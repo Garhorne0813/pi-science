@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import type { PiConfig } from "@pi-science/contracts";
 import type { PiProcessOptions, RuntimeSkillPolicy } from "./pi-process.js";
-import { configRoot } from "../../storage/persistence.js";
+import { configRoot, metadataRoot } from "../../storage/persistence.js";
 import { canonicalRuntimeModelRef, projectedRuntimeModelRef, projectPiRuntime } from "./pi-runtime-projection.js";
 
 // The Pi Orbit host is a singleton per control plane: one port + one auth
@@ -135,7 +135,7 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
   } else {
     command = cliPath;
   }
-  const sessionDir = sessionDirectory ? resolve(sessionDirectory) : join(cwd, ".pi-science", "sessions");
+  const sessionDir = sessionDirectory ? resolve(sessionDirectory) : join(metadataRoot(cwd), "sessions");
   args.push("--mode", useRpcMode ? "rpc" : "web");
   if (useRpcMode) args.push("--session-dir", sessionDir);
   else args.push("--host", "127.0.0.1", "--port", String(reservedWebPort), "--web-app-managed", "--no-session");
@@ -150,15 +150,8 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
   const extensionPaths = ensureSandboxExtension(ensureMcpExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(config.extensions))));
   for (const extension of extensionPaths) args.push("-e", extension);
   const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
-  let agentDir = join(dataRoot, "pi-agent", useRpcMode ? workspaceKey : "web-host");
-  try {
-    mkdirSync(agentDir, { recursive: true });
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "EACCES" && code !== "EPERM" && code !== "EROFS") throw error;
-    agentDir = join(resolve(cwd), ".pi-science", "agent", workspaceKey);
-    mkdirSync(agentDir, { recursive: true });
-  }
+  const agentDir = join(dataRoot, "pi-agent", useRpcMode ? workspaceKey : "web-host");
+  mkdirSync(agentDir, { recursive: true });
   const storedKeys = settings.api_keys;
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -166,6 +159,7 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
     PI_CODING_AGENT_DIR: agentDir,
     PI_CONFIG_DIR: agentDir,
     PI_WORKSPACE_DIR: resolve(cwd),
+    PI_SCIENCE_STATE_ROOT: dataRoot,
     PI_SCIENCE_MCP_ADAPTER_PATH: findRuntimeExtension("pi-mcp-adapter", cliPath, []) ?? join(PROJECT_ROOT, "runtime", "pi", "node_modules", "pi-mcp-adapter", "index.ts"),
     CONTEXT_MODE_DATA_DIR: agentDir,
     CONTEXT_MODE_DIR: join(agentDir, "context-mode"),
@@ -259,14 +253,9 @@ function globalSkillPolicy(settings: Record<string, any>): RuntimeSkillPolicy {
 
 export function seedWorkspaceAssets(cwd: string): string[] {
   const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
-  // The workspace metadata dirs are managed state. A symlink (or plain file)
-  // left at cwd/.pi or cwd/.pi-science would make every write below (skills
-  // mirror, stale cleanup) land inside — and delete from — the linked
-  // location, so replace foreign entries before any mkdir/cp runs.
-  replaceForeignEntry(join(cwd, ".pi-science"));
+  // The workspace-local .pi directory contains the skills exposed to Pi.
+  // Control-plane state lives under PI_SCIENCE_HOME and is never seeded here.
   replaceForeignEntry(join(cwd, ".pi"));
-  const metadata = join(cwd, ".pi-science");
-  mkdirSync(metadata, { recursive: true });
   const sourceSkills = join(projectRoot, "skills");
   const targetSkills = join(cwd, ".pi", "skills");
   // The .pi/skills tree is managed state: if a previous seed or the runtime

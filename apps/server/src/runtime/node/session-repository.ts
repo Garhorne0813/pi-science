@@ -5,6 +5,7 @@ import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { readProject } from "../../project/project-registry.js";
 import { isAiTitlePrompt } from "../title/title-prompt.js";
+import { metadataRoot } from "../../storage/persistence.js";
 
 export interface SessionInfoRecord {
   id: string;
@@ -82,7 +83,7 @@ interface ParsedSessionHeader {
 }
 
 function sessionsRoot(cwd: string): string {
-  return join(resolve(cwd), ".pi-science", "sessions");
+  return join(metadataRoot(cwd), "sessions");
 }
 
 const HISTORY_PAGE_SIZE = 50;

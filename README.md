@@ -246,9 +246,9 @@ configured provider as your sessions — a fresh isolated Pi runtime sends the
 most recent few messages (≤ 6 messages, each trimmed to ≤ 200 characters) and
 asks for a title of at most 8 words. This means **the latest conversation
 excerpt is sent to your configured LLM provider** on each settled turn. The
-result is persisted in the workspace at
-`.pi-science/session-titles.jsonl`; browser storage is retained only as an
-immediate fallback.
+result is persisted in the workspace's private application state under
+`~/.pi-science/workspaces/<workspace-hash>/session-titles.jsonl` (or
+`PI_SCIENCE_HOME`); browser storage is retained only as an immediate fallback.
 
 To disable it, set the environment variable before starting the services and
 restart:

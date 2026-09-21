@@ -127,7 +127,7 @@ export default function registerSandbox(pi: any): void {
     const currentCwd = ctx.cwd || cwd;
     const path = event.input.path ?? currentCwd;
     try {
-      if (!(await fileToolPathAllowed(cwd, currentCwd, path))) return { block: true, reason: "File tools are limited to workspace files outside .pi-science" };
+      if (!(await fileToolPathAllowed(cwd, currentCwd, path))) return { block: true, reason: "File tools are limited to workspace files outside reserved legacy metadata paths" };
       if (event.toolName === "find" && typeof event.input.pattern === "string") {
         const pattern = event.input.pattern;
         if (isAbsolute(pattern) || pattern.split(/[\\/]/).includes("..") || pattern.split(/[\\/]/).some((part) => part.toLowerCase() === ".pi-science")) {

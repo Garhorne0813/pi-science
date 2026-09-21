@@ -67,7 +67,7 @@ export async function inspectGitWorkspace(cwd: string): Promise<GitWorkspaceStat
   const [branch, head, status] = await Promise.all([
     git(cwd, "branch", "--show-current").then((value) => value.trim() || null),
     git(cwd, "rev-parse", "HEAD").then((value) => value.trim()).catch(() => null),
-    git(cwd, "-c", "core.quotePath=false", "status", "--porcelain=v1", "-z", "--untracked-files=normal", "--", ".", ":(exclude).pi-science"),
+    git(cwd, "-c", "core.quotePath=false", "status", "--porcelain=v1", "-z", "--untracked-files=normal", "--", "."),
   ]);
   const changes = parsePorcelain(status);
   return { available: true, is_repository: true, root: await realpath(root), branch, head, clean: changes.length === 0, changes };

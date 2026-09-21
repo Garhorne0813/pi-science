@@ -6,7 +6,7 @@ import type { McpRepository, McpToolDecision, StoredMcpConnector } from "../stor
 import { validateWorkspaceCwd } from "../security/workspace-security.js";
 import { metadataRoot, writeJsonAtomic } from "../storage/persistence.js";
 
-export const MCP_RUNTIME_SNAPSHOT = ".pi-science/mcp-runtime.json";
+export const MCP_RUNTIME_SNAPSHOT = "mcp-runtime.json";
 // Bump when the managed MCP implementation changes its tool/resource contract.
 // The adapter includes this value in its metadata-cache fingerprint so a
 // previously discovered tool list cannot survive a runtime upgrade.
@@ -110,7 +110,7 @@ function projectServer(
 
 async function atomicSnapshot(cwd: string, payload: unknown): Promise<void> {
   const directory = metadataRoot(cwd);
-  try { if ((await lstat(directory)).isSymbolicLink()) throw new Error("Workspace .pi-science directory must not be a symbolic link"); }
+  try { if ((await lstat(directory)).isSymbolicLink()) throw new Error("Workspace state directory must not be a symbolic link"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   await mkdir(directory, { recursive: true });
   await writeJsonAtomic(join(directory, "mcp-runtime.json"), payload, { mode: 0o600 });

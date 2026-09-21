@@ -5,6 +5,7 @@ import { createServer, type AddressInfo } from "node:net";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { probeAsync, sandboxConversationCommand, sandboxResearchCommand, researchSandboxStatus, windowsResearchSandboxConfig } from "./research-sandbox.js";
+import { metadataRoot } from "../../storage/persistence.js";
 
 const cleanup: string[] = [];
 afterEach(async () => { await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
@@ -58,7 +59,7 @@ it("runs a research candidate with only its work and output directories writable
   if (!status.available) return;
   const workspace = await mkdtemp(join(tmpdir(), "pi-science-sandbox-"));
   cleanup.push(workspace);
-  const run = join(workspace, ".pi-science", "runs", "run-test");
+  const run = join(metadataRoot(workspace), "runs", "run-test");
   const work = join(run, "work"); const outputs = join(run, "outputs");
   await mkdir(work, { recursive: true }); await mkdir(outputs);
   await writeFile(join(workspace, "private.txt"), "secret");
@@ -80,7 +81,7 @@ it("runs a local Node evaluator inside the research sandbox", async () => {
   if (!status.available) return;
   const workspace = await mkdtemp(join(tmpdir(), "pi-science-sandbox-"));
   cleanup.push(workspace);
-  const evaluator = join(workspace, ".pi-science", "runs", "run-test", "evaluator");
+  const evaluator = join(metadataRoot(workspace), "runs", "run-test", "evaluator");
   await mkdir(evaluator, { recursive: true });
   const script = join(evaluator, "evaluate.mjs");
   const resultPath = join(evaluator, "evaluation.json");
@@ -95,7 +96,7 @@ it("confines a Windows candidate to its run directories", async () => {
   if (process.platform !== "win32" || !researchSandboxStatus().available) return;
   const workspace = await mkdtemp(join(tmpdir(), "pi-science-sandbox-win-"));
   cleanup.push(workspace);
-  const run = join(workspace, ".pi-science", "runs", "run-test");
+  const run = join(metadataRoot(workspace), "runs", "run-test");
   const work = join(run, "work"); const outputs = join(run, "outputs");
   await mkdir(work, { recursive: true }); await mkdir(outputs);
   const secret = join(workspace, "private.txt");
@@ -119,8 +120,8 @@ it("reads an approved managed environment without granting writes to it", async 
   process.env.PI_SCIENCE_HOME = join(workspace, "config");
   try {
     const prefix = join(process.env.PI_SCIENCE_HOME, "micromamba", "envs", "rev-test");
-    const work = join(workspace, ".pi-science", "runs", "run-test", "work");
-    const outputs = join(workspace, ".pi-science", "runs", "run-test", "outputs");
+    const work = join(metadataRoot(workspace), "runs", "run-test", "work");
+    const outputs = join(metadataRoot(workspace), "runs", "run-test", "outputs");
     await mkdir(prefix, { recursive: true }); await mkdir(work, { recursive: true }); await mkdir(outputs);
     await writeFile(join(prefix, "library.txt"), "package-data");
     const windows = process.platform === "win32";
@@ -145,17 +146,19 @@ it("runs a conversation command with project writes and a read-only managed envi
   const workspace = join(root, "project");
   const home = join(root, "control-home");
   const prefix = join(home, "micromamba", "envs", "rev-test");
-  await mkdir(join(workspace, ".pi-science"), { recursive: true }); await mkdir(prefix, { recursive: true });
+  await mkdir(workspace, { recursive: true }); await mkdir(prefix, { recursive: true });
   await writeFile(join(prefix, "library.txt"), "package-data");
   await writeFile(join(root, "host-secret.txt"), "secret");
-  await writeFile(join(workspace, ".pi-science", "control-secret.txt"), "control-secret");
   const previousHome = process.env.PI_SCIENCE_HOME;
   process.env.PI_SCIENCE_HOME = home;
   try {
-    const script = 'cat "$PI_SCIENCE_ENVIRONMENT_PREFIX/library.txt" > result.txt; if cat "../host-secret.txt" 2>/dev/null; then echo READ_ESCAPED; fi; if cat .pi-science/control-secret.txt 2>/dev/null; then echo METADATA_READ; fi; if printf hacked > .pi-science/control-secret.txt 2>/dev/null; then echo METADATA_WRITE; fi; if printf hacked > "$PI_SCIENCE_ENVIRONMENT_PREFIX/library.txt" 2>/dev/null; then echo WRITE_ESCAPED; fi';
+    const controlSecret = join(metadataRoot(workspace), "control-secret.txt");
+    await mkdir(metadataRoot(workspace), { recursive: true });
+    await writeFile(controlSecret, "control-secret");
+    const script = 'cat "$PI_SCIENCE_ENVIRONMENT_PREFIX/library.txt" > result.txt; if cat "../host-secret.txt" 2>/dev/null; then echo READ_ESCAPED; fi; if cat "$PI_SCIENCE_CONTROL_SECRET" 2>/dev/null; then echo METADATA_READ; fi; if printf hacked > "$PI_SCIENCE_CONTROL_SECRET" 2>/dev/null; then echo METADATA_WRITE; fi; if printf hacked > "$PI_SCIENCE_ENVIRONMENT_PREFIX/library.txt" 2>/dev/null; then echo WRITE_ESCAPED; fi';
     const isolated = await sandboxConversationCommand({
       command: ["/bin/bash"], conversationScript: script, workspace,
-      environment: { PATH: process.env.PATH, PI_SCIENCE_ENVIRONMENT_PREFIX: prefix, PI_SCIENCE_ENVIRONMENT_REVISION_ID: "rev-test" },
+      environment: { PATH: process.env.PATH, PI_SCIENCE_CONTROL_SECRET: controlSecret, PI_SCIENCE_ENVIRONMENT_PREFIX: prefix, PI_SCIENCE_ENVIRONMENT_REVISION_ID: "rev-test" },
       managedEnvironmentPrefix: prefix,
     });
     cleanup.push(isolated.cleanupDirectory);
@@ -168,7 +171,50 @@ it("runs a conversation command with project writes and a read-only managed envi
     expect(result.stdout).not.toContain("METADATA_WRITE");
     expect(await readFile(join(workspace, "result.txt"), "utf8")).toBe("package-data");
     expect(await readFile(join(prefix, "library.txt"), "utf8")).toBe("package-data");
-    expect(await readFile(join(workspace, ".pi-science", "control-secret.txt"), "utf8")).toBe("control-secret");
+    expect(await readFile(controlSecret, "utf8")).toBe("control-secret");
+  } finally {
+    if (previousHome === undefined) delete process.env.PI_SCIENCE_HOME;
+    else process.env.PI_SCIENCE_HOME = previousHome;
+  }
+});
+
+it.skipIf(process.platform !== "win32")("runs a Windows conversation command through the production Sandy path", async () => {
+  expect(researchSandboxStatus()).toMatchObject({ available: true, backend: "appcontainer" });
+  const root = await mkdtemp(join(tmpdir(), "pi-science-conversation-win-"));
+  cleanup.push(root);
+  const workspace = join(root, "project");
+  const stateHome = join(root, "control-home");
+  const prefix = join(stateHome, "micromamba", "envs", "rev-test");
+  const previousHome = process.env.PI_SCIENCE_HOME;
+  process.env.PI_SCIENCE_HOME = stateHome;
+  try {
+    await mkdir(workspace, { recursive: true });
+    await mkdir(prefix, { recursive: true });
+    await writeFile(join(prefix, "library.txt"), "package-data", "utf8");
+    const controlSecret = join(metadataRoot(workspace), "control-secret.txt");
+    await mkdir(metadataRoot(workspace), { recursive: true });
+    await writeFile(controlSecret, "control-secret", "utf8");
+    const script = join(workspace, "conversation.cjs");
+    await writeFile(script, `const fs=require("node:fs"); const path=require("node:path");
+      const source=path.join(process.env.PI_SCIENCE_ENVIRONMENT_PREFIX,"library.txt");
+      let stateBlocked=false; try { fs.readFileSync(process.env.PI_SCIENCE_CONTROL_SECRET); } catch { stateBlocked=true; }
+      try { fs.writeFileSync(source,"hacked"); } catch {}
+      fs.writeFileSync(path.join(process.cwd(),"result.json"),JSON.stringify({stateBlocked,value:fs.readFileSync(source,"utf8")}));`, "utf8");
+    const isolated = await sandboxConversationCommand({
+      command: [process.execPath, script], workspace,
+      environment: {
+        ...process.env,
+        PI_SCIENCE_CONTROL_SECRET: controlSecret,
+        PI_SCIENCE_ENVIRONMENT_PREFIX: prefix,
+        PI_SCIENCE_ENVIRONMENT_REVISION_ID: "rev-test",
+      },
+      managedEnvironmentPrefix: prefix,
+    });
+    cleanup.push(isolated.cleanupDirectory);
+    const result = spawnSync(isolated.command[0]!, isolated.command.slice(1), { cwd: workspace, env: isolated.environment, encoding: "utf8", timeout: 20_000 });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(await readFile(join(workspace, "result.json"), "utf8"))).toEqual({ stateBlocked: true, value: "package-data" });
+    expect(await readFile(controlSecret, "utf8")).toBe("control-secret");
   } finally {
     if (previousHome === undefined) delete process.env.PI_SCIENCE_HOME;
     else process.env.PI_SCIENCE_HOME = previousHome;
@@ -187,7 +233,7 @@ it("denies outbound connections from a research job", async () => {
   try {
     const workspace = await mkdtemp(join(tmpdir(), "pi-science-sandbox-"));
     cleanup.push(workspace);
-    const evaluator = join(workspace, ".pi-science", "runs", "run-test", "evaluator");
+    const evaluator = join(metadataRoot(workspace), "runs", "run-test", "evaluator");
     await mkdir(evaluator, { recursive: true });
     const port = (server.address() as AddressInfo).port;
     const connect = `const socket=require('node:net').connect(${port}, '127.0.0.1'); socket.on('connect',()=>process.exit(0)); socket.on('error',()=>process.exit(3)); setTimeout(()=>process.exit(4),2000);`;

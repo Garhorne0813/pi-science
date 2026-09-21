@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { researchLoopSchema } from "@pi-science/contracts";
 import { JobCoordinator, type JobRecord } from "../runtime/jobs/job-coordinator.js";
 import { artifactBlobPath } from "../runtime/artifacts/artifact-blob-store.js";
+import { metadataRoot } from "../storage/persistence.js";
 import { snapshotCandidate } from "./candidate-snapshot.js";
 import { ResearchLoopCoordinator } from "./coordinator.js";
 import { activeWallMs, stopReason } from "./stop-policy.js";
@@ -259,7 +260,7 @@ printf '{"metrics":{"score":%s}}\\n' "$value" > "$PI_SCIENCE_EVALUATION_PATH"
   expect(preflight.loop.baseline).toEqual({ score: 1 });
   expect(preflight.loop.baseline_job_id).toMatch(/^job_/);
   const baselineJob = await submittedJobs.get(cwd, preflight.loop.baseline_job_id!);
-  expect(baselineJob?.command.at(-1)).toContain(join(".pi-science", "evaluators", registered.evaluator.digest.slice(7)));
+  expect(baselineJob?.command.at(-1)).toContain(join("evaluators", registered.evaluator.digest.slice(7)));
   expect(baselineJob?.command.at(-1)).not.toBe(join(cwd, benchmark));
   await coordinator.action(cwd, loop.loop_id, "start");
   const detail = await waitFor(() => coordinator.detail(cwd, loop.loop_id), (value) => value?.status === "completed", 10_000);
@@ -302,7 +303,7 @@ async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean,
 }
 
 async function jobLockDiagnostics(cwd: string): Promise<unknown> {
-  const jobsDir = join(cwd, ".pi-science", "jobs");
+  const jobsDir = join(metadataRoot(cwd), "jobs");
   const names = await readdir(jobsDir).catch(() => []);
   return Promise.all(names.map(async (name) => {
     const path = join(jobsDir, name);
@@ -401,7 +402,7 @@ describe("subagent research loop", () => {
     expect(output).toMatchObject({ path: "result.json", kind: "data", version: 1 });
     expect(output?.artifact_id).toBeTruthy();
     expect(await readFile(artifactBlobPath(cwd, output!.sha256!), "utf8")).toContain('"score":0.95');
-    const manifest = (await readFile(join(cwd, ".pi-science", "artifacts.jsonl"), "utf8"))
+    const manifest = (await readFile(join(metadataRoot(cwd), "artifacts.jsonl"), "utf8"))
       .trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(manifest.at(-1)).toMatchObject({ artifact_id: output?.artifact_id, version: output?.version, producer: { loop_id: loop.loop_id, candidate_id: detail?.candidates.at(-1)?.candidate_id } });
     expect(runner.candidateCalls).toBe(2);

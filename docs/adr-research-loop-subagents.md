@@ -8,9 +8,9 @@ The Node server is the only authority for Research Loop state, revisions, budget
 
 The first implementation is serial. Candidate files are returned as JSON, validated, and copied into immutable snapshots. Candidate and evaluator commands run through `JobCoordinator` in workspace-contained directories with a restricted environment. Only deterministic metrics may drive automatic stop conditions.
 
-Each external phase is recorded as reserved, started, and completed/failed events in `.pi-science/research-records-v2.jsonl`. On startup and API access, the reconciler resumes non-terminal loops, consumes terminal job records, and marks missing agent runs as lost before an idempotent retry. Pausing waits for the current phase; cancelling stops active agent and job runs before becoming terminal.
+Each external phase is recorded as reserved, started, and completed/failed events in the workspace's private `research-records-v2.jsonl` under the global application state root. On startup and API access, the reconciler resumes non-terminal loops, consumes terminal job records, and marks missing agent runs as lost before an idempotent retry. Pausing waits for the current phase; cancelling stops active agent and job runs before becoming terminal.
 
-Hidden supervisor sessions are stored beneath `.pi-science/research-sessions/<loop_id>` and are excluded from normal conversation navigation.
+Hidden supervisor sessions are stored beneath the workspace's private `research-sessions/<loop_id>` state directory and are excluded from normal conversation navigation.
 
 ## Consequences
 

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { JobCoordinator, parseCommand, type JobOwnership, type JobRecord, type JobStatus, restrictLocalJobEnvironment, restrictResearchEnvironment, windowsTaskkillArgs } from "./job-coordinator.js";
 import { researchSandboxStatus } from "./research-sandbox.js";
+import { metadataRoot } from "../../storage/persistence.js";
 
 const cleanup: string[] = [];
 const jobs: JobCoordinator[] = [];
@@ -29,8 +30,8 @@ function jobCoordinator(environment: NodeJS.ProcessEnv = { ...process.env }, hoo
 
 async function writeStoredJob(cwd: string, jobId: string, status: JobStatus, createdAt: string, stderr = "", ownership?: JobOwnership): Promise<void> {
   const record: JobRecord = { job_id: jobId, command: ["/bin/true"], cwd, surface: "local", status, created_at: createdAt, stdout: "", stderr, artifact_ids: [], environment: {}, requirement: {}, ...(ownership ? { ownership } : {}) };
-  await mkdir(join(cwd, ".pi-science", "jobs"), { recursive: true });
-  await writeFile(join(cwd, ".pi-science", "jobs", `${jobId}.json`), `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  await mkdir(join(metadataRoot(cwd), "jobs"), { recursive: true });
+  await writeFile(join(metadataRoot(cwd), "jobs", `${jobId}.json`), `${JSON.stringify(record, null, 2)}\n`, "utf8");
 }
 
 const terminal = (record: JobRecord | null) => Boolean(record && TERMINAL.includes(record.status));
@@ -110,7 +111,7 @@ describe("job coordinator", () => {
     expect(healed?.ended_at).toBeTruthy();
     expect(healed?.stderr).toContain("earlier stderr");
     expect(healed?.stderr).toContain("orphaned by a server restart");
-    const persisted = JSON.parse(await readFile(join(cwd, ".pi-science", "jobs", "job_orphan0000000000.json"), "utf8")) as JobRecord;
+    const persisted = JSON.parse(await readFile(join(metadataRoot(cwd), "jobs", "job_orphan0000000000.json"), "utf8")) as JobRecord;
     expect(persisted.status).toBe("failed");
     expect(await coordinator.hasActive(cwd)).toBe(false);
   });
@@ -227,7 +228,7 @@ describe("job coordinator", () => {
     // The in-process ownership token still proves the owner is live, so simulate
     // a replacement process by expiring the durable owner directly.
     if (ownership) ownership.token = "lost-owner-token";
-    const path = join(cwd, ".pi-science", "jobs", `${submitted.job_id}.json`);
+    const path = join(metadataRoot(cwd), "jobs", `${submitted.job_id}.json`);
     const stored = JSON.parse(await readFile(path, "utf8")) as JobRecord;
     if (stored.ownership) stored.ownership.token = "lost-owner-token";
     await writeFile(path, `${JSON.stringify(stored, null, 2)}\n`, "utf8");
@@ -244,7 +245,7 @@ describe("job coordinator", () => {
     const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "setTimeout(() => {}, 180)"] });
     const initialLease = Date.parse(submitted.ownership!.lease_expires_at);
     await waitFor(async () => {
-      const stored = JSON.parse(await readFile(join(cwd, ".pi-science", "jobs", `${submitted.job_id}.json`), "utf8")) as JobRecord;
+      const stored = JSON.parse(await readFile(join(metadataRoot(cwd), "jobs", `${submitted.job_id}.json`), "utf8")) as JobRecord;
       return Date.parse(stored.ownership?.lease_expires_at ?? "") > initialLease;
     }, Boolean);
     expect((await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal))?.status).toBe("succeeded");
@@ -547,8 +548,8 @@ describe("job coordinator", () => {
   it("passes only canonical research variables and requested PI_SCIENCE values to a POSIX child", async () => {
     if (!researchSandboxStatus().available) return;
     const cwd = await workspace();
-    const work = join(cwd, ".pi-science", "runs", "run-test", "work");
-    const outputs = join(cwd, ".pi-science", "runs", "run-test", "outputs");
+    const work = join(metadataRoot(cwd), "runs", "run-test", "work");
+    const outputs = join(metadataRoot(cwd), "runs", "run-test", "outputs");
     await mkdir(work, { recursive: true }); await mkdir(outputs);
     const coordinator = jobCoordinator({ PATH: process.env.PATH, HOME: "/tmp", hOmE: "/untrusted", sEcReT_tOkEn: "leak-me" });
     const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "console.log(JSON.stringify(process.env))"], execution_cwd: work, surface: "research-loop", env: { PI_SCIENCE_OUTPUT_DIR: outputs } });
@@ -580,8 +581,8 @@ describe("job coordinator", () => {
   it("keeps research surfaces on their narrower allowlist unchanged", async () => {
     if (!researchSandboxStatus().available) return;
     const cwd = await workspace();
-    const work = join(cwd, ".pi-science", "runs", "run-test", "work");
-    const outputs = join(cwd, ".pi-science", "runs", "run-test", "outputs");
+    const work = join(metadataRoot(cwd), "runs", "run-test", "work");
+    const outputs = join(metadataRoot(cwd), "runs", "run-test", "outputs");
     await mkdir(work, { recursive: true }); await mkdir(outputs);
     const coordinator = jobCoordinator({ PATH: process.env.PATH, HOME: "/tmp", PI_SCIENCE_ENVIRONMENT_ID: "env_123", sEcReT_tOkEn: "leak-me" });
     const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "console.log(JSON.stringify(process.env))"], execution_cwd: work, surface: "research-loop", env: { PI_SCIENCE_OUTPUT_DIR: outputs } });

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, stat } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
-import { withFileWriteLock, writeJsonAtomic } from "../storage/persistence.js";
+import { cp, lstat, mkdir, readFile, readdir, rename, rm, stat } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
+import { legacyMetadataRoot, metadataRoot, withFileWriteLock, workspaceStateRoot, writeJsonAtomic } from "../storage/persistence.js";
 
 export const PROJECT_MANIFEST_VERSION = 1 as const;
 
@@ -17,12 +17,70 @@ export interface ProjectUpdate {
   name?: string;
 }
 
-function metadataRoot(cwd: string): string {
-  return join(resolve(cwd), ".pi-science");
-}
-
 export function projectManifestPath(cwd: string): string {
   return join(metadataRoot(cwd), "project.json");
+}
+
+async function assertSafeMetadataTree(root: string): Promise<void> {
+  let entries = 0;
+  const visit = async (path: string): Promise<void> => {
+    const info = await lstat(path);
+    if (info.isSymbolicLink()) throw new Error(`Legacy workspace metadata contains a symbolic link: ${path}`);
+    if (info.isFile()) {
+      if (info.nlink > 1) throw new Error(`Legacy workspace metadata contains a hard-linked file: ${path}`);
+      return;
+    }
+    if (!info.isDirectory()) throw new Error(`Legacy workspace metadata contains an unsupported file type: ${path}`);
+    for (const name of await readdir(path)) {
+      entries += 1;
+      if (entries > 100_000) throw new Error(`Legacy workspace metadata contains too many entries: ${root}`);
+      await visit(join(path, name));
+    }
+  };
+  await visit(root);
+}
+
+async function migrateLegacyMetadata(cwd: string): Promise<void> {
+  const legacy = legacyMetadataRoot(cwd);
+  let info;
+  try { info = await lstat(legacy); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+  if (info.isSymbolicLink() || !info.isDirectory()) throw new Error(`Legacy workspace metadata is not a directory: ${legacy}`);
+  await assertSafeMetadataTree(legacy);
+  const target = workspaceStateRoot(cwd);
+  await mkdir(dirname(target), { recursive: true });
+  await withFileWriteLock(`${target}.migration`, async () => {
+    try {
+      await rename(legacy, target);
+      try { await assertSafeMetadataTree(target); }
+      catch (error) { await rename(target, legacy).catch(() => undefined); throw error; }
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        try { if ((await stat(target)).isDirectory()) return; } catch { /* continue to surface the original failure */ }
+      }
+      if (code === "EEXIST" || code === "ENOTEMPTY") {
+        const entries = await readdir(target);
+        if (entries.length > 0) throw new Error(`Cannot migrate legacy workspace metadata because the global state directory is not empty: ${target}`);
+        await rm(target, { recursive: true });
+        await rename(legacy, target);
+        try { await assertSafeMetadataTree(target); }
+        catch (error) { await rename(target, legacy).catch(() => undefined); throw error; }
+        return;
+      }
+      if (code !== "EXDEV") throw error;
+    }
+    const staging = `${target}.migrating-${randomUUID()}`;
+    try {
+      await cp(legacy, staging, { recursive: true, force: false, errorOnExist: true });
+      await assertSafeMetadataTree(staging);
+      await rename(staging, target);
+      await rm(legacy, { recursive: true });
+    } finally {
+      await rm(staging, { recursive: true, force: true });
+    }
+  });
 }
 
 function normalizeName(value: string | undefined, cwd: string): string {
@@ -51,7 +109,7 @@ export async function readProject(cwd: string): Promise<ProjectManifest | null> 
   try {
     raw = await readFile(path, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
     throw error;
   }
   let value: unknown;
@@ -67,15 +125,15 @@ export async function readProject(cwd: string): Promise<ProjectManifest | null> 
 /**
  * Register a workspace once and return its stable project identity.
  *
- * The manifest is deliberately kept next to the workspace rather than in a
- * global registry. Moving or copying a workspace therefore keeps its identity
- * and remains usable without access to a central database.
+ * The manifest lives in the application state root so agent processes that can
+ * write the project never gain access to control-plane identity or state.
  */
 export async function ensureProject(cwd: string, name?: string): Promise<ProjectManifest> {
   const workspace = resolve(cwd);
   const workspaceStat = await stat(workspace);
   if (!workspaceStat.isDirectory()) throw new Error(`Not a directory: ${cwd}`);
 
+  await migrateLegacyMetadata(workspace);
   const metadata = metadataRoot(workspace);
   await mkdir(metadata, { recursive: true });
   const path = projectManifestPath(workspace);

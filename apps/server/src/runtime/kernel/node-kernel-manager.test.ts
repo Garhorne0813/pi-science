@@ -46,13 +46,20 @@ function newTestManager(deps: NodeKernelManagerDependencies = {}): NodeKernelMan
 }
 
 it("reports Windows Notebook unavailable and rejects the production sandbox path before spawning", async () => {
+  const sandy = process.env.PI_SCIENCE_SANDY_PATH;
+  delete process.env.PI_SCIENCE_SANDY_PATH;
   const spawnProcess = vi.fn();
   const interpreterAvailable = vi.fn(() => true);
-  const manager = new NodeKernelManager({ platform: "win32", spawnProcess: spawnProcess as never, interpreterAvailable });
-  expect(manager.status()).toMatchObject({ execution_available: false, unavailable_reason: WINDOWS_KERNEL_UNAVAILABLE, interpreters: { python: false, r: false } });
-  await expect(manager.execute({ language: "python", code: "1+1", cwd: "C:\\workspace", environment: {} as WorkspaceEnvironmentStatus, timeoutMs: 1000 })).rejects.toThrow(WINDOWS_KERNEL_UNAVAILABLE);
-  expect(spawnProcess).not.toHaveBeenCalled();
-  expect(interpreterAvailable).not.toHaveBeenCalled();
+  try {
+    const manager = new NodeKernelManager({ platform: "win32", spawnProcess: spawnProcess as never, interpreterAvailable });
+    expect(manager.status()).toMatchObject({ execution_available: false, unavailable_reason: WINDOWS_KERNEL_UNAVAILABLE, interpreters: { python: false, r: false } });
+    await expect(manager.execute({ language: "python", code: "1+1", cwd: "C:\\workspace", environment: {} as WorkspaceEnvironmentStatus, timeoutMs: 1000 })).rejects.toThrow(WINDOWS_KERNEL_UNAVAILABLE);
+    expect(spawnProcess).not.toHaveBeenCalled();
+    expect(interpreterAvailable).not.toHaveBeenCalled();
+  } finally {
+    if (sandy === undefined) delete process.env.PI_SCIENCE_SANDY_PATH;
+    else process.env.PI_SCIENCE_SANDY_PATH = sandy;
+  }
 });
 
 afterEach(async () => {

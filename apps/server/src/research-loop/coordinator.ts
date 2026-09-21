@@ -12,6 +12,7 @@ import {
 import type { JobCoordinator, JobRecord } from "../runtime/jobs/job-coordinator.js";
 import { publishResearchOutputArtifact } from "../runtime/artifacts/workspace-artifact-publisher.js";
 import { metadataRoot } from "../storage/persistence.js";
+import { ensureProject } from "../project/project-registry.js";
 import { findBashExecutable } from "../support/platform-utils.js";
 import { cachedResearchSandboxStatus } from "../runtime/jobs/research-sandbox.js";
 import { snapshotCandidate, within } from "./candidate-snapshot.js";
@@ -35,6 +36,7 @@ export class ResearchLoopCoordinator {
   repository(cwd: string) { return new ResearchRepository(cwd); }
 
   async create(cwd: string, input: unknown): Promise<ResearchLoop> {
+    await ensureProject(cwd);
     const parsed = createResearchLoopSchema.parse(input);
     const now = new Date().toISOString();
     const loop = researchLoopSchema.parse({
@@ -61,6 +63,7 @@ export class ResearchLoopCoordinator {
   }
 
   async registerEvaluator(cwd: string, input: unknown) {
+    await ensureProject(cwd);
     const supplied = input as Record<string, unknown>;
     const command = supplied.command;
     let digest = supplied.digest;

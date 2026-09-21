@@ -12,8 +12,9 @@
   `notes/` stores daily work logs (append during the day; do not edit old
   entries after their day has passed).
 - **Provenance**: every file you write or edit is automatically recorded in
-  `.pi-science/provenance.jsonl`. The platform captures what tool you used,
-  which model was active, and the exact code or diff.
+  private application state outside the workspace. The platform captures what
+  tool you used, which model was active, and the exact code or diff, and shows
+  it through supported provenance views.
 - **Runtime**: you operate inside the pi coding agent harness. The pi-science
   UI provides the chat interface, file browser, inspector, and notebook
   panels. Tool calls and outputs stream to the user in real time.

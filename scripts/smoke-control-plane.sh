@@ -45,7 +45,7 @@ curl() {
 }
 
 SMOKE_WORKSPACE="$TEMP_DIR/workspace"
-mkdir -p "$SMOKE_WORKSPACE/.pi-science"
+mkdir -p "$SMOKE_WORKSPACE"
 printf 'smoke\n' > "$SMOKE_WORKSPACE/notes.txt"
 
 cleanup() {

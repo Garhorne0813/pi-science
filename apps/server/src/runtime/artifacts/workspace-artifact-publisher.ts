@@ -165,7 +165,8 @@ export async function publishResearchOutputArtifact(
   if (!info.isFile() || info.isSymbolicLink()) throw new Error("Research artifact must be a regular file");
   const canonicalTarget = await realpath(target);
   if (!isContained(canonicalOutput, canonicalTarget)) throw new Error("Research artifact escapes the output directory");
-  return publishValidatedArtifact(workspace, canonicalTarget, options);
+  const logicalPath = `research/${relative(metadataRoot(workspace), canonicalTarget).replaceAll("\\", "/")}`;
+  return publishValidatedArtifact(workspace, canonicalTarget, options, logicalPath);
 }
 
 function isContained(root: string, path: string): boolean {
@@ -177,10 +178,11 @@ async function publishValidatedArtifact(
   workspace: string,
   target: string,
   options: PublishWorkspaceArtifactOptions,
+  logicalPath?: string,
 ): Promise<PublishedWorkspaceArtifact> {
   const digest = await captureArtifactBlob(workspace, target);
 
-  const path = relative(workspace, target).replaceAll("\\", "/");
+  const path = logicalPath ?? relative(workspace, target).replaceAll("\\", "/");
   const artifactId = createHash("sha256").update(`${workspace}:${path}`).digest("hex").slice(0, 24);
   return withFileWriteLock(workspaceFile(workspace, "artifacts.jsonl"), async () => {
     const artifacts = await readJsonLines<ArtifactManifest>(workspaceFile(workspace, "artifacts.jsonl"));

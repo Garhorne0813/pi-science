@@ -321,7 +321,7 @@ function iso(value: number | null | undefined): string | null {
 }
 
 async function workspaceExists(path: string): Promise<boolean> {
-  try { return (await stat(path)).isDirectory() && (await stat(`${path}/.pi-science`)).isDirectory(); } catch { return false; }
+  try { return (await stat(path)).isDirectory(); } catch { return false; }
 }
 
 function placeholderManifest(path: string): ProjectManifest {

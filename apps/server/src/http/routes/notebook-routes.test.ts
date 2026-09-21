@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { NotebookService } from "../../runtime/notebooks/notebook-service.js";
 import { registerNotebookRoutes } from "./notebook-routes.js";
+import { workspaceFile } from "../../storage/persistence.js";
 
 const cleanup: string[] = [];
 
@@ -71,7 +72,7 @@ describe("notebook document routes", () => {
     if (process.platform !== "win32") {
       expect((await stat(join(cwd, path))).mode & 0o7777).toBe(0o600);
     }
-    const provenance = (await readFile(join(cwd, ".pi-science", "provenance.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    const provenance = (await readFile(workspaceFile(cwd, "provenance.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(provenance.at(-1)).toMatchObject({ tool: "notebook_run", executionId: "exec-notebook-cell" });
 
     const conflict = await app.inject({

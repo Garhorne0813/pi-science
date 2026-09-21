@@ -1,9 +1,9 @@
 import { spawn, spawnSync } from "node:child_process";
 import { constants, existsSync } from "node:fs";
-import { access, chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { delimiter, join, resolve, sep } from "node:path";
-import { configPath, readJson, withFileWriteLock, withWorkspaceWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
+import { configPath, metadataRoot, readJson, withFileWriteLock, withWorkspaceWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
 import type { EnvironmentRepository } from "../../storage/sqlite/repositories/environment-repository.js";
 
 export type EnvironmentLanguage = "python" | "r";
@@ -148,7 +148,7 @@ function environmentExecutable(prefix: string, language: EnvironmentLanguage, pl
 }
 
 function nodeToolsRoot(workspace: string): string {
-  return join(workspace, ".pi-science", "node-tools");
+  return join(metadataRoot(workspace), "node-tools");
 }
 
 function npmGlobalPrefixFor(workspace: string): string {
@@ -160,7 +160,7 @@ function pnpmHomeFor(workspace: string): string {
 }
 
 function corepackHomeFor(workspace: string): string {
-  return join(workspace, ".pi-science", "cache", "corepack");
+  return join(metadataRoot(workspace), "cache", "corepack");
 }
 
 function commandAvailable(command: string): boolean {
@@ -299,7 +299,7 @@ function isVersionedIntegritySnapshot(snapshot: readonly string[]): boolean {
 function snapshotDriftError(revisionId: string): string {
   return `Environment revision ${revisionId} was modified outside Pi-Science (for example by a direct pip install into the shared prefix). Roll back or create a new revision via the packages API instead of mutating the prefix.`;
 }
-function bindingPath(cwd: string): string { return join(resolve(cwd), ".pi-science", "environment.json"); }
+function bindingPath(cwd: string): string { return join(metadataRoot(cwd), "environment.json"); }
 function registryPath(): string { return configPath(join("environments", "registry.json")); }
 function environmentRoot(): string { return configPath(join("micromamba", "envs")); }
 
@@ -388,8 +388,8 @@ export class WorkspaceEnvironmentService {
     if (revision.status !== "failed" && revision.status !== "archived") {
       throw Object.assign(new Error(`Only failed or archived environment revisions can be deleted: ${revisionId}`), { code: "environment_not_deletable" });
     }
-    const root = resolve(environmentRoot());
-    const prefix = resolve(revision.prefix);
+    const root = await realpath(environmentRoot());
+    const prefix = await realpath(revision.prefix);
     if (!prefix.startsWith(`${root}${sep}`)) throw new Error(`Environment prefix is outside the managed root: ${revision.prefix}`);
     await rm(prefix, { recursive: true, force: true });
     if (this.environmentRepository) await this.environmentRepository.remove(revisionId);
@@ -483,7 +483,7 @@ export class WorkspaceEnvironmentService {
     const nodeModules = join(workspace, "node_modules");
     const nodeModulesExists = await exists(nodeModules);
     const npmPrefix = npmGlobalPrefixFor(workspace);
-    const npmCache = join(workspace, ".pi-science", "cache", "npm");
+    const npmCache = join(metadataRoot(workspace), "cache", "npm");
     const pnpmHome = pnpmHomeFor(workspace);
     const corepackHome = corepackHomeFor(workspace);
     const [npmPrefixSize, npmCacheSize, pnpmHomeSize, corepackHomeSize] = await Promise.all([
@@ -683,7 +683,7 @@ export class WorkspaceEnvironmentService {
 
   private statusFor(workspace: string, prefix: string, manager: NonNullable<WorkspaceEnvironmentStatus["manager"]>, extra: Partial<WorkspaceEnvironmentStatus>): WorkspaceEnvironmentStatus {
     const paths = environmentPaths(prefix);
-    return { ready: false, workspace, prefix: prefix, python: paths.python, pip: paths.pip, r: environmentExecutable(prefix, "r"), manager, npm: { local_prefix: workspace, global_prefix: npmGlobalPrefixFor(workspace), cache: join(workspace, ".pi-science", "cache", "npm") }, ...extra };
+    return { ready: false, workspace, prefix: prefix, python: paths.python, pip: paths.pip, r: environmentExecutable(prefix, "r"), manager, npm: { local_prefix: workspace, global_prefix: npmGlobalPrefixFor(workspace), cache: join(metadataRoot(workspace), "cache", "npm") }, ...extra };
   }
 
   private async ensureMicromamba(): Promise<string> {
@@ -748,7 +748,7 @@ export class WorkspaceEnvironmentService {
   }
 
   private async bindUnlocked(cwd: string, revision: EnvironmentRevision): Promise<WorkspaceEnvironmentStatus> {
-    await mkdir(join(cwd, ".pi-science"), { recursive: true });
+    await mkdir(metadataRoot(cwd), { recursive: true });
     const path = bindingPath(cwd);
     await writeJsonAtomic(path, { schema_version: 1, environment_id: revision.environment_id, revision_id: revision.revision_id, bound_at: new Date().toISOString() } satisfies ProjectEnvironmentBinding);
     return this.status(cwd);

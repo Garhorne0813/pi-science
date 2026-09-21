@@ -3,15 +3,16 @@ import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { join, resolve } from "node:path";
 import { sessionStatsSchema, type SessionStats } from "@pi-science/contracts";
+import { metadataRoot } from "../../storage/persistence.js";
 
 /** Whole-session stats checkpoint storage, one JSON file per session next to
- *  the session JSONL (`<cwd>/.pi-science/sessions/stats/<id>.json`). The file
+ *  the session JSONL in the workspace state directory. The file
  *  is the refresh-recovery source when the Pi runtime is idle: counters come
  *  from `get_session_stats` at turn end, timing comes from the control-plane
  *  event-stream projector. */
 
 function statsDir(cwd: string): string {
-  return join(resolve(cwd), ".pi-science", "sessions", "stats");
+  return join(metadataRoot(cwd), "sessions", "stats");
 }
 
 function statsPath(cwd: string, sessionId: string): string {

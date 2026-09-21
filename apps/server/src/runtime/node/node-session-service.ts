@@ -1,7 +1,7 @@
 import type { CreateSessionRequest, PiConfig, SessionState, SessionStats } from "@pi-science/contracts";
 import { randomUUID } from "node:crypto";
 import { mkdir, unlink } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import nodeProcess from "node:process";
 import { ConversationEventHub, conversationEventHub } from "../events/conversation-event-hub.js";
 import { durableEventStore } from "../events/event-store.js";
@@ -19,7 +19,7 @@ import { foldEventRecordsTiming, maxTiming, mergeSessionStats, SessionStatsProje
 import { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
 import { diffWorkspaceSnapshots, previewKind, previewMime, snapshotWorkspace, type WorkspaceSnapshotEntry } from "../artifacts/workspace-artifact-snapshot.js";
 import { turnArtifactRepository } from "../artifacts/turn-artifact-repository.js";
-import { readJsonLines, workspaceFile } from "../../storage/persistence.js";
+import { metadataRoot, readJsonLines, workspaceFile } from "../../storage/persistence.js";
 import { ensureProject } from "../../project/project-registry.js";
 import type { ModelResourceService } from "../../model-resources/model-resource-service.js";
 
@@ -209,7 +209,7 @@ export class NodeSessionService {
     const migration = await this.ensureModelResources();
     if (migration) return migration;
     const project = await ensureProject(cwd);
-    await mkdir(resolve(cwd, ".pi-science", "sessions"), { recursive: true });
+    await mkdir(join(metadataRoot(cwd), "sessions"), { recursive: true });
     return this.withLock(`create:${cwd}`, async () => {
       let runtime: RuntimeRecord | undefined;
       const config = effectiveConfig(body.config);

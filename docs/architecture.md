@@ -18,7 +18,8 @@ flowchart LR
     PH -->|spawn lazily| MCP[Enabled MCP connectors]
     CP -->|spawn on demand| K[Native Python and R kernels]
     CP --> DB[(Global state.sqlite)]
-    CP --> WS[(Workspace files and .pi-science metadata)]
+    CP --> WS[(Workspace files)]
+    CP --> PS[(Global private workspace state)]
     CP -->|bounded provider and probe HTTP| EXT[Configured model and scientific data services]
     MCP -->|bounded scientific API HTTP| EXT
     PH --> WS
@@ -147,9 +148,9 @@ The control plane exposes `/internal/live`, `/internal/ready`, and
 
 ## Workspace and persistent state
 
-Pi-Science is local-first: a workspace remains a normal directory, and portable
-project state is stored beside it. Application-wide coordination state is kept
-separately in the control-plane configuration root.
+Pi-Science is local-first: a workspace remains a normal directory. Project
+content stays there, while all Pi-Science control-plane state is stored under
+the application configuration root.
 
 ```text
 project/
@@ -158,23 +159,23 @@ project/
 ├── .pi/
 │   ├── skills/
 │   └── agents/
-├── .pi-science/
-│   ├── project.json           # stable project identity and display metadata
-│   ├── environment.json       # binding to a shared Micromamba revision
-│   ├── memory/
-│   │   └── ledger.json       # canonical memory ledger (records, proposals, decisions)
-│   ├── sessions/             # persisted Pi session JSONL files
-│   ├── agent/                # project-local fallback runtime config
-│   ├── mcp-runtime.json      # generated enabled connectors and effective tool policy
-│   ├── runs/                 # execution workspaces and outputs
-│   ├── solutions/            # immutable research candidates
-│   ├── artifact-blobs/       # content-addressed bytes for published artifact versions
-│   ├── session-titles.jsonl
-│   ├── turn-artifacts.jsonl
-│   ├── artifacts.jsonl
-│   ├── provenance.jsonl
-│   └── research-records-v2.jsonl
 └── research files
+
+~/.pi-science/                       # or PI_SCIENCE_HOME
+└── workspaces/<sha256-canonical-path>/
+    ├── project.json                 # stable project identity and display metadata
+    ├── environment.json             # binding to a shared Micromamba revision
+    ├── memory/ledger.json
+    ├── sessions/
+    ├── mcp-runtime.json
+    ├── runs/
+    ├── solutions/
+    ├── artifact-blobs/
+    ├── session-titles.jsonl
+    ├── turn-artifacts.jsonl
+    ├── artifacts.jsonl
+    ├── provenance.jsonl
+    └── research-records-v2.jsonl
 ```
 
 Publishing an artifact captures its bytes under `artifact-blobs/<sha-prefix>/<sha256>`
@@ -188,14 +189,14 @@ reconstruct bytes that were already overwritten before this store existed.
 
 The project-level Git status endpoint (`/api/git/status`) is read-only. It
 reports the current branch, HEAD, and worktree changes only when the repository
-root is the registered workspace. It excludes Pi-Science's own `.pi-science`
-metadata from the change list and does not initialize repositories, commit,
+root is the registered workspace. It does not initialize repositories, commit,
 push, or create worktrees. Mutating Git operations for research remain a
 separate policy-gated phase.
 
 The global configuration root is `PI_SCIENCE_HOME` when set, otherwise
-`~/.pi-science`; a checkout-local `.runtime/pi-science` directory is used as a
-fallback when the preferred location is not writable. Production starts a
+`~/.pi-science`. Workspace state is keyed by the SHA-256 digest of its canonical
+path. On first registration, a legacy workspace-local `.pi-science` directory
+is moved into this global location and removed from the workspace. Production starts a
 dedicated worker thread for `state.sqlite` and enables SQLite by default. The
 database uses WAL journaling and stores:
 
@@ -218,9 +219,8 @@ project knowledge until the user accepts them.
 
 The memory ledger is the canonical project-memory store. It keeps the existing
 project knowledge records and review proposals together with evidence references,
-approval state, and decision audit events. Existing `.pi-science/project-state.json`
-files are migrated on first read and retained as a compatibility projection for
-older clients and local tooling.
+approval state, and decision audit events. Legacy `project-state.json` files are
+migrated with the rest of the workspace state on first registration.
 
 External workspaces are explicitly registered through the workspace-open API.
 Their canonical paths and pin state are persisted in SQLite so they can be
@@ -244,7 +244,7 @@ revision used by another project. Existing workspace `.venv` directories remain
 a legacy migration fallback and malformed ones are never overwritten
 automatically.
 JavaScript packages remain workspace-local; attempted global npm/pnpm installs
-are redirected below `.pi-science/`.
+are redirected into the workspace's private application state directory.
 
 Session Notebook is opened from the active conversation and renders the shared
 execution history for Agent and user cells. Disk `.ipynb` files are opened from
@@ -306,7 +306,7 @@ flowchart LR
     S --> DB[(MCP SQLite repositories)]
     S --> P[Probe and tools/list]
     DB --> RP[McpRuntimeProjection]
-    RP --> F[workspace/.pi-science/mcp-runtime.json]
+    RP --> F[global workspace state/mcp-runtime.json]
     F --> A[Pi MCP adapter]
     A --> L[Local stdio or socket server]
     A --> H[Remote HTTP or SSE server]
@@ -339,7 +339,7 @@ flowchart LR
   connector explicitly allows all tools.
 - Runtime-affecting definition or policy changes materialize a mode-0600,
   atomically replaced
-  `.pi-science/mcp-runtime.json` for each known workspace and reloads active
+  `mcp-runtime.json` in each workspace's private state directory and reloads active
   runtimes. The snapshot contains enabled definitions and policy, not resolved
   secret values. The Pi extension loads the snapshot from each session's own
   workspace because multiple projects share one Pi Orbit host.
@@ -361,8 +361,8 @@ The detailed API, schema, migration, and UI contract is documented in
 - The token remains in the backend; browser origins are not granted direct CORS
   access to the host.
 - Workspace paths are canonicalized and validated before runtime creation.
-- Each registered workspace owns a stable project identity in
-  `.pi-science/project.json`; session listings resolve their `project_id` from
+- Each registered workspace owns a stable project identity in its private
+  `project.json`; session listings resolve their `project_id` from
   that manifest.
 - A registered workspace is inside the application trust boundary. The control
   plane records Pi Orbit project trust before creating a runtime, so users should
@@ -409,10 +409,11 @@ The detailed API, schema, migration, and UI contract is documented in
 The mandatory Pi Science sandbox extension routes the built-in Bash tool and
 direct `!` commands to a control-plane conversation job. Notebook Python/R
 kernels use the same OS sandbox. The workspace is writable, the bound
-micromamba revision is read-only, network access is denied, and `.pi-science`
-metadata is hidden. Commands fail closed when the revision or native sandbox is
-unavailable. The existing Windows Sandy grants cannot exclude workspace
-metadata, so conversation Bash and Notebook Python/R execution currently fail closed on Windows. The kernel status API reports this limitation and the UI disables execution.
+micromamba revision is read-only, private application state is outside the
+workspace and unavailable, and network access is denied. Commands fail closed
+when the revision or native sandbox is unavailable. Windows uses Sandy's
+AppContainer policy when `PI_SCIENCE_SANDY_PATH` points to `sandy.exe`; the
+kernel status API disables execution when that runner is unavailable.
 
 Pi's built-in file tools remain in the supervisor process. The extension checks
 their paths against the workspace and blocks `.pi-science` and symlink escapes;

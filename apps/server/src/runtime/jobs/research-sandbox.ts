@@ -27,7 +27,7 @@ function parents(path: string): string[] {
 
 function macProfile(readable: string[], writable: string[], denied: string[] = []): string {
   const ancestorRules = [...new Set([...readable, ...writable].flatMap(parents))].map((path) => `(literal ${quote(path)})`);
-  const readRules = [...new Set(readable)].map((path) => `(subpath ${quote(path)})`);
+  const readRules = [...new Set(readable)].flatMap((path) => [`(literal ${quote(path)})`, `(subpath ${quote(path)})`]);
   const writeRules = [...new Set(writable)].map((path) => `(subpath ${quote(path)})`);
   return [
     "(version 1)", "(deny default)",
@@ -183,10 +183,11 @@ export async function sandboxResearchCommand(input: { command: string[]; workspa
     if (cleanup.status !== 0 || cleanup.error) throw new Error(`research AppContainer cleanup failed: ${probeFailure(cleanup)}`);
   }
   const runs = await realpath(join(metadataRoot(workspace), "runs"));
-  if (!inside(workspace, runs)) throw new Error("research run root escapes the workspace");
+  if (!inside(metadataRoot(workspace), runs)) throw new Error("research run root escapes the workspace state directory");
   const requestedWorkspace = resolve(input.workspace);
   const requestedExecutionCwd = resolve(input.executionCwd);
-  if (requestedExecutionCwd !== requestedWorkspace && !requestedExecutionCwd.startsWith(`${requestedWorkspace}${sep}`)) throw new Error("research execution directory escapes the workspace");
+  const requestedState = resolve(metadataRoot(requestedWorkspace));
+  if (requestedExecutionCwd !== requestedWorkspace && !inside(requestedState, requestedExecutionCwd)) throw new Error("research execution directory escapes the workspace state directory");
   const candidate = input.surface === "research-loop";
   const evaluator = input.surface === "research-evaluator";
   if (!candidate && !evaluator) throw new Error("unsupported research sandbox surface");
@@ -213,6 +214,22 @@ export async function sandboxResearchCommand(input: { command: string[]; workspa
   const aliases = status.backend === "seatbelt";
   const readable = [...(status.backend === "appcontainer" ? [] : availableSystemRoots(aliases ? macSystemRoots : linuxSystemRoots)), ...(status.backend === "appcontainer" ? [] : [commandPath]), ...(aliases ? [input.command[0]!] : []), ...(candidate ? [executionCwd, outputDirectory] : [workspace, outputDirectory]), ...(aliases ? candidate ? [input.executionCwd, originalOutput] : [input.workspace, originalOutput] : [])];
   const writable = candidate ? [executionCwd, outputDirectory, ...(aliases ? [input.executionCwd, originalOutput] : [])] : [outputDirectory, ...(aliases ? [originalOutput] : [])];
+  if (evaluator) {
+    const requestedSubject = input.environment.PI_SCIENCE_SUBJECT_DIR;
+    if (requestedSubject) {
+      if (!isAbsolute(requestedSubject)) throw new Error("research evaluator subject path is not absolute");
+      const subject = await realpath(requestedSubject);
+      if (subject !== workspace && !inside(runs, subject)) throw new Error("research evaluator subject escapes the workspace and run directory");
+      readable.push(subject);
+      if (aliases) readable.push(requestedSubject);
+    }
+    const evaluatorRoot = await realpath(join(metadataRoot(workspace), "evaluators")).catch(() => join(metadataRoot(workspace), "evaluators"));
+    for (const argument of input.command.slice(1)) {
+      if (!isAbsolute(argument)) continue;
+      const path = await realpath(argument).catch(() => null);
+      if (path && inside(evaluatorRoot, path)) readable.push(path);
+    }
+  }
   const executableRoots: string[] = [];
   if (status.backend === "appcontainer") {
     const nodeRuntimeRoot = windowsRuntimeReadRoot(process.execPath);
@@ -271,7 +288,6 @@ export async function sandboxResearchCommand(input: { command: string[]; workspa
 export async function sandboxConversationCommand(input: { command: string[]; conversationScript?: string; workspace: string; environment: NodeJS.ProcessEnv; managedEnvironmentPrefix?: string; trustedReadPaths?: string[]; timeoutSeconds?: number; platform?: NodeJS.Platform }): Promise<{ command: string[]; environment: NodeJS.ProcessEnv; backend: ResearchSandboxBackend; cleanupDirectory: string }> {
   const status = await cachedResearchSandboxStatus(input.platform);
   if (!status.available) throw new Error(`conversation execution isolation unavailable: ${status.reason}`);
-  if (status.backend === "appcontainer") throw new Error("conversation execution isolation is not yet available on Windows: workspace metadata cannot be excluded from Sandy grants");
   if (!input.managedEnvironmentPrefix || !input.environment.PI_SCIENCE_ENVIRONMENT_REVISION_ID) throw new Error("conversation execution requires a bound managed environment revision");
   const workspace = await realpath(input.workspace);
   const environmentRoot = await realpath(join(configRoot(), "micromamba", "envs"));
@@ -285,20 +301,40 @@ export async function sandboxConversationCommand(input: { command: string[]; con
   const cleanupDirectory = await mkdtemp(join(tmpdir(), "pi-science-conversation-"));
   try {
     const canonicalCleanupDirectory = await realpath(cleanupDirectory);
-    const scriptPath = input.conversationScript === undefined ? null : join(cleanupDirectory, "command.sh");
+    const scriptPath = input.conversationScript === undefined ? null : join(cleanupDirectory, status.backend === "appcontainer" ? "command.cmd" : "command.sh");
     if (scriptPath) await writeFile(scriptPath, input.conversationScript!, { encoding: "utf8", mode: 0o600 });
-    const executionCommand = scriptPath ? [...input.command, scriptPath] : input.command;
+    const executionCommand = scriptPath
+      ? status.backend === "appcontainer" ? [...input.command, "/d", "/s", "/c", scriptPath] : [...input.command, scriptPath]
+      : input.command;
     const aliases = status.backend === "seatbelt";
-    const metadata = join(workspace, ".pi-science");
-    if (!(await lstat(metadata)).isDirectory()) throw new Error("conversation workspace metadata directory is missing");
-    const readable = [...availableSystemRoots(systemRoots), workspace, prefix, cleanupDirectory, canonicalCleanupDirectory, ...trustedReadPaths, ...(aliases ? [input.workspace, input.managedEnvironmentPrefix, input.command[0]!, ...(input.trustedReadPaths ?? [])] : [])];
+    const legacyMetadata = metadataRoot(workspace);
+    const nestedLegacyMetadata = inside(workspace, legacyMetadata) ? legacyMetadata : null;
+    const readable = [...(status.backend === "appcontainer" ? [] : availableSystemRoots(systemRoots)), workspace, prefix, cleanupDirectory, canonicalCleanupDirectory, ...trustedReadPaths, ...(aliases ? [input.workspace, input.managedEnvironmentPrefix, input.command[0]!, ...(input.trustedReadPaths ?? [])] : [])];
     const writable = [workspace, cleanupDirectory, canonicalCleanupDirectory, ...(aliases ? [input.workspace] : [])];
     const environment: NodeJS.ProcessEnv = { ...input.environment, HOME: cleanupDirectory, TMPDIR: cleanupDirectory, TMP: cleanupDirectory, TEMP: cleanupDirectory };
-    let command: string[] = ["/usr/bin/sandbox-exec", "-p", macProfile(readable, writable, [metadata, join(input.workspace, ".pi-science")]), ...executionCommand];
+    let command: string[] = ["/usr/bin/sandbox-exec", "-p", macProfile(readable, writable, nestedLegacyMetadata ? [nestedLegacyMetadata] : []), ...executionCommand];
     if (status.backend === "bubblewrap") {
-      const emptyMetadata = join(cleanupDirectory, "hidden-metadata");
-      await mkdir(emptyMetadata);
-      command = bwrapCommand([commandPath, ...executionCommand.slice(1)], readable, writable, workspace, [{ source: emptyMetadata, target: metadata }]);
+      const hidden: Array<{ source: string; target: string }> = [];
+      if (nestedLegacyMetadata) {
+        const emptyMetadata = join(cleanupDirectory, "hidden-metadata");
+        await mkdir(emptyMetadata);
+        hidden.push({ source: emptyMetadata, target: nestedLegacyMetadata });
+      }
+      command = bwrapCommand([commandPath, ...executionCommand.slice(1)], readable, writable, workspace, hidden);
+    } else if (status.backend === "appcontainer") {
+      const cleanup = await probeAsync(sandyExecutable(), ["--cleanup"], { timeoutMs: 10_000 });
+      if (cleanup.status !== 0 || cleanup.error) throw new Error(`conversation AppContainer cleanup failed: ${probeFailure(cleanup)}`);
+      environment.USERPROFILE = canonicalCleanupDirectory;
+      environment.APPDATA = join(canonicalCleanupDirectory, ".appdata");
+      environment.LOCALAPPDATA = join(canonicalCleanupDirectory, ".localappdata");
+      environment.HOMEDRIVE = win32.parse(canonicalCleanupDirectory).root.slice(0, 2);
+      environment.HOMEPATH = canonicalCleanupDirectory.slice(environment.HOMEDRIVE.length);
+      await Promise.all([mkdir(environment.APPDATA, { recursive: true }), mkdir(environment.LOCALAPPDATA, { recursive: true })]);
+      const config = windowsResearchSandboxConfig({ commandPath, executionCwd: workspace, readable, writable, executableRoots: [prefix], timeoutSeconds: input.timeoutSeconds });
+      if (config.length > 20_000) throw new Error("conversation AppContainer policy exceeds the Windows command-line limit");
+      const dryRun = await probeAsync(sandyExecutable(), ["--dry-run", "--string", config, "--exec", commandPath], { cwd: workspace, env: environment, timeoutMs: 10_000 });
+      if (dryRun.status !== 0 || dryRun.error) throw new Error(`conversation AppContainer policy rejected: ${probeFailure(dryRun)}`);
+      command = [sandyExecutable(), "--quiet", "--string", config, "--exec", commandPath, ...executionCommand.slice(1)];
     }
     return { command, environment, backend: status.backend, cleanupDirectory };
   } catch (error) {

@@ -1,6 +1,8 @@
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathIsInside } from "../support/platform-utils.js";
+import { ensureProject, readProject } from "../project/project-registry.js";
+import { legacyMetadataRoot } from "../storage/persistence.js";
 
 async function canonicalizeForContainment(root: string, path: string): Promise<string> {
   const pathFromRoot = relative(root, path);
@@ -21,15 +23,12 @@ async function canonicalizeForContainment(root: string, path: string): Promise<s
 export async function validateWorkspaceCwd(cwd: string): Promise<string> {
   if (!cwd) throw new Error("Workspace path is required");
   const root = await realpath(resolve(cwd));
-  const marker = resolve(root, ".pi-science");
   const rootStat = await stat(root);
   if (!rootStat.isDirectory()) throw new Error(`Not a directory: ${cwd}`);
+  if (await readProject(root)) { await ensureProject(root); return root; }
   try {
-    const markerStat = await stat(marker);
-    if (markerStat.isDirectory()) return root;
-  } catch {
-    // A workspace outside the managed root must have the marker.
-  }
+    if ((await stat(legacyMetadataRoot(root))).isDirectory()) { await ensureProject(root); return root; }
+  } catch { /* no legacy registration marker */ }
   const managedRootValue = process.env.PI_SCIENCE_WORKSPACES;
   if (managedRootValue) {
     const configuredRoot = resolve(managedRootValue);
@@ -52,7 +51,7 @@ export async function resolveWorkspaceFile(workspace: string, relativePath: stri
   ) {
     throw new Error("Artifact path escapes the workspace");
   }
-  const includesMetadata = relativePathFromRoot.split(/[\\/]/).some((part) => part.toLowerCase() === ".pi-science");
-  if (includesMetadata) throw new Error("Artifact metadata paths are not publishable");
+  const includesReservedMetadata = relativePathFromRoot.split(/[\\/]/).some((part) => part.toLowerCase() === ".pi-science");
+  if (includesReservedMetadata) throw new Error("Artifact metadata paths are not publishable");
   return canonicalCandidate;
 }

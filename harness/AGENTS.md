@@ -140,8 +140,9 @@ Inspect state -> define result and evidence -> execute -> validate
   formats as generic text.
 - Keep temporary or intermediate work separate from durable deliverables. Do
   not create a second project-memory or history hierarchy in ordinary files.
-- Pi-Science owns `.pi-science/`. Do not directly create, edit, summarize,
-  synchronize, or delete its internal files. Use supported application flows.
+- Pi-Science keeps private application state outside the workspace. Do not try
+  to locate, create, edit, summarize, synchronize, or delete that state. Use
+  supported application flows.
 - `PROJECT.md`, when present, is reviewed project context. Treat it as context,
   not as an agent-maintained notebook. Durable knowledge enters through the
   Project Memory review flow.

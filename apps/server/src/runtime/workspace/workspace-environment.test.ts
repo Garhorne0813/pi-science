@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PACKAGES, DEFAULT_R_PACKAGES, defaultPythonExecutable, environmentPythonExecutable, micromambaDownloadUrl, WorkspaceEnvironmentService, workspaceEnvironmentVariables, type EnvironmentRevision } from "./workspace-environment.js";
+import { metadataRoot } from "../../storage/persistence.js";
 
 describe("workspace environment platform defaults", () => {
   it("uses the Windows Python launcher name when no override is configured", () => {
@@ -37,7 +38,7 @@ describe("workspace environment platform defaults", () => {
     const status = {
       ready: true, workspace, prefix: join(workspace, ".venv"), python: "python.exe", pip: "pip.exe",
       manager: "micromamba" as const,
-      npm: { local_prefix: workspace, global_prefix: join(workspace, ".pi-science", "npm-global"), cache: join(workspace, ".pi-science", "cache", "npm") },
+      npm: { local_prefix: workspace, global_prefix: join(metadataRoot(workspace), "npm-global"), cache: join(metadataRoot(workspace), "cache", "npm") },
     };
 
     const environment = workspaceEnvironmentVariables(status, {
@@ -71,18 +72,18 @@ describe("workspace environment platform defaults", () => {
     const workspace = "/work/project";
     const status = {
       ready: true, workspace, prefix: join(workspace, ".venv"), python: join(workspace, ".venv", "bin", "python"), pip: join(workspace, ".venv", "bin", "pip"),
-      npm: { local_prefix: workspace, global_prefix: join(workspace, ".pi-science", "node-tools", "npm"), cache: join(workspace, ".pi-science", "cache", "npm") },
+      npm: { local_prefix: workspace, global_prefix: join(metadataRoot(workspace), "node-tools", "npm"), cache: join(metadataRoot(workspace), "cache", "npm") },
     };
 
     const environment = workspaceEnvironmentVariables(status, { PATH: "/usr/bin" }, "linux");
-    expect(environment.npm_config_prefix).toBe(join(workspace, ".pi-science", "node-tools", "npm"));
-    expect(environment.NPM_CONFIG_PREFIX).toBe(join(workspace, ".pi-science", "node-tools", "npm"));
-    expect(environment.npm_config_cache).toBe(join(workspace, ".pi-science", "cache", "npm"));
-    expect(environment.PNPM_HOME).toBe(join(workspace, ".pi-science", "node-tools", "pnpm"));
-    expect(environment.COREPACK_HOME).toBe(join(workspace, ".pi-science", "cache", "corepack"));
+    expect(environment.npm_config_prefix).toBe(join(metadataRoot(workspace), "node-tools", "npm"));
+    expect(environment.NPM_CONFIG_PREFIX).toBe(join(metadataRoot(workspace), "node-tools", "npm"));
+    expect(environment.npm_config_cache).toBe(join(metadataRoot(workspace), "cache", "npm"));
+    expect(environment.PNPM_HOME).toBe(join(metadataRoot(workspace), "node-tools", "pnpm"));
+    expect(environment.COREPACK_HOME).toBe(join(metadataRoot(workspace), "cache", "corepack"));
     expect(environment.NODE_PATH).toBeUndefined();
-    expect(environment.PATH).toContain(join(workspace, ".pi-science", "node-tools", "npm", "bin"));
-    expect(environment.PATH).toContain(join(workspace, ".pi-science", "node-tools", "pnpm"));
+    expect(environment.PATH).toContain(join(metadataRoot(workspace), "node-tools", "npm", "bin"));
+    expect(environment.PATH).toContain(join(metadataRoot(workspace), "node-tools", "pnpm"));
   });
 });
 
@@ -153,7 +154,7 @@ describe("workspace environment package mutation", () => {
     tempDirs.push(root);
     process.env.PI_SCIENCE_HOME = root;
     const workspace = join(root, "workspace");
-    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    await mkdir(metadataRoot(workspace), { recursive: true });
     const prefix = join(root, "micromamba", "envs", "rev_old");
     const bin = join(prefix, process.platform === "win32" ? "Scripts" : "bin");
     const python = join(bin, process.platform === "win32" ? "python.exe" : "python");
@@ -176,7 +177,7 @@ describe("workspace environment package mutation", () => {
         created_at: new Date().toISOString(),
       }],
     }), "utf8");
-    await writeFile(join(workspace, ".pi-science", "environment.json"), JSON.stringify({
+    await writeFile(join(metadataRoot(workspace), "environment.json"), JSON.stringify({
       schema_version: 1,
       environment_id: "env_test", revision_id: "rev_old", bound_at: new Date().toISOString(),
     }), "utf8");
@@ -213,7 +214,7 @@ describe("workspace environment package mutation", () => {
     const newPrefix = join(root, "micromamba", "envs", "rev_new");
     const bin = join(newPrefix, process.platform === "win32" ? "Scripts" : "bin");
     const python = join(bin, process.platform === "win32" ? "python.exe" : "python");
-    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    await mkdir(metadataRoot(workspace), { recursive: true });
     await mkdir(bin, { recursive: true });
     await writeFile(python, "#!/bin/sh\nexit 0\n", "utf8");
     await chmod(python, 0o755);
@@ -229,7 +230,7 @@ describe("workspace environment package mutation", () => {
     };
     const registryPath = join(root, "environments", "registry.json");
     await writeFile(registryPath, JSON.stringify({ schema_version: 1, revisions: [oldRevision] }), "utf8");
-    await writeFile(join(workspace, ".pi-science", "environment.json"), JSON.stringify({
+    await writeFile(join(metadataRoot(workspace), "environment.json"), JSON.stringify({
       schema_version: 1, environment_id: "env_test", revision_id: "rev_old", bound_at: new Date().toISOString(),
     }), "utf8");
 
@@ -256,7 +257,7 @@ describe("workspace environment package mutation", () => {
     const prefix = join(root, "micromamba", "envs", "rev_r");
     const bin = join(prefix, process.platform === "win32" ? "Scripts" : "bin");
     const rscript = join(bin, process.platform === "win32" ? "Rscript.exe" : "Rscript");
-    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    await mkdir(metadataRoot(workspace), { recursive: true });
     await mkdir(bin, { recursive: true });
     await writeFile(rscript, "#!/bin/sh\nexit 0\n", "utf8");
     await chmod(rscript, 0o755);
@@ -269,7 +270,7 @@ describe("workspace environment package mutation", () => {
         platform: `${process.platform}-${process.arch}`, created_at: new Date().toISOString(),
       }],
     }), "utf8");
-    await writeFile(join(workspace, ".pi-science", "environment.json"), JSON.stringify({
+    await writeFile(join(metadataRoot(workspace), "environment.json"), JSON.stringify({
       schema_version: 1, environment_id: "env_r", revision_id: "rev_r", bound_at: new Date().toISOString(),
     }), "utf8");
 
@@ -289,8 +290,8 @@ describe("workspace environment package mutation", () => {
     expect(status.lockfile.exists).toBe(false);
     expect(status.node_modules_exists).toBe(false);
     expect(status.install_needed).toBe(true);
-    expect(status.tooling.npm_prefix).toBe(join(root, ".pi-science", "node-tools", "npm"));
-    expect(status.tooling.pnpm_home).toBe(join(root, ".pi-science", "node-tools", "pnpm"));
+    expect(status.tooling.npm_prefix).toBe(join(metadataRoot(root), "node-tools", "npm"));
+    expect(status.tooling.pnpm_home).toBe(join(metadataRoot(root), "node-tools", "pnpm"));
   });
 
   it("exposes compute environment presets", () => {
@@ -319,7 +320,7 @@ describe("workspace environment package mutation", () => {
     tempDirs.push(root);
     process.env.PI_SCIENCE_HOME = root;
     const workspace = join(root, "workspace");
-    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    await mkdir(metadataRoot(workspace), { recursive: true });
     await mkdir(join(root, "environments"), { recursive: true });
     const revOldPrefix = join(root, "micromamba", "envs", "rev_old");
     const revNewPrefix = join(root, "micromamba", "envs", "rev_new");
@@ -330,7 +331,7 @@ describe("workspace environment package mutation", () => {
         { environment_id: "env_test", revision_id: "rev_new", name: "test-env", display_name: "Test Env", language: "python", status: "ready", prefix: revNewPrefix, packages: ["python=3.12", "pip", "numpy"], platform: `${process.platform}-${process.arch}`, created_at: "2026-01-02T00:00:00.000Z", supersedes_revision_id: "rev_old" },
       ],
     }), "utf8");
-    await writeFile(join(workspace, ".pi-science", "environment.json"), JSON.stringify({
+    await writeFile(join(metadataRoot(workspace), "environment.json"), JSON.stringify({
       schema_version: 1, environment_id: "env_test", revision_id: "rev_new", bound_at: "2026-01-02T00:00:00.000Z",
     }), "utf8");
 
@@ -341,7 +342,7 @@ describe("workspace environment package mutation", () => {
       python: join(root, "micromamba", "envs", revisionId, "bin", "python"),
       pip: join(root, "micromamba", "envs", revisionId, "bin", "pip"),
       environment_id: "env_test", revision_id: revisionId, manager: "micromamba",
-      npm: { local_prefix: workspace, global_prefix: join(workspace, ".pi-science", "node-tools", "npm"), cache: join(workspace, ".pi-science", "cache", "npm") },
+      npm: { local_prefix: workspace, global_prefix: join(metadataRoot(workspace), "node-tools", "npm"), cache: join(metadataRoot(workspace), "cache", "npm") },
     }));
 
     await expect(service.rollback(workspace)).resolves.toMatchObject({ revision_id: "rev_old" });
@@ -364,7 +365,7 @@ describe("environment revision integrity", () => {
     const prefix = join(root, "micromamba", "envs", "rev_old");
     const bin = join(prefix, process.platform === "win32" ? "Scripts" : "bin");
     const python = join(bin, process.platform === "win32" ? "python.exe" : "python");
-    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    await mkdir(metadataRoot(workspace), { recursive: true });
     await mkdir(bin, { recursive: true });
     await writeFile(python, "#!/bin/sh\nexit 0\n", "utf8");
     await chmod(python, 0o755);
@@ -379,7 +380,7 @@ describe("environment revision integrity", () => {
         platform: `${process.platform}-${process.arch}`, created_at: new Date().toISOString(),
       }],
     }), "utf8");
-    await writeFile(join(workspace, ".pi-science", "environment.json"), JSON.stringify({
+    await writeFile(join(metadataRoot(workspace), "environment.json"), JSON.stringify({
       schema_version: 1, environment_id: "env_test", revision_id: "rev_old", bound_at: new Date().toISOString(),
     }), "utf8");
     return { root, workspace, prefix };

@@ -38,9 +38,9 @@ describe("Git workspace inspection", () => {
     await git(cwd, "-c", "user.name=Pi Science Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "baseline");
     await writeFile(join(cwd, ".pi-science", "project.json"), "{}");
     const baseline = await inspectGitWorkspace(cwd);
-    expect(baseline).toMatchObject({ available: true, is_repository: true, root: await realpath(cwd), clean: true });
+    expect(baseline).toMatchObject({ available: true, is_repository: true, root: await realpath(cwd), clean: false });
     expect(baseline.head).toMatch(/^[0-9a-f]{40,64}$/);
-    expect(baseline.changes).toEqual([]);
+    expect(baseline.changes).toContainEqual({ index_status: "?", worktree_status: "?", path: ".pi-science/" });
 
     await writeFile(join(cwd, "study data.txt"), "two");
     const changed = await inspectGitWorkspace(cwd);

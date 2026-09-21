@@ -9,6 +9,8 @@ import {
   publishResearchOutputArtifact,
 } from "./workspace-artifact-publisher.js";
 import { artifactBlobPath } from "./artifact-blob-store.js";
+import { metadataRoot, workspaceFile } from "../../storage/persistence.js";
+import { ensureProject } from "../../project/project-registry.js";
 
 const workspaces: string[] = [];
 
@@ -38,7 +40,7 @@ describe("workspace artifact publisher", () => {
     expect(firstArtifact).toMatchObject({ path: "outputs/result.csv", version: 1, size: 8 });
     expect(await readFile(artifactBlobPath(cwd, firstArtifact.sha256), "utf8")).toBe("value\n1\n");
 
-    const manifests = JSON.parse(`[${(await readFile(join(cwd, ".pi-science", "artifacts.jsonl"), "utf8")).trim().split("\n").join(",")}]`) as Array<Record<string, unknown>>;
+    const manifests = JSON.parse(`[${(await readFile(workspaceFile(cwd, "artifacts.jsonl"), "utf8")).trim().split("\n").join(",")}]`) as Array<Record<string, unknown>>;
     expect(manifests[0]).toMatchObject({
       artifact_id: firstArtifact.artifact_id,
       version: 1,
@@ -50,7 +52,7 @@ describe("workspace artifact publisher", () => {
       },
     });
 
-    const provenance = JSON.parse(`[${(await readFile(join(cwd, ".pi-science", "provenance.jsonl"), "utf8")).trim().split("\n").join(",")}]`) as Array<Record<string, unknown>>;
+    const provenance = JSON.parse(`[${(await readFile(workspaceFile(cwd, "provenance.jsonl"), "utf8")).trim().split("\n").join(",")}]`) as Array<Record<string, unknown>>;
     expect(provenance[0]).toMatchObject({
       path: "outputs/result.csv",
       executionId: "exec-cell-1",
@@ -77,7 +79,7 @@ describe("workspace artifact publisher", () => {
     await expect(publishWorkspaceArtifacts(cwd, ["outputs/missing.csv"], { tool: "node-kernel-gateway" })).resolves.toEqual([]);
 
     await writeFile(join(cwd, "outputs", "result.csv"), "value\n1\n", "utf8");
-    await mkdir(join(cwd, ".pi-science", "artifacts.jsonl"));
+    await mkdir(workspaceFile(cwd, "artifacts.jsonl"));
     const failures: string[] = [];
     const detailed = await publishWorkspaceArtifactsDetailed(cwd, ["outputs/result.csv"], {
       tool: "node-kernel-gateway",
@@ -93,12 +95,13 @@ describe("workspace artifact publisher", () => {
   it("publishes only contained research-run outputs and deduplicates retries", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-research-artifact-"));
     workspaces.push(cwd);
-    const outputRoot = join(cwd, ".pi-science", "runs", "run-1", "outputs");
+    const outputRoot = join(metadataRoot(cwd), "runs", "run-1", "outputs");
     await mkdir(outputRoot, { recursive: true });
+    await ensureProject(cwd);
     await writeFile(join(outputRoot, "result.json"), '{"score":1}\n');
     const options = { tool: "research-evaluator", loopId: "loop-1", candidateId: "candidate-1", kind: "data" };
     const first = await publishResearchOutputArtifact(cwd, outputRoot, "result.json", options);
-    expect(first).toMatchObject({ version: 1, path: ".pi-science/runs/run-1/outputs/result.json" });
+    expect(first).toMatchObject({ version: 1, path: "research/runs/run-1/outputs/result.json" });
     expect(await publishResearchOutputArtifact(cwd, outputRoot, "result.json", options)).toEqual(first);
     await rm(join(outputRoot, "result.json"));
     expect(await readFile(artifactBlobPath(cwd, first.sha256), "utf8")).toBe('{"score":1}\n');
@@ -115,18 +118,19 @@ describe("workspace artifact publisher", () => {
   it("repairs provenance after publication was interrupted between the manifest and lineage", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-artifact-retry-"));
     workspaces.push(cwd);
-    await mkdir(join(cwd, ".pi-science"));
+    await mkdir(metadataRoot(cwd), { recursive: true });
+    await ensureProject(cwd);
     await writeFile(join(cwd, "result.txt"), "result");
-    await mkdir(join(cwd, ".pi-science", "provenance.jsonl"));
+    await mkdir(workspaceFile(cwd, "provenance.jsonl"));
     await expect(publishWorkspaceArtifacts(cwd, ["result.txt"], { tool: "test" })).rejects.toThrow(/Failed to publish/);
-    const manifests = (await readFile(join(cwd, ".pi-science", "artifacts.jsonl"), "utf8")).trim().split("\n");
+    const manifests = (await readFile(workspaceFile(cwd, "artifacts.jsonl"), "utf8")).trim().split("\n");
     expect(manifests).toHaveLength(1);
 
-    await rm(join(cwd, ".pi-science", "provenance.jsonl"), { recursive: true });
+    await rm(workspaceFile(cwd, "provenance.jsonl"), { recursive: true });
     const [artifact] = await publishWorkspaceArtifacts(cwd, ["result.txt"], { tool: "test" });
     expect(artifact).toMatchObject({ version: 1 });
     await publishWorkspaceArtifacts(cwd, ["result.txt"], { tool: "test" });
-    const provenance = (await readFile(join(cwd, ".pi-science", "provenance.jsonl"), "utf8")).trim().split("\n");
+    const provenance = (await readFile(workspaceFile(cwd, "provenance.jsonl"), "utf8")).trim().split("\n");
     expect(provenance).toHaveLength(1);
   });
 
@@ -134,8 +138,9 @@ describe("workspace artifact publisher", () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-artifact-store-symlink-"));
     const outside = await mkdtemp(join(tmpdir(), "pi-science-artifact-outside-"));
     workspaces.push(cwd, outside);
-    await mkdir(join(cwd, ".pi-science"));
-    await symlink(outside, join(cwd, ".pi-science", "artifact-blobs"));
+    await mkdir(metadataRoot(cwd), { recursive: true });
+    await ensureProject(cwd);
+    await symlink(outside, join(metadataRoot(cwd), "artifact-blobs"));
     await writeFile(join(cwd, "result.txt"), "result");
     await expect(publishWorkspaceArtifacts(cwd, ["result.txt"], { tool: "test" })).rejects.toThrow(/Failed to publish/);
     expect(await readdir(outside)).toEqual([]);

@@ -7,6 +7,7 @@ import { buildPiProcessOptions, loadDefaultPiConfig, resetWebRuntimeAllocation, 
 import { CredentialStore } from "../../model-resources/credential-store.js";
 import { ModelResourceRepository, emptyModelResourceState } from "../../model-resources/model-resource-repository.js";
 import { runtimeCredentialEnvName } from "../../model-resources/runtime-credential-env.js";
+import { metadataRoot } from "../../storage/persistence.js";
 
 const cleanup: string[] = [];
 const original = { home: process.env.PI_SCIENCE_HOME, userHome: process.env.HOME, userProfile: process.env.USERPROFILE, cli: process.env.PI_CLI_PATH, tsx: process.env.PI_TSX_PATH, tsconfig: process.env.PI_TSCONFIG_PATH, piMode: process.env.PI_SCIENCE_PI_MODE };
@@ -586,7 +587,7 @@ describe("Pi runtime custom provider materialization", () => {
     expect(options.web?.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(options.web?.authToken).toBeTruthy();
     expect(options.env?.PI_ORBIT_AUTH_TOKEN).toBe(options.web?.authToken);
-    expect(options.web?.runtime).toMatchObject({ cwd, sessionDir: join(cwd, ".pi-science", "sessions") });
+    expect(options.web?.runtime).toMatchObject({ cwd, sessionDir: join(metadataRoot(cwd), "sessions") });
   });
 
   it("allows isolated runtimes to override the web session directory", async () => {
