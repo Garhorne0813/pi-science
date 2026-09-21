@@ -501,7 +501,7 @@ describe("conversation presentation protocol v2", () => {
     }));
     thread = foldEvent(thread, envelope({ seq: 3, type: "item.completed", itemId: "answer-1", payload: { revision: 1 } }));
     const beforeRunCompletion = thread.blocks.find((block) => block.kind === "agent");
-    expect(beforeRunCompletion).toMatchObject({ itemId: "answer-1", partial: false, presentationRole: "final" });
+    expect(beforeRunCompletion).toMatchObject({ itemId: "answer-1", revision: 1, sequence: 3, partial: false, presentationRole: "final" });
     expect(thread.foldState?.terminalRunIds).not.toContain("run-1");
 
     const duplicate = foldEvent(thread, envelope({
@@ -529,7 +529,26 @@ describe("conversation presentation protocol v2", () => {
       payload: {},
     }));
     const thinking = thread.blocks.find((block) => block.kind === "thinking");
+    expect(thinking).toMatchObject({ itemId: "anonymous-1", revision: 1, sequence: 2 });
     expect(thinking && "parts" in thinking && thinking.parts[0]?.text).toBe("Weigh it.");
+  });
+
+  it("carries V2 identity and revision metadata onto tool blocks", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({
+      seq: 2,
+      type: "tool.updated",
+      itemId: "tool-item-1",
+      parentItemId: "parent-1",
+      payload: { callId: "call-1", tool: "python", status: "running", revision: 4 },
+    }));
+    expect(thread.blocks.find((block) => block.kind === "tool")).toMatchObject({
+      itemId: "tool-item-1",
+      parentItemId: "parent-1",
+      revision: 4,
+      sequence: 2,
+    });
   });
 
   it("reorders speculative V2 thinking revisions when a missing predecessor arrives", () => {
