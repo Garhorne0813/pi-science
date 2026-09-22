@@ -84,6 +84,18 @@ describe("normalizeMathInput", () => {
     expect(normalizeMathInput(input)).toBe(input);
   });
 
+  it("never rewrites TeX inside an unclosed fenced code block", () => {
+    const input = "```python\nformula = \"\\(x^2\\)\"\ndisplay = \"\\[y\\]\"";
+    expect(normalizeMathInput(input)).toBe(input);
+  });
+
+  it("never rewrites TeX inside list and blockquote fences", () => {
+    const list = "- item\n    ```python\n    formula = \"\\(x^2\\)\"";
+    const quote = "> ```python\n> formula = \"\\(x^2\\)\"";
+    expect(normalizeMathInput(list)).toBe(list);
+    expect(normalizeMathInput(quote)).toBe(quote);
+  });
+
   it("never rewrites TeX inside a tilde-fenced code block", () => {
     const input = "~~~\n$$\n\\frac{a}{b}\n$$\n~~~";
     expect(normalizeMathInput(input)).toBe(input);
