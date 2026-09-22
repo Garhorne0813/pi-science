@@ -180,6 +180,7 @@ function reconcileFenceIdentities(markdown: string, previous: Pick<FenceIdentity
       let bestScore = 0.6;
       for (const nextIndex of unmatchedNext) {
         if (identified[nextIndex] !== null) continue;
+        if (prior[priorIndex]!.signature === fences[nextIndex]!.signature) continue;
         const score = signatureSimilarity(prior[priorIndex]!.signature, fences[nextIndex]!.signature);
         if (score > bestScore) {
           bestNext = nextIndex;
