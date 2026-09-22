@@ -96,7 +96,13 @@ const STYLES: Record<Variant, Record<string, string>> = {
 export type CodeRunner = { cwd: string; sessionId: string };
 
 type IdentifiedFence = MarkdownFencedCodeBlock & { id: string };
-type CodeExecution = { running: boolean; snapshot: string; result: CellResult | null };
+type FenceIdentityState = {
+  markdown: string;
+  fences: IdentifiedFence[];
+  nextSerial: number;
+  byStart: Map<number, string>;
+};
+type CodeExecution = { running: boolean; snapshot: string; requestId: number; result: CellResult | null };
 
 function signatureSimilarity(left: string, right: string): number {
   const longest = Math.max(left.length, right.length);
@@ -112,71 +118,107 @@ function signatureSimilarity(left: string, right: string): number {
   return (prefix + suffix) / longest;
 }
 
-/** Keep interactive state with an unchanged fence when replace revisions add,
- * remove, or reorder siblings. Exact source matches are authoritative; a
- * one-for-one unmatched pair carries identity across an in-place code edit. */
-function useStableFenceIdentities(markdown: string): Map<number, string> {
-  const previous = useRef<IdentifiedFence[]>([]);
-  const serial = useRef(0);
-  return useMemo(() => {
-    const fences = markdownFencedCodeBlocks(markdown);
-    const prior = previous.current;
-    const usedPrior = new Set<number>();
-    const identified: Array<IdentifiedFence | null> = fences.map(() => null);
+function reconcileFenceIdentities(markdown: string, previous: Pick<FenceIdentityState, "fences" | "nextSerial">): FenceIdentityState {
+  const fences = markdownFencedCodeBlocks(markdown);
+  const prior = previous.fences;
+  const usedPrior = new Set<number>();
+  const identified: Array<IdentifiedFence | null> = fences.map(() => null);
+  const priorBySignature = new Map<string, number[]>();
+  const nextBySignature = new Map<string, number[]>();
 
-    for (let nextIndex = 0; nextIndex < fences.length; nextIndex += 1) {
-      const fence = fences[nextIndex]!;
+  for (let index = 0; index < prior.length; index += 1) {
+    const signature = prior[index]!.signature;
+    const matches = priorBySignature.get(signature) ?? [];
+    matches.push(index);
+    priorBySignature.set(signature, matches);
+  }
+  for (let index = 0; index < fences.length; index += 1) {
+    const signature = fences[index]!.signature;
+    const matches = nextBySignature.get(signature) ?? [];
+    matches.push(index);
+    nextBySignature.set(signature, matches);
+  }
+
+  // Preserve exact matches only when the signature multiplicity is unchanged.
+  // If a duplicate identical fence was inserted or removed, ownership is
+  // ambiguous; assigning the old id by source offset can move a pending run to
+  // the wrong logical block, so prefer fresh identities instead.
+  for (const [signature, nextIndexes] of nextBySignature) {
+    const priorIndexes = priorBySignature.get(signature) ?? [];
+    if (priorIndexes.length === 0 || priorIndexes.length !== nextIndexes.length) continue;
+    const available = new Set(priorIndexes);
+    for (const nextIndex of nextIndexes) {
       let best = -1;
       let distance = Number.POSITIVE_INFINITY;
-      for (let priorIndex = 0; priorIndex < prior.length; priorIndex += 1) {
-        if (usedPrior.has(priorIndex) || prior[priorIndex]!.signature !== fence.signature) continue;
-        const candidateDistance = Math.abs(prior[priorIndex]!.start - fence.start);
+      for (const priorIndex of available) {
+        const candidateDistance = Math.abs(prior[priorIndex]!.start - fences[nextIndex]!.start);
         if (candidateDistance < distance) {
           best = priorIndex;
           distance = candidateDistance;
         }
       }
       if (best >= 0) {
+        available.delete(best);
         usedPrior.add(best);
-        identified[nextIndex] = { ...fence, id: prior[best]!.id };
+        identified[nextIndex] = { ...fences[nextIndex]!, id: prior[best]!.id };
       }
     }
+  }
 
-    const unmatchedPrior = prior.map((_fence, index) => index).filter((index) => !usedPrior.has(index));
-    const unmatchedNext = fences.map((_fence, index) => index).filter((index) => identified[index] === null);
-    if (unmatchedPrior.length === unmatchedNext.length) {
-      for (let index = 0; index < unmatchedNext.length; index += 1) {
-        const priorIndex = unmatchedPrior[index]!;
-        const nextIndex = unmatchedNext[index]!;
-        usedPrior.add(priorIndex);
-        identified[nextIndex] = { ...fences[nextIndex]!, id: prior[priorIndex]!.id };
-      }
-    } else {
-      // When insertion and an in-place edit happen in the same replacement,
-      // carry identity only for a strong source match; otherwise a new fence is
-      // safer than moving a pending execution to unrelated code.
-      for (const priorIndex of unmatchedPrior) {
-        let bestNext = -1;
-        let bestScore = 0.6;
-        for (const nextIndex of unmatchedNext) {
-          if (identified[nextIndex] !== null) continue;
-          const score = signatureSimilarity(prior[priorIndex]!.signature, fences[nextIndex]!.signature);
-          if (score > bestScore) {
-            bestNext = nextIndex;
-            bestScore = score;
-          }
+  const unmatchedPrior = prior.map((_fence, index) => index).filter((index) => !usedPrior.has(index));
+  const unmatchedNext = fences.map((_fence, index) => index).filter((index) => identified[index] === null);
+  if (unmatchedPrior.length === 1 && unmatchedNext.length === 1) {
+    const priorIndex = unmatchedPrior[0]!;
+    const nextIndex = unmatchedNext[0]!;
+    identified[nextIndex] = { ...fences[nextIndex]!, id: prior[priorIndex]!.id };
+  } else if (unmatchedPrior.length !== unmatchedNext.length) {
+    // When insertion/deletion and an in-place edit happen in the same
+    // replacement, carry identity only for a strong source match. Equal-sized
+    // multi-fence rewrites are intentionally treated as ambiguous.
+    for (const priorIndex of unmatchedPrior) {
+      let bestNext = -1;
+      let bestScore = 0.6;
+      for (const nextIndex of unmatchedNext) {
+        if (identified[nextIndex] !== null) continue;
+        const score = signatureSimilarity(prior[priorIndex]!.signature, fences[nextIndex]!.signature);
+        if (score > bestScore) {
+          bestNext = nextIndex;
+          bestScore = score;
         }
-        if (bestNext >= 0) identified[bestNext] = { ...fences[bestNext]!, id: prior[priorIndex]!.id };
       }
+      if (bestNext >= 0) identified[bestNext] = { ...fences[bestNext]!, id: prior[priorIndex]!.id };
     }
+  }
 
-    const next = identified.map((fence, index) => fence ?? {
-      ...fences[index]!,
-      id: `fence-${serial.current++}`,
-    });
-    previous.current = next;
-    return new Map(next.map((fence) => [fence.start, fence.id]));
-  }, [markdown]);
+  let nextSerial = previous.nextSerial;
+  const next = identified.map((fence, index) => fence ?? {
+    ...fences[index]!,
+    id: `fence-${nextSerial++}`,
+  });
+  return {
+    markdown,
+    fences: next,
+    nextSerial,
+    byStart: new Map(next.map((fence) => [fence.start, fence.id])),
+  };
+}
+
+/** Keep interactive state with an unchanged fence when replace revisions add,
+ * remove, or reorder siblings. Identity reconciliation is pure during render;
+ * only a committed render becomes the baseline for the next revision. */
+function useStableFenceIdentities(markdown: string): Map<number, string> {
+  const [committed, setCommitted] = useState<FenceIdentityState>(() =>
+    reconcileFenceIdentities(markdown, { fences: [], nextSerial: 0 }),
+  );
+  const pending = useMemo(
+    () => (committed.markdown === markdown ? committed : reconcileFenceIdentities(markdown, committed)),
+    [committed, markdown],
+  );
+  useEffect(() => {
+    if (pending === committed) return;
+    setCommitted((current) => current === committed ? pending : current);
+  }, [committed, pending]);
+  return pending.byStart;
 }
 
 function useFrameCoalescedValue(value: string, enabled: boolean): string {
@@ -377,6 +419,7 @@ export function MarkdownViewer({
   const fenceIdentities = useStableFenceIdentities(renderedValue);
   const [codeExecutions, setCodeExecutions] = useState<Record<string, CodeExecution>>({});
   const inFlightExecutions = useRef(new Set<string>());
+  const executionSerial = useRef(0);
   // Renderer components stay mounted across streaming frames, so `pre` reads
   // the current source through a ref instead of forcing a new component type.
   const renderedValueRef = useRef(renderedValue);
@@ -394,32 +437,44 @@ export function MarkdownViewer({
     return cwd ? { cwd, documentPath: undefined } : undefined;
   }, [cwd, resourceCwd, resourceDocumentPath, resourceRoot]);
   const runCode = useCallback((executionId: string, code: string) => {
-    if (!cwd || !sessionId || !code.trim() || inFlightExecutions.current.has(executionId)) return;
+    if (!cwd || !sessionId || !code.trim()) return;
     const snapshot = code;
-    inFlightExecutions.current.add(executionId);
+    const inFlightKey = `${executionId}\u0000${snapshot}`;
+    if (inFlightExecutions.current.has(inFlightKey)) return;
+    const requestId = executionSerial.current++;
+    inFlightExecutions.current.add(inFlightKey);
     setCodeExecutions((current) => ({
       ...current,
-      [executionId]: { running: true, snapshot, result: null },
+      [executionId]: { running: true, snapshot, requestId, result: null },
     }));
     void notebookRuntime.execute(`chat-${sessionId}`, cwd, "python", snapshot, sessionId)
       .then((result) => {
-        setCodeExecutions((current) => ({
-          ...current,
-          [executionId]: { running: false, snapshot, result },
-        }));
+        setCodeExecutions((current) => {
+          const active = current[executionId];
+          if (!active || active.requestId !== requestId) return current;
+          return {
+            ...current,
+            [executionId]: { running: false, snapshot, requestId, result },
+          };
+        });
       })
       .catch((cause: unknown) => {
-        setCodeExecutions((current) => ({
-          ...current,
-          [executionId]: {
-            running: false,
-            snapshot,
-            result: { ok: false, stdout: "", result: null, error: cause instanceof Error ? cause.message : String(cause) },
-          },
-        }));
+        setCodeExecutions((current) => {
+          const active = current[executionId];
+          if (!active || active.requestId !== requestId) return current;
+          return {
+            ...current,
+            [executionId]: {
+              running: false,
+              snapshot,
+              requestId,
+              result: { ok: false, stdout: "", result: null, error: cause instanceof Error ? cause.message : String(cause) },
+            },
+          };
+        });
       })
       .finally(() => {
-        inFlightExecutions.current.delete(executionId);
+        inFlightExecutions.current.delete(inFlightKey);
       });
   }, [cwd, sessionId]);
   const closeCodeResult = useCallback((executionId: string) => {
@@ -503,13 +558,14 @@ export function MarkdownViewer({
           const fenceId = start === undefined ? undefined : fenceIdentities.get(start);
           const executionId = fenceId ? `${sessionId}:${fenceId}` : undefined;
           const execution = executionId ? codeExecutions[executionId] : undefined;
-          const result = execution?.snapshot === code ? execution.result : null;
+          const executionMatchesCode = execution?.snapshot === code;
+          const result = executionMatchesCode ? execution.result : null;
           return (
             <RunnableCodeBlock
               code={code}
               language={language}
               preClassName={s.pre}
-              running={execution?.running === true}
+              running={executionMatchesCode && execution.running === true}
               result={result ?? null}
               onRun={() => { if (executionId) runCode(executionId, code); }}
               onCloseResult={() => { if (executionId) closeCodeResult(executionId); }}
