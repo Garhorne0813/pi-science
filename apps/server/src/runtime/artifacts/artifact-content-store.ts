@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { copyFile, link, lstat, mkdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, link, lstat, mkdir, open, readdir, rm, writeFile, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 import { isArtifactSurfaceablePath } from "./artifact-surface-policy.js";
 import { metadataRoot, readJsonLines, workspaceFile } from "../../storage/persistence.js";
@@ -9,6 +9,12 @@ import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/works
 interface ArtifactContentManifest {
   path?: string;
   sha256?: string;
+}
+
+export interface ResolvedArtifactContent {
+  handle: FileHandle;
+  path: string;
+  size: number;
 }
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
@@ -47,6 +53,18 @@ async function existingSnapshotValid(path: string, expectedSha256: string): Prom
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function openRegularFile(path: string, displayPath: string): Promise<ResolvedArtifactContent> {
+  const handle = await open(path, "r");
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw new Error("Artifact content snapshot must be a regular file");
+    return { handle, path: displayPath, size: info.size };
+  } catch (error) {
+    await handle.close();
     throw error;
   }
 }
@@ -97,18 +115,32 @@ export async function persistArtifactBytes(cwd: string, expectedSha256: string, 
 /** Resolve an immutable published artifact body. For manifests created before
  * snapshot storage existed, the current workspace file is used only when its
  * bytes still match the requested hash; stale content is never substituted. */
-export async function resolveArtifactContent(cwd: string, requestedPath: string, expectedSha256: string): Promise<{ file: string; path: string }> {
+export async function resolveArtifactContent(cwd: string, requestedPath: string, expectedSha256: string): Promise<ResolvedArtifactContent> {
   const sha256 = expectedSha256.toLowerCase();
   if (!SHA256_RE.test(sha256)) throw new Error("Invalid artifact SHA-256");
   const workspace = await validateWorkspaceCwd(cwd);
-  const path = normalizeArtifactPath(requestedPath);
+  const requested = normalizeArtifactPath(requestedPath);
   const manifests = await readJsonLines<ArtifactContentManifest>(workspaceFile(workspace, "artifacts.jsonl"));
-  if (!manifests.some((item) => item.path === path && item.sha256?.toLowerCase() === sha256)) {
+  const manifest = manifests.find((item) => item.path === requested && item.sha256?.toLowerCase() === sha256);
+  if (!manifest) {
     throw new Error("Artifact content hash is not published for this path");
   }
+  // Use the matched manifest values below, rather than request values. Apart
+  // from making the trust boundary explicit, this prevents a request path or
+  // hash from becoming a filesystem path even after validation.
+  const path = normalizeArtifactPath(manifest.path ?? "");
 
-  const snapshot = join(metadataRoot(workspace), "artifact-content", sha256);
-  if (await existingSnapshotValid(snapshot, sha256)) return { file: snapshot, path };
+  const snapshotDirectory = join(metadataRoot(workspace), "artifact-content");
+  const snapshotEntry = await readdir(snapshotDirectory, { withFileTypes: true })
+    .then((entries) => entries.find((entry) => entry.isFile() && entry.name === sha256))
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+  if (snapshotEntry) {
+    const snapshot = join(snapshotDirectory, snapshotEntry.name);
+    if (await existingSnapshotValid(snapshot, sha256)) return openRegularFile(snapshot, path);
+  }
 
   // Legacy fallback: preserve correctness rather than returning whatever now
   // happens to occupy the path. Reject lexical symlinks and verify the bytes.
@@ -123,5 +155,5 @@ export async function resolveArtifactContent(cwd: string, requestedPath: string,
   if (!currentInfo.isFile() || await sha256File(current) !== sha256) {
     throw new Error("Immutable content for this artifact version is unavailable");
   }
-  return { file: current, path };
+  return openRegularFile(current, path);
 }

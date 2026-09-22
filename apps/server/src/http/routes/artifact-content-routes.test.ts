@@ -57,4 +57,36 @@ describe("immutable artifact content", () => {
     expect(oldServe.statusCode).toBe(200);
     expect(oldServe.body).toBe("version-one");
   });
+
+  it("rejects request-controlled hashes and paths before filesystem access", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-artifact-content-"));
+    workspaces.push(cwd);
+    await mkdir(join(cwd, ".pi-science"), { recursive: true });
+    await writeFile(join(cwd, "result.txt"), "published", "utf8");
+
+    const app = Fastify({ logger: false });
+    registerArtifactRoutes(app);
+    apps.push(app);
+
+    const published = await app.inject({
+      method: "POST",
+      url: `/api/artifacts/publish?cwd=${encodeURIComponent(cwd)}`,
+      payload: { path: "result.txt", tool: "test" },
+    });
+    const { sha256 } = published.json() as { sha256: string };
+
+    const invalidHash = await app.inject({
+      method: "GET",
+      url: `/api/artifacts/content/not-a-sha?cwd=${encodeURIComponent(cwd)}&path=result.txt`,
+    });
+    expect(invalidHash.statusCode).toBe(404);
+    expect(invalidHash.json()).toMatchObject({ error: "Invalid artifact SHA-256" });
+
+    const traversal = await app.inject({
+      method: "GET",
+      url: `/api/artifacts/content/${sha256}?cwd=${encodeURIComponent(cwd)}&path=..%2Fresult.txt`,
+    });
+    expect(traversal.statusCode).toBe(404);
+    expect(traversal.json()).toMatchObject({ error: "Artifact path is not available for automatic preview" });
+  });
 });
