@@ -22,16 +22,18 @@ function literatureDetails(details: Record<string, unknown>): Record<string, unk
 
 function literatureSource(tool: string, input: Record<string, unknown>, details: Record<string, unknown>): string {
   const request = record(details.request);
+  // bioRxiv and medRxiv share one tool name; the requested server is the
+  // authoritative provider even before a result envelope exists.
+  const server = text(input.server) ?? text(request?.server) ?? text(details.server);
+  const normalizedServer = server?.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (normalizedServer === "biorxiv" || normalizedServer === "medrxiv") return displaySource(server!);
+
   const explicit = text(input.database)
     ?? text(input.source)
     ?? text(input.provider)
     ?? text(request?.provider)
     ?? text(details.provider);
-  if (explicit) {
-    const server = text(input.server) ?? text(request?.server) ?? text(details.server);
-    if (server && /bio|med/i.test(explicit)) return displaySource(server);
-    return displaySource(explicit);
-  }
+  if (explicit) return displaySource(explicit);
 
   const normalized = tool.toLowerCase().replace(/[\s_-]+/g, "");
   if (normalized.includes("pubmed")) return "PubMed";

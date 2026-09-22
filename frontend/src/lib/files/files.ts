@@ -11,6 +11,7 @@ export type { FileRoot };
 export type ArtifactContentKey = string | number;
 
 const API = "/api";
+const SHA256_RE = /^[0-9a-f]{64}$/i;
 
 /**
  * File previews are rendered by more than one surface: a turn artifact card,
@@ -64,6 +65,10 @@ export const artifactFileKey = (
   contentKey?: ArtifactContentKey,
 ) => ["artifact-file", cwd, root ?? null, path, maxBytes ?? null, contentKey ?? null] as const;
 
+function immutableArtifactHash(contentKey?: ArtifactContentKey): string | undefined {
+  return typeof contentKey === "string" && SHA256_RE.test(contentKey) ? contentKey.toLowerCase() : undefined;
+}
+
 function artifactFileQuery(
   path: string,
   root: FileRoot | undefined,
@@ -74,9 +79,13 @@ function artifactFileQuery(
   const params = new URLSearchParams({ cwd });
   if (root) params.set("root", root);
   if (maxBytes !== undefined) params.set("maxBytes", String(maxBytes));
+  const artifactHash = immutableArtifactHash(contentKey);
+  if (artifactHash && (root === undefined || root === "workspace")) params.set("path", path);
   return {
     queryKey: artifactFileKey(cwd, path, root, maxBytes, contentKey),
-    queryFn: () => apiRequest<ArtifactFile>(`${API}/files/${encodeWorkspacePath(path)}?${params}`),
+    queryFn: () => apiRequest<ArtifactFile>(artifactHash && (root === undefined || root === "workspace")
+      ? `${API}/artifacts/content/${artifactHash}?${params}`
+      : `${API}/files/${encodeWorkspacePath(path)}?${params}`),
     staleTime: ARTIFACT_FILE_STALE_MS,
     gcTime: ARTIFACT_FILE_GC_MS,
     retry: false,
@@ -102,8 +111,8 @@ export interface ArtifactFile {
 /** Read a workspace file. Uses REST API. `maxBytes` caps the response to the
  *  first N bytes (used by per-turn artifact cards to preview file content).
  *
- * `contentKey` is part of the cache identity so a new artifact revision never
- * reuses the previous revision's file body. */
+ * A SHA-256 `contentKey` uses the immutable artifact-content endpoint; legacy
+ * numeric revisions remain cache identities only. */
 export async function readArtifact(
   path: string,
   root: FileRoot | undefined,
@@ -143,10 +152,14 @@ export function previewUrl(
   cwd: string,
   contentKey?: ArtifactContentKey,
 ): string {
+  const artifactHash = immutableArtifactHash(contentKey);
+  if (artifactHash && (root === undefined || root === "workspace")) {
+    const params = new URLSearchParams({ cwd, path });
+    return `${API}/artifacts/content/${artifactHash}/serve?${params}`;
+  }
   const params = new URLSearchParams({ cwd });
   if (root) params.set("root", root);
-  // The serve endpoint ignores this value; the browser uses it to bypass a
-  // previously loaded image when the artifact content advances in place.
+  // Non-hash revisions still bust the browser cache for legacy artifacts.
   if (contentKey !== undefined) params.set("v", String(contentKey));
   const encodedPath = path.split("/").map(encodeURIComponent).join("/");
   return `${API}/files/serve/${encodedPath}?${params}`;
@@ -186,58 +199,4 @@ export function base64ToBytes(b64: string): ArrayBuffer {
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return bytes.buffer;
-}
-
-export interface LargeFilePointer {
-  error?: string;
-  format?: string;
-  path?: string;
-  name?: string;
-  size?: string | number;
-  size_bytes?: number;
-  modified?: number;
-  is_dir?: boolean;
-  note?: string | null;
-  hint?: string;
-  gzipped?: boolean;
-  approx_rows?: number;
-  rows?: number;
-  num_rows?: number;
-  n_rows?: number;
-  approx_reads?: number;
-  approx_sequences?: number;
-  approx_variants?: number;
-  n_columns?: number;
-  read_length?: { min: number; max: number; mean: number };
-  samples?: string[];
-  sample_ids?: string[];
-  columns?: Array<{ name: string; dtype: string }>;
-  datasets?: Array<{ path: string; shape: Array<number | string>; dtype: string }>;
-}
-
-function artifactProbeQuery(path: string, root: FileRoot | undefined, cwd: string) {
-  const params = new URLSearchParams({ cwd });
-  if (root) params.set("root", root);
-  return {
-    queryKey: ["artifact-probe", cwd, root ?? null, path] as const,
-    queryFn: () => withArtifactProbeSlot(() => apiRequest<LargeFilePointer>(`${API}/files/probe/${encodeWorkspacePath(path)}?${params}`)),
-    staleTime: ARTIFACT_PROBE_STALE_MS,
-    gcTime: ARTIFACT_PROBE_GC_MS,
-    retry: false,
-  };
-}
-
-/** Probe metadata/structure without reading the whole file. Calls are shared
- * through the query cache and pass through a module-level semaphore, so many
- * mounted historical turns cannot multiply the effective concurrency. */
-export async function probeLargeFile(
-  path: string,
-  root: FileRoot | undefined,
-  cwd: string,
-): Promise<LargeFilePointer | null> {
-  try {
-    return await queryClient.fetchQuery(artifactProbeQuery(path, root, cwd));
-  } catch {
-    return null;
-  }
 }

@@ -4,6 +4,7 @@ import { stat } from "node:fs/promises";
 import { relative } from "node:path";
 import { appendJsonLineUnlocked, readJsonLines, withFileWriteLock, workspaceFile } from "../../storage/persistence.js";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";
+import { persistArtifactFile } from "./artifact-content-store.js";
 import { previewKind, previewMime } from "./workspace-artifact-snapshot.js";
 
 const MAX_PUBLISH_BYTES = 2 * 1024 * 1024 * 1024;
@@ -150,6 +151,10 @@ async function publishWorkspaceArtifact(
 
   const path = relative(workspace, target).replaceAll("\\", "/");
   const artifactId = createHash("sha256").update(`${workspace}:${path}`).digest("hex").slice(0, 24);
+  // Capture the exact bytes addressed by the manifest hash before publishing
+  // metadata. If the file changes between hashing and capture, fail rather
+  // than creating a version whose historical preview points at other bytes.
+  await persistArtifactFile(workspace, target, digest.sha256);
   return withFileWriteLock(workspaceFile(cwd, "artifacts.jsonl"), async () => {
     const artifacts = await readJsonLines<ArtifactManifest>(workspaceFile(cwd, "artifacts.jsonl"));
     const previous = artifacts.filter((item) => item.artifact_id === artifactId).at(-1);

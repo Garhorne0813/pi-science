@@ -46,6 +46,19 @@ describe("ActivityRendererRegistry", () => {
     });
     expect(arxivView).toEqual({ title: "arXiv", detail: "conversation.activity.resultCount:2" });
 
+    const medrxivRunning = tool("search_biorxiv_preprints", {
+      status: "running",
+      title: "Running search biorxiv preprints",
+      input: { server: "medrxiv" },
+    });
+    const medrxivRunningView = activityRendererRegistry.resolve(projectToolActivity(medrxivRunning).kind).compact({
+      activity: projectToolActivity(medrxivRunning),
+      source: medrxivRunning,
+      live: true,
+      t,
+    });
+    expect(medrxivRunningView.title).toBe("conversation.activity.literatureRunning:medRxiv");
+
     const medrxiv = tool("search_biorxiv_preprints", {
       input: { server: "medrxiv" },
       details: {
