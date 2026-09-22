@@ -411,9 +411,11 @@ direct `!` commands to a control-plane conversation job. Notebook Python/R
 kernels use the same OS sandbox. The workspace is writable, the bound
 micromamba revision is read-only, private application state is outside the
 workspace and unavailable, and network access is denied. Commands fail closed
-when the revision or native sandbox is unavailable. Windows uses Sandy's
-AppContainer policy when `PI_SCIENCE_SANDY_PATH` points to `sandy.exe`; the
-kernel status API disables execution when that runner is unavailable.
+when the revision or native sandbox is unavailable. Windows conversation Bash
+uses Sandy's non-interactive AppContainer policy when `PI_SCIENCE_SANDY_PATH`
+points to `sandy.exe`. Notebook Python/R remains disabled on native Windows
+because that policy disables the persistent stdin protocol required by kernels;
+the kernel status API reports this limitation and the UI disables execution.
 
 Pi's built-in file tools remain in the supervisor process. The extension checks
 their paths against the workspace and blocks `.pi-science` and symlink escapes;

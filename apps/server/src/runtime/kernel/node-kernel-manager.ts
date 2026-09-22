@@ -1,9 +1,8 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createInterface, type Interface } from "node:readline";
@@ -84,7 +83,7 @@ const PYTHON_BRIDGE = fileURLToPath(new URL("./bridges/kernel_bridge.py", import
 const R_BRIDGE = fileURLToPath(new URL("./bridges/kernel_bridge.R", import.meta.url));
 const HEALTH_CHECK_CODE = "1+1";
 const INTERRUPT_GRACE_MS = 2_000;
-export const WINDOWS_KERNEL_UNAVAILABLE = "Notebook execution on Windows requires PI_SCIENCE_SANDY_PATH to point to sandy.exe";
+export const WINDOWS_KERNEL_UNAVAILABLE = "Notebook execution is unavailable on Windows because the AppContainer policy does not support the kernel stdin protocol";
 
 class KernelTimeoutError extends Error {
   constructor(message: string) {
@@ -154,12 +153,11 @@ export class NodeKernelManager {
   private windowsSandboxUnavailable(): boolean {
     // Production uses the real sandbox function. Protocol tests inject a fake
     // sandbox so they can still exercise Windows process lifecycle semantics.
+    // Sandy conversation jobs are non-interactive: their AppContainer policy
+    // deliberately disables stdin. A persistent Notebook kernel cannot use
+    // that policy because its request protocol is carried over stdin.
     return this.deps.platform === "win32"
-      && this.deps.sandboxCommand === sandboxConversationCommand
-      && (!process.env.PI_SCIENCE_SANDY_PATH
-        || !isAbsolute(process.env.PI_SCIENCE_SANDY_PATH)
-        || !process.env.PI_SCIENCE_SANDY_PATH.toLowerCase().endsWith(".exe")
-        || !existsSync(process.env.PI_SCIENCE_SANDY_PATH));
+      && this.deps.sandboxCommand === sandboxConversationCommand;
   }
 
   executionCapability(): Pick<KernelManagerStatus, "execution_available" | "unavailable_reason"> {

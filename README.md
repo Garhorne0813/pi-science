@@ -71,7 +71,7 @@ The Bash launcher is designed for macOS/Linux and is intended to run under WSL; 
 
 Unattended research execution on Windows additionally requires [Sandy](https://github.com/ahrvoje/sandy_cli) for AppContainer + Job Object isolation. Windows research scripts must use a `.cjs`, `.mjs`, or `.js` entrypoint. Set `PI_SCIENCE_SANDY_PATH` to the absolute path of `sandy.exe` **outside the workspace** before starting Pi Science. The installer does not download Sandy automatically; without it, research preflight refuses to start. Windows CI uses Sandy `v0.9992` with a pinned SHA-256 and exercises the isolation tests.
 
-Notebook Python/R execution and conversation Bash commands are currently unavailable on native Windows. The Notebook status API reports this capability explicitly and the UI disables cell execution; existing notebooks remain viewable and editable. Research jobs continue to use Sandy when configured.
+Notebook Python/R execution is currently unavailable on native Windows because the Sandy policy used for non-interactive jobs disables the persistent stdin protocol required by kernels. The Notebook status API reports this capability explicitly and the UI disables cell execution; existing notebooks remain viewable and editable. Research jobs and conversation Bash commands use Sandy when it is configured and otherwise fail closed.
 
 ### The `pi-science` command
 

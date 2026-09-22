@@ -150,9 +150,9 @@ describe("Node control plane", () => {
     expect(status.json()).toMatchObject({ native: true, active_count: 0, interpreters: { python: expect.any(Boolean), r: expect.any(Boolean) } });
   });
 
-  it("returns explicit capability and 503 for Windows Notebook execution", async () => {
+  it("returns explicit capability and 503 for Windows Notebook execution even when Sandy is configured", async () => {
     const sandy = process.env.PI_SCIENCE_SANDY_PATH;
-    delete process.env.PI_SCIENCE_SANDY_PATH;
+    process.env.PI_SCIENCE_SANDY_PATH = "C:\\tools\\sandy.exe";
     const workspace = join(tmpdir(), `pi-science-win-kernel-${Date.now()}`);
     try {
       await mkdir(join(workspace, ".pi-science"), { recursive: true });

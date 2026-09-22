@@ -45,9 +45,9 @@ function newTestManager(deps: NodeKernelManagerDependencies = {}): NodeKernelMan
   });
 }
 
-it("reports Windows Notebook unavailable and rejects the production sandbox path before spawning", async () => {
+it("reports Windows Notebook unavailable and rejects the production sandbox path before spawning even when Sandy is configured", async () => {
   const sandy = process.env.PI_SCIENCE_SANDY_PATH;
-  delete process.env.PI_SCIENCE_SANDY_PATH;
+  process.env.PI_SCIENCE_SANDY_PATH = "C:\\tools\\sandy.exe";
   const spawnProcess = vi.fn();
   const interpreterAvailable = vi.fn(() => true);
   try {

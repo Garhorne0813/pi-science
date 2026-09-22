@@ -324,8 +324,10 @@ flowchart LR
 必装的 Pi Science sandbox extension 将内置 Bash 工具和 `!` 命令路由到控制面的
 conversation job；Notebook 的 Python/R 内核使用同一套 OS 沙箱。工作区可写，绑定的
 micromamba 修订版只读，私有应用状态位于工作区外且不可访问，网络禁止。环境修订版或原生
-沙箱不可用时执行会失败关闭。Windows 在 `PI_SCIENCE_SANDY_PATH` 指向 `sandy.exe` 时使用
-Sandy AppContainer；缺少该 runner 时，kernel status API 会禁用执行。
+沙箱不可用时执行会失败关闭。Windows conversation Bash 在 `PI_SCIENCE_SANDY_PATH` 指向
+`sandy.exe` 时使用 Sandy 的非交互 AppContainer policy。由于该 policy 禁用持久 kernel
+协议所需的 stdin，原生 Windows 上的 Notebook Python/R 仍保持禁用；kernel status API
+会报告此限制，UI 也会禁用执行。
 
 Pi 内置文件工具仍在 supervisor 进程中运行；extension 会限制其路径在工作区内，并阻止访问
 `.pi-science` 或通过符号链接越界。这是应用层路径检查，不是 OS 隔离。其他可信 extension 和
