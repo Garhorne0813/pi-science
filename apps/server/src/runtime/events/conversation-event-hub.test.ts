@@ -539,6 +539,50 @@ describe("central conversation event hub", () => {
     expect(received.filter((event) => event.type === "error")).toEqual([]);
   });
 
+  it("keeps generic confirmations out of the permission channel", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub();
+    const process = new EventEmitter() as PiProcess;
+    const received: Array<Record<string, unknown>> = [];
+    hub.bind(cwd, process, { activeSessionId: () => "session-interactions", onBusy: () => undefined, onExit: () => undefined });
+    await hub.subscribe(cwd, "session-interactions", undefined, (record) => received.push(JSON.parse(record.data)));
+
+    process.emit("event", { type: "agent_start" });
+    process.emit("event", {
+      type: "extension_ui_request",
+      id: "confirm-1",
+      method: "confirm",
+      title: "Continue?",
+      message: "Continue with the next step?",
+    });
+    process.emit("event", {
+      type: "extension_ui_request",
+      id: "permission-1",
+      method: "confirm",
+      kind: "permission",
+      title: "Install scipy",
+      operation: "Install scipy 1.17",
+      scope: "Project environment",
+      effect: "Creates a new revision",
+    });
+
+    await eventually(() => received.some((event) => event.requestId === "permission-1"));
+    expect(received.find((event) => event.requestId === "confirm-1")).toMatchObject({
+      type: "question.asked",
+      kind: "confirmation",
+      method: "confirm",
+      title: "Continue?",
+    });
+    expect(received.find((event) => event.requestId === "permission-1")).toMatchObject({
+      type: "permission.asked",
+      kind: "permission",
+      method: "confirm",
+      operation: "Install scipy 1.17",
+      scope: "Project environment",
+      effect: "Creates a new revision",
+    });
+  });
+
   it("publishes activity titles and preserves tool result details", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();

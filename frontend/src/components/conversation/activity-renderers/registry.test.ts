@@ -16,6 +16,49 @@ describe("ActivityRendererRegistry", () => {
     expect(pubmedView).toEqual({ title: "PubMed", detail: "conversation.activity.resultRetainedCount:3:1" });
   });
 
+  it("keeps broad research activities out of the literature renderer", () => {
+    const grep = tool("grep", {
+      title: "Searching for tool.updated",
+      presentation: {
+        version: 1,
+        kind: "search",
+        title: "Searching for tool.updated",
+        importance: "micro",
+        domain: "research",
+      },
+    });
+    expect(projectToolActivity(grep).kind).toBe("file");
+    expect([
+      "search_pubmed",
+      "search_arxiv",
+      "search_crossref",
+      "search_biorxiv_preprints",
+      "get_europe_pmc_full_text",
+    ].map((name) => projectToolActivity(tool(name)).kind)).toEqual([
+      "literature",
+      "literature",
+      "literature",
+      "literature",
+      "literature",
+    ]);
+  });
+
+  it("preserves semantic titles while adding renderer detail", () => {
+    const python = tool("python", {
+      title: "Fit Michaelis-Menten model",
+      details: { outputs: [{}, {}] },
+    });
+    const view = activityRendererRegistry.resolve(projectToolActivity(python).kind).compact({
+      activity: projectToolActivity(python),
+      source: python,
+      live: false,
+      t,
+    });
+    expect(view.title).toBe("Fit Michaelis-Menten model");
+    expect(view.detail).toContain("Python");
+    expect(view.detail).toContain("outputCount:2");
+  });
+
   it("always falls back for unknown renderer keys", () => {
     const registry = new ActivityRendererRegistry();
     const unknown = tool("future_science_tool", { title: "Future analysis" });

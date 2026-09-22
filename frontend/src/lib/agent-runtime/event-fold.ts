@@ -886,8 +886,15 @@ function adaptV2Event(event: PiScienceEvent): PiScienceEvent[] {
     }
     case "run.cancelled":
       return [{ ...base, type: "session.idle", cancelled: true }];
-    case "artifact.updated":
-      return [{ ...base, type: "turn.artifacts", artifacts: payload.artifacts ?? payload.items ?? [] }];
+    case "artifact.updated": {
+      const revision = numberValue(payload.revision) ?? numberValue(event.revision);
+      return [{
+        ...base,
+        type: "turn.artifacts",
+        artifacts: payload.artifacts ?? payload.items ?? [],
+        ...(revision !== undefined ? { revision } : {}),
+      }];
+    }
     case "plan.updated":
       return [{ ...base, type: "status.updated", status: "plan", message: stringValue(payload.summary) ?? stringValue(payload.message) ?? "Plan updated" }];
     default:

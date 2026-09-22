@@ -169,6 +169,9 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
   const { t } = useTranslation();
   const filename = item.path.split("/").pop() ?? item.path;
   const [structureFailed, setStructureFailed] = useState(false);
+  useEffect(() => {
+    setStructureFailed(false);
+  }, [item.path, item.version, item.revision, item.sha256]);
   const snippet = useSnippet(item.path, cwd, snippetKindFor(item) !== "structure");
   const open = () => {
     if (!cwd) return;
@@ -259,6 +262,9 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
   const filename = item.path.split("/").pop() ?? item.path;
   const Icon = fileIcon(item.kind);
   const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => {
+    setImageFailed(false);
+  }, [item.path, item.version, item.revision, item.sha256]);
   const isImage = item.kind === "image" && !imageFailed;
 
   const open = () => {

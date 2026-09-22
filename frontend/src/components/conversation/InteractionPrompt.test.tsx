@@ -21,6 +21,20 @@ describe("InteractionPrompt", () => {
     expect(onRespond).toHaveBeenCalledWith({ confirmed: true });
   });
 
+  it("does not let question text override an explicit non-permission kind", () => {
+    const onRespond = vi.fn();
+    render(<InteractionPrompt interaction={{
+      requestId: "question-1",
+      kind: "question",
+      method: "input",
+      title: "Why was permission denied?",
+    }} onRespond={onRespond} />);
+    expect(screen.queryByRole("region", { name: "Approval required" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Because the scope was too broad." } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    expect(onRespond).toHaveBeenCalledWith({ value: "Because the scope was too broad." });
+  });
+
   it("sends the selected MCP approval once and locks the buttons while pending", async () => {
     let resolveResponse!: () => void;
     const onRespond = vi.fn(() => new Promise<void>((resolve) => { resolveResponse = resolve; }));

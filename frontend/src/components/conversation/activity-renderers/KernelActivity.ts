@@ -1,4 +1,4 @@
-import { count, detailRecord, genericDetails, record, text } from "./shared";
+import { count, detailRecord, genericDetails, meaningfulActivityTitle, record, text } from "./shared";
 import type { ActivityRenderer } from "./types";
 
 function kernelName(tool: string): string {
@@ -13,12 +13,22 @@ export const KernelActivityRenderer: ActivityRenderer = {
     const kernel = kernelName(source.tool);
     const details = detailRecord(source);
     const outputCount = count(details.outputs) ?? count(record(details.result)?.outputs);
-    const title = activity.state === "running"
+    const semanticTitle = meaningfulActivityTitle(activity.title, source.tool);
+    const genericTitle = activity.state === "running"
       ? t("conversation.activity.kernelRunning", { kernel })
       : activity.state === "error"
         ? t("conversation.activity.kernelFailed", { kernel })
         : t("conversation.activity.kernelComplete", { kernel });
-    return { title, ...(outputCount !== undefined ? { detail: t("conversation.activity.outputCount", { count: outputCount }) } : {}) };
+    const title = semanticTitle ?? genericTitle;
+    const detailParts = semanticTitle
+      ? [activity.state === "running"
+        ? t("conversation.activity.kernelRunning", { kernel })
+        : activity.state === "error"
+          ? t("conversation.activity.kernelFailed", { kernel })
+          : kernel]
+      : [];
+    if (outputCount !== undefined) detailParts.push(t("conversation.activity.outputCount", { count: outputCount }));
+    return { title, ...(detailParts.length > 0 ? { detail: detailParts.join(" · ") } : {}) };
   },
   expanded: (props) => {
     const rows = genericDetails(props);

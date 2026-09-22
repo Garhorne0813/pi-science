@@ -316,8 +316,9 @@ function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
   const renderer = activityRendererRegistry.resolve(activity.presentation?.renderer ?? activity.kind);
   const rendererProps = { activity, source: block, live, t };
   const compact = renderer.compact(rendererProps);
-  const details = renderer.expanded(rendererProps);
-  const hasDetails = details.length > 1 || Boolean(block.input || block.output || block.partialOutput || block.diff || block.details !== undefined);
+  const hasStructuredDetails = block.details !== undefined && block.details !== null;
+  const hasDetails = Boolean(block.input || block.output || block.partialOutput || block.diff || hasStructuredDetails);
+  const details = expanded ? renderer.expanded(rendererProps) : null;
   const running = live && block.status === "running";
   const duration = running ? null : stepDuration(block);
   // While the operation streams, its freshest output line fills the right
@@ -332,7 +333,7 @@ function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
       {duration && <span aria-hidden="true" className="shrink-0 font-mono text-[10px] tabular-nums text-muted">{duration}</span>}
       {hasDetails && <ChevronRight size={12} aria-hidden className={cn(styles.chevron, "shrink-0 transition-transform", expanded && "rotate-90")} />}
     </button>
-    {expanded && hasDetails && <div className={cn(styles.details, "space-y-2 pb-2 pl-6 text-xs")}>
+    {expanded && hasDetails && details && <div className={cn(styles.details, "space-y-2 pb-2 pl-6 text-xs")}>
       {details.map((detail, index) => detail.pre || detail.plain
         ? <Detail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} pre={detail.pre} />
         : <OutputDetail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} fullValue={detail.fullValue} partial={detail.partial} t={t} />)}

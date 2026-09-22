@@ -1,4 +1,4 @@
-import { count, detailRecord, genericDetails, text } from "./shared";
+import { count, detailRecord, genericDetails, meaningfulActivityTitle, text } from "./shared";
 import type { ActivityRenderer } from "./types";
 
 function literatureSource(tool: string, input: Record<string, unknown>): string {
@@ -17,17 +17,27 @@ export const LiteratureActivityRenderer: ActivityRenderer = {
     const database = literatureSource(source.tool, source.input ?? {});
     const results = count(details.results) ?? count(details.resultCount) ?? count(details.result_count);
     const retained = count(details.retained) ?? count(details.selected) ?? count(details.retainedCount);
-    const title = activity.state === "running"
+    const semanticTitle = meaningfulActivityTitle(activity.title, source.tool);
+    const genericTitle = activity.state === "running"
       ? t("conversation.activity.literatureRunning", { database })
       : activity.state === "error"
         ? t("conversation.activity.literatureFailed", { database })
         : database;
+    const title = semanticTitle ?? genericTitle;
     const detail = results === undefined
       ? undefined
       : retained === undefined
         ? t("conversation.activity.resultCount", { count: results })
         : t("conversation.activity.resultRetainedCount", { count: results, retained });
-    return { title, ...(detail ? { detail } : {}) };
+    const detailParts = semanticTitle
+      ? [activity.state === "running"
+        ? t("conversation.activity.literatureRunning", { database })
+        : activity.state === "error"
+          ? t("conversation.activity.literatureFailed", { database })
+          : database]
+      : [];
+    if (detail) detailParts.push(detail);
+    return { title, ...(detailParts.length > 0 ? { detail: detailParts.join(" · ") } : {}) };
   },
   expanded: genericDetails,
 };

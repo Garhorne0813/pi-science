@@ -27,6 +27,12 @@ export function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+export function meaningfulActivityTitle(title: string, tool: string): string | undefined {
+  const value = text(title);
+  if (!value || value.toLowerCase() === tool.trim().toLowerCase()) return undefined;
+  return value;
+}
+
 export function count(value: unknown): number | undefined {
   if (Array.isArray(value)) return value.length;
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;

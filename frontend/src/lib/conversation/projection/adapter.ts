@@ -17,6 +17,21 @@ import type {
   UserMessageProjection,
 } from "./types";
 
+const LITERATURE_TOOLS = new Set([
+  "search_pubmed",
+  "search_arxiv",
+  "search_crossref",
+  "search_biorxiv_preprints",
+  "get_europe_pmc_full_text",
+  // Keep the legacy aliases explicit rather than treating the broad research
+  // domain as a renderer selector.
+  "pubmed",
+  "crossref",
+  "semantic_scholar",
+  "search_semantic_scholar",
+  "literature",
+]);
+
 export const LEGACY_STREAM_EPOCH = "legacy";
 
 export interface ConversationProjectionOptions {
@@ -189,7 +204,7 @@ export function activityKind(block: ToolCallBlock): ActivityKind {
   const tool = block.tool.trim().toLowerCase();
   if (block.childSessionId || tool.includes("subagent") || tool.includes("agent")) return "subagent";
   if (tool.includes("python") || tool.includes("kernel") || tool === "r" || tool.includes("notebook")) return "kernel";
-  if (block.presentation?.domain === "research" || /pubmed|literature|crossref|semantic_scholar/.test(tool)) return "literature";
+  if (LITERATURE_TOOLS.has(tool)) return "literature";
   if (/dataset|csv|parquet|table/.test(tool)) return "dataset";
   if (/read|write|file|grep|glob|find|list/.test(tool)) return "file";
   if (/environment|package|install|dependency/.test(tool)) return "environment";

@@ -7,6 +7,7 @@ import { AgentActivity } from "./AgentActivity";
 import { executionActivities, executionOperationCount } from "../../lib/conversation/activity-policy";
 import { defaultProgressAppearance } from "@pi-science/contracts";
 import { setProgressAppearance } from "../progress/progress-settings-store";
+import { activityRendererRegistry } from "./activity-renderers/registry";
 
 const tool = (id: string, name: string, status: ToolCallBlock["status"] = "done", input?: Record<string, unknown>): ToolCallBlock => ({ kind: "tool", id, callId: `${id}-call`, tool: name, status, input, output: "output" });
 beforeAll(async () => { await i18n.changeLanguage("en"); });
@@ -32,6 +33,19 @@ describe("AgentActivity live stream", () => {
     expect(screen.getByText("2 outputs")).toBeInTheDocument();
     expect(screen.getByText("PubMed")).toBeInTheDocument();
     expect(screen.getByText("3 results · 1 retained")).toBeInTheDocument();
+  });
+
+  it("does not materialize expanded details while a trace row is collapsed", () => {
+    const renderer = activityRendererRegistry.resolve("kernel");
+    const expanded = vi.spyOn(renderer, "expanded");
+    try {
+      render(<AgentActivity blocks={[tool("python", "python")]} />);
+      expect(expanded).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Python" }));
+      expect(expanded).toHaveBeenCalledTimes(1);
+    } finally {
+      expanded.mockRestore();
+    }
   });
 
   it("updates the running tool line immediately when consecutive tools share the same phase", () => {

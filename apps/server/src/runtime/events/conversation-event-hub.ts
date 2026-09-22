@@ -222,6 +222,20 @@ function browserQuestionnaireRequestId(title: unknown): string | null {
   }
 }
 
+type InteractionKind = "permission" | "confirmation" | "question";
+
+function interactionKind(value: unknown): InteractionKind | undefined {
+  return value === "permission" || value === "confirmation" || value === "question" ? value : undefined;
+}
+
+function eventField(event: PiEvent, key: string): unknown {
+  const direct = (event as Record<string, unknown>)[key];
+  if (direct !== undefined) return direct;
+  const payload = (event as Record<string, unknown>).payload;
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) return (payload as Record<string, unknown>)[key];
+  return undefined;
+}
+
 type AssistantContentKind = "text" | "thinking";
 
 const ASSISTANT_EVENT_TYPES: Record<AssistantContentKind, string[]> = {
@@ -941,21 +955,34 @@ export class ConversationEventHub {
       }
       case "extension_ui_request": {
         turn.hadActivity = true;
-        const method = String(event.method ?? "");
-        if (method === "confirm") return [{ type: "permission.asked", sessionId, ...turnFields(turn), requestId: String(event.id ?? ""), title: String(event.title ?? "Confirmation"), message: cap(event.message) }];
+        const method = String(eventField(event, "method") ?? "");
+        const explicitKind = interactionKind(eventField(event, "kind"));
+        const kind = explicitKind ?? (method === "confirm" ? "confirmation" : "question");
+        const type = kind === "permission" ? "permission.asked" : "question.asked";
+        const requestId = String(eventField(event, "id") ?? eventField(event, "requestId") ?? "");
+        const rawTitle = eventField(event, "title");
+        const questionnaireId = method !== "confirm" ? browserQuestionnaireRequestId(rawTitle) : null;
+        const common = {
+          type,
+          sessionId,
+          ...turnFields(turn),
+          requestId,
+          kind,
+          method,
+          title: questionnaireId ? "Questionnaire" : String(rawTitle ?? (method === "confirm" ? "Confirmation" : "Question")),
+          message: cap(questionnaireId ? "Complete the questionnaire to continue." : eventField(event, "message")),
+          operation: cap(eventField(event, "operation"), 500),
+          scope: cap(eventField(event, "scope"), 500),
+          effect: cap(eventField(event, "effect"), 500),
+        };
+        if (method === "confirm") return [common];
         if (["select", "input", "editor"].includes(method)) {
-          const toolCallId = browserQuestionnaireRequestId(event.title);
+          const toolCallId = questionnaireId;
           return [{
-            type: "question.asked",
-            sessionId,
-            ...turnFields(turn),
-            requestId: String(event.id ?? ""),
-            method,
-            title: toolCallId ? "Questionnaire" : String(event.title ?? "Question"),
-            message: cap(toolCallId ? "Complete the questionnaire to continue." : event.message),
-            options: safeValue(event.options ?? []),
-            placeholder: String(event.placeholder ?? ""),
-            prefill: String(event.prefill ?? ""),
+            ...common,
+            options: safeValue(eventField(event, "options") ?? []),
+            placeholder: String(eventField(event, "placeholder") ?? ""),
+            prefill: String(eventField(event, "prefill") ?? ""),
             ...(toolCallId ? { questionnaire: true, toolCallId } : {}),
           }];
         }

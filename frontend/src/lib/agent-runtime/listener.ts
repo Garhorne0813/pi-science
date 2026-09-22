@@ -15,6 +15,12 @@ import { hasActivePendingInteraction } from "./types";
 import { useRuntimeStore } from "./store";
 import type { PendingInteraction, PendingQuestionnaire } from "./types";
 
+type InteractionKind = NonNullable<PendingInteraction["kind"]>;
+
+function interactionKind(value: unknown): InteractionKind | undefined {
+  return value === "permission" || value === "confirmation" || value === "question" ? value : undefined;
+}
+
 /** The client whose stream is currently folded into the store, and the
  *  unsubscribe handle for that subscription. Re-registering for the same
  *  client is a no-op, so switching sessions never stacks listeners. */
@@ -358,13 +364,14 @@ export function registerEventListener(client: PiScienceClient) {
       if (!interactionId) return false;
       bumpConversationGeneration();
       const method = String(event.method || payload.method || "input") as PendingInteraction["method"];
+      const kind = interactionKind(event.kind) ?? interactionKind(payload.kind) ?? (method === "confirm" ? "confirmation" : "question");
       useRuntimeStore.setState({
         working: true,
         turnLifecycle: "waiting",
         status: "ready",
         pendingInteraction: {
           requestId: interactionId,
-          kind: method === "confirm" ? "confirmation" : "question",
+          kind,
           method: ["confirm", "select", "input", "editor"].includes(method) ? method : "input",
           title: String(event.title || payload.title || "Question"),
           message: String(event.message || payload.message || ""),
@@ -389,16 +396,15 @@ export function registerEventListener(client: PiScienceClient) {
 
     if (event.type === "permission.asked" || event.type === "question.asked") {
       bumpConversationGeneration();
-      const method = event.type === "permission.asked"
-        ? "confirm"
-        : (event.method as PendingInteraction["method"]) || "input";
+      const method = (event.method as PendingInteraction["method"]) || (event.type === "permission.asked" ? "confirm" : "input");
+      const kind = interactionKind(event.kind) ?? (method === "confirm" ? "confirmation" : "question");
       useRuntimeStore.setState({
         working: true,
         turnLifecycle: "waiting",
         status: "ready",
         pendingInteraction: {
           requestId: String(event.requestId || ""),
-          kind: event.type === "permission.asked" ? "permission" : "question",
+          kind,
           method,
           title: String(event.title || (method === "confirm" ? "Confirmation" : "Question")),
           message: String(event.message || ""),

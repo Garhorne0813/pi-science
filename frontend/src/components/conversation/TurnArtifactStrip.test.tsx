@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { latestArtifactVersions, ReferencedArtifactStrip, TurnArtifactStrip } from "./TurnArtifactStrip";
 
@@ -131,6 +131,25 @@ describe("TurnArtifactStrip", () => {
       />,
     );
     expect(screen.getByLabelText("broken.png (broken.png)")).toBeInTheDocument();
+  });
+
+  it("retries a failed image preview after a stable artifact advances", async () => {
+    const { rerender } = render(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{ path: "work/old.png", artifactId: "artifact-1", version: 1, kind: "image", mime: "image/png", size: 10 }]}
+      />,
+    );
+    fireEvent.error(screen.getByAltText("old.png"));
+    expect(screen.queryByAltText("old.png")).not.toBeInTheDocument();
+
+    rerender(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{ path: "work/new.png", artifactId: "artifact-1", version: 2, kind: "image", mime: "image/png", size: 10 }]}
+      />,
+    );
+    await waitFor(() => expect(screen.getByAltText("new.png")).toBeInTheDocument());
   });
 
   it("renders a CSV summary badge with rows, columns, type hints and +N more", async () => {

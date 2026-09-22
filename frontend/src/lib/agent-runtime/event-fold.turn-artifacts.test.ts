@@ -32,6 +32,42 @@ describe("foldEvent turn.artifacts", () => {
     expect(state.index["turn-artifacts-turn-1"]).toBe(2);
   });
 
+  it("adapts V2 artifact revisions from payload and envelope locations", () => {
+    let state = threadWith([{ kind: "user", id: "user-1", text: "hi" }]);
+    const v2Artifact = (
+      eventId: string,
+      seq: number,
+      path: string,
+      revision?: number,
+      payloadRevision?: number,
+    ): PiScienceEvent => ({
+      schemaVersion: 2,
+      eventId,
+      seq,
+      streamEpoch: "epoch-1",
+      sessionId: "s",
+      turnId: "turn-v2",
+      runId: "run-v2",
+      type: "artifact.updated",
+      ...(revision !== undefined ? { revision } : {}),
+      payload: {
+        ...(payloadRevision !== undefined ? { revision: payloadRevision } : {}),
+        artifacts: [{ path, kind: "table", mime: "text/csv", size: 1 }],
+      },
+    });
+    state = foldEvent(state, v2Artifact("event-1", 1, "new.csv", undefined, 2));
+    state = foldEvent(state, v2Artifact("event-2", 2, "stale.csv", 1));
+    expect(state.blocks.find((block) => block.kind === "artifact-summary")).toMatchObject({
+      revision: 2,
+      artifacts: [{ path: "new.csv" }],
+    });
+    state = foldEvent(state, v2Artifact("event-3", 3, "latest.csv", 3));
+    expect(state.blocks.find((block) => block.kind === "artifact-summary")).toMatchObject({
+      revision: 3,
+      artifacts: [{ path: "latest.csv" }],
+    });
+  });
+
   it("appends when the assistant message is not in the thread yet", () => {
     let state = threadWith([{ kind: "user", id: "user-1", text: "hi" }]);
     const event: PiScienceEvent = {

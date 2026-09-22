@@ -44,8 +44,9 @@ export function InteractionPrompt({
       : { label: option.label || option.value || t("interaction.option"), value: option.value || option.label || "" }
   ));
 
-  const permission = interaction.kind === "permission"
-    || /\b(permission|approval|allow|deny)\b/i.test(`${interaction.title} ${interaction.message ?? ""}`);
+  const permission = interaction.kind != null
+    ? interaction.kind === "permission"
+    : /\b(permission|approval|allow|deny)\b/i.test(`${interaction.title} ${interaction.message ?? ""}`);
 
   if (permission) {
     return <>
