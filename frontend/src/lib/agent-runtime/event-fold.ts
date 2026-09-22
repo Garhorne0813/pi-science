@@ -1696,7 +1696,7 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[], o
       insertAt = afterAgentBlock(blocks, insertedBefore + 1);
     }
     if (insertAt < 0) insertAt = blocks.length;
-    const block: ThreadBlock = {
+    const persistedBlock: ThreadBlock = {
       kind: "artifact-summary",
       id: blockId,
       turnId: turn.turn_id,
@@ -1705,6 +1705,24 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[], o
       artifacts: items,
     };
     const existingIdx = index[blockId];
+    const existingBlock = existingIdx === undefined ? undefined : blocks[existingIdx];
+    const versionedExisting = existingBlock?.kind === "artifact-summary"
+      && (numberValue(existingBlock.revision) !== undefined || numberValue(existingBlock.sequence) !== undefined)
+      ? existingBlock
+      : undefined;
+    // Persisted records currently carry no projection revision. They may have
+    // better turn-anchor metadata than a live summary (for example after an
+    // older history page loads), but must not roll versioned live content back
+    // to a stale REST/cache snapshot or discard its reconciliation metadata.
+    const block: ThreadBlock = versionedExisting ? {
+      ...versionedExisting,
+      assistantMessageId: assistantMessageId ?? versionedExisting.assistantMessageId ?? null,
+      ...(Number.isInteger(ordinal) && ordinal > 0
+        ? { turnOrdinal: ordinal }
+        : versionedExisting.turnOrdinal !== undefined
+          ? { turnOrdinal: versionedExisting.turnOrdinal }
+          : {}),
+    } : persistedBlock;
     if (existingIdx !== undefined) {
       if (existingIdx === insertAt) {
         // Already at the right place: refresh the block content in place.

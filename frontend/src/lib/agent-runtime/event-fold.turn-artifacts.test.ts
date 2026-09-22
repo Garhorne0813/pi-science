@@ -254,6 +254,39 @@ describe("attachTurnArtifacts (history restore)", () => {
     expect(twice.blocks.filter((block) => block.kind === "artifact-summary")).toHaveLength(1);
   });
 
+  it("does not replace a versioned live summary with an unversioned persisted snapshot", () => {
+    const thread = threadWith([
+      { kind: "user", id: "u", text: "a" },
+      { kind: "agent", id: "a1", parts: [{ id: "a1", text: "r" }] },
+      {
+        kind: "artifact-summary",
+        id: "turn-artifacts-turn-1",
+        turnId: "turn-1",
+        revision: 3,
+        sequence: 9,
+        artifacts: [{ path: "new.csv", kind: "table", mime: "text/csv", size: 3 }],
+      },
+    ]);
+
+    const next = attachTurnArtifacts(thread, [{
+      turn_id: "turn-1",
+      session_id: "s",
+      assistant_message_id: "a1",
+      turn_ordinal: 1,
+      ended_at: "t",
+      artifacts: [{ path: "old.csv", kind: "table", mime: "text/csv", size: 1 }],
+    }]);
+
+    expect(next.blocks[2]).toMatchObject({
+      kind: "artifact-summary",
+      assistantMessageId: "a1",
+      turnOrdinal: 1,
+      revision: 3,
+      sequence: 9,
+      artifacts: [{ path: "new.csv" }],
+    });
+  });
+
   it("attaches by turn order when persisted ids are absent", () => {
     const thread = threadWith([
       { kind: "user", id: "u1", text: "a" },

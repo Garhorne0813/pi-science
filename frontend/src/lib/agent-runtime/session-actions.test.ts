@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { useRuntimeStore } from "./index";
-import { emptyThread } from "./event-fold";
+import { emptyThread, foldEvent } from "./event-fold";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
 
@@ -83,6 +83,64 @@ describe("runtime session actions", () => {
     expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual(["user-old", "agent-old", "agent-new"]);
     expect(useRuntimeStore.getState().historyCursor).toBe("cursor-older");
     expect(useRuntimeStore.getState().historyHasMore).toBe(true);
+  });
+
+  it("does not let a delayed persisted artifact snapshot roll back a live summary", async () => {
+    useRuntimeStore.setState({
+      activeSessionId: "session-artifact-race",
+      cwd: "/workspace",
+      thread: {
+        blocks: [
+          { kind: "user", id: "user-new", text: "prompt" },
+          { kind: "agent", id: "agent-new", parts: [{ id: "agent-new", text: "answer" }] },
+        ],
+        index: { "user-new": 0, "agent-new": 1 },
+        loaded: true,
+      },
+      historyCursor: "cursor-newest",
+      historyHasMore: true,
+      historyLoading: false,
+    });
+    let resolveArtifacts!: (response: Response) => void;
+    const artifacts = new Promise<Response>((resolve) => { resolveArtifacts = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages?")) {
+        return jsonResponse({ messages: [], next_cursor: null, has_more: false, snapshot_version: "v2" });
+      }
+      if (url.includes("/artifacts?")) return artifacts;
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().loadOlderMessages();
+    useRuntimeStore.setState((current) => ({
+      thread: foldEvent(current.thread, {
+        type: "turn.artifacts",
+        sessionId: "session-artifact-race",
+        turnId: "turn-1",
+        assistantMessageId: "agent-new",
+        revision: 3,
+        seq: 9,
+        artifacts: [{ path: "new.csv", kind: "table", mime: "text/csv", size: 3 }],
+      }),
+    }));
+    resolveArtifacts(jsonResponse({ turns: [{
+      turn_id: "turn-1",
+      session_id: "session-artifact-race",
+      assistant_message_id: "agent-new",
+      turn_ordinal: 1,
+      ended_at: "2026-09-22T00:00:00.000Z",
+      artifacts: [{ path: "old.csv", kind: "table", mime: "text/csv", size: 1 }],
+    }] }));
+
+    await vi.waitFor(() => {
+      expect(useRuntimeStore.getState().thread.blocks.at(-1)).toMatchObject({
+        kind: "artifact-summary",
+        revision: 3,
+        sequence: 9,
+        artifacts: [{ path: "new.csv" }],
+      });
+    });
   });
 
   it("retries one transient older-page failure without stranding pagination", async () => {
