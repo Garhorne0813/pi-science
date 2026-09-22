@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/ui";
@@ -22,6 +22,10 @@ export function CodeBlockFrame({
 }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    setCopied(false);
+  }, [code]);
 
   const copy = async () => {
     try {

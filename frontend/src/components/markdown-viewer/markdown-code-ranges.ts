@@ -53,7 +53,14 @@ export function containerContinuationPrefix(prefix: string): string {
       column += 1;
     }
   }
-  return expanded.replace(/(?:[-*+]|\d{1,9}[.)])([ \t]+)$/, (marker) => " ".repeat(marker.length));
+  let current = expanded;
+  while (true) {
+    const next = current.replace(/(^|[ \t>])(?:[-*+]|\d{1,9}[.)])(?=[ \t]+)/g, (match: string, lead: string) =>
+      lead + " ".repeat(match.length - lead.length),
+    );
+    if (next === current) return next;
+    current = next;
+  }
 }
 
 const FENCE_PROBE = "PISCIENCE_FENCE_PROBE";
@@ -69,9 +76,15 @@ let probeCache: { markdown: string; start: number; open: boolean } | null = null
  * (blank line in a blockquote, missing list indentation) does not grow, and a
  * closing fence was already excluded from the parsed value.
  */
-export function isUnclosedFencedCodeBlock(markdown: string, start: number, end: number, code: string): boolean {
-  // Non-whitespace after the node means a container boundary already closed it.
-  if (markdown.slice(end).trim() !== "") return false;
+export function isUnclosedFencedCodeBlock(
+  markdown: string,
+  start: number,
+  end: number,
+  code: string,
+  lastNonWhitespaceOffset = markdown.trimEnd().length,
+): boolean {
+  // A single scan per rendered document is enough; do not rescan a suffix for every <pre>.
+  if (end < lastNonWhitespaceOffset) return false;
   if (probeCache && probeCache.markdown === markdown && probeCache.start === start) return probeCache.open;
   const open = probeFenceOpen(markdown, start, code);
   probeCache = { markdown, start, open };

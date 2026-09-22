@@ -348,6 +348,17 @@ describe("MarkdownViewer images", () => {
     expect(container.textContent).toContain("Image failed to load");
   });
 
+  it("retries an image when its source changes after an error", () => {
+    const { container, rerender } = render(
+      <MarkdownViewer>{"![x](https://example.com/missing.png)"}</MarkdownViewer>,
+    );
+    fireEvent.error(container.querySelector("img") as HTMLImageElement);
+    expect(container.querySelector("img")).toBeNull();
+
+    rerender(<MarkdownViewer>{"![x](https://example.com/recovered.png)"}</MarkdownViewer>);
+    expect(container.querySelector("img")).toHaveAttribute("src", "https://example.com/recovered.png");
+  });
+
   it("opens a workspace-relative local link in the inspector", () => {
     render(
       <MarkdownViewer variant="document" resourceContext={{ cwd: CWD, documentPath: `${CWD}/reports/readme.md` }}>

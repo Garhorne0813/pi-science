@@ -53,6 +53,22 @@ describe("MarkdownViewer runnable code across streaming frames", () => {
     expect(screen.getByRole("button", { name: "Run" })).toBeEnabled();
   });
 
+  it("keeps a pending run across the streaming-to-final transition", () => {
+    execute.mockReturnValue(new Promise(() => {}));
+    const base = "```python\nprint(42)\n```\n\nNarration";
+    const runner = { cwd: "/workspace", sessionId: "s1" };
+
+    const { rerender } = render(
+      <MarkdownViewer mode="streaming" codeRunner={runner}>{base}</MarkdownViewer>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    rerender(<MarkdownViewer mode="final" codeRunner={runner}>{base}</MarkdownViewer>);
+
+    expect(screen.getByRole("button", { name: "Running…" })).toBeDisabled();
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("executes only once when a delta lands while the run is pending", async () => {
     const frames = stubFrames();
     execute.mockReturnValue(new Promise(() => {}));

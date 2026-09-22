@@ -52,9 +52,13 @@ export function prepareStreamingMarkdown(markdown: string): PreparedStreamingMar
     return { text, codeRanges: markdownCodeRanges(text) };
   }
   const math = findOpenDisplayMath(markdown, tree);
-  if (!math) return { text: markdown };
-  const closer = "$".repeat(math.openerLength);
-  const text = `${markdown}${markdown.endsWith("\n") ? "" : "\n"}${math.closingPrefix}${closer}`;
+  if (math) {
+    const closer = "$".repeat(math.openerLength);
+    const text = markdown + (markdown.endsWith("\n") ? "" : "\n") + math.closingPrefix + closer;
+    return { text, codeRanges: markdownCodeRanges(text) };
+  }
+  if (!findOpenBracketDisplayMath(markdown, treeCodeRanges)) return { text: markdown };
+  const text = markdown + (markdown.endsWith("\n") ? "" : "\n") + "\\]";
   return { text, codeRanges: markdownCodeRanges(text) };
 }
 
@@ -103,14 +107,12 @@ function findOpenCodeSpan(
     index = end;
   }
 
-  // CommonMark matches a backtick run with the next run of the same length.
-  let cursor = 0;
-  while (cursor < runs.length) {
-    const run = runs[cursor]!;
-    let match = cursor + 1;
-    while (match < runs.length && runs[match]!.length !== run.length) match += 1;
-    if (match === runs.length) return run;
-    cursor = match + 1;
+  // Validate candidates by reparsing a synthetic closer. This excludes
+  // backticks owned by link destinations, HTML, autolinks, and other syntax
+  // regions that are not inline-code delimiters.
+  for (let index = runs.length - 1; index >= 0; index -= 1) {
+    const run = runs[index]!;
+    if (isSyntheticInlineCodeCandidate(markdown, run, insertAt)) return run;
   }
   return null;
 }
@@ -119,6 +121,22 @@ function isEscaped(markdown: string, index: number): boolean {
   let backslashes = 0;
   for (let i = index - 1; i >= 0 && markdown[i] === "\\"; i -= 1) backslashes += 1;
   return backslashes % 2 === 1;
+}
+
+function isSyntheticInlineCodeCandidate(markdown: string, run: BacktickRun, insertAt: number): boolean {
+  const closer = String.fromCharCode(96).repeat(run.length);
+  const probe = markdown.slice(0, insertAt) + closer + markdown.slice(insertAt);
+  const node = findInlineCodeNodeAt(mathParser.parse(probe) as MarkdownNode, run.start);
+  return node?.position?.end.offset === insertAt + run.length;
+}
+
+function findInlineCodeNodeAt(node: MarkdownNode, start: number): MarkdownNode | null {
+  if (node.type === "inlineCode" && node.position?.start.offset === start) return node;
+  for (const child of node.children ?? []) {
+    const found = findInlineCodeNodeAt(child, start);
+    if (found) return found;
+  }
+  return null;
 }
 
 type InlineHost = { type: string; start: number; end: number };
@@ -190,6 +208,32 @@ function hasExplicitMathCloser(
   const lastLine = lastBreak < 0 ? source.slice(openerLength) : source.slice(lastBreak + 1);
   const body = value.replace(/\n+$/, "");
   return !body.endsWith(lastLine.trimEnd());
+}
+
+function findOpenBracketDisplayMath(markdown: string, codeRanges: MarkdownSourceRange[]): boolean {
+  type BracketToken = { start: number; kind: "open" | "close" };
+  const tokens: BracketToken[] = [];
+  const openPattern = /(?:^|\n)\\\[/g;
+  for (const match of markdown.matchAll(openPattern)) {
+    const matchStart = match.index ?? 0;
+    tokens.push({ start: match[0]!.startsWith("\n") ? matchStart + 1 : matchStart, kind: "open" });
+  }
+  const closePattern = /\\\](?=[ \t]*(?:\n|$))/g;
+  for (const match of markdown.matchAll(closePattern)) {
+    tokens.push({ start: match.index ?? 0, kind: "close" });
+  }
+  tokens.sort((a, b) => a.start - b.start);
+
+  let rangeIndex = 0;
+  let open = false;
+  for (const token of tokens) {
+    while (rangeIndex < codeRanges.length && codeRanges[rangeIndex]!.end <= token.start) rangeIndex += 1;
+    const range = codeRanges[rangeIndex];
+    if (range && token.start >= range.start && token.start < range.end) continue;
+    if (token.kind === "open") open = true;
+    else if (open) open = false;
+  }
+  return open;
 }
 
 function lastMathNode(node: MarkdownNode): MarkdownNode | null {

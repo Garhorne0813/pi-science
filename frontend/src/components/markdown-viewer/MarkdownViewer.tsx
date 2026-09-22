@@ -20,9 +20,28 @@ export type { MarkdownRenderMode } from "./streaming-markdown";
 
 type Variant = "chat" | "document";
 
-const MemoizedReactMarkdown = memo(ReactMarkdown);
 const REMARK_PLUGINS: NonNullable<Options["remarkPlugins"]> = [remarkGfm, remarkMath];
 const REHYPE_PLUGINS: NonNullable<Options["rehypePlugins"]> = [[rehypeKatex, { throwOnError: false }]];
+
+type MarkdownRendererProps = {
+  value: string;
+  components: Components;
+  renderMode: MarkdownRenderMode;
+};
+
+const MemoizedMarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRendererProps) {
+  const { value, components } = props;
+  return (
+    <ReactMarkdown
+      remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={REHYPE_PLUGINS}
+      skipHtml
+      components={components}
+    >
+      {value}
+    </ReactMarkdown>
+  );
+});
 
 const STYLES: Record<Variant, Record<string, string>> = {
   chat: {
@@ -121,6 +140,9 @@ function MathBlock({ children, variant }: { children?: React.ReactNode; variant:
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const source = mathSource(children);
+  useEffect(() => {
+    setCopied(false);
+  }, [source]);
   const copy = async () => {
     if (source === null) return;
     try {
@@ -158,6 +180,9 @@ const FILE_HREF = /^(?!(?:https?:\/\/|mailto:|#|data:|file:))/i;
 function ResourceImage({ src, alt }: { src: string; alt?: string }) {
   const { t } = useTranslation();
   const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
   if (failed) {
     return (
       <span role="img" aria-label={alt ?? ""} className="my-3 inline-block rounded-input border border-border bg-surface-2 px-3 py-2 text-xs text-muted">
@@ -262,6 +287,11 @@ export function MarkdownViewer({
   // the current source through a ref instead of forcing a new component type.
   const renderedValueRef = useRef(renderedValue);
   renderedValueRef.current = renderedValue;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const lastNonWhitespaceOffset = renderedValue.trimEnd().length;
+  const lastNonWhitespaceOffsetRef = useRef(lastNonWhitespaceOffset);
+  lastNonWhitespaceOffsetRef.current = lastNonWhitespaceOffset;
   const resourceCwd = resourceContext?.cwd;
   const resourceRoot = resourceContext?.root;
   const resourceDocumentPath = resourceContext?.documentPath;
@@ -334,10 +364,10 @@ export function MarkdownViewer({
       // the rest of the message is still streaming. A later replace/revision
       // event can rewrite the block, so this runs a draft by design; it is a
       // convenience, not a guarantee that the code will not change.
-      const isUnclosedFence = mode === "streaming"
+      const isUnclosedFence = modeRef.current === "streaming"
         && start !== undefined
         && end !== undefined
-        && isUnclosedFencedCodeBlock(renderedValueRef.current, start, end, code);
+        && isUnclosedFencedCodeBlock(renderedValueRef.current, start, end, code, lastNonWhitespaceOffsetRef.current);
       if (chrome && codeProps) {
         if (!isUnclosedFence && cwd && sessionId && runnableLanguage(language)) {
           return (
@@ -367,17 +397,10 @@ export function MarkdownViewer({
     ),
     th: ({ children, style }) => <th className={s.th} style={style}>{children}</th>,
     td: ({ children, style }) => <td className={s.td} style={style}>{children}</td>,
-  }), [codeChrome, context, cwd, handleFileLink, mode, s, sessionId, t, variant]);
+  }), [codeChrome, context, cwd, handleFileLink, s, sessionId, t, variant]);
   return (
     <div className={cn(s.root, className)}>
-      <MemoizedReactMarkdown
-        remarkPlugins={REMARK_PLUGINS}
-        rehypePlugins={REHYPE_PLUGINS}
-        skipHtml
-        components={components}
-      >
-        {renderedValue}
-      </MemoizedReactMarkdown>
+      <MemoizedMarkdownRenderer value={renderedValue} components={components} renderMode={mode} />
     </div>
   );
 }

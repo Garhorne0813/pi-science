@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeMathInput } from "./MarkdownViewer";
-import { markdownCodeRanges } from "./markdown-code-ranges";
+import { containerContinuationPrefix, markdownCodeRanges } from "./markdown-code-ranges";
 import { prepareStreamingMarkdown, stabilizeStreamingMarkdown } from "./streaming-markdown";
 
 describe("stabilizeStreamingMarkdown", () => {
@@ -97,6 +97,11 @@ describe("stabilizeStreamingMarkdown", () => {
       .toBe("- x\n  $$\n  y = 1\n\n  $$");
   });
 
+  it("stabilizes nested list display math", () => {
+    const input = "1. - $$\n       E = mc^2";
+    expect(stabilizeStreamingMarkdown(input)).toBe(input + "\n     $$");
+  });
+
   it("closes display math on the line that opened it in a list item", () => {
     expect(stabilizeStreamingMarkdown("- $$\n  x")).toBe("- $$\n  x\n  $$");
     expect(stabilizeStreamingMarkdown("> - $$\n>   x")).toBe("> - $$\n>   x\n>   $$");
@@ -115,6 +120,23 @@ describe("stabilizeStreamingMarkdown", () => {
     expect(stabilizeStreamingMarkdown("Use ```\\(x\\)\n")).toBe("Use ```\\(x\\)```\n");
     expect(stabilizeStreamingMarkdown("> Use ```\\(x\\)\n")).toBe("> Use ```\\(x\\)```\n");
     expect(stabilizeStreamingMarkdown("- item\n  Use ```\\(x\\)\n")).toBe("- item\n  Use ```\\(x\\)```\n");
+  });
+
+  it("does not close backticks inside a link destination", () => {
+    const input = "See [docs](https://example.com/`draft)";
+    expect(stabilizeStreamingMarkdown(input)).toBe(input);
+  });
+
+  it("stabilizes incomplete bracket display math", () => {
+    const input = "\\[\nE = mc^2";
+    const stabilized = stabilizeStreamingMarkdown(input);
+    expect(stabilized).toBe("\\[\nE = mc^2\n\\]");
+    expect(normalizeMathInput(stabilized)).toBe("$$\nE = mc^2\n$$");
+  });
+
+  it("handles all list markers in nested container prefixes", () => {
+    expect(containerContinuationPrefix("1. - ")).toBe("     ");
+    expect(containerContinuationPrefix("> 1. - ")).toBe(">      ");
   });
 
   it("does not close a backtick run that later deltas cannot continue", () => {
