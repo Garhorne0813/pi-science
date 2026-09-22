@@ -6,10 +6,11 @@ interface PermissionCardProps {
   interaction: PendingInteraction;
   submitting: boolean;
   selectedOption: string | null;
+  selectedConfirmation: boolean | null;
   onRespond: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => void;
 }
 
-export function PermissionCard({ interaction, submitting, selectedOption, onRespond }: PermissionCardProps) {
+export function PermissionCard({ interaction, submitting, selectedOption, selectedConfirmation, onRespond }: PermissionCardProps) {
   const { t } = useTranslation();
   const options = (interaction.options || []).map((option) => typeof option === "string"
     ? { label: option, value: option }
@@ -32,8 +33,8 @@ export function PermissionCard({ interaction, submitting, selectedOption, onResp
         {submitting && selectedOption === option.value && <Loader2 size={12} className="animate-spin" />}{option.label}
       </button>)}
     </div> : <div className="mt-4 flex justify-end gap-2">
-      <button type="button" disabled={submitting} onClick={() => onRespond({ confirmed: false })} className="rounded-input border border-border px-3 py-1.5 text-xs text-text hover:bg-surface-2 disabled:opacity-50">{t("interaction.deny")}</button>
-      <button type="button" disabled={submitting} onClick={() => onRespond({ confirmed: true })} className="inline-flex items-center gap-1.5 rounded-input bg-accent-fill px-3 py-1.5 text-xs text-accent-fg disabled:opacity-50">{submitting && <Loader2 size={12} className="animate-spin" />}{t("interaction.allowOnce")}</button>
+      <button type="button" disabled={submitting} onClick={() => onRespond({ confirmed: false })} className="inline-flex items-center gap-1.5 rounded-input border border-border px-3 py-1.5 text-xs text-text hover:bg-surface-2 disabled:opacity-50">{submitting && selectedConfirmation === false && <Loader2 size={12} className="animate-spin" />}{t("interaction.deny")}</button>
+      <button type="button" disabled={submitting} onClick={() => onRespond({ confirmed: true })} className="inline-flex items-center gap-1.5 rounded-input bg-accent-fill px-3 py-1.5 text-xs text-accent-fg disabled:opacity-50">{submitting && selectedConfirmation === true && <Loader2 size={12} className="animate-spin" />}{t("interaction.allowOnce")}</button>
     </div>}
   </div>;
 }

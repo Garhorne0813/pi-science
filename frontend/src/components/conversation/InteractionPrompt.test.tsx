@@ -54,6 +54,19 @@ describe("InteractionPrompt", () => {
     resolveResponse();
   });
 
+  it("shows pending feedback on the confirmation action that was actually chosen", () => {
+    const onRespond = vi.fn(() => new Promise<void>(() => undefined));
+    render(<InteractionPrompt interaction={{ requestId: "install-2", kind: "permission", method: "confirm", title: "Install scipy" }} onRespond={onRespond} />);
+
+    const deny = screen.getByRole("button", { name: "Deny" });
+    const allow = screen.getByRole("button", { name: "Allow once" });
+    fireEvent.click(deny);
+
+    expect(onRespond).toHaveBeenCalledWith({ confirmed: false });
+    expect(deny.querySelector(".animate-spin")).toBeTruthy();
+    expect(allow.querySelector(".animate-spin")).toBeNull();
+  });
+
   it("shows a failed response and enables the approval choices for retry", async () => {
     const onRespond = vi.fn().mockRejectedValueOnce(new Error("Runtime is unavailable")).mockResolvedValue(undefined);
     render(<InteractionPrompt interaction={approval} onRespond={onRespond} />);

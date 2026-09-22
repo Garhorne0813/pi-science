@@ -203,7 +203,11 @@ function projectArtifact(turn: TurnPresentation, summaryId: string, artifact: Tu
 export function activityKind(block: ToolCallBlock): ActivityKind {
   const tool = block.tool.trim().toLowerCase();
   if (block.childSessionId || tool.includes("subagent") || tool.includes("agent")) return "subagent";
-  if (tool.includes("python") || tool.includes("kernel") || tool === "r" || tool.includes("notebook")) return "kernel";
+  // File-backed notebook reads/edits do not execute a kernel. Keep them on the
+  // generic file path; only execution-oriented notebook tools use the kernel
+  // renderer.
+  if (tool === "notebook_read" || tool === "notebook_edit") return "file";
+  if (tool.includes("python") || tool.includes("kernel") || tool === "r" || tool === "notebook" || tool === "notebook_run" || tool === "run_cell" || tool === "execute_code") return "kernel";
   if (LITERATURE_TOOLS.has(tool)) return "literature";
   if (/dataset|csv|parquet|table/.test(tool)) return "dataset";
   if (/read|write|file|grep|glob|find|list/.test(tool)) return "file";
