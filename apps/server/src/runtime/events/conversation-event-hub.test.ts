@@ -580,7 +580,12 @@ describe("central conversation event hub", () => {
       options: ["Allow once", "Allow for session", "Deny"],
     });
 
-    await eventually(() => received.some((event) => event.requestId === "permission-1"));
+    await eventually(() => [
+      "confirm-1",
+      "permission-1",
+      "select-1",
+      "mcp-permission-1",
+    ].every((requestId) => received.some((event) => event.requestId === requestId)));
     expect(received.find((event) => event.requestId === "confirm-1")).toMatchObject({
       type: "question.asked",
       kind: "confirmation",
