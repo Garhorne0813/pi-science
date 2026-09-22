@@ -26,6 +26,13 @@ describe("MarkdownViewer runnable code across streaming frames", () => {
     return { flush: () => act(() => paint?.(16)) };
   }
 
+  function shellForCode(container: HTMLElement, code: string): HTMLElement {
+    const pre = [...container.querySelectorAll("pre")].find((candidate) => candidate.textContent?.includes(code));
+    const shell = pre?.closest(".relative");
+    if (!(shell instanceof HTMLElement)) throw new Error(`Missing runnable shell for ${code}`);
+    return shell;
+  }
+
   it("keeps a run in flight and shows its output after later deltas", async () => {
     const frames = stubFrames();
     let resolveRun: (value: typeof RESULT) => void = () => {};
@@ -106,5 +113,70 @@ describe("MarkdownViewer runnable code across streaming frames", () => {
     await act(async () => { resolveRun(RESULT); });
     expect(screen.queryByText("42")).toBeNull();
     expect(screen.getByRole("button", { name: "Run" })).toBeEnabled();
+  });
+
+  it("keeps a pending run with its fence when a replacement prepends another fence", async () => {
+    const frames = stubFrames();
+    let resolveRun: (value: typeof RESULT) => void = () => {};
+    execute.mockReturnValue(new Promise((resolve) => { resolveRun = resolve; }));
+    const runner = { cwd: "/workspace", sessionId: "s1" };
+    const original = "```python\nprint('A')\n```\n\nNarration";
+    const replacement = "```python\nprint('B')\n```\n\n```python\nprint('A')\n```\n\nNarration";
+
+    const { container, rerender } = render(
+      <MarkdownViewer mode="streaming" codeRunner={runner}>{original}</MarkdownViewer>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    rerender(<MarkdownViewer mode="streaming" codeRunner={runner}>{replacement}</MarkdownViewer>);
+    frames.flush();
+
+    expect(shellForCode(container, "print('B')").querySelector('[aria-label="Run"]')).toBeInTheDocument();
+    expect(shellForCode(container, "print('A')").querySelector('[aria-label="Running…"]')).toBeInTheDocument();
+    expect(execute).toHaveBeenCalledTimes(1);
+
+    await act(async () => { resolveRun(RESULT); });
+    await waitFor(() => expect(shellForCode(container, "print('A')")).toHaveTextContent("42"));
+    expect(shellForCode(container, "print('B')")).not.toHaveTextContent("42");
+  });
+
+  it("does not transfer a pending run to the remaining fence when its origin is deleted", async () => {
+    const frames = stubFrames();
+    let resolveRun: (value: typeof RESULT) => void = () => {};
+    execute.mockReturnValue(new Promise((resolve) => { resolveRun = resolve; }));
+    const runner = { cwd: "/workspace", sessionId: "s1" };
+    const original = "```python\nprint('A')\n```\n\n```python\nprint('B')\n```";
+    const replacement = "```python\nprint('B')\n```";
+
+    const { container, rerender } = render(
+      <MarkdownViewer mode="streaming" codeRunner={runner}>{original}</MarkdownViewer>,
+    );
+    fireEvent.click(shellForCode(container, "print('A')").querySelector('[aria-label="Run"]')!);
+    rerender(<MarkdownViewer mode="streaming" codeRunner={runner}>{replacement}</MarkdownViewer>);
+    frames.flush();
+
+    expect(shellForCode(container, "print('B')").querySelector('[aria-label="Run"]')).toBeInTheDocument();
+    expect(shellForCode(container, "print('B')").querySelector('[aria-label="Running…"]')).not.toBeInTheDocument();
+
+    await act(async () => { resolveRun(RESULT); });
+    expect(container).not.toHaveTextContent("42");
+  });
+
+  it("keeps a pending run with its fence when closed fences reorder", () => {
+    const frames = stubFrames();
+    execute.mockReturnValue(new Promise(() => {}));
+    const runner = { cwd: "/workspace", sessionId: "s1" };
+    const original = "```python\nprint('A')\n```\n\n```python\nprint('B')\n```";
+    const replacement = "```python\nprint('B')\n```\n\n```python\nprint('A')\n```";
+
+    const { container, rerender } = render(
+      <MarkdownViewer mode="streaming" codeRunner={runner}>{original}</MarkdownViewer>,
+    );
+    fireEvent.click(shellForCode(container, "print('B')").querySelector('[aria-label="Run"]')!);
+    rerender(<MarkdownViewer mode="streaming" codeRunner={runner}>{replacement}</MarkdownViewer>);
+    frames.flush();
+
+    expect(shellForCode(container, "print('B')").querySelector('[aria-label="Running…"]')).toBeInTheDocument();
+    expect(shellForCode(container, "print('A')").querySelector('[aria-label="Run"]')).toBeInTheDocument();
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 });

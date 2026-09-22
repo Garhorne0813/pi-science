@@ -3,6 +3,7 @@ import remarkParse from "remark-parse";
 import { unified } from "unified";
 
 export type MarkdownSourceRange = { start: number; end: number };
+export type MarkdownFencedCodeBlock = MarkdownSourceRange & { signature: string };
 
 type MarkdownNode = {
   type: string;
@@ -14,6 +15,7 @@ type MarkdownNode = {
 const markdownParser = unified().use(remarkParse).use(remarkGfm).freeze();
 let cachedMarkdown: string | null = null;
 let cachedRanges: MarkdownSourceRange[] = [];
+let cachedFences: MarkdownFencedCodeBlock[] = [];
 
 export function collectCodeRanges(node: MarkdownNode, ranges: MarkdownSourceRange[]): void {
   if (node.type === "code" || node.type === "inlineCode") {
@@ -27,12 +29,41 @@ export function collectCodeRanges(node: MarkdownNode, ranges: MarkdownSourceRang
 
 /** Source ranges that CommonMark parsed as fenced, indented, or inline code. */
 export function markdownCodeRanges(markdown: string): MarkdownSourceRange[] {
-  if (markdown === cachedMarkdown) return cachedRanges;
+  ensureMarkdownAnalysis(markdown);
+  return cachedRanges;
+}
+
+/** Fenced code nodes, with an exact-source signature for revision reconciliation. */
+export function markdownFencedCodeBlocks(markdown: string): MarkdownFencedCodeBlock[] {
+  ensureMarkdownAnalysis(markdown);
+  return cachedFences;
+}
+
+function ensureMarkdownAnalysis(markdown: string): void {
+  if (markdown === cachedMarkdown) return;
+  const tree = markdownParser.parse(markdown) as MarkdownNode;
   const ranges: MarkdownSourceRange[] = [];
-  collectCodeRanges(markdownParser.parse(markdown) as MarkdownNode, ranges);
+  collectCodeRanges(tree, ranges);
+  const fences: MarkdownFencedCodeBlock[] = [];
+  collectFencedCodeBlocks(tree, markdown, fences);
   cachedMarkdown = markdown;
   cachedRanges = ranges.sort((a, b) => a.start - b.start);
-  return cachedRanges;
+  cachedFences = fences.sort((a, b) => a.start - b.start);
+}
+
+function collectFencedCodeBlocks(node: MarkdownNode, markdown: string, fences: MarkdownFencedCodeBlock[]): void {
+  if (node.type === "code") {
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (start === undefined || end === undefined) return;
+    const firstLineEnd = markdown.indexOf("\n", start);
+    const openingLine = markdown.slice(start, firstLineEnd < 0 ? markdown.length : firstLineEnd);
+    if (/^(`{3,}|~{3,})/.test(openingLine)) {
+      fences.push({ start, end, signature: markdown.slice(start, end) });
+    }
+    return;
+  }
+  for (const child of node.children ?? []) collectFencedCodeBlocks(child, markdown, fences);
 }
 
 /**

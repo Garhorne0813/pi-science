@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { unified } from "unified";
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
-import { isUnclosedFencedCodeBlock } from "./markdown-code-ranges";
+import { isUnclosedFencedCodeBlock, markdownFencedCodeBlocks } from "./markdown-code-ranges";
 
 const parser = unified().use(remarkParse).use(remarkGfm).freeze();
 
@@ -70,5 +70,15 @@ describe("isUnclosedFencedCodeBlock", () => {
     expect(unclosed(open)).toBe(true);
     expect(unclosed(closed)).toBe(false);
     expect(unclosed(open)).toBe(true);
+  });
+});
+
+describe("markdownFencedCodeBlocks", () => {
+  it("identifies container fences but excludes indented code", () => {
+    const markdown = "> ```python\n> print(1)\n> ```\n\n    indented";
+    const fences = markdownFencedCodeBlocks(markdown);
+    expect(fences).toHaveLength(1);
+    expect(fences[0]?.signature).toContain("```python");
+    expect(markdown.slice(fences[0]!.start, fences[0]!.end)).toBe(fences[0]!.signature);
   });
 });

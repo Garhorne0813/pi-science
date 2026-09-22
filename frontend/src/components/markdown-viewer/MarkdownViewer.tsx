@@ -8,12 +8,19 @@ import { Check, Copy, File } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/ui";
 import { fenceLanguage, runnableLanguage } from "@/lib/conversation";
+import { notebookRuntime, type CellResult } from "@/lib/notebook";
 import { RunnableCodeBlock } from "../conversation/RunnableCodeBlock";
 import { CodeBlockFrame } from "./CodeBlockFrame";
 import { fileInspectorForPath } from "@/lib/artifacts";
 import { resolveMarkdownResource, type MarkdownResourceContext } from "@/lib/files/markdown-resources";
 import { useUiStore } from "@/lib/ui";
-import { isUnclosedFencedCodeBlock, markdownCodeRanges, type MarkdownSourceRange } from "./markdown-code-ranges";
+import {
+  isUnclosedFencedCodeBlock,
+  markdownCodeRanges,
+  markdownFencedCodeBlocks,
+  type MarkdownFencedCodeBlock,
+  type MarkdownSourceRange,
+} from "./markdown-code-ranges";
 import { prepareStreamingMarkdown, type MarkdownRenderMode } from "./streaming-markdown";
 
 export type { MarkdownRenderMode } from "./streaming-markdown";
@@ -87,6 +94,90 @@ const STYLES: Record<Variant, Record<string, string>> = {
 };
 
 export type CodeRunner = { cwd: string; sessionId: string };
+
+type IdentifiedFence = MarkdownFencedCodeBlock & { id: string };
+type CodeExecution = { running: boolean; snapshot: string; result: CellResult | null };
+
+function signatureSimilarity(left: string, right: string): number {
+  const longest = Math.max(left.length, right.length);
+  if (longest === 0) return 1;
+  let prefix = 0;
+  while (prefix < left.length && prefix < right.length && left[prefix] === right[prefix]) prefix += 1;
+  let suffix = 0;
+  while (
+    suffix < left.length - prefix
+    && suffix < right.length - prefix
+    && left[left.length - 1 - suffix] === right[right.length - 1 - suffix]
+  ) suffix += 1;
+  return (prefix + suffix) / longest;
+}
+
+/** Keep interactive state with an unchanged fence when replace revisions add,
+ * remove, or reorder siblings. Exact source matches are authoritative; a
+ * one-for-one unmatched pair carries identity across an in-place code edit. */
+function useStableFenceIdentities(markdown: string): Map<number, string> {
+  const previous = useRef<IdentifiedFence[]>([]);
+  const serial = useRef(0);
+  return useMemo(() => {
+    const fences = markdownFencedCodeBlocks(markdown);
+    const prior = previous.current;
+    const usedPrior = new Set<number>();
+    const identified: Array<IdentifiedFence | null> = fences.map(() => null);
+
+    for (let nextIndex = 0; nextIndex < fences.length; nextIndex += 1) {
+      const fence = fences[nextIndex]!;
+      let best = -1;
+      let distance = Number.POSITIVE_INFINITY;
+      for (let priorIndex = 0; priorIndex < prior.length; priorIndex += 1) {
+        if (usedPrior.has(priorIndex) || prior[priorIndex]!.signature !== fence.signature) continue;
+        const candidateDistance = Math.abs(prior[priorIndex]!.start - fence.start);
+        if (candidateDistance < distance) {
+          best = priorIndex;
+          distance = candidateDistance;
+        }
+      }
+      if (best >= 0) {
+        usedPrior.add(best);
+        identified[nextIndex] = { ...fence, id: prior[best]!.id };
+      }
+    }
+
+    const unmatchedPrior = prior.map((_fence, index) => index).filter((index) => !usedPrior.has(index));
+    const unmatchedNext = fences.map((_fence, index) => index).filter((index) => identified[index] === null);
+    if (unmatchedPrior.length === unmatchedNext.length) {
+      for (let index = 0; index < unmatchedNext.length; index += 1) {
+        const priorIndex = unmatchedPrior[index]!;
+        const nextIndex = unmatchedNext[index]!;
+        usedPrior.add(priorIndex);
+        identified[nextIndex] = { ...fences[nextIndex]!, id: prior[priorIndex]!.id };
+      }
+    } else {
+      // When insertion and an in-place edit happen in the same replacement,
+      // carry identity only for a strong source match; otherwise a new fence is
+      // safer than moving a pending execution to unrelated code.
+      for (const priorIndex of unmatchedPrior) {
+        let bestNext = -1;
+        let bestScore = 0.6;
+        for (const nextIndex of unmatchedNext) {
+          if (identified[nextIndex] !== null) continue;
+          const score = signatureSimilarity(prior[priorIndex]!.signature, fences[nextIndex]!.signature);
+          if (score > bestScore) {
+            bestNext = nextIndex;
+            bestScore = score;
+          }
+        }
+        if (bestNext >= 0) identified[bestNext] = { ...fences[bestNext]!, id: prior[priorIndex]!.id };
+      }
+    }
+
+    const next = identified.map((fence, index) => fence ?? {
+      ...fences[index]!,
+      id: `fence-${serial.current++}`,
+    });
+    previous.current = next;
+    return new Map(next.map((fence) => [fence.start, fence.id]));
+  }, [markdown]);
+}
 
 function useFrameCoalescedValue(value: string, enabled: boolean): string {
   const [coalesced, setCoalesced] = useState(value);
@@ -283,6 +374,9 @@ export function MarkdownViewer({
     [mode, visibleValue],
   );
   const renderedValue = useMemo(() => normalizeMathInput(prepared.text, prepared.codeRanges), [prepared]);
+  const fenceIdentities = useStableFenceIdentities(renderedValue);
+  const [codeExecutions, setCodeExecutions] = useState<Record<string, CodeExecution>>({});
+  const inFlightExecutions = useRef(new Set<string>());
   // Renderer components stay mounted across streaming frames, so `pre` reads
   // the current source through a ref instead of forcing a new component type.
   const renderedValueRef = useRef(renderedValue);
@@ -299,6 +393,42 @@ export function MarkdownViewer({
     if (resourceCwd) return { cwd: resourceCwd, root: resourceRoot, documentPath: resourceDocumentPath };
     return cwd ? { cwd, documentPath: undefined } : undefined;
   }, [cwd, resourceCwd, resourceDocumentPath, resourceRoot]);
+  const runCode = useCallback((executionId: string, code: string) => {
+    if (!cwd || !sessionId || !code.trim() || inFlightExecutions.current.has(executionId)) return;
+    const snapshot = code;
+    inFlightExecutions.current.add(executionId);
+    setCodeExecutions((current) => ({
+      ...current,
+      [executionId]: { running: true, snapshot, result: null },
+    }));
+    void notebookRuntime.execute(`chat-${sessionId}`, cwd, "python", snapshot, sessionId)
+      .then((result) => {
+        setCodeExecutions((current) => ({
+          ...current,
+          [executionId]: { running: false, snapshot, result },
+        }));
+      })
+      .catch((cause: unknown) => {
+        setCodeExecutions((current) => ({
+          ...current,
+          [executionId]: {
+            running: false,
+            snapshot,
+            result: { ok: false, stdout: "", result: null, error: cause instanceof Error ? cause.message : String(cause) },
+          },
+        }));
+      })
+      .finally(() => {
+        inFlightExecutions.current.delete(executionId);
+      });
+  }, [cwd, sessionId]);
+  const closeCodeResult = useCallback((executionId: string) => {
+    setCodeExecutions((current) => {
+      const existing = current[executionId];
+      if (!existing?.result) return current;
+      return { ...current, [executionId]: { ...existing, result: null } };
+    });
+  }, []);
   const handleFileLink = useCallback((href: string) => {
     if (!context) return;
     const resolved = resolveMarkdownResource(href, context);
@@ -370,8 +500,20 @@ export function MarkdownViewer({
         && isUnclosedFencedCodeBlock(renderedValueRef.current, start, end, code, lastNonWhitespaceOffsetRef.current);
       if (chrome && codeProps) {
         if (!isUnclosedFence && cwd && sessionId && runnableLanguage(language)) {
+          const fenceId = start === undefined ? undefined : fenceIdentities.get(start);
+          const executionId = fenceId ? `${sessionId}:${fenceId}` : undefined;
+          const execution = executionId ? codeExecutions[executionId] : undefined;
+          const result = execution?.snapshot === code ? execution.result : null;
           return (
-            <RunnableCodeBlock code={code} language={language} cwd={cwd} sessionId={sessionId} preClassName={s.pre}>
+            <RunnableCodeBlock
+              code={code}
+              language={language}
+              preClassName={s.pre}
+              running={execution?.running === true}
+              result={result ?? null}
+              onRun={() => { if (executionId) runCode(executionId, code); }}
+              onCloseResult={() => { if (executionId) closeCodeResult(executionId); }}
+            >
               {children}
             </RunnableCodeBlock>
           );
@@ -397,7 +539,7 @@ export function MarkdownViewer({
     ),
     th: ({ children, style }) => <th className={s.th} style={style}>{children}</th>,
     td: ({ children, style }) => <td className={s.td} style={style}>{children}</td>,
-  }), [codeChrome, context, cwd, handleFileLink, s, sessionId, t, variant]);
+  }), [closeCodeResult, codeChrome, codeExecutions, context, cwd, fenceIdentities, handleFileLink, runCode, s, sessionId, t, variant]);
   return (
     <div className={cn(s.root, className)}>
       <MemoizedMarkdownRenderer value={renderedValue} components={components} renderMode={mode} />
