@@ -50,7 +50,6 @@ describe("MarkdownViewer runnable code across streaming frames", () => {
     rerender(<MarkdownViewer mode="streaming" codeRunner={runner}>{`${base} continues`}</MarkdownViewer>);
     frames.flush();
 
-    // A remount would reset `running` and offer a second Run for the same block.
     expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
     expect(screen.getByRole("button", { name: "Running…" })).toBeDisabled();
     expect(execute).toHaveBeenCalledTimes(1);
@@ -113,6 +112,39 @@ describe("MarkdownViewer runnable code across streaming frames", () => {
     await act(async () => { resolveRun(RESULT); });
     expect(screen.queryByText("42")).toBeNull();
     expect(screen.getByRole("button", { name: "Run" })).toBeEnabled();
+  });
+
+  it("lets edited code run while the previous snapshot is still pending", async () => {
+    const frames = stubFrames();
+    let resolveFirst: (value: typeof RESULT) => void = () => {};
+    let resolveSecond: (value: typeof RESULT) => void = () => {};
+    execute
+      .mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockReturnValueOnce(new Promise((resolve) => { resolveSecond = resolve; }));
+    const runner = { cwd: "/workspace", sessionId: "s1" };
+
+    const { rerender } = render(
+      <MarkdownViewer mode="streaming" codeRunner={runner}>{"```python\nprint(1)\n```"}</MarkdownViewer>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    rerender(
+      <MarkdownViewer mode="streaming" codeRunner={runner}>{"```python\nprint(2)\n```"}</MarkdownViewer>,
+    );
+    frames.flush();
+
+    const run = screen.getByRole("button", { name: "Run" });
+    expect(run).toBeEnabled();
+    fireEvent.click(run);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("button", { name: "Running…" })).toBeDisabled();
+
+    await act(async () => { resolveFirst(RESULT); });
+    expect(screen.getByRole("button", { name: "Running…" })).toBeDisabled();
+    expect(screen.queryByText("42")).toBeNull();
+
+    await act(async () => { resolveSecond({ ...RESULT, stdout: "2\n" }); });
+    await waitFor(() => expect(screen.getByText("2")).toBeInTheDocument());
   });
 
   it("keeps a pending run with its fence when a replacement prepends another fence", async () => {
@@ -178,5 +210,41 @@ describe("MarkdownViewer runnable code across streaming frames", () => {
     expect(shellForCode(container, "print('B')").querySelector('[aria-label="Running…"]')).toBeInTheDocument();
     expect(shellForCode(container, "print('A')").querySelector('[aria-label="Run"]')).toBeInTheDocument();
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not transfer pending state across an equal-sized multi-fence rewrite", () => {
+    const frames = stubFrames();
+    execute.mockReturnValue(new Promise(() => {}));
+    const runner = { cwd: "/workspace", sessionId: "s1" };
+    const original = "```python\nprint('A')\n```\n\n```python\nprint('B')\n```";
+    const replacement = "```python\nprint('X')\n```\n\n```python\nprint('Y')\n```";
+
+    const { container, rerender } = render(
+      <MarkdownViewer mode="streaming" codeRunner={runner}>{original}</MarkdownViewer>,
+    );
+    fireEvent.click(shellForCode(container, "print('A')").querySelector('[aria-label="Run"]')!);
+    rerender(<MarkdownViewer mode="streaming" codeRunner={runner}>{replacement}</MarkdownViewer>);
+    frames.flush();
+
+    expect(shellForCode(container, "print('X')").querySelector('[aria-label="Run"]')).toBeInTheDocument();
+    expect(shellForCode(container, "print('Y')").querySelector('[aria-label="Run"]')).toBeInTheDocument();
+    expect(container.querySelector('[aria-label="Running…"]')).not.toBeInTheDocument();
+  });
+
+  it("does not move a pending run onto a newly inserted identical fence", () => {
+    const frames = stubFrames();
+    execute.mockReturnValue(new Promise(() => {}));
+    const runner = { cwd: "/workspace", sessionId: "s1" };
+    const code = "```python\nprint('same')\n```";
+
+    const { container, rerender } = render(
+      <MarkdownViewer mode="streaming" codeRunner={runner}>{code}</MarkdownViewer>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    rerender(<MarkdownViewer mode="streaming" codeRunner={runner}>{`${code}\n\n${code}`}</MarkdownViewer>);
+    frames.flush();
+
+    expect(container.querySelectorAll('[aria-label="Run"]')).toHaveLength(2);
+    expect(container.querySelector('[aria-label="Running…"]')).not.toBeInTheDocument();
   });
 });
