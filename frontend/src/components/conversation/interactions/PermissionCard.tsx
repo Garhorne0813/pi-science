@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Loader2, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { PendingInteraction } from "../../../lib/agent-runtime";
@@ -12,10 +13,14 @@ interface PermissionCardProps {
 
 export function PermissionCard({ interaction, submitting, selectedOption, selectedConfirmation, onRespond }: PermissionCardProps) {
   const { t } = useTranslation();
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    rootRef.current?.focus();
+  }, [interaction.requestId]);
   const options = (interaction.options || []).map((option) => typeof option === "string"
     ? { label: option, value: option }
     : { label: option.label || option.value || t("interaction.option"), value: option.value || option.label || "" });
-  return <div className="rounded-card border border-accent/30 bg-accent/5 p-4 animate-fadeIn" role="region" aria-labelledby={`permission-${interaction.requestId}`}>
+  return <div ref={rootRef} tabIndex={-1} className="rounded-card border border-accent/30 bg-accent/5 p-4 animate-fadeIn outline-none" role="alertdialog" aria-labelledby={`permission-${interaction.requestId}`}>
     <div className="flex items-start gap-3">
       <span className="mt-0.5 rounded-full bg-accent/10 p-1.5 text-accent"><ShieldCheck size={16} aria-hidden /></span>
       <div className="min-w-0 flex-1">

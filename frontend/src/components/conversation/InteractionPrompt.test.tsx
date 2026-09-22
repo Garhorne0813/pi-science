@@ -14,11 +14,17 @@ describe("InteractionPrompt", () => {
   it("renders confirmation permissions as an accessible approval card", () => {
     const onRespond = vi.fn();
     render(<InteractionPrompt interaction={{ requestId: "install-1", kind: "permission", method: "confirm", title: "Install scipy", operation: "Install scipy 1.17", scope: "Project environment", effect: "Creates a new revision" }} onRespond={onRespond} />);
-    expect(screen.getByRole("region", { name: "Approval required" })).toBeInTheDocument();
+    expect(screen.getByRole("alertdialog", { name: "Approval required" })).toBeInTheDocument();
     expect(screen.getByText("Project environment")).toBeInTheDocument();
     expect(screen.getByText("Creates a new revision")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
     expect(onRespond).toHaveBeenCalledWith({ confirmed: true });
+  });
+
+  it("moves focus to the permission alertdialog when it appears", () => {
+    const onRespond = vi.fn();
+    render(<InteractionPrompt interaction={{ requestId: "install-focus", kind: "permission", method: "confirm", title: "Install scipy" }} onRespond={onRespond} />);
+    expect(screen.getByRole("alertdialog", { name: "Approval required" })).toHaveFocus();
   });
 
   it("does not let question text override an explicit non-permission kind", () => {
@@ -29,7 +35,7 @@ describe("InteractionPrompt", () => {
       method: "input",
       title: "Why was permission denied?",
     }} onRespond={onRespond} />);
-    expect(screen.queryByRole("region", { name: "Approval required" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog", { name: "Approval required" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "Because the scope was too broad." } });
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     expect(onRespond).toHaveBeenCalledWith({ value: "Because the scope was too broad." });

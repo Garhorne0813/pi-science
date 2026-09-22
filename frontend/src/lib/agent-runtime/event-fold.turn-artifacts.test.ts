@@ -134,6 +134,37 @@ describe("foldEvent turn.artifacts", () => {
     expect(state.blocks.find((block) => block.kind === "artifact-summary")).toMatchObject({ revision: 2, artifacts: [{ path: "new.csv" }] });
   });
 
+  it("does not let an unversioned update roll back a versioned summary", () => {
+    let state = threadWith([{ kind: "user", id: "user-1", text: "hi" }]);
+    const base = { type: "turn.artifacts", sessionId: "s", turnId: "turn-1" } as PiScienceEvent;
+    state = foldEvent(state, { ...base, revision: 2, artifacts: [{ path: "new.csv", kind: "table", mime: "text/csv", size: 2 }] });
+    state = foldEvent(state, { ...base, artifacts: [{ path: "legacy.csv", kind: "table", mime: "text/csv", size: 1 }] });
+    expect(state.blocks.find((block) => block.kind === "artifact-summary")).toMatchObject({ revision: 2, artifacts: [{ path: "new.csv" }] });
+  });
+
+  it("does not let a revision-less envelope overwrite a revisioned summary", () => {
+    let state = threadWith([{ kind: "user", id: "user-1", text: "hi" }]);
+    state = foldEvent(state, {
+      type: "turn.artifacts", sessionId: "s", turnId: "turn-1", revision: 3,
+      artifacts: [{ path: "v3.csv", kind: "table", mime: "text/csv", size: 3 }],
+    } as PiScienceEvent);
+    state = foldEvent(state, {
+      type: "turn.artifacts", sessionId: "s", turnId: "turn-1", seq: 9,
+      artifacts: [{ path: "late.csv", kind: "table", mime: "text/csv", size: 1 }],
+    } as PiScienceEvent);
+    expect(state.blocks.find((block) => block.kind === "artifact-summary")).toMatchObject({ revision: 3, artifacts: [{ path: "v3.csv" }] });
+  });
+
+  it("still replaces legacy unversioned summaries with later unversioned updates", () => {
+    let state = threadWith([{ kind: "user", id: "user-1", text: "hi" }]);
+    const base = { type: "turn.artifacts", sessionId: "s", turnId: "turn-1" } as PiScienceEvent;
+    state = foldEvent(state, { ...base, artifacts: [{ path: "a.png", kind: "image", mime: "image/png", size: 1 }] });
+    state = foldEvent(state, { ...base, artifacts: [{ path: "a.png", kind: "image", mime: "image/png", size: 1 }, { path: "b.csv", kind: "table", mime: "text/csv", size: 2 }] });
+    expect(state.blocks.find((block) => block.kind === "artifact-summary")).toMatchObject({
+      artifacts: [{ path: "a.png" }, { path: "b.csv" }],
+    });
+  });
+
   it("ignores empty artifact lists", () => {
     const state = threadWith([{ kind: "user", id: "user-1", text: "hi" }]);
     const next = foldEvent(state, { type: "turn.artifacts", sessionId: "s", turnId: "turn-1", artifacts: [] } as PiScienceEvent);
