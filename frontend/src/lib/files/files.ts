@@ -200,3 +200,57 @@ export function base64ToBytes(b64: string): ArrayBuffer {
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return bytes.buffer;
 }
+
+export interface LargeFilePointer {
+  error?: string;
+  format?: string;
+  path?: string;
+  name?: string;
+  size?: string | number;
+  size_bytes?: number;
+  modified?: number;
+  is_dir?: boolean;
+  note?: string | null;
+  hint?: string;
+  gzipped?: boolean;
+  approx_rows?: number;
+  rows?: number;
+  num_rows?: number;
+  n_rows?: number;
+  approx_reads?: number;
+  approx_sequences?: number;
+  approx_variants?: number;
+  n_columns?: number;
+  read_length?: { min: number; max: number; mean: number };
+  samples?: string[];
+  sample_ids?: string[];
+  columns?: Array<{ name: string; dtype: string }>;
+  datasets?: Array<{ path: string; shape: Array<number | string>; dtype: string }>;
+}
+
+function artifactProbeQuery(path: string, root: FileRoot | undefined, cwd: string) {
+  const params = new URLSearchParams({ cwd });
+  if (root) params.set("root", root);
+  return {
+    queryKey: ["artifact-probe", cwd, root ?? null, path] as const,
+    queryFn: () => withArtifactProbeSlot(() => apiRequest<LargeFilePointer>(`${API}/files/probe/${encodeWorkspacePath(path)}?${params}`)),
+    staleTime: ARTIFACT_PROBE_STALE_MS,
+    gcTime: ARTIFACT_PROBE_GC_MS,
+    retry: false,
+  };
+}
+
+/** Probe metadata/structure without reading the whole file. Calls are shared
+ * through the query cache and pass through a module-level semaphore, so many
+ * mounted historical turns cannot multiply the effective concurrency. */
+export async function probeLargeFile(
+  path: string,
+  root: FileRoot | undefined,
+  cwd: string,
+): Promise<LargeFilePointer | null> {
+  try {
+    return await queryClient.fetchQuery(artifactProbeQuery(path, root, cwd));
+  } catch {
+    return null;
+  }
+}
