@@ -397,7 +397,12 @@ export function registerEventListener(client: PiScienceClient) {
     if (event.type === "permission.asked" || event.type === "question.asked") {
       bumpConversationGeneration();
       const method = (event.method as PendingInteraction["method"]) || (event.type === "permission.asked" ? "confirm" : "input");
-      const kind = interactionKind(event.kind) ?? (method === "confirm" ? "confirmation" : "question");
+      const kind = interactionKind(event.kind)
+        ?? (event.type === "permission.asked"
+          ? "permission"
+          : method === "confirm"
+            ? "confirmation"
+            : "question");
       useRuntimeStore.setState({
         working: true,
         turnLifecycle: "waiting",

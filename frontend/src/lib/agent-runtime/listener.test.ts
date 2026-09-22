@@ -217,6 +217,38 @@ describe("runtime event subscription", () => {
     expect(useRuntimeStore.getState().status).toBe("ready");
   });
 
+  it("preserves legacy permission semantics when kind is omitted", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-legacy-permission"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-legacy-permission");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    source.emit("permission.asked", {
+      type: "permission.asked",
+      sessionId: "session-legacy-permission",
+      requestId: "permission-1",
+      method: "confirm",
+      title: "Install scipy",
+      operation: "Install scipy 1.17",
+      scope: "Project environment",
+      effect: "Creates a new revision",
+      // Legacy events intentionally omit kind.
+    });
+
+    expect(useRuntimeStore.getState().pendingInteraction).toMatchObject({
+      requestId: "permission-1",
+      kind: "permission",
+      operation: "Install scipy 1.17",
+      scope: "Project environment",
+      effect: "Creates a new revision",
+    });
+  });
+
   it("marks a running questionnaire interaction resolved immediately after response", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
