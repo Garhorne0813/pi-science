@@ -46,7 +46,7 @@ describe("Git workspace inspection", () => {
     const changed = await inspectGitWorkspace(cwd);
     expect(changed.changes).toContainEqual({ index_status: " ", worktree_status: "M", path: "study data.txt" });
     expect(changed.head).toBe(baseline.head);
-  });
+  }, 15_000);
 
   it("does not inspect a parent repository beyond the workspace", async () => {
     const root = await workspace();

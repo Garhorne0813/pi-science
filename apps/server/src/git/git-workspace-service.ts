@@ -72,8 +72,14 @@ function parsePorcelain(output: string): GitChange[] {
  * deliberately absent; research branches and commits need a separate policy. */
 export async function inspectGitWorkspace(cwd: string): Promise<GitWorkspaceStatus> {
   let root: string;
-  try { root = resolve((await git(cwd, "rev-parse", "--show-toplevel")).trim()); }
-  catch (error) {
+  let metadataPaths: string[];
+  try {
+    const [rootOutput, gitDirOutput, commonDirOutput] = (await git(cwd, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"))
+      .trim().split(/\r?\n/);
+    if (!rootOutput || !gitDirOutput || !commonDirOutput) throw new Error("Git repository metadata is incomplete");
+    root = resolve(rootOutput);
+    metadataPaths = [gitDirOutput, commonDirOutput].map((path) => resolve(cwd, path));
+  } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return { available: code !== "ENOENT", is_repository: false, root: null, branch: null, head: null, clean: null, changes: [], reason: code === "ENOENT" ? "git_unavailable" : "not_a_repository" };
   }
@@ -83,10 +89,6 @@ export async function inspectGitWorkspace(cwd: string): Promise<GitWorkspaceStat
     return { available: true, is_repository: false, root: null, branch: null, head: null, clean: null, changes: [], reason: "repository_root_outside_workspace" };
   }
   const canonicalRoot = await realpath(root);
-  const metadataPaths = await Promise.all([
-    git(cwd, "rev-parse", "--absolute-git-dir"),
-    git(cwd, "rev-parse", "--git-common-dir"),
-  ]).then((values) => values.map((value) => resolve(cwd, value.trim())));
   const canonicalMetadataPaths = await Promise.all(metadataPaths.map((path) => realpath(path)));
   if (canonicalMetadataPaths.some((path) => !isContained(canonicalRoot, path))) {
     return { available: true, is_repository: false, root: null, branch: null, head: null, clean: null, changes: [], reason: "repository_metadata_outside_workspace" };
