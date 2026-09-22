@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream, createWriteStream } from "node:fs";
-import { chmod, link, lstat, mkdir, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { constants, createReadStream, createWriteStream } from "node:fs";
+import { chmod, link, lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { metadataRoot } from "../../storage/persistence.js";
@@ -16,19 +16,58 @@ export function artifactBlobPath(cwd: string, sha256: string): string {
   return join(metadataRoot(cwd), "artifact-blobs", sha256.slice(0, 2), sha256);
 }
 
+function isContained(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+}
+
+async function openArtifactSource(sourceRoot: string, source: string) {
+  const root = await realpath(sourceRoot);
+  const target = resolve(source);
+  if (!isContained(root, target) || target === root) throw new Error("Artifact source escapes the workspace");
+
+  let handle;
+  try {
+    handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ELOOP") throw new Error("Artifact source must not be a symbolic link");
+    throw error;
+  }
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isFile()) throw new Error("Artifact source must be a regular file");
+
+    let current = root;
+    for (const part of relative(root, target).split(/[\\/]/)) {
+      current = join(current, part);
+      const info = await lstat(current, { bigint: true });
+      if (info.isSymbolicLink()) throw new Error("Artifact source must not contain symbolic links");
+      if (current === target && (!info.isFile() || info.dev !== opened.dev || info.ino !== opened.ino)) {
+        throw new Error("Artifact source changed while it was being opened");
+      }
+    }
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
 /** Capture the bytes once, before publishing metadata. A changed source file
  * cannot cause the manifest digest to describe a different saved version. */
-export async function captureArtifactBlob(cwd: string, source: string): Promise<ArtifactBlob> {
+export async function captureArtifactBlob(cwd: string, source: string, sourceRoot = cwd): Promise<ArtifactBlob> {
+  const sourceHandle = await openArtifactSource(sourceRoot, source);
   const root = join(metadataRoot(cwd), "artifact-blobs");
-  await assertRealDirectory(metadataRoot(cwd));
-  await mkdir(root, { recursive: true });
-  await assertRealDirectory(root);
-  const temporary = join(root, `.capture-${randomUUID()}.tmp`);
-  const hash = createHash("sha256");
-  let size = 0;
+  let temporary: string | undefined;
   try {
+    await assertRealDirectory(metadataRoot(cwd));
+    await mkdir(root, { recursive: true });
+    await assertRealDirectory(root);
+    temporary = join(root, `.capture-${randomUUID()}.tmp`);
+    const hash = createHash("sha256");
+    let size = 0;
     await pipeline(
-      createReadStream(source),
+      sourceHandle.createReadStream({ autoClose: false }),
       new Transform({
         transform(chunk: Buffer, _encoding, callback) {
           size += chunk.length;
@@ -52,7 +91,8 @@ export async function captureArtifactBlob(cwd: string, source: string): Promise<
     }
     return { sha256, size };
   } finally {
-    await unlink(temporary).catch(() => undefined);
+    await sourceHandle.close();
+    if (temporary) await unlink(temporary).catch(() => undefined);
   }
 }
 

@@ -9,11 +9,26 @@ import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/works
 import { artifactBlobPath, captureArtifactBlob, verifyArtifactBlob } from "../../runtime/artifacts/artifact-blob-store.js";
 
 interface Artifact { artifact_id: string; version: number; path: string; kind: string; mime: string; size: number; sha256: string; blob_sha256?: string; published_at: string; producer?: Record<string, unknown>; inputs?: unknown[]; environment?: Record<string, unknown>; verification?: Record<string, unknown> }
+interface ArtifactVerificationEvent { artifact_id: string; version: number; verification: Record<string, unknown> }
+
+function artifactKey(artifact: Pick<Artifact, "artifact_id" | "version">): string {
+  return `${artifact.artifact_id}:${artifact.version}`;
+}
+
+async function withLatestVerification(cwd: string, artifacts: Artifact[]): Promise<Artifact[]> {
+  const events = await readJsonLines<ArtifactVerificationEvent>(workspaceFile(cwd, "artifact-verifications.jsonl"));
+  const latest = new Map(events.map((event) => [artifactKey(event), event.verification]));
+  return artifacts.map((artifact) => {
+    const verification = latest.get(artifactKey(artifact));
+    return verification ? { ...artifact, verification } : artifact;
+  });
+}
 
 async function findArtifact(cwd: string, artifactId: string, version?: number): Promise<Artifact | undefined> {
   const rows = (await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl")))
     .filter((row) => row.artifact_id === artifactId);
-  return version === undefined ? rows.at(-1) : rows.findLast((row) => row.version === version);
+  const item = version === undefined ? rows.at(-1) : rows.findLast((row) => row.version === version);
+  return item ? (await withLatestVerification(cwd, [item]))[0] : undefined;
 }
 
 function q(request: { query: unknown }, key: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[key]; return typeof value === "string" && value ? value : fallback; }
@@ -27,7 +42,7 @@ export async function recordProvenance(cwd: string, body: Record<string, unknown
 }
 
 export function registerArtifactRoutes(app: FastifyInstance): void {
-  app.get("/api/artifacts", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const query = request.query as { artifact_id?: string; limit?: string }; const all = await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl")); const filtered = query.artifact_id ? all.filter((item) => item.artifact_id === query.artifact_id) : all; return { artifacts: filtered.slice(-Math.min(1000, Math.max(1, Number(query.limit ?? 100)))).reverse() }; });
+  app.get("/api/artifacts", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const query = request.query as { artifact_id?: string; limit?: string }; const all = await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl")); const filtered = query.artifact_id ? all.filter((item) => item.artifact_id === query.artifact_id) : all; const artifacts = filtered.slice(-Math.min(1000, Math.max(1, Number(query.limit ?? 100)))).reverse(); return { artifacts: await withLatestVerification(cwd, artifacts) }; });
   app.post("/api/artifacts/publish", async (request, reply) => {
     const cwd = await ws(request, reply); if (!cwd) return;
     const body = (request.body ?? {}) as Record<string, unknown>;
@@ -87,10 +102,14 @@ export function registerArtifactRoutes(app: FastifyInstance): void {
     const item = await findArtifact(cwd, String(body.artifact_id ?? ""), body.version ? Number(body.version) : undefined);
     if (!item) return reply.code(404).send({ error: "Artifact not found" });
     if (!item.blob_sha256) return reply.code(409).send({ error: "Legacy artifact has no saved content" });
-    try {
-      const result = await verifyArtifactBlob(cwd, { sha256: item.blob_sha256, size: item.size });
-      return { ...item, verification: { status: result.valid ? "passed" : "failed", checks: { sha256: result.sha256, expected: item.sha256, size: result.size, expected_size: item.size }, checked_at: new Date().toISOString() } };
-    } catch { return reply.code(404).send({ error: "Artifact content is missing" }); }
+    const result = await verifyArtifactBlob(cwd, { sha256: item.blob_sha256, size: item.size })
+      .catch(() => null);
+    if (!result) return reply.code(404).send({ error: "Artifact content is missing" });
+    const verification = { status: result.valid ? "passed" : "failed", checks: { sha256: result.sha256, expected: item.sha256, size: result.size, expected_size: item.size }, checked_at: new Date().toISOString() };
+    await withFileWriteLock(workspaceFile(cwd, "artifact-verifications.jsonl"), async () => {
+      await appendJsonLineUnlocked(workspaceFile(cwd, "artifact-verifications.jsonl"), { artifact_id: item.artifact_id, version: item.version, verification });
+    });
+    return { ...item, verification };
   });
   app.post("/api/artifacts/claim-check", async (request, reply) => { const body = (request.body ?? {}) as Record<string, unknown>; const values = Array.isArray(body.values) ? body.values.map(Number) : []; if (!values.length || values.some((value) => !Number.isFinite(value))) return reply.code(422).send({ error: "values must contain finite numbers" }); const direction = body.direction === undefined ? undefined : body.direction === "positive" || body.direction === "negative" ? body.direction : null; if (direction === null) return reply.code(422).send({ error: "direction must be positive or negative" }); const parseBound = (value: unknown): number | undefined => { if (value === undefined) return undefined; const parsed = Number(value); return Number.isFinite(parsed) ? parsed : undefined; }; const minimum = parseBound(body.minimum); const maximum = parseBound(body.maximum); if (body.minimum !== undefined && minimum === undefined || body.maximum !== undefined && maximum === undefined) return reply.code(422).send({ error: "minimum and maximum must be finite numbers" }); if (minimum !== undefined && maximum !== undefined && minimum > maximum) return reply.code(422).send({ error: "minimum must not exceed maximum" }); const violations = [...(direction === "positive" && values.some((value) => value < 0) ? ["values must be non-negative"] : []), ...(direction === "negative" && values.some((value) => value > 0) ? ["values must be non-positive"] : []), ...(minimum !== undefined && values.some((value) => value < minimum) ? [`values must be >= ${minimum}`] : []), ...(maximum !== undefined && values.some((value) => value > maximum) ? [`values must be <= ${maximum}`] : [])]; return { claim: String(body.claim ?? ""), status: violations.length ? "failed" : "passed", violations, summary: violations.length ? violations.join("; ") : "claim checks passed" }; });
 

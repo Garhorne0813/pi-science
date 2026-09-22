@@ -166,7 +166,7 @@ export async function publishResearchOutputArtifact(
   const canonicalTarget = await realpath(target);
   if (!isContained(canonicalOutput, canonicalTarget)) throw new Error("Research artifact escapes the output directory");
   const logicalPath = `research/${relative(metadataRoot(workspace), canonicalTarget).replaceAll("\\", "/")}`;
-  return publishValidatedArtifact(workspace, canonicalTarget, options, logicalPath);
+  return publishValidatedArtifact(workspace, canonicalTarget, options, logicalPath, canonicalOutput);
 }
 
 function isContained(root: string, path: string): boolean {
@@ -179,8 +179,9 @@ async function publishValidatedArtifact(
   target: string,
   options: PublishWorkspaceArtifactOptions,
   logicalPath?: string,
+  sourceRoot = workspace,
 ): Promise<PublishedWorkspaceArtifact> {
-  const digest = await captureArtifactBlob(workspace, target);
+  const digest = await captureArtifactBlob(workspace, target, sourceRoot);
 
   const path = logicalPath ?? relative(workspace, target).replaceAll("\\", "/");
   const artifactId = createHash("sha256").update(`${workspace}:${path}`).digest("hex").slice(0, 24);

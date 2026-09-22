@@ -74,6 +74,8 @@ describe("artifact version content", () => {
     await writeFile(artifactBlobPath(cwd, item.sha256), "corrupt!");
     const verified = await app.inject({ method: "POST", url: `/api/artifacts/verify${url}`, payload: { artifact_id: item.artifact_id } });
     expect(verified.json().verification.status).toBe("failed");
+    const current = await app.inject({ method: "GET", url: `/api/artifacts/${item.artifact_id}${url}` });
+    expect(current.json().verification.status).toBe("failed");
     expect((await app.inject({ method: "GET", url: `/api/artifacts/${item.artifact_id}/content${url}` })).statusCode).toBe(409);
     expect((await app.inject({ method: "POST", url: `/api/artifacts/publish${url}`, payload: { path: "result.txt" } })).statusCode).toBe(409);
   });

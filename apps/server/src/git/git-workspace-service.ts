@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { promisify } from "node:util";
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 
 const execFileAsync = promisify(execFile);
 
@@ -24,13 +24,31 @@ export interface GitWorkspaceStatus {
 }
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, "--no-optional-locks", ...args], {
+  const env: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH,
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_ATTR_NOSYSTEM: "1",
+  };
+  if (process.platform === "win32") {
+    env.SystemRoot = process.env.SystemRoot;
+    env.ComSpec = process.env.ComSpec;
+    env.PATHEXT = process.env.PATHEXT;
+  }
+  const { stdout } = await execFileAsync("git", ["-C", cwd, "--no-optional-locks", "-c", "core.fsmonitor=false", ...args], {
     timeout: 10_000,
     maxBuffer: 2_000_000,
     encoding: "utf8",
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
+    env,
   });
   return stdout;
+}
+
+function isContained(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
 }
 
 function parsePorcelain(output: string): GitChange[] {
@@ -64,11 +82,20 @@ export async function inspectGitWorkspace(cwd: string): Promise<GitWorkspaceStat
   if (await realpath(root) !== await realpath(cwd)) {
     return { available: true, is_repository: false, root: null, branch: null, head: null, clean: null, changes: [], reason: "repository_root_outside_workspace" };
   }
+  const canonicalRoot = await realpath(root);
+  const metadataPaths = await Promise.all([
+    git(cwd, "rev-parse", "--absolute-git-dir"),
+    git(cwd, "rev-parse", "--git-common-dir"),
+  ]).then((values) => values.map((value) => resolve(cwd, value.trim())));
+  const canonicalMetadataPaths = await Promise.all(metadataPaths.map((path) => realpath(path)));
+  if (canonicalMetadataPaths.some((path) => !isContained(canonicalRoot, path))) {
+    return { available: true, is_repository: false, root: null, branch: null, head: null, clean: null, changes: [], reason: "repository_metadata_outside_workspace" };
+  }
   const [branch, head, status] = await Promise.all([
     git(cwd, "branch", "--show-current").then((value) => value.trim() || null),
     git(cwd, "rev-parse", "HEAD").then((value) => value.trim()).catch(() => null),
     git(cwd, "-c", "core.quotePath=false", "status", "--porcelain=v1", "-z", "--untracked-files=normal", "--", "."),
   ]);
   const changes = parsePorcelain(status);
-  return { available: true, is_repository: true, root: await realpath(root), branch, head, clean: changes.length === 0, changes };
+  return { available: true, is_repository: true, root: canonicalRoot, branch, head, clean: changes.length === 0, changes };
 }

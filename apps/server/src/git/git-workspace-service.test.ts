@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -54,5 +54,34 @@ describe("Git workspace inspection", () => {
     const nested = join(root, "nested");
     await mkdir(join(nested, ".pi-science"), { recursive: true });
     expect(await inspectGitWorkspace(nested)).toMatchObject({ is_repository: false, reason: "repository_root_outside_workspace" });
+  });
+
+  it.skipIf(process.platform === "win32")("does not execute a repository-controlled fsmonitor hook", async () => {
+    const cwd = await workspace();
+    const marker = join(cwd, "fsmonitor-executed");
+    const hook = join(cwd, "fsmonitor.sh");
+    await git(cwd, "init", "-q");
+    await writeFile(hook, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+    await git(cwd, "config", "core.fsmonitor", hook);
+
+    expect(await inspectGitWorkspace(cwd)).toMatchObject({ is_repository: true });
+    await expect(access(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects a linked worktree whose Git metadata is outside the workspace", async () => {
+    const repository = await workspace();
+    const linked = await workspace();
+    await rm(linked, { recursive: true, force: true });
+    await git(repository, "init", "-q");
+    await writeFile(join(repository, "tracked.txt"), "one");
+    await git(repository, "add", "tracked.txt");
+    await git(repository, "-c", "user.name=Pi Science Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "baseline");
+    await git(repository, "worktree", "add", "-q", linked);
+    await mkdir(join(linked, ".pi-science"));
+
+    expect(await inspectGitWorkspace(linked)).toMatchObject({
+      is_repository: false,
+      reason: "repository_metadata_outside_workspace",
+    });
   });
 });
