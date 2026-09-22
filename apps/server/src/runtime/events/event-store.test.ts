@@ -100,6 +100,17 @@ describe("durable conversation event replay", () => {
     expect((await store.readAfter(cwd, "session-clock")).map((item) => item.id)).toEqual(["epoch-clock:1", "epoch-clock:2"]);
   });
 
+  it("preserves append order for different epochs created in the same millisecond", async () => {
+    const cwd = await workspace();
+    const store = new DurableEventStore();
+    const createdAt = "2026-07-23T00:00:00.000Z";
+    await store.append(cwd, "session-epoch-tie", record("z-old:1", createdAt, "old"));
+    await store.append(cwd, "session-epoch-tie", record("a-new:1", createdAt, "new"));
+
+    expect((await store.readAfter(cwd, "session-epoch-tie")).map((item) => item.id))
+      .toEqual(["z-old:1", "a-new:1"]);
+  });
+
   it("continues to replay legacy numeric cursors", async () => {
     const cwd = await workspace();
     const store = new DurableEventStore();
