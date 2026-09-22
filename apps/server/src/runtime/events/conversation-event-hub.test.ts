@@ -565,6 +565,20 @@ describe("central conversation event hub", () => {
       scope: "Project environment",
       effect: "Creates a new revision",
     });
+    process.emit("event", {
+      type: "extension_ui_request",
+      id: "select-1",
+      method: "select",
+      title: "Choose an output",
+      options: ["A", "B"],
+    });
+    process.emit("event", {
+      type: "extension_ui_request",
+      id: "mcp-permission-1",
+      method: "select",
+      title: "[pi-science:permission] MCP: papers wants to run search",
+      options: ["Allow once", "Allow for session", "Deny"],
+    });
 
     await eventually(() => received.some((event) => event.requestId === "permission-1"));
     expect(received.find((event) => event.requestId === "confirm-1")).toMatchObject({
@@ -580,6 +594,20 @@ describe("central conversation event hub", () => {
       operation: "Install scipy 1.17",
       scope: "Project environment",
       effect: "Creates a new revision",
+    });
+    expect(received.find((event) => event.requestId === "select-1")).toMatchObject({
+      type: "question.asked",
+      kind: "question",
+      method: "select",
+      title: "Choose an output",
+      options: ["A", "B"],
+    });
+    expect(received.find((event) => event.requestId === "mcp-permission-1")).toMatchObject({
+      type: "permission.asked",
+      kind: "permission",
+      method: "select",
+      title: "MCP: papers wants to run search",
+      options: ["Allow once", "Allow for session", "Deny"],
     });
   });
 

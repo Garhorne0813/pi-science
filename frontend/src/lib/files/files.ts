@@ -7,6 +7,9 @@ import { queryClient } from "../client/query-client";
 
 export type { FileRoot };
 
+/** Identifies the immutable content revision represented by a preview. */
+export type ArtifactContentKey = string | number;
+
 const API = "/api";
 
 /**
@@ -58,19 +61,21 @@ export const artifactFileKey = (
   path: string,
   root: FileRoot | undefined,
   maxBytes?: number,
-) => ["artifact-file", cwd, root ?? null, path, maxBytes ?? null] as const;
+  contentKey?: ArtifactContentKey,
+) => ["artifact-file", cwd, root ?? null, path, maxBytes ?? null, contentKey ?? null] as const;
 
 function artifactFileQuery(
   path: string,
   root: FileRoot | undefined,
   cwd: string,
   maxBytes?: number,
+  contentKey?: ArtifactContentKey,
 ) {
   const params = new URLSearchParams({ cwd });
   if (root) params.set("root", root);
   if (maxBytes !== undefined) params.set("maxBytes", String(maxBytes));
   return {
-    queryKey: artifactFileKey(cwd, path, root, maxBytes),
+    queryKey: artifactFileKey(cwd, path, root, maxBytes, contentKey),
     queryFn: () => apiRequest<ArtifactFile>(`${API}/files/${encodeWorkspacePath(path)}?${params}`),
     staleTime: ARTIFACT_FILE_STALE_MS,
     gcTime: ARTIFACT_FILE_GC_MS,
@@ -95,15 +100,19 @@ export interface ArtifactFile {
 }
 
 /** Read a workspace file. Uses REST API. `maxBytes` caps the response to the
- *  first N bytes (used by per-turn artifact cards to preview file content). */
+ *  first N bytes (used by per-turn artifact cards to preview file content).
+ *
+ * `contentKey` is part of the cache identity so a new artifact revision never
+ * reuses the previous revision's file body. */
 export async function readArtifact(
   path: string,
   root: FileRoot | undefined,
   cwd: string,
   maxBytes?: number,
+  contentKey?: ArtifactContentKey,
 ): Promise<ArtifactFile | null> {
   try {
-    return await queryClient.fetchQuery(artifactFileQuery(path, root, cwd, maxBytes));
+    return await queryClient.fetchQuery(artifactFileQuery(path, root, cwd, maxBytes, contentKey));
   } catch {
     return null;
   }
@@ -128,9 +137,17 @@ export async function writeArtifact(
 }
 
 /** URL for browser-native preview (PDF, images, HTML, video). */
-export function previewUrl(path: string, root: FileRoot | undefined, cwd: string): string {
+export function previewUrl(
+  path: string,
+  root: FileRoot | undefined,
+  cwd: string,
+  contentKey?: ArtifactContentKey,
+): string {
   const params = new URLSearchParams({ cwd });
   if (root) params.set("root", root);
+  // The serve endpoint ignores this value; the browser uses it to bypass a
+  // previously loaded image when the artifact content advances in place.
+  if (contentKey !== undefined) params.set("v", String(contentKey));
   const encodedPath = path.split("/").map(encodeURIComponent).join("/");
   return `${API}/files/serve/${encodedPath}?${params}`;
 }

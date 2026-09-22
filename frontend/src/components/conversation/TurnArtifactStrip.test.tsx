@@ -152,6 +152,51 @@ describe("TurnArtifactStrip", () => {
     await waitFor(() => expect(screen.getByAltText("new.png")).toBeInTheDocument());
   });
 
+  it("reloads a preview when the same path advances in place", async () => {
+    mockReadArtifact.mockImplementation(async (
+      _path: string,
+      _root: string,
+      _cwd: string,
+      _maxBytes: number,
+      contentKey?: string | number,
+    ) => ({
+      ...snippetFile(),
+      data: contentKey === 1 ? "v1" : "v2",
+    }));
+
+    const { rerender } = render(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{
+          path: "work/result.txt",
+          artifactId: "artifact-1",
+          version: 1,
+          kind: "text",
+          mime: "text/plain",
+          size: 2,
+        }]}
+      />,
+    );
+    expect(await screen.findByText("v1")).toBeInTheDocument();
+
+    rerender(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{
+          path: "work/result.txt",
+          artifactId: "artifact-1",
+          version: 2,
+          kind: "text",
+          mime: "text/plain",
+          size: 2,
+        }]}
+      />,
+    );
+    expect(await screen.findByText("v2")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("v1")).not.toBeInTheDocument());
+    expect(mockReadArtifact).toHaveBeenLastCalledWith("work/result.txt", "workspace", "/workspace", 8192, 2);
+  });
+
   it("renders a CSV summary badge with rows, columns, type hints and +N more", async () => {
     mockReadArtifact.mockResolvedValue({ ...snippetFile(), data: "gene,value,fc,padj,log2\nA,1.0,2.5,0.01,3.1\nB,2.0,-1.2,0.04,-2.0\nC,3.0,0.8,0.9,0.4\nD,4.0,1.1,0.02,1.9\nE,5.0,3.3,0.001,4.2\nF,6.0,0.2,0.7,0.1" });
     render(

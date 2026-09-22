@@ -29,7 +29,10 @@ export function text(value: unknown): string | undefined {
 
 export function meaningfulActivityTitle(title: string, tool: string): string | undefined {
   const value = text(title);
-  if (!value || value.toLowerCase() === tool.trim().toLowerCase()) return undefined;
+  if (!value) return undefined;
+  const normalizedTitle = value.toLowerCase().replace(/\s+/g, " ").trim();
+  const normalizedTool = tool.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  if (normalizedTitle === normalizedTool || normalizedTitle === `running ${normalizedTool}`) return undefined;
   return value;
 }
 

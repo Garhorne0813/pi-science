@@ -33,6 +33,29 @@ describe("workspace file context", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it("does not reuse a cached preview across content revisions", async () => {
+    let revision = 0;
+    const fetchMock = vi.fn(async () => {
+      revision += 1;
+      return new Response(JSON.stringify({
+        path: "work/result.csv",
+        encoding: "utf8",
+        data: "revision-" + revision,
+        size: 11,
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = await readArtifact("work/result.csv", "workspace", "/workspace", 8192, 1);
+    const second = await readArtifact("work/result.csv", "workspace", "/workspace", 8192, 2);
+
+    expect(first?.data).toBe("revision-1");
+    expect(second?.data).toBe("revision-2");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(previewUrl("work/result.csv", "workspace", "/workspace", "sha-v2"))
+      .toContain("v=sha-v2");
+  });
+
   it("shares repeated metadata probes for the same workspace path", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       path: "work/result.csv",

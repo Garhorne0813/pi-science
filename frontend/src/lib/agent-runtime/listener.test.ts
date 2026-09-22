@@ -249,6 +249,35 @@ describe("runtime event subscription", () => {
     });
   });
 
+  it("routes a typed MCP approval select to the permission interaction", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-mcp-permission"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-mcp-permission");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    source.emit("permission.asked", {
+      type: "permission.asked",
+      sessionId: "session-mcp-permission",
+      requestId: "mcp-permission-1",
+      kind: "permission",
+      method: "select",
+      title: "MCP: papers wants to run search",
+      options: ["Allow once", "Allow for session", "Deny"],
+    });
+
+    expect(useRuntimeStore.getState().pendingInteraction).toMatchObject({
+      requestId: "mcp-permission-1",
+      kind: "permission",
+      method: "select",
+      options: ["Allow once", "Allow for session", "Deny"],
+    });
+  });
+
   it("marks a running questionnaire interaction resolved immediately after response", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

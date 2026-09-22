@@ -1,21 +1,59 @@
-import { count, detailRecord, genericDetails, meaningfulActivityTitle, text } from "./shared";
+import { count, detailRecord, genericDetails, meaningfulActivityTitle, record, text } from "./shared";
 import type { ActivityRenderer } from "./types";
 
-function literatureSource(tool: string, input: Record<string, unknown>): string {
-  const explicit = text(input.database) ?? text(input.source);
-  if (explicit) return explicit;
-  const normalized = tool.toLowerCase();
+function displaySource(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/[\s_-]+/g, "");
   if (normalized.includes("pubmed")) return "PubMed";
   if (normalized.includes("crossref")) return "Crossref";
-  if (normalized.includes("semantic_scholar")) return "Semantic Scholar";
+  if (normalized.includes("semanticscholar")) return "Semantic Scholar";
+  if (normalized.includes("arxiv")) return "arXiv";
+  if (normalized.includes("medrxiv")) return "medRxiv";
+  if (normalized.includes("biorxiv")) return "bioRxiv";
+  if (normalized.includes("europepmc")) return "Europe PMC";
+  if (normalized === "literature") return "Literature";
+  return value.trim();
+}
+
+function literatureDetails(details: Record<string, unknown>): Record<string, unknown> {
+  return record(details.structuredContent)
+    ?? record(details.result)
+    ?? details;
+}
+
+function literatureSource(tool: string, input: Record<string, unknown>, details: Record<string, unknown>): string {
+  const request = record(details.request);
+  const explicit = text(input.database)
+    ?? text(input.source)
+    ?? text(input.provider)
+    ?? text(request?.provider)
+    ?? text(details.provider);
+  if (explicit) {
+    const server = text(input.server) ?? text(request?.server) ?? text(details.server);
+    if (server && /bio|med/i.test(explicit)) return displaySource(server);
+    return displaySource(explicit);
+  }
+
+  const normalized = tool.toLowerCase().replace(/[\s_-]+/g, "");
+  if (normalized.includes("pubmed")) return "PubMed";
+  if (normalized.includes("crossref")) return "Crossref";
+  if (normalized.includes("semantic")) return "Semantic Scholar";
+  if (normalized.includes("arxiv")) return "arXiv";
+  if (normalized.includes("medrxiv")) return "medRxiv";
+  if (normalized.includes("biorxiv")) return "bioRxiv";
+  if (normalized.includes("europepmc")) return "Europe PMC";
   return "Literature";
 }
 
 export const LiteratureActivityRenderer: ActivityRenderer = {
   compact: ({ activity, source, t }) => {
-    const details = detailRecord(source);
-    const database = literatureSource(source.tool, source.input ?? {});
-    const results = count(details.results) ?? count(details.resultCount) ?? count(details.result_count);
+    const rawDetails = detailRecord(source);
+    const details = literatureDetails(rawDetails);
+    const database = literatureSource(source.tool, source.input ?? {}, details);
+    const results = count(details.count)
+      ?? count(details.records)
+      ?? count(details.results)
+      ?? count(details.resultCount)
+      ?? count(details.result_count);
     const retained = count(details.retained) ?? count(details.selected) ?? count(details.retainedCount);
     const semanticTitle = meaningfulActivityTitle(activity.title, source.tool);
     const genericTitle = activity.state === "running"

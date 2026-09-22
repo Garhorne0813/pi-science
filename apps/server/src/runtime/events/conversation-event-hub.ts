@@ -224,6 +224,18 @@ function browserQuestionnaireRequestId(title: unknown): string | null {
 
 type InteractionKind = "permission" | "confirmation" | "question";
 
+/**
+ * Pi's extension_ui_request protocol does not carry a semantic kind. The
+ * managed MCP approval producer adds this private marker to its select title;
+ * the server consumes it here and removes it before the UI sees the title.
+ */
+const MCP_PERMISSION_TITLE_PREFIX = "[pi-science:permission] ";
+
+function markedMcpPermissionTitle(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.startsWith(MCP_PERMISSION_TITLE_PREFIX)) return undefined;
+  return value.slice(MCP_PERMISSION_TITLE_PREFIX.length).trim() || "MCP approval";
+}
+
 function interactionKind(value: unknown): InteractionKind | undefined {
   return value === "permission" || value === "confirmation" || value === "question" ? value : undefined;
 }
@@ -956,11 +968,13 @@ export class ConversationEventHub {
       case "extension_ui_request": {
         turn.hadActivity = true;
         const method = String(eventField(event, "method") ?? "");
+        const rawTitle = eventField(event, "title");
+        const markedPermissionTitle = markedMcpPermissionTitle(rawTitle);
         const explicitKind = interactionKind(eventField(event, "kind"));
-        const kind = explicitKind ?? (method === "confirm" ? "confirmation" : "question");
+        const kind = explicitKind
+          ?? (markedPermissionTitle ? "permission" : method === "confirm" ? "confirmation" : "question");
         const type = kind === "permission" ? "permission.asked" : "question.asked";
         const requestId = String(eventField(event, "id") ?? eventField(event, "requestId") ?? "");
-        const rawTitle = eventField(event, "title");
         const questionnaireId = method !== "confirm" ? browserQuestionnaireRequestId(rawTitle) : null;
         const common = {
           type,
@@ -969,7 +983,9 @@ export class ConversationEventHub {
           requestId,
           kind,
           method,
-          title: questionnaireId ? "Questionnaire" : String(rawTitle ?? (method === "confirm" ? "Confirmation" : "Question")),
+          title: questionnaireId
+            ? "Questionnaire"
+            : markedPermissionTitle ?? String(rawTitle ?? (method === "confirm" ? "Confirmation" : "Question")),
           message: cap(questionnaireId ? "Complete the questionnaire to continue." : eventField(event, "message")),
           operation: cap(eventField(event, "operation"), 500),
           scope: cap(eventField(event, "scope"), 500),

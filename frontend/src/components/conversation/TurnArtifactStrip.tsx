@@ -23,6 +23,10 @@ const CARD =
   "group relative flex w-[128px] shrink-0 flex-col overflow-hidden rounded-[12px] bg-surface text-left ring-1 ring-inset ring-black/10 focus-visible:ring-2 focus-visible:ring-[#2a78d6] dark:ring-white/10";
 const FILENAME_BAR = "flex h-[25px] min-w-0 items-center gap-0.5 px-2";
 
+function artifactContentKey(item: TurnArtifactItem): string | number | undefined {
+  return item.sha256 ?? item.revision ?? item.version;
+}
+
 function fileIcon(kind: string) {
   switch (kind) {
     case "image": return FileImage;
@@ -72,7 +76,12 @@ function OpenAffordance() {
 }
 
 /** Capped first-bytes read of a workspace file for the snippet card. */
-function useSnippet(path: string, cwd?: string, enabled = true) {
+function useSnippet(
+  path: string,
+  cwd?: string,
+  enabled = true,
+  contentKey?: string | number,
+) {
   const [state, setState] = useState<{ status: "loading" } | { status: "error" } | { status: "ready"; text: string }>({ status: "loading" });
   useEffect(() => {
     if (!enabled || !cwd) {
@@ -81,7 +90,10 @@ function useSnippet(path: string, cwd?: string, enabled = true) {
     }
     let cancelled = false;
     setState({ status: "loading" });
-    void readArtifact(path, "workspace", cwd, SNIPPET_BYTES)
+    const request = contentKey === undefined
+      ? readArtifact(path, "workspace", cwd, SNIPPET_BYTES)
+      : readArtifact(path, "workspace", cwd, SNIPPET_BYTES, contentKey);
+    void request
       .then((file) => {
         if (cancelled) return;
         if (!file || file.encoding !== "utf8" || !file.data) {
@@ -96,7 +108,7 @@ function useSnippet(path: string, cwd?: string, enabled = true) {
     return () => {
       cancelled = true;
     };
-  }, [path, cwd, enabled]);
+  }, [path, cwd, enabled, contentKey]);
   return state;
 }
 
@@ -168,11 +180,12 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
   const openInspector = useUiStore((state) => state.openInspector);
   const { t } = useTranslation();
   const filename = item.path.split("/").pop() ?? item.path;
+  const contentKey = artifactContentKey(item);
   const [structureFailed, setStructureFailed] = useState(false);
   useEffect(() => {
     setStructureFailed(false);
-  }, [item.path, item.version, item.revision, item.sha256]);
-  const snippet = useSnippet(item.path, cwd, snippetKindFor(item) !== "structure");
+  }, [item.path, contentKey]);
+  const snippet = useSnippet(item.path, cwd, snippetKindFor(item) !== "structure", contentKey);
   const open = () => {
     if (!cwd) return;
     openInspector(fileInspectorForPath(item.path, filename, "workspace", cwd));
@@ -191,7 +204,14 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
       >
         <OpenAffordance />
         <div className={`relative ${PREVIEW_HEIGHT} overflow-hidden bg-surface-2`}>
-          <MoleculeThumb path={item.path} cwd={cwd} filename={filename} onError={() => setStructureFailed(true)} />
+          <MoleculeThumb
+            key={`${item.path}:${String(contentKey ?? 'current')}`}
+            path={item.path}
+            cwd={cwd}
+            filename={filename}
+            contentKey={contentKey}
+            onError={() => setStructureFailed(true)}
+          />
         </div>
         <span className={FILENAME_BAR}>
           <FilenameLabel filename={filename} />
@@ -261,10 +281,11 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
   const openInspector = useUiStore((state) => state.openInspector);
   const filename = item.path.split("/").pop() ?? item.path;
   const Icon = fileIcon(item.kind);
+  const contentKey = artifactContentKey(item);
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => {
     setImageFailed(false);
-  }, [item.path, item.version, item.revision, item.sha256]);
+  }, [item.path, contentKey]);
   const isImage = item.kind === "image" && !imageFailed;
 
   const open = () => {
@@ -283,7 +304,7 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
         <OpenAffordance />
         <div className={`relative ${PREVIEW_HEIGHT} overflow-hidden bg-surface-2 p-1.5`}>
           <img
-            src={previewUrl(item.path, "workspace", cwd ?? "")}
+            src={previewUrl(item.path, "workspace", cwd ?? "", contentKey)}
             alt={filename}
             loading="lazy"
             onError={() => setImageFailed(true)}
