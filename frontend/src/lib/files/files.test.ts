@@ -35,7 +35,7 @@ describe("workspace file context", () => {
 
   it("uses immutable artifact content for SHA-addressed previews", async () => {
     let revision = 0;
-    const fetchMock = vi.fn(async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => {
       revision += 1;
       return new Response(JSON.stringify({
         path: "work/result.csv",
