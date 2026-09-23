@@ -224,3 +224,112 @@ describe("stream envelope completeness", () => {
     expect(transportDiagnostics().log.some((entry) => entry.reason === "stream_gap" && entry.detail?.includes("discontinuity"))).toBe(true);
   });
 });
+
+describe("stream position consumption", () => {
+  beforeEach(() => {
+    resetTransportDiagnostics();
+  });
+
+  /** text(1) → the given record(2) → text(3), then report what the fold and the
+   *  transport each believe about the stream position. */
+  async function runInterleaved(record: Record<string, unknown>) {
+    stubFetch();
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    source.emit("text.updated", { type: "text.updated", sessionId: "session-a", schemaVersion: 2, seq: 1, eventId: "epoch-1:1", streamEpoch: "epoch-1", partId: "p-1", text: "hello" }, "epoch-1:1");
+    source.emit(String(record.type), { sessionId: "session-a", schemaVersion: 2, seq: 2, eventId: "epoch-1:2", streamEpoch: "epoch-1", ...record }, "epoch-1:2");
+    source.emit("text.updated", { type: "text.updated", sessionId: "session-a", schemaVersion: 2, seq: 3, eventId: "epoch-1:3", streamEpoch: "epoch-1", partId: "p-1", text: " world" }, "epoch-1:3");
+
+    const foldState = useRuntimeStore.getState().thread.foldState;
+    getClient().reconnect("session-a", "/workspace", "manual");
+    const reconnectUrl = FakeEventSource.instances.at(-1)!.url;
+    return {
+      lastSequence: foldState?.lastSequence,
+      reconciliationRequired: foldState?.reconciliationRequired,
+      sawRecord: foldState?.seenEventIds.includes("epoch-1:2"),
+      cursor: reconnectUrl.includes("lastEventId=") ? decodeURIComponent(reconnectUrl.split("lastEventId=")[1]!) : null,
+      streamGaps: transportDiagnostics().log.filter((entry) => entry.reason === "stream_gap").length,
+      agentText: useRuntimeStore.getState().thread.blocks
+        .filter((block) => block.kind === "agent")
+        .map((block) => block.kind === "agent" ? block.parts.map((part) => part.text).join("") : ""),
+    };
+  }
+
+  const identityLessRecords: Array<[string, Record<string, unknown>]> = [
+    ["questionnaire.asked", {
+      type: "questionnaire.asked",
+      toolCallId: "call-1",
+      questions: [{ question: "Which?", header: "Choice", options: [{ label: "A", description: "" }] }],
+    }],
+    ["questionnaire.asked without questions", { type: "questionnaire.asked", toolCallId: "call-1", questions: [] }],
+    ["questionnaire.finished", { type: "questionnaire.finished", toolCallId: "call-1" }],
+    ["question.asked", { type: "question.asked", requestId: "req-1", title: "Which?", method: "input" }],
+    ["permission.asked", { type: "permission.asked", requestId: "req-1", title: "Allow?", method: "confirm" }],
+    ["interaction.requested without an id", { type: "interaction.requested" }],
+  ];
+
+  it.each(identityLessRecords)("folds %s so the stream position is accounted for", async (_name, record) => {
+    const result = await runInterleaved(record);
+    // A healthy stream: the record sits between two content records and must
+    // not look like a lost event to the reducer.
+    expect(result.reconciliationRequired).toBe(false);
+    expect(result.lastSequence).toBe(3);
+    expect(result.sawRecord).toBe(true);
+    expect(result.streamGaps).toBe(0);
+    // The transport's applied cursor and the reducer's waterline agree.
+    expect(result.cursor).toBe("epoch-1:3");
+    expect(result.agentText).toEqual(["hello world"]);
+  });
+
+  it("applies the questionnaire UI state while folding the same record", async () => {
+    stubFetch();
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    source.emit("questionnaire.asked", {
+      type: "questionnaire.asked", sessionId: "session-a", schemaVersion: 2, seq: 2, eventId: "epoch-1:2", streamEpoch: "epoch-1",
+      toolCallId: "call-1",
+      questions: [{ question: "Which?", header: "Choice", options: [{ label: "A", description: "" }] }],
+    }, "epoch-1:2");
+
+    const current = useRuntimeStore.getState();
+    expect(current.pendingQuestionnaire).toMatchObject({ toolCallId: "call-1" });
+    expect(current.turnLifecycle).toBe("waiting");
+    expect(current.thread.foldState?.lastSequence).toBe(2);
+  });
+
+  it("folds a session replacement that changed nothing", async () => {
+    // A replacement record whose id resolves to the current session leaves the
+    // stream in place, so its position still has to be consumed.
+    stubFetch();
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    source.emit("text.updated", { type: "text.updated", sessionId: "session-a", schemaVersion: 2, seq: 1, eventId: "epoch-1:1", streamEpoch: "epoch-1", partId: "p-1", text: "hello" }, "epoch-1:1");
+    source.emit("session.replaced", {
+      type: "session.replaced", sessionId: "session-a", schemaVersion: 2, seq: 2, eventId: "epoch-1:2", streamEpoch: "epoch-1",
+      replacementSessionId: "session-a",
+    }, "epoch-1:2");
+    source.emit("text.updated", { type: "text.updated", sessionId: "session-a", schemaVersion: 2, seq: 3, eventId: "epoch-1:3", streamEpoch: "epoch-1", partId: "p-1", text: " world" }, "epoch-1:3");
+
+    const foldState = useRuntimeStore.getState().thread.foldState;
+    expect(foldState?.lastSequence).toBe(3);
+    expect(foldState?.reconciliationRequired).toBe(false);
+    expect(transportDiagnostics().log.filter((entry) => entry.reason === "stream_gap")).toHaveLength(0);
+  });
+
+  it("re-attaches without a spurious gap when a replacement switches the session", async () => {
+    stubFetch();
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    source.emit("session.replaced", {
+      type: "session.replaced", sessionId: "session-a", schemaVersion: 2, seq: 1, eventId: "epoch-1:1", streamEpoch: "epoch-1",
+      replacementSessionId: "session-b",
+    }, "epoch-1:1");
+
+    expect(useRuntimeStore.getState().activeSessionId).toBe("session-b");
+    expect(transportDiagnostics().log.filter((entry) => entry.reason === "stream_gap")).toHaveLength(0);
+  });
+});

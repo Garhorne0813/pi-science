@@ -253,12 +253,16 @@ export function registerEventListener(client: PiScienceClient) {
     if (event.type === "session.replaced") {
       const replacementSessionId = String(event.replacementSessionId || "");
       if (!replacementSessionId) return;
-      applySessionReplacements([{
+      const previousActiveId = state.activeSessionId;
+      const nextActiveId = applySessionReplacements([{
         cwd: state.cwd,
         oldId: String(event.sessionId || state.activeSessionId || ""),
         newId: replacementSessionId,
       }]);
-      return;
+      // Adopting a replacement re-attaches the stream and clears the thread, so
+      // this record cannot leave a hole behind. A record that changed nothing
+      // still consumed a position and must reach the fold below.
+      if (nextActiveId !== previousActiveId) return;
     }
 
     if (event.type === "stream.gap") {
@@ -405,18 +409,20 @@ export function registerEventListener(client: PiScienceClient) {
 
     if (event.type === "questionnaire.asked") {
       const questions = questionnaireQuestions(event.questions);
-      if (questions.length === 0) return;
-      bumpConversationGeneration();
-      useRuntimeStore.setState({
-        working: true,
-        turnLifecycle: "waiting",
-        status: "ready",
-        pendingQuestionnaire: {
-          toolCallId: String(event.toolCallId || ""),
-          questions,
-        },
-      });
-      return;
+      // An invalid payload cannot build a card, but it consumed a stream
+      // position just the same: fold it instead of dropping it.
+      if (questions.length > 0) {
+        bumpConversationGeneration();
+        useRuntimeStore.setState({
+          working: true,
+          turnLifecycle: "waiting",
+          status: "ready",
+          pendingQuestionnaire: {
+            toolCallId: String(event.toolCallId || ""),
+            questions,
+          },
+        });
+      }
     }
 
     if (event.type === "questionnaire.finished") {
@@ -430,7 +436,6 @@ export function registerEventListener(client: PiScienceClient) {
         ...(questionnaireMatches ? { pendingQuestionnaire: null } : {}),
         ...(interactionMatches ? { pendingInteraction: null } : {}),
       });
-      return;
     }
 
     const payload = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
@@ -439,28 +444,31 @@ export function registerEventListener(client: PiScienceClient) {
 
     if (event.type === "interaction.requested") {
       const interactionId = String(event.interactionId || event.requestId || payload.interactionId || payload.requestId || event.itemId || "");
-      if (!interactionId) return false;
-      bumpConversationGeneration();
-      const method = String(event.method || payload.method || "input") as PendingInteraction["method"];
-      const kind = interactionKind(event.kind) ?? interactionKind(payload.kind) ?? (method === "confirm" ? "confirmation" : "question");
-      useRuntimeStore.setState({
-        working: true,
-        turnLifecycle: "waiting",
-        status: "ready",
-        pendingInteraction: {
-          requestId: interactionId,
-          kind,
-          method: ["confirm", "select", "input", "editor"].includes(method) ? method : "input",
-          title: String(event.title || payload.title || "Question"),
-          message: String(event.message || payload.message || ""),
-          options: Array.isArray(event.options || payload.options) ? (event.options || payload.options) as PendingInteraction["options"] : [],
-          placeholder: String(event.placeholder || payload.placeholder || ""),
-          prefill: String(event.prefill || payload.prefill || ""),
-          operation: String(event.operation || payload.operation || ""),
-          scope: String(event.scope || payload.scope || ""),
-          effect: String(event.effect || payload.effect || ""),
-        },
-      });
+      // Same rule for a request without an id: no card, but the position is
+      // still consumed, so it is folded below rather than dropped.
+      if (interactionId) {
+        bumpConversationGeneration();
+        const method = String(event.method || payload.method || "input") as PendingInteraction["method"];
+        const kind = interactionKind(event.kind) ?? interactionKind(payload.kind) ?? (method === "confirm" ? "confirmation" : "question");
+        useRuntimeStore.setState({
+          working: true,
+          turnLifecycle: "waiting",
+          status: "ready",
+          pendingInteraction: {
+            requestId: interactionId,
+            kind,
+            method: ["confirm", "select", "input", "editor"].includes(method) ? method : "input",
+            title: String(event.title || payload.title || "Question"),
+            message: String(event.message || payload.message || ""),
+            options: Array.isArray(event.options || payload.options) ? (event.options || payload.options) as PendingInteraction["options"] : [],
+            placeholder: String(event.placeholder || payload.placeholder || ""),
+            prefill: String(event.prefill || payload.prefill || ""),
+            operation: String(event.operation || payload.operation || ""),
+            scope: String(event.scope || payload.scope || ""),
+            effect: String(event.effect || payload.effect || ""),
+          },
+        });
+      }
       // The reducer still records the envelope; the interaction card is a
       // separate state dimension and must not be hidden by process folding.
     } else if (event.type === "interaction.resolved") {
@@ -500,7 +508,6 @@ export function registerEventListener(client: PiScienceClient) {
           ...(event.questionnaire === true ? { questionnaire: true, toolCallId: String(event.toolCallId || "") } : {}),
         },
       });
-      return;
     }
 
     const eventStatus = String(event.status ?? payload.status ?? "");
@@ -581,6 +588,14 @@ export function registerEventListener(client: PiScienceClient) {
       }
     }
 
+    // Every record that reaches this point has consumed a stream position, and
+    // the fold's sequence waterline is what tells a lost event apart from one
+    // that simply produced no conversation block. So an interaction record —
+    // questionnaire, permission, question, malformed interaction — is folded
+    // even when its UI state could not be built. Only records carrying no
+    // position at all (`connection.*`, `stream.gap`) and the missing-session
+    // retry above — which re-attaches a stream whose records are not durable
+    // yet — may skip this.
     const current = useRuntimeStore.getState();
     const newThread = foldEvent(current.thread, event);
     if (newThread.blocks !== current.thread.blocks || newThread.foldState !== current.thread.foldState) {
