@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { convertHistoryToBlocks, mergeHistoryWindow, replaceHistoryTail, useRuntimeStore } from "./index";
-import { emptyThread, foldEvent, prependHistoryMessages, threadFromMessages, type Thread } from "./event-fold";
+import { emptyThread, foldEvent, mergeHistoryWithLive, prependHistoryMessages, threadFromMessages, type Thread } from "./event-fold";
 import type { HistoryMessage, PiScienceEvent } from "../client/types";
 import type { ThreadBlock } from "../../types/thread";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
@@ -824,5 +824,38 @@ describe("conversation presentation protocol v2", () => {
     expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "status-line", level: "error" }));
     expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "artifact-summary", turnId: "turn-1" }));
     expect(thread.foldState?.lastSequence).toBe(5);
+  });
+});
+
+describe("mergeHistoryWithLive", () => {
+  const optimisticUser = (id: string, text: string, timestamp: string): ThreadBlock =>
+    ({ kind: "user", id, text, timestamp }) as ThreadBlock;
+  const threadOf = (blocks: ThreadBlock[]): Thread => {
+    const index: Record<string, number> = {};
+    blocks.forEach((block, position) => { index[block.id] = position; });
+    return { blocks, index, loaded: true };
+  };
+
+  it("drops an optimistic prompt once the durable copy of that send arrives", () => {
+    const history = threadOf(convertHistoryToBlocks([
+      { id: "58316547", role: "user", content: [{ type: "text", text: "run the notebook" }], timestamp: "2026-09-23T00:44:20.000Z" },
+    ]));
+    const live = threadOf([optimisticUser("user-1790095463523", "run the notebook", "2026-09-23T00:44:19.500Z")]);
+    expect(mergeHistoryWithLive(history, live).blocks.map((block) => block.id)).toEqual(["58316547"]);
+  });
+
+  it("keeps a repeated prompt whose durable copy history has not recorded yet", () => {
+    const history = threadOf(convertHistoryToBlocks([
+      { id: "111", role: "user", content: [{ type: "text", text: "status" }], timestamp: "2026-09-23T00:10:00.000Z" },
+    ]));
+    const live = threadOf([optimisticUser("user-1790099999999", "status", "2026-09-23T00:44:00.000Z")]);
+    expect(mergeHistoryWithLive(history, live).blocks.map((block) => block.id))
+      .toEqual(["111", "user-1790099999999"]);
+  });
+
+  it("keeps an optimistic prompt when history has not caught up at all", () => {
+    const live = threadOf([optimisticUser("user-1790099999999", "brand new", "2026-09-23T00:44:00.000Z")]);
+    expect(mergeHistoryWithLive(threadOf([]), live).blocks.map((block) => block.id))
+      .toEqual(["user-1790099999999"]);
   });
 });

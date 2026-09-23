@@ -1333,6 +1333,26 @@ export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], 
   const merged = { blocks, index, loaded: true };
   return { thread: opts.resetProjection ? resetThreadProjection(merged) : preserveFoldState(merged, current), retainedOlderPrefix: true };
 }
+/** Optimistic prompt blocks are keyed by `user-${Date.now()}` at send time. */
+const OPTIMISTIC_USER_BLOCK_ID = /^user-\d+$/;
+
+/** An optimistic prompt block is keyed by `user-${Date.now()}` when it is sent,
+ *  so it can never match the durable JSONL id that identifies the same message
+ *  once a history snapshot covering it lands. Merging on ids alone therefore
+ *  keeps one prompt twice.
+ *
+ *  Pair the two by text, but only when the durable copy is timestamped at or
+ *  after the optimistic one: the server records the message after the client
+ *  sent it, so that is the same send. A durable block from an earlier turn
+ *  carries an earlier timestamp, which keeps a verbatim repeated prompt from
+ *  being swallowed by the previous identical one. */
+function isSatisfiedByDurableUser(block: ThreadBlock, durable: Extract<ThreadBlock, { kind: "user" }>): boolean {
+  if (block.kind !== "user" || !OPTIMISTIC_USER_BLOCK_ID.test(block.id)) return false;
+  if (durable.text !== block.text) return false;
+  if (!block.timestamp || !durable.timestamp) return false;
+  return durable.timestamp >= block.timestamp;
+}
+
 export function mergeHistoryWithLive(history: Thread, live: Thread): Thread {
   if (live.blocks.length === 0) return history;
   const ids = new Set(history.blocks.map((block) => block.id));
@@ -1341,10 +1361,21 @@ export function mergeHistoryWithLive(history: Thread, live: Thread): Thread {
       .filter((block): block is Extract<ThreadBlock, { kind: "tool" }> => block.kind === "tool")
       .map((block) => block.callId),
   );
+  const durableUsers = history.blocks.filter(
+    (block): block is Extract<ThreadBlock, { kind: "user" }> => block.kind === "user",
+  );
+  const claimedDurableUsers = new Set<string>();
   const blocks = [...history.blocks];
   for (const block of live.blocks) {
     if (ids.has(block.id)) continue;
     if (block.kind === "tool" && toolCallIds.has(block.callId)) continue;
+    if (block.kind === "user") {
+      const twin = durableUsers.find((candidate) => !claimedDurableUsers.has(candidate.id) && isSatisfiedByDurableUser(block, candidate));
+      if (twin) {
+        claimedDurableUsers.add(twin.id);
+        continue;
+      }
+    }
     blocks.push(block);
     ids.add(block.id);
     if (block.kind === "tool") toolCallIds.add(block.callId);
