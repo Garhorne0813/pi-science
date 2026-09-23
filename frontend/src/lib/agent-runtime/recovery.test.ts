@@ -13,6 +13,35 @@ installRuntimeTestEnvironment();
 
 
 describe("runtime conversation recovery", () => {
+  it("keeps a just-sent user message until the settled history snapshot contains it", async () => {
+    const client = getClient();
+    let includeNewPrompt = false;
+    vi.spyOn(client, "getMessagesPage").mockImplementation(async () => ({
+      messages: [
+        { id: "older", role: "user" as const, content: [{ type: "text" as const, text: "older question" }] },
+        ...(includeNewPrompt ? [{ id: "durable-new", role: "user" as const, client_message_id: "request-new", content: [{ type: "text" as const, text: "new question" }] }] : []),
+      ],
+      next_cursor: null,
+      has_more: false,
+      snapshot_version: "snapshot",
+    }));
+    vi.spyOn(client, "getTurnArtifacts").mockResolvedValue({ turns: [] });
+    useRuntimeStore.setState({
+      activeSessionId: "session-a", cwd: "/workspace", working: false,
+      thread: { blocks: [
+        { kind: "user", id: "older", text: "older question" },
+        { kind: "user", id: "optimistic-new", client_message_id: "request-new", deliveryStatus: "pending", text: "new question" },
+      ], index: { older: 0, "optimistic-new": 1 }, loaded: true },
+    });
+
+    await resyncCompletedHistory("session-a", "/workspace");
+    expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual(["older", "optimistic-new"]);
+
+    includeNewPrompt = true;
+    await resyncCompletedHistory("session-a", "/workspace");
+    expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual(["older", "durable-new"]);
+  });
+
   it.each([
     ["settled-history resync", async () => resyncCompletedHistory("session-a", "/workspace")],
     ["connection recovery", async () => reconcileAfterConnectionLoss(
@@ -824,19 +853,24 @@ describe("runtime conversation recovery", () => {
 
   it("replaces the thread with the settle-time snapshot without duplicating the live turn", async () => {
     let messagesReads = 0;
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    let requestId = "";
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes("/messages")) {
         messagesReads += 1;
         // Complete authoritative snapshot: JSONL ids that never match the live
         // block ids (user-<ts> / SSE partId).
         return jsonResponse({ messages: [
-          { id: "user-durable", role: "user", content: [{ type: "text", text: "hello" }], timestamp: "2026-01-01T00:00:00Z" },
+          { id: "user-durable", role: "user", client_message_id: requestId, content: [{ type: "text", text: "hello" }], timestamp: "2026-01-01T00:00:00Z" },
           { id: "agent-durable", role: "assistant", content: [{ type: "text", text: "world" }], timestamp: "2026-01-01T00:00:01Z" },
         ] });
       }
       if (url.includes("/state")) return jsonResponse(state("session-a"));
-      if (url.includes("/prompt")) return jsonResponse({ ok: true, id: "session-a" });
+      if (url.includes("/prompt")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { client_message_id?: string };
+        requestId = body.client_message_id ?? "";
+        return jsonResponse({ ok: true, id: "session-a" });
+      }
       if (url.startsWith("/api/sessions?")) return jsonResponse([]);
       throw new Error(`Unexpected request: ${url}`);
     }));

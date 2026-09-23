@@ -3,7 +3,7 @@
 
 import { clearCachedMessages, clearAiTitle, clearSessionName, getClient, type PiScienceClient, type SessionState } from "../client/pi-science-client";
 import { isMissingSessionError } from "./errors";
-import { attachTurnArtifacts, emptyThread, resetTurnBuffer } from "./event-fold";
+import { attachTurnArtifacts, emptyThread, resetTurnBuffer, type Thread } from "./event-fold";
 import { markWorkspaceFilesChanged } from "./file-revision";
 import { generations, turnState } from "./generations";
 import { mergeRecoveryHistoryWindow } from "./history-window-recovery";
@@ -141,6 +141,11 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
       || latest.cwd !== cwd
       || latest.working
     ) return;
+    // The settle event can precede the messages endpoint's view of the user
+    // write. Keep that prompt at its turn boundary while accepting any new
+    // assistant/tool records from the snapshot; a later refresh replaces it
+    // once the durable user row with the same request identity arrives.
+    const restoredThread = retainUnmatchedPrompt(merged.thread, latest.thread);
     if (metadataGeneration !== generations.presentationMetadata) {
       try {
         const persistedTurns = await refetchPersistedTurnArtifacts(sessionId, cwd);
@@ -167,7 +172,7 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
     }
     const historyHasMore = merged.retainedOlderPrefix ? latest.historyHasMore : merged.boundaryPage.has_more;
     useRuntimeStore.setState({
-      thread: attachTurnArtifacts(merged.thread, turns, { windowComplete: !historyHasMore }),
+      thread: attachTurnArtifacts(restoredThread, turns, { windowComplete: !historyHasMore }),
       historyCursor: merged.retainedOlderPrefix ? latest.historyCursor : merged.boundaryPage.next_cursor,
       historyHasMore,
       historyLoading: false,
@@ -176,6 +181,21 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
   } catch (error) {
     console.error("Failed to resynchronize completed conversation:", error);
   }
+}
+
+function retainUnmatchedPrompt(history: Thread, live: Thread): Thread {
+  const promptIndex = live.blocks.findLastIndex((block) => block.kind === "user" && block.client_message_id);
+  if (promptIndex < 0) return history;
+  const prompt = live.blocks[promptIndex];
+  if (prompt.kind !== "user" || history.blocks.some((block) => block.kind === "user"
+    && (block.client_message_id === prompt.client_message_id || block.id === prompt.id))) return history;
+  const preceding = live.blocks.slice(0, promptIndex).findLast((block) => history.index[block.id] !== undefined);
+  const insertAt = preceding ? history.index[preceding.id] + 1 : 0;
+  const blocks = [...history.blocks];
+  blocks.splice(insertAt, 0, prompt);
+  const index: Record<string, number> = {};
+  blocks.forEach((block, position) => { index[block.id] = position; });
+  return { ...history, blocks, index };
 }
 
 function liveArtifactTurns(thread: ReturnType<typeof useRuntimeStore.getState>["thread"], sessionId: string) {
