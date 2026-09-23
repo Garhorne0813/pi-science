@@ -80,7 +80,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
         <ComposerTodo />
       </Suspense>
       <div className="relative mx-auto max-w-[var(--conversation-composer-width)]">
-        {promptDeliveryNotice && <div role="status" className="mb-2 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-muted">{t(`conversation.promptDelivery.${promptDeliveryNotice}`)}</div>}
+        {promptDeliveryNotice === "indeterminate" && <div role="status" className="mb-2 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-muted">{t("conversation.promptDelivery.indeterminate")}</div>}
         {retryRequest && <button type="button" onClick={() => { void sendPrompt(input.trim(), retryRequest.clientMessageId).catch(() => undefined); }} className="mb-2 text-xs text-accent hover:underline">{t("conversation.promptDelivery.retrySameRequest")}</button>}
         {/* Fixed 36px fade band above the composer card (reference:
             ConversationRoot composer seat gradient). The card sits at the

@@ -848,7 +848,6 @@
   "conversation.copy": "复制",
   "conversation.copied": "已复制",
   "conversation.sources": "引用来源",
-  "conversation.promptDelivery.pending": "正在确认消息是否已写入会话…",
   "conversation.promptDelivery.indeterminate": "发送结果暂时无法确认；重连后会继续核对。",
   "conversation.promptDelivery.rejected": "服务端未接受此消息，可以重试。",
   "conversation.promptDelivery.retrySameRequest": "使用同一请求 ID 重试或查询这次发送",

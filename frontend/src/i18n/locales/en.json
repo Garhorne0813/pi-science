@@ -848,7 +848,6 @@
   "conversation.copy": "Copy",
   "conversation.copied": "Copied",
   "conversation.sources": "Sources",
-  "conversation.promptDelivery.pending": "Confirming that this message was saved to the conversation…",
   "conversation.promptDelivery.indeterminate": "The send status is still unknown. It will be checked again after reconnecting.",
   "conversation.promptDelivery.rejected": "The server did not accept this message. You can retry it.",
   "conversation.promptDelivery.retrySameRequest": "Retry or check this send using the same request ID",

@@ -17,9 +17,10 @@ beforeEach(() => { Object.defineProperty(navigator, "clipboard", { configurable:
 afterEach(() => { cleanup(); useRuntimeStore.setState({ thread: { blocks: [], index: {}, loaded: true } }); Reflect.deleteProperty(navigator, "clipboard"); });
 
 describe("turn-level conversation rendering", () => {
-  it("shows the send-confirmation state beside an optimistic prompt", () => {
+  it("keeps an optimistic prompt visible without a send-confirmation banner", () => {
     render(<>{renderBlocks([{ kind: "user", id: "u1", text: "status", deliveryStatus: "pending", client_message_id: "8fd824aa-51d3-4f63-839c-09e021b7970b" }], codeRunner)}</>);
-    expect(screen.getByRole("status")).toHaveTextContent("Confirming that this message was saved to the conversation");
+    expect(screen.getByText("status")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("offers a same-ID retry for a definitely rejected request", () => {
