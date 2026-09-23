@@ -23,6 +23,23 @@ const CARD =
   "group relative flex w-[128px] shrink-0 flex-col overflow-hidden rounded-[12px] bg-surface text-left ring-1 ring-inset ring-black/10 focus-visible:ring-2 focus-visible:ring-[#2a78d6] dark:ring-white/10";
 const FILENAME_BAR = "flex h-[25px] min-w-0 items-center gap-0.5 px-2";
 
+function artifactContentKey(item: TurnArtifactItem): string | number | undefined {
+  return item.sha256 ?? item.revision ?? item.version;
+}
+
+function inspectorForArtifact(item: TurnArtifactItem, cwd: string) {
+  const filename = item.path.split("/").pop() ?? item.path;
+  const inspector = fileInspectorForPath(item.path, filename, "workspace", cwd);
+  if (!item.sha256) return inspector;
+  // A published notebook snapshot is a read-only file preview too; opening
+  // the live notebook editor here would silently switch to its current bytes.
+  return {
+    ...(inspector.variant === "file" ? inspector : { variant: "file" as const, path: item.path, filename, root: "workspace" as const, cwd }),
+    sha256: item.sha256,
+    version: item.version,
+  };
+}
+
 function fileIcon(kind: string) {
   switch (kind) {
     case "image": return FileImage;
@@ -72,7 +89,12 @@ function OpenAffordance() {
 }
 
 /** Capped first-bytes read of a workspace file for the snippet card. */
-function useSnippet(path: string, cwd?: string, enabled = true) {
+function useSnippet(
+  path: string,
+  cwd?: string,
+  enabled = true,
+  contentKey?: string | number,
+) {
   const [state, setState] = useState<{ status: "loading" } | { status: "error" } | { status: "ready"; text: string }>({ status: "loading" });
   useEffect(() => {
     if (!enabled || !cwd) {
@@ -81,7 +103,10 @@ function useSnippet(path: string, cwd?: string, enabled = true) {
     }
     let cancelled = false;
     setState({ status: "loading" });
-    void readArtifact(path, "workspace", cwd, SNIPPET_BYTES)
+    const request = contentKey === undefined
+      ? readArtifact(path, "workspace", cwd, SNIPPET_BYTES)
+      : readArtifact(path, "workspace", cwd, SNIPPET_BYTES, contentKey);
+    void request
       .then((file) => {
         if (cancelled) return;
         if (!file || file.encoding !== "utf8" || !file.data) {
@@ -96,7 +121,7 @@ function useSnippet(path: string, cwd?: string, enabled = true) {
     return () => {
       cancelled = true;
     };
-  }, [path, cwd, enabled]);
+  }, [path, cwd, enabled, contentKey]);
   return state;
 }
 
@@ -144,7 +169,7 @@ function IconCard({ item, cwd, Icon }: { item: TurnArtifactItem; cwd?: string; I
   const filename = item.path.split("/").pop() ?? item.path;
   const open = () => {
     if (!cwd) return;
-    openInspector(fileInspectorForPath(item.path, filename, "workspace", cwd));
+    openInspector(inspectorForArtifact(item, cwd));
   };
   return (
     <button
@@ -168,11 +193,15 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
   const openInspector = useUiStore((state) => state.openInspector);
   const { t } = useTranslation();
   const filename = item.path.split("/").pop() ?? item.path;
+  const contentKey = artifactContentKey(item);
   const [structureFailed, setStructureFailed] = useState(false);
-  const snippet = useSnippet(item.path, cwd, snippetKindFor(item) !== "structure");
+  useEffect(() => {
+    setStructureFailed(false);
+  }, [item.path, contentKey]);
+  const snippet = useSnippet(item.path, cwd, snippetKindFor(item) !== "structure", contentKey);
   const open = () => {
     if (!cwd) return;
-    openInspector(fileInspectorForPath(item.path, filename, "workspace", cwd));
+    openInspector(inspectorForArtifact(item, cwd));
   };
 
   const ready = snippet.status === "ready";
@@ -188,7 +217,14 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
       >
         <OpenAffordance />
         <div className={`relative ${PREVIEW_HEIGHT} overflow-hidden bg-surface-2`}>
-          <MoleculeThumb path={item.path} cwd={cwd} filename={filename} onError={() => setStructureFailed(true)} />
+          <MoleculeThumb
+            key={`${item.path}:${String(contentKey ?? 'current')}`}
+            path={item.path}
+            cwd={cwd}
+            filename={filename}
+            contentKey={contentKey}
+            onError={() => setStructureFailed(true)}
+          />
         </div>
         <span className={FILENAME_BAR}>
           <FilenameLabel filename={filename} />
@@ -258,12 +294,16 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
   const openInspector = useUiStore((state) => state.openInspector);
   const filename = item.path.split("/").pop() ?? item.path;
   const Icon = fileIcon(item.kind);
+  const contentKey = artifactContentKey(item);
   const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => {
+    setImageFailed(false);
+  }, [item.path, contentKey]);
   const isImage = item.kind === "image" && !imageFailed;
 
   const open = () => {
     if (!cwd) return;
-    openInspector(fileInspectorForPath(item.path, filename, "workspace", cwd));
+    openInspector(inspectorForArtifact(item, cwd));
   };
 
   if (isImage) {
@@ -277,7 +317,7 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
         <OpenAffordance />
         <div className={`relative ${PREVIEW_HEIGHT} overflow-hidden bg-surface-2 p-1.5`}>
           <img
-            src={previewUrl(item.path, "workspace", cwd ?? "")}
+            src={previewUrl(item.path, "workspace", cwd ?? "", contentKey)}
             alt={filename}
             loading="lazy"
             onError={() => setImageFailed(true)}
@@ -304,20 +344,21 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
 export function TurnArtifactStrip({ artifacts, cwd, heading = "generated" }: { artifacts: TurnArtifactItem[]; cwd?: string; heading?: "generated" | "referenced" }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const visible = useMemo(() => (expanded ? artifacts : artifacts.slice(0, MAX_VISIBLE)), [artifacts, expanded]);
-  const extra = artifacts.length - visible.length;
+  const stableArtifacts = useMemo(() => latestArtifactVersions(artifacts), [artifacts]);
+  const visible = useMemo(() => (expanded ? stableArtifacts : stableArtifacts.slice(0, MAX_VISIBLE)), [stableArtifacts, expanded]);
+  const extra = stableArtifacts.length - visible.length;
 
-  if (!artifacts.length) return null;
+  if (!stableArtifacts.length) return null;
 
   const ariaLabel = heading === "referenced" ? t("conversation.referencedFiles") : t("conversation.generatedFiles");
-  const headingLabel = heading === "referenced" ? t("conversation.referencedFilesLabel", { count: artifacts.length }) : t("conversation.generatedFilesLabel", { count: artifacts.length });
+  const headingLabel = heading === "referenced" ? t("conversation.referencedFilesLabel", { count: stableArtifacts.length }) : t("conversation.generatedFilesLabel", { count: stableArtifacts.length });
   return (
     <section aria-label={ariaLabel} className="mt-3.5">
       <div className="mb-1.5 text-[10.5px] font-medium tracking-[0.02em] text-muted">
         {headingLabel}
       </div>
       <div className="flex flex-wrap gap-2">
-        {visible.map((item) => <ArtifactMiniCard key={item.path} item={item} cwd={cwd} />)}
+        {visible.map((item) => <ArtifactMiniCard key={item.artifactId ?? item.path} item={item} cwd={cwd} />)}
         {extra > 0 && (
           <button
             type="button"
@@ -340,6 +381,27 @@ export function TurnArtifactStrip({ artifacts, cwd, heading = "generated" }: { a
       </div>
     </section>
   );
+}
+
+/** Keep the card identity stable while an artifact advances to a newer
+ * immutable version. Stale/replayed versions cannot create duplicate cards. */
+export function latestArtifactVersions(artifacts: TurnArtifactItem[]): TurnArtifactItem[] {
+  const positions = new Map<string, number>();
+  const result: TurnArtifactItem[] = [];
+  for (const artifact of artifacts) {
+    const id = artifact.artifactId ?? artifact.path;
+    const position = positions.get(id);
+    if (position === undefined) {
+      positions.set(id, result.length);
+      result.push(artifact);
+      continue;
+    }
+    const current = result[position];
+    const nextRevision = artifact.revision ?? artifact.version ?? 0;
+    const currentRevision = current.revision ?? current.version ?? 0;
+    if (nextRevision > currentRevision) result[position] = artifact;
+  }
+  return result;
 }
 
 /** Show existing workspace files cited by the final answer, even when the turn

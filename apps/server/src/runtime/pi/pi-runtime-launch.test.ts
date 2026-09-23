@@ -535,6 +535,24 @@ describe("Pi runtime custom provider materialization", () => {
     const extensions = options.args.flatMap((arg, index) => arg === "-e" ? [options.args[index + 1]] : []);
     expect(extensions).not.toContain(ambient);
     expect(extensions).toContain(join(import.meta.dirname, "extensions", "pi-science-mcp.ts"));
+    expect(extensions).toContain(join(import.meta.dirname, "extensions", "prompt-identity.ts"));
+  });
+
+  it("keeps prompt identity enabled when optional MCP tools are disabled", async () => {
+    const previous = process.env.PI_SCIENCE_DISABLE_MCP;
+    process.env.PI_SCIENCE_DISABLE_MCP = "1";
+    try {
+      const cwd = join(tmpdir(), `pi-runtime-prompt-identity-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+      cleanup.push(cwd);
+      await mkdir(cwd, { recursive: true });
+      const options = buildPiProcessOptions(cwd, { skills: [], extensions: [] })!;
+      const extensions = options.args.flatMap((arg, index) => arg === "-e" ? [options.args[index + 1]] : []);
+      expect(extensions).toContain(join(import.meta.dirname, "extensions", "prompt-identity.ts"));
+      expect(extensions).not.toContain(join(import.meta.dirname, "extensions", "pi-science-mcp.ts"));
+    } finally {
+      if (previous === undefined) delete process.env.PI_SCIENCE_DISABLE_MCP;
+      else process.env.PI_SCIENCE_DISABLE_MCP = previous;
+    }
   });
 
   it("runs a source TypeScript CLI through the adjacent tsx runtime", async () => {

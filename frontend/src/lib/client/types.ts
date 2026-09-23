@@ -37,6 +37,7 @@ export interface AvailableModel {
 export interface HistoryMessage {
   id: string;
   role: string;
+  client_message_id?: string;
   content: Array<{ type: string; text?: string; [key: string]: unknown }>;
   toolCallId?: string;
   toolName?: string;
@@ -53,6 +54,15 @@ export interface HistoryMessage {
   revision?: number;
   sequence?: number;
   classificationSource?: "explicit" | "legacy_inferred" | "unknown";
+}
+
+export type PromptDeliveryState = "pending" | "accepted" | "persisted" | "rejected" | "indeterminate";
+
+export interface PromptRequestStatus {
+  status: PromptDeliveryState;
+  client_message_id: string;
+  durable_message_id?: string;
+  error_code?: string;
 }
 
 export interface SessionMessagePage {
@@ -81,6 +91,13 @@ export interface TurnArtifactItem {
   size: number;
   artifactId?: string;
   version?: number;
+  revision?: number;
+  sha256?: string;
+  state?: "declared" | "writing" | "published" | "failed";
+  activityId?: string;
+  executionId?: string;
+  environmentRevision?: string;
+  provenanceRef?: string;
 }
 
 export interface TurnArtifactTurn {

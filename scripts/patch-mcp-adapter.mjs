@@ -73,6 +73,17 @@ async function withApprovalQueue<T>(
   ],
 ]);
 
+// The upstream Pi extension UI request protocol has no semantic kind field.
+// Mark only the managed MCP approval producer at this boundary; the server
+// turns the marker into the authoritative interaction kind and strips it
+// before publishing the user-facing title.
+patch("tool-approval.ts", "PI_SCIENCE_PERMISSION_UI_V1", [
+  [
+    '      `${title}\\n\\nArguments:\\n${preview}`,',
+    '      `[pi-science:permission] ${title}\\n\\nArguments:\\n${preview}`,',
+  ],
+]);
+
 // Pi Orbit hosts many workspace sessions in one process. Allow the managed
 // wrapper to resolve its in-memory config from the current session context;
 // a config captured while the host boots would otherwise use orbit-host cwd.

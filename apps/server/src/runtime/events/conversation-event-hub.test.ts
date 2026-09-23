@@ -29,6 +29,45 @@ async function eventually(predicate: () => boolean): Promise<void> {
 }
 
 describe("central conversation event hub", () => {
+  it("passes the published identity to observers across empty turns and hub restarts", async () => {
+    const cwd = await workspace();
+    const records: SseEventRecord[] = [];
+    const store = {
+      append: async (_cwd: string, _sessionId: string, event: SseEventRecord) => { records.push(event); },
+      readAfter: async () => records,
+    };
+    const observed: Array<{ type: string; turnId: string; turnOrdinal: number }> = [];
+    const run = async (count: number) => {
+      const hub = new ConversationEventHub(store);
+      const process = new EventEmitter();
+      hub.bind(cwd, process as PiProcess, {
+        activeSessionId: () => "identity-test",
+        onBusy: () => {}, onExit: () => {},
+        observe: (event, _sessionId, identity) => {
+          if (identity) observed.push({ type: event.type, ...identity });
+        },
+      });
+      const before = observed.length;
+      for (let i = 0; i < count; i += 1) {
+        process.emit("event", { type: "agent_start" });
+        process.emit("event", { type: "agent_settled" });
+      }
+      await eventually(() => observed.length === before + count * 2);
+    };
+    await run(3);
+    await run(1);
+    const starts = observed.filter((item) => item.type === "agent_start");
+    expect(starts.map((item) => item.turnOrdinal)).toEqual([1, 2, 3, 1]);
+    expect(new Set(starts.map((item) => item.turnId)).size).toBe(4);
+    const published = records.map((record) => JSON.parse(record.data));
+    for (const item of observed) {
+      expect(published).toContainEqual(expect.objectContaining({
+        type: item.type === "agent_start" ? "agent_start" : "session.idle",
+        turnId: item.turnId, turnOrdinal: item.turnOrdinal,
+      }));
+    }
+  });
+
   it("deduplicates an event that appears in both replay and the live replay window", async () => {
     const cwd = await workspace();
     const records: SseEventRecord[] = [];
@@ -537,6 +576,119 @@ describe("central conversation event hub", () => {
     }
     await eventually(() => received.filter((event) => event.type === "session.idle").length === 3);
     expect(received.filter((event) => event.type === "error")).toEqual([]);
+  });
+
+  it("keeps generic confirmations out of the permission channel", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub();
+    const process = new EventEmitter() as PiProcess;
+    const received: Array<Record<string, unknown>> = [];
+    hub.bind(cwd, process, { activeSessionId: () => "session-interactions", onBusy: () => undefined, onExit: () => undefined });
+    await hub.subscribe(cwd, "session-interactions", undefined, (record) => received.push(JSON.parse(record.data)));
+
+    process.emit("event", { type: "agent_start" });
+    process.emit("event", {
+      type: "extension_ui_request",
+      id: "confirm-1",
+      method: "confirm",
+      title: "Continue?",
+      message: "Continue with the next step?",
+    });
+    process.emit("event", {
+      type: "extension_ui_request",
+      id: "permission-1",
+      method: "confirm",
+      kind: "permission",
+      title: "Install scipy",
+      operation: "Install scipy 1.17",
+      scope: "Project environment",
+      effect: "Creates a new revision",
+    });
+    process.emit("event", {
+      type: "extension_ui_request",
+      id: "select-1",
+      method: "select",
+      title: "Choose an output",
+      options: ["A", "B"],
+    });
+    process.emit("event", {
+      type: "extension_ui_request",
+      id: "mcp-permission-1",
+      method: "select",
+      title: "[pi-science:permission] MCP: papers wants to run search",
+      options: ["Allow once", "Allow for session", "Deny"],
+    });
+
+    await eventually(() => [
+      "confirm-1",
+      "permission-1",
+      "select-1",
+      "mcp-permission-1",
+    ].every((requestId) => received.some((event) => event.requestId === requestId)));
+    expect(received.find((event) => event.requestId === "confirm-1")).toMatchObject({
+      type: "question.asked",
+      kind: "confirmation",
+      method: "confirm",
+      title: "Continue?",
+    });
+    expect(received.find((event) => event.requestId === "permission-1")).toMatchObject({
+      type: "permission.asked",
+      kind: "permission",
+      method: "confirm",
+      operation: "Install scipy 1.17",
+      scope: "Project environment",
+      effect: "Creates a new revision",
+    });
+    expect(received.find((event) => event.requestId === "select-1")).toMatchObject({
+      type: "question.asked",
+      kind: "question",
+      method: "select",
+      title: "Choose an output",
+      options: ["A", "B"],
+    });
+    expect(received.find((event) => event.requestId === "mcp-permission-1")).toMatchObject({
+      type: "permission.asked",
+      kind: "permission",
+      method: "select",
+      title: "MCP: papers wants to run search",
+      options: ["Allow once", "Allow for session", "Deny"],
+    });
+  });
+
+  it("caps interaction metadata that the producer omitted to an empty string", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub();
+    const process = new EventEmitter() as PiProcess;
+    const received: Array<Record<string, unknown>> = [];
+    hub.bind(cwd, process, { activeSessionId: () => "session-metadata", onBusy: () => undefined, onExit: () => undefined });
+    await hub.subscribe(cwd, "session-metadata", undefined, (record) => received.push(JSON.parse(record.data)));
+
+    process.emit("event", { type: "agent_start" });
+    // The managed MCP approval producer sends only a title and options. Every
+    // other metadata field is absent, and must not reach the UI as the literal
+    // two-character text `""` — that value is truthy, so the permission card
+    // would render it instead of falling back to the tool title.
+    process.emit("event", {
+      type: "extension_ui_request",
+      id: "mcp-permission-2",
+      method: "select",
+      title: "[pi-science:permission] MCP: papers wants to run search",
+      options: ["Allow once", "Allow for session", "Deny"],
+    });
+
+    await eventually(() => received.some((event) => event.requestId === "mcp-permission-2"));
+    const published = received.find((event) => event.requestId === "mcp-permission-2")!;
+    expect(published).toMatchObject({
+      type: "permission.asked",
+      kind: "permission",
+      title: "MCP: papers wants to run search",
+      operation: "",
+      scope: "",
+      effect: "",
+      message: "",
+    });
+    // Guard the regression directly: a truthy `""` would win over the title.
+    expect(published.operation || published.title).toBe("MCP: papers wants to run search");
   });
 
   it("publishes activity titles and preserves tool result details", async () => {

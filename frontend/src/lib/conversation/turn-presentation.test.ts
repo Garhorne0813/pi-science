@@ -6,6 +6,7 @@ import { buildTurnPresentations } from "./turn-presentation";
 const user = (id: string): ThreadBlock => ({ kind: "user", id, text: id });
 const agent = (id: string, partial = false): AgentMessageBlock => ({ kind: "agent", id, parts: [{ id: `${id}-part`, text: id }], ...(partial ? { partial: true } : {}) });
 const tool = (id: string, name = "read", status: ToolCallBlock["status"] = "done"): ThreadBlock => ({ kind: "tool", id, callId: `${id}-call`, tool: name, status });
+const inTurn = (block: ThreadBlock, turnId: string): ThreadBlock => ({ ...block, turnId } as ThreadBlock);
 
 describe("turn analysis", () => {
   it("finds the final agent after the last execution tool", () => {
@@ -47,6 +48,32 @@ describe("turn analysis", () => {
 });
 
 describe("buildTurnPresentations", () => {
+  it("keeps resumed runtime turns inside one live user reply", () => {
+    const blocks: ThreadBlock[] = [
+      inTurn(user("u1"), "run-1"),
+      inTurn(tool("read-1"), "run-1"),
+      { ...agent("progress"), turnId: "run-2", presentationRole: "intermediate" },
+      inTurn(tool("read-2", "read", "running"), "run-2"),
+    ];
+    const turns = buildTurnPresentations(blocks, { lastTurnId: "run-2", lastTurnLifecycle: "active" });
+    expect(turns).toHaveLength(1);
+    expect(turns[0].lifecycle).toBe("active");
+    expect(turns[0].activityBlocks.map((block) => block.id)).toEqual(["read-1", "progress", "read-2"]);
+  });
+
+  it("routes a late artifact to its previous user turn without settling the live reply", () => {
+    const turns = buildTurnPresentations([
+      inTurn(user("u1"), "run-1"),
+      inTurn(tool("first"), "run-1"),
+      inTurn(user("u2"), "run-2"),
+      inTurn(tool("second", "read", "running"), "run-2"),
+      { kind: "artifact-summary", id: "late", turnId: "run-1", artifacts: [] },
+    ], { lastTurnId: "run-2", lastTurnLifecycle: "active" });
+    expect(turns).toHaveLength(2);
+    expect(turns[0].artifacts.map((block) => block.id)).toEqual(["late"]);
+    expect(turns[1].lifecycle).toBe("active");
+  });
+
   it("aggregates narration-separated tools into one turn", () => {
     const turns = buildTurnPresentations([user("user-1"), agent("agent-a"), tool("tool-1"), agent("agent-b"), tool("tool-2"), agent("agent-c")]);
     expect(turns).toHaveLength(1);
@@ -181,5 +208,38 @@ describe("buildTurnPresentations", () => {
     ], { lastTurnLifecycle: "settled" })[0];
     expect(turn.finalAgent?.id).toBe("final-b");
     expect(turn.activityBlocks.map((block) => block.id)).toEqual(["final-a", "late-edit"]);
+  });
+
+  it("keeps a positioned legacy strip inside its owning turn", () => {
+    const blocks: ThreadBlock[] = [
+      user("u1"),
+      tool("tool-1"),
+      user("u2"),
+      tool("tool-2", "bash", "running"),
+      {
+        kind: "artifact-summary",
+        id: "strip-1",
+        turnId: "opaque-published-uuid",
+        artifacts: [{ path: "a.csv", kind: "table", mime: "text/csv", size: 1 }],
+      } as ThreadBlock,
+    ];
+    const turns = buildTurnPresentations(blocks, { lastTurnLifecycle: "active" });
+    const running = turns.find((turn) => turn.blocks.some((block) => block.id === "tool-2"));
+    const strip = turns.find((turn) => turn.blocks.some((block) => block.id === "strip-1"));
+    expect(running?.active).toBe(true);
+    expect(running?.lifecycle).toBe("active");
+    expect(strip).toBe(running);
+    expect(turns).toHaveLength(2);
+  });
+
+  it("still finds the active turn when lastTurnId matches no group", () => {
+    // History restore rebuilds the running turn under a user-message key, so
+    // the streamed turn id no longer identifies any group. Every group would
+    // otherwise render as settled and the live turn would read "Completed".
+    const blocks: ThreadBlock[] = [user("u1"), tool("tool-1"), user("u2"), tool("tool-2", "bash", "running")];
+    const turns = buildTurnPresentations(blocks, { lastTurnId: "turn-not-present", lastTurnLifecycle: "active" });
+    const running = turns.find((turn) => turn.blocks.some((block) => block.id === "tool-2"));
+    expect(running?.active).toBe(true);
+    expect(running?.lifecycle).toBe("active");
   });
 });

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import type { PendingInteraction } from "../../lib/agent-runtime";
 import { useTranslation } from "react-i18next";
+import { PermissionCard } from "./interactions/PermissionCard";
 
 export function InteractionPrompt({
   interaction,
@@ -14,12 +15,14 @@ export function InteractionPrompt({
   const [value, setValue] = useState(interaction.prefill || "");
   const [submitting, setSubmitting] = useState(false);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
+  const [selectedConfirmation, setSelectedConfirmation] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setValue(interaction.prefill || "");
     setSubmitting(false);
     setSelectedOption(null);
+    setSelectedConfirmation(null);
     setError(null);
   }, [interaction.requestId, interaction.prefill]);
 
@@ -27,6 +30,7 @@ export function InteractionPrompt({
     if (submitting) return;
     setSubmitting(true);
     setSelectedOption(typeof response.value === "string" ? response.value : null);
+    setSelectedConfirmation(typeof response.confirmed === "boolean" ? response.confirmed : null);
     setError(null);
     try {
       await onRespond(response);
@@ -34,6 +38,7 @@ export function InteractionPrompt({
       setError(cause instanceof Error && cause.message ? cause.message : t("interaction.responseFailed"));
       setSubmitting(false);
       setSelectedOption(null);
+      setSelectedConfirmation(null);
     }
   };
 
@@ -43,6 +48,17 @@ export function InteractionPrompt({
       : { label: option.label || option.value || t("interaction.option"), value: option.value || option.label || "" }
   ));
 
+  const permission = interaction.kind != null
+    ? interaction.kind === "permission"
+    : /\b(permission|approval|allow|deny)\b/i.test(`${interaction.title} ${interaction.message ?? ""}`);
+
+  if (permission) {
+    return <>
+      <PermissionCard interaction={interaction} submitting={submitting} selectedOption={selectedOption} selectedConfirmation={selectedConfirmation} onRespond={(response) => { void respond(response); }} />
+      {error && <p role="alert" className="mt-3 rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{error}</p>}
+    </>;
+  }
+
   return (
     <div className="rounded-card border border-accent/30 bg-accent/5 p-4 animate-fadeIn">
       <div className="text-sm font-medium text-text">{interaction.title}</div>
@@ -50,8 +66,8 @@ export function InteractionPrompt({
 
       {interaction.method === "confirm" ? (
         <div className="mt-3 flex gap-2">
-          <button type="button" disabled={submitting} onClick={() => void respond({ confirmed: true })} className="inline-flex items-center gap-1.5 rounded-input bg-accent-fill px-3 py-1.5 text-xs text-accent-fg disabled:opacity-50">{submitting && <Loader2 size={12} className="animate-spin" />}{t("common.confirm")}</button>
-          <button type="button" disabled={submitting} onClick={() => void respond({ confirmed: false })} className="rounded-input border border-border px-3 py-1.5 text-xs text-text hover:bg-surface-2 disabled:opacity-50">{t("interaction.decline")}</button>
+          <button type="button" disabled={submitting} onClick={() => void respond({ confirmed: true })} className="inline-flex items-center gap-1.5 rounded-input bg-accent-fill px-3 py-1.5 text-xs text-accent-fg disabled:opacity-50">{submitting && selectedConfirmation === true && <Loader2 size={12} className="animate-spin" />}{t("common.confirm")}</button>
+          <button type="button" disabled={submitting} onClick={() => void respond({ confirmed: false })} className="inline-flex items-center gap-1.5 rounded-input border border-border px-3 py-1.5 text-xs text-text hover:bg-surface-2 disabled:opacity-50">{submitting && selectedConfirmation === false && <Loader2 size={12} className="animate-spin" />}{t("interaction.decline")}</button>
         </div>
       ) : interaction.method === "select" ? (
         <div className="mt-3 flex flex-wrap gap-2">

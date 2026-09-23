@@ -75,6 +75,7 @@ export interface InspectorTab {
 export function inspectorTabId(data: Inspector): string {
   switch (data.variant) {
     case "file":
+      return JSON.stringify([data.variant, data.cwd ?? "", data.root ?? "", data.path, data.sha256 ?? ""]);
     case "notebook-file":
       return JSON.stringify([data.variant, data.cwd ?? "", data.root ?? "", data.path]);
     case "pdf":

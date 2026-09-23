@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { convertHistoryToBlocks, mergeHistoryWindow, replaceHistoryTail, useRuntimeStore } from "./index";
-import { emptyThread, foldEvent, prependHistoryMessages, threadFromMessages, type Thread } from "./event-fold";
+import { emptyThread, foldEvent, mergeHistoryWithLive, prependHistoryMessages, threadFromMessages, type Thread } from "./event-fold";
 import type { HistoryMessage, PiScienceEvent } from "../client/types";
 import type { ThreadBlock } from "../../types/thread";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
@@ -824,5 +824,98 @@ describe("conversation presentation protocol v2", () => {
     expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "status-line", level: "error" }));
     expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "artifact-summary", turnId: "turn-1" }));
     expect(thread.foldState?.lastSequence).toBe(5);
+  });
+});
+
+describe("mergeHistoryWithLive", () => {
+  const optimisticUser = (id: string, text: string, timestamp: string, client_message_id?: string): ThreadBlock =>
+    ({ kind: "user", id, text, timestamp, ...(client_message_id ? { client_message_id } : {}) }) as ThreadBlock;
+  const threadOf = (blocks: ThreadBlock[]): Thread => {
+    const index: Record<string, number> = {};
+    blocks.forEach((block, position) => { index[block.id] = position; });
+    return { blocks, index, loaded: true };
+  };
+
+  it("drops an optimistic prompt only when the durable copy carries the same request ID", () => {
+    const history = threadOf(convertHistoryToBlocks([
+      { id: "58316547", role: "user", client_message_id: "send-a", content: [{ type: "text", text: "run the notebook" }], timestamp: "2026-09-23T00:44:20.000Z" },
+    ]));
+    const live = threadOf([optimisticUser("user-send-a", "run the notebook", "1900-01-01T00:00:00.000Z", "send-a")]);
+    expect(mergeHistoryWithLive(history, live).blocks.map((block) => block.id)).toEqual(["58316547"]);
+  });
+
+  it("keeps a repeated prompt whose durable copy history has not recorded yet", () => {
+    const history = threadOf(convertHistoryToBlocks([
+      { id: "111", role: "user", content: [{ type: "text", text: "status" }], timestamp: "2026-09-23T00:10:00.000Z" },
+    ]));
+    const live = threadOf([optimisticUser("user-1790099999999", "status", "2026-09-23T00:44:00.000Z")]);
+    expect(mergeHistoryWithLive(history, live).blocks.map((block) => block.id))
+      .toEqual(["111", "user-1790099999999"]);
+  });
+
+  it("keeps an optimistic prompt when history has not caught up at all", () => {
+    const live = threadOf([optimisticUser("user-1790099999999", "brand new", "2026-09-23T00:44:00.000Z")]);
+    expect(mergeHistoryWithLive(threadOf([]), live).blocks.map((block) => block.id))
+      .toEqual(["user-1790099999999"]);
+  });
+
+  it("keeps a repeated prompt whose history candidate follows a shared block but has no request ID", () => {
+    const earlier = { id: "first", role: "user", content: [{ type: "text", text: "status" }], timestamp: "2026-09-23T00:10:00.000Z" };
+    const history = threadOf(convertHistoryToBlocks([
+      earlier,
+      { id: "second", role: "user", content: [{ type: "text", text: "status" }], timestamp: "2026-09-23T00:44:00.000Z" },
+    ]));
+    const live = threadOf([
+      ...convertHistoryToBlocks([earlier]),
+      optimisticUser("user-send-b", "status", "2026-09-23T00:49:00.000Z", "send-b"),
+    ]);
+    expect(mergeHistoryWithLive(history, live).blocks.map((block) => block.id)).toEqual(["first", "second", "user-send-b"]);
+  });
+
+  it("matches the first prompt of a client-created session despite clock skew", () => {
+    const history = threadOf(convertHistoryToBlocks([
+      { id: "first", role: "user", content: [{ type: "text", text: "start" }], timestamp: "2026-09-23T00:44:00.000Z" },
+    ]));
+    const live = threadOf([{ ...optimisticUser("user-1790099999999", "start", "2026-09-23T00:49:00.000Z"), optimisticFirstInSession: true } as ThreadBlock]);
+    expect(mergeHistoryWithLive(history, live).blocks.map((block) => block.id)).toEqual(["first"]);
+  });
+
+  it("retains a repeated live prompt when the only matching durable copy precedes the shared block", () => {
+    const history = threadOf(convertHistoryToBlocks([
+      { id: "first", role: "user", content: [{ type: "text", text: "status" }], timestamp: "2026-09-23T00:10:00.000Z" },
+      { id: "second", role: "user", content: [{ type: "text", text: "something else" }], timestamp: "2026-09-23T00:20:00.000Z" },
+    ]));
+    const live = threadOf([
+      history.blocks[0], history.blocks[1],
+      optimisticUser("user-1790099999999", "status", "2026-09-23T00:15:00.000Z"),
+    ]);
+    expect(mergeHistoryWithLive(history, live).blocks.map((block) => block.id))
+      .toEqual(["first", "second", "user-1790099999999"]);
+  });
+
+  it("preserves an old same-text message after a shared anchor beside a new optimistic send", () => {
+    const history = threadOf(convertHistoryToBlocks([
+      { id: "A", role: "user", content: [{ type: "text", text: "start" }] },
+      { id: "B", role: "user", content: [{ type: "text", text: "status" }] },
+    ]));
+    const live = threadOf([
+      ...convertHistoryToBlocks([{ id: "A", role: "user", content: [{ type: "text", text: "start" }] }]),
+      optimisticUser("user-new-status", "status", "2026-09-23T00:49:00.000Z", "new-status"),
+    ]);
+    expect(mergeHistoryWithLive(history, live).blocks.map((block) => block.id)).toEqual(["A", "B", "user-new-status"]);
+    const durableCopy = threadOf(convertHistoryToBlocks([
+      { id: "A", role: "user", content: [{ type: "text", text: "start" }] },
+      { id: "B", role: "user", content: [{ type: "text", text: "status" }] },
+      { id: "O", role: "user", client_message_id: "new-status", content: [{ type: "text", text: "status" }] },
+    ]));
+    expect(mergeHistoryWithLive(durableCopy, live).blocks.map((block) => block.id)).toEqual(["A", "B", "O"]);
+  });
+
+  it("keeps identical text with two different explicit send IDs as two messages", () => {
+    const history = threadOf(convertHistoryToBlocks([
+      { id: "older", role: "user", content: [{ type: "text", text: "status" }] },
+    ]));
+    const live = threadOf([optimisticUser("user-new", "status", "2026-09-23T00:49:00.000Z", "send-new")]);
+    expect(mergeHistoryWithLive(history, live).blocks.map((block) => block.id)).toEqual(["older", "user-new"]);
   });
 });

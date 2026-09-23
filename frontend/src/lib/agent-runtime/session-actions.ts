@@ -3,6 +3,7 @@
  *  references stay stable across renders exactly as before. */
 
 import type { StoreApi } from "zustand";
+import { v4 as uuidv4 } from "uuid";
 import type { ThreadBlock } from "../../types/thread";
 import { activityPolicy } from "../conversation/activity-policy";
 import {
@@ -10,8 +11,16 @@ import {
   getClient,
   moveSessionName,
   type HistoryMessage,
+  type PromptRequestStatus,
   type SessionInfo,
 } from "../client/pi-science-client";
+import {
+  localPromptRequests,
+  promptContentDigest,
+  removeLocalPromptRequest,
+  saveLocalPromptRequest,
+  updateLocalPromptRequest,
+} from "../client/prompt-request-cache";
 import { appendRuntimeError, isMissingSessionError } from "./errors";
 import { attachTurnArtifacts, emptyThread, mergeHistoryWithLive, prependHistoryMessages, resetTurnBuffer, threadFromMessages } from "./event-fold";
 import { fetchPersistedTurnArtifacts } from "./turn-artifacts";
@@ -35,6 +44,46 @@ const _interactionResponsePromises = new Map<string, Promise<void>>();
 function connectionKey(cwd: string, sessionId?: string): string { return `${cwd}\u0000${sessionId ?? ""}`; }
 function historyPageKey(cwd: string, sessionId: string, before: string): string { return `${connectionKey(cwd, sessionId)}\u0000${before}`; }
 function interactionResponseKey(cwd: string, sessionId: string, requestId: string): string { return `${connectionKey(cwd, sessionId)}\u0000${requestId}`; }
+
+function applyPromptDeliveryStatus(
+  get: GetState,
+  set: SetState,
+  clientMessageId: string,
+  status: PromptRequestStatus,
+): void {
+  const current = get();
+  const userBlocks = current.thread.blocks.filter((block): block is Extract<ThreadBlock, { kind: "user" }> => block.kind === "user");
+  const target = userBlocks.find((block) => block.client_message_id === clientMessageId);
+  const blocks = current.thread.blocks.map((block) => {
+    if (block.kind !== "user" || block.client_message_id !== clientMessageId) return block;
+    if (status.status === "persisted") {
+      return { ...block, id: status.durable_message_id ?? block.id, deliveryStatus: undefined };
+    }
+    return {
+      ...block,
+      deliveryStatus: status.status === "rejected" ? "rejected" as const
+        : status.status === "indeterminate" ? "indeterminate" as const
+          : "pending" as const,
+    };
+  });
+  const index: Record<string, number> = {};
+  blocks.forEach((block, position) => { index[block.id] = position; });
+  const notice = status.status === "indeterminate" ? "indeterminate"
+    : status.status === "pending" || status.status === "accepted" ? "pending"
+      : null;
+  set({
+    ...(target ? { thread: { ...current.thread, blocks, index } } : {}),
+    ...(current.promptDeliveryNotice === null || current.promptDeliveryNotice !== notice
+      ? { promptDeliveryNotice: notice }
+      : {}),
+  });
+}
+
+function updateOptimisticStatus(get: GetState, set: SetState, status: PromptRequestStatus): void {
+  if (status.status === "persisted") removeLocalPromptRequest(status.client_message_id);
+  else updateLocalPromptRequest(status.client_message_id, { status: status.status });
+  applyPromptDeliveryStatus(get, set, status.client_message_id, status);
+}
 
 export function createRuntimeActions(set: SetState, get: GetState) {
   /** React StrictMode can replay the route effect while the first session
@@ -63,6 +112,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           sessions: state.cwd !== cwd ? [] : state.sessions,
           activeSessionId: sessionId ?? null,
           working: false,
+          promptDeliveryNotice: null,
           turnLifecycle: "settled",
           model: null,
           thinking: null,
@@ -206,6 +256,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         }
         set(nextState);
         if (nextState.thread) backfillSessionName(cwd, targetSessionId, nextState.thread);
+        void restorePendingPromptRequests(client, cwd, targetSessionId, get, set);
 
         // A refresh can restore a cached busy snapshot after the turn's final
         // SSE event has already passed. Keep checking the authoritative state
@@ -273,6 +324,53 @@ export function createRuntimeActions(set: SetState, get: GetState) {
     };
     void pending.then(clearIfCurrent, clearIfCurrent);
     return pending;
+  };
+
+  const restorePendingPromptRequests = async (
+    client: ReturnType<typeof getClient>,
+    cwd: string,
+    sessionId: string,
+    getState: GetState,
+    setState: SetState,
+  ) => {
+    for (const record of localPromptRequests(cwd, sessionId)) {
+      if (getState().cwd !== cwd || getState().activeSessionId !== sessionId) return;
+      try {
+        const status = await client.getPromptRequestStatus(sessionId, record.clientMessageId, cwd);
+        if (getState().cwd !== cwd || getState().activeSessionId !== sessionId) return;
+        updateOptimisticStatus(getState, setState, status);
+        if (status.status === "pending" || status.status === "accepted") {
+          void monitorPromptRequest(client, cwd, sessionId, record.clientMessageId);
+        }
+      } catch {
+        const status: PromptRequestStatus = {
+          status: record.status === "persisted" ? "accepted" : record.status,
+          client_message_id: record.clientMessageId,
+        };
+        applyPromptDeliveryStatus(getState, setState, record.clientMessageId, status);
+      }
+    }
+  };
+
+  const monitorPromptRequest = async (
+    client: ReturnType<typeof getClient>,
+    cwd: string,
+    sessionId: string,
+    clientMessageId: string,
+  ) => {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const current = get();
+      if (current.cwd !== cwd || current.activeSessionId !== sessionId) return;
+      try {
+        const status = await client.getPromptRequestStatus(sessionId, clientMessageId, cwd);
+        updateOptimisticStatus(get, set, status);
+        if (status.status === "persisted" || status.status === "rejected" || status.status === "indeterminate") return;
+      } catch {
+        // Keep the stored ID and current visual state; a later connect can
+        // resume status reconciliation without copying prompt text locally.
+      }
+    }
   };
 
   const loadHistoryPage = async (sessionId: string, cwd: string, before: string): Promise<number> => {
@@ -375,25 +473,81 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       set({ status: "offline", pendingInteraction: null, pendingQuestionnaire: null });
     },
 
-    sendPrompt: async (message: string): Promise<string | null> => {
+    sendPrompt: async (message: string, requestedClientMessageId?: string): Promise<string | null> => {
       if (!message.trim()) return null;
       const initialState = get();
       if (initialState.working || initialState.pendingInteraction || initialState.pendingQuestionnaire) {
         throw new Error("The current conversation is still running");
       }
       let { activeSessionId, cwd } = initialState;
-      const thread = get().thread;
-      const userBlock: ThreadBlock = {
+      const contentDigest = promptContentDigest(message);
+      // A retry identity is meaningful only while the original session is
+      // active; a new-session send always receives a fresh scoped ID.
+      let clientMessageId = activeSessionId ? requestedClientMessageId : undefined;
+      let recoveredStatus: PromptRequestStatus | null = null;
+      // A normal composer submission always means a new user send, even when
+      // its text matches an older pending/rejected send. Only an explicit
+      // retry action supplies the prior ID.
+      if (!clientMessageId) clientMessageId = uuidv4();
+      else if (activeSessionId) {
+        try {
+          recoveredStatus = await getClient().getPromptRequestStatus(activeSessionId, clientMessageId, cwd);
+          if (recoveredStatus.status === "persisted") {
+            updateOptimisticStatus(get, set, recoveredStatus);
+            return activeSessionId;
+          }
+        } catch (error) {
+          if ((error as Error & { status?: number }).status === 404) removeLocalPromptRequest(clientMessageId);
+          // Reusing the same ID is safe: the server ledger either recognizes
+          // it and returns its state without dispatching again, or has no
+          // record and can accept this first attempt.
+        }
+      }
+      const requestId = clientMessageId;
+      const alreadyPending = recoveredStatus !== null
+        && ["pending", "accepted", "indeterminate"].includes(recoveredStatus.status);
+
+      const threadBeforeSend = get().thread;
+      const priorOptimistic = threadBeforeSend.blocks.find((block) => block.kind === "user" && block.client_message_id === requestId);
+      const userBlock: ThreadBlock = priorOptimistic ?? {
         kind: "user",
-        id: `user-${Date.now()}`,
+        id: `user-${requestId}`,
+        client_message_id: requestId,
+        deliveryStatus: alreadyPending && recoveredStatus?.status === "indeterminate" ? "indeterminate" : "pending",
         text: message,
+        ...(!activeSessionId ? { optimisticFirstInSession: true } : {}),
         timestamp: new Date().toISOString(),
       };
-      const blocks = [...thread.blocks, userBlock];
-      set({ thread: { blocks, index: { ...thread.index, [userBlock.id]: blocks.length - 1 }, loaded: true }, working: true, turnLifecycle: "active" });
+      if (!priorOptimistic) {
+        const blocks = [...threadBeforeSend.blocks, userBlock];
+        set({ thread: { blocks, index: { ...threadBeforeSend.index, [userBlock.id]: blocks.length - 1 }, loaded: true } });
+      }
+      saveLocalPromptRequest({
+        cwd,
+        sessionId: activeSessionId ?? "",
+        clientMessageId: requestId,
+        contentDigest,
+        status: recoveredStatus?.status ?? "pending",
+      });
+
+      if (alreadyPending && activeSessionId) {
+        updateOptimisticStatus(get, set, recoveredStatus!);
+        return activeSessionId;
+      }
+
+      const thread = get().thread;
+      const blocks = [...thread.blocks];
+      const blockPosition = blocks.findIndex((block) => block.id === userBlock.id);
+      if (priorOptimistic && priorOptimistic.kind === "user") {
+        blocks[blockPosition] = { ...priorOptimistic, deliveryStatus: "pending" };
+      }
+      const index: Record<string, number> = {};
+      blocks.forEach((block, position) => { index[block.id] = position; });
+      set({ thread: { blocks, index, loaded: true }, working: true, turnLifecycle: "active", promptDeliveryNotice: null });
       if (!activeSessionId) {
         try {
           activeSessionId = await get().createNewSession();
+          updateLocalPromptRequest(requestId, { sessionId: activeSessionId });
         } catch (error) {
           const current = get();
           if (current.cwd === cwd) set({ working: false, turnLifecycle: "failed" });
@@ -419,7 +573,11 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       // previous turn (nor a slow monitor to the wrong prompt).
       const promptTimestamp = Date.now();
       try {
-        await client.sendPrompt(activeSessionId, message, cwd);
+        const delivery = await client.sendPrompt(activeSessionId, message, requestId, cwd);
+        updateOptimisticStatus(get, set, delivery);
+        if (delivery.status !== "persisted" && delivery.status !== "rejected" && delivery.status !== "indeterminate") {
+          void monitorPromptRequest(client, cwd, activeSessionId, requestId);
+        }
         // Monitor every prompt, including those sent through an EventSource
         // that currently reports OPEN. Old-session sockets can be half-open:
         // the backend accepts and persists the turn while no live event reaches
@@ -437,6 +595,14 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         );
         return activeSessionId;
       } catch (error) {
+        const metadata = error as Error & { code?: string; status?: number; deliveryState?: PromptRequestStatus["status"] };
+        const failedDelivery: PromptRequestStatus = {
+          status: metadata.deliveryState
+            ?? (metadata.code === "timeout" || metadata.status === undefined || metadata.status >= 500 ? "indeterminate" : "rejected"),
+          client_message_id: requestId,
+          ...(metadata.code ? { error_code: metadata.code } : {}),
+        };
+        updateOptimisticStatus(get, set, failedDelivery);
         const current = get();
         if (current.activeSessionId === activeSessionId && current.cwd === cwd) {
           // A stale URL/session can fail before the SSE terminal event arrives.
@@ -469,7 +635,6 @@ export function createRuntimeActions(set: SetState, get: GetState) {
             // Fall through to the original request error.
           }
           appendRuntimeError(error, activeSessionId, cwd);
-          const metadata = error as Error & { code?: string; status?: number };
           const ambiguousTransportFailure = metadata.code === "timeout"
             || (!metadata.code && (metadata.status === undefined || metadata.status >= 500));
           set({
@@ -745,17 +910,21 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         resetTurnBuffer();
         turnState.errored = false;
         registerEventListener(client);
-        const currentThread = get().thread;
+        const live = get();
         set({
           client,
           activeSessionId: result.id,
-          thread: currentThread.blocks.length > 0 ? currentThread : emptyThread(),
+          thread: live.thread.blocks.length > 0 ? live.thread : emptyThread(),
           historyCursor: null,
           historyHasMore: false,
           historyLoading: false,
           historySnapshotVersion: "",
-          working: false,
-          turnLifecycle: "settled",
+          // sendPrompt creates this session lazily while its prompt is already
+          // in flight, so keep the live turn state. Resetting to settled here
+          // renders the running turn as "Completed" for the whole
+          // session-creation round trip, until sendPrompt re-arms it.
+          working: live.working,
+          turnLifecycle: live.turnLifecycle,
           status: "connecting",
           pendingInteraction: null,
           pendingQuestionnaire: null,

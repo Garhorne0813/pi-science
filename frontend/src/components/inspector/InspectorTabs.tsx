@@ -20,7 +20,7 @@ function clampZoom(value: number): number {
 
 function tabTitle(data: Inspector, sessionKernelTitle: string): string {
   switch (data.variant) {
-    case "file": return data.filename;
+    case "file": return data.sha256 ? `${data.filename} (${data.version ? `v${data.version}` : data.sha256.slice(0, 8)})` : data.filename;
     case "notebook-file": return data.path.split(/[\\/]/).pop() || data.path;
     case "pdf": return data.filename || data.path?.split(/[\\/]/).pop() || "PDF";
     case "artifact": return data.filename || data.title;

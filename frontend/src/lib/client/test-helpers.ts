@@ -57,6 +57,13 @@ export function installClientTestEnvironment(): void {
       get length() { return store.size; },
       key: (index: number) => [...store.keys()][index] ?? null,
     });
+    const sessionStore = new Map<string, string>();
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => sessionStore.get(key) ?? null,
+      setItem: (key: string, value: string) => { sessionStore.set(key, value); },
+      removeItem: (key: string) => { sessionStore.delete(key); },
+      clear: () => sessionStore.clear(),
+    });
   });
 
   afterEach(() => {

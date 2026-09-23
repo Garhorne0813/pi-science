@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { extname, relative, resolve } from "node:path";
 import { appendJsonLine, readJsonLines, workspaceFile } from "../../storage/persistence.js";
+import { persistArtifactBytes } from "../artifacts/artifact-content-store.js";
 import type { PiEvent } from "../pi/pi-process.js";
 import { executionIdFor, executionRepository } from "../executions/execution-repository.js";
 
@@ -119,6 +120,7 @@ async function observeWrittenArtifact(cwd: string, model: string | null, event: 
       observed = { path, sha256, artifactId, version: previousVersion };
       return;
     }
+    await persistArtifactBytes(cwd, sha256, bytes);
     const contentType = mime(path);
     const verification = { status: "passed", checks: { exists: true, readable: true, size: metadata.size, sha256 }, checked_at: new Date().toISOString() };
     const manifest = {

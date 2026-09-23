@@ -8,12 +8,13 @@ import { ACTIVITY_SWITCH_DEBOUNCE_MS, MIN_ACTIVITY_VISIBLE_MS, selectDisplayedAc
 import type { PresentedActivity } from "../../lib/conversation/activity-narrative";
 import { groupActivityBlocks, type ActivityGroup } from "../../lib/conversation/activity-groups";
 import { isLiveLifecycle, type TurnLifecycle } from "../../lib/conversation/turn-presentation";
-import { presentToolActivity } from "../../lib/conversation/activity-presenters";
+import { projectToolActivity } from "../../lib/conversation/projection";
 import { ProgressVisual, useProgressAppearance } from "../progress/ProgressVisual";
 import type { ProgressActivityState } from "../progress/progress-activity-map";
 import { cn } from "../../lib/ui";
 import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
 import { parseSuggestions } from "../../lib/conversation";
+import { activityRendererRegistry } from "./activity-renderers/registry";
 import styles from "./AgentActivity.module.css";
 
 export type ActivityBlock = AgentMessageBlock | ThinkingBlock | ToolCallBlock;
@@ -40,7 +41,7 @@ export function ThinkingActivity({ className }: { className?: string }) {
  *  intermediate narration, reasoning, and tools — behind one summary. The
  *  final answer is owned by ConversationTurn and rendered outside this
  *  component. A settled turn without a final answer says so explicitly. */
-export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both", hasFinalAnswer }: { blocks: ActivityBlock[]; lifecycle?: TurnLifecycle; cwd?: string; part?: "both" | "content" | "status"; hasFinalAnswer?: boolean }) {
+export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both", hasFinalAnswer, turnStartedAt, turnEndedAt }: { blocks: ActivityBlock[]; lifecycle?: TurnLifecycle; cwd?: string; part?: "both" | "content" | "status"; hasFinalAnswer?: boolean; turnStartedAt?: string; turnEndedAt?: string }) {
   const { t } = useTranslation();
   const progressAppearance = useProgressAppearance();
   const tools = useMemo(() => blocks.filter((block): block is ToolCallBlock => block.kind === "tool"), [blocks]);
@@ -129,7 +130,7 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
     : lifecycle === "aborted"
       ? t("conversation.activity.stopped")
       : t("conversation.activity.completed");
-  const processDuration = formatProcessDuration(traceTools);
+  const processDuration = formatProcessDuration(traceBlocks, turnStartedAt, turnEndedAt);
   // failureSummary carries its own separator; the failed headline already
   // says the run went wrong.
   const failureSuffix = lifecycle !== "failed" && failureCount > 0 ? t("conversation.activity.failureSummary", { count: failureCount }) : "";
@@ -285,9 +286,10 @@ function stepDuration(block: { startedAt?: string; endedAt?: string }): string |
   return formatSeconds(Math.max(0, (end - start) / 1000));
 }
 
-function formatProcessDuration(blocks: ToolCallBlock[]): string | null {
-  const starts = blocks.map((block) => block.startedAt ? Date.parse(block.startedAt) : Number.NaN).filter(Number.isFinite);
-  const ends = blocks.map((block) => block.endedAt ? Date.parse(block.endedAt) : Number.NaN).filter(Number.isFinite);
+function formatProcessDuration(blocks: ActivityBlock[], turnStartedAt?: string, turnEndedAt?: string): string | null {
+  const validTime = (value?: string) => value ? Date.parse(value) : Number.NaN;
+  const starts = [validTime(turnStartedAt), ...blocks.map((block) => validTime(block.kind === "tool" ? block.startedAt : block.kind === "thinking" ? block.startedAt ?? block.timestamp : block.timestamp))].filter(Number.isFinite);
+  const ends = [validTime(turnEndedAt), ...blocks.map((block) => validTime(block.kind === "tool" || block.kind === "thinking" ? block.endedAt : undefined))].filter(Number.isFinite);
   if (starts.length === 0 || ends.length === 0) return null;
   return formatSeconds(Math.max(0, (Math.max(...ends) - Math.min(...starts)) / 1000));
 }
@@ -311,29 +313,31 @@ function ActivityIcon({ state, slot, config, label, activityState, compact = fal
 function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const activity = projectToolActivity(block);
+  const renderer = activityRendererRegistry.resolve(activity.presentation?.renderer ?? activity.kind);
+  const rendererProps = { activity, source: block, live, t };
+  const compact = renderer.compact(rendererProps);
   const hasStructuredDetails = block.details !== undefined && block.details !== null;
   const hasDetails = Boolean(block.input || block.output || block.partialOutput || block.diff || hasStructuredDetails);
-  const output = block.output ?? block.partialOutput;
+  const details = expanded ? renderer.expanded(rendererProps) : null;
   const running = live && block.status === "running";
   const duration = running ? null : stepDuration(block);
   // While the operation streams, its freshest output line fills the right
   // edge of the row and the chevron sits at the far right; once the step
   // completes the tail makes way for the duration chip.
-  const liveTail = running && block.partialOutput ? lastStreamLine(block.partialOutput) : null;
+  const liveTail = running && block.partialOutput ? lastStreamLine(block.partialOutput) : compact.detail ?? null;
   return <div className={cn(styles.entry, styles.tool)} data-running={running}>
     <button type="button" disabled={!hasDetails} aria-expanded={hasDetails ? expanded : undefined} onClick={() => hasDetails && setExpanded((value) => !value)} className={cn(styles.toolButton, "flex min-h-primary max-w-full items-center gap-2 rounded-input py-1.5 text-left text-ui-label text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default sm:min-h-control")}>
       {running ? <span aria-hidden className="mx-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : block.status === "error" ? <CircleX size={14} aria-hidden className="shrink-0 text-error-text" /> : <Check size={14} aria-hidden className="shrink-0 text-muted" />}
-      <span className="min-w-0 truncate">{presentToolActivity(block, t)}</span>
+      <span className="min-w-0 truncate">{compact.title}</span>
       {liveTail && <span aria-hidden className="hidden min-w-0 flex-1 truncate text-right font-mono text-[10px] text-muted sm:block">{liveTail}</span>}
       {duration && <span aria-hidden="true" className="shrink-0 font-mono text-[10px] tabular-nums text-muted">{duration}</span>}
       {hasDetails && <ChevronRight size={12} aria-hidden className={cn(styles.chevron, "shrink-0 transition-transform", expanded && "rotate-90")} />}
     </button>
-    {expanded && hasDetails && <div className={cn(styles.details, "space-y-2 pb-2 pl-6 text-xs")}>
-      <Detail label={t("conversation.activity.toolLabel")} value={block.tool} />
-      {block.input && <Detail label={t("conversation.activity.input")} value={JSON.stringify(block.input, null, 2)} pre />}
-      {output && <OutputDetail label={t("conversation.activity.output")} value={output} fullValue={block.output} partial={Boolean(block.partialOutput && !block.output)} t={t} />}
-      {hasStructuredDetails && <OutputDetail label={t("conversation.activity.details")} value={stringifyDetails(block.details)} fullValue={stringifyDetails(block.details)} t={t} />}
-      {block.diff && <OutputDetail label={t("conversation.activity.diff")} value={block.diff} fullValue={block.diff} t={t} />}
+    {expanded && hasDetails && details && <div className={cn(styles.details, "space-y-2 pb-2 pl-6 text-xs")}>
+      {details.map((detail, index) => detail.pre || detail.plain
+        ? <Detail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} pre={detail.pre} />
+        : <OutputDetail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} fullValue={detail.fullValue} partial={detail.partial} t={t} />)}
     </div>}
   </div>;
 }
@@ -378,10 +382,5 @@ function OutputDetail({
     </div>}
     {partial && !truncated && <div className="mt-1 text-[10px] text-muted">{t("conversation.activity.fullOutputUnavailable")}</div>}
   </div>;
-}
-function stringifyDetails(value: unknown): string {
-  if (typeof value === "string") return value;
-  try { return JSON.stringify(value, null, 2); }
-  catch { return String(value); }
 }
 function Detail({ label, value, pre = false }: { label: string; value: string; pre?: boolean }) { return <div><div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted">{label}</div>{pre ? <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-input bg-surface px-2 py-1.5 font-mono text-xs leading-5 text-text">{value}</pre> : <div className="font-mono text-xs text-text">{value}</div>}</div>; }

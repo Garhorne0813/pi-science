@@ -1,20 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import { Atom } from "lucide-react";
-import { readArtifact, type ArtifactFile } from "@/lib/files/files";
+import { readArtifact, type ArtifactContentKey, type ArtifactFile } from "@/lib/files/files";
 import { moleculeThumbnailCacheKey, renderMoleculeThumbnail } from "@/lib/viewers/molecule-thumbnail";
 
 const MOLECULE_SNIPPET_BYTES = 256 * 1024;
 const MOLECULE_THUMBNAIL_MAX_BYTES = 16 * 1024 * 1024;
 
-async function readCompleteMolecule(path: string, cwd: string): Promise<ArtifactFile | null> {
-  const snippet = await readArtifact(path, "workspace", cwd, MOLECULE_SNIPPET_BYTES);
+async function readCompleteMolecule(
+  path: string,
+  cwd: string,
+  contentKey?: ArtifactContentKey,
+): Promise<ArtifactFile | null> {
+  const read = (maxBytes: number) => contentKey === undefined
+    ? readArtifact(path, "workspace", cwd, maxBytes)
+    : readArtifact(path, "workspace", cwd, maxBytes, contentKey);
+  const snippet = await read(MOLECULE_SNIPPET_BYTES);
   if (!snippet?.truncated) return snippet;
 
   // Structure formats are commonly ordered by chain. Rendering a prefix can
   // therefore turn a dimer into an apparently valid monomer. Fetch the whole
   // local file when it is reasonably sized; otherwise show the fallback card
   // instead of a scientifically misleading partial thumbnail.
-  const complete = await readArtifact(path, "workspace", cwd, MOLECULE_THUMBNAIL_MAX_BYTES);
+  const complete = await read(MOLECULE_THUMBNAIL_MAX_BYTES);
   return complete?.truncated ? null : complete;
 }
 
@@ -26,11 +33,13 @@ export function MoleculeThumb({
   path,
   cwd,
   filename,
+  contentKey,
   onError,
 }: {
   path: string;
   cwd: string;
   filename: string;
+  contentKey?: ArtifactContentKey;
   onError?: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -62,7 +71,7 @@ export function MoleculeThumb({
   useEffect(() => {
     if (!inView || text !== null || failed) return;
     let cancelled = false;
-    void readCompleteMolecule(path, cwd)
+    void readCompleteMolecule(path, cwd, contentKey)
       .then((file) => {
         if (cancelled) return;
         if (!file || file.encoding !== "utf8" || !file.data) {
@@ -81,7 +90,7 @@ export function MoleculeThumb({
     return () => {
       cancelled = true;
     };
-  }, [inView, path, cwd, text, failed, onError]);
+  }, [inView, path, cwd, contentKey, text, failed, onError]);
 
   useEffect(() => {
     if (!text || image !== null || failed) return;
@@ -101,6 +110,12 @@ export function MoleculeThumb({
       cancelled = true;
     };
   }, [text, image, failed, filename, path, cwd, onError]);
+
+  useEffect(() => {
+    setText(null);
+    setImage(null);
+    setFailed(false);
+  }, [path, cwd, contentKey]);
 
   return (
     <div ref={containerRef} className="relative h-full w-full overflow-hidden" aria-hidden>

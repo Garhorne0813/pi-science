@@ -3,7 +3,7 @@
 
 import { clearCachedMessages, clearAiTitle, clearSessionName, getClient, type PiScienceClient, type SessionState } from "../client/pi-science-client";
 import { isMissingSessionError } from "./errors";
-import { attachTurnArtifacts, emptyThread, resetTurnBuffer } from "./event-fold";
+import { attachTurnArtifacts, emptyThread, resetTurnBuffer, type Thread } from "./event-fold";
 import { markWorkspaceFilesChanged } from "./file-revision";
 import { generations, turnState } from "./generations";
 import { mergeRecoveryHistoryWindow } from "./history-window-recovery";
@@ -141,6 +141,11 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
       || latest.cwd !== cwd
       || latest.working
     ) return;
+    // The settle event can precede the messages endpoint's view of the user
+    // write. Keep that prompt at its turn boundary while accepting any new
+    // assistant/tool records from the snapshot; a later refresh replaces it
+    // once the durable user row with the same request identity arrives.
+    const restoredThread = retainUnmatchedPrompt(merged.thread, latest.thread);
     if (metadataGeneration !== generations.presentationMetadata) {
       try {
         const persistedTurns = await refetchPersistedTurnArtifacts(sessionId, cwd);
@@ -167,7 +172,7 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
     }
     const historyHasMore = merged.retainedOlderPrefix ? latest.historyHasMore : merged.boundaryPage.has_more;
     useRuntimeStore.setState({
-      thread: attachTurnArtifacts(merged.thread, turns, { windowComplete: !historyHasMore }),
+      thread: attachTurnArtifacts(restoredThread, turns, { windowComplete: !historyHasMore }),
       historyCursor: merged.retainedOlderPrefix ? latest.historyCursor : merged.boundaryPage.next_cursor,
       historyHasMore,
       historyLoading: false,
@@ -178,23 +183,50 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
   }
 }
 
+function retainUnmatchedPrompt(history: Thread, live: Thread): Thread {
+  const promptIndex = live.blocks.findLastIndex((block) => block.kind === "user" && block.client_message_id);
+  if (promptIndex < 0) return history;
+  const prompt = live.blocks[promptIndex];
+  if (prompt.kind !== "user" || history.blocks.some((block) => block.kind === "user"
+    && (block.client_message_id === prompt.client_message_id || block.id === prompt.id))) return history;
+  const preceding = live.blocks.slice(0, promptIndex).findLast((block) => history.index[block.id] !== undefined);
+  const insertAt = preceding ? history.index[preceding.id] + 1 : 0;
+  const blocks = [...history.blocks];
+  blocks.splice(insertAt, 0, prompt);
+  const index: Record<string, number> = {};
+  blocks.forEach((block, position) => { index[block.id] = position; });
+  return { ...history, blocks, index };
+}
+
 function liveArtifactTurns(thread: ReturnType<typeof useRuntimeStore.getState>["thread"], sessionId: string) {
   return thread.blocks.flatMap((block) => block.kind === "artifact-summary" ? [{
     turn_id: block.turnId,
     session_id: sessionId,
     assistant_message_id: block.assistantMessageId ?? null,
     turn_ordinal: block.turnOrdinal ?? null,
-    ended_at: "",
+    ended_at: block.endedAt ?? "",
     artifacts: block.artifacts,
   }] : []);
 }
 
-function mergeArtifactTurns(
+export function mergeArtifactTurns(
   persisted: Awaited<ReturnType<typeof fetchPersistedTurnArtifacts>>,
   live: Awaited<ReturnType<typeof fetchPersistedTurnArtifacts>>,
 ) {
   const byTurn = new Map(persisted.map((turn) => [turn.turn_id, turn]));
-  for (const turn of live) byTurn.set(turn.turn_id, turn);
+  for (const turn of live) {
+    const previous = byTurn.get(turn.turn_id);
+    // The live turn is newer for its artifact list and ordinal, but a copy
+    // rebuilt from a legacy block may carry no turn end time. Letting it
+    // replace the persisted copy outright strands the strip: the record has no
+    // assistant message id and an opaque turn id, so the end time is the only
+    // anchor left, and an unresolvable anchor is dropped from a partial history
+    // window instead of being placed by position.
+    byTurn.set(
+      turn.turn_id,
+      previous && !turn.ended_at ? { ...turn, ended_at: previous.ended_at } : turn,
+    );
+  }
   return [...byTurn.values()];
 }
 
@@ -251,7 +283,7 @@ export async function reconcileWorkingState(
   } else if (!hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
     // Only an authoritative idle snapshot from this activity generation may
     // settle a failed probe. An unknown state must remain conservatively busy.
-    useRuntimeStore.setState({ working: false, turnLifecycle: "settled" });
+        useRuntimeStore.setState({ working: false, turnLifecycle: "settled" });
     markWorkspaceFilesChanged();
   }
 }
@@ -454,6 +486,13 @@ async function runGapRecoveryRound(
   // arrives while this request is in flight invalidates the run below, so an
   // old snapshot cannot overwrite the newer live projection.
   if (historyResult.status === "fulfilled") {
+    // An empty snapshot can still race the session's first flush, so it must
+    // not replace a thread that already holds live content — same guard as
+    // resyncCompletedHistory. The round is a no-op rather than a failure: the
+    // gap-recovery retry budget is far shorter than the window in which the
+    // messages become visible, and the settle-time resync rebases the thread
+    // once they do.
+    if (historyResult.value.messages.length === 0 && current.thread.blocks.length > 0) return "completed";
     const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
     const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, current.thread, historyResult.value, { keepLiveExtras: false, resetProjection: true });
     const mergeInvalidation = gapRecoveryInvalidation(

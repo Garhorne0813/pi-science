@@ -125,7 +125,7 @@ export function FilePreviewInspector({
     (async () => {
       try {
         if (needsUrl) {
-          const u = previewUrl(data.path, data.root, cwd);
+          const u = previewUrl(data.path, data.root, cwd, data.sha256);
           if (cancelled) return;
           setUrl(u);
           // Browser dev has no local server; html can still preview inline content.
@@ -139,6 +139,7 @@ export function FilePreviewInspector({
             data.root,
             cwd,
             kind === "markdown" ? MARKDOWN_PREVIEW_BYTES : undefined,
+            data.sha256,
           );
           if (cancelled) return;
           if (f && f.encoding === "utf8") {
@@ -149,7 +150,7 @@ export function FilePreviewInspector({
           else setError(t("filePreview.fileUnavailable"));
         }
         if (needsBytes) {
-          const f = await readArtifact(data.path, data.root, cwd);
+          const f = await readArtifact(data.path, data.root, cwd, undefined, data.sha256);
           if (cancelled) return;
           if (f && f.encoding === "base64") setBytes(base64ToBytes(f.data));
           else setError(t("filePreview.fileUnavailable"));
@@ -167,7 +168,7 @@ export function FilePreviewInspector({
     // locale switch mid-load shouldn't re-trigger a network/disk read to refresh
     // an error string.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd, data.path, data.content, data.root, kind, needsUrl, needsText, needsBytes]);
+  }, [cwd, data.path, data.content, data.root, data.sha256, kind, needsUrl, needsText, needsBytes]);
 
   const loadFullText = async () => {
     if (!textTruncated || fullTextLoading) return;
@@ -176,7 +177,7 @@ export function FilePreviewInspector({
     setFullTextLoading(true);
     setFullTextError(null);
     try {
-      const f = await readArtifact(targetPath, data.root, cwd);
+      const f = await readArtifact(targetPath, data.root, cwd, undefined, data.sha256);
       if (fullTextLoadPathRef.current !== targetPath) return;
       if (f && f.encoding === "utf8") {
         setText(f.data);
@@ -206,7 +207,8 @@ export function FilePreviewInspector({
     && !loading
     && !error
     && !textTruncated
-    && text !== null;
+    && text !== null
+    && !data.sha256;
   const canSave = editing && draft !== null && !saving;
 
   // The inspector instance is reused across files (the same component stays
@@ -265,7 +267,7 @@ export function FilePreviewInspector({
   const scrollRef = useRef<HTMLDivElement>(null);
   const onScroll = useScrollMemory(
     scrollRef,
-    showHistory ? `history:${data.path}` : `file:${data.path}`,
+    showHistory ? `history:${data.path}` : `file:${data.path}:${data.sha256 ?? "current"}`,
     showHistory || !loading,
   );
 
@@ -273,6 +275,7 @@ export function FilePreviewInspector({
     <div className="flex h-full flex-col">
       <header className={cn("flex shrink-0 items-center gap-2 border-b border-border px-4", compactHeader ? "h-9" : "h-12")}>
         {showTitle && <span className="truncate text-sm font-medium text-text">{data.filename}</span>}
+        {data.sha256 && <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">{t("filePreview.publishedVersion", { version: data.version ? `v${data.version}` : data.sha256.slice(0, 8) })}</span>}
         <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">
           {data.artifact || t("filePreview.file")}
         </span>
@@ -330,7 +333,7 @@ export function FilePreviewInspector({
           aria-pressed={showHistory}
           onClick={() => setShowHistory((v) => !v)}
         />
-        {showOpenExternally && kind !== "html" && (
+        {showOpenExternally && kind !== "html" && !data.sha256 && (
           <IconButton
             icon={ExternalLink}
             label={t("common.open")}
@@ -376,10 +379,10 @@ export function FilePreviewInspector({
           <PreviewError
             error={error}
             filename={data.filename}
-            path={data.path}
+            path={data.sha256 ? undefined : data.path}
             root={data.root}
             cwd={cwd}
-            onOpenExternally={kind === "html" ? undefined : () => void openArtifactExternally(data.path, data.root, cwd)}
+            onOpenExternally={kind === "html" || data.sha256 ? undefined : () => void openArtifactExternally(data.path, data.root, cwd)}
           />
         )}
         {!showHistory && !editing && !loading && !error && (

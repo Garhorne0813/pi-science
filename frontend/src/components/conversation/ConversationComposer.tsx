@@ -6,6 +6,8 @@ import type { SessionStats } from "../../lib/client/pi-science-client";
 import type { useComposer } from "../../hooks/useComposer";
 import type { useModelConfig } from "../../hooks/useModelConfig";
 import type { useResearchLoop } from "../../hooks/useResearchLoop";
+import { useRuntimeStore } from "../../lib/agent-runtime";
+import { findLocalPromptRequest, promptContentDigest } from "../../lib/client/prompt-request-cache";
 import { ConversationStatsLine } from "./ConversationStatsLine";
 import { MentionComposer } from "./MentionComposer";
 import { ModelControlMenu } from "./ModelControlMenu";
@@ -29,6 +31,7 @@ export interface ConversationComposerProps {
   compactionEnabled: boolean;
   compactionThresholdPercent: number | null;
   working: boolean;
+  promptDeliveryNotice: "pending" | "indeterminate" | null;
   interactionPending: boolean;
   reviewingProject: boolean;
   reviewNotice: string | null;
@@ -48,10 +51,14 @@ export interface ConversationComposerProps {
 
 /** The composer seat is kept separate from the route so streamed transcript
  * updates do not make the page's orchestration code own every control detail. */
-export function ConversationComposer({ workspaceCwd, status, activeSessionId, sessionStats, contextTokens, contextWindow, contextPercent, compactionEnabled, compactionThresholdPercent, working, interactionPending, reviewingProject, reviewNotice, autoReviewOn, modelControlsDisabled, showWelcome, showScrollDown, composer, model, research, modePicker, onScrollToBottom, onReview, onAbort, onRemoveWorkspaceReference }: ConversationComposerProps) {
+export function ConversationComposer({ workspaceCwd, status, activeSessionId, sessionStats, contextTokens, contextWindow, contextPercent, compactionEnabled, compactionThresholdPercent, working, promptDeliveryNotice, interactionPending, reviewingProject, reviewNotice, autoReviewOn, modelControlsDisabled, showWelcome, showScrollDown, composer, model, research, modePicker, onScrollToBottom, onReview, onAbort, onRemoveWorkspaceReference }: ConversationComposerProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { input, setInput, files, setFiles, workspaceReferences } = composer;
+  const sendPrompt = useRuntimeStore((state) => state.sendPrompt);
+  const retryRequest = activeSessionId && input.trim()
+    ? findLocalPromptRequest(workspaceCwd, activeSessionId, promptContentDigest(input.trim()))
+    : null;
   return (
     <div className={cn("px-8 shrink-0", showWelcome ? "py-0" : "pb-1 pt-1")}>
       {!showWelcome && (
@@ -73,6 +80,8 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
         <ComposerTodo />
       </Suspense>
       <div className="relative mx-auto max-w-[var(--conversation-composer-width)]">
+        {promptDeliveryNotice === "indeterminate" && <div role="status" className="mb-2 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-muted">{t("conversation.promptDelivery.indeterminate")}</div>}
+        {retryRequest && <button type="button" onClick={() => { void sendPrompt(input.trim(), retryRequest.clientMessageId).catch(() => undefined); }} className="mb-2 text-xs text-accent hover:underline">{t("conversation.promptDelivery.retrySameRequest")}</button>}
         {/* Fixed 36px fade band above the composer card (reference:
             ConversationRoot composer seat gradient). The card sits at the
             bottom of the column, so the band softens the transcript edge

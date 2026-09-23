@@ -310,6 +310,7 @@ describe("Node session lifecycle", () => {
       explicitExtension,
       join(import.meta.dirname, "../pi/extensions/pi-science-notebook.ts"),
       join(import.meta.dirname, "../pi/extensions/pi-science-mcp.ts"),
+      join(import.meta.dirname, "../pi/extensions/prompt-identity.ts"),
     ]);
     await service.shutdownAll();
   });
@@ -880,6 +881,10 @@ describe("Node session lifecycle", () => {
     });
     const turnEvent = publish.mock.calls.find(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts")?.[2] as Record<string, unknown>;
     expect(turnEvent).toMatchObject({ type: "turn.artifacts", assistantMessageId: "msg-turn-1", turnOrdinal: 1 });
+    const started = publish.mock.calls.find(([, , payload]) => payload.type === "agent_start")?.[2];
+    expect(turnEvent.turnId).toBe(started?.turnId);
+    const persisted = JSON.parse((await readFile(join(cwd, ".pi-science", "turn-artifacts.jsonl"), "utf8")).trim());
+    expect(persisted.turn_id).toBe(started?.turnId);
     expect(turnEvent.artifacts).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "work/plot.png", kind: "image" }),
     ]));
@@ -1041,7 +1046,7 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
-  it("continues turn ordinals across runtime rebuilds from persisted records", async () => {
+  it("keeps the hub identity across runtime rebuilds", async () => {
     process.env.FAKE_PI_MODE = "turn-artifacts-partid";
     const cwd = await workspaceWithSessions("session-turn-ordinal-rebuild");
     process.env.FAKE_PI_WRITE_FILE = join(cwd, "work", "plot.png");

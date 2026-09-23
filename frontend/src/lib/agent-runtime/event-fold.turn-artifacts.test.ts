@@ -1,3 +1,4 @@
+import { buildTurnPresentations } from "../conversation/turn-presentation";
 import { beforeEach, describe, expect, it } from "vitest";
 import { attachTurnArtifacts as attachTurnArtifactsPure, foldEvent, resetTurnBuffer } from "./event-fold";
 import type { ArtifactAttachOptions, Thread } from "./event-fold";
@@ -30,6 +31,119 @@ describe("foldEvent turn.artifacts", () => {
     const summary = state.blocks[2];
     expect(summary).toMatchObject({ kind: "artifact-summary", turnId: "turn-1", assistantMessageId: "agent-1" });
     expect(state.index["turn-artifacts-turn-1"]).toBe(2);
+  });
+
+  function threeTurnThread(): Thread {
+    return threadWith([
+      { kind: "user", id: "user-1", text: "first", timestamp: "2026-01-01T00:00:00Z" },
+      { kind: "agent", id: "agent-1", parts: [{ id: "agent-1", text: "one" }] },
+      { kind: "user", id: "user-2", text: "second", timestamp: "2026-01-01T00:01:00Z" },
+      { kind: "agent", id: "agent-2", parts: [{ id: "agent-2", text: "two" }] },
+      { kind: "user", id: "user-3", text: "third", timestamp: "2026-01-01T00:02:00Z" },
+      { kind: "agent", id: "agent-3", parts: [{ id: "agent-3", text: "three" }] },
+    ]);
+  }
+
+  it("anchors a live strip by the published turn end time", () => {
+    // `turnOrdinal` counts persisted artifact records, so the first record of a
+    // session carries ordinal 1 even when the file belongs to a later turn. The
+    // published end time is what identifies the owning turn.
+    const state = foldEvent(threeTurnThread(), {
+      type: "turn.artifacts",
+      sessionId: "s",
+      turnId: "2f1c7d8e-0000-4000-8000-000000000000",
+      turnOrdinal: 1,
+      endedAt: "2026-01-01T00:02:30Z",
+      artifacts: [{ path: "third.csv", kind: "data", mime: "text/csv", size: 10 }],
+    });
+    expect(state.blocks.map((block) => block.kind)).toEqual([
+      "user", "agent", "user", "agent", "user", "agent", "artifact-summary",
+    ]);
+    expect(state.blocks.at(-1)).toMatchObject({
+      kind: "artifact-summary",
+      turnId: "2f1c7d8e-0000-4000-8000-000000000000",
+      endedAt: "2026-01-01T00:02:30Z",
+    });
+    const turns = buildTurnPresentations(state.blocks);
+    expect(turns).toHaveLength(3);
+    expect(turns[2].artifacts).toHaveLength(1);
+  });
+
+  it("restores tool-only artifacts by time without an extra presentation turn", () => {
+    const state = attachTurnArtifacts(threadWith([
+      { kind: "user", id: "u1", text: "hi", timestamp: "2026-01-01T00:00:00Z" },
+      { kind: "agent", id: "a1", parts: [{ id: "p1", text: "hello" }] },
+      { kind: "user", id: "u2", text: "write", timestamp: "2026-01-01T00:01:00Z" },
+      { kind: "tool", id: "t2", callId: "c2", tool: "write", status: "done" },
+    ]), [{ turn_id: "legacy-uuid", session_id: "s", assistant_message_id: null,
+      turn_ordinal: 1, ended_at: "2026-01-01T00:01:30Z",
+      artifacts: [{ path: "a.csv", kind: "data", mime: "text/csv", size: 1 }],
+    }], { windowComplete: false });
+    expect(state.blocks.at(-1)).toMatchObject({ kind: "artifact-summary", endedAt: "2026-01-01T00:01:30Z" });
+    const turns = buildTurnPresentations(state.blocks);
+    expect(turns).toHaveLength(2);
+    expect(turns[1].artifacts).toHaveLength(1);
+  });
+
+  it("does not interpret a restarted hub ordinal as a history position", () => {
+    const state = attachTurnArtifacts(threeTurnThread(), [{
+      turn_id: "turn-s-1-00000000-0000-4000-8000-000000000000", session_id: "s",
+      assistant_message_id: null, turn_ordinal: 1, ended_at: "2025-12-31T00:00:00Z",
+      artifacts: [{ path: "old.csv", kind: "data", mime: "text/csv", size: 1 }],
+    }]);
+    expect(state.blocks.some((block) => block.kind === "artifact-summary")).toBe(false);
+  });
+
+  it("falls back to the record ordinal when no turn end time is published", () => {
+    // Documents the behaviour the end time overrides: the ordinal is read
+    // positionally as the n-th user-delimited turn, so the first artifact record
+    // lands on the first turn regardless of which turn produced the file.
+    const state = foldEvent(threeTurnThread(), {
+      type: "turn.artifacts",
+      sessionId: "s",
+      turnId: "2f1c7d8e-0000-4000-8000-000000000000",
+      turnOrdinal: 1,
+      artifacts: [{ path: "third.csv", kind: "data", mime: "text/csv", size: 10 }],
+    });
+    expect(state.blocks.map((block) => block.kind)).toEqual([
+      "user", "agent", "artifact-summary", "user", "agent", "user", "agent",
+    ]);
+  });
+
+  it("adapts V2 artifact revisions from payload and envelope locations", () => {
+    let state = threadWith([{ kind: "user", id: "user-1", text: "hi" }]);
+    const v2Artifact = (
+      eventId: string,
+      seq: number,
+      path: string,
+      revision?: number,
+      payloadRevision?: number,
+    ): PiScienceEvent => ({
+      schemaVersion: 2,
+      eventId,
+      seq,
+      streamEpoch: "epoch-1",
+      sessionId: "s",
+      turnId: "turn-v2",
+      runId: "run-v2",
+      type: "artifact.updated",
+      ...(revision !== undefined ? { revision } : {}),
+      payload: {
+        ...(payloadRevision !== undefined ? { revision: payloadRevision } : {}),
+        artifacts: [{ path, kind: "table", mime: "text/csv", size: 1 }],
+      },
+    });
+    state = foldEvent(state, v2Artifact("event-1", 1, "new.csv", undefined, 2));
+    state = foldEvent(state, v2Artifact("event-2", 2, "stale.csv", 1));
+    expect(state.blocks.find((block) => block.kind === "artifact-summary")).toMatchObject({
+      revision: 2,
+      artifacts: [{ path: "new.csv" }],
+    });
+    state = foldEvent(state, v2Artifact("event-3", 3, "latest.csv", 3));
+    expect(state.blocks.find((block) => block.kind === "artifact-summary")).toMatchObject({
+      revision: 3,
+      artifacts: [{ path: "latest.csv" }],
+    });
   });
 
   it("appends when the assistant message is not in the thread yet", () => {
@@ -87,6 +201,46 @@ describe("foldEvent turn.artifacts", () => {
     const summaries = state.blocks.filter((block) => block.kind === "artifact-summary");
     expect(summaries).toHaveLength(1);
     expect((summaries[0] as { artifacts: unknown[] }).artifacts).toHaveLength(2);
+  });
+
+  it("rejects duplicate and stale artifact summary revisions", () => {
+    let state = threadWith([{ kind: "user", id: "user-1", text: "hi" }]);
+    const base = { type: "turn.artifacts", sessionId: "s", turnId: "turn-1" } as PiScienceEvent;
+    state = foldEvent(state, { ...base, revision: 2, artifacts: [{ path: "new.csv", kind: "table", mime: "text/csv", size: 2 }] });
+    state = foldEvent(state, { ...base, revision: 2, artifacts: [{ path: "duplicate.csv", kind: "table", mime: "text/csv", size: 2 }] });
+    state = foldEvent(state, { ...base, revision: 1, artifacts: [{ path: "stale.csv", kind: "table", mime: "text/csv", size: 1 }] });
+    expect(state.blocks.find((block) => block.kind === "artifact-summary")).toMatchObject({ revision: 2, artifacts: [{ path: "new.csv" }] });
+  });
+
+  it("does not let an unversioned update roll back a versioned summary", () => {
+    let state = threadWith([{ kind: "user", id: "user-1", text: "hi" }]);
+    const base = { type: "turn.artifacts", sessionId: "s", turnId: "turn-1" } as PiScienceEvent;
+    state = foldEvent(state, { ...base, revision: 2, artifacts: [{ path: "new.csv", kind: "table", mime: "text/csv", size: 2 }] });
+    state = foldEvent(state, { ...base, artifacts: [{ path: "legacy.csv", kind: "table", mime: "text/csv", size: 1 }] });
+    expect(state.blocks.find((block) => block.kind === "artifact-summary")).toMatchObject({ revision: 2, artifacts: [{ path: "new.csv" }] });
+  });
+
+  it("does not let a revision-less envelope overwrite a revisioned summary", () => {
+    let state = threadWith([{ kind: "user", id: "user-1", text: "hi" }]);
+    state = foldEvent(state, {
+      type: "turn.artifacts", sessionId: "s", turnId: "turn-1", revision: 3,
+      artifacts: [{ path: "v3.csv", kind: "table", mime: "text/csv", size: 3 }],
+    } as PiScienceEvent);
+    state = foldEvent(state, {
+      type: "turn.artifacts", sessionId: "s", turnId: "turn-1", seq: 9,
+      artifacts: [{ path: "late.csv", kind: "table", mime: "text/csv", size: 1 }],
+    } as PiScienceEvent);
+    expect(state.blocks.find((block) => block.kind === "artifact-summary")).toMatchObject({ revision: 3, artifacts: [{ path: "v3.csv" }] });
+  });
+
+  it("still replaces legacy unversioned summaries with later unversioned updates", () => {
+    let state = threadWith([{ kind: "user", id: "user-1", text: "hi" }]);
+    const base = { type: "turn.artifacts", sessionId: "s", turnId: "turn-1" } as PiScienceEvent;
+    state = foldEvent(state, { ...base, artifacts: [{ path: "a.png", kind: "image", mime: "image/png", size: 1 }] });
+    state = foldEvent(state, { ...base, artifacts: [{ path: "a.png", kind: "image", mime: "image/png", size: 1 }, { path: "b.csv", kind: "table", mime: "text/csv", size: 2 }] });
+    expect(state.blocks.find((block) => block.kind === "artifact-summary")).toMatchObject({
+      artifacts: [{ path: "a.png" }, { path: "b.csv" }],
+    });
   });
 
   it("ignores empty artifact lists", () => {
@@ -207,6 +361,39 @@ describe("attachTurnArtifacts (history restore)", () => {
     const once = attachTurnArtifacts(thread, turns);
     const twice = attachTurnArtifacts(once, turns);
     expect(twice.blocks.filter((block) => block.kind === "artifact-summary")).toHaveLength(1);
+  });
+
+  it("does not replace a versioned live summary with an unversioned persisted snapshot", () => {
+    const thread = threadWith([
+      { kind: "user", id: "u", text: "a" },
+      { kind: "agent", id: "a1", parts: [{ id: "a1", text: "r" }] },
+      {
+        kind: "artifact-summary",
+        id: "turn-artifacts-turn-1",
+        turnId: "turn-1",
+        revision: 3,
+        sequence: 9,
+        artifacts: [{ path: "new.csv", kind: "table", mime: "text/csv", size: 3 }],
+      },
+    ]);
+
+    const next = attachTurnArtifacts(thread, [{
+      turn_id: "turn-1",
+      session_id: "s",
+      assistant_message_id: "a1",
+      turn_ordinal: 1,
+      ended_at: "t",
+      artifacts: [{ path: "old.csv", kind: "table", mime: "text/csv", size: 1 }],
+    }]);
+
+    expect(next.blocks[2]).toMatchObject({
+      kind: "artifact-summary",
+      assistantMessageId: "a1",
+      turnOrdinal: 1,
+      revision: 3,
+      sequence: 9,
+      artifacts: [{ path: "new.csv" }],
+    });
   });
 
   it("attaches by turn order when persisted ids are absent", () => {

@@ -18,6 +18,7 @@ describe("Pi runtime installation contract", () => {
     expect(fetchScript).toContain('pi-mcp-adapter@$PI_MCP_ADAPTER_VERSION');
     const mcpPatchScript = await readFile(resolve(projectRoot, "scripts/patch-mcp-adapter.mjs"), "utf8");
     expect(mcpPatchScript).toContain("PI_SCIENCE_SESSION_CONFIG_FACTORY_V1");
+    expect(mcpPatchScript).toContain("PI_SCIENCE_PERMISSION_UI_V1");
     expect(mcpPatchScript).toContain("PI_SCIENCE_MCP_ACTION_ENUM_V1");
     expect(mcpPatchScript).toContain('Type.Literal("ui-messages")');
     expect(mcpPatchScript).toContain('error: "invalid_action"');

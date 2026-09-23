@@ -7,6 +7,7 @@ import { AgentActivity } from "./AgentActivity";
 import { executionActivities, executionOperationCount } from "../../lib/conversation/activity-policy";
 import { defaultProgressAppearance } from "@pi-science/contracts";
 import { setProgressAppearance } from "../progress/progress-settings-store";
+import { activityRendererRegistry } from "./activity-renderers/registry";
 
 const tool = (id: string, name: string, status: ToolCallBlock["status"] = "done", input?: Record<string, unknown>): ToolCallBlock => ({ kind: "tool", id, callId: `${id}-call`, tool: name, status, input, output: "output" });
 beforeAll(async () => { await i18n.changeLanguage("en"); });
@@ -23,6 +24,30 @@ describe("AgentActivity data filters", () => {
 });
 
 describe("AgentActivity live stream", () => {
+  it("uses semantic kernel and literature renderers", () => {
+    render(<AgentActivity blocks={[
+      { ...tool("python", "python", "done", { code: "print(42)" }), details: { outputs: [{ type: "text" }, { type: "image" }] } },
+      { ...tool("pubmed", "search_pubmed", "done", { query: "kinetics" }), details: { results: [{}, {}, {}], retained: [{}] } },
+    ]} />);
+    expect(screen.getByText("Python")).toBeInTheDocument();
+    expect(screen.getByText("2 outputs")).toBeInTheDocument();
+    expect(screen.getByText("PubMed")).toBeInTheDocument();
+    expect(screen.getByText("3 results · 1 retained")).toBeInTheDocument();
+  });
+
+  it("does not materialize expanded details while a trace row is collapsed", () => {
+    const renderer = activityRendererRegistry.resolve("kernel");
+    const expanded = vi.spyOn(renderer, "expanded");
+    try {
+      render(<AgentActivity blocks={[tool("python", "python")]} />);
+      expect(expanded).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Python" }));
+      expect(expanded).toHaveBeenCalledTimes(1);
+    } finally {
+      expanded.mockRestore();
+    }
+  });
+
   it("updates the running tool line immediately when consecutive tools share the same phase", () => {
     const read = tool("read", "read", "running", { path: "a.ts", description: "Find why the second reply stops following" });
     const { rerender } = render(<AgentActivity blocks={[read]} />);
@@ -269,6 +294,21 @@ describe("AgentActivity settled display", () => {
     expect(screen.getByText("Reading one.ts")).toBeInTheDocument();
     expect(screen.getByText("Running bash")).toBeInTheDocument();
     expect(screen.queryByText("The final answer.")).not.toBeInTheDocument();
+  });
+
+  it("shows elapsed time for a completed reasoning phase without tool calls", () => {
+    render(<AgentActivity lifecycle="settled" blocks={[{
+      kind: "thinking", id: "reasoning", parts: [{ id: "reasoning-part", text: "Check the result" }],
+      startedAt: "2026-09-08T00:00:00.000Z", endedAt: "2026-09-08T00:00:03.400Z",
+    }]} />);
+    expect(screen.getByRole("button", { name: /Completed · 3.4s/ })).toBeInTheDocument();
+  });
+
+  it("uses the conversation timestamps when restored activity has no tool timing", () => {
+    render(<AgentActivity lifecycle="settled" turnStartedAt="2026-09-08T00:00:00.000Z" turnEndedAt="2026-09-08T00:00:05.200Z" blocks={[{
+      kind: "agent", id: "update", presentationRole: "intermediate", parts: [{ id: "update-part", text: "Checking." }],
+    }]} />);
+    expect(screen.getByRole("button", { name: /Completed · 5.2s/ })).toBeInTheDocument();
   });
 
   it("folds commentary when a settled turn never produced a final answer", () => {

@@ -3,7 +3,7 @@
 
 import { request, responseError, RUNTIME_START_TIMEOUT_MS } from "./http";
 import { cacheMessages } from "./message-cache";
-import type { HistoryMessage, InteractionResponse, SessionInfo, SessionListPage, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
+import type { HistoryMessage, InteractionResponse, PromptRequestStatus, SessionInfo, SessionListPage, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
 import { parseWirePayload } from "./wire-schema";
 
 export async function createSession(baseUrl: string, cwd: string, model?: string): Promise<{ id: string; cwd?: string; project_id?: string }> {
@@ -186,23 +186,56 @@ export async function forkSession(baseUrl: string, sessionId: string, cwd: strin
   return { id: data.id };
 }
 
-export async function sendPrompt(baseUrl: string, sessionId: string, message: string, cwd?: string): Promise<void> {
+export async function sendPrompt(baseUrl: string, sessionId: string, message: string, clientMessageId: string, cwd?: string): Promise<PromptRequestStatus> {
   const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
   const res = await request(`${baseUrl}/api/sessions/${sessionId}/prompt${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, client_message_id: clientMessageId }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.ok === false) {
     const error = new Error(responseError(data, `Send prompt failed: ${res.statusText}`)) as Error & {
       code?: string;
       status?: number;
+      deliveryState?: PromptRequestStatus["status"];
     };
+    error.code = typeof data.code === "string" ? data.code : undefined;
+    error.status = res.status;
+    if (["pending", "accepted", "persisted", "rejected", "indeterminate"].includes(data.status)) {
+      error.deliveryState = data.status as PromptRequestStatus["status"];
+    }
+    throw error;
+  }
+  const states = new Set(["pending", "accepted", "persisted", "rejected", "indeterminate"]);
+  return {
+    status: states.has(data.status) ? data.status as PromptRequestStatus["status"] : "accepted",
+    client_message_id: typeof data.client_message_id === "string" ? data.client_message_id : clientMessageId,
+    ...(typeof data.durable_message_id === "string" ? { durable_message_id: data.durable_message_id } : {}),
+    ...(typeof data.error_code === "string" ? { error_code: data.error_code } : {}),
+  };
+}
+
+export async function getPromptRequestStatus(baseUrl: string, sessionId: string, clientMessageId: string, cwd?: string): Promise<PromptRequestStatus> {
+  const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/prompt-requests/${clientMessageId}${params}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    const error = new Error(responseError(data, `Read prompt status failed: ${res.statusText}`)) as Error & { code?: string; status?: number };
     error.code = typeof data.code === "string" ? data.code : undefined;
     error.status = res.status;
     throw error;
   }
+  const states = new Set(["pending", "accepted", "persisted", "rejected", "indeterminate"]);
+  if (!states.has(data.status) || data.client_message_id !== clientMessageId) {
+    throw new Error("Read prompt status failed: invalid response payload");
+  }
+  return {
+    status: data.status as PromptRequestStatus["status"],
+    client_message_id: clientMessageId,
+    ...(typeof data.durable_message_id === "string" ? { durable_message_id: data.durable_message_id } : {}),
+    ...(typeof data.error_code === "string" ? { error_code: data.error_code } : {}),
+  };
 }
 
 export async function setModel(

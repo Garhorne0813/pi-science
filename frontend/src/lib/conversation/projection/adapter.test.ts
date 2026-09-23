@@ -45,6 +45,17 @@ describe("conversation projection adapter", () => {
     expect(projection.turns[0].artifacts).toEqual([expect.objectContaining({ id: "summary-1:results/fit.csv", filename: "fit.csv", kind: "dataset", state: "published" })]);
   });
 
+  it("updates a versioned artifact in place and drops a stale replay", () => {
+    const projection = projectConversation(thread([
+      { kind: "user", id: "u1", turnId: "turn-1", text: "question" },
+      { kind: "artifact-summary", id: "summary-1", turnId: "turn-1", artifacts: [
+        { path: "results/fit-v2.csv", artifactId: "artifact-fit", version: 2, revision: 3, state: "published", kind: "data", mime: "text/csv", size: 20 },
+        { path: "results/fit-v1.csv", artifactId: "artifact-fit", version: 1, kind: "data", mime: "text/csv", size: 10 },
+      ] },
+    ]));
+    expect(projection.turns[0].artifacts).toEqual([expect.objectContaining({ id: "artifact-fit", version: 2, revision: 3, state: "published", path: "results/fit-v2.csv" })]);
+  });
+
   it("keeps the first position while replacing only with a newer revision", () => {
     expect(latestByRevision([
       { id: "a", revision: 2, value: "current" },

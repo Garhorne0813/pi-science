@@ -33,7 +33,7 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
   return (
     <div data-thread-block-ids={turnBlockIds(turn).join(" ")} className="flex flex-col gap-0 scroll-mt-4">
       {turn.user && <UserMessage block={turn.user} />}
-      {(turn.active || turn.activityBlocks.length > 0) && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} part={isLiveLifecycle(turn.lifecycle) ? "content" : "both"} />}
+      {(turn.active || turn.activityBlocks.length > 0) && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} turnStartedAt={turn.user?.timestamp} turnEndedAt={turn.finalAgent?.timestamp} part={isLiveLifecycle(turn.lifecycle) ? "content" : "both"} />}
       {visibleAgent && <AgentMessage key={visibleAgent.id} block={visibleAgent} actionText={turn.finalAgent ? actionTextByBlock?.get(turn.finalAgent.id) : undefined} codeRunner={codeRunner} />}
       {(turn.active || turn.activityBlocks.length > 0) && isLiveLifecycle(turn.lifecycle) && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} part="status" />}
       {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} />)}
@@ -45,6 +45,7 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
 
 function UserMessage({ block }: { block: UserMessageBlock }) {
   const { t } = useTranslation();
+  const sendPrompt = useRuntimeStore((state) => state.sendPrompt);
   const visibleText = visibleUserMessage(block.text);
   const references = referencesFromMessage(block.text);
   const copyText = visibleText || references.map((reference) => reference.path).join("\n");
@@ -60,6 +61,8 @@ function UserMessage({ block }: { block: UserMessageBlock }) {
           <span className="truncate">{reference.path}</span>
         </span>)}
       </div>}
+      {block.deliveryStatus && block.deliveryStatus !== "pending" && <div role="status" className={cn("text-[10px]", block.deliveryStatus === "rejected" ? "text-error-text" : "text-muted")}>{t(`conversation.promptDelivery.${block.deliveryStatus}`)}</div>}
+      {block.deliveryStatus === "rejected" && block.client_message_id && <button type="button" onClick={() => { void sendPrompt(block.text, block.client_message_id).catch(() => undefined); }} className="text-[10px] text-accent hover:underline">{t("conversation.promptDelivery.retrySameRequest")}</button>}
       <MessageActions text={copyText} timestamp={block.timestamp} align="right" />
     </div>
   );

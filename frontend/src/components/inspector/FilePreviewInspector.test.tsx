@@ -35,6 +35,9 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {})
       ? jsonResponse({ path: truncatedPath, encoding: "utf8", data: "# Full file\n\nComplete content", size: 29 })
       : jsonResponse({ path: truncatedPath, encoding: "utf8", data: "# Partial preview", size: 2 * 1024 * 1024, truncated: true });
   }
+  if (url.includes("/api/artifacts/content/")) {
+    return jsonResponse({ path: "x.txt", encoding: "utf8", data: "published version one", size: 21 });
+  }
   if (missingPath && url.includes(`/api/files/${missingPath}`)) return jsonResponse({ error: "File not found" }, 404);
   if (url.includes("/api/files/")) return jsonResponse({ path: "x.txt", encoding: "utf8", data: "line1\nline2\n", size: 12 });
   return jsonResponse({ error: `unhandled ${method} ${url}` }, 404);
@@ -75,6 +78,32 @@ afterEach(() => {
 });
 
 describe("FilePreviewInspector edit capability", () => {
+  it("reads a published snapshot and prevents editing or opening the live file", async () => {
+    const sha256 = "a".repeat(64);
+    render(
+      <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
+        <FilePreviewInspector data={{ variant: "file", path: "x.txt", filename: "x.txt", root: "workspace", sha256, version: 1 }} onClose={() => {}} cwd="proj" />
+      </FeedbackContext.Provider>,
+    );
+    expect(await screen.findByText((_, element) => element?.tagName === "CODE" && element.textContent === "published version one")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes(`/api/artifacts/content/${sha256}?`))).toBe(true);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/api/files/x.txt?"))).toBe(false);
+    expect(screen.getByText("Published v1")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Edit file")).toBeNull();
+    expect(screen.queryByTitle("Open externally")).toBeNull();
+  });
+
+  it("serves published image bytes by SHA", async () => {
+    const sha256 = "b".repeat(64);
+    render(
+      <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
+        <FilePreviewInspector data={{ variant: "file", path: "plot.png", filename: "plot.png", root: "workspace", sha256 }} onClose={() => {}} cwd="proj" />
+      </FeedbackContext.Provider>,
+    );
+    const image = await screen.findByAltText("plot.png");
+    expect(image.getAttribute("src")).toContain(`/api/artifacts/content/${sha256}/serve?`);
+  });
+
   it("limits select-all to the code preview contents", async () => {
     renderInspector("x.txt", "x.txt", "text");
 
