@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FolderOpen, File, ChevronRight, Trash2, ArrowUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useUiStore } from "../../lib/ui";
+import { copyTextToClipboard, useUiStore } from "../../lib/ui";
 import { fileInspectorForPath } from "../../lib/artifacts";
+import { absoluteWorkspacePath } from "../../lib/files/workspace-path";
 import { workspaceFiles, type Breadcrumb } from "../../lib/workspace";
 import { FileContextMenu, type ContextPoint, type FileListEntry } from "../../components/sidebar/FileContextMenu";
 import { useFeedback } from "../../components/feedback/feedback-context";
@@ -102,9 +103,11 @@ export function FilesPage() {
   };
 
   const copyPath = async (text: string) => {
-    await navigator.clipboard.writeText(text);
-    toast(t("files.copied"), "success");
+    // Close the menu before the clipboard round-trip so a slow write cannot
+    // unmount a menu the user reopened in the meantime.
     setContextMenu(null);
+    const copied = await copyTextToClipboard(text);
+    toast(t(copied ? "files.copied" : "files.copyFailed"), copied ? "success" : "error");
   };
 
   const referenceEntry = (entry: FileListEntry) => {
@@ -169,7 +172,7 @@ export function FilesPage() {
       </div>
 
       {/* Context menu */}
-      {contextMenu && <FileContextMenu entry={contextMenu.entry} point={contextMenu.point} onClose={() => setContextMenu(null)} onReference={() => referenceEntry(contextMenu.entry)} onCopy={(text) => void copyPath(text)} onDelete={() => void handleDelete(contextMenu.entry)} />}
+      {contextMenu && <FileContextMenu entry={contextMenu.entry} point={contextMenu.point} onClose={() => setContextMenu(null)} onReference={() => referenceEntry(contextMenu.entry)} onCopy={(text) => void copyPath(text)} onCopyAbsolutePath={() => void copyPath(absoluteWorkspacePath(workspaceCwd, contextMenu.entry.path))} onDelete={() => void handleDelete(contextMenu.entry)} />}
     </WorkspacePage>
   );
 }

@@ -52,6 +52,17 @@ export function stripCwdPrefix(candidate: string, cwd: string): string | null {
   return null;
 }
 
+/** Absolute filesystem path of a workspace-relative entry — the spelling a
+ *  terminal, a file dialog or a script outside the workspace needs. The copied
+ *  separator follows the workspace platform, so a Windows cwd yields a path
+ *  that pastes straight into Explorer or PowerShell. */
+export function absoluteWorkspacePath(cwd: string, path: string): string {
+  const base = normalizeSlashes(cwd).replace(/\/+$/, "");
+  const leaf = normalizeSlashes(path).replace(/^\/+/, "");
+  const absolute = !base ? leaf : leaf ? `${base}/${leaf}` : base;
+  return WINDOWS_DRIVE.test(base) && !base.startsWith("/") ? absolute.replace(/\//g, "\\") : absolute;
+}
+
 /** Map a path spelled in agent text or a runtime event onto a workspace-relative
  *  path, the only spelling automatic probe/serve routes accept.
  *

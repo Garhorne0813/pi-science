@@ -184,4 +184,37 @@ describe("FileBrowser", () => {
 
     await vi.waitFor(() => expect(refresh.querySelector("svg")).not.toHaveClass("animate-spin"));
   });
+
+  it("copies the workspace-relative and absolute path from the row menu", async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    render(<FileBrowser cwd="/workspaces/proj" />);
+    fireEvent.click(screen.getByText("Files"));
+    const row = (await screen.findByText("data.csv")).closest("button")!;
+
+    fireEvent.contextMenu(row, { clientX: 20, clientY: 30 });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Copy path" }));
+    // The mock lists the entry with its bare name; the real API returns the
+    // workspace-relative path.
+    expect(writeText).toHaveBeenLastCalledWith("data.csv");
+
+    fireEvent.contextMenu(row, { clientX: 20, clientY: 30 });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Copy absolute path" }));
+    expect(writeText).toHaveBeenLastCalledWith("/workspaces/proj/data.csv");
+  });
+
+  it("reports a refused clipboard instead of failing silently", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    const execCommand = vi.fn(() => false);
+    Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
+    render(<FileBrowser cwd="/workspaces/proj" />);
+    fireEvent.click(screen.getByText("Files"));
+    const row = (await screen.findByText("data.csv")).closest("button")!;
+
+    fireEvent.contextMenu(row, { clientX: 20, clientY: 30 });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Copy path" }));
+
+    const { useFeedback } = await import("../../components/feedback/feedback-context");
+    await vi.waitFor(() => expect(vi.mocked(useFeedback().toast)).toHaveBeenCalledWith("Copy failed", "error"));
+  });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stripCwdPrefix, toWorkspaceRelativePath } from "./workspace-path";
+import { absoluteWorkspacePath, stripCwdPrefix, toWorkspaceRelativePath } from "./workspace-path";
 
 describe("workspace path mapping", () => {
   const cwd = "/home/caee/pi-science-workspaces/rosavin";
@@ -38,5 +38,20 @@ describe("workspace path mapping", () => {
     expect(stripCwdPrefix(`${cwd}/figures`, cwd)).toBe("figures");
     expect(stripCwdPrefix(cwd, cwd)).toBeNull();
     expect(stripCwdPrefix("/home/other/figures", cwd)).toBeNull();
+  });
+
+  it("builds the absolute path a terminal or file dialog needs", () => {
+    expect(absoluteWorkspacePath(cwd, "figures/plot.png")).toBe(`${cwd}/figures/plot.png`);
+    expect(absoluteWorkspacePath(`${cwd}/`, "/figures/plot.png")).toBe(`${cwd}/figures/plot.png`);
+    expect(absoluteWorkspacePath(cwd, "plot.png")).toBe(`${cwd}/plot.png`);
+  });
+
+  it("keeps the platform separator for a Windows workspace", () => {
+    expect(absoluteWorkspacePath("C:\\Users\\cyq\\ws", "figures/plot.png")).toBe("C:\\Users\\cyq\\ws\\figures\\plot.png");
+    expect(absoluteWorkspacePath("C:/Users/cyq/ws", "figures/plot.png")).toBe("C:\\Users\\cyq\\ws\\figures\\plot.png");
+  });
+
+  it("falls back to the relative path when there is no workspace root", () => {
+    expect(absoluteWorkspacePath("", "work/data.csv")).toBe("work/data.csv");
   });
 });
