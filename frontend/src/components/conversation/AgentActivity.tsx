@@ -157,7 +157,7 @@ function ActivityTrace({ groups, cwd, live = false }: { groups: ActivityGroup[];
   return <>
     {groups.map((group) => {
       const entries = group.blocks.map((block) => block.kind === "agent"
-        ? <div key={block.id} id={`thread-block-${block.id}`} className={cn(styles.entry, styles.narration, "min-w-0")}><MarkdownViewer variant="chat" className="text-ui-body leading-relaxed text-muted [overflow-wrap:anywhere]" resourceContext={cwd ? { cwd } : undefined}>{parseSuggestions(block.parts.map((part) => part.text).join("")).clean}</MarkdownViewer></div>
+        ? <div key={block.id} id={`thread-block-${block.id}`} className={cn(styles.entry, styles.narration, "min-w-0")}><MarkdownViewer variant="chat" mode={block.partial ? "streaming" : "final"} className="text-ui-body leading-relaxed text-muted [overflow-wrap:anywhere]" resourceContext={cwd ? { cwd } : undefined}>{parseSuggestions(block.parts.map((part) => part.text).join("")).clean}</MarkdownViewer></div>
         : block.kind === "thinking"
           ? <ThinkingRow key={block.id} block={block} />
           : <TraceItem key={block.id} block={block} live={live} />);

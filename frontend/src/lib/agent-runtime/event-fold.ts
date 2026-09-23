@@ -754,8 +754,9 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
 
     case "error": {
       const msg = (event.message as string) || "Unknown error";
-      if (event.runFailed === true || event.runId) markTerminalRun(foldState, runIdentity(event, foldState), numberValue(event.seq));
-      // If we already have a partial agent block without text, replace it with the error
+      const failedRunId = event.runFailed === true || event.runId ? runIdentity(event, foldState) : undefined;
+      // If we already have a partial agent block without text, replace it with the error.
+      // Capture this before settling the failed run, which flips `partial` to false.
       const lastBlock = blocks[blocks.length - 1];
       if (lastBlock && lastBlock.kind === "agent" && lastBlock.partial && !lastBlock.parts?.[0]?.text) {
         blocks[blocks.length - 1] = {
@@ -778,6 +779,20 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
         };
         index[errBlock.id] = blocks.length;
         blocks.push(errBlock);
+      }
+      if (failedRunId) {
+        markTerminalRun(foldState, failedRunId, numberValue(event.seq));
+        const failedIso = new Date().toISOString();
+        for (let i = 0; i < blocks.length; i += 1) {
+          const block = blocks[i];
+          if ((block.kind === "agent" || block.kind === "thinking") && block.partial && block.runId === failedRunId) {
+            blocks[i] = block.kind === "thinking"
+              ? { ...block, partial: false, endedAt: block.endedAt ?? failedIso }
+              : { ...block, partial: false };
+          }
+        }
+        foldState.activeItemKey = undefined;
+        foldState.activeRunId = undefined;
       }
       break;
     }

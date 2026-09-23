@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { useUiStore } from "@/lib/ui";
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   useUiStore.setState({ inspectorOpen: false, inspectorData: null });
 });
 
@@ -84,6 +85,209 @@ print(1)
   });
 });
 
+describe("MarkdownViewer streaming mode", () => {
+  it("renders incomplete code and display math without throwing", () => {
+    const code = render(
+      <MarkdownViewer mode="streaming">{"```python\ndef fit("}</MarkdownViewer>,
+    );
+    expect(code.container.querySelector("pre")).toBeInTheDocument();
+    code.unmount();
+
+    const math = render(<MarkdownViewer mode="streaming">{"$$\nE_a = 54.2"}</MarkdownViewer>);
+    expect(math.container.querySelector(".katex-display .katex")).toBeInTheDocument();
+    math.unmount();
+
+    const table = render(<MarkdownViewer mode="streaming">{"| A | B |\n| --- | ---\n| 1"}</MarkdownViewer>);
+    expect(table.container.textContent).toContain("A");
+    expect(table.container.textContent).toContain("1");
+  });
+
+  it("does not offer execution for an unclosed code fence", () => {
+    render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"```python\nprint('partial')"}
+      </MarkdownViewer>,
+    );
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+  });
+
+  it("preserves code and disables execution after length-changing math normalization", () => {
+    const { container } = render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"\\[x\\]\n\n```python\nformula = \"\\(y^2\\)\""}
+      </MarkdownViewer>,
+    );
+    expect(container.querySelector("code")?.textContent).toContain("\\(y^2\\)");
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+  });
+
+  it("keeps execution available for a completed fence while the message continues streaming", () => {
+    render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"```python\nprint('done')\n```\n\nMore explanation is still streaming..."}
+      </MarkdownViewer>,
+    );
+    expect(screen.getByRole("button", { name: "Run" })).toBeInTheDocument();
+  });
+
+  it("only disables execution for the unclosed fence in a streaming message", () => {
+    render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"```python\nprint('done')\n```\n\n```python\nprint('partial')"}
+      </MarkdownViewer>,
+    );
+    expect(screen.getAllByRole("button", { name: "Run" })).toHaveLength(1);
+  });
+
+  it("does not treat a fence-like line inside an unclosed fence as a closer", () => {
+    render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {'```python\nprint("partial")\n> ```'}
+      </MarkdownViewer>,
+    );
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+  });
+
+  it("does not treat a four-space indented line as a closing fence", () => {
+    render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"```python\nprint('partial')\n    ```"}
+      </MarkdownViewer>,
+    );
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+  });
+
+  it("offers execution once a blank line closes a blockquote fence", () => {
+    render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"> ```python\n> print('done')\n\n"}
+      </MarkdownViewer>,
+    );
+    expect(screen.getByRole("button", { name: "Run" })).toBeInTheDocument();
+  });
+
+  it("does not create a root-level code block when a list fence is unclosed", () => {
+    const { container } = render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"- item\n  ```python\n  x = 1"}
+      </MarkdownViewer>,
+    );
+    expect(container.querySelectorAll("pre")).toHaveLength(1);
+    expect(container.querySelector("li pre")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+  });
+
+  it("disables execution for a deeply indented list fence", () => {
+    const { container } = render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"- item\n    ```python\n    partial"}
+      </MarkdownViewer>,
+    );
+    expect(container.querySelector("li pre code")?.textContent).toContain("partial");
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+  });
+
+  it("only disables the current root fence after a blockquote container ends", () => {
+    const { container } = render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"> ```python\n> print('done')\n\n```python\nprint('partial')"}
+      </MarkdownViewer>,
+    );
+    const codeBlocks = container.querySelectorAll("pre code");
+    expect(codeBlocks).toHaveLength(2);
+    expect(codeBlocks[0]?.closest(".relative")?.querySelector('button[aria-label="Run"]')).toBeInTheDocument();
+    expect(codeBlocks[1]?.closest(".relative")?.querySelector('button[aria-label="Run"]')).toBeUndefined();
+    expect(screen.getAllByRole("button", { name: "Run" })).toHaveLength(1);
+  });
+
+  it("keeps complete streaming and final output structurally equivalent", () => {
+    const markdown = "中文 $E = mc^2$\n\n| A | B |\n| --- | --- |\n| 1 | 2 |";
+    const streaming = render(<MarkdownViewer mode="streaming">{markdown}</MarkdownViewer>);
+    const streamingHtml = streaming.container.innerHTML;
+    streaming.unmount();
+    const final = render(<MarkdownViewer mode="final">{markdown}</MarkdownViewer>);
+    expect(final.container.innerHTML).toBe(streamingHtml);
+  });
+
+  it("keeps multi-dollar display math structurally equivalent while streaming", () => {
+    const markdown = "$$$\nx\n$$$";
+    const streaming = render(<MarkdownViewer mode="streaming">{markdown}</MarkdownViewer>);
+    const streamingHtml = streaming.container.innerHTML;
+    streaming.unmount();
+    const final = render(<MarkdownViewer mode="final">{markdown}</MarkdownViewer>);
+    expect(final.container.innerHTML).toBe(streamingHtml);
+  });
+
+  it("closes unclosed multi-dollar display math so it renders while streaming", () => {
+    const { container } = render(<MarkdownViewer mode="streaming">{"$$$\nE = mc^2"}</MarkdownViewer>);
+    expect(container.querySelector(".katex-display .katex")).toBeInTheDocument();
+  });
+
+  it("renders an open inline code span as code instead of flashing math", () => {
+    const open = render(
+      <MarkdownViewer mode="streaming">{'Use `formula = "\\(x^2\\)"'}</MarkdownViewer>,
+    );
+    expect(open.container.querySelector(".katex")).toBeNull();
+    const openHtml = open.container.innerHTML;
+    expect(open.container.querySelector("code")?.textContent).toBe('formula = "\\(x^2\\)"');
+    open.unmount();
+    const closed = render(
+      <MarkdownViewer mode="streaming">{'Use `formula = "\\(x^2\\)"`'}</MarkdownViewer>,
+    );
+    expect(closed.container.innerHTML).toBe(openHtml);
+  });
+
+  it("does not render dollars as math inside an open inline code span", () => {
+    const { container } = render(<MarkdownViewer mode="streaming">{"Use `$$x^2$$"}</MarkdownViewer>);
+    expect(container.querySelector(".katex")).toBeNull();
+    expect(container.querySelector("code")?.textContent).toBe("$$x^2$$");
+  });
+
+  it("keeps a multi-backtick closer on the paragraph line before the newline", () => {
+    const open = render(<MarkdownViewer mode="streaming">{"Use ```\\(x\\)\n"}</MarkdownViewer>);
+    expect(open.container.querySelector(".katex")).toBeNull();
+    expect(open.container.querySelector("pre")).toBeNull();
+    expect(open.container.querySelector("code")?.textContent).toBe("\\(x\\)");
+    const openHtml = open.container.innerHTML;
+    open.unmount();
+    const closed = render(<MarkdownViewer mode="streaming">{"Use ```\\(x\\)```\n"}</MarkdownViewer>);
+    expect(closed.container.innerHTML).toBe(openHtml);
+  });
+
+  it("does not duplicate nested code spans inside an open span", () => {
+    const { container } = render(
+      <MarkdownViewer mode="streaming">{"Use `open and ``closed`` tail"}</MarkdownViewer>,
+    );
+    expect(container.textContent).toBe("Use open and ``closed`` tail");
+    expect(container.querySelector("code")?.textContent).toBe("open and ``closed`` tail");
+  });
+
+  it("renders same-line list display math while streaming", () => {
+    const { container } = render(<MarkdownViewer mode="streaming">{"- $$\n  E = mc^2"}</MarkdownViewer>);
+    expect(container.querySelector(".katex-display .katex")).toBeInTheDocument();
+  });
+
+  it("coalesces rapid deltas into one animation-frame paint", () => {
+    let paint: FrameRequestCallback | null = null;
+    const requestFrame = vi.fn((callback: FrameRequestCallback) => {
+      paint = callback;
+      return 1;
+    });
+    vi.stubGlobal("requestAnimationFrame", requestFrame);
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const { container, rerender } = render(<MarkdownViewer mode="streaming">{"one"}</MarkdownViewer>);
+
+    rerender(<MarkdownViewer mode="streaming">{"two"}</MarkdownViewer>);
+    rerender(<MarkdownViewer mode="streaming">{"three"}</MarkdownViewer>);
+
+    expect(container.textContent).toBe("one");
+    expect(requestFrame).toHaveBeenCalledTimes(1);
+    act(() => paint?.(16));
+    expect(container.textContent).toBe("three");
+  });
+});
+
 describe("MarkdownViewer images", () => {
   const CWD = "/Users/cyq/pi-science-workspaces/test";
 
@@ -142,6 +346,17 @@ describe("MarkdownViewer images", () => {
     fireEvent.error(img);
     expect(container.querySelector("img")).toBeNull();
     expect(container.textContent).toContain("Image failed to load");
+  });
+
+  it("retries an image when its source changes after an error", () => {
+    const { container, rerender } = render(
+      <MarkdownViewer>{"![x](https://example.com/missing.png)"}</MarkdownViewer>,
+    );
+    fireEvent.error(container.querySelector("img") as HTMLImageElement);
+    expect(container.querySelector("img")).toBeNull();
+
+    rerender(<MarkdownViewer>{"![x](https://example.com/recovered.png)"}</MarkdownViewer>);
+    expect(container.querySelector("img")).toHaveAttribute("src", "https://example.com/recovered.png");
   });
 
   it("opens a workspace-relative local link in the inspector", () => {

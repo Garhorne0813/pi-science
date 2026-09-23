@@ -819,7 +819,7 @@ describe("conversation presentation protocol v2", () => {
       payload: { artifacts: [{ path: "result.csv", kind: "table", mime: "text/csv", size: 10 }] },
     }));
 
-    expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "agent", parts: [{ id: "answer-1", text: "partial" }] }));
+    expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "agent", parts: [{ id: "answer-1", text: "partial" }], partial: false }));
     expect(thread.blocks).not.toContainEqual(expect.objectContaining({ kind: "agent", parts: [{ id: "answer-1", text: "partial late" }] }));
     expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "status-line", level: "error" }));
     expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "artifact-summary", turnId: "turn-1" }));
