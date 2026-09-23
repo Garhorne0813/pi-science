@@ -80,6 +80,8 @@
   "conversation.activity.exploreSummary": "已探索 · {{count}} 项操作",
   "conversation.activity.exploreSummaryLive": "探索中 · 已完成 {{done}}/{{count}} 项操作",
   "conversation.activity.failureSummary": " · {{count}} 项失败",
+  "conversation.activity.turnDuration": "本轮总耗时：{{duration}}",
+  "conversation.activity.processDuration": "活动耗时：{{duration}}",
   "conversation.activity.noAnswer": "本次运行没有返回最终答复",
   "conversation.activity.operationCount_one": "{{count}} 项操作",
   "conversation.activity.operationCount_other": "{{count}} 项操作",

@@ -80,6 +80,8 @@
   "conversation.activity.exploreSummary": "Explored · {{count}} operations",
   "conversation.activity.exploreSummaryLive": "Exploring · {{done}} of {{count}} operations",
   "conversation.activity.failureSummary": " · {{count}} failed",
+  "conversation.activity.turnDuration": "Total turn duration: {{duration}}",
+  "conversation.activity.processDuration": "Activity duration: {{duration}}",
   "conversation.activity.noAnswer": "No final answer returned",
   "conversation.activity.operationCount_one": "{{count}} operation",
   "conversation.activity.operationCount_other": "{{count}} operations",

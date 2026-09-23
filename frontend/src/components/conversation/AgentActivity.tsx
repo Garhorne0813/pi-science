@@ -102,11 +102,25 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
     return <>{content}{status}</>;
   }
 
-  if (activities.length === 0) return null;
-
   // Callers that render the final answer outside this component
   // (ConversationTurn) pass the flag down; direct renders scan the blocks.
   const hasExplicitFinal = hasFinalAnswer ?? blocks.some((block) => block.kind === "agent" && block.presentationRole === "final");
+  // Only a settled turn with a delivered answer has two trustworthy boundaries
+  // to measure the whole turn against.
+  const wholeTurnDuration = lifecycle === "settled" && hasExplicitFinal
+    ? formatTimestampDuration(turnStartedAt, turnEndedAt)
+    : null;
+
+  if (activities.length === 0) {
+    // Nothing folded away, but a plan-only or answer-only turn still carries a
+    // measurable turn duration worth showing.
+    if (!wholeTurnDuration) return null;
+    const completed = t("conversation.activity.completed");
+    return <div data-state="completed" data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
+      <span role="status" aria-label={`${completed}. ${t("conversation.activity.turnDuration", { duration: wholeTurnDuration })}`} className={cn(styles.summary, "flex min-h-primary w-full items-center py-1 text-sm font-medium text-text")}>{completed} · {wholeTurnDuration}</span>
+    </div>;
+  }
+
   // A settled turn can legitimately contain only commentary/process narration.
   // Keep that history recoverable in the fold, but make the missing answer
   // explicit instead of promoting commentary into the answer slot.
@@ -130,7 +144,10 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
     : lifecycle === "aborted"
       ? t("conversation.activity.stopped")
       : t("conversation.activity.completed");
-  const processDuration = formatProcessDuration(traceBlocks, turnStartedAt, turnEndedAt);
+  const processDuration = wholeTurnDuration ?? formatProcessDuration(traceBlocks, turnStartedAt, turnEndedAt);
+  const durationDescription = processDuration
+    ? t(wholeTurnDuration ? "conversation.activity.turnDuration" : "conversation.activity.processDuration", { duration: processDuration })
+    : null;
   // failureSummary carries its own separator; the failed headline already
   // says the run went wrong.
   const failureSuffix = lifecycle !== "failed" && failureCount > 0 ? t("conversation.activity.failureSummary", { count: failureCount }) : "";
@@ -138,7 +155,7 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
 
   return <div id={blocks.length === 1 && blocks[0].kind === "tool" ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
     {traceBlocks.length > 0 ? (
-      <button type="button" aria-expanded={traceExpanded} aria-controls={traceId} onClick={() => setTraceExpanded((value) => !value)} className={cn(styles.summary, "flex min-h-primary w-full items-center gap-2 rounded-input py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-control")}>
+      <button type="button" aria-label={durationDescription ? `${summaryLabel}. ${durationDescription}` : undefined} aria-expanded={traceExpanded} aria-controls={traceId} onClick={() => setTraceExpanded((value) => !value)} className={cn(styles.summary, "flex min-h-primary w-full items-center gap-2 rounded-input py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-control")}>
         <span aria-live="polite" aria-atomic="true" className="min-w-0 flex-1 truncate text-sm font-medium text-text">{summaryLabel}</span>
         <ChevronRight size={13} aria-hidden className={cn(styles.chevron, "shrink-0 text-muted", traceExpanded && "rotate-90")} />
       </button>
@@ -291,7 +308,24 @@ function formatProcessDuration(blocks: ActivityBlock[], turnStartedAt?: string, 
   const starts = [validTime(turnStartedAt), ...blocks.map((block) => validTime(block.kind === "tool" ? block.startedAt : block.kind === "thinking" ? block.startedAt ?? block.timestamp : block.timestamp))].filter(Number.isFinite);
   const ends = [validTime(turnEndedAt), ...blocks.map((block) => validTime(block.kind === "tool" || block.kind === "thinking" ? block.endedAt : undefined))].filter(Number.isFinite);
   if (starts.length === 0 || ends.length === 0) return null;
-  return formatSeconds(Math.max(0, (Math.max(...ends) - Math.min(...starts)) / 1000));
+  return formatPositiveDuration(Math.max(...ends) - Math.min(...starts));
+}
+
+function formatTimestampDuration(startTimestamp?: string, endTimestamp?: string): string | null {
+  if (!startTimestamp || !endTimestamp) return null;
+  const start = Date.parse(startTimestamp);
+  const end = Date.parse(endTimestamp);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return formatPositiveDuration(end - start);
+}
+
+/** A span only means something when it is positive. Zero, negative, and
+ *  unparseable intervals are dropped rather than reported as `0.0s`, and a
+ *  sub-100 ms span would round to that same misleading value. */
+function formatPositiveDuration(elapsedMs: number): string | null {
+  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return null;
+  if (elapsedMs < 100) return "<0.1s";
+  return formatSeconds(elapsedMs / 1000);
 }
 
 function activityStateFor(lifecycle: TurnLifecycle, activity: PresentedActivity | null): ProgressActivityState {
