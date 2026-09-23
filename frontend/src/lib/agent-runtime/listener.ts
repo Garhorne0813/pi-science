@@ -82,9 +82,13 @@ const TURN_WATCHDOG_SILENCE_MS = 20_000;
 let turnWatchdogTimer: ReturnType<typeof setInterval> | null = null;
 let turnWatchdogReconnected = false;
 let lastTurnEventAt = 0;
+let turnEventVersion = 0;
+let turnWatchdogProbe: object | null = null;
 
 function noteTurnEvent(): void {
   lastTurnEventAt = Date.now();
+  turnEventVersion += 1;
+  turnWatchdogReconnected = false;
 }
 
 function disarmTurnWatchdog(): void {
@@ -93,6 +97,7 @@ function disarmTurnWatchdog(): void {
     turnWatchdogTimer = null;
   }
   turnWatchdogReconnected = false;
+  turnWatchdogProbe = null;
 }
 
 /** Arm (or refresh) the live-turn watchdog. Safe to call on every live
@@ -131,13 +136,34 @@ async function runTurnWatchdogTick(): Promise<void> {
     client.reconnect(sessionId, cwd);
     return;
   }
+  // A slow REST request must not accumulate another probe every five seconds.
+  if (turnWatchdogProbe) return;
+  const probe = {};
+  turnWatchdogProbe = probe;
+  const eventVersion = turnEventVersion;
+  const connectionGeneration = generations.connection;
+  const activityGeneration = generations.activity;
+  const mutationGeneration = generations.localMutation;
   try {
     const runtimeState = await client.getSessionState(sessionId, cwd);
     const latest = useRuntimeStore.getState();
-    if (!latest.working || latest.activeSessionId !== sessionId || latest.cwd !== cwd) {
-      disarmTurnWatchdog();
-      return;
-    }
+    // REST describes the state when requested, not necessarily when received.
+    // Replay, a new prompt, an interaction, or a connection replacement can
+    // supersede it while awaiting. In particular, do not briefly settle a live
+    // turn or disarm its new watchdog on the strength of an old idle response.
+    // The event counter also covers metadata events and same-millisecond arrivals.
+    if (
+      turnWatchdogProbe !== probe
+      || client !== _listenerClient
+      || eventVersion !== turnEventVersion
+      || connectionGeneration !== generations.connection
+      || activityGeneration !== generations.activity
+      || mutationGeneration !== generations.localMutation
+      || !latest.working
+      || latest.activeSessionId !== sessionId
+      || latest.cwd !== cwd
+      || latest.turnLifecycle !== current.turnLifecycle
+    ) return;
     if (hasActivePendingInteraction(latest.pendingInteraction, latest.pendingQuestionnaire)) {
       useRuntimeStore.setState({ working: false, turnLifecycle: "waiting", status: "ready" });
       disarmTurnWatchdog();
@@ -162,6 +188,9 @@ async function runTurnWatchdogTick(): Promise<void> {
     }
   } catch {
     // A failed probe is retried on the next tick.
+  } finally {
+    // A superseded request must not clear the next watchdog's in-flight probe.
+    if (turnWatchdogProbe === probe) turnWatchdogProbe = null;
   }
 }
 
@@ -195,6 +224,7 @@ function questionnaireQuestions(value: unknown): PendingQuestionnaire["questions
 
 export function registerEventListener(client: PiScienceClient) {
   if (_listenerClient === client && _listenerUnsubscribe) return;
+  disarmTurnWatchdog();
   clearOptimisticRetry();
   optimisticRetries.clear();
   _listenerUnsubscribe?.();
