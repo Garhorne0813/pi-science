@@ -669,7 +669,33 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         const current = get();
         if (current.activeSessionId === activeSessionId && current.cwd === cwd) {
           appendRuntimeError(error, activeSessionId, cwd);
-          set({ working: true, turnLifecycle: turnLifecycle === "settled" ? "active" : turnLifecycle, status: "error" });
+          const code = error && typeof error === "object" && "code" in error
+            ? (error as { code?: unknown }).code
+            : undefined;
+          if (code === "runtime_evicted") {
+            set({ working: false, turnLifecycle: "aborted", status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
+            return;
+          }
+          try {
+            const runtimeState = await getClient().getSessionState(activeSessionId, cwd);
+            const stillCurrent = get();
+            if (stillCurrent.activeSessionId === activeSessionId && stillCurrent.cwd === cwd) {
+              const busy = runtimeState.is_streaming
+                || runtimeState.is_compacting
+                || runtimeState.pending_message_count > 0;
+              set({
+                working: busy,
+                turnLifecycle: busy ? "active" : "aborted",
+                status: "error",
+                ...(busy ? {} : { pendingInteraction: null, pendingQuestionnaire: null }),
+              });
+            }
+          } catch {
+            const stillCurrent = get();
+            if (stillCurrent.activeSessionId === activeSessionId && stillCurrent.cwd === cwd) {
+              set({ working: true, turnLifecycle: turnLifecycle === "settled" ? "active" : turnLifecycle, status: "error" });
+            }
+          }
         }
         throw error;
       }

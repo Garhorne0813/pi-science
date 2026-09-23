@@ -53,6 +53,23 @@ describe("PiScienceClient REST calls", () => {
       .rejects.toThrow("cannot delete");
   });
 
+  it("preserves structured error metadata from abort responses", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      ok: false,
+      code: "runtime_evicted",
+      error: "Pi runtime was evicted",
+    }), {
+      status: 410,
+      headers: { "Content-Type": "application/json" },
+    })));
+    const client = new PiScienceClient();
+
+    await expect(client.abort("session-a", "/workspace")).rejects.toMatchObject({
+      code: "runtime_evicted",
+      status: 410,
+    });
+  });
+
   it("preserves backend detail errors across conversation endpoints", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ detail: "session index unavailable" }), {

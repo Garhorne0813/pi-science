@@ -628,6 +628,47 @@ describe("runtime session actions", () => {
     expect(useRuntimeStore.getState().turnLifecycle).toBe("aborted");
   });
 
+  it("settles the local turn when abort reports a structured runtime eviction", async () => {
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: "session-evicted",
+      working: true,
+      turnLifecycle: "active",
+      status: "error",
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      ok: false,
+      code: "runtime_evicted",
+      error: "Pi runtime was evicted",
+    }, 410)));
+
+    await expect(useRuntimeStore.getState().abort()).resolves.toBeUndefined();
+    expect(useRuntimeStore.getState().working).toBe(false);
+    expect(useRuntimeStore.getState().turnLifecycle).toBe("aborted");
+    expect(useRuntimeStore.getState().status).toBe("ready");
+  });
+
+  it("reconciles a non-eviction abort error against authoritative idle state", async () => {
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: "session-abort-error",
+      working: true,
+      turnLifecycle: "active",
+      status: "ready",
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/abort")) return jsonResponse({ ok: false, code: "abort_failed", error: "abort failed" }, 500);
+      if (url.includes("/state")) return jsonResponse(state("session-abort-error"));
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await expect(useRuntimeStore.getState().abort()).rejects.toThrow("abort failed");
+    expect(useRuntimeStore.getState().working).toBe(false);
+    expect(useRuntimeStore.getState().turnLifecycle).toBe("aborted");
+    expect(useRuntimeStore.getState().status).toBe("error");
+  });
+
   it("clears active conversation state when deleting the active session", async () => {
     useRuntimeStore.setState({
       cwd: "/workspace",

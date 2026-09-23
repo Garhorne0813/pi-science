@@ -269,7 +269,13 @@ export async function abort(baseUrl: string, sessionId: string, cwd?: string): P
   const res = await request(`${baseUrl}/api/sessions/${sessionId}/abort${params}`, { method: "POST" });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.ok === false) {
-    throw new Error(responseError(data, `Abort failed: ${res.statusText}`));
+    const error = new Error(responseError(data, `Abort failed: ${res.statusText}`)) as Error & {
+      code?: string;
+      status?: number;
+    };
+    error.code = typeof data.code === "string" ? data.code : undefined;
+    error.status = res.status;
+    throw error;
   }
 }
 
