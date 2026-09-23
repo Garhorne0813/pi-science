@@ -7,6 +7,7 @@ import { generations } from "./generations";
 import { useRuntimeStore } from "./index";
 import { mergeArtifactTurns, reconcileAfterConnectionLoss, reconcileAfterGap, reconcilePromptAfterLateStream, resyncCompletedHistory } from "./recovery";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
+import type { ThreadBlock } from "../../types/thread";
 
 
 installRuntimeTestEnvironment();
@@ -1095,5 +1096,30 @@ describe("mergeArtifactTurns", () => {
       [turn({ turn_id: "t2" })],
     );
     expect(merged.map((entry) => entry.turn_id)).toEqual(["t1", "t2"]);
+  });
+});
+
+describe("gap recovery with a lagging history flush", () => {
+  it("keeps live thread content when the snapshot is still empty", async () => {
+    queryClient.clear();
+    const client = getClient();
+    vi.spyOn(client, "getMessagesPage").mockResolvedValue({
+      messages: [], next_cursor: null, has_more: false, snapshot_version: "v1",
+    });
+    vi.spyOn(client, "getSessionState").mockResolvedValue(state("session-a"));
+    vi.spyOn(client, "getTurnArtifacts").mockResolvedValue({ turns: [] });
+    const optimistic: ThreadBlock = { kind: "user", id: "user-request", text: "make SVG", client_message_id: "request" };
+    useRuntimeStore.setState({
+      activeSessionId: "session-a",
+      cwd: "/workspace",
+      status: "connecting",
+      thread: { blocks: [optimistic], index: { "user-request": 0 }, loaded: true },
+    });
+
+    await reconcileAfterGap("session-a", "/workspace");
+
+    const after = useRuntimeStore.getState();
+    expect(after.thread.blocks.map((block) => block.id)).toEqual(["user-request"]);
+    expect(after.status).not.toBe("error");
   });
 });

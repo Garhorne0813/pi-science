@@ -283,7 +283,7 @@ export async function reconcileWorkingState(
   } else if (!hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
     // Only an authoritative idle snapshot from this activity generation may
     // settle a failed probe. An unknown state must remain conservatively busy.
-    useRuntimeStore.setState({ working: false, turnLifecycle: "settled" });
+        useRuntimeStore.setState({ working: false, turnLifecycle: "settled" });
     markWorkspaceFilesChanged();
   }
 }
@@ -486,6 +486,13 @@ async function runGapRecoveryRound(
   // arrives while this request is in flight invalidates the run below, so an
   // old snapshot cannot overwrite the newer live projection.
   if (historyResult.status === "fulfilled") {
+    // An empty snapshot can still race the session's first flush, so it must
+    // not replace a thread that already holds live content — same guard as
+    // resyncCompletedHistory. The round is a no-op rather than a failure: the
+    // gap-recovery retry budget is far shorter than the window in which the
+    // messages become visible, and the settle-time resync rebases the thread
+    // once they do.
+    if (historyResult.value.messages.length === 0 && current.thread.blocks.length > 0) return "completed";
     const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
     const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, current.thread, historyResult.value, { keepLiveExtras: false, resetProjection: true });
     const mergeInvalidation = gapRecoveryInvalidation(

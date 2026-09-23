@@ -1325,8 +1325,16 @@ export interface HistoryWindowMerge {
 export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], opts: { keepLiveExtras: boolean; resetProjection?: boolean; windowComplete?: boolean }): HistoryWindowMerge {
   const authoritative = carryToolTiming(current, threadFromMessages(messages), !opts.resetProjection);
   if (authoritative.blocks.length === 0) {
+    // An empty page is never authoritative over a thread that still holds
+    // conversation content. A fetch can race the session's first flush, and
+    // replacing the thread would blank the optimistic prompt and everything
+    // already streamed until some later refresh happens to include it.
+    // Callers that intentionally clear a conversation blank the thread
+    // themselves (session switch, workspace landing), so an empty snapshot may
+    // only reset an already empty thread.
+    const clearable = current.blocks.length === 0;
     return {
-      thread: opts.resetProjection ? resetThreadProjection(authoritative) : current,
+      thread: opts.resetProjection && clearable ? resetThreadProjection(authoritative) : current,
       retainedOlderPrefix: true,
     };
   }

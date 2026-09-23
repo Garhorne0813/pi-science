@@ -80,4 +80,24 @@ describe("history recovery turn fragments", () => {
     expect(turns[0].active).toBe(true);
     expect(turns[0].user?.id).toBe("user");
   });
+
+  it("keeps live content when the snapshot is still empty", () => {
+    // A session's first flush can lag the prompt, so a recovery read can return
+    // an empty page while the thread already holds the optimistic message and
+    // streamed reasoning. Replacing the thread with it blanked the conversation
+    // until a later refresh happened to include those messages.
+    const live = thread([
+      { kind: "user", id: "user-request", text: "make SVG", client_message_id: "request" } as ThreadBlock,
+      thinking,
+    ]);
+    const merged = mergeHistoryWindow(live, [], { keepLiveExtras: false, resetProjection: true, windowComplete: true });
+    expect(merged.thread).toBe(live);
+    expect(merged.thread.blocks.map((block) => block.id)).toEqual(["user-request", thinking.id]);
+  });
+
+  it("still resets an empty thread from an empty snapshot", () => {
+    const merged = mergeHistoryWindow(thread([]), [], { keepLiveExtras: false, resetProjection: true, windowComplete: true });
+    expect(merged.thread.blocks).toEqual([]);
+    expect(merged.retainedOlderPrefix).toBe(true);
+  });
 });
