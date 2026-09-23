@@ -206,12 +206,33 @@ function ThinkingRow({ block }: { block: ThinkingBlock }) {
       <span className="min-w-0 truncate">{t("conversation.activity.thinking")}</span>
       {liveTail && <span aria-hidden className="hidden min-w-0 flex-1 truncate text-right font-mono text-[10px] text-muted sm:block">{liveTail}</span>}
       {duration && <span aria-hidden="true" className="shrink-0 font-mono text-[10px] tabular-nums text-muted">{duration}</span>}
+      {running && <LiveStepElapsed since={block.startedAt} />}
       <ChevronRight size={12} aria-hidden className={cn(styles.chevron, "shrink-0 transition-transform", expanded && "rotate-90")} />
     </button>
     {expanded && <div className={cn(styles.details, "pb-2 pl-6")}>
       <div className="whitespace-pre-wrap text-ui-caption italic leading-snug text-muted [overflow-wrap:anywhere]">{text}</div>
     </div>}
   </div>;
+}
+
+/** Self-ticking clock for one running phase. It measures the phase, not the
+ *  turn, so a reasoning row reports the same quantity while it runs as the
+ *  finished row reports when it ends. Lives in its own component so the tick
+ *  never re-renders the surrounding trace. */
+function LiveStepElapsed({ since }: { since?: string }) {
+  const [, tick] = useState(0);
+  const startedAt = useMemo(() => {
+    if (!since) return null;
+    const parsed = Date.parse(since);
+    return Number.isFinite(parsed) ? parsed : null;
+  }, [since]);
+  useEffect(() => {
+    if (startedAt === null) return;
+    const timer = window.setInterval(() => tick((value) => value + 1), 250);
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
+  if (startedAt === null) return null;
+  return <span aria-hidden="true" className="shrink-0 font-mono text-[10px] tabular-nums text-muted">{formatSeconds(Math.max(0, (Date.now() - startedAt) / 1000))}</span>;
 }
 
 function GroupSummary({ group, live }: { group: ActivityGroup; live: boolean }) {
