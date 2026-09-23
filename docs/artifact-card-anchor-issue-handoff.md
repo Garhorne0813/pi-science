@@ -195,7 +195,11 @@ for (const block of blocks) {
 9: artifact-summary                      artifacts=1
 ```
 
-可见后果：**会话导航栏条目数约为轮次数的两倍**（约 8 轮出现约 16 个条目），即每个卡片多出一条导航项。
+已核实的后果（**更正**：曾误写为"每个卡片多出一条导航条目"，实测不成立）：
+- 每个 strip 会**自成一个 turn 分组**，因此成为虚拟列表里一个独立的 item，其 lifecycle 恒为 `settled`（`turn-presentation.ts` 只把 active 身份给匹配的组）。
+- 在 `8d3fa0ef` 之前，`lastKey` 兜底会让这个只含 artifact 的分组**抢走 active 身份**，使正在运行的轮次被判成 settled → 即 §7 的"提前 Completed / 闪烁"。这是我用 `lastContentKey` 修掉的那条。
+- **导航栏不受影响**：`ConversationNavRail` 的 items 来自 `LiveSessionPage.tsx:157-174` 的 `userNavItems`，由**会话级用户消息索引**（`messageIndexQuery.data.messages`）加已加载的用户块构成，只含 user 块，不含 artifact 块。曾观测到"导航条目约为轮次两倍"是因为该索引包含大量未加载进窗口的历史用户消息，与卡片无关。
+- `8d3fa0ef` 之后，artifact 块通过 `ownerByTurnId`（新格式 id）或 `?? currentKey`（旧格式兜底）**并入所属轮次分组**，自成组问题消失（实测：3 个 strip 全部落在内容分组内）。
 
 这也解释了 §3 的 S3（闪烁）：分组键不稳 → 见 §7。
 
@@ -437,9 +441,18 @@ await tab.playwright.evaluate(() => {
 
 ## 10. 测量陷阱（**强烈建议先读**）
 
-### 10.1 会话有**两个**可滚动容器，`ScrollHeight` 相同
+### 10.1 ~~会话有**两个**可滚动容器，`ScrollHeight` 相同~~（**本节结论已更正**）
 
-实测：
+> **更正（2026-09-24）**：该会话只有**一个**真正的滚动容器。实测结构是
+> `[data-testid="virtuoso-scroller"].conversation-scroller`（`overflow-y: auto`，唯一可滚动）
+> └─ `div`（无 testid、`overflow-y: visible`）—— 内层内容包装器，**不滚动**（`scrollTop` 恒 0）。
+> 那个包装器之所以落进"可滚动"筛选，只是因为启发式 `scrollHeight > clientHeight` 对**内容溢出的非滚动元素**同样成立。
+>
+> 我据此得出的"卡片完全不渲染"是**两次测量错误叠加**：误判容器 + **在同一次 `evaluate` 里先设 `scrollTop` 再读 DOM**（react-virtuoso 要到下一个任务才重算窗口，因此读到的是滚动前状态）。
+>
+> 详见 `docs/pending-activity-settle-and-scroll-correction.md` 的 Part 2。下面的原始记录保留，仅作为"不要这样测"的反例。
+
+实测（当时的记录）：
 
 ```
 [data-testid="virtuoso-scroller"]  class="conversation-scroller overflow-y-auto"  sh=3176 ch=528 scrollTop=2648
@@ -485,7 +498,7 @@ div (无 testid)                                                                
 2. `turnOrdinal` 的双重语义（会话轮次序号 vs 产物记录计数）应统一到哪一套？如果统一到 hub，重启后 hub 计数重置的问题如何解决（`newConversationId` 的注释称"ordinal 仅用于诊断"）？
 3. §6 的 `continue` 是否应该改为"暂存并在下次 attach 重试"？有无更简单的等价方案（例如把未锚定的记录挂在窗口末尾并标记 provisional）？
 4. §7.3 的 5ms settle，是事件驱动还是看门狗驱动？若是看门狗，20s 静默 + `!runtimeWorking` 的组合在长工具调用/SSE 抖动下是否会误判？
-5. §10.1 的双滚动容器是否本身就是缺陷（一个未被卸载的旧实例）？如果是，可能同时解释用户提出的"闪烁"里的一部分。
+5. ~~§10.1 的双滚动容器是否本身就是缺陷~~ —— **已结案：不存在这个缺陷**。实测只有唯一一个滚动容器（`[data-testid="virtuoso-scroller"]`），另一个是它内部 `overflow: visible` 的内容包装器，我的筛选启发式误判了它。详见 `docs/pending-activity-settle-and-scroll-correction.md` Part 2。
 
 ---
 
