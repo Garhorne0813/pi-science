@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { useRuntimeStore } from "./index";
 import { emptyThread, foldEvent } from "./event-fold";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
+import type { ThreadBlock } from "../../types/thread";
 
 
 installRuntimeTestEnvironment();
@@ -732,5 +733,35 @@ describe("runtime session actions", () => {
     expect(current.thread.blocks).toContainEqual(
       expect.objectContaining({ kind: "status-line", text: "temporary read failure" }),
     );
+  });
+
+  it("keeps a live turn running while the session is created lazily", async () => {
+    // sendPrompt inserts the optimistic prompt, arms the turn, and only then
+    // awaits createNewSession. Writing an idle/settled state from that
+    // creation round trip renders the running turn as "Completed" until
+    // sendPrompt re-arms it.
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      if (url === "/api/sessions") return jsonResponse({ id: "session-new", cwd: "/workspace" });
+      if (url.includes("/messages")) return jsonResponse({ messages: [], next_cursor: null, has_more: false, snapshot_version: "v1" });
+      if (url.includes("/state")) return jsonResponse(state("session-new"));
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const optimistic: ThreadBlock = { kind: "user", id: "user-1", text: "make SVG", client_message_id: "req" };
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: null,
+      thread: { blocks: [optimistic], index: { "user-1": 0 }, loaded: true },
+      working: true,
+      turnLifecycle: "active",
+    });
+
+    await useRuntimeStore.getState().createNewSession();
+
+    const after = useRuntimeStore.getState();
+    expect(after.turnLifecycle).toBe("active");
+    expect(after.working).toBe(true);
+    expect(after.thread.blocks.map((block) => block.id)).toEqual(["user-1"]);
   });
 });

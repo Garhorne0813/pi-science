@@ -910,17 +910,21 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         resetTurnBuffer();
         turnState.errored = false;
         registerEventListener(client);
-        const currentThread = get().thread;
+        const live = get();
         set({
           client,
           activeSessionId: result.id,
-          thread: currentThread.blocks.length > 0 ? currentThread : emptyThread(),
+          thread: live.thread.blocks.length > 0 ? live.thread : emptyThread(),
           historyCursor: null,
           historyHasMore: false,
           historyLoading: false,
           historySnapshotVersion: "",
-          working: false,
-          turnLifecycle: "settled",
+          // sendPrompt creates this session lazily while its prompt is already
+          // in flight, so keep the live turn state. Resetting to settled here
+          // renders the running turn as "Completed" for the whole
+          // session-creation round trip, until sendPrompt re-arms it.
+          working: live.working,
+          turnLifecycle: live.turnLifecycle,
           status: "connecting",
           pendingInteraction: null,
           pendingQuestionnaire: null,
