@@ -79,6 +79,7 @@ export interface RuntimeState {
   historyLoading: boolean;
   historySnapshotVersion: string;
   working: boolean;
+  promptDeliveryNotice: "pending" | "indeterminate" | null;
   /** Explicit lifecycle for the newest turn. `working=false` alone cannot
    *  distinguish a settled answer from an abort or terminal failure. */
   turnLifecycle: "queued" | "active" | "waiting" | "recovering" | "stopping" | "settled" | "aborted" | "failed";
@@ -103,7 +104,7 @@ export interface RuntimeState {
   // Actions
   connect: (cwd: string, sessionId?: string) => Promise<void>;
   disconnect: () => void;
-  sendPrompt: (message: string) => Promise<string | null>;
+  sendPrompt: (message: string, clientMessageId?: string) => Promise<string | null>;
   abort: () => Promise<void>;
   setModel: (model: string, thinking?: string) => Promise<string | null>;
   respondToInteraction: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => Promise<void>;

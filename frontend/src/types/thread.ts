@@ -36,6 +36,8 @@ export type ThreadBlock =
 export interface UserMessageBlock extends ConversationBlockIdentity {
   kind: "user";
   id: string;
+  client_message_id?: string;
+  deliveryStatus?: "pending" | "indeterminate" | "rejected";
   text: string;
   /** Optimistic first send into a session created by this client. */
   optimisticFirstInSession?: boolean;

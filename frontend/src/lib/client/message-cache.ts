@@ -47,6 +47,7 @@ function sanitizeMessageEntry(raw: unknown): CachedMessageEntry | null {
     clean.push({
       id: msg.id,
       role: msg.role,
+      client_message_id: typeof msg.client_message_id === "string" ? msg.client_message_id : undefined,
       content: content as Array<{ type: string; text?: string; [key: string]: unknown }>,
       toolCallId: typeof msg.toolCallId === "string" ? msg.toolCallId : undefined,
       toolName: typeof msg.toolName === "string" ? msg.toolName : undefined,

@@ -6,6 +6,7 @@ import type { SessionTitleRepository } from "../../runtime/node/session-titles.j
 import { sessionTitleRepository } from "../../runtime/node/session-titles.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { AiTitleService } from "../../runtime/title/ai-title-service.js";
+import { PromptRequestRepository } from "../../runtime/node/prompt-request-repository.js";
 
 function cwd(request: { query: unknown }): string {
   const value = (request.query as { cwd?: unknown }).cwd;
@@ -50,6 +51,7 @@ export function registerNodeSessionRoutes(
   aiTitleService?: AiTitleService,
   titles: SessionTitleRepository = sessionTitleRepository,
 ): void {
+  const promptRequests = new PromptRequestRepository(sessionRepository);
   app.post("/api/sessions", async (request, reply) => {
     const parsed = createSessionRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid session request", code: "invalid_request" });
@@ -59,10 +61,82 @@ export function registerNodeSessionRoutes(
   });
 
   app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/prompt", async (request, reply) => {
-    const body = request.body as { message?: unknown };
+    const body = request.body as { message?: unknown; client_message_id?: unknown };
     if (typeof body?.message !== "string" || !body.message) return reply.code(400).send({ ok: false, code: "invalid_request", error: "message is required" });
-    const result = await nodeSessionService.command(request.params.session_id, cwd(request), "prompt", { message: body.message });
-    return result.success ? { ok: true, id: request.params.session_id } : sendFailure(reply, result);
+    const clientMessageId = body.client_message_id;
+    if (clientMessageId === undefined) {
+      let workspace: string;
+      try { workspace = await validateWorkspaceCwd(cwd(request)); }
+      catch (error) { return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) }); }
+      return promptRequests.withSessionMutationLock(workspace, request.params.session_id, async () => {
+        const result = await nodeSessionService.command(request.params.session_id, workspace, "prompt", { message: body.message });
+        return result.success ? { ok: true, id: request.params.session_id } : sendFailure(reply, result);
+      });
+    }
+    if (typeof clientMessageId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientMessageId)) {
+      return reply.code(400).send({ ok: false, code: "invalid_request", error: "client_message_id must be a UUID v4" });
+    }
+    const requestId = clientMessageId;
+    const promptMessage = body.message;
+    let workspace: string;
+    try { workspace = await validateWorkspaceCwd(cwd(request)); }
+    catch (error) { return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) }); }
+    const sessionId = request.params.session_id;
+    if (!(await sessionRepository.findPath(workspace, sessionId)) && !nodeSessionService.liveSessions(workspace).some((session) => session.id === sessionId)) {
+      return reply.code(404).send({ ok: false, code: "not_found", error: "session not found in this workspace" });
+    }
+
+    return promptRequests.withSessionMutationLock(workspace, sessionId, async () => {
+      const prepared = await promptRequests.prepare(workspace, sessionId, requestId, promptMessage);
+      if ("conflict" in prepared) {
+        return reply.code(409).send({ ok: false, code: "client_message_id_conflict", error: "client_message_id was already used with different prompt content" });
+      }
+      if ("busy" in prepared) {
+        return reply.code(409).send({ ok: false, code: "prompt_request_in_flight", error: "another prompt request for this session is still being reconciled", blocking_client_message_id: prepared.blocking_client_message_id });
+      }
+      if (!prepared.dispatch) {
+        if (prepared.status.status === "rejected") {
+          return reply.code(503).send({ ok: false, code: prepared.status.error_code ?? "prompt_rejected", error: "prompt request could not be prepared", ...prepared.status });
+        }
+        return reply.code(202).send({ ok: true, id: sessionId, ...prepared.status });
+      }
+
+      let result: Awaited<ReturnType<NodeSessionService["command"]>>;
+      try {
+        result = await nodeSessionService.command(sessionId, workspace, "prompt", { message: promptMessage });
+      } catch (error) {
+        const delivery = await promptRequests.update(workspace, sessionId, requestId, "indeterminate", { error_code: "prompt_command_threw" });
+        return reply.code(502).send({ ok: false, code: "prompt_command_threw", error: String(error), ...(delivery ?? {}) });
+      }
+      if (result.success) {
+        const accepted = await promptRequests.update(workspace, sessionId, requestId, "accepted");
+        const current = await promptRequests.getStatus(workspace, sessionId, requestId);
+        return reply.code(202).send({ ok: true, id: sessionId, ...(current ?? accepted ?? prepared.status) });
+      }
+      // A transport failure can happen after Pi accepted the command. Preserve
+      // that ambiguity; only a definite HTTP/runtime rejection is retryable.
+      const errorCode = typeof result.code === "string" ? result.code : "runtime_command_failed";
+      const indeterminateCodes = new Set(["timeout", "process_closed", "process_exit", "write_failed", "spawn_failed", "runtime_command_failed", "internal_error"]);
+      const state = indeterminateCodes.has(errorCode) ? "indeterminate" as const : "rejected" as const;
+      const delivery = await promptRequests.update(workspace, sessionId, requestId, state, { error_code: errorCode });
+      if (state === "rejected") await promptRequests.clearAssociation(workspace, sessionId, requestId);
+      return reply.code(status(result.code)).send({ ok: false, ...result, ...(delivery ?? {}) });
+    });
+  });
+
+  app.get<{ Params: { session_id: string; client_message_id: string } }>("/api/sessions/:session_id/prompt-requests/:client_message_id", async (request, reply) => {
+    const { session_id: sessionId, client_message_id: clientMessageId } = request.params;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientMessageId)) {
+      return reply.code(400).send({ ok: false, code: "invalid_request", error: "client_message_id must be a UUID v4" });
+    }
+    let workspace: string;
+    try { workspace = await validateWorkspaceCwd(cwd(request)); }
+    catch (error) { return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) }); }
+    if (!(await sessionRepository.findPath(workspace, sessionId)) && !nodeSessionService.liveSessions(workspace).some((session) => session.id === sessionId)) {
+      return reply.code(404).send({ ok: false, code: "not_found", error: "session not found in this workspace" });
+    }
+    const status = await promptRequests.getStatus(workspace, sessionId, clientMessageId);
+    return status ? { ok: true, ...status } : reply.code(404).send({ ok: false, code: "not_found", error: "prompt request not found" });
   });
 
   app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/title", async (request, reply) => {

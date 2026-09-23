@@ -106,6 +106,7 @@ export function LiveSessionPage() {
     : { blocks: [] as ThreadBlock[], index: {} as Record<string, number>, loaded: true };
   const sessions = useRuntimeStore((s) => s.sessions);
   const working = useRuntimeStore((s) => s.working);
+  const promptDeliveryNotice = useRuntimeStore((s) => s.promptDeliveryNotice);
   const turnLifecycle = useRuntimeStore((s) => s.turnLifecycle);
   const historyLoading = useRuntimeStore((s) => s.historyLoading);
   const loadOlderMessages = useRuntimeStore((s) => s.loadOlderMessages);
@@ -444,6 +445,7 @@ export function LiveSessionPage() {
           compactionEnabled={compactionEnabled}
           compactionThresholdPercent={compactionThresholdPercent}
           working={working}
+          promptDeliveryNotice={promptDeliveryNotice}
           interactionPending={interactionPending}
           reviewingProject={reviewingProject}
           reviewNotice={reviewNotice}

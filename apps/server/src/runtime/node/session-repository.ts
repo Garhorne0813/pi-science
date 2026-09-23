@@ -18,6 +18,8 @@ export interface SessionInfoRecord {
 export interface SessionMessageRecord {
   id: string;
   role: string;
+  /** Explicit client send identity persisted on the original Pi user message. */
+  client_message_id?: string;
   content: Array<Record<string, unknown>>;
   toolCallId?: string;
   toolName?: string;
@@ -138,6 +140,7 @@ function parseMessageLine(line: string): SessionMessageRecord | null {
     const record: SessionMessageRecord = {
       id: typeof entry.id === "string" ? entry.id : "",
       role: typeof message.role === "string" ? message.role : "",
+      ...(typeof message.client_message_id === "string" ? { client_message_id: message.client_message_id } : {}),
       content: Array.isArray(message.content) ? message.content as Array<Record<string, unknown>> : [],
       toolCallId: typeof message.toolCallId === "string" ? message.toolCallId : undefined,
       toolName: typeof message.toolName === "string" ? message.toolName : undefined,

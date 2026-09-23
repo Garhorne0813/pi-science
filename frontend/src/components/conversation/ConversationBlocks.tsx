@@ -45,6 +45,7 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
 
 function UserMessage({ block }: { block: UserMessageBlock }) {
   const { t } = useTranslation();
+  const sendPrompt = useRuntimeStore((state) => state.sendPrompt);
   const visibleText = visibleUserMessage(block.text);
   const references = referencesFromMessage(block.text);
   const copyText = visibleText || references.map((reference) => reference.path).join("\n");
@@ -60,6 +61,8 @@ function UserMessage({ block }: { block: UserMessageBlock }) {
           <span className="truncate">{reference.path}</span>
         </span>)}
       </div>}
+      {block.deliveryStatus && <div role="status" className={cn("text-[10px]", block.deliveryStatus === "rejected" ? "text-error-text" : "text-muted")}>{t(`conversation.promptDelivery.${block.deliveryStatus}`)}</div>}
+      {block.deliveryStatus === "rejected" && block.client_message_id && <button type="button" onClick={() => { void sendPrompt(block.text, block.client_message_id).catch(() => undefined); }} className="text-[10px] text-accent hover:underline">{t("conversation.promptDelivery.retrySameRequest")}</button>}
       <MessageActions text={copyText} timestamp={block.timestamp} align="right" />
     </div>
   );

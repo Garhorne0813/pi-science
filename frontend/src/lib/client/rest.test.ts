@@ -8,6 +8,20 @@ installClientTestEnvironment();
 
 
 describe("PiScienceClient REST calls", () => {
+  it("sends a stable client message ID and reads its delivery status", async () => {
+    const id = "8fd824aa-51d3-4f63-839c-09e021b7970b";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, status: "accepted", client_message_id: id }), { status: 202, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, status: "persisted", client_message_id: id, durable_message_id: "durable-1" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PiScienceClient();
+
+    await expect(client.sendPrompt("session-a", "status", id, "/workspace")).resolves.toMatchObject({ status: "accepted", client_message_id: id });
+    await expect(client.getPromptRequestStatus("session-a", id, "/workspace")).resolves.toMatchObject({ status: "persisted", durable_message_id: "durable-1" });
+    expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toEqual({ message: "status", client_message_id: id });
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe(`/api/sessions/session-a/prompt-requests/${id}?cwd=%2Fworkspace`);
+  });
+
   it("inherits backend model settings when creating a session", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       id: "session-luna",
@@ -53,7 +67,7 @@ describe("PiScienceClient REST calls", () => {
     const client = new PiScienceClient();
 
     await expect(client.listSessions("/workspace")).rejects.toThrow("session index unavailable");
-    await expect(client.sendPrompt("session-a", "hello", "/workspace")).rejects.toThrow("Invalid API key");
+    await expect(client.sendPrompt("session-a", "hello", "8fd824aa-51d3-4f63-839c-09e021b7970b", "/workspace")).rejects.toThrow("Invalid API key");
   });
 
   it("requests paginated history and returns the cursor metadata", async () => {
@@ -74,6 +88,21 @@ describe("PiScienceClient REST calls", () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/sessions/session-a/messages?cwd=%2Fworkspace&before=cursor%2F1&limit=25");
     expect(page).toMatchObject({ next_cursor: "eyJ2IjoxLCJvIjoxMjN9", has_more: true, snapshot_version: "456:789" });
     expect(page.messages[0]?.id).toBe("m2");
+  });
+
+  it("keeps client message identity in history and the restored message cache", async () => {
+    const id = "8fd824aa-51d3-4f63-839c-09e021b7970b";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      messages: [{ id: "durable-1", role: "user", client_message_id: id, content: [{ type: "text", text: "status" }] }],
+      next_cursor: null,
+      has_more: false,
+      snapshot_version: "1:1",
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    const client = new PiScienceClient();
+
+    const page = await client.getMessagesPage("session-a", "/workspace");
+    expect(page.messages[0]?.client_message_id).toBe(id);
+    expect(client.getCachedMessages("session-a", "/workspace")?.[0]?.client_message_id).toBe(id);
   });
 
   it("preserves structured tool details through the history wire schema", async () => {

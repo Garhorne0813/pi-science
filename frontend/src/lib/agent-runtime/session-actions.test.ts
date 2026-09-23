@@ -341,6 +341,61 @@ describe("runtime session actions", () => {
     expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/sessions")).toHaveLength(1);
   });
 
+  it("assigns different request IDs to separate sends with identical text", async () => {
+    const sentIds: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/prompt?") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { client_message_id: string };
+        sentIds.push(body.client_message_id);
+        return jsonResponse({ ok: true, status: "persisted", client_message_id: body.client_message_id, durable_message_id: `durable-${sentIds.length}` }, 202);
+      }
+      if (url.includes("/messages?")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-same-text"));
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    useRuntimeStore.setState({ activeSessionId: "session-same-text", cwd: "/workspace", status: "ready" });
+
+    await useRuntimeStore.getState().sendPrompt("status");
+    useRuntimeStore.setState({ working: false, turnLifecycle: "settled" });
+    await useRuntimeStore.getState().sendPrompt("status");
+    useRuntimeStore.getState().disconnect();
+
+    expect(sentIds).toHaveLength(2);
+    expect(sentIds[0]).not.toBe(sentIds[1]);
+    expect(useRuntimeStore.getState().thread.blocks.filter((block) => block.kind === "user")).toHaveLength(2);
+  });
+
+  it("reuses the prior ID only when retrying a specific rejected message", async () => {
+    const sentIds: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/prompt-requests/")) {
+        const id = url.split("/prompt-requests/")[1]!.split("?")[0]!;
+        return jsonResponse({ ok: true, status: "rejected", client_message_id: id, error_code: "runtime_busy" });
+      }
+      if (url.includes("/prompt?") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { client_message_id: string };
+        sentIds.push(body.client_message_id);
+        if (sentIds.length === 1) return jsonResponse({ ok: false, status: "rejected", client_message_id: body.client_message_id, code: "runtime_busy" }, 409);
+        return jsonResponse({ ok: true, status: "persisted", client_message_id: body.client_message_id, durable_message_id: "durable-retry" }, 202);
+      }
+      if (url.includes("/messages?")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-retry"));
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    useRuntimeStore.setState({ activeSessionId: "session-retry", cwd: "/workspace", status: "ready" });
+
+    await expect(useRuntimeStore.getState().sendPrompt("status")).rejects.toThrow();
+    const firstBlock = useRuntimeStore.getState().thread.blocks.find((block) => block.kind === "user");
+    if (!firstBlock || firstBlock.kind !== "user" || !firstBlock.client_message_id) throw new Error("optimistic send ID missing");
+    await useRuntimeStore.getState().sendPrompt("status", firstBlock.client_message_id);
+    useRuntimeStore.getState().disconnect();
+
+    expect(sentIds).toEqual([firstBlock.client_message_id, firstBlock.client_message_id]);
+    expect(useRuntimeStore.getState().thread.blocks.filter((block) => block.kind === "user")).toHaveLength(1);
+  });
+
   it("keeps independent blank conversations when another blank conversation is created", async () => {
     let counter = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
