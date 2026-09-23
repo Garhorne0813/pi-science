@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { delimiter, join, resolve, sep } from "node:path";
 import { configPath, metadataRoot, readJson, withFileWriteLock, withWorkspaceWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
 import type { EnvironmentRepository } from "../../storage/sqlite/repositories/environment-repository.js";
+import { probeLog, probeTimed } from "../../support/probe-log.js";
 
 export type EnvironmentLanguage = "python" | "r";
 export type EnvironmentStatus = "creating" | "ready" | "failed" | "archived";
@@ -592,7 +593,7 @@ export class WorkspaceEnvironmentService {
   }
 
   private async provision(cwd: string): Promise<WorkspaceEnvironmentStatus> {
-    const before = await this.status(cwd);
+    const before = await probeTimed("provision:status", () => this.status(cwd));
     if (before.ready) return before;
     if (before.error) throw new Error(before.error);
     if (process.env.NODE_ENV === "test") {
@@ -600,9 +601,11 @@ export class WorkspaceEnvironmentService {
       await this.run(this.basePython, ["-m", "venv", legacy], 120_000);
       return this.status(cwd);
     }
-    const existing = (await this.list()).find((item) => item.environment_id === DEFAULT_ENVIRONMENT_ID && item.status === "ready");
-    const revision = existing ?? await this.createRevision({ environment_id: DEFAULT_ENVIRONMENT_ID, name: "python-standard", display_name: "Python Standard", language: "python", packages: DEFAULT_PACKAGES });
-    return this.bind(cwd, revision.revision_id);
+    const revisions = await probeTimed("provision:list-revisions", () => this.list());
+    const existing = revisions.find((item) => item.environment_id === DEFAULT_ENVIRONMENT_ID && item.status === "ready");
+    probeLog("provision:revision-selected", { reused: Boolean(existing) });
+    const revision = existing ?? await probeTimed("provision:create-revision", () => this.createRevision({ environment_id: DEFAULT_ENVIRONMENT_ID, name: "python-standard", display_name: "Python Standard", language: "python", packages: DEFAULT_PACKAGES }));
+    return probeTimed("provision:bind", () => this.bind(cwd, revision.revision_id));
   }
 
   private async createRevision(input: Omit<EnvironmentRevision, "revision_id" | "status" | "prefix" | "platform" | "created_at">): Promise<EnvironmentRevision> {
@@ -613,13 +616,13 @@ export class WorkspaceEnvironmentService {
     await rm(finalPrefix, { recursive: true, force: true });
     try {
       await mkdir(environmentRoot(), { recursive: true });
-      const micromamba = await this.ensureMicromamba();
+      const micromamba = await probeTimed("create-revision:ensure-micromamba", () => this.ensureMicromamba());
       // Conda prefixes are not safely relocatable: create at the final path and
       // use registry status as the publication boundary. Failed prefixes are
       // removed before the revision is marked failed.
-      await this.run(micromamba, ["create", "--yes", "--prefix", finalPrefix, "--channel", "conda-forge", "--strict-channel-priority", ...input.packages], 20 * 60_000, this.micromambaEnvironment());
-      await this.runHealthCheck(finalPrefix, input.language);
-      revision = { ...revision, status: "ready", integrity_snapshot: await integritySnapshot(finalPrefix) };
+      await probeTimed("create-revision:micromamba-create", () => this.run(micromamba, ["create", "--yes", "--prefix", finalPrefix, "--channel", "conda-forge", "--strict-channel-priority", ...input.packages], 20 * 60_000, this.micromambaEnvironment()));
+      await probeTimed("create-revision:health-check", () => this.runHealthCheck(finalPrefix, input.language));
+      revision = { ...revision, status: "ready", integrity_snapshot: await probeTimed("create-revision:integrity-snapshot", () => integritySnapshot(finalPrefix)) };
       await this.upsert(revision);
       return revision;
     } catch (error) {

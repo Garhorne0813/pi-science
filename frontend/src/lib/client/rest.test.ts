@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { REQUEST_TIMEOUT_MS, RUNTIME_START_TIMEOUT_MS } from "./http";
 import { PiScienceClient } from "./pi-science-client";
 import { installClientTestEnvironment } from "./test-helpers";
 
@@ -118,5 +119,54 @@ describe("PiScienceClient REST calls", () => {
 
     await expect(client.getMessagesPage("session-a", "/workspace"))
       .rejects.toThrow("Load messages failed: invalid response payload");
+  });
+
+  it("accepts a prompt acknowledgment that arrives after the old REST budget", async () => {
+    vi.useFakeTimers();
+    try {
+      // A prompt can wait on a first-time workspace provision, which takes tens
+      // of seconds. Model a 50s acknowledgment and abort on signal so the old
+      // 45s budget would reject this request as a timeout.
+      vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+        const timer = globalThis.setTimeout(() => resolve(new Response(
+          JSON.stringify({ ok: true, id: "session-a" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        )), 50_000);
+        init?.signal?.addEventListener("abort", () => {
+          globalThis.clearTimeout(timer);
+          reject(new Error("Request timed out while contacting the Pi-Science backend"));
+        });
+      })));
+      const client = new PiScienceClient();
+
+      const pending = client.sendPrompt("session-a", "hello", "/workspace");
+      await vi.advanceTimersByTimeAsync(50_000);
+
+      await expect(pending).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("budgets a prompt like a runtime start, not like an ordinary read", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, id: "session-a" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const client = new PiScienceClient();
+      await client.sendPrompt("session-a", "hello", "/workspace");
+
+      // A prompt can have to start the session runtime and provision the
+      // workspace environment first. Aborting it at the ordinary REST budget
+      // reports a timeout for a turn the backend still completes.
+      const delays = timers.mock.calls.map((call) => call[1]);
+      expect(delays).toContain(RUNTIME_START_TIMEOUT_MS);
+      expect(delays).not.toContain(REQUEST_TIMEOUT_MS);
+    } finally {
+      timers.mockRestore();
+    }
   });
 });

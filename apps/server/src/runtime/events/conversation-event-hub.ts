@@ -3,6 +3,12 @@ import { resolve } from "node:path";
 import { durableEventStore, type EventPublishGuard, type SseEventRecord } from "./event-store.js";
 import type { PiEvent, PiProcess } from "../pi/pi-process.js";
 import { toolActivityPresentation, toolActivityTitle } from "../presentation/tool-activity-presenters.js";
+import { probeLog } from "../../support/probe-log.js";
+
+/** Structural frames the event-stream probe always reports. */
+const PROBE_EVENT_TYPES = new Set(["agent_start", "agent_settled", "agent_end", "error", "session.idle", "runtime_evicted"]);
+/** Silence that makes the probe report the next frame with its gap. */
+const PROBE_SILENCE_MS = 20_000;
 
 type Subscriber = {
   ready: boolean;
@@ -389,6 +395,8 @@ export class ConversationEventHub {
   private readonly expectedExits = new WeakSet<PiProcess>();
   /** Per-process throttle for immediate stderr forwarding (ms). */
   private readonly stderrLogAt = new WeakMap<PiProcess, number>();
+  /** Per-process arrival time of the last probed event-stream frame. */
+  private readonly probeLastEventAt = new WeakMap<PiProcess, number>();
   private log: (level: "info" | "warn" | "error", message: string) => void = () => {};
 
   constructor(
@@ -485,6 +493,15 @@ export class ConversationEventHub {
     process.on("event", (event: PiEvent) => {
       const sessionId = this.eventSessionId(event) ?? options.activeSessionId();
       if (!sessionId) return;
+      // Event-stream probe: structural frames are always reported, and any
+      // frame that follows a long silence is reported with the gap, so a
+      // stream that stalls mid-turn is visible without flooding the log.
+      const eventNow = Date.now();
+      const previousAt = this.probeLastEventAt.get(process) ?? eventNow;
+      this.probeLastEventAt.set(process, eventNow);
+      if (PROBE_EVENT_TYPES.has(event.type) || eventNow - previousAt >= PROBE_SILENCE_MS) {
+        probeLog("event-stream frame", { type: event.type, gapMs: eventNow - previousAt });
+      }
       if (event.type === "agent_start") {
         turnNumber += 1;
         turnStartedAt = Date.now();

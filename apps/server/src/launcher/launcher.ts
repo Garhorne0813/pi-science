@@ -53,6 +53,7 @@ export async function launchServer(options: LauncherOptions = {}): Promise<Launc
     app = buildApp(config);
     const address = await app.listen({ host: config.host, port: config.port });
     const url = typeof address === "string" ? address.replace(/\/$/, "") : `http://${config.host}:${address}`;
+    publishControlPlaneAddress(config, typeof address === "string" ? new URL(address).port : String(address));
     const waitForReady = options.waitForReady ?? defaultWaitForReady;
     await waitForReady(url);
     options.log?.(`Pi-Science core ready at ${url}`);
@@ -69,4 +70,19 @@ export async function launchServer(options: LauncherOptions = {}): Promise<Launc
     await lock.release();
     throw error;
   }
+}
+
+/** Publish the control plane's own coordinates into the process environment.
+ *
+ * The managed Pi Orbit runtime inherits this environment, and the conversation
+ * sandbox extension inside it calls back into `/api/jobs/conversation` to run
+ * Bash. Without this the extension guesses a default port and can only
+ * authenticate when the launcher happened to export a token, so a non-default
+ * port or a server-generated token (direct `main.ts` launches) leaves every
+ * sandboxed command failing with "control-plane authentication required". */
+function publishControlPlaneAddress(config: ServerConfig, port: string): void {
+  if (!port) return;
+  const loopback = config.host === "0.0.0.0" || config.host === "::" || config.host === "" ? "127.0.0.1" : config.host;
+  if (!process.env.PI_SCIENCE_BACKEND_URL) process.env.PI_SCIENCE_BACKEND_URL = `http://${loopback}:${port}`;
+  if (config.internalToken && !process.env.PI_SCIENCE_INTERNAL_TOKEN) process.env.PI_SCIENCE_INTERNAL_TOKEN = config.internalToken;
 }

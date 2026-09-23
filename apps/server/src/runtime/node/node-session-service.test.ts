@@ -170,6 +170,81 @@ function testService(): NodeSessionService {
   return new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments);
 }
 
+describe("workspace environment priming", () => {
+  const nodeEnv = process.env.NODE_ENV;
+  beforeEach(() => { process.env.NODE_ENV = "development"; });
+  afterEach(() => { if (nodeEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = nodeEnv; });
+
+  it("warms each workspace once, without waiting for the caller", async () => {
+    const environment = vi.fn(async (_cwd: string) => ({ ...process.env }));
+    const service = new NodeSessionService(undefined, undefined, undefined, { environment });
+    const cwd = await workspaceWithSessions("primed");
+    const other = await workspaceWithSessions("primed-other");
+
+    service.primeWorkspaceEnvironment(cwd);
+    service.primeWorkspaceEnvironment(cwd);
+    await vi.waitFor(() => expect(environment).toHaveBeenCalledTimes(1));
+    service.primeWorkspaceEnvironment(other);
+    await vi.waitFor(() => expect(environment).toHaveBeenCalledTimes(2));
+    service.primeWorkspaceEnvironment(cwd);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Same canonical path twice is one warm-up; a second workspace gets its own.
+    expect(environment.mock.calls.map((call) => call[0])).toEqual([cwd, other]);
+  });
+
+  it("serializes warm-ups so concurrent workspaces cannot race the package cache", async () => {
+    const started: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const environment = vi.fn(async (cwd: string) => {
+      started.push(cwd);
+      if (started.length === 1) await new Promise<void>((resolve) => { releaseFirst = resolve; });
+      return { ...process.env };
+    });
+    const service = new NodeSessionService(undefined, undefined, undefined, { environment });
+    const first = await workspaceWithSessions("prime-serial-a");
+    const second = await workspaceWithSessions("prime-serial-b");
+
+    service.primeWorkspaceEnvironment(first);
+    service.primeWorkspaceEnvironment(second);
+    await vi.waitFor(() => expect(started).toEqual([first]));
+
+    releaseFirst?.();
+    await vi.waitFor(() => expect(started).toEqual([first, second]));
+  });
+
+  it("retries a failed warm-up after the cooldown, not on every refresh", async () => {
+    let attempts = 0;
+    const environment = vi.fn(async () => {
+      attempts += 1;
+      throw new Error("provision failed");
+    });
+    const service = new NodeSessionService(undefined, undefined, undefined, { environment });
+    const cwd = await workspaceWithSessions("prime-retry");
+
+    service.primeWorkspaceEnvironment(cwd);
+    await vi.waitFor(() => expect(environment).toHaveBeenCalledTimes(1));
+    // Workspace entry repeats on every session-list refresh; a failed provision
+    // must not be re-attempted (and re-solve conda) on each of them.
+    for (let refresh = 0; refresh < 5; refresh += 1) service.primeWorkspaceEnvironment(cwd);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(environment).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not provision while tests run the route suite", async () => {
+    process.env.NODE_ENV = "test";
+    const environment = vi.fn(async () => ({ ...process.env }));
+    const service = new NodeSessionService(undefined, undefined, undefined, { environment });
+    const cwd = await workspaceWithSessions("prime-test-env");
+
+    service.primeWorkspaceEnvironment(cwd);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(environment).not.toHaveBeenCalled();
+  });
+});
+
 describe("Node session lifecycle", () => {
   it("fails fast when the Pi runtime is missing without provisioning the workspace environment", async () => {
     const environment = vi.fn(async () => ({ ...process.env }));
