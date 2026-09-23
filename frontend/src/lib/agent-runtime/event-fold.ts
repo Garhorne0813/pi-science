@@ -613,6 +613,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
         turnId,
         ...(numberValue(event.revision) !== undefined ? { revision: numberValue(event.revision) } : {}),
         ...(numberValue(event.seq) !== undefined ? { sequence: numberValue(event.seq) } : {}),
+        ...(typeof event.endedAt === "string" && event.endedAt ? { endedAt: event.endedAt } : {}),
         assistantMessageId: event.assistantMessageId ? String(event.assistantMessageId) : null,
         ...(Number.isInteger(turnOrdinal) && turnOrdinal > 0 ? { turnOrdinal } : {}),
         artifacts: items,
@@ -631,7 +632,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
         // as attachTurnArtifacts.
         if (previousVersioned && !incomingVersioned) break;
         if (previousRevision !== undefined && (incomingRevision === undefined || incomingRevision <= previousRevision)) break;
-        blocks[existing] = block;
+        blocks[existing] = { ...block, endedAt: block.endedAt ?? (previous.kind === "artifact-summary" ? previous.endedAt : undefined) };
         break;
       }
       let insertAt = -1;
@@ -647,10 +648,12 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       if (insertAt < 0 && endedAt) {
         // Same primary fallback as attachTurnArtifacts: the turn's end time
         // identifies the owning turn independently of ordinals. The published
-        // ordinal counts artifact records rather than user-message turns, so
+        // legacy ordinal counts artifact records; hub ordinals reset, so
         // trusting it alone drops the strip on an unrelated earlier turn.
         insertAt = afterTurnEndedAt(blocks, endedAt);
       }
+      // Hub ordinals reset after restart and are never history positions.
+      if (insertAt < 0 && isHubTurnId(turnId)) break;
       if (insertAt < 0 && Number.isInteger(turnOrdinal) && turnOrdinal > 0) {
         // Prefer explicit turn metadata to the current live anchor: a late
         // artifact must not attach to a newer turn that is already streaming.
@@ -1577,6 +1580,10 @@ function afterAgentBlock(blocks: ThreadBlock[], ordinal: number): number {
   return blocks.length;
 }
 
+function isHubTurnId(turnId: string): boolean {
+  return /^turn-.+-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(turnId);
+}
+
 /** Position after the last block carrying a stable turn identity. This is the
  * strongest live artifact anchor when an older turn publishes after a newer
  * turn has already started. */
@@ -1633,10 +1640,14 @@ function afterTurnEndedAt(blocks: ThreadBlock[], endedAt: string): number {
   }
   let lastAgent = -1;
   if (lastUser >= 0) {
+    let lastContent = lastUser;
     for (let i = lastUser + 1; i < blocks.length; i += 1) {
       if (blocks[i].kind === "user") break;
+      if (blocks[i].kind !== "artifact-summary") lastContent = i;
       if (blocks[i].kind === "agent") lastAgent = i;
     }
+    // A tool-only turn still has a known user boundary and owns its files.
+    if (lastAgent < 0) return lastContent + 1;
   } else {
     // A tail page can omit the turn's opening user message. Use the end time
     // to find the latest agent block that belongs to the turn. Compare times,
@@ -1723,7 +1734,7 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[], o
       // agent block).
       insertAt = afterTurnEndedAt(blocks, turn.ended_at);
     }
-    if (insertAt < 0 && !windowComplete) {
+    if (insertAt < 0 && (!windowComplete || isHubTurnId(turn.turn_id))) {
       // Partial history window: this record's turn has not loaded yet (its
       // user message and agent blocks live in an older page). Every
       // remaining anchor would guess from the window start and land the
@@ -1756,6 +1767,7 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[], o
       id: blockId,
       turnId: turn.turn_id,
       assistantMessageId,
+      ...(turn.ended_at ? { endedAt: turn.ended_at } : {}),
       ...(Number.isInteger(ordinal) && ordinal > 0 ? { turnOrdinal: ordinal } : {}),
       artifacts: items,
     };
@@ -1771,6 +1783,7 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[], o
     // to a stale REST/cache snapshot or discard its reconciliation metadata.
     const block: ThreadBlock = versionedExisting ? {
       ...versionedExisting,
+      ...(turn.ended_at ? { endedAt: turn.ended_at } : {}),
       assistantMessageId: assistantMessageId ?? versionedExisting.assistantMessageId ?? null,
       ...(Number.isInteger(ordinal) && ordinal > 0
         ? { turnOrdinal: ordinal }

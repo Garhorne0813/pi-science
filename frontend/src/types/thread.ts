@@ -190,8 +190,9 @@ export interface TurnArtifactSummaryBlock extends ConversationBlockIdentity {
   id: string;
   turnId: string;
   assistantMessageId?: string | null;
-  /** 1-based turn ordinal when known (live events and new persisted records). */
+  /** Diagnostic ordinal; hub ordinals reset, legacy ordinals count artifacts. */
   turnOrdinal?: number | null;
+  endedAt?: string;
   artifacts: TurnArtifactItem[];
 }
 

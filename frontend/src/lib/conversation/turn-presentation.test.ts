@@ -210,17 +210,12 @@ describe("buildTurnPresentations", () => {
     expect(turn.activityBlocks.map((block) => block.id)).toEqual(["final-a", "late-edit"]);
   });
 
-  it("keeps the active designation on the running turn when a trailing strip forms its own group", () => {
+  it("keeps a positioned legacy strip inside its owning turn", () => {
     const blocks: ThreadBlock[] = [
       user("u1"),
       tool("tool-1"),
       user("u2"),
       tool("tool-2", "bash", "running"),
-      // The published artifact turn id is opaque — it does not match the
-      // session turn identity — so the strip is its own group and can be the
-      // last one in the array. It must not inherit the active designation:
-      // that marks the still-running turn settled and flips its label between
-      // the live text and "Completed" on every render.
       {
         kind: "artifact-summary",
         id: "strip-1",
@@ -233,7 +228,8 @@ describe("buildTurnPresentations", () => {
     const strip = turns.find((turn) => turn.blocks.some((block) => block.id === "strip-1"));
     expect(running?.active).toBe(true);
     expect(running?.lifecycle).toBe("active");
-    expect(strip?.active).toBe(false);
+    expect(strip).toBe(running);
+    expect(turns).toHaveLength(2);
   });
 
   it("still finds the active turn when lastTurnId matches no group", () => {

@@ -204,7 +204,7 @@ function liveArtifactTurns(thread: ReturnType<typeof useRuntimeStore.getState>["
     session_id: sessionId,
     assistant_message_id: block.assistantMessageId ?? null,
     turn_ordinal: block.turnOrdinal ?? null,
-    ended_at: "",
+    ended_at: block.endedAt ?? "",
     artifacts: block.artifacts,
   }] : []);
 }
@@ -216,8 +216,8 @@ export function mergeArtifactTurns(
   const byTurn = new Map(persisted.map((turn) => [turn.turn_id, turn]));
   for (const turn of live) {
     const previous = byTurn.get(turn.turn_id);
-    // The live turn is newer for its artifact list and ordinal, but it is
-    // rebuilt from the rendered block and carries no turn end time. Letting it
+    // The live turn is newer for its artifact list and ordinal, but a copy
+    // rebuilt from a legacy block may carry no turn end time. Letting it
     // replace the persisted copy outright strands the strip: the record has no
     // assistant message id and an opaque turn id, so the end time is the only
     // anchor left, and an unresolvable anchor is dropped from a partial history

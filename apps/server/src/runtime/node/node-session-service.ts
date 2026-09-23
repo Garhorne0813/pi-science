@@ -74,10 +74,7 @@ type RuntimeRecord = {
    *  keys live agent blocks by partId) to avoid every turn's artifacts being
    *  appended at the end of the thread. */
   turnAssistantPartId?: string;
-  /** 1-based ordinal of the current turn (incremented on each agent_start).
-   *  Persisted with turn-artifacts records so the frontend can anchor a strip
-   *  to the n-th agent block even when earlier turns produced no files (pure
-   *  record-ordinal fallback misplaces strips when a turn has no record). */
+  /** Hub ordinal, diagnostic only: resets when the control plane restarts. */
   turnOrdinal?: number;
   /** JSONL cursor captured at prompt-accept time (fallback evidence when the
    *  Pi event stream dies and agent_start never arrives): snapshot_version,
@@ -860,7 +857,7 @@ export class NodeSessionService {
           if (current === runtime && current.process === process) this.runtimes.delete(key);
         }
       },
-      observe: async (event, sessionId) => {
+      observe: async (event, sessionId, identity) => {
         await observeNodePiEvent(cwd, runtime.config.model ?? null, event, sessionId, (payload) => this.eventHub.publish(cwd, sessionId, payload));
         this.statsProjector.track(runtimeKey(cwd, sessionId), event, Date.now());
         // DeepSeek refreshes its stats line at settled boundaries (assistant
@@ -871,15 +868,12 @@ export class NodeSessionService {
           void this.refreshAndPublishStats(runtime, sessionId);
         }
         if (event.type === "agent_start") {
-          runtime.turnId = randomUUID();
+          // Capture the normalized identity while handling agent_start. The hub
+          // clears its active identity before observing agent_settled.
+          runtime.turnId = identity?.turnId;
+          runtime.turnOrdinal = identity?.turnOrdinal;
           runtime.turnBaseline = snapshotWorkspace(cwd);
           runtime.turnAssistantPartId = undefined;
-          // Derive the ordinal from persisted records so it keeps counting
-          // across runtime rebuilds (idle cleanup, restarts); the in-memory
-          // field alone would reset to 1 and misanchor strips for later turns.
-          runtime.turnOrdinal = await turnArtifactRepository
-            .nextTurnOrdinal(runtime.cwd, sessionId)
-            .catch(() => (runtime.turnOrdinal ?? 0) + 1);
         }
         // Pi's raw event type is "message_update" with an inner
         // assistantMessageEvent (text_delta/text/text_end); the hub normalizes
@@ -1203,6 +1197,9 @@ export class NodeSessionService {
     const baseline = runtime.turnBaseline;
     runtime.turnBaseline = undefined;
     if (!baseline) return;
+    const turnOrdinal = runtime.turnOrdinal ?? null;
+    const endedAt = new Date().toISOString();
+    const lastAssistantPartId = runtime.turnAssistantPartId;
     const before = await baseline;
     const after = await snapshotWorkspace(runtime.cwd);
     if (!after) return;
@@ -1215,14 +1212,12 @@ export class NodeSessionService {
     // anchor (PRD: artifact cards must land after the turn's FINAL assistant
     // message). A settled event's own ids may point to an earlier message of
     // a multi-message turn, so they are consulted only as secondary fallbacks.
-    const assistantMessageId = runtime.turnAssistantPartId
+    const assistantMessageId = lastAssistantPartId
       ?? (typeof event.assistantMessageId === "string"
         ? event.assistantMessageId
         : typeof event.messageId === "string"
           ? event.messageId
           : null);
-    const turnOrdinal = runtime.turnOrdinal ?? null;
-    const endedAt = new Date().toISOString();
     const record = {
       turn_id: turnId,
       session_id: sessionId,
@@ -1245,7 +1240,7 @@ export class NodeSessionService {
       turnOrdinal,
       assistantMessageId,
       // Published so the live fold can anchor the strip the same way the
-      // history restore does. `turnOrdinal` counts persisted artifact records,
+      // history restore does. `turnOrdinal` is diagnostic and resets with the hub,
       // not user-message turns, so it cannot identify the owning turn on its own.
       endedAt,
       artifacts: items,

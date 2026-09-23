@@ -46,7 +46,7 @@ export function buildTurnPresentations(blocks: ThreadBlock[], opts: { lastTurnLi
     const key: string = block.kind === "user"
       ? `user:${block.id}`
       : block.kind === "artifact-summary" && identity
-        ? ownerByTurnId.get(identity) ?? `turn:${identity}`
+        ? ownerByTurnId.get(identity) ?? currentKey ?? `turn:${identity}`
         : currentKey && byKey.get(currentKey)?.blocks.some((entry) => entry.kind === "user")
           ? currentKey
           : identity ? `turn:${identity}` : currentKey ?? `orphan:${block.id}`;
@@ -60,12 +60,8 @@ export function buildTurnPresentations(blocks: ThreadBlock[], opts: { lastTurnLi
     if (identity && block.kind !== "artifact-summary") ownerByTurnId.set(identity, key);
     if (block.kind !== "artifact-summary") currentKey = key;
   }
-  // A strip whose published turn id is opaque (it does not match the session
-  // turn identity) forms its own group, and it can be the last one in the
-  // block array. Falling back to `lastKey` would then hand the active
-  // designation to that strip, marking the still-running turn as settled and
-  // flipping its label between the live text and "Completed" on every render.
-  // Only a group with real turn content may stand in for the active turn.
+  // Unmatched legacy/history identities retain the position established by
+  // artifact attachment. Only groups with content can own the active state.
   let lastContentKey: string | null = null;
   for (const turn of turns) {
     if (turn.blocks.some((block) => block.kind !== "artifact-summary")) lastContentKey = turn.key;

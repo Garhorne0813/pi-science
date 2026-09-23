@@ -29,6 +29,45 @@ async function eventually(predicate: () => boolean): Promise<void> {
 }
 
 describe("central conversation event hub", () => {
+  it("passes the published identity to observers across empty turns and hub restarts", async () => {
+    const cwd = await workspace();
+    const records: SseEventRecord[] = [];
+    const store = {
+      append: async (_cwd: string, _sessionId: string, event: SseEventRecord) => { records.push(event); },
+      readAfter: async () => records,
+    };
+    const observed: Array<{ type: string; turnId: string; turnOrdinal: number }> = [];
+    const run = async (count: number) => {
+      const hub = new ConversationEventHub(store);
+      const process = new EventEmitter();
+      hub.bind(cwd, process as PiProcess, {
+        activeSessionId: () => "identity-test",
+        onBusy: () => {}, onExit: () => {},
+        observe: (event, _sessionId, identity) => {
+          if (identity) observed.push({ type: event.type, ...identity });
+        },
+      });
+      const before = observed.length;
+      for (let i = 0; i < count; i += 1) {
+        process.emit("event", { type: "agent_start" });
+        process.emit("event", { type: "agent_settled" });
+      }
+      await eventually(() => observed.length === before + count * 2);
+    };
+    await run(3);
+    await run(1);
+    const starts = observed.filter((item) => item.type === "agent_start");
+    expect(starts.map((item) => item.turnOrdinal)).toEqual([1, 2, 3, 1]);
+    expect(new Set(starts.map((item) => item.turnId)).size).toBe(4);
+    const published = records.map((record) => JSON.parse(record.data));
+    for (const item of observed) {
+      expect(published).toContainEqual(expect.objectContaining({
+        type: item.type === "agent_start" ? "agent_start" : "session.idle",
+        turnId: item.turnId, turnOrdinal: item.turnOrdinal,
+      }));
+    }
+  });
+
   it("deduplicates an event that appears in both replay and the live replay window", async () => {
     const cwd = await workspace();
     const records: SseEventRecord[] = [];

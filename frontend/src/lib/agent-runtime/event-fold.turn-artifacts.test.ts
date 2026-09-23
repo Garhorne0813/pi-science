@@ -1,3 +1,4 @@
+import { buildTurnPresentations } from "../conversation/turn-presentation";
 import { beforeEach, describe, expect, it } from "vitest";
 import { attachTurnArtifacts as attachTurnArtifactsPure, foldEvent, resetTurnBuffer } from "./event-fold";
 import type { ArtifactAttachOptions, Thread } from "./event-fold";
@@ -61,7 +62,36 @@ describe("foldEvent turn.artifacts", () => {
     expect(state.blocks.at(-1)).toMatchObject({
       kind: "artifact-summary",
       turnId: "2f1c7d8e-0000-4000-8000-000000000000",
+      endedAt: "2026-01-01T00:02:30Z",
     });
+    const turns = buildTurnPresentations(state.blocks);
+    expect(turns).toHaveLength(3);
+    expect(turns[2].artifacts).toHaveLength(1);
+  });
+
+  it("restores tool-only artifacts by time without an extra presentation turn", () => {
+    const state = attachTurnArtifacts(threadWith([
+      { kind: "user", id: "u1", text: "hi", timestamp: "2026-01-01T00:00:00Z" },
+      { kind: "agent", id: "a1", parts: [{ id: "p1", text: "hello" }] },
+      { kind: "user", id: "u2", text: "write", timestamp: "2026-01-01T00:01:00Z" },
+      { kind: "tool", id: "t2", callId: "c2", tool: "write", status: "done" },
+    ]), [{ turn_id: "legacy-uuid", session_id: "s", assistant_message_id: null,
+      turn_ordinal: 1, ended_at: "2026-01-01T00:01:30Z",
+      artifacts: [{ path: "a.csv", kind: "data", mime: "text/csv", size: 1 }],
+    }], { windowComplete: false });
+    expect(state.blocks.at(-1)).toMatchObject({ kind: "artifact-summary", endedAt: "2026-01-01T00:01:30Z" });
+    const turns = buildTurnPresentations(state.blocks);
+    expect(turns).toHaveLength(2);
+    expect(turns[1].artifacts).toHaveLength(1);
+  });
+
+  it("does not interpret a restarted hub ordinal as a history position", () => {
+    const state = attachTurnArtifacts(threeTurnThread(), [{
+      turn_id: "turn-s-1-00000000-0000-4000-8000-000000000000", session_id: "s",
+      assistant_message_id: null, turn_ordinal: 1, ended_at: "2025-12-31T00:00:00Z",
+      artifacts: [{ path: "old.csv", kind: "data", mime: "text/csv", size: 1 }],
+    }]);
+    expect(state.blocks.some((block) => block.kind === "artifact-summary")).toBe(false);
   });
 
   it("falls back to the record ordinal when no turn end time is published", () => {

@@ -33,7 +33,7 @@ type BindingOptions = {
   activeSessionId: () => string | null;
   onBusy: (busy: boolean) => void;
   onExit: () => void;
-  observe?: (event: PiEvent, sessionId: string) => Promise<void> | void;
+  observe?: (event: PiEvent, sessionId: string, identity: { turnId: string; turnOrdinal: number } | undefined) => Promise<void> | void;
 };
 
 type TurnState = {
@@ -523,7 +523,10 @@ export class ConversationEventHub {
       }
       if (event.type === "agent_settled") options.onBusy(false);
       eventQueue = eventQueue.catch(() => undefined).then(async () => {
-        for (const normalized of this.normalize(cwd, sessionId, event)) {
+        const normalizedEvents = this.normalize(cwd, sessionId, event);
+        const owner = normalizedEvents.find((item) => typeof item.turnId === "string");
+        const identity = owner ? { turnId: String(owner.turnId), turnOrdinal: Number(owner.turnOrdinal) } : undefined;
+        for (const normalized of normalizedEvents) {
           if (normalized.type === "text.updated" || normalized.type === "thinking.updated") {
             await this.queueText(cwd, sessionId, normalized, normalized.type === "thinking.updated" ? "thinking" : "text");
           } else {
@@ -531,7 +534,7 @@ export class ConversationEventHub {
             await this.publish(cwd, sessionId, normalized);
           }
         }
-        await Promise.resolve(options.observe?.(event, sessionId)).catch(() => undefined);
+        await Promise.resolve(options.observe?.(event, sessionId, identity)).catch(() => undefined);
       });
     });
     process.on("exit", ({ code, signal }: { code: number | null; signal: NodeJS.Signals | null }) => {
