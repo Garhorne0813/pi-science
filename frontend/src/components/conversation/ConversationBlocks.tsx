@@ -30,10 +30,13 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
   const visibleAgent = turn.finalAgent ?? turn.provisionalAgent;
   const finalText = turn.finalAgent?.parts.map((part) => part.text).join("") ?? "";
   const publishedPaths = turn.artifacts.flatMap((block) => block.artifacts.map((item) => item.path));
+  const showActivity = turn.active
+    || turn.activityBlocks.length > 0
+    || (turn.lifecycle === "settled" && Boolean(turn.user && turn.finalAgent));
   return (
     <div data-thread-block-ids={turnBlockIds(turn).join(" ")} className="flex flex-col gap-0 scroll-mt-4">
       {turn.user && <UserMessage block={turn.user} />}
-      {(turn.active || turn.activityBlocks.length > 0) && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} userTimestamp={turn.user?.timestamp} finalAgentTimestamp={turn.finalAgent?.timestamp} part={isLiveLifecycle(turn.lifecycle) ? "content" : "both"} />}
+      {showActivity && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} userTimestamp={turn.user?.timestamp} finalAgentTimestamp={turn.finalAgent?.timestamp} part={isLiveLifecycle(turn.lifecycle) ? "content" : "both"} />}
       {visibleAgent && <AgentMessage key={visibleAgent.id} block={visibleAgent} actionText={turn.finalAgent ? actionTextByBlock?.get(turn.finalAgent.id) : undefined} codeRunner={codeRunner} />}
       {(turn.active || turn.activityBlocks.length > 0) && isLiveLifecycle(turn.lifecycle) && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} userTimestamp={turn.user?.timestamp} finalAgentTimestamp={turn.finalAgent?.timestamp} part="status" />}
       {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} />)}

@@ -155,6 +155,21 @@ describe("turn-level activity through the history path", () => {
     expect(screen.getByText("接下来看事件折叠。")).toBeInTheDocument();
     expect(todoViewModel(thread.blocks)?.allCompleted).toBe(true);
   });
+
+  it("shows total duration for a completed history turn with no activity blocks", () => {
+    const thread = threadFromMessages([
+      { id: "plain-user", role: "user", content: [{ type: "text", text: "Hello" }], timestamp: "2026-09-08T00:00:00.000Z" },
+      { id: "plain-answer", role: "assistant", content: [{ type: "text", text: "Hi there." }], timestamp: "2026-09-08T00:00:05.300Z" },
+    ]);
+    const [turn] = buildTurnPresentations(thread.blocks);
+    expect(turn?.activityBlocks).toHaveLength(0);
+    expect(turn?.finalAgent).not.toBeNull();
+
+    render(<>{renderBlocks(thread.blocks, codeRunner)}</>);
+
+    expect(screen.getByText("Completed · 5.3s")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Completed. Total turn duration: 5.3s" })).toBeInTheDocument();
+  });
 });
 
 describe("activity over time (PRD v1.2 §26/§28)", () => {

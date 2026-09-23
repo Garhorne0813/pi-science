@@ -57,6 +57,12 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
   const traceTools = useMemo(() => traceBlocks.filter((block): block is ToolCallBlock => block.kind === "tool"), [traceBlocks]);
   const shown = useDisplayedActivity(tools, lifecycle);
   const [traceExpanded, setTraceExpanded] = useState(false);
+  // Callers that render the final answer outside this component
+  // (ConversationTurn) pass the flag down; direct renders scan the blocks.
+  const hasExplicitFinal = hasFinalAnswer ?? blocks.some((block) => block.kind === "agent" && block.presentationRole === "final");
+  const wholeTurnDuration = lifecycle === "settled" && hasExplicitFinal
+    ? formatTimestampDuration(userTimestamp, finalAgentTimestamp)
+    : null;
 
   if (isLiveLifecycle(lifecycle)) {
     const state = lifecycle === "waiting" || lifecycle === "stopping" || shown?.state === "interaction" ? "waiting" : "running";
@@ -101,11 +107,15 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
     return <>{content}{status}</>;
   }
 
-  if (activities.length === 0) return null;
+  if (activities.length === 0) {
+    if (!wholeTurnDuration) return null;
+    const durationDescription = t("conversation.activity.turnDuration", { duration: wholeTurnDuration });
+    const completed = t("conversation.activity.completed");
+    return <div data-state="completed" data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
+      <span role="status" aria-label={`${completed}. ${durationDescription}`} className={cn(styles.summary, "flex min-h-primary w-full items-center py-1 text-sm font-medium text-text")}>{completed} · {wholeTurnDuration}</span>
+    </div>;
+  }
 
-  // Callers that render the final answer outside this component
-  // (ConversationTurn) pass the flag down; direct renders scan the blocks.
-  const hasExplicitFinal = hasFinalAnswer ?? blocks.some((block) => block.kind === "agent" && block.presentationRole === "final");
   // A settled turn can legitimately contain only commentary/process narration.
   // Keep that history recoverable in the fold, but make the missing answer
   // explicit instead of promoting commentary into the answer slot.
@@ -129,9 +139,6 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
     : lifecycle === "aborted"
       ? t("conversation.activity.stopped")
       : t("conversation.activity.completed");
-  const wholeTurnDuration = lifecycle === "settled" && hasExplicitFinal
-    ? formatTimestampDuration(userTimestamp, finalAgentTimestamp)
-    : null;
   const processDuration = wholeTurnDuration ?? formatProcessDuration(traceTools);
   const durationDescription = processDuration
     ? t(wholeTurnDuration ? "conversation.activity.turnDuration" : "conversation.activity.processDuration", { duration: processDuration })
