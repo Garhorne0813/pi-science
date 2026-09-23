@@ -1317,17 +1317,26 @@ export interface HistoryWindowMerge {
 /** Rebuild the loaded window around a fresh latest-page snapshot while
  *  reporting which pagination boundary describes the result.
  *
- *  A prefix of the previous window whose block ids overlap the snapshot is
- *  same-lineage history and stays in place. With `keepLiveExtras` the merge
- *  also preserves live blocks the snapshot does not cover yet (streaming
+ *  Keep older prefix blocks only outside turns covered by the snapshot. A
+ *  complete settled snapshot replaces the window, including anonymous extras.
+ *  With `keepLiveExtras` the merge also preserves live blocks the snapshot does not cover yet (streaming
  *  text, just-finished tools) — used by mid-stream recovery paths. Without
  *  it the settled snapshot is authoritative and live extras are dropped. */
-export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], opts: { keepLiveExtras: boolean; resetProjection?: boolean }): HistoryWindowMerge {
+export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], opts: { keepLiveExtras: boolean; resetProjection?: boolean; windowComplete?: boolean }): HistoryWindowMerge {
   const authoritative = carryToolTiming(current, threadFromMessages(messages), !opts.resetProjection);
   if (authoritative.blocks.length === 0) {
     return {
       thread: opts.resetProjection ? resetThreadProjection(authoritative) : current,
       retainedOlderPrefix: true,
+    };
+  }
+  // A complete snapshot has no older page to preserve. In particular, live
+  // anonymous reasoning before the first shared tool is not older history.
+  if (opts.windowComplete && !opts.keepLiveExtras) {
+    const replacement = authoritative;
+    return {
+      thread: opts.resetProjection ? resetThreadProjection(replacement) : preserveFoldState(replacement, current),
+      retainedOlderPrefix: false,
     };
   }
   const authoritativeIds = new Set(authoritative.blocks.map((block) => block.id));
@@ -1342,14 +1351,47 @@ export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], 
         : preserveFoldState({ blocks: authoritative.blocks, index: authoritative.index, loaded: authoritative.loaded }, current);
     return { thread: replacement, retainedOlderPrefix: false };
   }
+  // Only a snapshot that includes a turn's user boundary can replace that
+  // turn's live prefix. A page starting mid-turn must keep its earlier content.
+  const firstUser = authoritative.blocks.findIndex((block) => block.kind === "user");
+  const coveredTurnOwners = new Map<string, string>();
+  if (firstUser >= 0) {
+    for (const block of current.blocks) {
+      const position = authoritative.index[block.id];
+      if (position !== undefined && position >= firstUser && "turnId" in block && block.turnId) {
+        const owner = authoritative.blocks.slice(0, position + 1).findLast((candidate) => candidate.kind === "user");
+        if (owner) coveredTurnOwners.set(block.turnId, owner.id);
+      }
+    }
+  }
+  const prefix: ThreadBlock[] = [];
+  const coveredLive: ThreadBlock[] = [];
+  for (const block of current.blocks.slice(0, firstOverlap)) {
+    if (block.kind !== "user" && "turnId" in block && block.turnId && coveredTurnOwners.has(block.turnId)) {
+      coveredLive.push(block);
+    } else {
+      prefix.push(block);
+    }
+  }
   const tail = opts.keepLiveExtras
     ? mergeHistoryWithLive(authoritative, { blocks: current.blocks.slice(firstOverlap), index: {}, loaded: true })
     : authoritative;
-  const blocks = [...current.blocks.slice(0, firstOverlap), ...tail.blocks];
+  const tailBlocks = [...tail.blocks];
+  if (opts.keepLiveExtras) {
+    // Preserve in-flight extras within their proven owner, not after a newer
+    // user turn in a multi-turn snapshot.
+    for (const block of coveredLive) {
+      const ownerId = coveredTurnOwners.get("turnId" in block ? block.turnId ?? "" : "");
+      const ownerIndex = tailBlocks.findIndex((candidate) => candidate.id === ownerId);
+      const nextUser = tailBlocks.findIndex((candidate, position) => position > ownerIndex && candidate.kind === "user");
+      tailBlocks.splice(nextUser < 0 ? tailBlocks.length : nextUser, 0, block);
+    }
+  }
+  const blocks = [...prefix, ...tailBlocks];
   const index: Record<string, number> = {};
   blocks.forEach((block, position) => { index[block.id] = position; });
   const merged = { blocks, index, loaded: true };
-  return { thread: opts.resetProjection ? resetThreadProjection(merged) : preserveFoldState(merged, current), retainedOlderPrefix: true };
+  return { thread: opts.resetProjection ? resetThreadProjection(merged) : preserveFoldState(merged, current), retainedOlderPrefix: !opts.windowComplete && (prefix.length > 0 || (firstOverlap === 0 && authoritative.index[current.blocks[0].id] === 0)) };
 }
 export function mergeHistoryWithLive(history: Thread, live: Thread): Thread {
   if (live.blocks.length === 0) return history;
