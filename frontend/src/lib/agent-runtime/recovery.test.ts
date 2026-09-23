@@ -5,7 +5,7 @@ import { queryClient } from "../client/query-client";
 import { workspaceFiles } from "../workspace";
 import { generations } from "./generations";
 import { useRuntimeStore } from "./index";
-import { reconcileAfterConnectionLoss, reconcileAfterGap, reconcilePromptAfterLateStream, resyncCompletedHistory } from "./recovery";
+import { mergeArtifactTurns, reconcileAfterConnectionLoss, reconcileAfterGap, reconcilePromptAfterLateStream, resyncCompletedHistory } from "./recovery";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
 
@@ -1020,5 +1020,46 @@ describe("runtime conversation recovery", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(useRuntimeStore.getState().fileRevision).toBe(1);
     invalidateSpy.mockRestore();
+  });
+});
+
+describe("mergeArtifactTurns", () => {
+  const turn = (overrides: Record<string, unknown>) => ({
+    turn_id: "t1",
+    session_id: "s",
+    assistant_message_id: null,
+    turn_ordinal: 3,
+    ended_at: "",
+    artifacts: [{ path: "a.csv", kind: "table", mime: "text/csv", size: 1 }],
+    ...overrides,
+  }) as never;
+
+  it("keeps the persisted turn end time when the live copy has none", () => {
+    // The live copy is rebuilt from the rendered block, which carries no turn
+    // end time. Without the persisted value the strip has no anchor left —
+    // there is no assistant message id and the turn id is opaque — so a partial
+    // history window drops it instead of placing it.
+    const merged = mergeArtifactTurns(
+      [turn({ ended_at: "2026-01-01T00:00:10Z" })],
+      [turn({ turn_ordinal: 4 })],
+    );
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ turn_ordinal: 4, ended_at: "2026-01-01T00:00:10Z" });
+  });
+
+  it("lets a live copy with its own turn end time replace the persisted one", () => {
+    const merged = mergeArtifactTurns(
+      [turn({ ended_at: "2026-01-01T00:00:10Z" })],
+      [turn({ ended_at: "2026-01-01T00:00:20Z" })],
+    );
+    expect(merged[0]).toMatchObject({ ended_at: "2026-01-01T00:00:20Z" });
+  });
+
+  it("adds a live turn that has no persisted record yet", () => {
+    const merged = mergeArtifactTurns(
+      [turn({ turn_id: "t1", ended_at: "2026-01-01T00:00:10Z" })],
+      [turn({ turn_id: "t2" })],
+    );
+    expect(merged.map((entry) => entry.turn_id)).toEqual(["t1", "t2"]);
   });
 });
