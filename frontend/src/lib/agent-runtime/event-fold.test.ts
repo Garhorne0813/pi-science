@@ -44,6 +44,29 @@ describe("transport event folding", () => {
     expect(tool.endedAt).toBe("2026-09-08T00:00:03.000Z");
   });
 
+  it("keeps an observed reasoning phase's timing across the settle-time rebuild", () => {
+    // Persisted messages carry no reasoning clock, so without the carry-over
+    // the reasoning row loses its duration on every history resync.
+    const current = threadFromMessages([
+      { id: "user-1", role: "user", content: [{ type: "text", text: "run" }], turnId: "turn-1" },
+    ]);
+    current.blocks.push({
+      kind: "thinking", id: "thinking-turn-1-reasoning-1", turnId: "turn-1",
+      parts: [{ id: "reasoning-1", text: "Weigh the options." }], partial: false,
+      startedAt: "2026-09-08T00:00:00.000Z", endedAt: "2026-09-08T00:00:04.500Z",
+    } as ThreadBlock);
+    const merged = replaceHistoryTail(current, [
+      { id: "user-1", role: "user", content: [{ type: "text", text: "run" }], turnId: "turn-1" },
+      {
+        id: "assistant-1", role: "assistant", turnId: "turn-1", timestamp: "2026-09-08T00:00:05.000Z",
+        content: [{ type: "thinking", thinking: "Weigh the options." }, { type: "text", text: "answer" }],
+      },
+    ]);
+    const thinking = merged.blocks.find((block) => block.kind === "thinking") as { startedAt?: string; endedAt?: string } | undefined;
+    expect(thinking?.startedAt).toBe("2026-09-08T00:00:00.000Z");
+    expect(thinking?.endedAt).toBe("2026-09-08T00:00:04.500Z");
+  });
+
   it("derives full tool timing from history when the live tail was never observed", () => {
     const merged = threadFromMessages([
       { id: "user-1", role: "user", content: [{ type: "text", text: "run" }], timestamp: "2026-09-08T00:00:00.000Z" },
