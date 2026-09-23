@@ -40,7 +40,7 @@ export function ThinkingActivity({ className }: { className?: string }) {
  *  intermediate narration, reasoning, and tools — behind one summary. The
  *  final answer is owned by ConversationTurn and rendered outside this
  *  component. A settled turn without a final answer says so explicitly. */
-export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both", hasFinalAnswer }: { blocks: ActivityBlock[]; lifecycle?: TurnLifecycle; cwd?: string; part?: "both" | "content" | "status"; hasFinalAnswer?: boolean }) {
+export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both", hasFinalAnswer, userTimestamp, finalAgentTimestamp }: { blocks: ActivityBlock[]; lifecycle?: TurnLifecycle; cwd?: string; part?: "both" | "content" | "status"; hasFinalAnswer?: boolean; userTimestamp?: string; finalAgentTimestamp?: string }) {
   const { t } = useTranslation();
   const progressAppearance = useProgressAppearance();
   const tools = useMemo(() => blocks.filter((block): block is ToolCallBlock => block.kind === "tool"), [blocks]);
@@ -129,7 +129,13 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
     : lifecycle === "aborted"
       ? t("conversation.activity.stopped")
       : t("conversation.activity.completed");
-  const processDuration = formatProcessDuration(traceTools);
+  const wholeTurnDuration = lifecycle === "settled" && hasExplicitFinal
+    ? formatTimestampDuration(userTimestamp, finalAgentTimestamp)
+    : null;
+  const processDuration = wholeTurnDuration ?? formatProcessDuration(traceTools);
+  const durationDescription = processDuration
+    ? t(wholeTurnDuration ? "conversation.activity.turnDuration" : "conversation.activity.processDuration", { duration: processDuration })
+    : null;
   // failureSummary carries its own separator; the failed headline already
   // says the run went wrong.
   const failureSuffix = lifecycle !== "failed" && failureCount > 0 ? t("conversation.activity.failureSummary", { count: failureCount }) : "";
@@ -137,7 +143,7 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
 
   return <div id={blocks.length === 1 && blocks[0].kind === "tool" ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
     {traceBlocks.length > 0 ? (
-      <button type="button" aria-expanded={traceExpanded} aria-controls={traceId} onClick={() => setTraceExpanded((value) => !value)} className={cn(styles.summary, "flex min-h-primary w-full items-center gap-2 rounded-input py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-control")}>
+      <button type="button" aria-label={durationDescription ? `${summaryLabel}. ${durationDescription}` : undefined} aria-expanded={traceExpanded} aria-controls={traceId} onClick={() => setTraceExpanded((value) => !value)} className={cn(styles.summary, "flex min-h-primary w-full items-center gap-2 rounded-input py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-control")}>
         <span aria-live="polite" aria-atomic="true" className="min-w-0 flex-1 truncate text-sm font-medium text-text">{summaryLabel}</span>
         <ChevronRight size={13} aria-hidden className={cn(styles.chevron, "shrink-0 text-muted", traceExpanded && "rotate-90")} />
       </button>
@@ -289,7 +295,21 @@ function formatProcessDuration(blocks: ToolCallBlock[]): string | null {
   const starts = blocks.map((block) => block.startedAt ? Date.parse(block.startedAt) : Number.NaN).filter(Number.isFinite);
   const ends = blocks.map((block) => block.endedAt ? Date.parse(block.endedAt) : Number.NaN).filter(Number.isFinite);
   if (starts.length === 0 || ends.length === 0) return null;
-  return formatSeconds(Math.max(0, (Math.max(...ends) - Math.min(...starts)) / 1000));
+  return formatPositiveDuration(Math.max(...ends) - Math.min(...starts));
+}
+
+function formatTimestampDuration(startTimestamp?: string, endTimestamp?: string): string | null {
+  if (!startTimestamp || !endTimestamp) return null;
+  const start = Date.parse(startTimestamp);
+  const end = Date.parse(endTimestamp);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return formatPositiveDuration(end - start);
+}
+
+function formatPositiveDuration(elapsedMs: number): string | null {
+  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return null;
+  if (elapsedMs < 100) return "<0.1s";
+  return formatSeconds(elapsedMs / 1000);
 }
 
 function activityStateFor(lifecycle: TurnLifecycle, activity: PresentedActivity | null): ProgressActivityState {

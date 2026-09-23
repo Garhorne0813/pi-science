@@ -22,6 +22,86 @@ describe("AgentActivity data filters", () => {
   it("keeps todo out of trace", () => { expect(executionActivities([tool("read", "read"), tool("todo", "todo"), tool("search", "grep")]).map((block) => block.id)).toEqual(["read", "search"]); });
 });
 
+describe("completed turn duration", () => {
+  it("uses the user-to-final-answer wall time instead of the tool write window", () => {
+    const block = {
+      ...tool("read", "read"),
+      startedAt: "2026-09-08T00:00:00.000Z",
+      endedAt: "2026-09-08T00:00:00.007Z",
+    };
+    render(<AgentActivity
+      blocks={[block]}
+      lifecycle="settled"
+      hasFinalAnswer
+      userTimestamp="2026-09-08T00:00:00.000Z"
+      finalAgentTimestamp="2026-09-08T00:00:05.300Z"
+    />);
+
+    const summary = screen.getByRole("button", { name: /Total turn duration: 5\.3s/ });
+    expect(summary).toHaveTextContent("Completed · 5.3s");
+    expect(summary).toHaveAttribute("aria-label", expect.stringContaining("Total turn duration: 5.3s"));
+  });
+
+  it("shows a short positive full-turn duration as less than 0.1 seconds", () => {
+    render(<AgentActivity
+      blocks={[tool("read", "read")]}
+      lifecycle="settled"
+      hasFinalAnswer
+      userTimestamp="2026-09-08T00:00:00.000Z"
+      finalAgentTimestamp="2026-09-08T00:00:00.007Z"
+    />);
+
+    const summary = screen.getByRole("button", { name: /Total turn duration: <0\.1s/ });
+    expect(summary).toHaveTextContent("Completed · <0.1s");
+  });
+
+  it("labels the full-turn duration in Simplified Chinese", async () => {
+    await i18n.changeLanguage("zh-Hans");
+    try {
+      render(<AgentActivity
+        blocks={[tool("read", "read")]}
+        lifecycle="settled"
+        hasFinalAnswer
+        userTimestamp="2026-09-08T00:00:00.000Z"
+        finalAgentTimestamp="2026-09-08T00:00:05.300Z"
+      />);
+
+      expect(screen.getByRole("button", { name: /本轮总耗时：5\.3s/ })).toHaveTextContent("已完成 · 5.3s");
+    } finally {
+      await i18n.changeLanguage("en");
+    }
+  });
+
+  it.each([
+    ["2026-09-08T00:00:00.000Z", "2026-09-08T00:00:00.000Z"],
+    ["2026-09-08T00:00:01.000Z", "2026-09-08T00:00:00.000Z"],
+    ["not-a-timestamp", "2026-09-08T00:00:01.000Z"],
+  ])("hides an untrusted boundary interval (%s → %s)", (userTimestamp, finalAgentTimestamp) => {
+    render(<AgentActivity
+      blocks={[tool("read", "read")]}
+      lifecycle="settled"
+      hasFinalAnswer
+      userTimestamp={userTimestamp}
+      finalAgentTimestamp={finalAgentTimestamp}
+    />);
+
+    expect(screen.getByText("Completed")).toBeInTheDocument();
+    expect(screen.queryByText(/0\.0s/)).not.toBeInTheDocument();
+  });
+
+  it("uses the tool-window estimate for an aborted turn and hides zero-rounded values", () => {
+    const block = {
+      ...tool("read", "read"),
+      startedAt: "2026-09-08T00:00:00.000Z",
+      endedAt: "2026-09-08T00:00:00.007Z",
+    };
+    render(<AgentActivity blocks={[block]} lifecycle="aborted" />);
+
+    const summary = screen.getByRole("button", { name: /Activity duration: <0\.1s/ });
+    expect(summary).toHaveTextContent("Stopped · <0.1s");
+  });
+});
+
 describe("AgentActivity live stream", () => {
   it("updates the running tool line immediately when consecutive tools share the same phase", () => {
     const read = tool("read", "read", "running", { path: "a.ts", description: "Find why the second reply stops following" });
