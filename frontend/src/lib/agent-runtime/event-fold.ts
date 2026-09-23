@@ -643,6 +643,14 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
         insertAt = afterAssistantTurnEnd(blocks, assistantMessageId, index);
       }
       if (insertAt < 0) insertAt = afterIdentifiedTurn(blocks, turnId);
+      const endedAt = typeof event.endedAt === "string" ? event.endedAt : "";
+      if (insertAt < 0 && endedAt) {
+        // Same primary fallback as attachTurnArtifacts: the turn's end time
+        // identifies the owning turn independently of ordinals. The published
+        // ordinal counts artifact records rather than user-message turns, so
+        // trusting it alone drops the strip on an unrelated earlier turn.
+        insertAt = afterTurnEndedAt(blocks, endedAt);
+      }
       if (insertAt < 0 && Number.isInteger(turnOrdinal) && turnOrdinal > 0) {
         // Prefer explicit turn metadata to the current live anchor: a late
         // artifact must not attach to a newer turn that is already streaming.

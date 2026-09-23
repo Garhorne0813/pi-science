@@ -32,6 +32,54 @@ describe("foldEvent turn.artifacts", () => {
     expect(state.index["turn-artifacts-turn-1"]).toBe(2);
   });
 
+  function threeTurnThread(): Thread {
+    return threadWith([
+      { kind: "user", id: "user-1", text: "first", timestamp: "2026-01-01T00:00:00Z" },
+      { kind: "agent", id: "agent-1", parts: [{ id: "agent-1", text: "one" }] },
+      { kind: "user", id: "user-2", text: "second", timestamp: "2026-01-01T00:01:00Z" },
+      { kind: "agent", id: "agent-2", parts: [{ id: "agent-2", text: "two" }] },
+      { kind: "user", id: "user-3", text: "third", timestamp: "2026-01-01T00:02:00Z" },
+      { kind: "agent", id: "agent-3", parts: [{ id: "agent-3", text: "three" }] },
+    ]);
+  }
+
+  it("anchors a live strip by the published turn end time", () => {
+    // `turnOrdinal` counts persisted artifact records, so the first record of a
+    // session carries ordinal 1 even when the file belongs to a later turn. The
+    // published end time is what identifies the owning turn.
+    const state = foldEvent(threeTurnThread(), {
+      type: "turn.artifacts",
+      sessionId: "s",
+      turnId: "2f1c7d8e-0000-4000-8000-000000000000",
+      turnOrdinal: 1,
+      endedAt: "2026-01-01T00:02:30Z",
+      artifacts: [{ path: "third.csv", kind: "data", mime: "text/csv", size: 10 }],
+    });
+    expect(state.blocks.map((block) => block.kind)).toEqual([
+      "user", "agent", "user", "agent", "user", "agent", "artifact-summary",
+    ]);
+    expect(state.blocks.at(-1)).toMatchObject({
+      kind: "artifact-summary",
+      turnId: "2f1c7d8e-0000-4000-8000-000000000000",
+    });
+  });
+
+  it("falls back to the record ordinal when no turn end time is published", () => {
+    // Documents the behaviour the end time overrides: the ordinal is read
+    // positionally as the n-th user-delimited turn, so the first artifact record
+    // lands on the first turn regardless of which turn produced the file.
+    const state = foldEvent(threeTurnThread(), {
+      type: "turn.artifacts",
+      sessionId: "s",
+      turnId: "2f1c7d8e-0000-4000-8000-000000000000",
+      turnOrdinal: 1,
+      artifacts: [{ path: "third.csv", kind: "data", mime: "text/csv", size: 10 }],
+    });
+    expect(state.blocks.map((block) => block.kind)).toEqual([
+      "user", "agent", "artifact-summary", "user", "agent", "user", "agent",
+    ]);
+  });
+
   it("adapts V2 artifact revisions from payload and envelope locations", () => {
     let state = threadWith([{ kind: "user", id: "user-1", text: "hi" }]);
     const v2Artifact = (
