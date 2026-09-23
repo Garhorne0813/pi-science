@@ -636,9 +636,15 @@ export class NodeSessionService {
     this.clearIdleTimer(runtime);
     this.clearEventWatchdog(runtime);
     if (runtime.reconcileTimer) clearTimeout(runtime.reconcileTimer);
+    const statsKeys = new Set<string>();
+    if (runtime.activeSessionId) statsKeys.add(runtimeKey(runtime.cwd, runtime.activeSessionId));
     for (const [key, current] of this.runtimes) {
-      if (current === runtime) this.runtimes.delete(key);
+      if (current === runtime) {
+        statsKeys.add(key);
+        this.runtimes.delete(key);
+      }
     }
+    for (const key of statsKeys) this.statsProjector.clear(key);
   }
 
   /** Whole-session cumulative stats (turns, tool calls, tokens, wall time).

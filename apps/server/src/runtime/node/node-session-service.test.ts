@@ -13,6 +13,7 @@ import { ModelResourceRepository, emptyModelResourceState } from "../../model-re
 import { readJsonLines } from "../../storage/persistence.js";
 import { ProjectReviewService } from "../../project-review/service.js";
 import { parseReviewResult, type ReviewRunRequest, type ReviewRunResult, type ReviewSubagentRunner } from "../../project-review/types.js";
+import { SessionStatsProjector } from "./session-stats-projector.js";
 
 const cleanup: string[] = [];
 const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE, piMode: process.env.PI_SCIENCE_PI_MODE, argsLog: process.env.FAKE_PI_ARGS_LOG, stateDelay: process.env.FAKE_PI_STATE_DELAY, activeProbe: process.env.FAKE_PI_ACTIVE_PROBE, agentStartDelay: process.env.FAKE_PI_AGENT_START_DELAY, watchdog: process.env.PI_SCIENCE_EVENT_WATCHDOG_MS, sessionFile: process.env.FAKE_PI_SESSION_FILE, rejectModel: process.env.FAKE_PI_REJECT_MODEL, modelBusy: process.env.FAKE_PI_MODEL_BUSY_ATTEMPTS, recoveryRetries: process.env.PI_SCIENCE_RECOVERY_BUSY_RETRIES, recoveryRetryDelay: process.env.PI_SCIENCE_RECOVERY_BUSY_RETRY_DELAY_MS };
@@ -276,6 +277,45 @@ describe("Node session lifecycle", () => {
       code: "not_found",
     });
   });
+
+  it("clears in-flight stats when an evicted runtime is discarded and the session is restored", async () => {
+    process.env.PI_SCIENCE_IDLE_RUNTIME_MS = "60000";
+    const service = testService();
+    const sessionId = "session-stats-evicted";
+    const cwd = await workspaceWithSessions(sessionId);
+    const key = `${resolve(cwd)}\0${sessionId}`;
+    const projector = (service as unknown as { statsProjector: SessionStatsProjector }).statsProjector;
+
+    // The old generation has already committed its checkpoint decision and
+    // is partway through an assistant message and tool when Orbit evicts it.
+    projector.timingWithCheckpoint(key, null);
+    projector.track(key, { type: "agent_start" }, 1_000);
+    projector.track(key, { type: "message_start", message: { id: "old-message" } }, 1_100);
+    projector.track(key, { type: "message_update", message: { id: "old-message" }, assistantMessageEvent: { type: "text_delta", delta: "partial" } }, 1_200);
+    projector.track(key, { type: "tool_execution_start", toolCallId: "old-tool" }, 1_300);
+    installStaleRuntime(service, sessionId, cwd, {
+      attachedToHost: true,
+      isClosed: true,
+      async sendCommand() { return { success: false, code: "runtime_evicted", error: "runtime was evicted" }; },
+    });
+
+    try {
+      await expect(service.command(sessionId, cwd, "abort")).resolves.toEqual({ success: true });
+      await expect(service.resume(sessionId, cwd)).resolves.toEqual({ success: true });
+
+      // A new generation folds its persisted checkpoint once. Its first
+      // recovered delta may arrive before message_start; it must not inherit
+      // the old generation's active message or tool timer.
+      const checkpoint = { llmMs: 40, toolMs: 20, ttftMs: 10, ttftSteps: 1, decodeMs: 5 };
+      expect(projector.timingWithCheckpoint(key, checkpoint)).toEqual(checkpoint);
+      projector.track(key, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "recovered" } }, 5_000);
+      projector.track(key, { type: "message_end" }, 5_100);
+      projector.track(key, { type: "tool_execution_end", toolCallId: "old-tool" }, 5_200);
+      expect(projector.timing(key)).toEqual(checkpoint);
+    } finally {
+      await service.shutdownAll();
+    }
+  }, 30_000);
 
   it("restores the persisted session and retries a prompt after eviction during preflight", async () => {
     const service = testService();
