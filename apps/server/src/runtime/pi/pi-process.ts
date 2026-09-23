@@ -78,6 +78,10 @@ export class PiProcess extends EventEmitter {
   get attachedToHost(): boolean {
     return this.webHost !== undefined;
   }
+  /** True after this per-session runtime has exited or been evicted. */
+  get isClosed(): boolean {
+    return this.closed;
+  }
   private readonly runtimeId: string | undefined;
   private eventAbort: AbortController | undefined;
   /** Highest Pi Orbit event sequence consumed for this runtime. Kept on the
@@ -109,8 +113,7 @@ export class PiProcess extends EventEmitter {
       this.child = webHost.child;
       const onStderr = (text: string) => this.emit("stderr", text);
       const onExit = ({ code, signal }: { code: number | null; signal: NodeJS.Signals | null }) => {
-        this.closed = true;
-        this.emitExit(code, signal);
+        this.markClosed(code, signal);
       };
       webHost.on("stderr", onStderr);
       webHost.on("exit", onExit);
@@ -408,8 +411,7 @@ export class PiProcess extends EventEmitter {
             if (event?.type) {
               this.emit("event", event);
               if (event.type === "runtime_evicted") {
-                this.closed = true;
-                this.emitExit(null, null);
+                this.markClosed(null, null);
                 return;
               }
             }
@@ -460,6 +462,7 @@ export class PiProcess extends EventEmitter {
     catch { payload = {}; }
     const data = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
     if (!response.ok || data.success === false || data.cancelled === true) {
+      if (data.code === "runtime_evicted") this.markClosed(null, null);
       return {
         ...data,
         success: false,
@@ -536,6 +539,16 @@ export class PiProcess extends EventEmitter {
     if (this.exitEmitted) return;
     this.exitEmitted = true;
     this.emit("exit", { code, signal });
+  }
+
+  private markClosed(code: number | null, signal: NodeJS.Signals | null): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.eventStreamAlive = false;
+    this.eventAbort?.abort();
+    this.removeHostListeners?.();
+    this.removeHostListeners = undefined;
+    this.emitExit(code, signal);
   }
 
   private handleLine(line: string): void {

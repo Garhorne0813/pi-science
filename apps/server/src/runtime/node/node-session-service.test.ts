@@ -167,6 +167,20 @@ function testService(): NodeSessionService {
   return new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments);
 }
 
+function installStaleRuntime(service: NodeSessionService, sessionId: string, cwd: string, process: Record<string, unknown>): void {
+  const runtimes = (service as unknown as { runtimes: Map<string, unknown> }).runtimes;
+  runtimes.set(`${resolve(cwd)}\0${sessionId}`, {
+    cwd,
+    managerKey: `stale-${sessionId}`,
+    process,
+    activeSessionId: sessionId,
+    config: loadDefaultPiConfig(),
+    busy: false,
+    restartPending: false,
+    closing: false,
+  });
+}
+
 describe("Node session lifecycle", () => {
   it("fails fast when the Pi runtime is missing without provisioning the workspace environment", async () => {
     const environment = vi.fn(async () => ({ ...process.env }));
@@ -218,6 +232,76 @@ describe("Node session lifecycle", () => {
     await expect(service.state("session-a", cwd)).resolves.toMatchObject({ id: "session-a" });
     await service.shutdownAll();
   });
+
+  it("returns a cold state when a mapped runtime reports runtime_evicted", async () => {
+    const service = testService();
+    const sessionId = "session-state-evicted";
+    const cwd = await workspaceWithSessions(sessionId);
+    let closed = false;
+    installStaleRuntime(service, sessionId, cwd, {
+      attachedToHost: true,
+      get isClosed() { return closed; },
+      async sendCommand() {
+        closed = true;
+        return { success: false, code: "runtime_evicted", error: "runtime was evicted" };
+      },
+    });
+
+    await expect(service.state(sessionId, cwd)).resolves.toMatchObject({
+      id: sessionId,
+      is_streaming: false,
+      context_tokens: null,
+    });
+    expect(service.activeCount).toBe(0);
+  });
+
+  it("treats abort as idempotent when a mapped runtime reports runtime_evicted", async () => {
+    const service = testService();
+    const sessionId = "session-abort-evicted";
+    const cwd = await workspaceWithSessions(sessionId);
+    let closed = false;
+    installStaleRuntime(service, sessionId, cwd, {
+      attachedToHost: true,
+      get isClosed() { return closed; },
+      async sendCommand() {
+        closed = true;
+        return { success: false, code: "runtime_evicted", error: "runtime was evicted" };
+      },
+    });
+
+    await expect(service.command(sessionId, cwd, "abort")).resolves.toEqual({ success: true });
+    expect(service.activeCount).toBe(0);
+    await expect(service.command("missing-session", cwd, "abort")).resolves.toMatchObject({
+      success: false,
+      code: "not_found",
+    });
+  });
+
+  it("restores the persisted session and retries a prompt after eviction during preflight", async () => {
+    const service = testService();
+    const sessionId = "session-prompt-evicted";
+    const cwd = await workspaceWithSessions(sessionId);
+    let closed = false;
+    installStaleRuntime(service, sessionId, cwd, {
+      attachedToHost: false,
+      get isClosed() { return closed; },
+      async sendCommand(type: string) {
+        if (type === "get_state") {
+          if (!closed) {
+            closed = true;
+            return { success: false, code: "runtime_evicted", error: "runtime was evicted" };
+          }
+          return { success: true, data: { sessionId, isStreaming: false, pendingMessageCount: 0 } };
+        }
+        return { success: false, code: "runtime_evicted", error: "runtime was evicted" };
+      },
+    });
+
+    await expect(service.command(sessionId, cwd, "prompt", { message: "resume after eviction" }))
+      .resolves.toMatchObject({ success: true });
+    await expect(service.state(sessionId, cwd)).resolves.toMatchObject({ id: sessionId });
+    await service.shutdownAll();
+  }, 30_000);
 
   it("keeps identical session IDs isolated across workspaces", async () => {
     process.env.PI_SCIENCE_RPC_TIMEOUT_MS = "1500";
