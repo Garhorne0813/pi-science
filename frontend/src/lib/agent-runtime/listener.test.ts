@@ -9,6 +9,26 @@ installRuntimeTestEnvironment();
 
 
 describe("runtime event subscription", () => {
+  it("keeps the reply active after compaction until the run actually settles", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-compaction", { is_streaming: true }));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-compaction");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    source.emit("agent_start", { type: "agent_start", sessionId: "session-compaction", turnId: "t1" });
+    source.emit("compaction.updated", { type: "compaction.updated", sessionId: "session-compaction", status: "start" });
+    source.emit("compaction.updated", { type: "compaction.updated", sessionId: "session-compaction", status: "end" });
+    expect(useRuntimeStore.getState()).toMatchObject({ working: true, turnLifecycle: "active" });
+    source.emit("session.idle", { type: "session.idle", sessionId: "session-compaction" });
+    expect(useRuntimeStore.getState()).toMatchObject({ working: false, turnLifecycle: "settled" });
+  });
+
   it("renders named thinking.updated events delivered through the SSE transport", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

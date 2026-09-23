@@ -453,9 +453,11 @@ export function registerEventListener(client: PiScienceClient) {
       bumpConversationGeneration();
       const status = String(event.status || "");
       const failed = status === "error";
-      const finished = status === "end" || failed;
-      useRuntimeStore.setState({ working: !finished, turnLifecycle: failed ? "failed" : finished ? "settled" : "active", status: failed ? "error" : "ready" });
-      if (finished) disarmTurnWatchdog();
+      // Compaction ending is not the end of the agent run: generation resumes
+      // afterward. Only a run terminal event may settle its activity row.
+      useRuntimeStore.setState({ working: !failed, turnLifecycle: failed ? "failed" : "active", status: failed ? "error" : "ready" });
+      if (failed) disarmTurnWatchdog();
+      else ensureTurnWatchdog();
     } else if (event.type === "turn.artifacts") {
       bumpPresentationMetadataGeneration();
       // No extra tree refresh here: the server publishes this event from the

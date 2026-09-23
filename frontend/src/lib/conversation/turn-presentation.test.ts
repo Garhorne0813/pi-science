@@ -6,6 +6,7 @@ import { buildTurnPresentations } from "./turn-presentation";
 const user = (id: string): ThreadBlock => ({ kind: "user", id, text: id });
 const agent = (id: string, partial = false): AgentMessageBlock => ({ kind: "agent", id, parts: [{ id: `${id}-part`, text: id }], ...(partial ? { partial: true } : {}) });
 const tool = (id: string, name = "read", status: ToolCallBlock["status"] = "done"): ThreadBlock => ({ kind: "tool", id, callId: `${id}-call`, tool: name, status });
+const inTurn = (block: ThreadBlock, turnId: string): ThreadBlock => ({ ...block, turnId } as ThreadBlock);
 
 describe("turn analysis", () => {
   it("finds the final agent after the last execution tool", () => {
@@ -47,6 +48,32 @@ describe("turn analysis", () => {
 });
 
 describe("buildTurnPresentations", () => {
+  it("keeps resumed runtime turns inside one live user reply", () => {
+    const blocks: ThreadBlock[] = [
+      inTurn(user("u1"), "run-1"),
+      inTurn(tool("read-1"), "run-1"),
+      { ...agent("progress"), turnId: "run-2", presentationRole: "intermediate" },
+      inTurn(tool("read-2", "read", "running"), "run-2"),
+    ];
+    const turns = buildTurnPresentations(blocks, { lastTurnId: "run-2", lastTurnLifecycle: "active" });
+    expect(turns).toHaveLength(1);
+    expect(turns[0].lifecycle).toBe("active");
+    expect(turns[0].activityBlocks.map((block) => block.id)).toEqual(["read-1", "progress", "read-2"]);
+  });
+
+  it("routes a late artifact to its previous user turn without settling the live reply", () => {
+    const turns = buildTurnPresentations([
+      inTurn(user("u1"), "run-1"),
+      inTurn(tool("first"), "run-1"),
+      inTurn(user("u2"), "run-2"),
+      inTurn(tool("second", "read", "running"), "run-2"),
+      { kind: "artifact-summary", id: "late", turnId: "run-1", artifacts: [] },
+    ], { lastTurnId: "run-2", lastTurnLifecycle: "active" });
+    expect(turns).toHaveLength(2);
+    expect(turns[0].artifacts.map((block) => block.id)).toEqual(["late"]);
+    expect(turns[1].lifecycle).toBe("active");
+  });
+
   it("aggregates narration-separated tools into one turn", () => {
     const turns = buildTurnPresentations([user("user-1"), agent("agent-a"), tool("tool-1"), agent("agent-b"), tool("tool-2"), agent("agent-c")]);
     expect(turns).toHaveLength(1);

@@ -35,14 +35,21 @@ export function buildTurnPresentations(blocks: ThreadBlock[], opts: { lastTurnLi
   if (!Array.isArray(blocks)) return [];
   const turns: Array<{ key: string; blocks: ThreadBlock[] }> = [];
   const byKey = new Map<string, { key: string; blocks: ThreadBlock[] }>();
+  const ownerByTurnId = new Map<string, string>();
   let currentKey: string | null = null;
   for (const block of blocks) {
     const identity = "turnId" in block ? block.turnId : undefined;
-    const key: string = identity
-      ? `turn:${identity}`
-      : block.kind === "user"
-        ? `user:${block.id}`
-        : currentKey ?? `orphan:${block.id}`;
+    // Runtime turn IDs can change during one response (for example after a
+    // resumed run). A new user message, rather than a new runtime ID, is the
+    // boundary of a conversation turn. Artifact summaries may arrive late,
+    // so route those back to the group that owns their runtime ID.
+    const key: string = block.kind === "user"
+      ? `user:${block.id}`
+      : block.kind === "artifact-summary" && identity
+        ? ownerByTurnId.get(identity) ?? `turn:${identity}`
+        : currentKey && byKey.get(currentKey)?.blocks.some((entry) => entry.kind === "user")
+          ? currentKey
+          : identity ? `turn:${identity}` : currentKey ?? `orphan:${block.id}`;
     let turn = byKey.get(key);
     if (!turn) {
       turn = { key, blocks: [] };
@@ -50,7 +57,8 @@ export function buildTurnPresentations(blocks: ThreadBlock[], opts: { lastTurnLi
       turns.push(turn);
     }
     turn.blocks.push(block);
-    currentKey = key;
+    if (identity && block.kind !== "artifact-summary") ownerByTurnId.set(identity, key);
+    if (block.kind !== "artifact-summary") currentKey = key;
   }
   // A strip whose published turn id is opaque (it does not match the session
   // turn identity) forms its own group, and it can be the last one in the
@@ -62,7 +70,7 @@ export function buildTurnPresentations(blocks: ThreadBlock[], opts: { lastTurnLi
   for (const turn of turns) {
     if (turn.blocks.some((block) => block.kind !== "artifact-summary")) lastContentKey = turn.key;
   }
-  const identified = opts.lastTurnId ? `turn:${opts.lastTurnId}` : null;
+  const identified = opts.lastTurnId ? ownerByTurnId.get(opts.lastTurnId) ?? `turn:${opts.lastTurnId}` : null;
   // The active designation must land on a group that exists. History restore
   // can rebuild the running turn under a different key (its blocks then carry
   // a user-message id rather than the stream turn id); without this, no group
