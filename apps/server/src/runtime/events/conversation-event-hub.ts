@@ -164,7 +164,11 @@ function snapshotText(value: unknown): string | null {
 
 function stringify(value: unknown): string {
   if (typeof value === "string") return value;
-  try { return JSON.stringify(value ?? ""); } catch { return String(value ?? ""); }
+  // Nullish means "no value", so it must cap to the empty string. Stringifying
+  // an empty string instead yields the two-character text `""`, which is truthy
+  // and therefore survives every downstream `value || fallback` check.
+  if (value === undefined || value === null) return "";
+  try { return JSON.stringify(value); } catch { return String(value); }
 }
 
 function safeValue(value: unknown, depth = 0, key?: string): unknown {

@@ -616,6 +616,42 @@ describe("central conversation event hub", () => {
     });
   });
 
+  it("caps interaction metadata that the producer omitted to an empty string", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub();
+    const process = new EventEmitter() as PiProcess;
+    const received: Array<Record<string, unknown>> = [];
+    hub.bind(cwd, process, { activeSessionId: () => "session-metadata", onBusy: () => undefined, onExit: () => undefined });
+    await hub.subscribe(cwd, "session-metadata", undefined, (record) => received.push(JSON.parse(record.data)));
+
+    process.emit("event", { type: "agent_start" });
+    // The managed MCP approval producer sends only a title and options. Every
+    // other metadata field is absent, and must not reach the UI as the literal
+    // two-character text `""` — that value is truthy, so the permission card
+    // would render it instead of falling back to the tool title.
+    process.emit("event", {
+      type: "extension_ui_request",
+      id: "mcp-permission-2",
+      method: "select",
+      title: "[pi-science:permission] MCP: papers wants to run search",
+      options: ["Allow once", "Allow for session", "Deny"],
+    });
+
+    await eventually(() => received.some((event) => event.requestId === "mcp-permission-2"));
+    const published = received.find((event) => event.requestId === "mcp-permission-2")!;
+    expect(published).toMatchObject({
+      type: "permission.asked",
+      kind: "permission",
+      title: "MCP: papers wants to run search",
+      operation: "",
+      scope: "",
+      effect: "",
+      message: "",
+    });
+    // Guard the regression directly: a truthy `""` would win over the title.
+    expect(published.operation || published.title).toBe("MCP: papers wants to run search");
+  });
+
   it("publishes activity titles and preserves tool result details", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
