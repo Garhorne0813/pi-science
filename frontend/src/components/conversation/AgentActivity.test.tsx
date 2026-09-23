@@ -296,6 +296,21 @@ describe("AgentActivity settled display", () => {
     expect(screen.queryByText("The final answer.")).not.toBeInTheDocument();
   });
 
+  it("shows elapsed time for a completed reasoning phase without tool calls", () => {
+    render(<AgentActivity lifecycle="settled" blocks={[{
+      kind: "thinking", id: "reasoning", parts: [{ id: "reasoning-part", text: "Check the result" }],
+      startedAt: "2026-09-08T00:00:00.000Z", endedAt: "2026-09-08T00:00:03.400Z",
+    }]} />);
+    expect(screen.getByRole("button", { name: /Completed · 3.4s/ })).toBeInTheDocument();
+  });
+
+  it("uses the conversation timestamps when restored activity has no tool timing", () => {
+    render(<AgentActivity lifecycle="settled" turnStartedAt="2026-09-08T00:00:00.000Z" turnEndedAt="2026-09-08T00:00:05.200Z" blocks={[{
+      kind: "agent", id: "update", presentationRole: "intermediate", parts: [{ id: "update-part", text: "Checking." }],
+    }]} />);
+    expect(screen.getByRole("button", { name: /Completed · 5.2s/ })).toBeInTheDocument();
+  });
+
   it("folds commentary when a settled turn never produced a final answer", () => {
     render(<AgentActivity lifecycle="settled" blocks={[{ kind: "agent", id: "commentary", presentationRole: "intermediate", parts: [{ id: "commentary-part", text: "I checked the inputs." }] }]} />);
 

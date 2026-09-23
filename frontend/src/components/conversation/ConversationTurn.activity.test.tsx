@@ -143,9 +143,9 @@ describe("turn-level activity through the history path", () => {
 
     expect(screen.queryByText("我先读取 turn-presentation.ts。")).not.toBeInTheDocument();
     expect(screen.queryByText("接下来看事件折叠。")).not.toBeInTheDocument();
-    // Message timestamps rebuild the process duration: c1 starts with m1
-    // (02:00:00), the last execution result lands at 02:00:06.
-    const summary = screen.getByText("Completed · 6.0s");
+    // The turn lasts from the user message (02:00:00) to the final answer
+    // timestamp (02:00:07), including the time spent composing the answer.
+    const summary = screen.getByText("Completed · 7.0s");
     expect(summary).toBeInTheDocument();
     expect(screen.queryByText("Reading file")).not.toBeInTheDocument();
     expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();

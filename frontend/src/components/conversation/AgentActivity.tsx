@@ -41,7 +41,7 @@ export function ThinkingActivity({ className }: { className?: string }) {
  *  intermediate narration, reasoning, and tools — behind one summary. The
  *  final answer is owned by ConversationTurn and rendered outside this
  *  component. A settled turn without a final answer says so explicitly. */
-export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both", hasFinalAnswer }: { blocks: ActivityBlock[]; lifecycle?: TurnLifecycle; cwd?: string; part?: "both" | "content" | "status"; hasFinalAnswer?: boolean }) {
+export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both", hasFinalAnswer, turnStartedAt, turnEndedAt }: { blocks: ActivityBlock[]; lifecycle?: TurnLifecycle; cwd?: string; part?: "both" | "content" | "status"; hasFinalAnswer?: boolean; turnStartedAt?: string; turnEndedAt?: string }) {
   const { t } = useTranslation();
   const progressAppearance = useProgressAppearance();
   const tools = useMemo(() => blocks.filter((block): block is ToolCallBlock => block.kind === "tool"), [blocks]);
@@ -130,7 +130,7 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
     : lifecycle === "aborted"
       ? t("conversation.activity.stopped")
       : t("conversation.activity.completed");
-  const processDuration = formatProcessDuration(traceTools);
+  const processDuration = formatProcessDuration(traceBlocks, turnStartedAt, turnEndedAt);
   // failureSummary carries its own separator; the failed headline already
   // says the run went wrong.
   const failureSuffix = lifecycle !== "failed" && failureCount > 0 ? t("conversation.activity.failureSummary", { count: failureCount }) : "";
@@ -286,9 +286,10 @@ function stepDuration(block: { startedAt?: string; endedAt?: string }): string |
   return formatSeconds(Math.max(0, (end - start) / 1000));
 }
 
-function formatProcessDuration(blocks: ToolCallBlock[]): string | null {
-  const starts = blocks.map((block) => block.startedAt ? Date.parse(block.startedAt) : Number.NaN).filter(Number.isFinite);
-  const ends = blocks.map((block) => block.endedAt ? Date.parse(block.endedAt) : Number.NaN).filter(Number.isFinite);
+function formatProcessDuration(blocks: ActivityBlock[], turnStartedAt?: string, turnEndedAt?: string): string | null {
+  const validTime = (value?: string) => value ? Date.parse(value) : Number.NaN;
+  const starts = [validTime(turnStartedAt), ...blocks.map((block) => validTime(block.kind === "tool" ? block.startedAt : block.kind === "thinking" ? block.startedAt ?? block.timestamp : block.timestamp))].filter(Number.isFinite);
+  const ends = [validTime(turnEndedAt), ...blocks.map((block) => validTime(block.kind === "tool" || block.kind === "thinking" ? block.endedAt : undefined))].filter(Number.isFinite);
   if (starts.length === 0 || ends.length === 0) return null;
   return formatSeconds(Math.max(0, (Math.max(...ends) - Math.min(...starts)) / 1000));
 }
