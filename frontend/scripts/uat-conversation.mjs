@@ -100,6 +100,28 @@ async function run() {
       await page.keyboard.press("Escape");
 
       await composer.fill("请先使用 bash 工具执行 sleep 2，然后只回复 CHAT_BROWSER_UAT_OK");
+      // Sample the turn for its whole duration. Two things the user can see
+      // that no wait-for-text assertion covers: the prompt must stay visible
+      // (a recovery read that races the session's first flush used to blank
+      // it) and the activity row must not report completed before the answer.
+      await page.evaluate(() => {
+        window.__uatActivity = [];
+        const sample = () => {
+          const rows = [...document.querySelectorAll("[data-state]")]
+            .filter((element) => element.getAttribute("data-state") !== "closed");
+          const row = rows.at(-1);
+          window.__uatActivity.push({
+            at: Date.now(),
+            state: row ? row.getAttribute("data-state") : null,
+            users: document.querySelectorAll("div.ui-user-message").length,
+            marker: /CHAT_BROWSER_UAT_OK/.test(document.body.innerText),
+          });
+          if (window.__uatActivity.length > 6000) window.__uatActivity.shift();
+        };
+        sample();
+        window.__uatActivityTimer = window.setInterval(sample, 40);
+        return true;
+      });
       await page.getByRole("button", { name: "Send message" }).click();
       // The first prompt lazily creates the session and lands on /session/:id.
       // Runtime startup can take up to the control-plane start timeout.
@@ -108,9 +130,43 @@ async function run() {
       if (!firstSession) throw new Error(`No session ID after the first prompt: ${page.url()}`);
       createdSessions.push(firstSession);
       await page.getByRole("button", { name: "Stop generation" }).waitFor({ timeout: 10_000 });
-      await page.getByText("Working…", { exact: true }).first().waitFor({ timeout: 10_000 });
+      // The activity row renders its label and the elapsed time as separate
+      // nodes, so anchor on the label prefix instead of the full text.
+      await page.getByText(/^Working/).first().waitFor({ timeout: 10_000 });
       await page.getByText("CHAT_BROWSER_UAT_OK", { exact: true }).waitFor({ timeout: 120_000 });
       await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 20_000 });
+      const turnWatch = await page.evaluate(() => {
+        window.clearInterval(window.__uatActivityTimer);
+        const samples = window.__uatActivity ?? [];
+        // Longest contiguous stretch without the prompt on screen. Mounting the
+        // lazily created session remounts the virtualized list, so a gap of a
+        // few frames is expected; losing the prompt for a long stretch is not.
+        let longestAbsence = 0;
+        let current = null;
+        for (const sample of samples) {
+          if (sample.users === 0) {
+            current = current ?? sample.at;
+            longestAbsence = Math.max(longestAbsence, sample.at - current);
+          } else {
+            current = null;
+          }
+        }
+        return {
+          samples: samples.length,
+          states: [...new Set(samples.map((sample) => sample.state))],
+          minUsers: Math.min(...samples.map((sample) => sample.users)),
+          completedBeforeAnswer: samples.filter((sample) => sample.marker === false && sample.state === "completed").length,
+          absentSamples: samples.filter((sample) => sample.users === 0).length,
+          longestAbsenceMs: longestAbsence,
+        };
+      });
+      console.log(`INFO first turn samples: ${JSON.stringify(turnWatch)}`);
+      if (turnWatch.completedBeforeAnswer > 0) {
+        throw new Error(`Activity row reported completed before the answer arrived (${turnWatch.completedBeforeAnswer} samples)`);
+      }
+      if (turnWatch.longestAbsenceMs > 1000) {
+        throw new Error(`The sent prompt left the conversation for ${turnWatch.longestAbsenceMs}ms`);
+      }
     } else {
       if (await modelTrigger.count()) throw new Error("Model selector should be hidden when no models are available");
       await composer.fill("model configuration required");
