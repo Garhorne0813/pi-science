@@ -1222,12 +1222,13 @@ export class NodeSessionService {
           ? event.messageId
           : null);
     const turnOrdinal = runtime.turnOrdinal ?? null;
+    const endedAt = new Date().toISOString();
     const record = {
       turn_id: turnId,
       session_id: sessionId,
       assistant_message_id: assistantMessageId,
       turn_ordinal: turnOrdinal,
-      ended_at: new Date().toISOString(),
+      ended_at: endedAt,
       artifacts: items,
     };
     // Defensive idempotency: a reconciliation-recovered turn and a late
@@ -1243,6 +1244,10 @@ export class NodeSessionService {
       turnId,
       turnOrdinal,
       assistantMessageId,
+      // Published so the live fold can anchor the strip the same way the
+      // history restore does. `turnOrdinal` counts persisted artifact records,
+      // not user-message turns, so it cannot identify the owning turn on its own.
+      endedAt,
       artifacts: items,
     }).catch(() => undefined);
   }
