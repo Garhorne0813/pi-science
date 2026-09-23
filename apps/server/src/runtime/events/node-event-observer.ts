@@ -5,6 +5,7 @@ import { appendJsonLine, readJsonLines, workspaceFile } from "../../storage/pers
 import type { PiEvent } from "../pi/pi-process.js";
 import { executionIdFor, executionRepository } from "../executions/execution-repository.js";
 import { artifactIdentity } from "../artifacts/artifact-identity.js";
+import { ensureProject, readProject } from "../../project/project-registry.js";
 
 type Publish = (payload: Record<string, unknown>) => Promise<void>;
 
@@ -44,6 +45,9 @@ export async function observeNodePiEvent(
   sessionId: string,
   publish: Publish,
 ): Promise<void> {
+  // Initialize project identity before execution or event records create the
+  // state directory. Otherwise legacy metadata cannot be migrated later.
+  if (!(await readProject(cwd))) await ensureProject(cwd);
   if (["agent_start", "agent_end", "agent_settled", "error"].includes(event.type)) {
     void serialized(workspaceFile(cwd, "skill-events.jsonl"), () => appendJsonLine(workspaceFile(cwd, "skill-events.jsonl"), {
       type: "skill_event", session_id: sessionId, ts: Date.now() / 1000, event: event.type,
