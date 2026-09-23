@@ -9,8 +9,10 @@
 import { clearCachedMessages, readCachedMessages } from "./message-cache";
 import * as rest from "./rest";
 import { clearAiTitle, clearAiTitleAttempted, clearSessionName } from "./session-names";
-import { SseTransport } from "./sse-transport";
+import { SseTransport, type TransportReason } from "./sse-transport";
 import type { HistoryMessage, InteractionResponse, PiScienceEvent, PromptRequestStatus, SessionInfo, SessionListPage, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
+
+export type { TransportReason } from "./sse-transport";
 
 export type {
   AvailableModel,
@@ -187,12 +189,12 @@ export class PiScienceClient {
 
   // ── SSE ──
 
-  connect(sessionId: string, cwd?: string): void {
-    this.transport.connect(sessionId, cwd);
+  connect(sessionId: string, cwd?: string, reason?: TransportReason): void {
+    this.transport.connect(sessionId, cwd, reason);
   }
 
-  reconnect(sessionId: string, cwd?: string): void {
-    this.transport.reconnect(sessionId, cwd);
+  reconnect(sessionId: string, cwd?: string, reason?: TransportReason): void {
+    this.transport.reconnect(sessionId, cwd, reason);
   }
 
   disconnect(): void {

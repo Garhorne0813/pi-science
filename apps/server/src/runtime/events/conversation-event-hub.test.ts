@@ -151,6 +151,34 @@ describe("central conversation event hub", () => {
     expect(typeof event.occurredAt).toBe("string");
   });
 
+  it("gives a record without turn identity its stream position too", async () => {
+    // Session stats carry no turn/run identity but still consume a stream
+    // position. A consumer that cannot see the position reads every one of them
+    // as a hole and rebases the conversation for a healthy stream.
+    const cwd = await workspace();
+    const hub = new ConversationEventHub(
+      { append: async () => undefined, readAfter: async () => [] },
+      { createStreamEpoch: () => "epoch-stats" },
+    );
+    const received: SseEventRecord[] = [];
+    await hub.subscribe(cwd, "session-stats", undefined, (record) => received.push(record), false);
+
+    await hub.publish(cwd, "session-stats", { type: "session.stats", sessionId: "session-stats", stats: { turns: 1 } });
+
+    const event = JSON.parse(received[0]!.data) as Record<string, unknown>;
+    expect(event).toMatchObject({
+      schemaVersion: 2,
+      sessionId: "session-stats",
+      streamEpoch: "epoch-stats",
+      eventId: "epoch-stats:1",
+      seq: 1,
+      type: "session.stats",
+      stats: { turns: 1 },
+    });
+    expect(event.turnId).toBeUndefined();
+    expect(received[0]!.id).toBe("epoch-stats:1");
+  });
+
   it("chunks large UTF-8 text records before the durable record limit", async () => {
     const cwd = await workspace();
     const records: SseEventRecord[] = [];

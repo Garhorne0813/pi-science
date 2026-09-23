@@ -1,6 +1,7 @@
 /** Public state shape of the agent runtime store. */
 
 import type { PiScienceClient, SessionInfo, SessionStats } from "../client/pi-science-client";
+import type { TransportStatus } from "./transport-status";
 import type { Thread } from "./event-fold";
 
 export interface PendingInteraction {
@@ -59,9 +60,17 @@ export function hasActivePendingInteraction(
   );
 }
 
+/** User-facing availability of the active session. Only a foreground attach,
+ *  an intentional detach and an exhausted authoritative recovery may change
+ *  it; background stream repair is reported through `transportStatus`. */
+export type RuntimeStatus = "connecting" | "ready" | "error" | "offline";
+
 export interface RuntimeState {
   // Connection
-  status: "connecting" | "ready" | "error" | "offline";
+  status: RuntimeStatus;
+  /** Low-level EventSource lifecycle, including the background repair of a
+   *  session the user can keep working in. */
+  transportStatus: TransportStatus;
   client: PiScienceClient | null;
 
   // Session
