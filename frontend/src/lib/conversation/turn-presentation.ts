@@ -36,7 +36,6 @@ export function buildTurnPresentations(blocks: ThreadBlock[], opts: { lastTurnLi
   const turns: Array<{ key: string; blocks: ThreadBlock[] }> = [];
   const byKey = new Map<string, { key: string; blocks: ThreadBlock[] }>();
   let currentKey: string | null = null;
-  let lastKey: string | null = null;
   for (const block of blocks) {
     const identity = "turnId" in block ? block.turnId : undefined;
     const key: string = identity
@@ -52,9 +51,24 @@ export function buildTurnPresentations(blocks: ThreadBlock[], opts: { lastTurnLi
     }
     turn.blocks.push(block);
     currentKey = key;
-    lastKey = key;
   }
-  const activeKey = opts.lastTurnId ? `turn:${opts.lastTurnId}` : lastKey;
+  // A strip whose published turn id is opaque (it does not match the session
+  // turn identity) forms its own group, and it can be the last one in the
+  // block array. Falling back to `lastKey` would then hand the active
+  // designation to that strip, marking the still-running turn as settled and
+  // flipping its label between the live text and "Completed" on every render.
+  // Only a group with real turn content may stand in for the active turn.
+  let lastContentKey: string | null = null;
+  for (const turn of turns) {
+    if (turn.blocks.some((block) => block.kind !== "artifact-summary")) lastContentKey = turn.key;
+  }
+  const identified = opts.lastTurnId ? `turn:${opts.lastTurnId}` : null;
+  // The active designation must land on a group that exists. History restore
+  // can rebuild the running turn under a different key (its blocks then carry
+  // a user-message id rather than the stream turn id); without this, no group
+  // matches and every one of them renders as settled — the live turn shows
+  // "Completed" until the next stream event re-keys it.
+  const activeKey = identified && turns.some((turn) => turn.key === identified) ? identified : lastContentKey;
   return turns.map((turn) => {
     const lifecycle = turn.key === activeKey ? opts.lastTurnLifecycle ?? "settled" : "settled";
     return buildTurnPresentation(turn.blocks, lifecycle);

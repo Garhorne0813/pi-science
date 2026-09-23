@@ -182,4 +182,41 @@ describe("buildTurnPresentations", () => {
     expect(turn.finalAgent?.id).toBe("final-b");
     expect(turn.activityBlocks.map((block) => block.id)).toEqual(["final-a", "late-edit"]);
   });
+
+  it("keeps the active designation on the running turn when a trailing strip forms its own group", () => {
+    const blocks: ThreadBlock[] = [
+      user("u1"),
+      tool("tool-1"),
+      user("u2"),
+      tool("tool-2", "bash", "running"),
+      // The published artifact turn id is opaque — it does not match the
+      // session turn identity — so the strip is its own group and can be the
+      // last one in the array. It must not inherit the active designation:
+      // that marks the still-running turn settled and flips its label between
+      // the live text and "Completed" on every render.
+      {
+        kind: "artifact-summary",
+        id: "strip-1",
+        turnId: "opaque-published-uuid",
+        artifacts: [{ path: "a.csv", kind: "table", mime: "text/csv", size: 1 }],
+      } as ThreadBlock,
+    ];
+    const turns = buildTurnPresentations(blocks, { lastTurnLifecycle: "active" });
+    const running = turns.find((turn) => turn.blocks.some((block) => block.id === "tool-2"));
+    const strip = turns.find((turn) => turn.blocks.some((block) => block.id === "strip-1"));
+    expect(running?.active).toBe(true);
+    expect(running?.lifecycle).toBe("active");
+    expect(strip?.active).toBe(false);
+  });
+
+  it("still finds the active turn when lastTurnId matches no group", () => {
+    // History restore rebuilds the running turn under a user-message key, so
+    // the streamed turn id no longer identifies any group. Every group would
+    // otherwise render as settled and the live turn would read "Completed".
+    const blocks: ThreadBlock[] = [user("u1"), tool("tool-1"), user("u2"), tool("tool-2", "bash", "running")];
+    const turns = buildTurnPresentations(blocks, { lastTurnId: "turn-not-present", lastTurnLifecycle: "active" });
+    const running = turns.find((turn) => turn.blocks.some((block) => block.id === "tool-2"));
+    expect(running?.active).toBe(true);
+    expect(running?.lifecycle).toBe("active");
+  });
 });
