@@ -1,4 +1,4 @@
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright-core";
@@ -8,7 +8,10 @@ import { resolveBrowserExecutable } from "./browser-executable.mjs";
 const frontend = process.env.PI_SCIENCE_FRONTEND_URL || "http://127.0.0.1:5173";
 const backend = process.env.PI_SCIENCE_BACKEND_URL || "http://127.0.0.1:8787";
 const chromePath = await resolveBrowserExecutable();
-const workspace = path.join(os.tmpdir(), `pi-science-conversation-uat-${process.pid}`);
+// One fixed path rather than a pid-suffixed one: the app registers every
+// workspace it opens, so a fresh directory per run would add a project row per
+// run and leave it pointing at a directory the run then deletes.
+const workspace = path.join(os.tmpdir(), "pi-science-conversation-uat");
 const screenshot = path.join(os.tmpdir(), "pi-science-conversation-uat.png");
 const browserApiOrigins = new Set([new URL(frontend).origin, new URL(backend).origin]);
 const internalToken = process.env.PI_SCIENCE_INTERNAL_TOKEN;
@@ -241,7 +244,13 @@ async function run() {
         method: "DELETE",
       })).catch(() => undefined);
     }
-    await rm(workspace, { recursive: true, force: true });
+    // Keep the workspace directory itself. The app registers every workspace it
+    // opens, and a registered path that no longer exists makes the next
+    // control-plane start treat it as missing; cleaning the contents instead
+    // leaves the registration valid.
+    for (const entry of await readdir(workspace).catch(() => [])) {
+      await rm(path.join(workspace, entry), { recursive: true, force: true });
+    }
   }
 }
 
