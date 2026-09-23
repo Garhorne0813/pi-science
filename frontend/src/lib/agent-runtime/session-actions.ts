@@ -387,6 +387,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         kind: "user",
         id: `user-${Date.now()}`,
         text: message,
+        ...(!activeSessionId ? { optimisticFirstInSession: true } : {}),
         timestamp: new Date().toISOString(),
       };
       const blocks = [...thread.blocks, userBlock];

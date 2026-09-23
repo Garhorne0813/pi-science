@@ -37,6 +37,8 @@ export interface UserMessageBlock extends ConversationBlockIdentity {
   kind: "user";
   id: string;
   text: string;
+  /** Optimistic first send into a session created by this client. */
+  optimisticFirstInSession?: boolean;
   timestamp?: string;
   images?: ImageAttachment[];
 }
@@ -284,6 +286,9 @@ export interface FilePreviewInspector {
   variant: "file";
   path: string;
   filename: string;
+  /** Published content to preview, independently of the current workspace file. */
+  sha256?: string;
+  version?: number;
   artifact?: ArtifactKind;
   language?: string;
   content?: string;

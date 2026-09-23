@@ -42,6 +42,21 @@ beforeEach(() => {
 });
 
 describe("TurnArtifactStrip", () => {
+  it("opens the same published SHA shown in a card, including notebook snapshots", async () => {
+    const sha256 = "a".repeat(64);
+    render(<TurnArtifactStrip cwd="/workspace" artifacts={[
+      { path: "work/result.txt", artifactId: "text", sha256, version: 1, kind: "text", mime: "text/plain", size: 1 },
+      { path: "work/plot.png", artifactId: "image", sha256, version: 1, kind: "image", mime: "image/png", size: 1 },
+      { path: "work/analysis.ipynb", artifactId: "notebook", sha256, version: 1, kind: "notebook", mime: "application/json", size: 1 },
+    ]} />);
+    for (const filename of ["result.txt", "plot.png", "analysis.ipynb"]) {
+      fireEvent.click(screen.getByLabelText(`${filename} (work/${filename})`));
+      expect(openInspector).toHaveBeenLastCalledWith(expect.objectContaining({
+        variant: "file", path: `work/${filename}`, sha256, version: 1,
+      }));
+    }
+  });
+
   it("keeps one stable card per artifact and selects its newest version", () => {
     expect(latestArtifactVersions([
       { path: "old.csv", artifactId: "a1", version: 1, revision: 1, kind: "table", mime: "text/csv", size: 1 },

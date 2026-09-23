@@ -858,4 +858,38 @@ describe("mergeHistoryWithLive", () => {
     expect(mergeHistoryWithLive(threadOf([]), live).blocks.map((block) => block.id))
       .toEqual(["user-1790099999999"]);
   });
+
+  it("matches a persisted prompt after a shared history block even when the browser clock runs ahead", () => {
+    const earlier = { id: "first", role: "user", content: [{ type: "text", text: "status" }], timestamp: "2026-09-23T00:10:00.000Z" };
+    const history = threadOf(convertHistoryToBlocks([
+      earlier,
+      { id: "second", role: "user", content: [{ type: "text", text: "status" }], timestamp: "2026-09-23T00:44:00.000Z" },
+    ]));
+    const live = threadOf([
+      ...convertHistoryToBlocks([earlier]),
+      optimisticUser("user-1790099999999", "status", "2026-09-23T00:49:00.000Z"),
+    ]);
+    expect(mergeHistoryWithLive(history, live).blocks.map((block) => block.id)).toEqual(["first", "second"]);
+  });
+
+  it("matches the first prompt of a client-created session despite clock skew", () => {
+    const history = threadOf(convertHistoryToBlocks([
+      { id: "first", role: "user", content: [{ type: "text", text: "start" }], timestamp: "2026-09-23T00:44:00.000Z" },
+    ]));
+    const live = threadOf([{ ...optimisticUser("user-1790099999999", "start", "2026-09-23T00:49:00.000Z"), optimisticFirstInSession: true } as ThreadBlock]);
+    expect(mergeHistoryWithLive(history, live).blocks.map((block) => block.id)).toEqual(["first"]);
+  });
+
+  it("retains a repeated live prompt when the only matching durable copy precedes the shared block", () => {
+    const history = threadOf(convertHistoryToBlocks([
+      { id: "first", role: "user", content: [{ type: "text", text: "status" }], timestamp: "2026-09-23T00:10:00.000Z" },
+      { id: "second", role: "user", content: [{ type: "text", text: "something else" }], timestamp: "2026-09-23T00:20:00.000Z" },
+    ]));
+    const live = threadOf([
+      history.blocks[0], history.blocks[1],
+      optimisticUser("user-1790099999999", "status", "2026-09-23T00:15:00.000Z"),
+    ]);
+    expect(mergeHistoryWithLive(history, live).blocks.map((block) => block.id))
+      .toEqual(["first", "second", "user-1790099999999"]);
+  });
 });

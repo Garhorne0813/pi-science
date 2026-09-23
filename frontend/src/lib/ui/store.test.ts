@@ -18,6 +18,15 @@ beforeEach(() => {
 });
 
 describe("inspector tabs", () => {
+  it("keeps a published version distinct from the live file and another version", () => {
+    const live = file("result.txt");
+    const first = { ...live, sha256: "a".repeat(64), version: 1 };
+    const second = { ...live, sha256: "b".repeat(64), version: 2 };
+    for (const data of [live, first, second]) useUiStore.getState().openInspector(data);
+    expect(useUiStore.getState().inspectorTabs).toHaveLength(3);
+    expect(new Set([live, first, second].map(inspectorTabId)).size).toBe(3);
+  });
+
   it("opens files in separate tabs and activates the newest one", () => {
     const first = file("results/one.txt");
     const second = file("results/two.txt");

@@ -7,6 +7,7 @@
   "office.embeddedChartsNote": "Embedded charts are not shown in preview",
   "office.truncatedPrefix": "Showing first {{count}} rows",
   "filePreview.inspectWithoutLoading": "Inspect file structure without loading full content",
+  "filePreview.publishedVersion": "Published {{version}}",
   "filePreview.pointer.format": "Format",
   "filePreview.pointer.size": "Size",
   "filePreview.pointer.rows": "Rows",

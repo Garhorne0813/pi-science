@@ -7,6 +7,7 @@
   "office.embeddedChartsNote": "嵌入图表不在预览中显示",
   "office.truncatedPrefix": "显示前 {{count}} 行",
   "filePreview.inspectWithoutLoading": "无需加载完整内容即可检查文件结构",
+  "filePreview.publishedVersion": "已发布版本 {{version}}",
   "filePreview.pointer.format": "格式",
   "filePreview.pointer.size": "大小",
   "filePreview.pointer.rows": "行数",

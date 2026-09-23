@@ -27,6 +27,19 @@ function artifactContentKey(item: TurnArtifactItem): string | number | undefined
   return item.sha256 ?? item.revision ?? item.version;
 }
 
+function inspectorForArtifact(item: TurnArtifactItem, cwd: string) {
+  const filename = item.path.split("/").pop() ?? item.path;
+  const inspector = fileInspectorForPath(item.path, filename, "workspace", cwd);
+  if (!item.sha256) return inspector;
+  // A published notebook snapshot is a read-only file preview too; opening
+  // the live notebook editor here would silently switch to its current bytes.
+  return {
+    ...(inspector.variant === "file" ? inspector : { variant: "file" as const, path: item.path, filename, root: "workspace" as const, cwd }),
+    sha256: item.sha256,
+    version: item.version,
+  };
+}
+
 function fileIcon(kind: string) {
   switch (kind) {
     case "image": return FileImage;
@@ -156,7 +169,7 @@ function IconCard({ item, cwd, Icon }: { item: TurnArtifactItem; cwd?: string; I
   const filename = item.path.split("/").pop() ?? item.path;
   const open = () => {
     if (!cwd) return;
-    openInspector(fileInspectorForPath(item.path, filename, "workspace", cwd));
+    openInspector(inspectorForArtifact(item, cwd));
   };
   return (
     <button
@@ -188,7 +201,7 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
   const snippet = useSnippet(item.path, cwd, snippetKindFor(item) !== "structure", contentKey);
   const open = () => {
     if (!cwd) return;
-    openInspector(fileInspectorForPath(item.path, filename, "workspace", cwd));
+    openInspector(inspectorForArtifact(item, cwd));
   };
 
   const ready = snippet.status === "ready";
@@ -290,7 +303,7 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
 
   const open = () => {
     if (!cwd) return;
-    openInspector(fileInspectorForPath(item.path, filename, "workspace", cwd));
+    openInspector(inspectorForArtifact(item, cwd));
   };
 
   if (isImage) {

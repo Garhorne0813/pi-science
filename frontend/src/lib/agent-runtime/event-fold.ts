@@ -1336,21 +1336,11 @@ export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], 
 /** Optimistic prompt blocks are keyed by `user-${Date.now()}` at send time. */
 const OPTIMISTIC_USER_BLOCK_ID = /^user-\d+$/;
 
-/** An optimistic prompt block is keyed by `user-${Date.now()}` when it is sent,
- *  so it can never match the durable JSONL id that identifies the same message
- *  once a history snapshot covering it lands. Merging on ids alone therefore
- *  keeps one prompt twice.
- *
- *  Pair the two by text, but only when the durable copy is timestamped at or
- *  after the optimistic one: the server records the message after the client
- *  sent it, so that is the same send. A durable block from an earlier turn
- *  carries an earlier timestamp, which keeps a verbatim repeated prompt from
- *  being swallowed by the previous identical one. */
-function isSatisfiedByDurableUser(block: ThreadBlock, durable: Extract<ThreadBlock, { kind: "user" }>): boolean {
+/** Compare text only within the portion of history added after a shared
+ * durable block. Client and server timestamps can have arbitrary clock skew. */
+function isOptimisticTwin(block: ThreadBlock, durable: Extract<ThreadBlock, { kind: "user" }>): boolean {
   if (block.kind !== "user" || !OPTIMISTIC_USER_BLOCK_ID.test(block.id)) return false;
-  if (durable.text !== block.text) return false;
-  if (!block.timestamp || !durable.timestamp) return false;
-  return durable.timestamp >= block.timestamp;
+  return durable.text === block.text;
 }
 
 export function mergeHistoryWithLive(history: Thread, live: Thread): Thread {
@@ -1361,18 +1351,32 @@ export function mergeHistoryWithLive(history: Thread, live: Thread): Thread {
       .filter((block): block is Extract<ThreadBlock, { kind: "tool" }> => block.kind === "tool")
       .map((block) => block.callId),
   );
-  const durableUsers = history.blocks.filter(
-    (block): block is Extract<ThreadBlock, { kind: "user" }> => block.kind === "user",
-  );
+  const historyPositions = new Map(history.blocks.map((block, position) => [block.id, position]));
+  // A shared durable block establishes order across both projections without
+  // comparing clocks. When no shared block exists, preserve the legacy time
+  // guard so a previous, identically worded prompt is not swallowed.
+  let lastSharedPosition = -1;
   const claimedDurableUsers = new Set<string>();
   const blocks = [...history.blocks];
   for (const block of live.blocks) {
-    if (ids.has(block.id)) continue;
+    if (ids.has(block.id)) {
+      lastSharedPosition = Math.max(lastSharedPosition, historyPositions.get(block.id) ?? -1);
+      continue;
+    }
     if (block.kind === "tool" && toolCallIds.has(block.callId)) continue;
     if (block.kind === "user") {
-      const twin = durableUsers.find((candidate) => !claimedDurableUsers.has(candidate.id) && isSatisfiedByDurableUser(block, candidate));
-      if (twin) {
-        claimedDurableUsers.add(twin.id);
+      const twinPosition = history.blocks.findIndex((candidate, position) => {
+        if (position <= lastSharedPosition || candidate.kind !== "user" || claimedDurableUsers.has(candidate.id) || !isOptimisticTwin(block, candidate)) return false;
+        // The first send to a client-created session has no previous prompt
+        // and can be matched without a timestamp even after the assistant
+        // starts replying. Other cold restores have no reliable boundary.
+        return lastSharedPosition >= 0
+          || (block.kind === "user" && block.optimisticFirstInSession && position === 0)
+          || Boolean(block.timestamp && candidate.timestamp && candidate.timestamp >= block.timestamp);
+      });
+      if (twinPosition >= 0) {
+        claimedDurableUsers.add(history.blocks[twinPosition].id);
+        lastSharedPosition = twinPosition;
         continue;
       }
     }
