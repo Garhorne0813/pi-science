@@ -153,12 +153,14 @@ it("runs a conversation command with project writes and a read-only managed envi
   await writeFile(join(prefix, "library.txt"), "package-data");
   await writeFile(join(root, "host-secret.txt"), "secret");
   const previousHome = process.env.PI_SCIENCE_HOME;
+  const previousNodePath = process.env.PI_NODE_PATH;
   process.env.PI_SCIENCE_HOME = home;
+  process.env.PI_NODE_PATH = process.execPath;
   try {
     const controlSecret = join(metadataRoot(workspace), "control-secret.txt");
     await mkdir(metadataRoot(workspace), { recursive: true });
     await writeFile(controlSecret, "control-secret");
-    const script = 'cat "$PI_SCIENCE_ENVIRONMENT_PREFIX/library.txt" > result.txt; if cat "../host-secret.txt" 2>/dev/null; then echo READ_ESCAPED; fi; if cat "$PI_SCIENCE_CONTROL_SECRET" 2>/dev/null; then echo METADATA_READ; fi; if printf hacked > "$PI_SCIENCE_CONTROL_SECRET" 2>/dev/null; then echo METADATA_WRITE; fi; if printf hacked > "$PI_SCIENCE_ENVIRONMENT_PREFIX/library.txt" 2>/dev/null; then echo WRITE_ESCAPED; fi';
+    const script = 'node --version > node-version.txt; cat "$PI_SCIENCE_ENVIRONMENT_PREFIX/library.txt" > result.txt; if cat "../host-secret.txt" 2>/dev/null; then echo READ_ESCAPED; fi; if cat "$PI_SCIENCE_CONTROL_SECRET" 2>/dev/null; then echo METADATA_READ; fi; if printf hacked > "$PI_SCIENCE_CONTROL_SECRET" 2>/dev/null; then echo METADATA_WRITE; fi; if printf hacked > "$PI_SCIENCE_ENVIRONMENT_PREFIX/library.txt" 2>/dev/null; then echo WRITE_ESCAPED; fi';
     const isolated = await sandboxConversationCommand({
       command: ["/bin/bash"], conversationScript: script, workspace,
       environment: { PATH: process.env.PATH, PI_SCIENCE_CONTROL_SECRET: controlSecret, PI_SCIENCE_ENVIRONMENT_PREFIX: prefix, PI_SCIENCE_ENVIRONMENT_REVISION_ID: "rev-test" },
@@ -173,11 +175,14 @@ it("runs a conversation command with project writes and a read-only managed envi
     expect(result.stdout).not.toContain("METADATA_READ");
     expect(result.stdout).not.toContain("METADATA_WRITE");
     expect(await readFile(join(workspace, "result.txt"), "utf8")).toBe("package-data");
+    expect(await readFile(join(workspace, "node-version.txt"), "utf8")).toBe(`${process.version}\n`);
     expect(await readFile(join(prefix, "library.txt"), "utf8")).toBe("package-data");
     expect(await readFile(controlSecret, "utf8")).toBe("control-secret");
   } finally {
     if (previousHome === undefined) delete process.env.PI_SCIENCE_HOME;
     else process.env.PI_SCIENCE_HOME = previousHome;
+    if (previousNodePath === undefined) delete process.env.PI_NODE_PATH;
+    else process.env.PI_NODE_PATH = previousNodePath;
   }
 });
 

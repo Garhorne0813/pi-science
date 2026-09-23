@@ -38,6 +38,7 @@
 - Node.js 24.16 或更高版本
 - Python 3.11 或更高版本
 - pnpm
+- Linux：bubblewrap（`bwrap`），并允许创建非特权用户命名空间
 - 一个 LLM 提供商 API Key，或可信的 OpenAI / Anthropic 兼容本地端点
 - Windows：PowerShell 5.1 或更高版本
 
@@ -67,7 +68,7 @@ powershell -File scripts/install.ps1
 powershell -File scripts/start.ps1
 ```
 
-Shell 启动器面向 macOS/Linux 设计，并计划用于 WSL；CI 当前只在 Linux 上验证其生命周期。PowerShell 安装器会下载并校验原生 Windows Pi runtime ZIP，因此 Windows 全新安装不需要 Git Bash。两种启动器都会运行 `tsx watch` 与 Vite 开发服务器，因此不是生产部署服务器。安装完成后的启动过程直接调用 package-local 可执行文件，因此运行时不需要 npm 或 pnpm wrapper；安装、构建和依赖更新仍然需要 pnpm。
+Shell 启动器面向 macOS/Linux 设计，并计划用于 WSL；CI 当前只在 Linux 上验证其生命周期。PowerShell 安装器会下载并校验原生 Windows Pi runtime ZIP，因此 Windows 全新安装不需要 Git Bash。两种启动器默认直接运行控制平面，并运行 Vite 开发服务器；POSIX 可通过 `PI_SCIENCE_SERVER_WATCH=1` 显式启用监听模式，因此不是生产部署服务器。安装完成后的启动过程直接调用 package-local 可执行文件，因此运行时不需要 npm 或 pnpm wrapper；安装、构建和依赖更新仍然需要 pnpm。
 
 ### `pi-science` 命令
 

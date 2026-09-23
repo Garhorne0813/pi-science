@@ -1,10 +1,14 @@
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../../app/app.js";
 import type { ServerConfig } from "../../config/config.js";
 import { artifactBlobPath } from "../../runtime/artifacts/artifact-blob-store.js";
+import { publishWorkspaceArtifacts } from "../../runtime/artifacts/workspace-artifact-publisher.js";
+import { moveWorkspaceMetadata } from "../../storage/persistence.js";
+import { ensureProject } from "../../project/project-registry.js";
+import { artifactIdentity } from "../../runtime/artifacts/artifact-identity.js";
 
 const apps: Array<{ close(): Promise<unknown> }> = [];
 const workspaces: string[] = [];
@@ -19,6 +23,30 @@ function config(): ServerConfig {
 }
 
 describe("artifact version content", () => {
+  it("continues a legacy artifact history across a workspace rename and both publishers", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-science-artifact-rename-"));
+    workspaces.push(root);
+    const before = join(root, "before");
+    const after = join(root, "after");
+    await mkdir(before);
+    await mkdir(join(before, ".pi-science"));
+    await writeFile(join(before, "report.csv"), "first");
+    await writeFile(join(before, ".pi-science", "artifacts.jsonl"), `${JSON.stringify({ artifact_id: "legacy-path-id", version: 1, path: "report.csv", sha256: "old", size: 3 })}\n`);
+    const project = await ensureProject(before);
+    const newPathId = await artifactIdentity(before, "future.csv", []);
+    const app = buildApp(config()); apps.push(app);
+    await rename(before, after);
+    await moveWorkspaceMetadata(before, after);
+    expect((await ensureProject(after)).id).toBe(project.id);
+    expect(await artifactIdentity(after, "future.csv", [])).toBe(newPathId);
+    await writeFile(join(after, "report.csv"), "second");
+    const published = await app.inject({ method: "POST", url: `/api/artifacts/publish?cwd=${encodeURIComponent(after)}`, payload: { path: "report.csv" } });
+    expect(published.json()).toMatchObject({ artifact_id: "legacy-path-id", version: 2 });
+    await writeFile(join(after, "report.csv"), "third");
+    const [automatic] = await publishWorkspaceArtifacts(after, ["report.csv"], { tool: "test" });
+    expect(automatic).toMatchObject({ artifact_id: "legacy-path-id", version: 3 });
+  });
+
   it("retains both published versions after the workspace file is removed", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-artifact-versions-"));
     workspaces.push(cwd);

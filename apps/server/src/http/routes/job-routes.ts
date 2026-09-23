@@ -26,13 +26,14 @@ export function registerJobRoutes(app: FastifyInstance, jobs: JobCoordinator): v
     if (!cwd) return;
     const body = (request.body ?? {}) as Record<string, unknown>;
     if (typeof body.command !== "string" || !body.command.trim() || body.command.length > 100_000) return reply.code(400).send({ error: "Invalid conversation command" });
+    if (body.client_job_id !== undefined && (typeof body.client_job_id !== "string" || !/^job_[0-9a-f]{16}$/.test(body.client_job_id))) return reply.code(400).send({ error: "Invalid conversation job ID" });
     const timeout = body.timeout_seconds === undefined ? 3600 : Number(body.timeout_seconds);
     if (!Number.isFinite(timeout) || timeout < 1 || timeout > 3600) return reply.code(400).send({ error: "Invalid conversation timeout" });
     const command = process.platform === "win32"
       ? [requireWindowsShell()]
       : ["/bin/bash"];
     try {
-      return publicJobRecord(await jobs.submit(cwd, { command, conversation_script: body.command, surface: "conversation", requirement: { timeout_seconds: timeout }, env: body.env }));
+      return publicJobRecord(await jobs.submit(cwd, { command, conversation_script: body.command, surface: "conversation", requirement: { timeout_seconds: timeout }, env: body.env, client_job_id: body.client_job_id }));
     } catch (error) {
       return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
     }

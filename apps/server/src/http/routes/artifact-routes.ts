@@ -7,6 +7,7 @@ import { provenanceRecordSchema, type ProvenanceRecord } from "@pi-science/contr
 import { appendJsonLineUnlocked, metadataRoot, readJsonLines, withFileWriteLock, workspaceFile } from "../../storage/persistence.js";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { artifactBlobPath, captureArtifactBlob, verifyArtifactBlob } from "../../runtime/artifacts/artifact-blob-store.js";
+import { artifactIdentity } from "../../runtime/artifacts/artifact-identity.js";
 
 interface Artifact { artifact_id: string; version: number; path: string; kind: string; mime: string; size: number; sha256: string; blob_sha256?: string; published_at: string; producer?: Record<string, unknown>; inputs?: unknown[]; environment?: Record<string, unknown>; verification?: Record<string, unknown> }
 interface ArtifactVerificationEvent { artifact_id: string; version: number; verification: Record<string, unknown> }
@@ -64,9 +65,10 @@ export function registerArtifactRoutes(app: FastifyInstance): void {
     }
     const { sha256, size } = digest;
     const artifactPath = relative(cwd, target).replaceAll("\\", "/");
-    const artifactId = createHash("sha256").update(`${cwd}:${artifactPath}`).digest("hex").slice(0, 24);
     return withFileWriteLock(workspaceFile(cwd, "artifacts.jsonl"), async () => {
-      const existing = await findArtifact(cwd, artifactId);
+      const artifacts = await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl"));
+      const artifactId = await artifactIdentity(cwd, artifactPath, artifacts);
+      const existing = artifacts.filter((item) => item.artifact_id === artifactId).at(-1);
       if (existing?.sha256 === sha256 && existing.blob_sha256 === sha256) return existing;
       const artifact: Artifact = {
         artifact_id: artifactId, version: (existing?.version ?? 0) + 1,

@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { lstat, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { tmpdir } from "node:os";
 import { configRoot, metadataRoot } from "../../storage/persistence.js";
 
@@ -42,6 +42,21 @@ function macProfile(readable: string[], writable: string[], denied: string[] = [
 }
 
 function availableSystemRoots(roots: string[]): string[] { return roots.filter(existsSync); }
+
+async function selectedNodeReadPaths(workspace: string): Promise<string[]> {
+  const selected = process.env.PI_NODE_PATH;
+  if (!selected || !isAbsolute(selected)) return [];
+  const canonical = await realpath(selected).catch(() => null);
+  const running = await realpath(process.execPath).catch(() => null);
+  if (!canonical || canonical !== running || inside(workspace, canonical)) return [];
+  if (!(await lstat(canonical)).isFile()) return [];
+  const nvmRoot = await realpath(process.env.NVM_DIR ?? join(process.env.HOME ?? "", ".nvm")).catch(() => null);
+  const versionRoot = nvmRoot ? join(nvmRoot, "versions", "node") : null;
+  if (versionRoot && inside(versionRoot, canonical) && dirname(canonical).endsWith(`${sep}bin`)) {
+    return [dirname(canonical)];
+  }
+  return [canonical];
+}
 
 function sandyExecutable(): string { return process.env.PI_SCIENCE_SANDY_PATH ?? ""; }
 
@@ -236,6 +251,7 @@ export async function sandboxResearchCommand(input: { command: string[]; workspa
   const originalOutput = resolve(candidate ? outputValue : resolve(outputValue, ".."));
   const aliases = status.backend === "seatbelt";
   const readable = [...(status.backend === "appcontainer" ? [] : availableSystemRoots(aliases ? macSystemRoots : linuxSystemRoots)), ...(status.backend === "appcontainer" ? [] : [commandPath]), ...(aliases ? [input.command[0]!] : []), ...(candidate ? [executionCwd, outputDirectory] : [workspace, outputDirectory]), ...(aliases ? candidate ? [input.executionCwd, originalOutput] : [input.workspace, originalOutput] : [])];
+  if (status.backend !== "appcontainer") readable.push(...await selectedNodeReadPaths(workspace));
   const writable = candidate ? [executionCwd, outputDirectory, ...(aliases ? [input.executionCwd, originalOutput] : [])] : [outputDirectory, ...(aliases ? [originalOutput] : [])];
   if (evaluator) {
     const requestedSubject = input.environment.PI_SCIENCE_SUBJECT_DIR;
@@ -336,7 +352,7 @@ export async function sandboxConversationCommand(input: { command: string[]; con
     const legacyMetadata = metadataRoot(workspace);
     const nestedLegacyMetadata = inside(workspace, legacyMetadata) ? legacyMetadata : null;
     const cleanupPaths = status.backend === "appcontainer" ? [canonicalCleanupDirectory] : [cleanupDirectory, canonicalCleanupDirectory];
-    const readable = [...(status.backend === "appcontainer" ? [] : availableSystemRoots(systemRoots)), workspace, prefix, ...cleanupPaths, ...trustedReadPaths, ...(aliases ? [input.workspace, input.managedEnvironmentPrefix, input.command[0]!, ...(input.trustedReadPaths ?? [])] : [])];
+    const readable = [...(status.backend === "appcontainer" ? [] : availableSystemRoots(systemRoots)), workspace, prefix, ...cleanupPaths, ...trustedReadPaths, ...await selectedNodeReadPaths(workspace), ...(aliases ? [input.workspace, input.managedEnvironmentPrefix, input.command[0]!, ...(input.trustedReadPaths ?? [])] : [])];
     const writable = [workspace, ...cleanupPaths, ...(aliases ? [input.workspace] : [])];
     const environment: NodeJS.ProcessEnv = { ...input.environment, HOME: cleanupDirectory, TMPDIR: cleanupDirectory, TMP: cleanupDirectory, TEMP: cleanupDirectory };
     let command: string[] = ["/usr/bin/sandbox-exec", "-p", macProfile(readable, writable, nestedLegacyMetadata ? [nestedLegacyMetadata] : []), ...executionCommand];

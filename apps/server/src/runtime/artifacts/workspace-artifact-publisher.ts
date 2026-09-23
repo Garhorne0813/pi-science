@@ -5,6 +5,7 @@ import { appendJsonLineUnlocked, metadataRoot, readJsonLines, withFileWriteLock,
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { previewKind, previewMime } from "./workspace-artifact-snapshot.js";
 import { captureArtifactBlob } from "./artifact-blob-store.js";
+import { artifactIdentity } from "./artifact-identity.js";
 
 interface ArtifactManifest {
   artifact_id: string;
@@ -184,9 +185,9 @@ async function publishValidatedArtifact(
   const digest = await captureArtifactBlob(workspace, target, sourceRoot);
 
   const path = logicalPath ?? relative(workspace, target).replaceAll("\\", "/");
-  const artifactId = createHash("sha256").update(`${workspace}:${path}`).digest("hex").slice(0, 24);
   return withFileWriteLock(workspaceFile(workspace, "artifacts.jsonl"), async () => {
     const artifacts = await readJsonLines<ArtifactManifest>(workspaceFile(workspace, "artifacts.jsonl"));
+    const artifactId = await artifactIdentity(workspace, path, artifacts);
     const previous = artifacts.filter((item) => item.artifact_id === artifactId).at(-1);
     if (previous?.sha256 === digest.sha256 && previous.blob_sha256 === digest.sha256) {
       // A prior attempt may have saved the manifest and then failed while

@@ -34,6 +34,7 @@ it("routes the Bash tool and direct Bash through sandbox jobs", async () => {
   const request = JSON.parse(String(calls[0]!.init.body));
   expect(request).toMatchObject({ command: "python --version", env: { PI_PROVIDER: "test", PI_MODEL: "model", PI_REASONING_LEVEL: "high", PI_SESSION_ID: "session-1" } });
   expect(new Headers(calls[0]!.init.headers).get("x-pi-science-internal-token")).toBe("control-token");
+  expect(calls.every((call) => call.init.signal instanceof AbortSignal)).toBe(true);
 
   const direct = events.get("user_bash")();
   let output = "";
@@ -91,6 +92,30 @@ it("cancels a job when abort arrives during creation", async () => {
   registerSandbox({ registerTool: () => undefined, on: (name: string, handler: any) => events.set(name, handler) });
   await expect(events.get("user_bash")().operations.exec("sleep 10", "/workspace", { onData: () => undefined, signal: controller.signal })).rejects.toThrow("aborted");
   expect(calls.some((call) => call.startsWith("DELETE "))).toBe(true);
+});
+
+it("finishes promptly when creation never responds and the user aborts", async () => {
+  const controller = new AbortController();
+  let createdSignal: AbortSignal | undefined;
+  let cancelled = false;
+  vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit = {}) => {
+    if (String(url).includes("/api/jobs/conversation")) {
+      createdSignal = init.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new Error("request aborted")), { once: true });
+      });
+    }
+    cancelled = true;
+    return Promise.resolve(new Response(JSON.stringify({ job_id: "job", status: "cancelled" })));
+  }));
+  const events = new Map<string, any>();
+  registerSandbox({ registerTool: () => undefined, on: (name: string, handler: any) => events.set(name, handler) });
+  const pending = events.get("user_bash")().operations.exec("sleep 10", "/workspace", { onData: () => undefined, signal: controller.signal });
+  await vi.waitFor(() => expect(createdSignal).toBeDefined());
+  controller.abort();
+  await expect(pending).rejects.toThrow("aborted");
+  expect(createdSignal?.aborted).toBe(true);
+  expect(cancelled).toBe(true);
 });
 
 it("blocks file tools from leaving the workspace or reading application metadata", async () => {

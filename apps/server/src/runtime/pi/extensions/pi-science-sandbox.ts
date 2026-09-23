@@ -1,10 +1,14 @@
 /** Routes Pi's Bash tool and direct ! commands through the Node sandbox job. */
 import { realpath } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { createBashTool } from "@earendil-works/pi-coding-agent";
 
 const TOKEN_HEADER = "x-pi-science-internal-token";
 const POLL_MS = 250;
+const CREATE_TIMEOUT_MS = 30_000;
+const POLL_TIMEOUT_MS = 10_000;
+const CANCEL_TIMEOUT_MS = 5_000;
 
 interface Job {
   job_id: string;
@@ -30,11 +34,12 @@ function baseUrl(): string {
   return (process.env.PI_SCIENCE_BACKEND_URL || "http://127.0.0.1:8787").replace(/\/+$/, "");
 }
 
-async function jobRequest<T = Job>(path: string, init: RequestInit = {}): Promise<T> {
+async function jobRequest<T = Job>(path: string, init: RequestInit = {}, timeoutMs = POLL_TIMEOUT_MS): Promise<T> {
   const headers = new Headers(init.headers);
   const token = process.env.PI_SCIENCE_INTERNAL_TOKEN;
   if (token) headers.set(TOKEN_HEADER, token);
-  const response = await fetch(`${baseUrl()}${path}`, { ...init, headers });
+  const signal = init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
+  const response = await fetch(`${baseUrl()}${path}`, { ...init, headers, signal });
   const payload = await response.json() as T & { error?: string };
   if (!response.ok) throw new Error(payload.error || `Sandbox request failed (${response.status})`);
   return payload;
@@ -55,25 +60,47 @@ function terminal(status: Job["status"]): boolean {
 async function executeSandboxed(command: string, cwd: string, options: { onData: (data: Buffer) => void; signal?: AbortSignal; timeout?: number; env?: NodeJS.ProcessEnv }): Promise<{ exitCode: number | null }> {
   if (options.signal?.aborted) throw new Error("aborted");
   const query = `cwd=${encodeURIComponent(cwd)}`;
-  const job = await jobRequest(`/api/jobs/conversation?${query}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ command, timeout_seconds: options.timeout ?? 3600, env: identity(options.env) }),
-  });
+  const jobId = `job_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
   let cancelled = false;
+  const cancelPath = `/api/jobs/${encodeURIComponent(jobId)}?${query}`;
   const cancel = () => {
+    if (cancelled) return;
     cancelled = true;
-    void jobRequest(`/api/jobs/${encodeURIComponent(job.job_id)}?${query}`, { method: "DELETE" }).catch(() => undefined);
+    // Creation may have completed on the server even when its response was lost.
+    // Retry briefly because cancellation can reach the server before persistence.
+    void (async () => {
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        try {
+          await jobRequest<Job>(cancelPath, { method: "DELETE" }, CANCEL_TIMEOUT_MS);
+          return;
+        } catch { /* creation may still be in progress */ }
+        await new Promise<void>((resolve) => { const timer = setTimeout(resolve, 1_000); timer.unref?.(); });
+      }
+    })();
   };
   options.signal?.addEventListener("abort", cancel, { once: true });
-  if (options.signal?.aborted) cancel();
   try {
+    if (options.signal?.aborted) { cancel(); throw new Error("aborted"); }
+    let job: Job;
+    try {
+      job = await jobRequest(`/api/jobs/conversation?${query}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ command, client_job_id: jobId, timeout_seconds: options.timeout ?? 3600, env: identity(options.env) }),
+        signal: options.signal,
+      }, CREATE_TIMEOUT_MS);
+    } catch (error) {
+      cancel();
+      if (options.signal?.aborted) throw new Error("aborted");
+      throw error;
+    }
+    if (cancelled) throw new Error("aborted");
     let cursor = 0;
     let status = job.status;
     let returnCode = job.return_code;
     do {
       if (cancelled) throw new Error("aborted");
-      const delta = await jobRequest<OutputDelta>(`/api/jobs/${encodeURIComponent(job.job_id)}/output?${query}&cursor=${cursor}`);
+      const delta = await jobRequest<OutputDelta>(`/api/jobs/${encodeURIComponent(job.job_id)}/output?${query}&cursor=${cursor}`, { signal: options.signal });
       if (delta.lost) options.onData(Buffer.from("[Earlier sandbox output was dropped before it could be streamed]\n"));
       for (const frame of delta.frames) options.onData(Buffer.from(frame.data, "base64"));
       cursor = delta.cursor;
@@ -84,6 +111,10 @@ async function executeSandboxed(command: string, cwd: string, options: { onData:
     if (cancelled || status === "cancelled") throw new Error("aborted");
     if (status === "timed_out") throw new Error(`timeout:${options.timeout ?? 3600}`);
     return { exitCode: returnCode ?? (status === "succeeded" ? 0 : 1) };
+  } catch (error) {
+    cancel();
+    if (options.signal?.aborted) throw new Error("aborted");
+    throw error;
   } finally {
     options.signal?.removeEventListener("abort", cancel);
   }
