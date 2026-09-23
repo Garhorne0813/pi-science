@@ -1461,7 +1461,8 @@ function carryStepTiming(current: Thread, authoritative: Thread, preserveProject
  *  carries no turn/item identity and a history rebuild materializes the row
  *  from a message id, so neither the row id nor its turn can join the live
  *  phase to its restored copy — the reasoning text is the same string in both
- *  projections, so that is what identifies the phase. */
+ *  projections, so that is what identifies the phase. Two phases whose text is
+ *  byte-identical are indistinguishable by design; the later one wins. */
 function thinkingTimingByPhase(blocks: ThreadBlock[]): Map<string, { startedAt?: string; endedAt?: string }> {
   const timing = new Map<string, { startedAt?: string; endedAt?: string }>();
   for (const block of blocks) {
@@ -1474,8 +1475,9 @@ function thinkingTimingByPhase(blocks: ThreadBlock[]): Map<string, { startedAt?:
 
 function thinkingPhaseKey(block: ThinkingBlock): string | undefined {
   const text = block.parts.map((part) => part.text).join("");
-  if (!text) return undefined;
-  return `${text.length}\u0000${text.slice(0, 64)}`;
+  // The whole text, not a prefix: two phases that merely share an opening
+  // would otherwise collide and inherit each other's duration.
+  return text || undefined;
 }
 
 export function replaceHistoryTail(current: Thread, messages: HistoryMessage[]): Thread {
