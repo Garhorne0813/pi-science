@@ -11,7 +11,6 @@ export interface ExecutionEventConnectionOptions {
 /** Executions remain REST-backed; this lossy stream only signals that their cache changed. */
 export function subscribeExecutionInvalidation(cwd: string, options: ExecutionEventConnectionOptions = {}): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let connectedOnce = false;
   const signal = () => {
     timer ??= setTimeout(() => {
       timer = null;
@@ -20,10 +19,9 @@ export function subscribeExecutionInvalidation(cwd: string, options: ExecutionEv
   };
   const closeStream = openJsonEventStream<unknown>(`/api/executions/events?cwd=${encodeURIComponent(cwd)}`, {
     onMessage: signal,
-    onOpen: () => {
+    onOpen: ({ resumed, reconnect }) => {
       options.onConnectionChange?.(true);
-      if (connectedOnce) signal();
-      connectedOnce = true;
+      if (resumed || reconnect) signal();
     },
     onError: () => options.onConnectionChange?.(false),
     closeOnError: false,

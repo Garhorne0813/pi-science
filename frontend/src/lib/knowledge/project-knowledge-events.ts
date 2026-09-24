@@ -15,7 +15,6 @@ const SIGNAL_DEBOUNCE_MS = 250;
 export function subscribeProjectKnowledgeEvents(cwd: string, onSignal: (event?: ProjectKnowledgeEvent) => void): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let latest: ProjectKnowledgeEvent | undefined;
-  let connectedOnce = false;
   const signal = (event?: ProjectKnowledgeEvent) => {
     latest = event ?? latest;
     timer ??= setTimeout(() => {
@@ -27,11 +26,11 @@ export function subscribeProjectKnowledgeEvents(cwd: string, onSignal: (event?: 
   };
   const closeStream = openJsonEventStream<ProjectKnowledgeEvent>(`/api/project-knowledge/events?cwd=${encodeURIComponent(cwd)}`, {
     onMessage: signal,
-    onOpen: () => {
-      // The initial REST query is already in flight/on cache. Only a later
-      // EventSource open represents a reconnect that may have missed events.
-      if (connectedOnce) signal();
-      connectedOnce = true;
+    onOpen: ({ resumed, reconnect }) => {
+      // Initial mount is paired with the normal REST query. A visibility
+      // resume also needs catch-up after the new subscription is live, even
+      // when the first EventSource never reached OPEN.
+      if (resumed || reconnect) signal();
     },
     closeOnError: false,
     pauseWhenHidden: true,

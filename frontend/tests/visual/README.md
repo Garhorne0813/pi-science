@@ -20,6 +20,7 @@ pnpm --filter frontend test:visual              # build + full visual matrix
 pnpm --filter frontend test:visual:update       # rebuild baselines (review the diff!)
 pnpm --filter frontend test:visual:typecheck    # typecheck specs, fixtures and the config
 pnpm --filter frontend test:accessibility       # axe gate only (@accessibility tags)
+pnpm --filter frontend check:sse-budget          # browser SSE lifecycle and connection budget
 ```
 
 The Playwright `webServer` block starts the fixture mock server
@@ -98,3 +99,13 @@ conversation UI milestone; the SSE fixture is ready to push scripted
 
 Do not fake these gaps: if a scenario cannot be made deterministic, mark it
 skipped with a reason instead of asserting a screenshot that can drift.
+
+## SSE connection budget
+
+`pnpm --filter frontend check:sse-budget` builds the production bundle, starts
+the same fixture server on port 4174, and drives a system Chrome, Chromium, or
+Edge through the conversation and executions routes. It checks two visible
+conversation tabs, hidden-tab release, a first connection resumed before it
+opens, the no-cursor recovery sentinel, document reload, execution stream
+resume, and `/api/health`. Set `CHROME_PATH` or
+`PI_SCIENCE_SSE_BUDGET_PORT` to override the browser executable or port.

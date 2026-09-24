@@ -83,4 +83,26 @@ describe("subscribeExecutionInvalidation", () => {
     cleanup();
     expect(source.closed).toBe(true);
   });
+
+  it("invalidates again when the first source resumes only after a delayed OPEN", () => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const cleanup = subscribeExecutionInvalidation("/workspace/delayed-open");
+    const first = FakeEventSource.instances[0]!;
+
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(first.closed).toBe(true);
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    const resumed = FakeEventSource.instances[1]!;
+
+    vi.advanceTimersByTime(150);
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    resumed.onopen?.();
+    vi.advanceTimersByTime(150);
+    expect(invalidate).toHaveBeenCalledTimes(2);
+    cleanup();
+  });
 });

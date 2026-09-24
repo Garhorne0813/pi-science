@@ -1,6 +1,6 @@
 export interface JsonEventStreamOptions<T> {
   onMessage: (data: T) => void;
-  onOpen?: () => void;
+  onOpen?: (state: { resumed: boolean; reconnect: boolean }) => void;
   onError?: (error: Error) => void;
   closeOnError?: boolean;
   /** Release a long-lived subscription while this tab is in the background. */
@@ -13,6 +13,8 @@ export interface JsonEventStreamOptions<T> {
 export function openJsonEventStream<T>(url: string, options: JsonEventStreamOptions<T>): () => void {
   let source: EventSource | null = null;
   let closed = false;
+  let openedOnce = false;
+  let resumePending = false;
   const open = () => {
     if (closed || source) return;
     const next = new EventSource(url, { withCredentials: true });
@@ -25,7 +27,13 @@ export function openJsonEventStream<T>(url: string, options: JsonEventStreamOpti
         options.onError?.(error instanceof Error ? error : new Error(String(error)));
       }
     };
-    next.onopen = () => { if (source === next) options.onOpen?.(); };
+    next.onopen = () => {
+      if (source !== next) return;
+      const state = { resumed: resumePending, reconnect: openedOnce };
+      openedOnce = true;
+      resumePending = false;
+      options.onOpen?.(state);
+    };
     next.onerror = (event) => {
       if (source !== next || "data" in event) return;
       if (options.closeOnError !== false) close();
@@ -37,6 +45,10 @@ export function openJsonEventStream<T>(url: string, options: JsonEventStreamOpti
       source?.close();
       source = null;
     } else if (!closed && !source) {
+      // Remember this before opening: a first EventSource that was closed
+      // while CONNECTING still needs a REST catch-up after the replacement
+      // subscription is actually open.
+      resumePending = true;
       options.onResume?.();
       open();
     }

@@ -40,7 +40,7 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
       {turn.user && <UserMessage block={turn.user} />}
       {showActivity && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} turnStartedAt={turn.user?.timestamp} turnEndedAt={turn.finalAgent?.timestamp} part={isLiveLifecycle(turn.lifecycle) ? "content" : "both"} />}
       {visibleAgent && <AgentMessage key={visibleAgent.id} block={visibleAgent} actionText={turn.finalAgent ? actionTextByBlock?.get(turn.finalAgent.id) : undefined} codeRunner={codeRunner} />}
-      {(turn.active || turn.activityBlocks.length > 0) && isLiveLifecycle(turn.lifecycle) && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} part="status" />}
+      {(turn.active || turn.activityBlocks.length > 0) && isLiveLifecycle(turn.lifecycle) && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} turnStartedAt={turn.user?.timestamp} part="status" />}
       {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} />)}
       {turn.artifacts.map((block) => <TurnArtifactStrip key={block.id} artifacts={block.artifacts} cwd={codeRunner?.cwd} />)}
       {finalText && <ReferencedArtifactStrip text={finalText} cwd={codeRunner?.cwd} exclude={publishedPaths} />}

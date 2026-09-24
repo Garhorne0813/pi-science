@@ -92,6 +92,13 @@ describe("completed turn duration", () => {
 });
 
 describe("AgentActivity live stream", () => {
+  it("labels a restored queued turn without showing a running phase", () => {
+    render(<AgentActivity blocks={[]} lifecycle="queued" part="status" />);
+
+    expect(screen.getByText("Queued")).toBeInTheDocument();
+    expect(screen.getByText("Queued").closest("[data-state]")).toHaveAttribute("data-state", "waiting");
+  });
+
   it("uses semantic kernel and literature renderers", () => {
     render(<AgentActivity blocks={[
       { ...tool("python", "python", "done", { code: "print(42)" }), details: { outputs: [{ type: "text" }, { type: "image" }] } },
@@ -149,6 +156,45 @@ describe("AgentActivity live stream", () => {
       expect(container.querySelector('[aria-hidden="true"].font-mono')?.textContent).toMatch(/^\d+\.\ds$/);
       rerender(<AgentActivity blocks={[tool("read-1", "read", "done", { path: "a.ts" })]} lifecycle="settled" />);
       expect(container.querySelector('[aria-hidden="true"].font-mono')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("restores the live elapsed timer from the user's message timestamp", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-24T12:00:30.000Z"));
+      const { container } = render(<AgentActivity
+        blocks={[tool("read-restored", "read", "running", { path: "a.ts" })]}
+        lifecycle="active"
+        turnStartedAt="2026-09-24T12:00:00.000Z"
+        part="status"
+      />);
+      const elapsed = container.querySelector('[aria-hidden="true"].font-mono');
+      expect(elapsed).toHaveTextContent("30s");
+
+      act(() => { vi.advanceTimersByTime(5_000); });
+      expect(elapsed).toHaveTextContent("35s");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ["invalid timestamp falls back to the first live render", "not-a-timestamp"],
+    ["future timestamp is clamped to zero", "2026-09-24T12:01:00.000Z"],
+  ])("%s", (_name, turnStartedAt) => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-24T12:00:30.000Z"));
+      const { container } = render(<AgentActivity
+        blocks={[tool("read-fallback", "read", "running", { path: "a.ts" })]}
+        lifecycle="active"
+        turnStartedAt={turnStartedAt}
+        part="status"
+      />);
+      expect(container.querySelector('[aria-hidden="true"].font-mono')).toHaveTextContent("0.0s");
     } finally {
       vi.useRealTimers();
     }

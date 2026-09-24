@@ -56,6 +56,29 @@ describe("subscribeProjectKnowledgeEvents", () => {
     cleanup();
   });
 
+  it("catches up when the first source is hidden before OPEN", () => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    const onSignal = vi.fn();
+    const cleanup = subscribeProjectKnowledgeEvents(".", onSignal);
+    const first = FakeEventSource.instances[0]!;
+
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(first.closed).toBe(true);
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    const resumed = FakeEventSource.instances[1]!;
+
+    // Resume refresh may complete before the replacement stream is open.
+    vi.advanceTimersByTime(250);
+    expect(onSignal).toHaveBeenCalledOnce();
+    resumed.onopen?.();
+    vi.advanceTimersByTime(250);
+    expect(onSignal).toHaveBeenCalledTimes(2);
+    cleanup();
+  });
+
   it("debounces a burst and keeps the latest pending count", () => {
     const onSignal = vi.fn();
     const cleanup = subscribeProjectKnowledgeEvents("/workspace/demo", onSignal);
