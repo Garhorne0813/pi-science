@@ -5,10 +5,6 @@ import i18n from "../../i18n";
 import { queryClient } from "../../lib/client/query-client";
 import { SessionExecutionButton } from "./SessionExecutionButton";
 
-vi.mock("../../lib/runs/execution-events", () => ({
-  subscribeExecutionInvalidation: () => vi.fn(),
-}));
-
 beforeAll(async () => {
   await i18n.changeLanguage("en");
 });

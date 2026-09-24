@@ -20,6 +20,8 @@ pnpm --filter frontend test:visual              # build + full visual matrix
 pnpm --filter frontend test:visual:update       # rebuild baselines (review the diff!)
 pnpm --filter frontend test:visual:typecheck    # typecheck specs, fixtures and the config
 pnpm --filter frontend test:accessibility       # axe gate only (@accessibility tags)
+pnpm --filter frontend check:sse-budget         # build + browser SSE lifecycle and connection budget
+pnpm --filter frontend test:sse-budget          # same gate against an existing dist/ (what CI runs)
 ```
 
 The Playwright `webServer` block starts the fixture mock server
@@ -98,3 +100,23 @@ conversation UI milestone; the SSE fixture is ready to push scripted
 
 Do not fake these gaps: if a scenario cannot be made deterministic, mark it
 skipped with a reason instead of asserting a screenshot that can drift.
+
+## SSE connection budget
+
+`pnpm --filter frontend check:sse-budget` builds the production bundle, starts
+the same fixture server on port 4174, and drives a system Chrome, Chromium, or
+Edge through the conversation and executions routes. `test:sse-budget` is the
+same check without the build step; the Linux `verify` job runs it right after
+`pnpm build`, beside `test:bundle`.
+
+It checks two visible conversation tabs, hidden-tab release, a first connection
+resumed before it opens, the no-cursor recovery sentinel, document reload,
+execution stream resume, and `/api/health`.
+
+Each route is also held to its whole subscription set, not just the endpoint
+under test: a conversation route must hold exactly the conversation stream plus
+the workspace project-knowledge signal, and the executions route exactly the
+invalidation stream plus that signal. A third stream — the session header's
+executions subscription, for instance — fails the run and names itself. Set
+`CHROME_PATH` or `PI_SCIENCE_SSE_BUDGET_PORT` to override the browser executable
+or port.

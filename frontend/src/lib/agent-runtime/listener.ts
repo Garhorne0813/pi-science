@@ -3,6 +3,8 @@
 
 import type { PiScienceClient, PiScienceEvent, SessionStats } from "../client/pi-science-client";
 import { aiTitleAttemptedAt, hasAiTitle, markAiTitleAttempted } from "../client/pi-science-client";
+import { queryClient } from "../client/query-client";
+import { runsKey } from "../runs";
 import { appendRuntimeError, isMissingSessionError } from "./errors";
 import { markWorkspaceFilesChanged } from "./file-revision";
 import { foldEvent, resetTurnBuffer } from "./event-fold";
@@ -30,6 +32,48 @@ function reconnectReason(event: PiScienceEvent, fallback: ReconnectReason): Reco
 
 function interactionKind(value: unknown): InteractionKind | undefined {
   return value === "permission" || value === "confirmation" || value === "question" ? value : undefined;
+}
+
+const RUNS_SIGNAL_DEBOUNCE_MS = 150;
+let runsSignalTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Executions stay a REST surface, so this stream can only invalidate them.
+ *  Coalesce the burst a parallel tool fan-out produces into one refetch. */
+function signalSessionRuns(cwd: string): void {
+  runsSignalTimer ??= setTimeout(() => {
+    runsSignalTimer = null;
+    void queryClient.invalidateQueries({ queryKey: runsKey(cwd) });
+  }, RUNS_SIGNAL_DEBOUNCE_MS);
+}
+
+/** The records that create or settle an execution. Tool updates stream the
+ *  output tail many times per call while an execution stays pending/running,
+ *  so only the boundaries may invalidate: `startedAt` is written by
+ *  tool_execution_start, and the terminal status/`endedAt` by
+ *  tool_execution_end. Run-level starts and settles bracket the same window
+ *  for executions the conversation stream never observes a tool call for. */
+function isExecutionBoundary(event: PiScienceEvent): boolean {
+  switch (event.type) {
+    case "agent_start":
+    case "run.started":
+    case "run.completed":
+    case "run.cancelled":
+    case "run.failed":
+    case "agent_settled":
+      return true;
+    case "tool.updated": {
+      const status = String(event.status ?? "");
+      return status === "done" || status === "error" || typeof event.startedAt === "string";
+    }
+    default:
+      return false;
+  }
+}
+
+/** A stream that resumed after being hidden or dropped missed whatever ran in
+ *  the meantime; the re-attach is the only signal for those executions. */
+function isRecoveryAttach(event: PiScienceEvent): boolean {
+  return event.type === "connection.open" && event.reason !== "initial_attach";
 }
 
 /** The client whose stream is currently folded into the store, and the
@@ -238,6 +282,9 @@ export function registerEventListener(client: PiScienceClient) {
   disarmTurnWatchdog();
   clearOptimisticRetry();
   optimisticRetries.clear();
+  // A signal queued by the previous client must not land after the switch.
+  if (runsSignalTimer !== null) clearTimeout(runsSignalTimer);
+  runsSignalTimer = null;
   _listenerUnsubscribe?.();
   _listenerClient = client;
   _listenerUnsubscribe = client.onEvent((event) => {
@@ -249,6 +296,13 @@ export function registerEventListener(client: PiScienceClient) {
     // not count as turn activity: the watchdog's reconnect emits one and
     // must not reset its own silence clock.
     if (!event.type.startsWith("connection.")) noteTurnEvent();
+
+    // Runs own no subscription of their own on this page, so the conversation
+    // stream is what keeps the session's execution badge event-driven instead
+    // of waiting out the REST poll interval.
+    if (isExecutionBoundary(event) || isRecoveryAttach(event) || event.type === "stream.gap") {
+      signalSessionRuns(state.cwd);
+    }
 
     if (event.type === "session.replaced") {
       const replacementSessionId = String(event.replacementSessionId || "");

@@ -1,23 +1,19 @@
-import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { sessionRunsQuery } from "../../lib/runs";
-import { subscribeExecutionInvalidation } from "../../lib/runs/execution-events";
 import { cn } from "../../lib/ui";
 
 export function SessionExecutionButton({ cwd, sessionId, active, onToggle }: { cwd: string; sessionId?: string; active: boolean; onToggle: () => void }) {
   const { t } = useTranslation();
-  const [liveConnected, setLiveConnected] = useState(false);
+  // No execution subscription here: the conversation stream this page already
+  // holds invalidates the runs key on every execution boundary, so the REST
+  // interval below is a backstop for executions that stream never observes
+  // (notebook, compute and research surfaces), not the update path.
   const { data: runs = [] } = useQuery({
-    ...sessionRunsQuery(cwd, sessionId ?? "", liveConnected),
+    ...sessionRunsQuery(cwd, sessionId ?? ""),
     enabled: Boolean(sessionId),
   });
-
-  useEffect(() => {
-    if (!sessionId) return;
-    return subscribeExecutionInvalidation(cwd, { onConnectionChange: setLiveConnected });
-  }, [cwd, sessionId]);
 
   if (!sessionId) return null;
   const running = runs.filter((run) => run.status === "pending" || run.status === "running").length;
