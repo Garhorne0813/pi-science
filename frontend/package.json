@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "test:bundle": "node scripts/check-bundle-budget.mjs",
     "check:sse-budget": "pnpm build && node scripts/check-sse-connection-budget.mjs",
+    "test:sse-budget": "node scripts/check-sse-connection-budget.mjs",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.app.json --noEmit",
     "test:uat:conversation": "node scripts/uat-conversation.mjs",

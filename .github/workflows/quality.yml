@@ -72,6 +72,12 @@ jobs:
       - name: Enforce frontend bundle budget
         run: pnpm --filter frontend test:bundle
 
+      # Reuses the build above. The browser-level SSE budget is the only gate on
+      # the frontend's subscription lifecycle, so it must not stay local-only.
+      - name: Enforce frontend SSE connection budget
+        if: runner.os == 'Linux'
+        run: pnpm --filter frontend test:sse-budget
+
       - name: Run frontend accessibility smoke
         if: runner.os == 'Linux'
         run: pnpm --filter frontend exec playwright test --config playwright.visual.config.ts --grep @accessibility
