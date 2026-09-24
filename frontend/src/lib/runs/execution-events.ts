@@ -27,6 +27,8 @@ export function subscribeExecutionInvalidation(cwd: string, options: ExecutionEv
     },
     onError: () => options.onConnectionChange?.(false),
     closeOnError: false,
+    pauseWhenHidden: true,
+    onResume: signal,
   });
   return () => {
     closeStream();

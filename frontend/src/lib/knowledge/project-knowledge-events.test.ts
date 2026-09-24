@@ -30,9 +30,32 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("subscribeProjectKnowledgeEvents", () => {
+  it("closes while hidden and refreshes after the tab becomes visible", () => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    const onSignal = vi.fn();
+    const cleanup = subscribeProjectKnowledgeEvents(".", onSignal);
+    const first = FakeEventSource.instances[0]!;
+
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(first.closed).toBe(true);
+    first.message(9);
+    vi.advanceTimersByTime(250);
+    expect(onSignal).not.toHaveBeenCalled();
+
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(FakeEventSource.instances).toHaveLength(2);
+    vi.advanceTimersByTime(250);
+    expect(onSignal).toHaveBeenCalledWith(undefined);
+    cleanup();
+  });
+
   it("debounces a burst and keeps the latest pending count", () => {
     const onSignal = vi.fn();
     const cleanup = subscribeProjectKnowledgeEvents("/workspace/demo", onSignal);

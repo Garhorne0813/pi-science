@@ -28,10 +28,30 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   queryClient.clear();
 });
 
 describe("subscribeExecutionInvalidation", () => {
+  it("releases its stream in the background and invalidates runs on return", () => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    const key = runsKey("/workspace/demo");
+    queryClient.setQueryData(key, []);
+    const cleanup = subscribeExecutionInvalidation("/workspace/demo");
+    const first = FakeEventSource.instances[0]!;
+
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(first.closed).toBe(true);
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(FakeEventSource.instances).toHaveLength(2);
+    vi.advanceTimersByTime(150);
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+    cleanup();
+  });
+
   it("debounces execution events and invalidates the workspace ledger", () => {
     const key = runsKey("/workspace/demo");
     queryClient.setQueryData(key, []);

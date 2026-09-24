@@ -21,6 +21,8 @@ export function subscribeResearchEvents(cwd: string, onSignal: () => void): () =
     onMessage: signal,
     onOpen: signal,
     closeOnError: false,
+    pauseWhenHidden: true,
+    onResume: signal,
   });
   return () => {
     closeStream();

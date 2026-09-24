@@ -34,6 +34,8 @@ export function subscribeProjectKnowledgeEvents(cwd: string, onSignal: (event?: 
       connectedOnce = true;
     },
     closeOnError: false,
+    pauseWhenHidden: true,
+    onResume: () => signal(),
   });
   return () => {
     closeStream();

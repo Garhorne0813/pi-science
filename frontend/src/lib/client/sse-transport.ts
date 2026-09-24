@@ -49,6 +49,19 @@ export class SseTransport {
    * alive until a normal event is successfully applied; closing it during the
    * REST rebase would recreate a subscribe-registration blind spot. */
   private gapFencedKey: string | null = null;
+  private pausedForVisibility = false;
+  private listeningForVisibility = false;
+  private readonly onVisibilityChange = () => {
+    if (document.hidden) {
+      if (!this.sessionId) return;
+      this.pausedForVisibility = true;
+      ++this.connectionGeneration;
+      this.gapFencedKey = null;
+      this.closeEventSource();
+    } else if (this.pausedForVisibility && this.sessionId) {
+      this.connect(this.sessionId, this.cwd ?? undefined, "recovery");
+    }
+  };
 
   // Known event types from the backend (named SSE events)
   private static SSE_EVENTS = [
@@ -95,6 +108,11 @@ export class SseTransport {
     if (this.isConnectedTo(sessionId, targetCwd ?? undefined)) {
       return;
     }
+    if (!this.listeningForVisibility && typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", this.onVisibilityChange);
+      this.listeningForVisibility = true;
+    }
+    const resumingFromHidden = this.pausedForVisibility;
     const attachReason = reason
       ?? (this.sessionId !== null && this.sessionId !== sessionId ? "session_switch" : "initial_attach");
     this.connectionReason = attachReason;
@@ -105,13 +123,20 @@ export class SseTransport {
     const generation = ++this.connectionGeneration;
     this.sessionId = sessionId;
     this.cwd = targetCwd;
+    if (typeof document !== "undefined" && document.hidden) {
+      this.pausedForVisibility = true;
+      return;
+    }
 
     // If we already have a cursor for this (cwd, sessionId) from a previous
     // view, pass it to the backend so it only replays events after the cursor
     // instead of the full event log. This is the key optimisation for
     // conversation switching speed.
     const cursorKey = targetCwd ? sessionKey(targetCwd, sessionId) : "";
-    const lastEventId = cursorKey ? this.lastEventIds.get(cursorKey) : undefined;
+    const lastEventId = cursorKey
+      ? this.lastEventIds.get(cursorKey) ?? (resumingFromHidden ? RECOVERY_REPLAY_SENTINEL : undefined)
+      : undefined;
+    this.pausedForVisibility = false;
     const params = new URLSearchParams();
     if (cwd) params.set("cwd", cwd);
     if (lastEventId) params.set("lastEventId", lastEventId);
@@ -172,6 +197,8 @@ export class SseTransport {
           this.closeEventSource();
           this.sessionId = null;
           this.cwd = null;
+          this.pausedForVisibility = false;
+          this.stopVisibilityListening();
         }
       } catch (err) {
         console.error("SSE parse error:", err);
@@ -224,6 +251,7 @@ export class SseTransport {
    *  is the recovery fence. Do not tear it down until a successfully applied
    *  event advances the cursor (or the source actually closes). */
   reconnect(sessionId: string, cwd?: string, reason?: TransportReason): void {
+    if (typeof document !== "undefined" && document.hidden) return;
     const targetCwd = cwd ?? null;
     const cursorKey = targetCwd ? sessionKey(targetCwd, sessionId) : "";
     if (
@@ -246,7 +274,16 @@ export class SseTransport {
     this.closeEventSource();
     this.sessionId = null;
     this.cwd = null;
+    this.pausedForVisibility = false;
+    this.stopVisibilityListening();
     if (sessionId) this.emit({ type: "connection.closed", sessionId, reason: "manual" });
+  }
+
+  private stopVisibilityListening(): void {
+    if (this.listeningForVisibility) {
+      document.removeEventListener("visibilitychange", this.onVisibilityChange);
+      this.listeningForVisibility = false;
+    }
   }
 
   onEvent(fn: (event: PiScienceEvent) => unknown): () => void {

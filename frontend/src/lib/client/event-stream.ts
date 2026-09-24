@@ -3,29 +3,52 @@ export interface JsonEventStreamOptions<T> {
   onOpen?: () => void;
   onError?: (error: Error) => void;
   closeOnError?: boolean;
+  /** Release a long-lived subscription while this tab is in the background. */
+  pauseWhenHidden?: boolean;
+  /** Refresh REST-backed state after events may have been missed. */
+  onResume?: () => void;
 }
 
 /** Open an unnamed-message SSE stream with consistent JSON/error handling. */
 export function openJsonEventStream<T>(url: string, options: JsonEventStreamOptions<T>): () => void {
-  const source = new EventSource(url, { withCredentials: true });
+  let source: EventSource | null = null;
   let closed = false;
+  const open = () => {
+    if (closed || source) return;
+    const next = new EventSource(url, { withCredentials: true });
+    source = next;
+    next.onmessage = (event) => {
+      if (source !== next) return;
+      try {
+        options.onMessage(JSON.parse(event.data) as T);
+      } catch (error) {
+        options.onError?.(error instanceof Error ? error : new Error(String(error)));
+      }
+    };
+    next.onopen = () => { if (source === next) options.onOpen?.(); };
+    next.onerror = (event) => {
+      if (source !== next || "data" in event) return;
+      if (options.closeOnError !== false) close();
+      options.onError?.(new Error("Event stream connection failed"));
+    };
+  };
+  const onVisibilityChange = () => {
+    if (document.hidden) {
+      source?.close();
+      source = null;
+    } else if (!closed && !source) {
+      options.onResume?.();
+      open();
+    }
+  };
   const close = () => {
     if (closed) return;
     closed = true;
-    source.close();
+    if (options.pauseWhenHidden) document.removeEventListener("visibilitychange", onVisibilityChange);
+    source?.close();
+    source = null;
   };
-  source.onmessage = (event) => {
-    try {
-      options.onMessage(JSON.parse(event.data) as T);
-    } catch (error) {
-      options.onError?.(error instanceof Error ? error : new Error(String(error)));
-    }
-  };
-  source.onopen = () => options.onOpen?.();
-  source.onerror = (event) => {
-    if ("data" in event) return;
-    if (options.closeOnError !== false) close();
-    options.onError?.(new Error("Event stream connection failed"));
-  };
+  if (options.pauseWhenHidden) document.addEventListener("visibilitychange", onVisibilityChange);
+  if (!options.pauseWhenHidden || !document.hidden) open();
   return close;
 }
