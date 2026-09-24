@@ -96,6 +96,7 @@ export function installRuntimeTestEnvironment(): void {
     createClient("");
     useRuntimeStore.setState({
       status: "offline",
+      transportStatus: "idle",
       client: null,
       sessions: [],
       activeSessionId: null,

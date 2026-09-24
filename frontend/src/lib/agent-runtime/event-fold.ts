@@ -44,6 +44,13 @@ interface TextFoldState {
   segments?: TextSegment[];
 }
 
+/** One ownership boundary's content bookkeeping. `textByKey`/`thinkingByKey`
+ *  of the fold state are the ACTIVE owner's view; the others wait here. */
+interface ContentState {
+  textByKey: Record<string, TextFoldState>;
+  thinkingByKey: Record<string, TextFoldState>;
+}
+
 export interface EventFoldState {
   sessionId?: string;
   streamEpoch?: string;
@@ -60,6 +67,13 @@ export interface EventFoldState {
   errorSerial: number;
   textByKey: Record<string, TextFoldState>;
   thinkingByKey: Record<string, TextFoldState>;
+  /** Content keys are raw part/item ids, and a later run may legitimately
+   *  reuse the exact same id. Revision waterlines, replayed segments and
+   *  suppression therefore belong to an ownership boundary (run, else turn),
+   *  not to the id alone. */
+  contentStateByOwner?: Record<string, ContentState>;
+  /** Boundary whose view `textByKey`/`thinkingByKey` currently hold. */
+  contentStateOwner?: string;
   seenEventIds: string[];
   pendingEvents: PiScienceEvent[];
   /** Events that were projected (or deliberately consumed as stale) before
@@ -115,6 +129,7 @@ function cloneFoldState(state: Thread, event?: PiScienceEvent): EventFoldState {
     speculativeEventIds: [...(current.speculativeEventIds ?? [])],
     terminalRunIds: [...current.terminalRunIds],
     terminalRunSequences: { ...(current.terminalRunSequences ?? {}) },
+    contentStateByOwner: { ...(current.contentStateByOwner ?? {}) },
   };
 }
 
@@ -179,6 +194,124 @@ function turnIdentity(event: PiScienceEvent, state: EventFoldState): string {
 
 function runIdentity(event: PiScienceEvent, state: EventFoldState): string | undefined {
   return stringValue(event.runId) ?? state.activeRunId;
+}
+
+/** Owned content scopes are retained for the live session only; older runs are
+ *  kept for delayed/gap reconciliation but must not accumulate forever. */
+const MAX_CONTENT_STATE_OWNERS = 128;
+
+/** The ownership boundary a content event belongs to: its own run id, else its
+ *  own turn id, else the run/turn the fold is currently inside. The fallbacks
+ *  mirror the identities the reducer stamps on blocks (`runIdentity` /
+ *  `turnIdentity`), so a scope and the blocks materialized inside it always
+ *  agree — resolving "no identity" to a nameless scope instead would make the
+ *  next envelope-less record (session stats) look like a different owner and
+ *  rebuild the row it belongs to. */
+function contentOwnerOf(event: PiScienceEvent, state?: EventFoldState): string {
+  const runId = stringValue(event.runId) ?? state?.activeRunId;
+  if (runId) return `run:${runId}`;
+  // A brand-new thread has no turn yet, and the fold about to run will name
+  // this event's turn `legacy-turn-1`: resolve the same name here.
+  const turnOrdinal = state?.turnOrdinal ?? 0;
+  const turnId = stringValue(event.turnId) ?? state?.activeTurnId ?? `legacy-turn-${Math.max(1, turnOrdinal)}`;
+  return `turn:${turnId}`;
+}
+
+function blockRunId(block: ThreadBlock): string | undefined {
+  return "runId" in block ? stringValue(block.runId) : undefined;
+}
+
+function blockTurnId(block: ThreadBlock): string | undefined {
+  return "turnId" in block ? stringValue(block.turnId) : undefined;
+}
+
+/** The boundary a materialized block answers to, in `contentOwnerOf`'s
+ *  vocabulary. A block without identity is unowned and never contradicts one. */
+function blockOwnerOf(block: ThreadBlock): string | undefined {
+  const runId = blockRunId(block);
+  if (runId) return `run:${runId}`;
+  const turnId = blockTurnId(block);
+  return turnId ? `turn:${turnId}` : undefined;
+}
+
+/** Whether an existing block may receive content from this owner. Only the
+ *  same owner — or a block carrying no identity at all — may be extended: a
+ *  part id reused by a later run gets its own block, so the earlier run's text
+ *  is neither extended nor overwritten. */
+function blockAcceptsOwner(block: ThreadBlock, owner: string | undefined): boolean {
+  const blockOwner = blockOwnerOf(block);
+  if (!blockOwner || !owner) return true;
+  return blockOwner === owner;
+}
+
+/** Give the owner its own materialized block when the id it would target was
+ *  materialized by another run or turn. The allocated id stays readable (never
+ *  namespaced with the owner), so presentation identity is unchanged. */
+function ownerScopedBlockId(
+  blocks: ThreadBlock[],
+  index: Record<string, number>,
+  blockId: string,
+  owner: string | undefined,
+): string {
+  const position = index[blockId];
+  if (position === undefined) return blockId;
+  const existing = blocks[position];
+  if (!existing || blockAcceptsOwner(existing, owner)) return blockId;
+  let candidate = `${blockId}-r2`;
+  let serial = 2;
+  while (index[candidate] !== undefined) candidate = `${blockId}-r${++serial}`;
+  return candidate;
+}
+
+/** Cached bookkeeping can outlive the block it materialized. Restore only the
+ *  entries whose block still answers to this boundary.
+ *
+ *  Only a block carrying the SAME kind of id as the boundary proves a foreign
+ *  owner; a run-scoped entry holding a merely turn-identified block was
+ *  materialized before the run id was known, and dropping it would discard the
+ *  revision and segment log of content that is still streaming. */
+function ownedContentEntries(state: Thread, owner: string, entries: Record<string, TextFoldState>): Record<string, TextFoldState> {
+  const runScoped = owner.startsWith("run:");
+  const ownerId = owner.slice(runScoped ? "run:".length : "turn:".length);
+  const scoped: Record<string, TextFoldState> = {};
+  for (const [key, entry] of Object.entries(entries)) {
+    const position = state.index[entry.blockId];
+    const block = position === undefined ? undefined : state.blocks[position];
+    const blockId = block ? (runScoped ? blockRunId(block) : blockTurnId(block)) : undefined;
+    if (blockId !== undefined && blockId !== ownerId) continue;
+    scoped[key] = entry;
+  }
+  return scoped;
+}
+
+/** Bounded owner cache. Insertion order is the recency order: an owner that is
+ *  activated again keeps its original slot, so the oldest boundary is evicted
+ *  first. */
+function boundedContentOwners(states: Record<string, ContentState>): Record<string, ContentState> {
+  const entries = Object.entries(states);
+  if (entries.length <= MAX_CONTENT_STATE_OWNERS) return states;
+  return Object.fromEntries(entries.slice(-MAX_CONTENT_STATE_OWNERS));
+}
+
+/** Swap the fold's content view to `owner`'s bookkeeping, stashing the view
+ *  that was active. Everything else in the fold state (sequence waterline,
+ *  pending events, terminal runs, block materialization) stays shared: only
+ *  the raw-key content maps are owner-scoped. */
+function activateContentOwner(state: Thread, ownerKey: string): Thread {
+  if (state.foldState?.contentStateOwner === ownerKey) return state;
+  const next = cloneFoldState(state);
+  const byOwner = { ...(next.contentStateByOwner ?? {}) };
+  if (next.contentStateOwner) {
+    // The working maps are the newest copy of the outgoing boundary's view.
+    byOwner[next.contentStateOwner] = { textByKey: next.textByKey, thinkingByKey: next.thinkingByKey };
+  }
+  const restored = byOwner[ownerKey];
+  next.textByKey = restored ? ownedContentEntries(state, ownerKey, restored.textByKey) : {};
+  next.thinkingByKey = restored ? ownedContentEntries(state, ownerKey, restored.thinkingByKey) : {};
+  next.contentStateOwner = ownerKey;
+  byOwner[ownerKey] = { textByKey: next.textByKey, thinkingByKey: next.thinkingByKey };
+  next.contentStateByOwner = boundedContentOwners(byOwner);
+  return { ...state, foldState: next };
 }
 
 function roleOf(event: PiScienceEvent): "intermediate" | "final" | undefined {
@@ -289,8 +422,14 @@ function reconcileRepeatedNarration(
   return "keep";
 }
 
-export function foldEvent(state: Thread, event: PiScienceEvent): Thread {  if (isV2Event(event)) return foldV2Event(state, event);
-  return foldLegacyEvent(state, event);
+export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
+  // Content keys are raw part/item ids that a later run may reuse verbatim.
+  // Fold each event against its own run's (else turn's) bookkeeping so a reused
+  // id cannot inherit another run's revision waterline, replayed segments,
+  // suppression or materialized block.
+  const scoped = activateContentOwner(state, contentOwnerOf(event, state.foldState));
+  if (isV2Event(event)) return foldV2Event(scoped, event);
+  return foldLegacyEvent(scoped, event);
 }
 
 function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
@@ -383,6 +522,10 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
         break;
       }
       let blockId = previousText?.blockId ?? (explicit ? `agent-${turnId}-${stringValue(event.itemId) ?? key}` : (eventPartId ?? key));
+      // This owner's own view has no entry for the key, so a block under this
+      // id belongs to an earlier turn: materialize a separate one instead of
+      // rewriting that turn's answer.
+      blockId = ownerScopedBlockId(blocks, index, blockId, foldState.contentStateOwner);
       const existingIdx = index[blockId];
       if (existingIdx !== undefined) {
         const hasToolsAfter = blocks.slice(existingIdx + 1).some((b) => b.kind === "tool");
@@ -481,7 +624,12 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       const revision = numberValue(event.revision) ?? ((previous?.revision ?? 0) + 1);
       const turnId = turnIdentity(event, foldState);
       const runId = runIdentity(event, foldState);
-      const blockId = previous?.blockId ?? `thinking-${turnId}-${eventPartId ?? key}`;
+      const blockId = ownerScopedBlockId(
+        blocks,
+        index,
+        previous?.blockId ?? `thinking-${turnId}-${eventPartId ?? key}`,
+        foldState.contentStateOwner,
+      );
       // A different reasoning item taking over ends the previous phase.
       closeOpenThinking(blocks, nowIso, blockId);
       if (nextText.trim()) {
@@ -1147,9 +1295,13 @@ function drainV2Pending(state: Thread): Thread {
       next = consumeSpeculativePending(next, pending);
       continue;
     }
-    const pendingState = cloneFoldState(next, pending);
-    pendingState.pendingEvents = next.foldState.pendingEvents.filter((candidate) => candidate.eventId !== pending.eventId);
-    next = applyV2InOrder(withFoldState({ blocks: next.blocks, index: next.index, loaded: true }, pendingState), pending);
+    // A replayed event can belong to an earlier run than the one that queued
+    // it, so it is folded against its own boundary. The boundary it leaves
+    // active is re-resolved by the next event.
+    const owned = activateContentOwner(next, contentOwnerOf(pending, next.foldState));
+    const pendingState = cloneFoldState(owned, pending);
+    pendingState.pendingEvents = (owned.foldState?.pendingEvents ?? []).filter((candidate) => candidate.eventId !== pending.eventId);
+    next = applyV2InOrder(withFoldState({ blocks: owned.blocks, index: owned.index, loaded: true }, pendingState), pending);
   }
   return next;
 }
@@ -1172,6 +1324,10 @@ function foldV2Event(state: Thread, event: PiScienceEvent): Thread {
     foldState.lastAgentBlockId = undefined;
     foldState.textByKey = {};
     foldState.thinkingByKey = {};
+    // Owner-scoped bookkeeping must not survive the boundary either: keeping
+    // it would trade cross-run leakage for cross-epoch leakage.
+    foldState.contentStateByOwner = undefined;
+    foldState.contentStateOwner = undefined;
     foldState.seenEventIds = [];
     foldState.speculativeEventIds = [];
     foldState.terminalRunIds = [];
@@ -1266,22 +1422,30 @@ function mergeToolHistoryBlock(current: ToolCallBlock, older: ToolCallBlock): To
   };
 }
 
-/** Preserve UI-observed tool timing across authoritative rebuilds. History
+/** Preserve UI-observed step timing across authoritative rebuilds. History
  *  rows carry no wall-clock fields, so step durations would silently vanish
  *  on every settle-time resync without this carry-over. Only missing fields
  *  are filled: explicit runtime timestamps stay authoritative. */
-function carryToolTiming(current: Thread, authoritative: Thread, preserveProjection = true): Thread {
+function carryStepTiming(current: Thread, authoritative: Thread, preserveProjection = true): Thread {
   if (authoritative.blocks.length === 0) return authoritative;
   const timingByCallId = new Map<string, { startedAt?: string; endedAt?: string }>();
   for (const block of current.blocks) {
     if (block.kind !== "tool" || (!block.startedAt && !block.endedAt)) continue;
     timingByCallId.set(block.callId, { startedAt: block.startedAt, endedAt: block.endedAt });
   }
-  if (timingByCallId.size === 0) return authoritative;
+  const thinkingTiming = thinkingTimingByPhase(current.blocks);
+  if (timingByCallId.size === 0 && thinkingTiming.size === 0) return authoritative;
   let changed = false;
   const blocks = authoritative.blocks.map((block) => {
-    if (block.kind !== "tool") return block;
-    const timing = timingByCallId.get(block.callId);
+    if (block.kind === "tool") {
+      const timing = timingByCallId.get(block.callId);
+      if (!timing || (block.startedAt && block.endedAt)) return block;
+      changed = true;
+      return { ...block, ...(block.startedAt ? {} : { startedAt: timing.startedAt }), ...(block.endedAt ? {} : { endedAt: timing.endedAt }) };
+    }
+    if (block.kind !== "thinking") return block;
+    const key = thinkingPhaseKey(block);
+    const timing = key === undefined ? undefined : thinkingTiming.get(key);
     if (!timing || (block.startedAt && block.endedAt)) return block;
     changed = true;
     return { ...block, ...(block.startedAt ? {} : { startedAt: timing.startedAt }), ...(block.endedAt ? {} : { endedAt: timing.endedAt }) };
@@ -1293,8 +1457,31 @@ function carryToolTiming(current: Thread, authoritative: Thread, preserveProject
   return preserveProjection ? preserveFoldState(rebuilt, current) : rebuilt;
 }
 
+/** Reasoning timing keyed by the phase itself. The persisted message record
+ *  carries no turn/item identity and a history rebuild materializes the row
+ *  from a message id, so neither the row id nor its turn can join the live
+ *  phase to its restored copy — the reasoning text is the same string in both
+ *  projections, so that is what identifies the phase. Two phases whose text is
+ *  byte-identical are indistinguishable by design; the later one wins. */
+function thinkingTimingByPhase(blocks: ThreadBlock[]): Map<string, { startedAt?: string; endedAt?: string }> {
+  const timing = new Map<string, { startedAt?: string; endedAt?: string }>();
+  for (const block of blocks) {
+    if (block.kind !== "thinking" || (!block.startedAt && !block.endedAt)) continue;
+    const key = thinkingPhaseKey(block);
+    if (key) timing.set(key, { startedAt: block.startedAt, endedAt: block.endedAt });
+  }
+  return timing;
+}
+
+function thinkingPhaseKey(block: ThinkingBlock): string | undefined {
+  const text = block.parts.map((part) => part.text).join("");
+  // The whole text, not a prefix: two phases that merely share an opening
+  // would otherwise collide and inherit each other's duration.
+  return text || undefined;
+}
+
 export function replaceHistoryTail(current: Thread, messages: HistoryMessage[]): Thread {
-  const authoritative = carryToolTiming(current, threadFromMessages(messages));
+  const authoritative = carryStepTiming(current, threadFromMessages(messages));
   if (authoritative.blocks.length === 0) return current;
   const authoritativeIds = new Set(authoritative.blocks.map((block) => block.id));
   const firstOverlap = current.blocks.findIndex((block) => authoritativeIds.has(block.id));
@@ -1323,7 +1510,7 @@ export interface HistoryWindowMerge {
  *  text, just-finished tools) — used by mid-stream recovery paths. Without
  *  it the settled snapshot is authoritative and live extras are dropped. */
 export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], opts: { keepLiveExtras: boolean; resetProjection?: boolean; windowComplete?: boolean }): HistoryWindowMerge {
-  const authoritative = carryToolTiming(current, threadFromMessages(messages), !opts.resetProjection);
+  const authoritative = carryStepTiming(current, threadFromMessages(messages), !opts.resetProjection);
   if (authoritative.blocks.length === 0) {
     // An empty page is never authoritative over a thread that still holds
     // conversation content. A fetch can race the session's first flush, and

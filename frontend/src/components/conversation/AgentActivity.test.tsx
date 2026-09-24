@@ -291,6 +291,30 @@ describe("AgentActivity live stream", () => {
     expect(screen.getByText("3.2s")).toBeInTheDocument();
   });
 
+  it("ticks the elapsed time of the reasoning phase while it runs", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-15T00:00:04.500Z"));
+      const thinking: ActivityBlock = {
+        kind: "thinking", id: "th1", parts: [{ id: "th1-0", text: "Weigh the options." }],
+        partial: true, startedAt: "2026-09-15T00:00:00.000Z",
+      };
+      render(<AgentActivity blocks={[thinking]} />);
+      // The running phase reports its own clock instead of waiting for the end
+      // timestamp, so the reader can see how long the model has been thinking.
+      expect(screen.getByText("4.5s")).toBeInTheDocument();
+
+      act(() => {
+        // The clock and the 250 ms tick both move forward: the chip follows.
+        vi.setSystemTime(new Date("2026-09-15T00:00:06.400Z"));
+        vi.advanceTimersByTime(500);
+      });
+      expect(screen.getByText("6.9s")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("folds reasoning into the settled step records", () => {
     const blocks: ActivityBlock[] = [
       { kind: "thinking", id: "th1", parts: [{ id: "th1-0", text: "Weigh the options." }] },

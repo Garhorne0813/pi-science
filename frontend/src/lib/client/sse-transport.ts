@@ -6,9 +6,22 @@ import { REQUEST_TIMEOUT_MS } from "./http";
 import { sessionKey } from "./session-key";
 import type { PiScienceEvent } from "./types";
 
+/** Reconnect attribution travels with the transport events so a watcher can
+ *  tell a foreground attach from background repair. Duplicated as a literal
+ *  type to keep the client layer free of runtime-store imports. */
+export type TransportReason =
+  | "initial_attach"
+  | "session_switch"
+  | "late_stream_probe"
+  | "turn_watchdog"
+  | "stream_gap"
+  | "transport_error"
+  | "recovery"
+  | "manual";
+
 /** A recovery reconnect with no applied cursor must never become a future-only
- * subscription. This deliberately missing cursor forces the server to answer
- * with stream.gap, which establishes a live subscriber before recovery runs. */
+ *  subscription. This deliberately missing cursor forces the server to answer
+ *  with stream.gap, which establishes a live subscriber before recovery runs. */
 const RECOVERY_REPLAY_SENTINEL = "pi-recovery-sentinel:0";
 
 export class SseTransport {
@@ -19,6 +32,9 @@ export class SseTransport {
   private cwd: string | null = null;
   private connectionGeneration = 0;
   private connectionWatchdog: ReturnType<typeof setTimeout> | null = null;
+  /** Why the current subscription exists. Reported with every lifecycle event
+   *  of that subscription so a reconnect storm is attributable. */
+  private connectionReason: TransportReason = "initial_attach";
   // Track the last SSE event id per (cwd, sessionId) so that switching back
   // to a previously-viewed conversation can resume from the cursor instead of
   // forcing the backend to replay the entire event log. Uses a composite key
@@ -74,11 +90,14 @@ export class SseTransport {
       && (cwd === undefined || this.cwd === cwd);
   }
 
-  connect(sessionId: string, cwd?: string): void {
+  connect(sessionId: string, cwd?: string, reason?: TransportReason): void {
     const targetCwd = cwd ?? null;
     if (this.isConnectedTo(sessionId, targetCwd ?? undefined)) {
       return;
     }
+    const attachReason = reason
+      ?? (this.sessionId !== null && this.sessionId !== sessionId ? "session_switch" : "initial_attach");
+    this.connectionReason = attachReason;
     // A gap fence belongs to the currently registered EventSource only. A
     // real session switch/new attach must not suppress the new connection.
     this.gapFencedKey = null;
@@ -100,7 +119,7 @@ export class SseTransport {
     const url = `${this.baseUrl}/api/sessions/${sessionId}/events${query ? `?${query}` : ""}`;
     const source = new EventSource(url, { withCredentials: true });
     this.eventSource = source;
-    this.emit({ type: "connection.connecting", sessionId });
+    this.emit({ type: "connection.connecting", sessionId, reason: attachReason });
     this.armConnectionWatchdog(source, generation, sessionId);
 
     // Parse and forward a data payload to all listeners
@@ -173,7 +192,7 @@ export class SseTransport {
     source.onopen = () => {
       if (generation === this.connectionGeneration && source === this.eventSource) {
         this.clearConnectionWatchdog();
-        this.emit({ type: "connection.open", sessionId });
+        this.emit({ type: "connection.open", sessionId, reason: this.connectionReason });
       }
     };
 
@@ -188,6 +207,7 @@ export class SseTransport {
       this.emit({
         type: source.readyState === EventSource.CLOSED ? "connection.error" : "connection.reconnecting",
         sessionId,
+        reason: "transport_error",
         message: source.readyState === EventSource.CLOSED
           ? "Conversation stream closed"
           : "Reconnecting conversation stream",
@@ -203,7 +223,7 @@ export class SseTransport {
    *  Exception: after a server-declared stream.gap the current source itself
    *  is the recovery fence. Do not tear it down until a successfully applied
    *  event advances the cursor (or the source actually closes). */
-  reconnect(sessionId: string, cwd?: string): void {
+  reconnect(sessionId: string, cwd?: string, reason?: TransportReason): void {
     const targetCwd = cwd ?? null;
     const cursorKey = targetCwd ? sessionKey(targetCwd, sessionId) : "";
     if (
@@ -212,11 +232,11 @@ export class SseTransport {
       && this.isConnectedTo(sessionId, targetCwd ?? undefined)
     ) return;
     if (this.sessionId !== sessionId || this.cwd !== targetCwd) {
-      this.connect(sessionId, cwd);
+      this.connect(sessionId, cwd, reason);
       return;
     }
     this.closeEventSource();
-    this.connect(sessionId, cwd);
+    this.connect(sessionId, cwd, reason);
   }
 
   disconnect(): void {
@@ -226,7 +246,7 @@ export class SseTransport {
     this.closeEventSource();
     this.sessionId = null;
     this.cwd = null;
-    if (sessionId) this.emit({ type: "connection.closed", sessionId });
+    if (sessionId) this.emit({ type: "connection.closed", sessionId, reason: "manual" });
   }
 
   onEvent(fn: (event: PiScienceEvent) => unknown): () => void {
@@ -290,6 +310,7 @@ export class SseTransport {
         this.emit({
           type: "connection.error",
           sessionId,
+          reason: "transport_error",
           message: "Conversation stream connection timed out; the backend state is being checked.",
         });
       }

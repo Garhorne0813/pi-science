@@ -788,7 +788,7 @@ describe("runtime conversation recovery", () => {
     expect(reads).toBe(4);
   });
 
-  it("keeps the stop state and shows an inline error when the SSE transport closes", async () => {
+  it("keeps running and stays ready when a transport error is repaired by recovery", async () => {
     let stateReads = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -808,12 +808,17 @@ describe("runtime conversation recovery", () => {
 
     source.readyState = FakeEventSource.CLOSED;
     source.onerror?.({} as Event);
-    await Promise.resolve();
-    await Promise.resolve();
+    // While the repair runs the transport is recorded as failed, but the
+    // foreground keeps the session usable instead of demoting it.
+    expect(useRuntimeStore.getState()).toMatchObject({ working: true, status: "ready", transportStatus: "error" });
+    await vi.waitFor(() => expect(useRuntimeStore.getState().transportStatus).toBe("open"), { timeout: 5_000 });
 
     const current = useRuntimeStore.getState();
     expect(current.working).toBe(true);
-    expect(current.status).toBe("error");
+    // The transport failure is reported inline, but the session is not
+    // advertised as unusable: the authoritative reads the error triggered
+    // succeeded, so the foreground never leaves ready.
+    expect(current.status).toBe("ready");
     expect(current.thread.blocks).toContainEqual(
       expect.objectContaining({ kind: "status-line", text: "Conversation stream closed" }),
     );
@@ -896,6 +901,95 @@ describe("runtime conversation recovery", () => {
     expect(blocks.filter((b) => b.kind === "user").map((b) => b.id)).toEqual(["user-durable"]);
     expect(blocks.filter((b) => b.kind === "agent").map((b) => b.id)).toEqual(["agent-durable"]);
     expect(blocks.some((b) => (b as { parts?: Array<{ id: string }> }).parts?.some((p) => p.id === "live-part"))).toBe(false);
+  });
+
+  it("does not treat intermediate commentary as this turn's final reply", async () => {
+    // The agent narrates, the runtime goes briefly idle, and the real answer
+    // arrives later. Settling on the narration would drop the answer.
+    let reads = 0;
+    const promptAt = Date.now();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) {
+        reads += 1;
+        return jsonResponse({ messages: reads < 4 ? [
+          { id: "user-1", role: "user", content: [{ type: "text", text: "svg" }], timestamp: new Date(promptAt - 1_000).toISOString() },
+          {
+            id: "agent-commentary", role: "assistant", presentationRole: "intermediate",
+            content: [{ type: "text", text: "Let me sketch the pelican first." }],
+            timestamp: new Date(promptAt + 1_000).toISOString(),
+          },
+        ] : [
+          { id: "user-1", role: "user", content: [{ type: "text", text: "svg" }], timestamp: new Date(promptAt - 1_000).toISOString() },
+          {
+            id: "agent-commentary", role: "assistant", presentationRole: "intermediate",
+            content: [{ type: "text", text: "Let me sketch the pelican first." }],
+            timestamp: new Date(promptAt + 1_000).toISOString(),
+          },
+          {
+            id: "agent-final", role: "assistant", presentationRole: "final",
+            content: [{ type: "text", text: "<svg/>" }],
+            timestamp: new Date(promptAt + 3_000).toISOString(),
+          },
+        ] });
+      }
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.includes("/prompt")) return jsonResponse({ ok: true, id: "session-a" });
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    await useRuntimeStore.getState().sendPrompt("svg");
+
+    // Idle + an intermediate message after the prompt: still unconfirmed.
+    await new Promise((resolve) => setTimeout(resolve, 1_300));
+    expect(useRuntimeStore.getState().working).toBe(true);
+
+    // The final answer confirms the reply and settles the turn.
+    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false), { timeout: 5_000 });
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+      expect.objectContaining({ kind: "agent", id: "agent-final" }),
+    );
+  });
+
+  it("settles on an explicitly final assistant message after an idle runtime", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [
+        { id: "user-1", role: "user", content: [{ type: "text", text: "hi" }], timestamp: new Date(Date.now() - 60_000).toISOString() },
+        { id: "agent-final", role: "assistant", presentationRole: "final", content: [{ type: "text", text: "hello" }], timestamp: new Date(Date.now() + 1_000).toISOString() },
+      ] });
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.includes("/prompt")) return jsonResponse({ ok: true, id: "session-a" });
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    await useRuntimeStore.getState().sendPrompt("hi");
+
+    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false), { timeout: 5_000 });
+    expect(useRuntimeStore.getState().status).toBe("ready");
+  });
+
+  it("settles on a legacy assistant reply that carries no presentation role", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [
+        { id: "user-1", role: "user", content: [{ type: "text", text: "hi" }], timestamp: new Date(Date.now() - 60_000).toISOString() },
+        { id: "agent-legacy", role: "assistant", content: [{ type: "text", text: "legacy reply" }], timestamp: new Date(Date.now() + 1_000).toISOString() },
+      ] });
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.includes("/prompt")) return jsonResponse({ ok: true, id: "session-a" });
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    await useRuntimeStore.getState().sendPrompt("hi");
+
+    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false), { timeout: 5_000 });
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+      expect.objectContaining({ kind: "agent", id: "agent-legacy" }),
+    );
   });
 
   it("keeps monitoring when the runtime is idle but this turn has no reply yet", async () => {

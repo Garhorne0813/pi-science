@@ -10,6 +10,7 @@ import { mergeRecoveryHistoryWindow } from "./history-window-recovery";
 import { backfillSessionName } from "./naming";
 import { loadSessionsInternal } from "./sessions";
 import { useRuntimeStore } from "./store";
+import { applyTransportEvent } from "./transport-status";
 import { fetchPersistedTurnArtifacts, refetchPersistedTurnArtifacts } from "./turn-artifacts";
 import { hasActivePendingInteraction, hasPendingInteractionData } from "./types";
 
@@ -351,7 +352,9 @@ async function runConnectionRecovery(
       backfillSessionName(cwd, sessionId, useRuntimeStore.getState().thread);
     }
     if (historySucceeded && stateSucceeded) {
-      useRuntimeStore.setState({ status: "ready" });
+      // Authoritative recovery succeeded: the session is usable again, so the
+      // foreground returns to ready without ever having shown a repair phase.
+      applyTransportEvent({ transport: "open", reason: "recovery", foreground: "ready", sessionId });
       // The connection was restored after a loss: files may have changed
       // while the stream was down and no terminal event reached the tree.
       markWorkspaceFilesChanged();
@@ -384,7 +387,8 @@ async function runConnectionRecovery(
       markWorkspaceFilesChanged();
     }
   }
-  useRuntimeStore.setState({ status: "error" });
+  // Bounded recovery gave up: only now is the session advertised as unusable.
+  applyTransportEvent({ transport: "error", reason: "recovery", foreground: "error", sessionId });
 }
 
 export function reconcileAfterConnectionLoss(
@@ -534,12 +538,17 @@ async function runGapRecoveryRound(
     if (cursorInvalidation) return cursorInvalidation;
     client.clearCursor(cwd, sessionId);
     client.setResumeCursor(cwd, sessionId, resumeCursor);
-    if (reconnectTransport && client.isConnectedTo(sessionId, cwd)) client.reconnect(sessionId, cwd);
+    if (reconnectTransport && client.isConnectedTo(sessionId, cwd)) client.reconnect(sessionId, cwd, "stream_gap");
   }
-  // Set the status after an intentional reconnect so the synchronous
-  // connection.connecting notification does not overwrite a completed
-  // authoritative recovery. A later connection.open will also settle it.
-  useRuntimeStore.setState({ status: recoveryStatus });
+  // Record the finished round after the intentional reconnect so its
+  // synchronous connection.connecting notification cannot mask the result.
+  applyTransportEvent({
+    transport: recoveryStatus === "ready" ? "open" : "error",
+    reason: "stream_gap",
+    ...(recoveryStatus === "ready" ? { foreground: "ready" as const } : {}),
+    sessionId,
+    detail: "authoritative projection rebased",
+  });
   void loadSessionsInternal();
   return recoveryStatus === "ready" ? "completed" : "retryable-failure";
 }
@@ -564,9 +573,9 @@ async function runGapRecoveryWorker(sessionId: string, cwd: string, run: GapReco
     ) continue;
     return;
   }
-  useRuntimeStore.setState((current) => current.activeSessionId === sessionId && current.cwd === cwd
-    ? { status: "error" }
-    : {});
+  if (useRuntimeStore.getState().activeSessionId === sessionId && useRuntimeStore.getState().cwd === cwd) {
+    applyTransportEvent({ transport: "error", reason: "stream_gap", foreground: "error", sessionId, detail: "gap recovery exhausted" });
+  }
 }
 
 /** Single-flight authoritative recovery for both explicit server gaps and
@@ -641,7 +650,7 @@ export async function reconcilePromptAfterLateStream(
     if (ticks % 4 !== 0) continue;
     if (streamOpen && !forcedReconnect) {
       forcedReconnect = true;
-      client.reconnect(sessionId, cwd);
+      client.reconnect(sessionId, cwd, "late_stream_probe");
     }
 
     try {
@@ -716,7 +725,14 @@ export async function reconcilePromptAfterLateStream(
  *  written after the prompt was sent — i.e. this turn produced a reply that a
  *  history resync will find. The scan starts from the newest message; an
  *  assistant message without a parseable timestamp cannot be attributed to
- *  this turn and counts as unconfirmed. */
+ *  this turn and counts as unconfirmed.
+ *
+ *  Commentary is not an answer. An agent narrates between tool calls and can
+ *  fall briefly idle, so a newest explicitly intermediate message must never
+ *  confirm the reply: settling on it would drop the final answer that arrives
+ *  afterwards. Only that explicit negative guard exists — final messages and
+ *  legacy unclassified messages keep the timestamp rule, because a legacy
+ *  runtime never classified its messages. */
 async function turnHasNewAssistantReply(
   client: PiScienceClient,
   sessionId: string,
@@ -728,6 +744,7 @@ async function turnHasNewAssistantReply(
     const messages = page.messages;
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       if (messages[i].role !== "assistant") continue;
+      if (messages[i].presentationRole === "intermediate") return false;
       const timestamp = messages[i].timestamp;
       if (!timestamp) return false;
       const parsed = Date.parse(timestamp);

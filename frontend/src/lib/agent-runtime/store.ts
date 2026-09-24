@@ -12,6 +12,7 @@ import type { RuntimeState } from "./types";
 
 export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   status: "offline",
+  transportStatus: "idle",
   client: null,
   sessions: [],
   sessionsCursor: null,

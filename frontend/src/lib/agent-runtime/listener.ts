@@ -1,13 +1,14 @@
 /** Single SSE subscription that drives the store: connection status, turn
  *  lifecycle, interaction prompts and thread folding. */
 
-import type { PiScienceClient, SessionStats } from "../client/pi-science-client";
+import type { PiScienceClient, PiScienceEvent, SessionStats } from "../client/pi-science-client";
 import { aiTitleAttemptedAt, hasAiTitle, markAiTitleAttempted } from "../client/pi-science-client";
 import { appendRuntimeError, isMissingSessionError } from "./errors";
 import { markWorkspaceFilesChanged } from "./file-revision";
 import { foldEvent, resetTurnBuffer } from "./event-fold";
 import { bumpConversationGeneration, bumpPresentationMetadataGeneration, generations, turnState } from "./generations";
-import { consumeSuppressedConnectionRecovery, reconcileAfterConnectionLoss, reconcileAfterGap, reconcileWorkingState, recoverMissingSession, resyncCompletedHistory } from "./recovery";
+import { applyTransportEvent, RECONNECT_REASONS, type ReconnectReason } from "./transport-status";
+import { consumeSuppressedConnectionRecovery, reconcileAfterConnectionLoss, reconcileAfterGap, recoverMissingSession, resyncCompletedHistory } from "./recovery";
 import { applyAiSessionName } from "./naming";
 import { applySessionReplacements } from "./session-replacement";
 import { loadSessionsInternal, optimisticSessionIds } from "./sessions";
@@ -16,6 +17,16 @@ import { useRuntimeStore } from "./store";
 import type { PendingInteraction, PendingQuestionnaire } from "./types";
 
 type InteractionKind = NonNullable<PendingInteraction["kind"]>;
+
+const RECONNECT_REASON_SET = new Set<string>(RECONNECT_REASONS);
+
+/** Attribution travels with the transport event; an event emitted before the
+ *  reason field existed carries none, so the caller supplies its own. */
+function reconnectReason(event: PiScienceEvent, fallback: ReconnectReason): ReconnectReason {
+  return typeof event.reason === "string" && RECONNECT_REASON_SET.has(event.reason)
+    ? event.reason as ReconnectReason
+    : fallback;
+}
 
 function interactionKind(value: unknown): InteractionKind | undefined {
   return value === "permission" || value === "confirmation" || value === "question" ? value : undefined;
@@ -133,7 +144,7 @@ async function runTurnWatchdogTick(): Promise<void> {
   const cwd = current.cwd;
   if (!turnWatchdogReconnected) {
     turnWatchdogReconnected = true;
-    client.reconnect(sessionId, cwd);
+    client.reconnect(sessionId, cwd, "turn_watchdog");
     return;
   }
   // A slow REST request must not accumulate another probe every five seconds.
@@ -242,20 +253,32 @@ export function registerEventListener(client: PiScienceClient) {
     if (event.type === "session.replaced") {
       const replacementSessionId = String(event.replacementSessionId || "");
       if (!replacementSessionId) return;
-      applySessionReplacements([{
+      const previousActiveId = state.activeSessionId;
+      const nextActiveId = applySessionReplacements([{
         cwd: state.cwd,
         oldId: String(event.sessionId || state.activeSessionId || ""),
         newId: replacementSessionId,
       }]);
-      return;
+      // Adopting a replacement re-attaches the stream and clears the thread, so
+      // this record cannot leave a hole behind. A record that changed nothing
+      // still consumed a position and must reach the fold below.
+      if (nextActiveId !== previousActiveId) return;
     }
 
     if (event.type === "stream.gap") {
       bumpConversationGeneration();
       resetTurnBuffer();
       turnState.errored = false;
-      useRuntimeStore.setState({
-        status: "connecting",
+      // A gap is a projection repair, not a lost backend: a session the user
+      // is already working in stays ready while the rebase runs. Only a
+      // session that never reached ready keeps showing the attach phase.
+      applyTransportEvent({
+        transport: "recovering",
+        reason: "stream_gap",
+        foreground: "connecting",
+        keepReady: true,
+        sessionId: state.activeSessionId,
+        detail: "server declared a stream gap",
       });
       // Recover the authoritative snapshot from REST (messages + state). We do
       // NOT clear `working` here: if the backend is still mid-turn, Send must
@@ -269,8 +292,19 @@ export function registerEventListener(client: PiScienceClient) {
     }
 
     if (event.type === "connection.connecting" || event.type === "connection.reconnecting") {
-      useRuntimeStore.setState({ status: "connecting" });
-      if (event.type === "connection.reconnecting" && state.activeSessionId) {
+      const reconnecting = event.type === "connection.reconnecting";
+      // Same-session stream repair is background work. It updates transport
+      // diagnostics and must not demote a ready conversation to `connecting`;
+      // a foreground attach already set `connecting` before connecting.
+      applyTransportEvent({
+        transport: reconnecting ? "reconnecting" : "connecting",
+        reason: reconnectReason(event, reconnecting ? "transport_error" : "initial_attach"),
+        foreground: "connecting",
+        keepReady: true,
+        sessionId: state.activeSessionId,
+        detail: String(event.message ?? ""),
+      });
+      if (reconnecting && state.activeSessionId) {
         void reconcileAfterConnectionLoss(
           client,
           state.activeSessionId,
@@ -282,18 +316,31 @@ export function registerEventListener(client: PiScienceClient) {
       return;
     }
     if (event.type === "connection.open") {
-      useRuntimeStore.setState({ status: "ready" });
+      applyTransportEvent({
+        transport: "open",
+        reason: reconnectReason(event, "initial_attach"),
+        foreground: "ready",
+        sessionId: state.activeSessionId,
+      });
       return;
     }
     if (event.type === "connection.error") {
-      useRuntimeStore.setState({ status: "error" });
       appendRuntimeError(
         new Error(String(event.message || "Conversation stream closed")),
         state.activeSessionId,
         state.cwd,
       );
+      // A transport error is not proof that the session is unusable. The
+      // authoritative recovery below decides: it keeps the foreground ready
+      // when it recovers and promotes to `error` only when it gives up.
+      applyTransportEvent({
+        transport: "error",
+        reason: reconnectReason(event, "transport_error"),
+        sessionId: state.activeSessionId,
+        detail: String(event.message ?? ""),
+      });
       if (state.activeSessionId) {
-        void reconcileWorkingState(
+        void reconcileAfterConnectionLoss(
           client,
           state.activeSessionId,
           state.cwd,
@@ -304,7 +351,12 @@ export function registerEventListener(client: PiScienceClient) {
       return;
     }
     if (event.type === "connection.closed") {
-      if (state.status !== "offline") useRuntimeStore.setState({ status: "offline" });
+      applyTransportEvent({
+        transport: "closed",
+        reason: reconnectReason(event, "manual"),
+        foreground: "offline",
+        sessionId: state.activeSessionId,
+      });
       if (state.activeSessionId && !consumeSuppressedConnectionRecovery(client, state.activeSessionId, state.cwd)) {
         void reconcileAfterConnectionLoss(
           client,
@@ -357,18 +409,20 @@ export function registerEventListener(client: PiScienceClient) {
 
     if (event.type === "questionnaire.asked") {
       const questions = questionnaireQuestions(event.questions);
-      if (questions.length === 0) return;
-      bumpConversationGeneration();
-      useRuntimeStore.setState({
-        working: true,
-        turnLifecycle: "waiting",
-        status: "ready",
-        pendingQuestionnaire: {
-          toolCallId: String(event.toolCallId || ""),
-          questions,
-        },
-      });
-      return;
+      // An invalid payload cannot build a card, but it consumed a stream
+      // position just the same: fold it instead of dropping it.
+      if (questions.length > 0) {
+        bumpConversationGeneration();
+        useRuntimeStore.setState({
+          working: true,
+          turnLifecycle: "waiting",
+          status: "ready",
+          pendingQuestionnaire: {
+            toolCallId: String(event.toolCallId || ""),
+            questions,
+          },
+        });
+      }
     }
 
     if (event.type === "questionnaire.finished") {
@@ -382,7 +436,6 @@ export function registerEventListener(client: PiScienceClient) {
         ...(questionnaireMatches ? { pendingQuestionnaire: null } : {}),
         ...(interactionMatches ? { pendingInteraction: null } : {}),
       });
-      return;
     }
 
     const payload = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
@@ -391,28 +444,31 @@ export function registerEventListener(client: PiScienceClient) {
 
     if (event.type === "interaction.requested") {
       const interactionId = String(event.interactionId || event.requestId || payload.interactionId || payload.requestId || event.itemId || "");
-      if (!interactionId) return false;
-      bumpConversationGeneration();
-      const method = String(event.method || payload.method || "input") as PendingInteraction["method"];
-      const kind = interactionKind(event.kind) ?? interactionKind(payload.kind) ?? (method === "confirm" ? "confirmation" : "question");
-      useRuntimeStore.setState({
-        working: true,
-        turnLifecycle: "waiting",
-        status: "ready",
-        pendingInteraction: {
-          requestId: interactionId,
-          kind,
-          method: ["confirm", "select", "input", "editor"].includes(method) ? method : "input",
-          title: String(event.title || payload.title || "Question"),
-          message: String(event.message || payload.message || ""),
-          options: Array.isArray(event.options || payload.options) ? (event.options || payload.options) as PendingInteraction["options"] : [],
-          placeholder: String(event.placeholder || payload.placeholder || ""),
-          prefill: String(event.prefill || payload.prefill || ""),
-          operation: String(event.operation || payload.operation || ""),
-          scope: String(event.scope || payload.scope || ""),
-          effect: String(event.effect || payload.effect || ""),
-        },
-      });
+      // Same rule for a request without an id: no card, but the position is
+      // still consumed, so it is folded below rather than dropped.
+      if (interactionId) {
+        bumpConversationGeneration();
+        const method = String(event.method || payload.method || "input") as PendingInteraction["method"];
+        const kind = interactionKind(event.kind) ?? interactionKind(payload.kind) ?? (method === "confirm" ? "confirmation" : "question");
+        useRuntimeStore.setState({
+          working: true,
+          turnLifecycle: "waiting",
+          status: "ready",
+          pendingInteraction: {
+            requestId: interactionId,
+            kind,
+            method: ["confirm", "select", "input", "editor"].includes(method) ? method : "input",
+            title: String(event.title || payload.title || "Question"),
+            message: String(event.message || payload.message || ""),
+            options: Array.isArray(event.options || payload.options) ? (event.options || payload.options) as PendingInteraction["options"] : [],
+            placeholder: String(event.placeholder || payload.placeholder || ""),
+            prefill: String(event.prefill || payload.prefill || ""),
+            operation: String(event.operation || payload.operation || ""),
+            scope: String(event.scope || payload.scope || ""),
+            effect: String(event.effect || payload.effect || ""),
+          },
+        });
+      }
       // The reducer still records the envelope; the interaction card is a
       // separate state dimension and must not be hidden by process folding.
     } else if (event.type === "interaction.resolved") {
@@ -452,7 +508,6 @@ export function registerEventListener(client: PiScienceClient) {
           ...(event.questionnaire === true ? { questionnaire: true, toolCallId: String(event.toolCallId || "") } : {}),
         },
       });
-      return;
     }
 
     const eventStatus = String(event.status ?? payload.status ?? "");
@@ -533,6 +588,14 @@ export function registerEventListener(client: PiScienceClient) {
       }
     }
 
+    // Every record that reaches this point has consumed a stream position, and
+    // the fold's sequence waterline is what tells a lost event apart from one
+    // that simply produced no conversation block. So an interaction record —
+    // questionnaire, permission, question, malformed interaction — is folded
+    // even when its UI state could not be built. Only records carrying no
+    // position at all (`connection.*`, `stream.gap`) and the missing-session
+    // retry above — which re-attaches a stream whose records are not durable
+    // yet — may skip this.
     const current = useRuntimeStore.getState();
     const newThread = foldEvent(current.thread, event);
     if (newThread.blocks !== current.thread.blocks || newThread.foldState !== current.thread.foldState) {
@@ -542,7 +605,19 @@ export function registerEventListener(client: PiScienceClient) {
       const recoveryState = useRuntimeStore.getState();
       const recoverySessionId = recoveryState.activeSessionId ?? (event.sessionId ? String(event.sessionId) : null);
       if (recoverySessionId) {
-        useRuntimeStore.setState({ status: "connecting" });
+        // A sequence/epoch discontinuity inside a live session is the same
+        // class of repair as a server gap: rebase the projection without
+        // pretending the backend went away.
+        applyTransportEvent({
+          transport: "recovering",
+          reason: "stream_gap",
+          foreground: "connecting",
+          keepReady: true,
+          sessionId: recoverySessionId,
+          // The event identity is what makes a recurrence attributable: a
+          // sequence hole, a stale delta and an epoch change all land here.
+          detail: `projection discontinuity (${event.type} seq=${String(event.seq ?? "-")} part=${String(event.partId ?? "-")} rev=${String(event.revision ?? "-")} base=${String(event.baseRevision ?? "-")})`,
+        });
         void reconcileAfterGap(recoverySessionId, recoveryState.cwd, { resetTransport: true, reconnectTransport: true });
       }
       // Do not advance the applied SSE cursor while the authoritative rebase

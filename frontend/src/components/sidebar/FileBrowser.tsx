@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderOpen, File, ChevronRight, ChevronDown, RefreshCw, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useUiStore } from "../../lib/ui";
+import { copyTextToClipboard, useUiStore } from "../../lib/ui";
 import { fileInspectorForPath } from "../../lib/artifacts";
+import { absoluteWorkspacePath } from "../../lib/files/workspace-path";
 import { workspaceFiles } from "../../lib/workspace";
 import { useFeedback } from "../feedback/feedback-context";
 import { FileContextMenu, type ContextPoint, type FileListEntry } from "./FileContextMenu";
@@ -258,9 +259,12 @@ export function FileBrowser({ cwd }: { cwd: string }) {
   };
 
   const copyToClipboard = async (text: string) => {
-    await navigator.clipboard.writeText(text);
-    toast(t("files.copied"), "success");
+    // Close the menu before the clipboard round-trip. Closing it from the
+    // continuation lets a slow (or permission-blocked) write unmount a menu the
+    // user already reopened, which silently swallows the next click.
     setContextMenu(null);
+    const copied = await copyTextToClipboard(text);
+    toast(t(copied ? "files.copied" : "files.copyFailed"), copied ? "success" : "error");
   };
 
   const referenceEntry = (entry: FileListEntry) => {
@@ -370,7 +374,7 @@ export function FileBrowser({ cwd }: { cwd: string }) {
       </div>
 
       {/* Context menu */}
-      {contextMenu && <FileContextMenu entry={contextMenu.entry} point={contextMenu.point} onClose={() => setContextMenu(null)} onReference={() => referenceEntry(contextMenu.entry)} onCopy={(text) => void copyToClipboard(text)} onDelete={() => void deleteEntry(contextMenu.entry)} />}
+      {contextMenu && <FileContextMenu entry={contextMenu.entry} point={contextMenu.point} onClose={() => setContextMenu(null)} onReference={() => referenceEntry(contextMenu.entry)} onCopy={(text) => void copyToClipboard(text)} onCopyAbsolutePath={() => void copyToClipboard(absoluteWorkspacePath(cwd, contextMenu.entry.path))} onDelete={() => void deleteEntry(contextMenu.entry)} />}
     </div>
   );
 }

@@ -367,20 +367,28 @@ function versionedPayload(
   const turnId = typeof cleanBody.turnId === "string" && cleanBody.turnId ? cleanBody.turnId : null;
   const runId = typeof cleanBody.runId === "string" && cleanBody.runId ? cleanBody.runId : null;
   const authoritativeBody = { ...cleanBody, streamEpoch };
-  if (!turnId || !runId) return authoritativeBody;
   const type = String(cleanBody.type ?? "runtime.event");
-  return {
-    ...authoritativeBody,
+  // Every published record consumes a stream position, so every record carries
+  // it. Records without turn/run identity (session stats, questionnaires) used
+  // to ship a bare body; a consumer that cannot see their position then reads
+  // each one as a hole in the sequence and answers with a full authoritative
+  // rebase of a healthy stream.
+  const envelope = {
     schemaVersion: 2,
     workspaceId: resolve(cwd),
     sessionId,
     streamEpoch,
     eventId: `${streamEpoch}:${sequence}`,
     seq: sequence,
-    turnId,
-    runId,
     occurredAt: new Date().toISOString(),
     type,
+  };
+  if (!turnId || !runId) return { ...authoritativeBody, ...envelope };
+  return {
+    ...authoritativeBody,
+    ...envelope,
+    turnId,
+    runId,
     payload: authoritativeBody,
   };
 }

@@ -44,6 +44,63 @@ describe("transport event folding", () => {
     expect(tool.endedAt).toBe("2026-09-08T00:00:03.000Z");
   });
 
+  it("keeps an observed reasoning phase's timing across the settle-time rebuild", () => {
+    // Persisted messages carry no reasoning clock, so without the carry-over
+    // the reasoning row loses its duration on every history resync.
+    const current = threadFromMessages([
+      { id: "user-1", role: "user", content: [{ type: "text", text: "run" }], turnId: "turn-1" },
+    ]);
+    current.blocks.push({
+      kind: "thinking", id: "thinking-turn-1-reasoning-1", turnId: "turn-1",
+      parts: [{ id: "reasoning-1", text: "Weigh the options." }], partial: false,
+      startedAt: "2026-09-08T00:00:00.000Z", endedAt: "2026-09-08T00:00:04.500Z",
+    } as ThreadBlock);
+    const merged = replaceHistoryTail(current, [
+      { id: "user-1", role: "user", content: [{ type: "text", text: "run" }], turnId: "turn-1" },
+      {
+        id: "assistant-1", role: "assistant", turnId: "turn-1", timestamp: "2026-09-08T00:00:05.000Z",
+        content: [{ type: "thinking", thinking: "Weigh the options." }, { type: "text", text: "answer" }],
+      },
+    ]);
+    const thinking = merged.blocks.find((block) => block.kind === "thinking") as { startedAt?: string; endedAt?: string } | undefined;
+    expect(thinking?.startedAt).toBe("2026-09-08T00:00:00.000Z");
+    expect(thinking?.endedAt).toBe("2026-09-08T00:00:04.500Z");
+  });
+
+  it("keeps reasoning phases apart when they share a length and opening", () => {
+    // Restored rows fall back to the phase's own text, so the match must use
+    // the whole text: two phases that agree for their first 64 characters and
+    // have equal length would otherwise inherit one another's duration.
+    const opening = "Y".repeat(80);
+    const phaseA = `${opening}AAAA`;
+    const phaseB = `${opening}BBBB`;
+    const current = threadFromMessages([
+      { id: "user-1", role: "user", content: [{ type: "text", text: "run" }], turnId: "turn-1" },
+    ]);
+    current.blocks.push(
+      {
+        kind: "thinking", id: "thinking-a", turnId: "turn-1",
+        parts: [{ id: "reasoning-a", text: phaseA }], partial: false,
+        startedAt: "2026-09-08T00:00:01.000Z", endedAt: "2026-09-08T00:00:02.000Z",
+      } as ThreadBlock,
+      {
+        kind: "thinking", id: "thinking-b", turnId: "turn-1",
+        parts: [{ id: "reasoning-b", text: phaseB }], partial: false,
+        startedAt: "2026-09-08T00:00:05.000Z", endedAt: "2026-09-08T00:00:06.000Z",
+      } as ThreadBlock,
+    );
+    const merged = replaceHistoryTail(current, [
+      { id: "user-1", role: "user", content: [{ type: "text", text: "run" }], turnId: "turn-1" },
+      { id: "assistant-a", role: "assistant", turnId: "turn-1", content: [{ type: "thinking", thinking: phaseA }] },
+      { id: "assistant-b", role: "assistant", turnId: "turn-1", content: [{ type: "thinking", thinking: phaseB }] },
+    ]);
+    const rows = merged.blocks.filter((block) => block.kind === "thinking").map((block) => [block.startedAt, block.endedAt]);
+    expect(rows).toEqual([
+      ["2026-09-08T00:00:01.000Z", "2026-09-08T00:00:02.000Z"],
+      ["2026-09-08T00:00:05.000Z", "2026-09-08T00:00:06.000Z"],
+    ]);
+  });
+
   it("derives full tool timing from history when the live tail was never observed", () => {
     const merged = threadFromMessages([
       { id: "user-1", role: "user", content: [{ type: "text", text: "run" }], timestamp: "2026-09-08T00:00:00.000Z" },
