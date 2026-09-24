@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { access, cp, mkdtemp, readFile, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -40,6 +40,32 @@ describe("project registry", () => {
     const projects = await Promise.all(Array.from({ length: 8 }, () => ensureProject(cwd)));
 
     expect(new Set(projects.map((project) => project.id)).size).toBe(1);
+  });
+
+  it("rejects a copied identity marker while the original workspace still exists", async () => {
+    const original = await workspace();
+    const copy = await workspace();
+    await ensureProject(original);
+    await cp(join(original, ".pi-science-workspace-id"), join(copy, ".pi-science-workspace-id"));
+    await expect(ensureProject(copy)).rejects.toThrow(/still in use/);
+    await expect(readProject(copy)).resolves.toBeNull();
+  });
+
+  it("stores a Git workspace marker inside its Git metadata", async () => {
+    const cwd = await workspace();
+    await mkdir(join(cwd, ".git"));
+    const project = await ensureProject(cwd);
+    expect((await readFile(join(cwd, ".git", ".pi-science-workspace-id"), "utf8")).trim()).toBe(project.id);
+    await expect(access(join(cwd, ".pi-science-workspace-id"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("moves an existing marker into Git metadata after Git initialization", async () => {
+    const cwd = await workspace();
+    const project = await ensureProject(cwd);
+    await mkdir(join(cwd, ".git"));
+    expect((await ensureProject(cwd)).id).toBe(project.id);
+    expect((await readFile(join(cwd, ".git", ".pi-science-workspace-id"), "utf8")).trim()).toBe(project.id);
+    await expect(access(join(cwd, ".pi-science-workspace-id"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it.skipIf(process.platform === "win32")("uses one state directory for symlink aliases of a workspace", async () => {

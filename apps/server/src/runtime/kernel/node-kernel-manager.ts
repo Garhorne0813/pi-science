@@ -12,7 +12,7 @@ import {
   type WorkspaceEnvironmentStatus,
 } from "../workspace/workspace-environment.js";
 import { restrictResearchEnvironment } from "../jobs/job-environment.js";
-import { sandboxConversationCommand } from "../jobs/research-sandbox.js";
+import { cachedResearchSandboxStatus, sandboxConversationCommand, type ResearchSandboxStatus } from "../jobs/research-sandbox.js";
 
 export type KernelLanguage = "python" | "r";
 
@@ -77,6 +77,7 @@ export interface NodeKernelManagerDependencies {
   spawnProcess?: typeof spawn;
   killProcessTree?: (pid: number) => void;
   sandboxCommand?: typeof sandboxConversationCommand;
+  sandboxStatus?: () => Promise<ResearchSandboxStatus>;
 }
 
 const PYTHON_BRIDGE = fileURLToPath(new URL("./bridges/kernel_bridge.py", import.meta.url));
@@ -147,6 +148,7 @@ export class NodeKernelManager {
       spawnProcess: deps.spawnProcess ?? spawn,
       killProcessTree: deps.killProcessTree ?? defaultKillProcessTree,
       sandboxCommand: deps.sandboxCommand ?? sandboxConversationCommand,
+      sandboxStatus: deps.sandboxStatus ?? (deps.sandboxCommand ? async () => ({ available: true, backend: "seatbelt" }) : () => cachedResearchSandboxStatus(deps.platform ?? process.platform)),
     };
   }
 
@@ -160,10 +162,12 @@ export class NodeKernelManager {
       && this.deps.sandboxCommand === sandboxConversationCommand;
   }
 
-  executionCapability(): Pick<KernelManagerStatus, "execution_available" | "unavailable_reason"> {
-    return this.windowsSandboxUnavailable()
-      ? { execution_available: false, unavailable_reason: WINDOWS_KERNEL_UNAVAILABLE }
-      : { execution_available: true, unavailable_reason: null };
+  async executionCapability(): Promise<Pick<KernelManagerStatus, "execution_available" | "unavailable_reason">> {
+    if (this.windowsSandboxUnavailable()) return { execution_available: false, unavailable_reason: WINDOWS_KERNEL_UNAVAILABLE };
+    const sandbox = await this.deps.sandboxStatus();
+    return sandbox.available
+      ? { execution_available: true, unavailable_reason: null }
+      : { execution_available: false, unavailable_reason: `Notebook execution isolation unavailable: ${sandbox.reason}` };
   }
 
   activeCount(): number {
@@ -171,7 +175,8 @@ export class NodeKernelManager {
   }
 
   async execute(options: KernelExecuteOptions): Promise<KernelResult> {
-    if (this.windowsSandboxUnavailable()) throw new Error(WINDOWS_KERNEL_UNAVAILABLE);
+    const capability = await this.executionCapability();
+    if (!capability.execution_available) throw new Error(capability.unavailable_reason ?? "Notebook execution unavailable");
     const key = sessionKey(options);
     const session = await this.ensureSession(key, options);
     try {
@@ -214,9 +219,9 @@ export class NodeKernelManager {
     return session;
   }
 
-  status(): KernelManagerStatus {
+  async status(): Promise<KernelManagerStatus> {
     const sessions = [...this.sessions.values()];
-    const capability = this.executionCapability();
+    const capability = await this.executionCapability();
     const executionAvailable = capability.execution_available;
     const python = executionAvailable && this.deps.interpreterAvailable(this.deps.platform === "win32" ? "python" : "python3");
     const r = executionAvailable && this.deps.interpreterAvailable("Rscript");

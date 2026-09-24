@@ -336,6 +336,29 @@ describe("Node control plane", () => {
     expect(shutdownSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("returns 503 before environment provisioning when Linux isolation is unavailable", async () => {
+    const workspace = join(tmpdir(), `pi-science-linux-kernel-${Date.now()}`);
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    try {
+      const modules = createServerModules(config("http://127.0.0.1:1"));
+      const ensure = vi.spyOn(modules.environments, "ensure");
+      const app = buildApp(config("http://127.0.0.1:1"), {
+        ...modules,
+        kernels: new NodeKernelManager({ platform: "linux", interpreterAvailable: () => true, sandboxStatus: async () => ({ available: false, reason: "bubblewrap unavailable" }) }),
+      });
+      openApps.push(app);
+      expect((await app.inject({ method: "GET", url: "/api/kernels/status" })).json()).toMatchObject({ execution_available: false, interpreters: { python: false, r: false } });
+      for (const path of ["execute", "execute-stream"]) {
+        const response = await app.inject({ method: "POST", url: `/api/kernels/${path}?cwd=${encodeURIComponent(workspace)}`, payload: { language: "python", code: "1+1" } });
+        expect(response.statusCode).toBe(503);
+        expect(response.json()).toMatchObject({ code: "kernel_execution_unavailable" });
+      }
+      expect(ensure).not.toHaveBeenCalled();
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("calls the shared Pi runtime manager teardown exactly twice when nodePiManager is on (idempotent no-ops)", async () => {
     const modules = createServerModules(config("http://127.0.0.1:1", { nodePiManager: true }));
     const shutdownSpy = vi.spyOn(modules.piManager, "shutdownAll").mockResolvedValue(undefined);

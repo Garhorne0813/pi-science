@@ -79,6 +79,19 @@ export async function knownWorkspacePaths(workspaceRepository?: WorkspaceReposit
 }
 async function workspaceInfo(path: string, workspaceRepository?: WorkspaceRepository): Promise<Record<string, unknown>> {
   const project = await ensureProject(path);
+  if (workspaceRepository && !(await workspaceRepository.getByPath(path, true))) {
+    const locations = await workspaceRepository.getByProject(project.id);
+    const missing: typeof locations = [];
+    for (const location of locations) {
+      if (!(await stat(location.path).catch(() => null))?.isDirectory()) missing.push(location);
+    }
+    const oldPaths = new Set(await Promise.all(missing.map(async (location) => join(await realpath(dirname(location.path)).catch(() => dirname(location.path)), basename(location.path)))));
+    if (oldPaths.size === 1) {
+      const source = missing.find((location) => location.is_pinned) ?? missing[0];
+      if (source) await workspaceRepository.moveLocation(project.id, source.path, path, true);
+      for (const location of missing) if (location !== source) await workspaceRepository.markMissing(location.path, Date.now(), true);
+    }
+  }
   await workspaceRepository?.rememberWorkspace(path, { managed: pathIsInside(rootDir(), path, true), preservePath: pathIsInside(rootDir(), path, true) });
   const [sessions, metadata] = await Promise.all([sessionRepository.list(path), stat(path)]);
   return {
@@ -367,7 +380,7 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
   // ── Workspaces ──
   app.get("/api/workspaces", async () => { const result = await Promise.all((await knownWorkspacePaths(workspaceRepository)).map((path) => workspaceInfo(path, workspaceRepository))); return result.sort((left, right) => String(right.last_modified).localeCompare(String(left.last_modified))); });
   app.post("/api/workspaces", async (request, reply) => { const body = (request.body ?? {}) as { name?: unknown }; const name = String(body.name ?? "").trim().replace(/[\\/]/g, "-").slice(0, 100); if (!name) return reply.code(400).send({ error: "Invalid workspace name" }); const path = join(rootDir(), name); try { await stat(path); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* create */ } await mkdir(path, { recursive: true }); return await workspaceInfo(path, workspaceRepository); });
-  app.post("/api/workspaces/open", async (request, reply) => { const requestedPath = expandUserPath(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); let path: string; try { if (!(await stat(requestedPath)).isDirectory()) return reply.code(400).send({ error: "Not a directory" }); path = await realpath(requestedPath); } catch { return reply.code(404).send({ error: "Folder not found" }); } await rememberExternalWorkspace(path, workspaceRepository); return await workspaceInfo(path, workspaceRepository); });
+  app.post("/api/workspaces/open", async (request, reply) => { const requestedPath = expandUserPath(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); let path: string; try { if (!(await stat(requestedPath)).isDirectory()) return reply.code(400).send({ error: "Not a directory" }); path = await realpath(requestedPath); } catch { return reply.code(404).send({ error: "Folder not found" }); } const info = await workspaceInfo(path, workspaceRepository); await rememberExternalWorkspace(path, workspaceRepository); return info; });
   app.post("/api/workspaces/demo", async (request, reply) => {
     const demo = DEMOS[String((request.query as { name?: unknown }).name ?? "")];
     if (!demo) return reply.code(400).send({ error: "Unknown demo" });

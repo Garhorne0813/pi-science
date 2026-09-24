@@ -84,6 +84,10 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
       let cwd: string;
       try { cwd = await validateWorkspaceCwd(cwdValue); }
       catch (error) { return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) }); }
+      if (pathname === "/api/kernels/execute" || pathname === "/api/kernels/execute-stream") {
+        const capability = await kernels.executionCapability();
+        if (!capability.execution_available) return reply.code(503).send({ error: capability.unavailable_reason, code: "kernel_execution_unavailable" });
+      }
       try { await environments.ensure(cwd); }
       catch (error) {
         app.log.error({ err: error, requestId: request.id, cwd }, "workspace environment provisioning failed");

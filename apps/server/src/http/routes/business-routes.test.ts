@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { access, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../../app/app.js";
@@ -580,6 +580,32 @@ describe("native control-plane business routes", () => {
     expect(listed.json()).toEqual([
       expect.objectContaining({ path: canonicalExternal, project_id: opened.json().project_id }),
     ]);
+  });
+
+  it("recovers project history after an external workspace rename", async () => {
+    const sandbox = join(tmpdir(), `pi-science-external-rename-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const before = join(sandbox, "before");
+    const after = join(sandbox, "after");
+    tempDirs.push(sandbox);
+    await mkdir(before, { recursive: true });
+    process.env.PI_SCIENCE_HOME = join(sandbox, "home");
+    process.env.PI_SCIENCE_WORKSPACES = join(sandbox, "managed");
+    const modules = createServerModules(config(), { sqliteEnabled: true });
+    const app = buildApp(config(), modules);
+    apps.push(app);
+    const first = await app.inject({ method: "POST", url: "/api/workspaces/open", payload: { path: before } });
+    expect(first.statusCode).toBe(200);
+    await app.inject({ method: "POST", url: "/api/workspaces/pin", payload: { path: before } });
+    const state = metadataRoot(before);
+    await mkdir(join(state, "sessions"), { recursive: true });
+    await writeFile(join(state, "sessions", "saved.jsonl"), `${JSON.stringify({ type: "session", id: "saved", cwd: before, timestamp: "2026-07-24T01:00:00.000Z" })}\n`);
+    await writeFile(join(state, "artifact-proof"), "retained");
+    await rename(before, after);
+    const reopened = await app.inject({ method: "POST", url: "/api/workspaces/open", payload: { path: after } });
+    expect(reopened.statusCode).toBe(200);
+    expect(reopened.json()).toMatchObject({ project_id: first.json().project_id, session_count: 1 });
+    expect(await readFile(join(metadataRoot(after), "artifact-proof"), "utf8")).toBe("retained");
+    expect((await app.inject({ method: "GET", url: "/api/workspaces/pinned" })).json()).toEqual({ paths: [await realpath(after)] });
   });
 
   it("installs a demo workspace from the shipped assets and reuses it on a repeat install", async () => {
