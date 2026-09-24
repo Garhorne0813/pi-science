@@ -1,5 +1,6 @@
 import { bindingError } from "./bindings.js";
 import { createHash } from "node:crypto";
+import { stat } from "node:fs/promises";
 import { isAbsolute, normalize } from "node:path";
 import {
   mcpCredentialUpdateSchema,
@@ -392,7 +393,24 @@ export class McpConnectorService {
 
   private async materializeKnownWorkspaces(): Promise<void> {
     const locations = await this.workspaces.listKnown({ includeMissing: false });
-    await Promise.all(locations.map((item) => this.projection?.materialize(item.canonical_path, item.project_id)));
+    await Promise.all(locations.map(async (item) => {
+      // A known workspace whose directory is gone must not take the control
+      // plane down at startup: a user deleting a workspace folder, or a test
+      // harness removing its temporary one, would otherwise make every later
+      // start fail on the realpath inside validateWorkspaceCwd. Mark it missing
+      // — listKnown then excludes it — and skip it, the same policy the
+      // workspace catalog already applies while listing.
+      try {
+        if (!(await stat(item.canonical_path)).isDirectory()) {
+          await this.workspaces.markMissing(item.canonical_path);
+          return;
+        }
+      } catch {
+        await this.workspaces.markMissing(item.canonical_path);
+        return;
+      }
+      await this.projection?.materialize(item.canonical_path, item.project_id);
+    }));
   }
 
   private async requireConnector(connectorId: string): Promise<StoredMcpConnector> {

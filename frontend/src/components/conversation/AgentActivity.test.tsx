@@ -7,6 +7,7 @@ import { AgentActivity } from "./AgentActivity";
 import { executionActivities, executionOperationCount } from "../../lib/conversation/activity-policy";
 import { defaultProgressAppearance } from "@pi-science/contracts";
 import { setProgressAppearance } from "../progress/progress-settings-store";
+import { activityRendererRegistry } from "./activity-renderers/registry";
 
 const tool = (id: string, name: string, status: ToolCallBlock["status"] = "done", input?: Record<string, unknown>): ToolCallBlock => ({ kind: "tool", id, callId: `${id}-call`, tool: name, status, input, output: "output" });
 beforeAll(async () => { await i18n.changeLanguage("en"); });
@@ -22,7 +23,99 @@ describe("AgentActivity data filters", () => {
   it("keeps todo out of trace", () => { expect(executionActivities([tool("read", "read"), tool("todo", "todo"), tool("search", "grep")]).map((block) => block.id)).toEqual(["read", "search"]); });
 });
 
+describe("completed turn duration", () => {
+  const toolWindow = (startedAt: string, endedAt: string): ToolCallBlock => ({ ...tool("read", "read"), startedAt, endedAt });
+
+  it("uses the user-to-final-answer wall time instead of the tool write window", () => {
+    render(<AgentActivity
+      blocks={[toolWindow("2026-09-08T00:00:00.000Z", "2026-09-08T00:00:00.007Z")]}
+      lifecycle="settled"
+      hasFinalAnswer
+      turnStartedAt="2026-09-08T00:00:00.000Z"
+      turnEndedAt="2026-09-08T00:00:05.300Z"
+    />);
+
+    expect(screen.getByRole("button", { name: /Total turn duration: 5\.3s/ })).toHaveTextContent("Completed · 5.3s");
+  });
+
+  it("reports a whole turn that finished in under 100 ms as less than 0.1 seconds", () => {
+    render(<AgentActivity
+      blocks={[toolWindow("2026-09-08T00:00:00.000Z", "2026-09-08T00:00:00.007Z")]}
+      lifecycle="settled"
+      hasFinalAnswer
+      turnStartedAt="2026-09-08T00:00:00.000Z"
+      turnEndedAt="2026-09-08T00:00:00.007Z"
+    />);
+
+    expect(screen.getByRole("button", { name: /Total turn duration: <0\.1s/ })).toHaveTextContent("Completed · <0.1s");
+  });
+
+  it("labels the whole-turn duration in Simplified Chinese", async () => {
+    await i18n.changeLanguage("zh-Hans");
+    try {
+      render(<AgentActivity
+        blocks={[toolWindow("2026-09-08T00:00:00.000Z", "2026-09-08T00:00:00.007Z")]}
+        lifecycle="settled"
+        hasFinalAnswer
+        turnStartedAt="2026-09-08T00:00:00.000Z"
+        turnEndedAt="2026-09-08T00:00:05.300Z"
+      />);
+
+      expect(screen.getByRole("button", { name: /本轮总耗时：5\.3s/ })).toHaveTextContent("已完成 · 5.3s");
+    } finally {
+      await i18n.changeLanguage("en");
+    }
+  });
+
+  it.each([
+    ["2026-09-08T00:00:00.000Z", "2026-09-08T00:00:00.000Z"],
+    ["2026-09-08T00:00:01.000Z", "2026-09-08T00:00:00.000Z"],
+    ["not-a-timestamp", "2026-09-08T00:00:01.000Z"],
+  ])("hides an untrusted boundary interval (%s -> %s)", (turnStartedAt, turnEndedAt) => {
+    render(<AgentActivity blocks={[tool("read", "read")]} lifecycle="settled" hasFinalAnswer turnStartedAt={turnStartedAt} turnEndedAt={turnEndedAt} />);
+
+    expect(screen.getByText("Completed")).toBeInTheDocument();
+    expect(screen.queryByText(/0\.0s/)).not.toBeInTheDocument();
+  });
+
+  it("falls back to the tool window and labels it as the activity duration", () => {
+    render(<AgentActivity blocks={[toolWindow("2026-09-08T00:00:00.000Z", "2026-09-08T00:00:00.007Z")]} lifecycle="aborted" />);
+
+    expect(screen.getByRole("button", { name: /Activity duration: <0\.1s/ })).toHaveTextContent("Stopped · <0.1s");
+  });
+
+  it("shows the turn duration when the turn folded no activity away", () => {
+    render(<AgentActivity blocks={[]} lifecycle="settled" hasFinalAnswer turnStartedAt="2026-09-08T00:00:00.000Z" turnEndedAt="2026-09-08T00:00:05.300Z" />);
+
+    expect(screen.getByRole("status", { name: "Completed. Total turn duration: 5.3s" })).toHaveTextContent("Completed · 5.3s");
+  });
+});
+
 describe("AgentActivity live stream", () => {
+  it("uses semantic kernel and literature renderers", () => {
+    render(<AgentActivity blocks={[
+      { ...tool("python", "python", "done", { code: "print(42)" }), details: { outputs: [{ type: "text" }, { type: "image" }] } },
+      { ...tool("pubmed", "search_pubmed", "done", { query: "kinetics" }), details: { results: [{}, {}, {}], retained: [{}] } },
+    ]} />);
+    expect(screen.getByText("Python")).toBeInTheDocument();
+    expect(screen.getByText("2 outputs")).toBeInTheDocument();
+    expect(screen.getByText("PubMed")).toBeInTheDocument();
+    expect(screen.getByText("3 results · 1 retained")).toBeInTheDocument();
+  });
+
+  it("does not materialize expanded details while a trace row is collapsed", () => {
+    const renderer = activityRendererRegistry.resolve("kernel");
+    const expanded = vi.spyOn(renderer, "expanded");
+    try {
+      render(<AgentActivity blocks={[tool("python", "python")]} />);
+      expect(expanded).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Python" }));
+      expect(expanded).toHaveBeenCalledTimes(1);
+    } finally {
+      expanded.mockRestore();
+    }
+  });
+
   it("updates the running tool line immediately when consecutive tools share the same phase", () => {
     const read = tool("read", "read", "running", { path: "a.ts", description: "Find why the second reply stops following" });
     const { rerender } = render(<AgentActivity blocks={[read]} />);
@@ -269,6 +362,21 @@ describe("AgentActivity settled display", () => {
     expect(screen.getByText("Reading one.ts")).toBeInTheDocument();
     expect(screen.getByText("Running bash")).toBeInTheDocument();
     expect(screen.queryByText("The final answer.")).not.toBeInTheDocument();
+  });
+
+  it("shows elapsed time for a completed reasoning phase without tool calls", () => {
+    render(<AgentActivity lifecycle="settled" blocks={[{
+      kind: "thinking", id: "reasoning", parts: [{ id: "reasoning-part", text: "Check the result" }],
+      startedAt: "2026-09-08T00:00:00.000Z", endedAt: "2026-09-08T00:00:03.400Z",
+    }]} />);
+    expect(screen.getByRole("button", { name: /Completed · 3.4s/ })).toBeInTheDocument();
+  });
+
+  it("uses the conversation timestamps when restored activity has no tool timing", () => {
+    render(<AgentActivity lifecycle="settled" turnStartedAt="2026-09-08T00:00:00.000Z" turnEndedAt="2026-09-08T00:00:05.200Z" blocks={[{
+      kind: "agent", id: "update", presentationRole: "intermediate", parts: [{ id: "update-part", text: "Checking." }],
+    }]} />);
+    expect(screen.getByRole("button", { name: /Completed · 5.2s/ })).toBeInTheDocument();
   });
 
   it("folds commentary when a settled turn never produced a final answer", () => {

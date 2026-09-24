@@ -36,7 +36,11 @@ export type ThreadBlock =
 export interface UserMessageBlock extends ConversationBlockIdentity {
   kind: "user";
   id: string;
+  client_message_id?: string;
+  deliveryStatus?: "pending" | "indeterminate" | "rejected";
   text: string;
+  /** Optimistic first send into a session created by this client. */
+  optimisticFirstInSession?: boolean;
   timestamp?: string;
   images?: ImageAttachment[];
 }
@@ -169,6 +173,13 @@ export interface TurnArtifactItem {
   size: number;
   artifactId?: string;
   version?: number;
+  revision?: number;
+  sha256?: string;
+  state?: "declared" | "writing" | "published" | "failed";
+  activityId?: string;
+  executionId?: string;
+  environmentRevision?: string;
+  provenanceRef?: string;
 }
 
 /** Per-turn generated-file summary shown after the final assistant message.
@@ -179,8 +190,9 @@ export interface TurnArtifactSummaryBlock extends ConversationBlockIdentity {
   id: string;
   turnId: string;
   assistantMessageId?: string | null;
-  /** 1-based turn ordinal when known (live events and new persisted records). */
+  /** Diagnostic ordinal; hub ordinals reset, legacy ordinals count artifacts. */
   turnOrdinal?: number | null;
+  endedAt?: string;
   artifacts: TurnArtifactItem[];
 }
 
@@ -277,6 +289,9 @@ export interface FilePreviewInspector {
   variant: "file";
   path: string;
   filename: string;
+  /** Published content to preview, independently of the current workspace file. */
+  sha256?: string;
+  version?: number;
   artifact?: ArtifactKind;
   language?: string;
   content?: string;

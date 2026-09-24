@@ -320,20 +320,22 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
 
     case "item.completed": {
       const itemId = stringValue(event.itemId) ?? stringValue(event.partId);
+      const completedRevision = numberValue(event.revision);
+      const completedSequence = numberValue(event.seq);
       const content = itemId ? foldState.textByKey[itemId] ?? foldState.thinkingByKey[itemId] : undefined;
       const blockIndex = content ? index[content.blockId] : undefined;
       if (blockIndex !== undefined && (blocks[blockIndex]?.kind === "agent" || blocks[blockIndex]?.kind === "thinking")) {
         const completed = blocks[blockIndex];
         blocks[blockIndex] = completed.kind === "thinking"
-          ? { ...completed, partial: false, endedAt: completed.endedAt ?? new Date().toISOString() }
-          : { ...completed, partial: false };
+          ? { ...completed, ...(completedRevision !== undefined ? { revision: completedRevision } : {}), ...(completedSequence !== undefined ? { sequence: completedSequence } : {}), partial: false, endedAt: completed.endedAt ?? new Date().toISOString() }
+          : { ...completed, ...(completedRevision !== undefined ? { revision: completedRevision } : {}), ...(completedSequence !== undefined ? { sequence: completedSequence } : {}), partial: false };
       } else if (itemId) {
         for (let i = 0; i < blocks.length; i += 1) {
           const block = blocks[i];
           if ((block.kind === "agent" || block.kind === "thinking") && (block.itemId === itemId || block.id === itemId)) {
             blocks[i] = block.kind === "thinking"
-              ? { ...block, partial: false, endedAt: block.endedAt ?? new Date().toISOString() }
-              : { ...block, partial: false };
+              ? { ...block, ...(completedRevision !== undefined ? { revision: completedRevision } : {}), ...(completedSequence !== undefined ? { sequence: completedSequence } : {}), partial: false, endedAt: block.endedAt ?? new Date().toISOString() }
+              : { ...block, ...(completedRevision !== undefined ? { revision: completedRevision } : {}), ...(completedSequence !== undefined ? { sequence: completedSequence } : {}), partial: false };
           }
         }
       }
@@ -415,6 +417,8 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
             parts: [{ id: eventPartId ?? blockId, text: nextText }],
             ...(role ? { presentationRole: role } : {}),
             classificationSource: role ? "explicit" : "legacy_inferred",
+            revision,
+            ...(numberValue(event.seq) !== undefined ? { sequence: numberValue(event.seq) } : {}),
             partial: true,
             timestamp: new Date().toISOString(),
           });
@@ -427,6 +431,8 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
             itemId: stringValue(event.itemId) ?? eventPartId ?? (blocks[existingIdx].kind === "agent" ? blocks[existingIdx].itemId : undefined),
             parts: updatedAgentParts(blocks[existingIdx], eventPartId ?? blockId, nextText),
             ...(role ? { presentationRole: role, classificationSource: "explicit" as const } : {}),
+            revision,
+            ...(numberValue(event.seq) !== undefined ? { sequence: numberValue(event.seq) } : {}),
             partial: true,
             timestamp: blocks[existingIdx].kind === "agent" ? blocks[existingIdx].timestamp : undefined,
           } as ThreadBlock;
@@ -449,6 +455,8 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
           parts: [{ id: eventPartId ?? blockId, text: nextText }],
           ...(role ? { presentationRole: role } : {}),
           classificationSource: role ? "explicit" : "legacy_inferred",
+          revision,
+          ...(numberValue(event.seq) !== undefined ? { sequence: numberValue(event.seq) } : {}),
           partial: true,
           timestamp: new Date().toISOString(),
         };
@@ -470,6 +478,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       const key = `thinking:${eventPartId ?? eventItemKey(event, foldState)}`;
       const previous = foldState.thinkingByKey[key];
       const nextText = event.replace === true ? incomingText : (previous?.text ?? "") + incomingText;
+      const revision = numberValue(event.revision) ?? ((previous?.revision ?? 0) + 1);
       const turnId = turnIdentity(event, foldState);
       const runId = runIdentity(event, foldState);
       const blockId = previous?.blockId ?? `thinking-${turnId}-${eventPartId ?? key}`;
@@ -489,6 +498,8 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
             endedAt: undefined,
             turnId,
             ...(runId ? { runId } : {}),
+            revision,
+            ...(numberValue(event.seq) !== undefined ? { sequence: numberValue(event.seq) } : {}),
           } as ThreadBlock;
         } else {
           index[blockId] = blocks.length;
@@ -499,6 +510,8 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
             ...(runId ? { runId } : {}),
             ...(stringValue(event.itemId) || eventPartId ? { itemId: stringValue(event.itemId) ?? eventPartId } : {}),
             parts: [{ id: blockId, text: nextText }],
+            revision,
+            ...(numberValue(event.seq) !== undefined ? { sequence: numberValue(event.seq) } : {}),
             partial: true,
             startedAt: nowIso,
             timestamp: nowIso,
@@ -507,7 +520,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       }
       foldState.thinkingByKey[key] = {
         text: nextText,
-        revision: numberValue(event.revision) ?? ((previous?.revision ?? 0) + 1),
+        revision,
         blockId,
         partId: eventPartId ?? key,
         ...(previous?.segments ? { segments: previous.segments } : {}),
@@ -539,12 +552,17 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       // Runtimes rarely ship wall-clock fields. Arrival times are the honest
       // fallback: first sight starts the clock, a terminal status ends it.
       const nowIso = new Date().toISOString();
+      const revision = numberValue(event.revision) ?? ((previous?.revision ?? -1) + 1);
       const block: ThreadBlock = {
         kind: "tool",
         id: blockId,
         callId,
         turnId: stringValue(event.turnId) ?? previous?.turnId ?? foldState.activeTurnId,
         runId: stringValue(event.runId) ?? previous?.runId ?? foldState.activeRunId,
+        ...(stringValue(event.itemId) || previous?.itemId ? { itemId: stringValue(event.itemId) ?? previous?.itemId } : {}),
+        ...(stringValue(event.parentItemId) || previous?.parentItemId ? { parentItemId: stringValue(event.parentItemId) ?? previous?.parentItemId } : {}),
+        revision,
+        ...(numberValue(event.seq) !== undefined || previous?.sequence !== undefined ? { sequence: numberValue(event.seq) ?? previous?.sequence } : {}),
         ...(operationId || previous?.operationId ? { operationId: operationId ?? previous?.operationId } : {}),
         ...(attemptId || previous?.attemptId ? { attemptId: attemptId ?? previous?.attemptId } : {}),
         tool: (event.tool as string) || previous?.tool || "unknown",
@@ -593,13 +611,28 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
         kind: "artifact-summary",
         id: blockId,
         turnId,
+        ...(numberValue(event.revision) !== undefined ? { revision: numberValue(event.revision) } : {}),
+        ...(numberValue(event.seq) !== undefined ? { sequence: numberValue(event.seq) } : {}),
+        ...(typeof event.endedAt === "string" && event.endedAt ? { endedAt: event.endedAt } : {}),
         assistantMessageId: event.assistantMessageId ? String(event.assistantMessageId) : null,
         ...(Number.isInteger(turnOrdinal) && turnOrdinal > 0 ? { turnOrdinal } : {}),
         artifacts: items,
       };
       const existing = index[blockId];
       if (existing !== undefined) {
-        blocks[existing] = block;
+        const previous = blocks[existing];
+        const previousRevision = previous.kind === "artifact-summary" ? numberValue(previous.revision) : undefined;
+        const previousSequence = previous.kind === "artifact-summary" ? numberValue(previous.sequence) : undefined;
+        const incomingRevision = numberValue(event.revision);
+        const previousVersioned = previousRevision !== undefined || previousSequence !== undefined;
+        const incomingVersioned = incomingRevision !== undefined || numberValue(event.seq) !== undefined;
+        // Versioned projection updates are strictly monotonic. Replay and late
+        // delivery must never replace a newer published artifact set, and an
+        // unversioned update must not roll versioned content back — same policy
+        // as attachTurnArtifacts.
+        if (previousVersioned && !incomingVersioned) break;
+        if (previousRevision !== undefined && (incomingRevision === undefined || incomingRevision <= previousRevision)) break;
+        blocks[existing] = { ...block, endedAt: block.endedAt ?? (previous.kind === "artifact-summary" ? previous.endedAt : undefined) };
         break;
       }
       let insertAt = -1;
@@ -611,6 +644,16 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
         insertAt = afterAssistantTurnEnd(blocks, assistantMessageId, index);
       }
       if (insertAt < 0) insertAt = afterIdentifiedTurn(blocks, turnId);
+      const endedAt = typeof event.endedAt === "string" ? event.endedAt : "";
+      if (insertAt < 0 && endedAt) {
+        // Same primary fallback as attachTurnArtifacts: the turn's end time
+        // identifies the owning turn independently of ordinals. The published
+        // legacy ordinal counts artifact records; hub ordinals reset, so
+        // trusting it alone drops the strip on an unrelated earlier turn.
+        insertAt = afterTurnEndedAt(blocks, endedAt);
+      }
+      // Hub ordinals reset after restart and are never history positions.
+      if (insertAt < 0 && isHubTurnId(turnId)) break;
       if (insertAt < 0 && Number.isInteger(turnOrdinal) && turnOrdinal > 0) {
         // Prefer explicit turn metadata to the current live anchor: a late
         // artifact must not attach to a newer turn that is already streaming.
@@ -714,8 +757,9 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
 
     case "error": {
       const msg = (event.message as string) || "Unknown error";
-      if (event.runFailed === true || event.runId) markTerminalRun(foldState, runIdentity(event, foldState), numberValue(event.seq));
-      // If we already have a partial agent block without text, replace it with the error
+      const failedRunId = event.runFailed === true || event.runId ? runIdentity(event, foldState) : undefined;
+      // If we already have a partial agent block without text, replace it with the error.
+      // Capture this before settling the failed run, which flips `partial` to false.
       const lastBlock = blocks[blocks.length - 1];
       if (lastBlock && lastBlock.kind === "agent" && lastBlock.partial && !lastBlock.parts?.[0]?.text) {
         blocks[blocks.length - 1] = {
@@ -738,6 +782,20 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
         };
         index[errBlock.id] = blocks.length;
         blocks.push(errBlock);
+      }
+      if (failedRunId) {
+        markTerminalRun(foldState, failedRunId, numberValue(event.seq));
+        const failedIso = new Date().toISOString();
+        for (let i = 0; i < blocks.length; i += 1) {
+          const block = blocks[i];
+          if ((block.kind === "agent" || block.kind === "thinking") && block.partial && block.runId === failedRunId) {
+            blocks[i] = block.kind === "thinking"
+              ? { ...block, partial: false, endedAt: block.endedAt ?? failedIso }
+              : { ...block, partial: false };
+          }
+        }
+        foldState.activeItemKey = undefined;
+        foldState.activeRunId = undefined;
       }
       break;
     }
@@ -860,8 +918,15 @@ function adaptV2Event(event: PiScienceEvent): PiScienceEvent[] {
     }
     case "run.cancelled":
       return [{ ...base, type: "session.idle", cancelled: true }];
-    case "artifact.updated":
-      return [{ ...base, type: "turn.artifacts", artifacts: payload.artifacts ?? payload.items ?? [] }];
+    case "artifact.updated": {
+      const revision = numberValue(payload.revision) ?? numberValue(event.revision);
+      return [{
+        ...base,
+        type: "turn.artifacts",
+        artifacts: payload.artifacts ?? payload.items ?? [],
+        ...(revision !== undefined ? { revision } : {}),
+      }];
+    }
     case "plan.updated":
       return [{ ...base, type: "status.updated", status: "plan", message: stringValue(payload.summary) ?? stringValue(payload.message) ?? "Plan updated" }];
     default:
@@ -1252,17 +1317,34 @@ export interface HistoryWindowMerge {
 /** Rebuild the loaded window around a fresh latest-page snapshot while
  *  reporting which pagination boundary describes the result.
  *
- *  A prefix of the previous window whose block ids overlap the snapshot is
- *  same-lineage history and stays in place. With `keepLiveExtras` the merge
- *  also preserves live blocks the snapshot does not cover yet (streaming
+ *  Keep older prefix blocks only outside turns covered by the snapshot. A
+ *  complete settled snapshot replaces the window, including anonymous extras.
+ *  With `keepLiveExtras` the merge also preserves live blocks the snapshot does not cover yet (streaming
  *  text, just-finished tools) — used by mid-stream recovery paths. Without
  *  it the settled snapshot is authoritative and live extras are dropped. */
-export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], opts: { keepLiveExtras: boolean; resetProjection?: boolean }): HistoryWindowMerge {
+export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], opts: { keepLiveExtras: boolean; resetProjection?: boolean; windowComplete?: boolean }): HistoryWindowMerge {
   const authoritative = carryToolTiming(current, threadFromMessages(messages), !opts.resetProjection);
   if (authoritative.blocks.length === 0) {
+    // An empty page is never authoritative over a thread that still holds
+    // conversation content. A fetch can race the session's first flush, and
+    // replacing the thread would blank the optimistic prompt and everything
+    // already streamed until some later refresh happens to include it.
+    // Callers that intentionally clear a conversation blank the thread
+    // themselves (session switch, workspace landing), so an empty snapshot may
+    // only reset an already empty thread.
+    const clearable = current.blocks.length === 0;
     return {
-      thread: opts.resetProjection ? resetThreadProjection(authoritative) : current,
+      thread: opts.resetProjection && clearable ? resetThreadProjection(authoritative) : current,
       retainedOlderPrefix: true,
+    };
+  }
+  // A complete snapshot has no older page to preserve. In particular, live
+  // anonymous reasoning before the first shared tool is not older history.
+  if (opts.windowComplete && !opts.keepLiveExtras) {
+    const replacement = authoritative;
+    return {
+      thread: opts.resetProjection ? resetThreadProjection(replacement) : preserveFoldState(replacement, current),
+      retainedOlderPrefix: false,
     };
   }
   const authoritativeIds = new Set(authoritative.blocks.map((block) => block.id));
@@ -1277,14 +1359,47 @@ export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], 
         : preserveFoldState({ blocks: authoritative.blocks, index: authoritative.index, loaded: authoritative.loaded }, current);
     return { thread: replacement, retainedOlderPrefix: false };
   }
+  // Only a snapshot that includes a turn's user boundary can replace that
+  // turn's live prefix. A page starting mid-turn must keep its earlier content.
+  const firstUser = authoritative.blocks.findIndex((block) => block.kind === "user");
+  const coveredTurnOwners = new Map<string, string>();
+  if (firstUser >= 0) {
+    for (const block of current.blocks) {
+      const position = authoritative.index[block.id];
+      if (position !== undefined && position >= firstUser && "turnId" in block && block.turnId) {
+        const owner = authoritative.blocks.slice(0, position + 1).findLast((candidate) => candidate.kind === "user");
+        if (owner) coveredTurnOwners.set(block.turnId, owner.id);
+      }
+    }
+  }
+  const prefix: ThreadBlock[] = [];
+  const coveredLive: ThreadBlock[] = [];
+  for (const block of current.blocks.slice(0, firstOverlap)) {
+    if (block.kind !== "user" && "turnId" in block && block.turnId && coveredTurnOwners.has(block.turnId)) {
+      coveredLive.push(block);
+    } else {
+      prefix.push(block);
+    }
+  }
   const tail = opts.keepLiveExtras
     ? mergeHistoryWithLive(authoritative, { blocks: current.blocks.slice(firstOverlap), index: {}, loaded: true })
     : authoritative;
-  const blocks = [...current.blocks.slice(0, firstOverlap), ...tail.blocks];
+  const tailBlocks = [...tail.blocks];
+  if (opts.keepLiveExtras) {
+    // Preserve in-flight extras within their proven owner, not after a newer
+    // user turn in a multi-turn snapshot.
+    for (const block of coveredLive) {
+      const ownerId = coveredTurnOwners.get("turnId" in block ? block.turnId ?? "" : "");
+      const ownerIndex = tailBlocks.findIndex((candidate) => candidate.id === ownerId);
+      const nextUser = tailBlocks.findIndex((candidate, position) => position > ownerIndex && candidate.kind === "user");
+      tailBlocks.splice(nextUser < 0 ? tailBlocks.length : nextUser, 0, block);
+    }
+  }
+  const blocks = [...prefix, ...tailBlocks];
   const index: Record<string, number> = {};
   blocks.forEach((block, position) => { index[block.id] = position; });
   const merged = { blocks, index, loaded: true };
-  return { thread: opts.resetProjection ? resetThreadProjection(merged) : preserveFoldState(merged, current), retainedOlderPrefix: true };
+  return { thread: opts.resetProjection ? resetThreadProjection(merged) : preserveFoldState(merged, current), retainedOlderPrefix: !opts.windowComplete && (prefix.length > 0 || (firstOverlap === 0 && authoritative.index[current.blocks[0].id] === 0)) };
 }
 export function mergeHistoryWithLive(history: Thread, live: Thread): Thread {
   if (live.blocks.length === 0) return history;
@@ -1294,10 +1409,35 @@ export function mergeHistoryWithLive(history: Thread, live: Thread): Thread {
       .filter((block): block is Extract<ThreadBlock, { kind: "tool" }> => block.kind === "tool")
       .map((block) => block.callId),
   );
+  const durableUsersByClientId = new Map<string, Extract<ThreadBlock, { kind: "user" }>[]>();
+  for (const block of history.blocks) {
+    if (block.kind !== "user" || !block.client_message_id) continue;
+    const matches = durableUsersByClientId.get(block.client_message_id) ?? [];
+    matches.push(block);
+    durableUsersByClientId.set(block.client_message_id, matches);
+  }
   const blocks = [...history.blocks];
   for (const block of live.blocks) {
     if (ids.has(block.id)) continue;
     if (block.kind === "tool" && toolCallIds.has(block.callId)) continue;
+    if (block.kind === "user") {
+      if (block.client_message_id) {
+        // Only an exact request identity proves that this durable row is the
+        // optimistic send. If history has duplicate IDs, preserve the live
+        // block so the ambiguous state remains visible for recovery.
+        if (durableUsersByClientId.get(block.client_message_id)?.length === 1) continue;
+      } else if (
+        block.optimisticFirstInSession
+        && !history.blocks.some((candidate) => candidate.kind === "user" && candidate.client_message_id)
+        && history.blocks[0]?.kind === "user"
+        && history.blocks[0].text === block.text
+      ) {
+        // Compatibility for pre-protocol first messages in a session known to
+        // have been created by this client. Old sessions with uncertain order
+        // keep both rows instead of guessing from text, time, or an anchor.
+        continue;
+      }
+    }
     blocks.push(block);
     ids.add(block.id);
     if (block.kind === "tool") toolCallIds.add(block.callId);
@@ -1335,6 +1475,7 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
       if (text || images.length > 0) blocks.push({
         kind: "user",
         id: msg.id,
+        ...(msg.client_message_id ? { client_message_id: msg.client_message_id } : {}),
         text,
         ...(images.length > 0 ? { images } : {}),
         ...(msg.turnId ? { turnId: msg.turnId } : {}),
@@ -1489,6 +1630,10 @@ function afterAgentBlock(blocks: ThreadBlock[], ordinal: number): number {
   return blocks.length;
 }
 
+function isHubTurnId(turnId: string): boolean {
+  return /^turn-.+-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(turnId);
+}
+
 /** Position after the last block carrying a stable turn identity. This is the
  * strongest live artifact anchor when an older turn publishes after a newer
  * turn has already started. */
@@ -1545,10 +1690,14 @@ function afterTurnEndedAt(blocks: ThreadBlock[], endedAt: string): number {
   }
   let lastAgent = -1;
   if (lastUser >= 0) {
+    let lastContent = lastUser;
     for (let i = lastUser + 1; i < blocks.length; i += 1) {
       if (blocks[i].kind === "user") break;
+      if (blocks[i].kind !== "artifact-summary") lastContent = i;
       if (blocks[i].kind === "agent") lastAgent = i;
     }
+    // A tool-only turn still has a known user boundary and owns its files.
+    if (lastAgent < 0) return lastContent + 1;
   } else {
     // A tail page can omit the turn's opening user message. Use the end time
     // to find the latest agent block that belongs to the turn. Compare times,
@@ -1635,7 +1784,7 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[], o
       // agent block).
       insertAt = afterTurnEndedAt(blocks, turn.ended_at);
     }
-    if (insertAt < 0 && !windowComplete) {
+    if (insertAt < 0 && (!windowComplete || isHubTurnId(turn.turn_id))) {
       // Partial history window: this record's turn has not loaded yet (its
       // user message and agent blocks live in an older page). Every
       // remaining anchor would guess from the window start and land the
@@ -1663,15 +1812,35 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[], o
       insertAt = afterAgentBlock(blocks, insertedBefore + 1);
     }
     if (insertAt < 0) insertAt = blocks.length;
-    const block: ThreadBlock = {
+    const persistedBlock: ThreadBlock = {
       kind: "artifact-summary",
       id: blockId,
       turnId: turn.turn_id,
       assistantMessageId,
+      ...(turn.ended_at ? { endedAt: turn.ended_at } : {}),
       ...(Number.isInteger(ordinal) && ordinal > 0 ? { turnOrdinal: ordinal } : {}),
       artifacts: items,
     };
     const existingIdx = index[blockId];
+    const existingBlock = existingIdx === undefined ? undefined : blocks[existingIdx];
+    const versionedExisting = existingBlock?.kind === "artifact-summary"
+      && (numberValue(existingBlock.revision) !== undefined || numberValue(existingBlock.sequence) !== undefined)
+      ? existingBlock
+      : undefined;
+    // Persisted records currently carry no projection revision. They may have
+    // better turn-anchor metadata than a live summary (for example after an
+    // older history page loads), but must not roll versioned live content back
+    // to a stale REST/cache snapshot or discard its reconciliation metadata.
+    const block: ThreadBlock = versionedExisting ? {
+      ...versionedExisting,
+      ...(turn.ended_at ? { endedAt: turn.ended_at } : {}),
+      assistantMessageId: assistantMessageId ?? versionedExisting.assistantMessageId ?? null,
+      ...(Number.isInteger(ordinal) && ordinal > 0
+        ? { turnOrdinal: ordinal }
+        : versionedExisting.turnOrdinal !== undefined
+          ? { turnOrdinal: versionedExisting.turnOrdinal }
+          : {}),
+    } : persistedBlock;
     if (existingIdx !== undefined) {
       if (existingIdx === insertAt) {
         // Already at the right place: refresh the block content in place.

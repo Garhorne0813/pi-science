@@ -27,7 +27,7 @@ export default async function piScienceMcp(pi: unknown): Promise<void> {
   const probe = readFileSync(join(dirname(adapterPath), "mcp-probe.ts"), "utf8");
   const approval = readFileSync(join(dirname(adapterPath), "tool-approval.ts"), "utf8");
   const adapterSource = readFileSync(adapterPath, "utf8");
-  if (!manager.includes("PI_SCIENCE_TRANSPORT_POLICY_V1") || !manager.includes("PI_SCIENCE_RAW_BINDINGS_V1") || !manager.includes("PI_SCIENCE_PROJECT_EGRESS_AUDIT_V1") || !manager.includes("PI_SCIENCE_PROBE_TRANSPORT_POLICY_V1") || !authFlow.includes("PI_SCIENCE_OAUTH_TRANSPORT_POLICY_V1") || !probe.includes("PI_SCIENCE_PROBE_TRANSPORT_POLICY_V1") || !approval.includes("PI_SCIENCE_EXACT_TOOL_GRANTS_V1") || !adapterSource.includes("PI_SCIENCE_SESSION_CONFIG_FACTORY_V1")) {
+  if (!manager.includes("PI_SCIENCE_TRANSPORT_POLICY_V1") || !manager.includes("PI_SCIENCE_RAW_BINDINGS_V1") || !manager.includes("PI_SCIENCE_PROJECT_EGRESS_AUDIT_V1") || !manager.includes("PI_SCIENCE_PROBE_TRANSPORT_POLICY_V1") || !authFlow.includes("PI_SCIENCE_OAUTH_TRANSPORT_POLICY_V1") || !probe.includes("PI_SCIENCE_PROBE_TRANSPORT_POLICY_V1") || !approval.includes("PI_SCIENCE_EXACT_TOOL_GRANTS_V1") || !approval.includes("PI_SCIENCE_PERMISSION_UI_V1") || !adapterSource.includes("PI_SCIENCE_SESSION_CONFIG_FACTORY_V1")) {
     throw new Error("MCP adapter security/session patches are missing; run scripts/fetch-pi.sh");
   }
   const adapterUrl = pathToFileURL(adapterPath).href;

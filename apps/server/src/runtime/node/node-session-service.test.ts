@@ -14,6 +14,7 @@ import { metadataRoot, readJsonLines, workspaceFile } from "../../storage/persis
 import { ensureProject } from "../../project/project-registry.js";
 import { ProjectReviewService } from "../../project-review/service.js";
 import { parseReviewResult, type ReviewRunRequest, type ReviewRunResult, type ReviewSubagentRunner } from "../../project-review/types.js";
+import { SessionStatsProjector } from "./session-stats-projector.js";
 
 const cleanup: string[] = [];
 const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE, piMode: process.env.PI_SCIENCE_PI_MODE, argsLog: process.env.FAKE_PI_ARGS_LOG, stateDelay: process.env.FAKE_PI_STATE_DELAY, activeProbe: process.env.FAKE_PI_ACTIVE_PROBE, agentStartDelay: process.env.FAKE_PI_AGENT_START_DELAY, watchdog: process.env.PI_SCIENCE_EVENT_WATCHDOG_MS, sessionFile: process.env.FAKE_PI_SESSION_FILE, rejectModel: process.env.FAKE_PI_REJECT_MODEL, modelBusy: process.env.FAKE_PI_MODEL_BUSY_ATTEMPTS, recoveryRetries: process.env.PI_SCIENCE_RECOVERY_BUSY_RETRIES, recoveryRetryDelay: process.env.PI_SCIENCE_RECOVERY_BUSY_RETRY_DELAY_MS };
@@ -170,6 +171,20 @@ function testService(): NodeSessionService {
   return new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments);
 }
 
+function installStaleRuntime(service: NodeSessionService, sessionId: string, cwd: string, process: Record<string, unknown>): void {
+  const runtimes = (service as unknown as { runtimes: Map<string, unknown> }).runtimes;
+  runtimes.set(`${resolve(cwd)}\0${sessionId}`, {
+    cwd,
+    managerKey: `stale-${sessionId}`,
+    process,
+    activeSessionId: sessionId,
+    config: loadDefaultPiConfig(),
+    busy: false,
+    restartPending: false,
+    closing: false,
+  });
+}
+
 describe("workspace environment priming", () => {
   const nodeEnv = process.env.NODE_ENV;
   beforeEach(() => { process.env.NODE_ENV = "development"; });
@@ -297,6 +312,115 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
+  it("returns a cold state when a mapped runtime reports runtime_evicted", async () => {
+    const service = testService();
+    const sessionId = "session-state-evicted";
+    const cwd = await workspaceWithSessions(sessionId);
+    let closed = false;
+    installStaleRuntime(service, sessionId, cwd, {
+      attachedToHost: true,
+      get isClosed() { return closed; },
+      async sendCommand() {
+        closed = true;
+        return { success: false, code: "runtime_evicted", error: "runtime was evicted" };
+      },
+    });
+
+    await expect(service.state(sessionId, cwd)).resolves.toMatchObject({
+      id: sessionId,
+      is_streaming: false,
+      context_tokens: null,
+    });
+    expect(service.activeCount).toBe(0);
+  });
+
+  it("treats abort as idempotent when a mapped runtime reports runtime_evicted", async () => {
+    const service = testService();
+    const sessionId = "session-abort-evicted";
+    const cwd = await workspaceWithSessions(sessionId);
+    let closed = false;
+    installStaleRuntime(service, sessionId, cwd, {
+      attachedToHost: true,
+      get isClosed() { return closed; },
+      async sendCommand() {
+        closed = true;
+        return { success: false, code: "runtime_evicted", error: "runtime was evicted" };
+      },
+    });
+
+    await expect(service.command(sessionId, cwd, "abort")).resolves.toEqual({ success: true });
+    expect(service.activeCount).toBe(0);
+    await expect(service.command("missing-session", cwd, "abort")).resolves.toMatchObject({
+      success: false,
+      code: "not_found",
+    });
+  });
+
+  it("clears in-flight stats when an evicted runtime is discarded and the session is restored", async () => {
+    process.env.PI_SCIENCE_IDLE_RUNTIME_MS = "60000";
+    const service = testService();
+    const sessionId = "session-stats-evicted";
+    const cwd = await workspaceWithSessions(sessionId);
+    const key = `${resolve(cwd)}\0${sessionId}`;
+    const projector = (service as unknown as { statsProjector: SessionStatsProjector }).statsProjector;
+
+    // The old generation has already committed its checkpoint decision and
+    // is partway through an assistant message and tool when Orbit evicts it.
+    projector.timingWithCheckpoint(key, null);
+    projector.track(key, { type: "agent_start" }, 1_000);
+    projector.track(key, { type: "message_start", message: { id: "old-message" } }, 1_100);
+    projector.track(key, { type: "message_update", message: { id: "old-message" }, assistantMessageEvent: { type: "text_delta", delta: "partial" } }, 1_200);
+    projector.track(key, { type: "tool_execution_start", toolCallId: "old-tool" }, 1_300);
+    installStaleRuntime(service, sessionId, cwd, {
+      attachedToHost: true,
+      isClosed: true,
+      async sendCommand() { return { success: false, code: "runtime_evicted", error: "runtime was evicted" }; },
+    });
+
+    try {
+      await expect(service.command(sessionId, cwd, "abort")).resolves.toEqual({ success: true });
+      await expect(service.resume(sessionId, cwd)).resolves.toEqual({ success: true });
+
+      // A new generation folds its persisted checkpoint once. Its first
+      // recovered delta may arrive before message_start; it must not inherit
+      // the old generation's active message or tool timer.
+      const checkpoint = { llmMs: 40, toolMs: 20, ttftMs: 10, ttftSteps: 1, decodeMs: 5 };
+      expect(projector.timingWithCheckpoint(key, checkpoint)).toEqual(checkpoint);
+      projector.track(key, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "recovered" } }, 5_000);
+      projector.track(key, { type: "message_end" }, 5_100);
+      projector.track(key, { type: "tool_execution_end", toolCallId: "old-tool" }, 5_200);
+      expect(projector.timing(key)).toEqual(checkpoint);
+    } finally {
+      await service.shutdownAll();
+    }
+  }, 30_000);
+
+  it("restores the persisted session and retries a prompt after eviction during preflight", async () => {
+    const service = testService();
+    const sessionId = "session-prompt-evicted";
+    const cwd = await workspaceWithSessions(sessionId);
+    let closed = false;
+    installStaleRuntime(service, sessionId, cwd, {
+      attachedToHost: false,
+      get isClosed() { return closed; },
+      async sendCommand(type: string) {
+        if (type === "get_state") {
+          if (!closed) {
+            closed = true;
+            return { success: false, code: "runtime_evicted", error: "runtime was evicted" };
+          }
+          return { success: true, data: { sessionId, isStreaming: false, pendingMessageCount: 0 } };
+        }
+        return { success: false, code: "runtime_evicted", error: "runtime was evicted" };
+      },
+    });
+
+    await expect(service.command(sessionId, cwd, "prompt", { message: "resume after eviction" }))
+      .resolves.toMatchObject({ success: true });
+    await expect(service.state(sessionId, cwd)).resolves.toMatchObject({ id: sessionId });
+    await service.shutdownAll();
+  }, 30_000);
+
   it("keeps identical session IDs isolated across workspaces", async () => {
     process.env.PI_SCIENCE_RPC_TIMEOUT_MS = "1500";
     const service = testService();
@@ -388,6 +512,7 @@ describe("Node session lifecycle", () => {
       explicitExtension,
       join(import.meta.dirname, "../pi/extensions/pi-science-notebook.ts"),
       join(import.meta.dirname, "../pi/extensions/pi-science-mcp.ts"),
+      join(import.meta.dirname, "../pi/extensions/prompt-identity.ts"),
       join(import.meta.dirname, "../pi/extensions/pi-science-sandbox.ts"),
     ]);
     await service.shutdownAll();
@@ -959,6 +1084,10 @@ describe("Node session lifecycle", () => {
     });
     const turnEvent = publish.mock.calls.find(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts")?.[2] as Record<string, unknown>;
     expect(turnEvent).toMatchObject({ type: "turn.artifacts", assistantMessageId: "msg-turn-1", turnOrdinal: 1 });
+    const started = publish.mock.calls.find(([, , payload]) => payload.type === "agent_start")?.[2];
+    expect(turnEvent.turnId).toBe(started?.turnId);
+    const persisted = JSON.parse((await readFile(workspaceFile(cwd, "turn-artifacts.jsonl"), "utf8")).trim());
+    expect(persisted.turn_id).toBe(started?.turnId);
     expect(turnEvent.artifacts).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "work/plot.png", kind: "image" }),
     ]));
@@ -1120,7 +1249,7 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
-  it("continues turn ordinals across runtime rebuilds from persisted records", async () => {
+  it("keeps the hub identity across runtime rebuilds", async () => {
     process.env.FAKE_PI_MODE = "turn-artifacts-partid";
     const cwd = await workspaceWithSessions("session-turn-ordinal-rebuild");
     process.env.FAKE_PI_WRITE_FILE = join(cwd, "work", "plot.png");

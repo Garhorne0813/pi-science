@@ -3,6 +3,7 @@ import { lstat, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendJsonLineUnlocked, metadataRoot, readJsonLines, withFileWriteLock, workspaceFile } from "../../storage/persistence.js";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";
+import { persistArtifactFile } from "./artifact-content-store.js";
 import { previewKind, previewMime } from "./workspace-artifact-snapshot.js";
 import { captureArtifactBlob } from "./artifact-blob-store.js";
 import { artifactIdentity } from "./artifact-identity.js";
@@ -183,12 +184,14 @@ async function publishValidatedArtifact(
   sourceRoot = workspace,
 ): Promise<PublishedWorkspaceArtifact> {
   const digest = await captureArtifactBlob(workspace, target, sourceRoot);
+  // The artifact content routes read versioned bytes from the content
+  // store, so publishing keeps both stores in sync for the same digest.
+  await persistArtifactFile(workspace, target, digest.sha256);
 
   const path = logicalPath ?? relative(workspace, target).replaceAll("\\", "/");
   return withFileWriteLock(workspaceFile(workspace, "artifacts.jsonl"), async () => {
     const artifacts = await readJsonLines<ArtifactManifest>(workspaceFile(workspace, "artifacts.jsonl"));
-    const artifactId = await artifactIdentity(workspace, path, artifacts);
-    const previous = artifacts.filter((item) => item.artifact_id === artifactId).at(-1);
+    const artifactId = await artifactIdentity(workspace, path, artifacts);    const previous = artifacts.filter((item) => item.artifact_id === artifactId).at(-1);
     if (previous?.sha256 === digest.sha256 && previous.blob_sha256 === digest.sha256) {
       // A prior attempt may have saved the manifest and then failed while
       // recording provenance. Repair that partial publication on retry.

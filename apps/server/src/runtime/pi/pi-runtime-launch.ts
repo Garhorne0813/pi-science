@@ -45,6 +45,7 @@ const NOTEBOOK_EXTENSION = join(
 );
 const MCP_EXTENSION = join(PROJECT_ROOT, "apps", "server", "src", "runtime", "pi", "extensions", "pi-science-mcp.ts");
 const SANDBOX_EXTENSION = join(PROJECT_ROOT, "apps", "server", "src", "runtime", "pi", "extensions", "pi-science-sandbox.ts");
+const PROMPT_IDENTITY_EXTENSION = join(PROJECT_ROOT, "apps", "server", "src", "runtime", "pi", "extensions", "prompt-identity.ts");
 
 function webPort(): number {
   if (sharedWebPort === null) sharedWebPort = randomInt(20_000, 60_000);
@@ -147,7 +148,7 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
   if (effectiveThinking) args.push("--thinking", effectiveThinking);
   if (useRpcMode && sessionPath) args.push("--session", sessionPath);
   for (const skill of useRpcMode ? [...seededSkills, ...config.skills] : config.skills) args.push("--skill", skill);
-  const extensionPaths = ensureSandboxExtension(ensureMcpExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(config.extensions))));
+  const extensionPaths = ensureSandboxExtension(ensurePromptIdentityExtension(ensureMcpExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(config.extensions)))));
   for (const extension of extensionPaths) args.push("-e", extension);
   const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
   const agentDir = join(dataRoot, "pi-agent", useRpcMode ? workspaceKey : "web-host");
@@ -423,11 +424,11 @@ export function loadDefaultPiConfig(runtimeRoots?: string[]): PiConfig {
     provider: null,
     api_key: null,
     skills: Array.isArray(settings.skill_paths) ? settings.skill_paths.map(String).filter(Boolean) : [],
-    extensions: ensureSandboxExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(
+    extensions: ensureSandboxExtension(ensurePromptIdentityExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(
       Array.isArray(settings.extension_paths)
         ? settings.extension_paths.map(String).filter(Boolean)
         : runtimeExtensionStatus(undefined, runtimeRoots).filter((item) => item.installed && (item.id !== "context-mode" || process.env.PI_SCIENCE_ENABLE_CONTEXT_MODE === "1")).map((item) => item.path!).filter(Boolean),
-    ))),
+    )))),
   };
 }
 
@@ -523,6 +524,17 @@ function ensureNotebookExtension(paths: string[]): string[] {
 function ensureMcpExtension(paths: string[]): string[] {
   if (process.env.PI_SCIENCE_DISABLE_MCP === "1" || !existsSync(MCP_EXTENSION)) return paths;
   return [...paths.filter((path) => path !== MCP_EXTENSION && !path.includes("pi-mcp-adapter")), MCP_EXTENSION];
+}
+
+/** Prompt identity is a persistence protocol dependency. Keep it loaded even
+ * when optional MCP integrations are disabled or user extension settings are
+ * customized. */
+/** Prompt identity is a persistence protocol dependency. Keep it loaded even
+ * when optional MCP integrations are disabled or user extension settings are
+ * customized. */
+function ensurePromptIdentityExtension(paths: string[]): string[] {
+  if (!existsSync(PROMPT_IDENTITY_EXTENSION)) throw new Error("Pi-Science prompt identity extension is missing");
+  return [...paths.filter((path) => path !== PROMPT_IDENTITY_EXTENSION), PROMPT_IDENTITY_EXTENSION];
 }
 
 function ensureSandboxExtension(paths: string[]): string[] {

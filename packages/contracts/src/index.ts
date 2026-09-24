@@ -178,6 +178,7 @@ export const defaultProgressAppearance: ProgressAppearance = progressAppearanceS
 export const historyMessageSchema = z.object({
   id: z.string().min(1),
   role: z.string(),
+  client_message_id: z.string().min(1).optional(),
   content: z.array(z.record(z.string(), z.unknown())),
   toolCallId: z.string().optional(),
   toolName: z.string().optional(),

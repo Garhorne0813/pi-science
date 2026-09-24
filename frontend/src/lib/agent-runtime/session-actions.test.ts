@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { useRuntimeStore } from "./index";
-import { emptyThread } from "./event-fold";
+import { emptyThread, foldEvent } from "./event-fold";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
+import type { ThreadBlock } from "../../types/thread";
 
 
 installRuntimeTestEnvironment();
@@ -83,6 +84,64 @@ describe("runtime session actions", () => {
     expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual(["user-old", "agent-old", "agent-new"]);
     expect(useRuntimeStore.getState().historyCursor).toBe("cursor-older");
     expect(useRuntimeStore.getState().historyHasMore).toBe(true);
+  });
+
+  it("does not let a delayed persisted artifact snapshot roll back a live summary", async () => {
+    useRuntimeStore.setState({
+      activeSessionId: "session-artifact-race",
+      cwd: "/workspace",
+      thread: {
+        blocks: [
+          { kind: "user", id: "user-new", text: "prompt" },
+          { kind: "agent", id: "agent-new", parts: [{ id: "agent-new", text: "answer" }] },
+        ],
+        index: { "user-new": 0, "agent-new": 1 },
+        loaded: true,
+      },
+      historyCursor: "cursor-newest",
+      historyHasMore: true,
+      historyLoading: false,
+    });
+    let resolveArtifacts!: (response: Response) => void;
+    const artifacts = new Promise<Response>((resolve) => { resolveArtifacts = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages?")) {
+        return jsonResponse({ messages: [], next_cursor: null, has_more: false, snapshot_version: "v2" });
+      }
+      if (url.includes("/artifacts?")) return artifacts;
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().loadOlderMessages();
+    useRuntimeStore.setState((current) => ({
+      thread: foldEvent(current.thread, {
+        type: "turn.artifacts",
+        sessionId: "session-artifact-race",
+        turnId: "turn-1",
+        assistantMessageId: "agent-new",
+        revision: 3,
+        seq: 9,
+        artifacts: [{ path: "new.csv", kind: "table", mime: "text/csv", size: 3 }],
+      }),
+    }));
+    resolveArtifacts(jsonResponse({ turns: [{
+      turn_id: "turn-1",
+      session_id: "session-artifact-race",
+      assistant_message_id: "agent-new",
+      turn_ordinal: 1,
+      ended_at: "2026-09-22T00:00:00.000Z",
+      artifacts: [{ path: "old.csv", kind: "table", mime: "text/csv", size: 1 }],
+    }] }));
+
+    await vi.waitFor(() => {
+      expect(useRuntimeStore.getState().thread.blocks.at(-1)).toMatchObject({
+        kind: "artifact-summary",
+        revision: 3,
+        sequence: 9,
+        artifacts: [{ path: "new.csv" }],
+      });
+    });
   });
 
   it("retries one transient older-page failure without stranding pagination", async () => {
@@ -281,6 +340,61 @@ describe("runtime session actions", () => {
     );
     expect(current.sessions).toContainEqual(expect.objectContaining({ id: "session-first", name: "first question" }));
     expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/sessions")).toHaveLength(1);
+  });
+
+  it("assigns different request IDs to separate sends with identical text", async () => {
+    const sentIds: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/prompt?") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { client_message_id: string };
+        sentIds.push(body.client_message_id);
+        return jsonResponse({ ok: true, status: "persisted", client_message_id: body.client_message_id, durable_message_id: `durable-${sentIds.length}` }, 202);
+      }
+      if (url.includes("/messages?")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-same-text"));
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    useRuntimeStore.setState({ activeSessionId: "session-same-text", cwd: "/workspace", status: "ready" });
+
+    await useRuntimeStore.getState().sendPrompt("status");
+    useRuntimeStore.setState({ working: false, turnLifecycle: "settled" });
+    await useRuntimeStore.getState().sendPrompt("status");
+    useRuntimeStore.getState().disconnect();
+
+    expect(sentIds).toHaveLength(2);
+    expect(sentIds[0]).not.toBe(sentIds[1]);
+    expect(useRuntimeStore.getState().thread.blocks.filter((block) => block.kind === "user")).toHaveLength(2);
+  });
+
+  it("reuses the prior ID only when retrying a specific rejected message", async () => {
+    const sentIds: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/prompt-requests/")) {
+        const id = url.split("/prompt-requests/")[1]!.split("?")[0]!;
+        return jsonResponse({ ok: true, status: "rejected", client_message_id: id, error_code: "runtime_busy" });
+      }
+      if (url.includes("/prompt?") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { client_message_id: string };
+        sentIds.push(body.client_message_id);
+        if (sentIds.length === 1) return jsonResponse({ ok: false, status: "rejected", client_message_id: body.client_message_id, code: "runtime_busy" }, 409);
+        return jsonResponse({ ok: true, status: "persisted", client_message_id: body.client_message_id, durable_message_id: "durable-retry" }, 202);
+      }
+      if (url.includes("/messages?")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-retry"));
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    useRuntimeStore.setState({ activeSessionId: "session-retry", cwd: "/workspace", status: "ready" });
+
+    await expect(useRuntimeStore.getState().sendPrompt("status")).rejects.toThrow();
+    const firstBlock = useRuntimeStore.getState().thread.blocks.find((block) => block.kind === "user");
+    if (!firstBlock || firstBlock.kind !== "user" || !firstBlock.client_message_id) throw new Error("optimistic send ID missing");
+    await useRuntimeStore.getState().sendPrompt("status", firstBlock.client_message_id);
+    useRuntimeStore.getState().disconnect();
+
+    expect(sentIds).toEqual([firstBlock.client_message_id, firstBlock.client_message_id]);
+    expect(useRuntimeStore.getState().thread.blocks.filter((block) => block.kind === "user")).toHaveLength(1);
   });
 
   it("keeps independent blank conversations when another blank conversation is created", async () => {
@@ -514,6 +628,47 @@ describe("runtime session actions", () => {
     expect(useRuntimeStore.getState().turnLifecycle).toBe("aborted");
   });
 
+  it("settles the local turn when abort reports a structured runtime eviction", async () => {
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: "session-evicted",
+      working: true,
+      turnLifecycle: "active",
+      status: "error",
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      ok: false,
+      code: "runtime_evicted",
+      error: "Pi runtime was evicted",
+    }, 410)));
+
+    await expect(useRuntimeStore.getState().abort()).resolves.toBeUndefined();
+    expect(useRuntimeStore.getState().working).toBe(false);
+    expect(useRuntimeStore.getState().turnLifecycle).toBe("aborted");
+    expect(useRuntimeStore.getState().status).toBe("ready");
+  });
+
+  it("reconciles a non-eviction abort error against authoritative idle state", async () => {
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: "session-abort-error",
+      working: true,
+      turnLifecycle: "active",
+      status: "ready",
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/abort")) return jsonResponse({ ok: false, code: "abort_failed", error: "abort failed" }, 500);
+      if (url.includes("/state")) return jsonResponse(state("session-abort-error"));
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await expect(useRuntimeStore.getState().abort()).rejects.toThrow("abort failed");
+    expect(useRuntimeStore.getState().working).toBe(false);
+    expect(useRuntimeStore.getState().turnLifecycle).toBe("aborted");
+    expect(useRuntimeStore.getState().status).toBe("error");
+  });
+
   it("clears active conversation state when deleting the active session", async () => {
     useRuntimeStore.setState({
       cwd: "/workspace",
@@ -619,5 +774,35 @@ describe("runtime session actions", () => {
     expect(current.thread.blocks).toContainEqual(
       expect.objectContaining({ kind: "status-line", text: "temporary read failure" }),
     );
+  });
+
+  it("keeps a live turn running while the session is created lazily", async () => {
+    // sendPrompt inserts the optimistic prompt, arms the turn, and only then
+    // awaits createNewSession. Writing an idle/settled state from that
+    // creation round trip renders the running turn as "Completed" until
+    // sendPrompt re-arms it.
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      if (url === "/api/sessions") return jsonResponse({ id: "session-new", cwd: "/workspace" });
+      if (url.includes("/messages")) return jsonResponse({ messages: [], next_cursor: null, has_more: false, snapshot_version: "v1" });
+      if (url.includes("/state")) return jsonResponse(state("session-new"));
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const optimistic: ThreadBlock = { kind: "user", id: "user-1", text: "make SVG", client_message_id: "req" };
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: null,
+      thread: { blocks: [optimistic], index: { "user-1": 0 }, loaded: true },
+      working: true,
+      turnLifecycle: "active",
+    });
+
+    await useRuntimeStore.getState().createNewSession();
+
+    const after = useRuntimeStore.getState();
+    expect(after.turnLifecycle).toBe("active");
+    expect(after.working).toBe(true);
+    expect(after.thread.blocks.map((block) => block.id)).toEqual(["user-1"]);
   });
 });

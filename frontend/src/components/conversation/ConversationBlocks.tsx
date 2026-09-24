@@ -30,11 +30,16 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
   const visibleAgent = turn.finalAgent ?? turn.provisionalAgent;
   const finalText = turn.finalAgent?.parts.map((part) => part.text).join("") ?? "";
   const publishedPaths = turn.artifacts.flatMap((block) => block.artifacts.map((item) => item.path));
+  // A settled turn with both boundaries can report its own duration even when
+  // nothing folded into the process trace.
+  const showActivity = turn.active
+    || turn.activityBlocks.length > 0
+    || (turn.lifecycle === "settled" && Boolean(turn.user && turn.finalAgent));
   return (
     <div data-thread-block-ids={turnBlockIds(turn).join(" ")} className="flex flex-col gap-0 scroll-mt-4">
       {turn.user && <UserMessage block={turn.user} />}
-      {(turn.active || turn.activityBlocks.length > 0) && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} part={isLiveLifecycle(turn.lifecycle) ? "content" : "both"} />}
-      {visibleAgent && <AgentMessage block={visibleAgent} actionText={turn.finalAgent ? actionTextByBlock?.get(turn.finalAgent.id) : undefined} codeRunner={codeRunner} />}
+      {showActivity && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} turnStartedAt={turn.user?.timestamp} turnEndedAt={turn.finalAgent?.timestamp} part={isLiveLifecycle(turn.lifecycle) ? "content" : "both"} />}
+      {visibleAgent && <AgentMessage key={visibleAgent.id} block={visibleAgent} actionText={turn.finalAgent ? actionTextByBlock?.get(turn.finalAgent.id) : undefined} codeRunner={codeRunner} />}
       {(turn.active || turn.activityBlocks.length > 0) && isLiveLifecycle(turn.lifecycle) && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} part="status" />}
       {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} />)}
       {turn.artifacts.map((block) => <TurnArtifactStrip key={block.id} artifacts={block.artifacts} cwd={codeRunner?.cwd} />)}
@@ -45,6 +50,7 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
 
 function UserMessage({ block }: { block: UserMessageBlock }) {
   const { t } = useTranslation();
+  const sendPrompt = useRuntimeStore((state) => state.sendPrompt);
   const visibleText = visibleUserMessage(block.text);
   const references = referencesFromMessage(block.text);
   const copyText = visibleText || references.map((reference) => reference.path).join("\n");
@@ -60,6 +66,8 @@ function UserMessage({ block }: { block: UserMessageBlock }) {
           <span className="truncate">{reference.path}</span>
         </span>)}
       </div>}
+      {block.deliveryStatus && block.deliveryStatus !== "pending" && <div role="status" className={cn("text-[10px]", block.deliveryStatus === "rejected" ? "text-error-text" : "text-muted")}>{t(`conversation.promptDelivery.${block.deliveryStatus}`)}</div>}
+      {block.deliveryStatus === "rejected" && block.client_message_id && <button type="button" onClick={() => { void sendPrompt(block.text, block.client_message_id).catch(() => undefined); }} className="text-[10px] text-accent hover:underline">{t("conversation.promptDelivery.retrySameRequest")}</button>}
       <MessageActions text={copyText} timestamp={block.timestamp} align="right" />
     </div>
   );
@@ -72,7 +80,7 @@ function AgentMessage({ block, actionText, codeRunner }: { block: AgentMessageBl
   const text = parseSuggestions(rawText).clean;
   const citations = extractCitations(text);
   return <div className="group/message">
-    <MarkdownViewer variant="chat" codeRunner={codeRunner}>{text}</MarkdownViewer>
+    <MarkdownViewer variant="chat" codeRunner={codeRunner} mode={block.partial ? "streaming" : "final"}>{text}</MarkdownViewer>
     {citations.length > 0 && <div className="mt-2 flex flex-wrap items-center gap-1.5">
       <span className="text-[10px] text-muted">{t("conversation.sources")} ({citations.length})</span>
       {citations.map((citation, index) => <a key={`${citation.kind}:${citation.id}`} href={citation.url} target="_blank" rel="noreferrer" title={citation.id} className="rounded-full border border-border bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted hover:text-text">{index + 1} · {shortCitationId(citation.id)}</a>)}

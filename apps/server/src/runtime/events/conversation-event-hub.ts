@@ -39,7 +39,7 @@ type BindingOptions = {
   activeSessionId: () => string | null;
   onBusy: (busy: boolean) => void;
   onExit: () => void;
-  observe?: (event: PiEvent, sessionId: string) => Promise<void> | void;
+  observe?: (event: PiEvent, sessionId: string, identity: { turnId: string; turnOrdinal: number } | undefined) => Promise<void> | void;
 };
 
 type TurnState = {
@@ -170,7 +170,11 @@ function snapshotText(value: unknown): string | null {
 
 function stringify(value: unknown): string {
   if (typeof value === "string") return value;
-  try { return JSON.stringify(value ?? ""); } catch { return String(value ?? ""); }
+  // Nullish means "no value", so it must cap to the empty string. Stringifying
+  // an empty string instead yields the two-character text `""`, which is truthy
+  // and therefore survives every downstream `value || fallback` check.
+  if (value === undefined || value === null) return "";
+  try { return JSON.stringify(value); } catch { return String(value); }
 }
 
 function safeValue(value: unknown, depth = 0, key?: string): unknown {
@@ -226,6 +230,32 @@ function browserQuestionnaireRequestId(title: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+type InteractionKind = "permission" | "confirmation" | "question";
+
+/**
+ * Pi's extension_ui_request protocol does not carry a semantic kind. The
+ * managed MCP approval producer adds this private marker to its select title;
+ * the server consumes it here and removes it before the UI sees the title.
+ */
+const MCP_PERMISSION_TITLE_PREFIX = "[pi-science:permission] ";
+
+function markedMcpPermissionTitle(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.startsWith(MCP_PERMISSION_TITLE_PREFIX)) return undefined;
+  return value.slice(MCP_PERMISSION_TITLE_PREFIX.length).trim() || "MCP approval";
+}
+
+function interactionKind(value: unknown): InteractionKind | undefined {
+  return value === "permission" || value === "confirmation" || value === "question" ? value : undefined;
+}
+
+function eventField(event: PiEvent, key: string): unknown {
+  const direct = (event as Record<string, unknown>)[key];
+  if (direct !== undefined) return direct;
+  const payload = (event as Record<string, unknown>).payload;
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) return (payload as Record<string, unknown>)[key];
+  return undefined;
 }
 
 type AssistantContentKind = "text" | "thinking";
@@ -510,7 +540,10 @@ export class ConversationEventHub {
       }
       if (event.type === "agent_settled") options.onBusy(false);
       eventQueue = eventQueue.catch(() => undefined).then(async () => {
-        for (const normalized of this.normalize(cwd, sessionId, event)) {
+        const normalizedEvents = this.normalize(cwd, sessionId, event);
+        const owner = normalizedEvents.find((item) => typeof item.turnId === "string");
+        const identity = owner ? { turnId: String(owner.turnId), turnOrdinal: Number(owner.turnOrdinal) } : undefined;
+        for (const normalized of normalizedEvents) {
           if (normalized.type === "text.updated" || normalized.type === "thinking.updated") {
             await this.queueText(cwd, sessionId, normalized, normalized.type === "thinking.updated" ? "thinking" : "text");
           } else {
@@ -518,7 +551,7 @@ export class ConversationEventHub {
             await this.publish(cwd, sessionId, normalized);
           }
         }
-        await Promise.resolve(options.observe?.(event, sessionId)).catch(() => undefined);
+        await Promise.resolve(options.observe?.(event, sessionId, identity)).catch(() => undefined);
       });
     });
     process.on("exit", ({ code, signal }: { code: number | null; signal: NodeJS.Signals | null }) => {
@@ -958,21 +991,38 @@ export class ConversationEventHub {
       }
       case "extension_ui_request": {
         turn.hadActivity = true;
-        const method = String(event.method ?? "");
-        if (method === "confirm") return [{ type: "permission.asked", sessionId, ...turnFields(turn), requestId: String(event.id ?? ""), title: String(event.title ?? "Confirmation"), message: cap(event.message) }];
+        const method = String(eventField(event, "method") ?? "");
+        const rawTitle = eventField(event, "title");
+        const markedPermissionTitle = markedMcpPermissionTitle(rawTitle);
+        const explicitKind = interactionKind(eventField(event, "kind"));
+        const kind = explicitKind
+          ?? (markedPermissionTitle ? "permission" : method === "confirm" ? "confirmation" : "question");
+        const type = kind === "permission" ? "permission.asked" : "question.asked";
+        const requestId = String(eventField(event, "id") ?? eventField(event, "requestId") ?? "");
+        const questionnaireId = method !== "confirm" ? browserQuestionnaireRequestId(rawTitle) : null;
+        const common = {
+          type,
+          sessionId,
+          ...turnFields(turn),
+          requestId,
+          kind,
+          method,
+          title: questionnaireId
+            ? "Questionnaire"
+            : markedPermissionTitle ?? String(rawTitle ?? (method === "confirm" ? "Confirmation" : "Question")),
+          message: cap(questionnaireId ? "Complete the questionnaire to continue." : eventField(event, "message")),
+          operation: cap(eventField(event, "operation"), 500),
+          scope: cap(eventField(event, "scope"), 500),
+          effect: cap(eventField(event, "effect"), 500),
+        };
+        if (method === "confirm") return [common];
         if (["select", "input", "editor"].includes(method)) {
-          const toolCallId = browserQuestionnaireRequestId(event.title);
+          const toolCallId = questionnaireId;
           return [{
-            type: "question.asked",
-            sessionId,
-            ...turnFields(turn),
-            requestId: String(event.id ?? ""),
-            method,
-            title: toolCallId ? "Questionnaire" : String(event.title ?? "Question"),
-            message: cap(toolCallId ? "Complete the questionnaire to continue." : event.message),
-            options: safeValue(event.options ?? []),
-            placeholder: String(event.placeholder ?? ""),
-            prefill: String(event.prefill ?? ""),
+            ...common,
+            options: safeValue(eventField(event, "options") ?? []),
+            placeholder: String(eventField(event, "placeholder") ?? ""),
+            prefill: String(eventField(event, "prefill") ?? ""),
             ...(toolCallId ? { questionnaire: true, toolCallId } : {}),
           }];
         }

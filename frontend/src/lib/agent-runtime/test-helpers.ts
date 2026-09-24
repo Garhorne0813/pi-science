@@ -86,6 +86,13 @@ export function installRuntimeTestEnvironment(): void {
       removeItem: (key: string) => storage.delete(key),
       clear: () => storage.clear(),
     });
+    const sessionStorageMap = new Map<string, string>();
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => sessionStorageMap.get(key) ?? null,
+      setItem: (key: string, value: string) => sessionStorageMap.set(key, value),
+      removeItem: (key: string) => sessionStorageMap.delete(key),
+      clear: () => sessionStorageMap.clear(),
+    });
     createClient("");
     useRuntimeStore.setState({
       status: "offline",
@@ -99,6 +106,7 @@ export function installRuntimeTestEnvironment(): void {
       historyLoading: false,
       historySnapshotVersion: "",
       working: false,
+      promptDeliveryNotice: null,
       turnLifecycle: "settled",
       model: null,
       thinking: null,

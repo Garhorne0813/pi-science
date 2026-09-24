@@ -2,7 +2,7 @@ import Fastify from "fastify";
 import { access, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNodeSessionRoutes } from "./node-session-routes.js";
 import { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import { registerSessionReadRoutes } from "./session-routes.js";
@@ -94,6 +94,65 @@ function app() {
 }
 
 describe("native Node conversation routes", () => {
+  it("accepts client message IDs idempotently and rejects reuse with different content", async () => {
+    const cwd = await workspaceWithSessions("prompt-idempotency");
+    const command = vi.fn(async () => ({ success: true }));
+    const fakeService = {
+      command,
+      liveSessions: () => [],
+    } as unknown as NodeSessionService;
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(server, fakeService, sessionRepository);
+    const id = "8fd824aa-51d3-4f63-839c-09e021b7970b";
+    const url = `/api/sessions/prompt-idempotency/prompt?cwd=${encodeURIComponent(cwd)}`;
+
+    const first = await server.inject({ method: "POST", url, payload: { message: "status", client_message_id: id } });
+    expect(first.statusCode).toBe(202);
+    expect(first.json()).toMatchObject({ ok: true, status: "accepted", client_message_id: id });
+    const duplicate = await server.inject({ method: "POST", url, payload: { message: "status", client_message_id: id } });
+    expect(duplicate.statusCode).toBe(202);
+    expect(duplicate.json()).toMatchObject({ ok: true, status: "accepted", client_message_id: id });
+    expect(command).toHaveBeenCalledTimes(1);
+
+    const conflict = await server.inject({ method: "POST", url, payload: { message: "other text", client_message_id: id } });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json()).toMatchObject({ code: "client_message_id_conflict" });
+    const statusResponse = await server.inject({ method: "GET", url: `/api/sessions/prompt-idempotency/prompt-requests/${id}?cwd=${encodeURIComponent(cwd)}` });
+    expect(statusResponse.json()).toMatchObject({ status: "accepted", client_message_id: id });
+    await server.close();
+  });
+
+  it("serializes distinct prompt IDs for a session and blocks the next send until association resolves", async () => {
+    const cwd = await workspaceWithSessions("prompt-serialized");
+    let releaseCommand!: () => void;
+    const command = vi.fn(() => new Promise<{ success: boolean }>((resolve) => {
+      releaseCommand = () => resolve({ success: true });
+    }));
+    const fakeService = {
+      command,
+      liveSessions: () => [],
+    } as unknown as NodeSessionService;
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(server, fakeService, sessionRepository);
+    const firstId = "8fd824aa-51d3-4f63-839c-09e021b7970b";
+    const secondId = "91d824aa-51d3-4f63-839c-09e021b7970b";
+    const url = `/api/sessions/prompt-serialized/prompt?cwd=${encodeURIComponent(cwd)}`;
+
+    const first = server.inject({ method: "POST", url, payload: { message: "status", client_message_id: firstId } });
+    await vi.waitFor(() => expect(command).toHaveBeenCalledTimes(1));
+    const second = server.inject({ method: "POST", url, payload: { message: "status", client_message_id: secondId } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(command).toHaveBeenCalledTimes(1);
+
+    releaseCommand();
+    expect((await first).statusCode).toBe(202);
+    const blocked = await second;
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json()).toMatchObject({ code: "prompt_request_in_flight", blocking_client_message_id: firstId });
+    expect(command).toHaveBeenCalledTimes(1);
+    await server.close();
+  });
+
   it("generates an AI title for an existing session and 404s unknown sessions", async () => {
     const cwd = await workspaceWithSessions("session-title");
     const aiTitleService = {

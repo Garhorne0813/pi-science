@@ -33,6 +33,52 @@ describe("workspace file context", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it("uses immutable artifact content for SHA-addressed previews", async () => {
+    let revision = 0;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => {
+      revision += 1;
+      return new Response(JSON.stringify({
+        path: "work/result.csv",
+        encoding: "utf8",
+        data: "revision-" + revision,
+        size: 11,
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const sha1 = "a".repeat(64);
+    const sha2 = "b".repeat(64);
+
+    const first = await readArtifact("work/result.csv", "workspace", "/workspace", 8192, sha1);
+    const second = await readArtifact("work/result.csv", "workspace", "/workspace", 8192, sha2);
+
+    expect(first?.data).toBe("revision-1");
+    expect(second?.data).toBe("revision-2");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0]![0])).toContain(`/api/artifacts/content/${sha1}?`);
+    expect(String(fetchMock.mock.calls[0]![0])).toContain("path=work%2Fresult.csv");
+    expect(String(fetchMock.mock.calls[1]![0])).toContain(`/api/artifacts/content/${sha2}?`);
+    expect(previewUrl("work/result.csv", "workspace", "/workspace", sha2))
+      .toContain(`/api/artifacts/content/${sha2}/serve?`);
+  });
+
+  it("keeps numeric revisions as cache-busting compatibility keys", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      path: "work/result.csv",
+      encoding: "utf8",
+      data: "x",
+      size: 1,
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await readArtifact("work/result.csv", "workspace", "/workspace", 8192, 1);
+    await readArtifact("work/result.csv", "workspace", "/workspace", 8192, 2);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0]![0])).toContain("/api/files/work/result.csv?");
+    expect(previewUrl("work/result.csv", "workspace", "/workspace", "sha-v2"))
+      .toContain("v=sha-v2");
+  });
+
   it("shares repeated metadata probes for the same workspace path", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       path: "work/result.csv",

@@ -40,6 +40,7 @@ async function fakeWebRuntime(
   busyMs = 0,
   detachEventsOnResume = false,
   replayGapOnReconnect = false,
+  evictOnState = false,
 ): Promise<{
   cwd: string;
   command: string;
@@ -90,7 +91,7 @@ async function fakeWebRuntime(
     '    if (!runtime) return json(response, 404, { error: "Runtime not found" });',
     '    if (!suffix && request.method === "GET") { const busy = busyGets > 0 || (busyUntil > 0 && Date.now() < busyUntil); if (busyGets > 0) busyGets -= 1; return json(response, 200, { ...runtime, busy }); }',
     '    if (suffix === "/events") { const after = parsed.searchParams.get("after") ?? ""; appendFileSync("event-after.log", `${after}\\n`); if (replayGapOnReconnect && after === "1") return json(response, 409, { error: "Requested event sequence is no longer buffered", code: "event_replay_gap", oldestSequence: 5, latestSequence: 7 }); response.writeHead(200, { "content-type": "text/event-stream" }); response.write(`event: connected\\ndata: ${JSON.stringify({ runtimeId })}\\n\\n`); const set = clients.get(runtimeId) ?? new Set(); set.add(response); clients.set(runtimeId, set); request.on("close", () => set.delete(response)); return; }',
-    '    if (suffix === "/state") return json(response, 200, { piSessionId: runtime.piSessionId, isStreaming: false, pendingMessageCount: 0 });',
+    `    if (suffix === "/state") return ${evictOnState ? 'json(response, 410, { error: "Runtime was evicted", code: "runtime_evicted" })' : 'json(response, 200, { piSessionId: runtime.piSessionId, isStreaming: false, pendingMessageCount: 0 })'};`,
     '    if (suffix === "/commands") return json(response, 200, { commands: [{ name: "review", source: "skill" }] });',
     '    if (suffix === "/skills" && request.method === "GET") return json(response, 200, { policy: runtime.skillPolicy, skills: [{ name: "review", description: "Review", enabled: runtime.skillPolicy.mode !== "none" }], diagnostics: [] });',
     '    if (suffix === "/skills" && request.method === "PUT") { runtime.skillPolicy = await body(request); event(runtimeId, { type: "runtime_skills_changed", reason: "policy", policy: runtime.skillPolicy, enabledSkills: runtime.skillPolicy.mode === "none" ? [] : ["review"] }); return json(response, 200, { policy: runtime.skillPolicy, skills: [], diagnostics: [] }); }',
@@ -144,6 +145,27 @@ describe("Node Pi JSONL adapter", () => {
 });
 
 describe("Node Pi Orbit adapter", () => {
+  it("marks a runtime closed when an HTTP request reports runtime_evicted", async () => {
+    const manager = new PiManager();
+    managers.push(manager);
+    const runtime = await fakeWebRuntime(false, true, 0, 0, 0, false, false, true);
+    const process = await manager.start("evicted-workspace", runtime);
+
+    await expect(manager.sendCommand("evicted-workspace", "get_state")).resolves.toMatchObject({
+      success: false,
+      code: "runtime_evicted",
+    });
+    expect(process.isClosed).toBe(true);
+    expect(process.eventStreamAlive).toBe(false);
+    await expect(manager.sendCommand("evicted-workspace", "get_state")).resolves.toMatchObject({
+      success: false,
+      code: "not_found",
+    });
+
+    await manager.shutdownAll();
+    await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
   it("shares one host process across isolated runtimes and streams scoped events", async () => {
     const manager = new PiManager();
     managers.push(manager);

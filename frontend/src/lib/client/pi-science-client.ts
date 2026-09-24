@@ -10,7 +10,7 @@ import { clearCachedMessages, readCachedMessages } from "./message-cache";
 import * as rest from "./rest";
 import { clearAiTitle, clearAiTitleAttempted, clearSessionName } from "./session-names";
 import { SseTransport } from "./sse-transport";
-import type { HistoryMessage, InteractionResponse, PiScienceEvent, SessionInfo, SessionListPage, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
+import type { HistoryMessage, InteractionResponse, PiScienceEvent, PromptRequestStatus, SessionInfo, SessionListPage, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
 
 export type {
   AvailableModel,
@@ -20,6 +20,7 @@ export type {
   SessionInfo,
   SessionListPage,
   SessionMessagePage,
+  PromptRequestStatus,
   SessionState,
   SessionStats,
   SessionUserMessageIndex,
@@ -121,8 +122,12 @@ export class PiScienceClient {
     return rest.forkSession(this.baseUrl, sessionId, cwd, entryId);
   }
 
-  async sendPrompt(sessionId: string, message: string, cwd?: string): Promise<void> {
-    return rest.sendPrompt(this.baseUrl, sessionId, message, cwd);
+  async sendPrompt(sessionId: string, message: string, clientMessageId: string, cwd?: string): Promise<PromptRequestStatus> {
+    return rest.sendPrompt(this.baseUrl, sessionId, message, clientMessageId, cwd);
+  }
+
+  async getPromptRequestStatus(sessionId: string, clientMessageId: string, cwd?: string): Promise<PromptRequestStatus> {
+    return rest.getPromptRequestStatus(this.baseUrl, sessionId, clientMessageId, cwd);
   }
 
   async setModel(

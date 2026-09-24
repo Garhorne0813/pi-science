@@ -25,6 +25,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   historyLoading: false,
   historySnapshotVersion: "",
   working: false,
+  promptDeliveryNotice: null,
   turnLifecycle: "settled",
   model: null,
   thinking: null,

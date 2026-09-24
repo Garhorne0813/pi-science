@@ -17,6 +17,17 @@ beforeEach(() => { Object.defineProperty(navigator, "clipboard", { configurable:
 afterEach(() => { cleanup(); useRuntimeStore.setState({ thread: { blocks: [], index: {}, loaded: true } }); Reflect.deleteProperty(navigator, "clipboard"); });
 
 describe("turn-level conversation rendering", () => {
+  it("keeps an optimistic prompt visible without a send-confirmation banner", () => {
+    render(<>{renderBlocks([{ kind: "user", id: "u1", text: "status", deliveryStatus: "pending", client_message_id: "8fd824aa-51d3-4f63-839c-09e021b7970b" }], codeRunner)}</>);
+    expect(screen.getByText("status")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("offers a same-ID retry for a definitely rejected request", () => {
+    render(<>{renderBlocks([{ kind: "user", id: "u1", text: "status", deliveryStatus: "rejected", client_message_id: "8fd824aa-51d3-4f63-839c-09e021b7970b" }], codeRunner)}</>);
+    expect(screen.getByRole("button", { name: /same request ID/i })).toBeTruthy();
+  });
+
   it("renders nothing for invalid input", () => {
     expect(renderBlocks(null as unknown as ThreadBlock[], codeRunner)).toBeNull();
     expect(renderBlocks({} as unknown as ThreadBlock[], codeRunner)).toBeNull();

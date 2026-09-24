@@ -24,7 +24,7 @@ export async function mergeRecoveryHistoryWindow(
 ): Promise<RecoveryHistoryWindow> {
   let boundaryPage = initial;
   let messages = [...initial.messages];
-  let merged = mergeHistoryWindow(current, messages, opts);
+  let merged = mergeHistoryWindow(current, messages, { ...opts, windowComplete: !boundaryPage.has_more });
 
   while (!merged.retainedOlderPrefix && boundaryPage.has_more) {
     const before = boundaryPage.next_cursor;
@@ -37,7 +37,7 @@ export async function mergeRecoveryHistoryWindow(
       return { thread: current, retainedOlderPrefix: true, boundaryPage: initial };
     }
     messages = [...boundaryPage.messages, ...messages];
-    merged = mergeHistoryWindow(current, messages, opts);
+    merged = mergeHistoryWindow(current, messages, { ...opts, windowComplete: !boundaryPage.has_more });
   }
 
   return { ...merged, boundaryPage };

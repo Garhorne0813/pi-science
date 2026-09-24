@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ReferencedArtifactStrip, TurnArtifactStrip } from "./TurnArtifactStrip";
+import { latestArtifactVersions, ReferencedArtifactStrip, TurnArtifactStrip } from "./TurnArtifactStrip";
 
 const { openInspector, mockReadArtifact, mockProbeLargeFile } = vi.hoisted(() => ({
   openInspector: vi.fn(),
@@ -42,6 +42,28 @@ beforeEach(() => {
 });
 
 describe("TurnArtifactStrip", () => {
+  it("opens the same published SHA shown in a card, including notebook snapshots", async () => {
+    const sha256 = "a".repeat(64);
+    render(<TurnArtifactStrip cwd="/workspace" artifacts={[
+      { path: "work/result.txt", artifactId: "text", sha256, version: 1, kind: "text", mime: "text/plain", size: 1 },
+      { path: "work/plot.png", artifactId: "image", sha256, version: 1, kind: "image", mime: "image/png", size: 1 },
+      { path: "work/analysis.ipynb", artifactId: "notebook", sha256, version: 1, kind: "notebook", mime: "application/json", size: 1 },
+    ]} />);
+    for (const filename of ["result.txt", "plot.png", "analysis.ipynb"]) {
+      fireEvent.click(screen.getByLabelText(`${filename} (work/${filename})`));
+      expect(openInspector).toHaveBeenLastCalledWith(expect.objectContaining({
+        variant: "file", path: `work/${filename}`, sha256, version: 1,
+      }));
+    }
+  });
+
+  it("keeps one stable card per artifact and selects its newest version", () => {
+    expect(latestArtifactVersions([
+      { path: "old.csv", artifactId: "a1", version: 1, revision: 1, kind: "table", mime: "text/csv", size: 1 },
+      { path: "new.csv", artifactId: "a1", version: 2, revision: 3, kind: "table", mime: "text/csv", size: 2 },
+      { path: "stale.csv", artifactId: "a1", version: 1, kind: "table", mime: "text/csv", size: 1 },
+    ])).toEqual([expect.objectContaining({ path: "new.csv", version: 2 })]);
+  });
   it("renders verified workspace paths cited by the final answer", async () => {
     mockProbeLargeFile.mockImplementation(async (path: string) => path === "work/plot.png" ? { path, name: "plot.png", size: 2048, is_dir: false } : null);
     render(<ReferencedArtifactStrip cwd="/workspace" text="See `work/plot.png` and missing/file.pdf." />);
@@ -124,6 +146,70 @@ describe("TurnArtifactStrip", () => {
       />,
     );
     expect(screen.getByLabelText("broken.png (broken.png)")).toBeInTheDocument();
+  });
+
+  it("retries a failed image preview after a stable artifact advances", async () => {
+    const { rerender } = render(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{ path: "work/old.png", artifactId: "artifact-1", version: 1, kind: "image", mime: "image/png", size: 10 }]}
+      />,
+    );
+    fireEvent.error(screen.getByAltText("old.png"));
+    expect(screen.queryByAltText("old.png")).not.toBeInTheDocument();
+
+    rerender(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{ path: "work/new.png", artifactId: "artifact-1", version: 2, kind: "image", mime: "image/png", size: 10 }]}
+      />,
+    );
+    await waitFor(() => expect(screen.getByAltText("new.png")).toBeInTheDocument());
+  });
+
+  it("reloads a preview when the same path advances in place", async () => {
+    mockReadArtifact.mockImplementation(async (
+      _path: string,
+      _root: string,
+      _cwd: string,
+      _maxBytes: number,
+      contentKey?: string | number,
+    ) => ({
+      ...snippetFile(),
+      data: contentKey === 1 ? "v1" : "v2",
+    }));
+
+    const { rerender } = render(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{
+          path: "work/result.txt",
+          artifactId: "artifact-1",
+          version: 1,
+          kind: "text",
+          mime: "text/plain",
+          size: 2,
+        }]}
+      />,
+    );
+    expect(await screen.findByText("v1")).toBeInTheDocument();
+
+    rerender(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{
+          path: "work/result.txt",
+          artifactId: "artifact-1",
+          version: 2,
+          kind: "text",
+          mime: "text/plain",
+          size: 2,
+        }]}
+      />,
+    );
+    expect(await screen.findByText("v2")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("v1")).not.toBeInTheDocument());
+    expect(mockReadArtifact).toHaveBeenLastCalledWith("work/result.txt", "workspace", "/workspace", 8192, 2);
   });
 
   it("renders a CSV summary badge with rows, columns, type hints and +N more", async () => {

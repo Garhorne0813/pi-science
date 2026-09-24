@@ -7,7 +7,11 @@ import { queryClient } from "../client/query-client";
 
 export type { FileRoot };
 
+/** Identifies the immutable content revision represented by a preview. */
+export type ArtifactContentKey = string | number;
+
 const API = "/api";
+const SHA256_RE = /^[0-9a-f]{64}$/i;
 
 /**
  * File previews are rendered by more than one surface: a turn artifact card,
@@ -58,20 +62,30 @@ export const artifactFileKey = (
   path: string,
   root: FileRoot | undefined,
   maxBytes?: number,
-) => ["artifact-file", cwd, root ?? null, path, maxBytes ?? null] as const;
+  contentKey?: ArtifactContentKey,
+) => ["artifact-file", cwd, root ?? null, path, maxBytes ?? null, contentKey ?? null] as const;
+
+function immutableArtifactHash(contentKey?: ArtifactContentKey): string | undefined {
+  return typeof contentKey === "string" && SHA256_RE.test(contentKey) ? contentKey.toLowerCase() : undefined;
+}
 
 function artifactFileQuery(
   path: string,
   root: FileRoot | undefined,
   cwd: string,
   maxBytes?: number,
+  contentKey?: ArtifactContentKey,
 ) {
   const params = new URLSearchParams({ cwd });
   if (root) params.set("root", root);
   if (maxBytes !== undefined) params.set("maxBytes", String(maxBytes));
+  const artifactHash = immutableArtifactHash(contentKey);
+  if (artifactHash && (root === undefined || root === "workspace")) params.set("path", path);
   return {
-    queryKey: artifactFileKey(cwd, path, root, maxBytes),
-    queryFn: () => apiRequest<ArtifactFile>(`${API}/files/${encodeWorkspacePath(path)}?${params}`),
+    queryKey: artifactFileKey(cwd, path, root, maxBytes, contentKey),
+    queryFn: () => apiRequest<ArtifactFile>(artifactHash && (root === undefined || root === "workspace")
+      ? `${API}/artifacts/content/${artifactHash}?${params}`
+      : `${API}/files/${encodeWorkspacePath(path)}?${params}`),
     staleTime: ARTIFACT_FILE_STALE_MS,
     gcTime: ARTIFACT_FILE_GC_MS,
     retry: false,
@@ -95,15 +109,19 @@ export interface ArtifactFile {
 }
 
 /** Read a workspace file. Uses REST API. `maxBytes` caps the response to the
- *  first N bytes (used by per-turn artifact cards to preview file content). */
+ *  first N bytes (used by per-turn artifact cards to preview file content).
+ *
+ * A SHA-256 `contentKey` uses the immutable artifact-content endpoint; legacy
+ * numeric revisions remain cache identities only. */
 export async function readArtifact(
   path: string,
   root: FileRoot | undefined,
   cwd: string,
   maxBytes?: number,
+  contentKey?: ArtifactContentKey,
 ): Promise<ArtifactFile | null> {
   try {
-    return await queryClient.fetchQuery(artifactFileQuery(path, root, cwd, maxBytes));
+    return await queryClient.fetchQuery(artifactFileQuery(path, root, cwd, maxBytes, contentKey));
   } catch {
     return null;
   }
@@ -128,9 +146,21 @@ export async function writeArtifact(
 }
 
 /** URL for browser-native preview (PDF, images, HTML, video). */
-export function previewUrl(path: string, root: FileRoot | undefined, cwd: string): string {
+export function previewUrl(
+  path: string,
+  root: FileRoot | undefined,
+  cwd: string,
+  contentKey?: ArtifactContentKey,
+): string {
+  const artifactHash = immutableArtifactHash(contentKey);
+  if (artifactHash && (root === undefined || root === "workspace")) {
+    const params = new URLSearchParams({ cwd, path });
+    return `${API}/artifacts/content/${artifactHash}/serve?${params}`;
+  }
   const params = new URLSearchParams({ cwd });
   if (root) params.set("root", root);
+  // Non-hash revisions still bust the browser cache for legacy artifacts.
+  if (contentKey !== undefined) params.set("v", String(contentKey));
   const encodedPath = path.split("/").map(encodeURIComponent).join("/");
   return `${API}/files/serve/${encodedPath}?${params}`;
 }

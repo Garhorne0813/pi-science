@@ -4,10 +4,12 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { provenanceRecordSchema, type ProvenanceRecord } from "@pi-science/contracts";
-import { appendJsonLineUnlocked, metadataRoot, readJsonLines, withFileWriteLock, workspaceFile } from "../../storage/persistence.js";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { artifactBlobPath, captureArtifactBlob, verifyArtifactBlob } from "../../runtime/artifacts/artifact-blob-store.js";
 import { artifactIdentity } from "../../runtime/artifacts/artifact-identity.js";
+import { appendJsonLine, appendJsonLineUnlocked, metadataRoot, readJsonLines, withFileWriteLock, workspaceFile } from "../../storage/persistence.js";
+import { persistArtifactFile } from "../../runtime/artifacts/artifact-content-store.js";
+import { registerArtifactContentRoutes } from "./artifact-content-routes.js";
 
 interface Artifact { artifact_id: string; version: number; path: string; kind: string; mime: string; size: number; sha256: string; blob_sha256?: string; published_at: string; producer?: Record<string, unknown>; inputs?: unknown[]; environment?: Record<string, unknown>; verification?: Record<string, unknown> }
 interface ArtifactVerificationEvent { artifact_id: string; version: number; verification: Record<string, unknown> }
@@ -43,6 +45,8 @@ export async function recordProvenance(cwd: string, body: Record<string, unknown
 }
 
 export function registerArtifactRoutes(app: FastifyInstance): void {
+  registerArtifactContentRoutes(app);
+
   app.get("/api/artifacts", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const query = request.query as { artifact_id?: string; limit?: string }; const all = await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl")); const filtered = query.artifact_id ? all.filter((item) => item.artifact_id === query.artifact_id) : all; const artifacts = filtered.slice(-Math.min(1000, Math.max(1, Number(query.limit ?? 100)))).reverse(); return { artifacts: await withLatestVerification(cwd, artifacts) }; });
   app.post("/api/artifacts/publish", async (request, reply) => {
     const cwd = await ws(request, reply); if (!cwd) return;
@@ -65,6 +69,9 @@ export function registerArtifactRoutes(app: FastifyInstance): void {
     }
     const { sha256, size } = digest;
     const artifactPath = relative(cwd, target).replaceAll("\\", "/");
+    // The artifact content routes read versioned bytes from the content store,
+    // so publishing keeps both stores in sync for the same digest.
+    try { await persistArtifactFile(cwd, target, sha256); } catch (error) { return reply.code(409).send({ error: String(error) }); }
     return withFileWriteLock(workspaceFile(cwd, "artifacts.jsonl"), async () => {
       const artifacts = await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl"));
       const artifactId = await artifactIdentity(cwd, artifactPath, artifacts);

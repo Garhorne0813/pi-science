@@ -75,10 +75,7 @@ type RuntimeRecord = {
    *  keys live agent blocks by partId) to avoid every turn's artifacts being
    *  appended at the end of the thread. */
   turnAssistantPartId?: string;
-  /** 1-based ordinal of the current turn (incremented on each agent_start).
-   *  Persisted with turn-artifacts records so the frontend can anchor a strip
-   *  to the n-th agent block even when earlier turns produced no files (pure
-   *  record-ordinal fallback misplaces strips when a turn has no record). */
+  /** Hub ordinal, diagnostic only: resets when the control plane restarts. */
   turnOrdinal?: number;
   /** JSONL cursor captured at prompt-accept time (fallback evidence when the
    *  Pi event stream dies and agent_start never arrives): snapshot_version,
@@ -293,60 +290,99 @@ export class NodeSessionService {
       // other runtime-provided metadata are available after a server restart.
       if (type === "abort") {
         const runtime = this.runtimes.get(runtimeKey(cwd, sessionId));
-        if (!runtime) {
+        if (!runtime || runtime.closing || runtime.process.isClosed) {
+          if (runtime) this.discardClosedRuntime(runtime);
           const sessionPath = await this.repository.findPath(cwd, sessionId);
           if (!sessionPath) return { success: false, code: "not_found", error: "session not found in this workspace" };
-          if (type === "abort") return { success: true };
+          return { success: true };
         }
       }
       const activated = await probeTimed(`command:${type} activate`, () => this.activateUnlocked(sessionId, cwd));
       if ("error" in activated) return activated;
-      const runtime = activated;
+      let runtime = activated;
       const mutating = new Set(["prompt", "new_session", "switch_session", "fork", "clone", "set_model", "set_thinking_level", "compact", "abort"]);
-      if (mutating.has(type) && type !== "abort") {
-        // Item 5: revive a KNOWN-dead event stream BEFORE the mutation
-        // preflight. A dead stream often means get_state also fails, which
-        // would otherwise short-circuit reconcileForMutation before the
-        // health check gets a chance to reconnect/restart.
-        const healthy = await probeTimed(`command:${type} event-stream-health`, () => this.ensureHealthyEventStream(runtime, type));
-        if (!healthy.success) return healthy;
-        const ready = await probeTimed(`command:${type} reconcile-for-mutation`, () => this.reconcileForMutation(runtime));
-        if (!ready.success) return ready;
-      }
-      const oldId = runtime.activeSessionId;
-      if (type === "prompt" || type === "compact") this.beginPendingOperation(runtime, type);
-      const result = await probeTimed(`command:${type} transport-send`, () => runtime.process.sendCommand(type, params));
-      probeLog(`command:${type} transport-result`, { totalMs: Date.now() - commandStartedAt, success: result.success !== false, code: String(result.code ?? "") });
-      if (!result.success) {
-        if ((type === "prompt" || type === "compact") && result.code === "timeout") {
-          runtime.reconcileFromTimeout = true;
-          this.scheduleOperationReconciliation(runtime, true);
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        if (mutating.has(type) && type !== "abort") {
+          // Check the event stream and authoritative state while still under
+          // the session lock. A structured runtime_evicted response closes
+          // the stale process; rebuild before forwarding the requested action.
+          const healthy = await probeTimed(`command:${type} event-stream-health`, () => this.ensureHealthyEventStream(runtime, type));
+          if (!healthy.success) return healthy;
+          const ready = await probeTimed(`command:${type} reconcile-for-mutation`, () => this.reconcileForMutation(runtime));
+          if (!ready.success) {
+            if (attempt === 0 && this.isRuntimeUnavailable(ready, runtime)) {
+              this.discardClosedRuntime(runtime);
+              const recovered = await this.activateUnlocked(sessionId, cwd);
+              if ("error" in recovered) return recovered;
+              runtime = recovered;
+              continue;
+            }
+            return ready;
+          }
         }
-        else if (type === "prompt" || type === "compact") this.clearPendingOperation(runtime);
+
+        const oldId = runtime.activeSessionId;
+        if (type === "prompt" || type === "compact") this.beginPendingOperation(runtime, type);
+        const result = await probeTimed(`command:${type} transport-send`, () => runtime.process.sendCommand(type, params));
+        probeLog(`command:${type} transport-result`, { totalMs: Date.now() - commandStartedAt, success: result.success !== false, code: String(result.code ?? "") });
+        if (!result.success) {
+          if (type === "abort" && this.isRuntimeUnavailable(result, runtime)) {
+            this.clearPendingOperation(runtime);
+            this.discardClosedRuntime(runtime);
+            const sessionPath = await this.repository.findPath(cwd, sessionId);
+            return sessionPath
+              ? { success: true }
+              : { success: false, code: "not_found", error: "session not found in this workspace" };
+          }
+          if (type === "prompt" && attempt === 0 && this.isRuntimeUnavailable(result, runtime)) {
+            // Pi Orbit returns runtime_evicted before dispatching the prompt.
+            // Retry once with the original parameters after restoring history.
+            this.clearPendingOperation(runtime);
+            this.discardClosedRuntime(runtime);
+            const recovered = await this.activateUnlocked(sessionId, cwd);
+            if ("error" in recovered) return recovered;
+            runtime = recovered;
+            continue;
+          }
+          if ((type === "prompt" || type === "compact") && result.code === "timeout") {
+            runtime.reconcileFromTimeout = true;
+            this.scheduleOperationReconciliation(runtime, true);
+          }
+          else if (type === "prompt" || type === "compact") this.clearPendingOperation(runtime);
+          return result;
+        }
+
+        if (type === "prompt" || type === "compact") {
+          if (type === "prompt") this.recordAcceptTurnBaseline(runtime);
+          this.scheduleOperationReconciliation(runtime, false);
+          probeLog(`command:${type} accepted`, { totalMs: Date.now() - commandStartedAt, lockHeldMs: Date.now() - lockAcquiredAt });
+          return result;
+        }
+        if (type === "abort") this.clearPendingOperation(runtime);
+        if (mutating.has(type)) {
+          const state = await this.refreshState(runtime);
+          if (!state.success) {
+            if (type === "abort" && this.isRuntimeUnavailable(state, runtime)) {
+              this.discardClosedRuntime(runtime);
+              const sessionPath = await this.repository.findPath(cwd, sessionId);
+              return sessionPath
+                ? { success: true }
+                : { success: false, code: "not_found", error: "session not found in this workspace" };
+            }
+            await this.cleanupRuntime(runtime);
+            return failure(state, `unable to confirm state after ${type}`);
+          }
+          if (runtime.activeSessionId !== oldId) this.registerRuntime(runtime, oldId);
+          if (["new_session", "fork", "clone"].includes(type) && runtime.activeSessionId === oldId) {
+            return { success: false, code: "reconcile_failed", error: `${type} did not create a distinct session` };
+          }
+          if (type === "abort" && runtime.busy) {
+            return { success: false, code: "reconcile_failed", error: "abort was acknowledged but the runtime is still busy" };
+          }
+        }
         return result;
       }
-      if (type === "prompt" || type === "compact") {
-        if (type === "prompt") this.recordAcceptTurnBaseline(runtime);
-        this.scheduleOperationReconciliation(runtime, false);
-        probeLog(`command:${type} accepted`, { totalMs: Date.now() - commandStartedAt, lockHeldMs: Date.now() - lockAcquiredAt });
-        return result;
-      }
-      if (type === "abort") this.clearPendingOperation(runtime);
-      if (mutating.has(type)) {
-        const state = await this.refreshState(runtime);
-        if (!state.success) {
-          await this.cleanupRuntime(runtime);
-          return failure(state, `unable to confirm state after ${type}`);
-        }
-        if (runtime.activeSessionId !== oldId) this.registerRuntime(runtime, oldId);
-        if (["new_session", "fork", "clone"].includes(type) && runtime.activeSessionId === oldId) {
-          return { success: false, code: "reconcile_failed", error: `${type} did not create a distinct session` };
-        }
-        if (type === "abort" && runtime.busy) {
-          return { success: false, code: "reconcile_failed", error: "abort was acknowledged but the runtime is still busy" };
-        }
-      }
-      return result;
+      return { success: false, code: "runtime_evicted", error: "Pi runtime was evicted while recovering the session" };
     });
   }
 
@@ -575,8 +611,19 @@ export class NodeSessionService {
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
     return this.withLock(`${cwd}\0${sessionId}`, async () => {
-      const activated = await this.activateUnlocked(sessionId, cwd);
-      return "error" in activated ? activated : { success: true };
+      let activated = await this.activateUnlocked(sessionId, cwd);
+      if ("error" in activated) return activated;
+      const state = await this.refreshState(activated);
+      if (!state.success && this.isRuntimeUnavailable(state, activated)) {
+        this.discardClosedRuntime(activated);
+        activated = await this.activateUnlocked(sessionId, cwd);
+        if ("error" in activated) return activated;
+        const restoredState = await this.refreshState(activated);
+        if (!restoredState.success) return failure(restoredState, "unable to confirm restored session");
+      } else if (!state.success) {
+        return failure(state, "unable to confirm session state");
+      }
+      return { success: true };
     });
   }
 
@@ -585,30 +632,24 @@ export class NodeSessionService {
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { error: String(error), code: "workspace_invalid" }; }
     return this.withLock(`${cwd}\0${sessionId}`, async () => {
-      const runtime = this.runtimes.get(runtimeKey(cwd, sessionId));
+      let runtime = this.runtimes.get(runtimeKey(cwd, sessionId));
+      if (runtime && (runtime.closing || runtime.process.isClosed)) {
+        this.discardClosedRuntime(runtime);
+        runtime = undefined;
+      }
       if (!runtime) {
-        const sessionPath = await this.repository.findPath(cwd, sessionId);
-        if (!sessionPath) return { error: "session not found in this workspace", code: "not_found" };
-        const config = effectiveConfig();
-        return {
-          id: sessionId,
-          cwd,
-          is_streaming: false,
-          is_compacting: false,
-          pending_message_count: 0,
-          model: config.model ?? null,
-          thinking: config.thinking ?? null,
-          context_tokens: null,
-          context_window: config.model_context_window ?? null,
-          context_percent: null,
-          compaction_enabled: config.compaction_enabled ?? true,
-          compaction_threshold_percent: config.compaction_threshold_percent ?? null,
-        };
+        return this.coldState(sessionId, cwd);
       }
       const result = runtime.lastState && runtime.lastStateAt && Date.now() - runtime.lastStateAt < 500
         ? { success: true, data: runtime.lastState }
         : await this.refreshState(runtime);
-      if (!result.success || !result.data || typeof result.data !== "object") return { error: String(result.error ?? "unable to read session state"), code: String(result.code ?? "runtime_error") };
+      if (!result.success || !result.data || typeof result.data !== "object") {
+        if (this.isRuntimeUnavailable(result, runtime)) {
+          this.discardClosedRuntime(runtime);
+          return this.coldState(sessionId, cwd);
+        }
+        return { error: String(result.error ?? "unable to read session state"), code: String(result.code ?? "runtime_error") };
+      }
       const stats = await runtime.process.sendCommand("get_session_stats");
       return this.toSessionState(
         runtime,
@@ -616,6 +657,50 @@ export class NodeSessionService {
         stats.success && stats.data && typeof stats.data === "object" ? stats.data as Record<string, unknown> : undefined,
       );
     });
+  }
+
+  private async coldState(sessionId: string, cwd: string): Promise<SessionState | { error: string; code: string }> {
+    const sessionPath = await this.repository.findPath(cwd, sessionId);
+    if (!sessionPath) return { error: "session not found in this workspace", code: "not_found" };
+    const config = effectiveConfig();
+    return {
+      id: sessionId,
+      cwd,
+      is_streaming: false,
+      is_compacting: false,
+      pending_message_count: 0,
+      model: config.model ?? null,
+      thinking: config.thinking ?? null,
+      context_tokens: null,
+      context_window: config.model_context_window ?? null,
+      context_percent: null,
+      compaction_enabled: config.compaction_enabled ?? true,
+      compaction_threshold_percent: config.compaction_threshold_percent ?? null,
+    };
+  }
+
+  private isRuntimeUnavailable(result: PiResult, runtime: RuntimeRecord): boolean {
+    return result.code === "runtime_evicted"
+      || result.code === "process_closed"
+      || runtime.closing
+      || runtime.process.isClosed;
+  }
+
+  /** Remove a runtime that has already emitted its exit notification. */
+  private discardClosedRuntime(runtime: RuntimeRecord): void {
+    runtime.closing = true;
+    this.clearIdleTimer(runtime);
+    this.clearEventWatchdog(runtime);
+    if (runtime.reconcileTimer) clearTimeout(runtime.reconcileTimer);
+    const statsKeys = new Set<string>();
+    if (runtime.activeSessionId) statsKeys.add(runtimeKey(runtime.cwd, runtime.activeSessionId));
+    for (const [key, current] of this.runtimes) {
+      if (current === runtime) {
+        statsKeys.add(key);
+        this.runtimes.delete(key);
+      }
+    }
+    for (const key of statsKeys) this.statsProjector.clear(key);
   }
 
   /** Whole-session cumulative stats (turns, tool calls, tokens, wall time).
@@ -825,7 +910,10 @@ export class NodeSessionService {
     const key = runtimeKey(cwd, sessionId);
     let runtime = this.runtimes.get(key);
     if (runtime) {
-      if (runtime.activeSessionId !== sessionId) {
+      if (runtime.closing || runtime.process.isClosed) {
+        this.discardClosedRuntime(runtime);
+        runtime = undefined;
+      } else if (runtime.activeSessionId !== sessionId) {
         probeLog("activate:session-mismatch-cleanup", { activeSessionId: runtime.activeSessionId, sessionId });
         await this.cleanupRuntime(runtime);
         runtime = undefined;
@@ -918,11 +1006,12 @@ export class NodeSessionService {
       onExit: () => {
         runtime.closing = true;
         this.clearIdleTimer(runtime);
+        this.clearEventWatchdog(runtime);
         for (const [key, current] of this.runtimes) {
           if (current === runtime && current.process === process) this.runtimes.delete(key);
         }
       },
-      observe: async (event, sessionId) => {
+      observe: async (event, sessionId, identity) => {
         await observeNodePiEvent(cwd, runtime.config.model ?? null, event, sessionId, (payload) => this.eventHub.publish(cwd, sessionId, payload));
         this.statsProjector.track(runtimeKey(cwd, sessionId), event, Date.now());
         // DeepSeek refreshes its stats line at settled boundaries (assistant
@@ -933,15 +1022,12 @@ export class NodeSessionService {
           void this.refreshAndPublishStats(runtime, sessionId);
         }
         if (event.type === "agent_start") {
-          runtime.turnId = randomUUID();
+          // Capture the normalized identity while handling agent_start. The hub
+          // clears its active identity before observing agent_settled.
+          runtime.turnId = identity?.turnId;
+          runtime.turnOrdinal = identity?.turnOrdinal;
           runtime.turnBaseline = snapshotWorkspace(cwd);
           runtime.turnAssistantPartId = undefined;
-          // Derive the ordinal from persisted records so it keeps counting
-          // across runtime rebuilds (idle cleanup, restarts); the in-memory
-          // field alone would reset to 1 and misanchor strips for later turns.
-          runtime.turnOrdinal = await turnArtifactRepository
-            .nextTurnOrdinal(runtime.cwd, sessionId)
-            .catch(() => (runtime.turnOrdinal ?? 0) + 1);
         }
         // Pi's raw event type is "message_update" with an inner
         // assistantMessageEvent (text_delta/text/text_end); the hub normalizes
@@ -1265,6 +1351,9 @@ export class NodeSessionService {
     const baseline = runtime.turnBaseline;
     runtime.turnBaseline = undefined;
     if (!baseline) return;
+    const turnOrdinal = runtime.turnOrdinal ?? null;
+    const endedAt = new Date().toISOString();
+    const lastAssistantPartId = runtime.turnAssistantPartId;
     const before = await baseline;
     const after = await snapshotWorkspace(runtime.cwd);
     if (!after) return;
@@ -1277,19 +1366,18 @@ export class NodeSessionService {
     // anchor (PRD: artifact cards must land after the turn's FINAL assistant
     // message). A settled event's own ids may point to an earlier message of
     // a multi-message turn, so they are consulted only as secondary fallbacks.
-    const assistantMessageId = runtime.turnAssistantPartId
+    const assistantMessageId = lastAssistantPartId
       ?? (typeof event.assistantMessageId === "string"
         ? event.assistantMessageId
         : typeof event.messageId === "string"
           ? event.messageId
           : null);
-    const turnOrdinal = runtime.turnOrdinal ?? null;
     const record = {
       turn_id: turnId,
       session_id: sessionId,
       assistant_message_id: assistantMessageId,
       turn_ordinal: turnOrdinal,
-      ended_at: new Date().toISOString(),
+      ended_at: endedAt,
       artifacts: items,
     };
     // Defensive idempotency: a reconciliation-recovered turn and a late
@@ -1305,6 +1393,10 @@ export class NodeSessionService {
       turnId,
       turnOrdinal,
       assistantMessageId,
+      // Published so the live fold can anchor the strip the same way the
+      // history restore does. `turnOrdinal` is diagnostic and resets with the hub,
+      // not user-message turns, so it cannot identify the owning turn on its own.
+      endedAt,
       artifacts: items,
     }).catch(() => undefined);
   }
