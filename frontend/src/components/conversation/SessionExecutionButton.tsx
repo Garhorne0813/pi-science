@@ -6,6 +6,10 @@ import { cn } from "../../lib/ui";
 
 export function SessionExecutionButton({ cwd, sessionId, active, onToggle }: { cwd: string; sessionId?: string; active: boolean; onToggle: () => void }) {
   const { t } = useTranslation();
+  // No execution subscription here: the conversation stream this page already
+  // holds invalidates the runs key on every execution boundary, so the REST
+  // interval below is a backstop for executions that stream never observes
+  // (notebook, compute and research surfaces), not the update path.
   const { data: runs = [] } = useQuery({
     ...sessionRunsQuery(cwd, sessionId ?? ""),
     enabled: Boolean(sessionId),
