@@ -201,8 +201,8 @@ export class WorkspaceRepository {
     ]);
   }
 
-  async markMissing(pathValue: string, missingAt = Date.now()): Promise<void> {
-    const path = await canonicalPath(pathValue);
+  async markMissing(pathValue: string, missingAt = Date.now(), preservePath = false): Promise<void> {
+    const path = preservePath ? resolve(pathValue) : await canonicalPath(pathValue);
     await this.store.run("UPDATE project_locations SET missing_since = COALESCE(missing_since, ?), last_seen_at = ? WHERE canonical_path = ?", [missingAt, missingAt, path]);
   }
 
@@ -321,7 +321,7 @@ function iso(value: number | null | undefined): string | null {
 }
 
 async function workspaceExists(path: string): Promise<boolean> {
-  try { return (await stat(path)).isDirectory() && (await stat(`${path}/.pi-science`)).isDirectory(); } catch { return false; }
+  try { return (await stat(path)).isDirectory(); } catch { return false; }
 }
 
 function placeholderManifest(path: string): ProjectManifest {

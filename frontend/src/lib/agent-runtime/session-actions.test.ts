@@ -367,6 +367,32 @@ describe("runtime session actions", () => {
     expect(useRuntimeStore.getState().thread.blocks.filter((block) => block.kind === "user")).toHaveLength(2);
   });
 
+  it("stops polling an ID that the restarted server has no ledger entry for", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/prompt-requests/")) return jsonResponse({ ok: false, code: "not_found", error: "prompt request not found" }, 404);
+      if (url.includes("/prompt?") && init?.method === "POST") {
+        const { client_message_id } = JSON.parse(String(init.body)) as { client_message_id: string };
+        return jsonResponse({ ok: true, status: "accepted", client_message_id }, 202);
+      }
+      if (url.includes("/messages?")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-old-server"));
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useRuntimeStore.setState({ activeSessionId: "session-old-server", cwd: "/workspace", status: "ready" });
+
+    await useRuntimeStore.getState().sendPrompt("status");
+    await vi.waitFor(() => {
+      const block = useRuntimeStore.getState().thread.blocks.find((item) => item.kind === "user");
+      expect(block).toMatchObject({ deliveryStatus: "indeterminate" });
+    });
+    useRuntimeStore.getState().disconnect();
+
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/prompt-requests/"))).toHaveLength(1);
+    expect(sessionStorage.getItem("pi-science.pending-prompt-requests.v1")).toBe("[]");
+  });
+
   it("reuses the prior ID only when retrying a specific rejected message", async () => {
     const sentIds: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

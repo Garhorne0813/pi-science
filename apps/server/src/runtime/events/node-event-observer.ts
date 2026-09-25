@@ -5,6 +5,8 @@ import { appendJsonLine, readJsonLines, workspaceFile } from "../../storage/pers
 import { persistArtifactBytes } from "../artifacts/artifact-content-store.js";
 import type { PiEvent } from "../pi/pi-process.js";
 import { executionIdFor, executionRepository } from "../executions/execution-repository.js";
+import { artifactIdentity } from "../artifacts/artifact-identity.js";
+import { ensureProject, readProject } from "../../project/project-registry.js";
 
 type Publish = (payload: Record<string, unknown>) => Promise<void>;
 
@@ -44,6 +46,9 @@ export async function observeNodePiEvent(
   sessionId: string,
   publish: Publish,
 ): Promise<void> {
+  // Initialize project identity before execution or event records create the
+  // state directory. Otherwise legacy metadata cannot be migrated later.
+  if (!(await readProject(cwd))) await ensureProject(cwd);
   if (["agent_start", "agent_end", "agent_settled", "error"].includes(event.type)) {
     void serialized(workspaceFile(cwd, "skill-events.jsonl"), () => appendJsonLine(workspaceFile(cwd, "skill-events.jsonl"), {
       type: "skill_event", session_id: sessionId, ts: Date.now() / 1000, event: event.type,
@@ -112,8 +117,8 @@ async function observeWrittenArtifact(cwd: string, model: string | null, event: 
   let observed: ObservedArtifact | null = null;
   await serialized(workspaceFile(cwd, "artifacts.jsonl"), async () => {
     const sha256 = createHash("sha256").update(bytes).digest("hex");
-    const artifactId = createHash("sha256").update(`${workspace}:${path}`).digest("hex").slice(0, 24);
     const artifacts = await readJsonLines<Record<string, unknown>>(workspaceFile(cwd, "artifacts.jsonl"));
+    const artifactId = await artifactIdentity(workspace, path, artifacts as Array<{ path: string; artifact_id: string }>);
     const previous = artifacts.filter((item) => item.artifact_id === artifactId).at(-1);
     const previousVersion = Number(previous?.version ?? 0);
     if (previous?.sha256 === sha256) {

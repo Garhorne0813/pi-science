@@ -30,6 +30,7 @@ CONTROL_PLANE_CLI="$PROJECT_DIR/apps/server/node_modules/tsx/dist/cli.mjs"
 VITE_BIN="$PROJECT_DIR/frontend/node_modules/.bin/vite"
 [ -f "$CONTROL_PLANE_CLI" ] || { echo "Error: server dependencies are not installed. Run: bash scripts/install.sh" >&2; exit 1; }
 [ -x "$VITE_BIN" ] || { echo "Error: frontend dependencies are not installed. Run: bash scripts/install.sh" >&2; exit 1; }
+pi_science_check_sandbox || exit 1
 
 CONTROL_PLANE_PID=""
 CONTROL_PLANE_STARTED=""

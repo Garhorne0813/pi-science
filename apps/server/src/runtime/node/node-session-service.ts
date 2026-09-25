@@ -1,7 +1,7 @@
 import type { CreateSessionRequest, PiConfig, SessionState, SessionStats } from "@pi-science/contracts";
 import { randomUUID } from "node:crypto";
 import { mkdir, unlink } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import nodeProcess from "node:process";
 import { ConversationEventHub, conversationEventHub } from "../events/conversation-event-hub.js";
 import { durableEventStore } from "../events/event-store.js";
@@ -19,7 +19,8 @@ import { foldEventRecordsTiming, maxTiming, mergeSessionStats, SessionStatsProje
 import { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
 import { diffWorkspaceSnapshots, previewKind, previewMime, snapshotWorkspace, type WorkspaceSnapshotEntry } from "../artifacts/workspace-artifact-snapshot.js";
 import { turnArtifactRepository } from "../artifacts/turn-artifact-repository.js";
-import { readJsonLines, workspaceFile } from "../../storage/persistence.js";
+import { metadataRoot, readJsonLines, workspaceFile } from "../../storage/persistence.js";
+import { probeLog, probeTimed } from "../../support/probe-log.js";
 import { ensureProject } from "../../project/project-registry.js";
 import type { ModelResourceService } from "../../model-resources/model-resource-service.js";
 
@@ -93,6 +94,10 @@ function reconciliationDelayMs(): number {
   const value = Number(process.env.PI_SCIENCE_RECONCILE_DELAY_MS ?? 0);
   return value > 0 ? value : 2_000;
 }
+
+/** Cooldown before a workspace whose environment priming failed is retried;
+ *  priming is triggered by workspace entry, which can repeat on every refresh. */
+const PRIME_RETRY_MS = 5 * 60_000;
 
 /** Bounds only accepted-idle startup reconciliation while Pi Orbit resumes a
  *  session or warms a model; it is not an agent-response timeout. */
@@ -178,6 +183,15 @@ export class NodeSessionService {
    *  from the raw Pi event stream; persisted via the stats checkpoint. */
   private readonly statsProjector = new SessionStatsProjector();
   private hostReloadPending = false;
+  /** Workspaces whose environment provisioning has been primed (or attempted)
+   *  in this process; see primeWorkspaceEnvironment. */
+  private readonly primedEnvironments = new Set<string>();
+  /** Workspaces whose priming failed, with the time of the failure, so a
+   *  workspace list that keeps refreshing cannot retry a doomed provision. */
+  private readonly failedPriming = new Map<string, number>();
+  /** Serializes environment priming so opening several workspaces cannot run
+   *  concurrent micromamba solves against the shared package cache. */
+  private primeChain: Promise<void> = Promise.resolve();
   private log: (level: "info" | "warn" | "error", message: string) => void = () => {};
   private beforeRuntimeStart: ((cwd: string) => Promise<void>) | null = null;
 
@@ -199,6 +213,44 @@ export class NodeSessionService {
     this.beforeRuntimeStart = hook;
   }
 
+  /** Warm the workspace environment outside the request the user waits on.
+   *
+   * The first runtime start in a workspace also provisions its isolated
+   * environment, and a first-time provision creates a micromamba revision
+   * (conda-forge solve, download and link) rather than returning immediately.
+   * That cost belongs to workspace entry, not to the prompt that happens to be
+   * the first one: priming starts it in the background as soon as the client
+   * opens the workspace, so the follow-up prompt either finds it ready or joins
+   * the provisioning already in flight. Failures are logged and retried by the
+   * next request that actually needs the environment. */
+  primeWorkspaceEnvironment(cwdValue: string): void {
+    // Under NODE_ENV=test the environment service provisions a legacy venv
+    // instead of a managed revision; priming would only add filesystem work to
+    // unrelated route tests.
+    if (process.env.NODE_ENV === "test") return;
+    let cwd: string;
+    try { cwd = resolve(cwdValue); } catch { return; }
+    if (this.primedEnvironments.has(cwd)) return;
+    const failedAt = this.failedPriming.get(cwd);
+    if (failedAt !== undefined && Date.now() - failedAt < PRIME_RETRY_MS) return;
+    this.primedEnvironments.add(cwd);
+    const startedAt = Date.now();
+    this.primeChain = this.primeChain
+      .catch(() => undefined)
+      .then(() => this.environments.environment(cwd))
+      .then(
+        () => {
+          this.failedPriming.delete(cwd);
+          probeLog("environment primed", { cwd, ms: Date.now() - startedAt });
+        },
+        (error: unknown) => {
+          this.primedEnvironments.delete(cwd);
+          this.failedPriming.set(cwd, Date.now());
+          this.log("warn", `Workspace environment priming failed: ${String(error)}`);
+        },
+      );
+  }
+
   async create(body: CreateSessionRequest): Promise<{ id: string; cwd: string; project_id: string } | RuntimeFailure & { sessionId?: string }> {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(body.cwd); }
@@ -206,7 +258,7 @@ export class NodeSessionService {
     const migration = await this.ensureModelResources();
     if (migration) return migration;
     const project = await ensureProject(cwd);
-    await mkdir(resolve(cwd, ".pi-science", "sessions"), { recursive: true });
+    await mkdir(join(metadataRoot(cwd), "sessions"), { recursive: true });
     return this.withLock(`create:${cwd}`, async () => {
       let runtime: RuntimeRecord | undefined;
       const config = effectiveConfig(body.config);
@@ -227,7 +279,12 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
+    const commandStartedAt = Date.now();
+    let lockAcquiredAt = 0;
+    probeLog(`command:${type} start`, { sessionId });
     return this.withLock(`${cwd}\0${sessionId}`, async () => {
+      lockAcquiredAt = Date.now();
+      probeLog(`command:${type} lock-acquired`, { waitedMs: lockAcquiredAt - commandStartedAt });
       // Abort is safe to acknowledge when there is no live runtime. Command
       // discovery must activate the persisted session so project skills and
       // other runtime-provided metadata are available after a server restart.
@@ -240,7 +297,7 @@ export class NodeSessionService {
           return { success: true };
         }
       }
-      const activated = await this.activateUnlocked(sessionId, cwd);
+      const activated = await probeTimed(`command:${type} activate`, () => this.activateUnlocked(sessionId, cwd));
       if ("error" in activated) return activated;
       let runtime = activated;
       const mutating = new Set(["prompt", "new_session", "switch_session", "fork", "clone", "set_model", "set_thinking_level", "compact", "abort"]);
@@ -249,9 +306,9 @@ export class NodeSessionService {
           // Check the event stream and authoritative state while still under
           // the session lock. A structured runtime_evicted response closes
           // the stale process; rebuild before forwarding the requested action.
-          const healthy = await this.ensureHealthyEventStream(runtime, type);
+          const healthy = await probeTimed(`command:${type} event-stream-health`, () => this.ensureHealthyEventStream(runtime, type));
           if (!healthy.success) return healthy;
-          const ready = await this.reconcileForMutation(runtime);
+          const ready = await probeTimed(`command:${type} reconcile-for-mutation`, () => this.reconcileForMutation(runtime));
           if (!ready.success) {
             if (attempt === 0 && this.isRuntimeUnavailable(ready, runtime)) {
               this.discardClosedRuntime(runtime);
@@ -266,7 +323,8 @@ export class NodeSessionService {
 
         const oldId = runtime.activeSessionId;
         if (type === "prompt" || type === "compact") this.beginPendingOperation(runtime, type);
-        const result = await runtime.process.sendCommand(type, params);
+        const result = await probeTimed(`command:${type} transport-send`, () => runtime.process.sendCommand(type, params));
+        probeLog(`command:${type} transport-result`, { totalMs: Date.now() - commandStartedAt, success: result.success !== false, code: String(result.code ?? "") });
         if (!result.success) {
           if (type === "abort" && this.isRuntimeUnavailable(result, runtime)) {
             this.clearPendingOperation(runtime);
@@ -297,6 +355,7 @@ export class NodeSessionService {
         if (type === "prompt" || type === "compact") {
           if (type === "prompt") this.recordAcceptTurnBaseline(runtime);
           this.scheduleOperationReconciliation(runtime, false);
+          probeLog(`command:${type} accepted`, { totalMs: Date.now() - commandStartedAt, lockHeldMs: Date.now() - lockAcquiredAt });
           return result;
         }
         if (type === "abort") this.clearPendingOperation(runtime);
@@ -855,26 +914,29 @@ export class NodeSessionService {
         this.discardClosedRuntime(runtime);
         runtime = undefined;
       } else if (runtime.activeSessionId !== sessionId) {
+        probeLog("activate:session-mismatch-cleanup", { activeSessionId: runtime.activeSessionId, sessionId });
         await this.cleanupRuntime(runtime);
         runtime = undefined;
       } else {
         this.scheduleIdleCleanup(runtime);
+        probeLog("activate:reused-live-runtime", { sessionId });
         return runtime;
       }
     }
     const sessionPath = await this.repository.findPath(cwd, sessionId);
     if (!sessionPath) return { success: false, code: "not_found", error: "session not found in this workspace" };
+    probeLog("activate:cold-start", { sessionId });
     const migration = await this.ensureModelResources();
     if (migration) return { success: false, ...migration };
     const config = effectiveConfig();
-    const started = await this.startRuntime(cwd, config);
+    const started = await probeTimed("activate:start-runtime", () => this.startRuntime(cwd, config));
     if ("error" in started) return { success: false, ...started };
     runtime = started;
     // The restored session's jsonl may carry model_change events from
     // session-local switching; the workspace configuration must win, so the
     // model/thinking are re-applied after the switch and before the state
     // read that confirms the resume.
-    const resumed = await this.resumeSessionWithConfig(runtime, sessionPath, config);
+    const resumed = await probeTimed("activate:resume-session", () => this.resumeSessionWithConfig(runtime!, sessionPath, config));
     if (!resumed.success) { await this.cleanupRuntime(runtime); return failure(resumed, "unable to resume session"); }
     if (runtime.activeSessionId !== sessionId) { await this.cleanupRuntime(runtime); return { success: false, code: "session_mismatch", error: "runtime resumed a different session" }; }
     this.registerRuntime(runtime);
@@ -894,15 +956,15 @@ export class NodeSessionService {
     else {
       if (!nodeProcess.env.PI_CLI_PATH) return { error: "PI_CLI_PATH is not configured", code: "spawn_failed" };
       let environment: NodeJS.ProcessEnv;
-      try { environment = await this.environments.environment(cwd); }
+      try { environment = await probeTimed("start-runtime:workspace-environment", () => this.environments.environment(cwd)); }
       catch (error) { return { error: `unable to prepare isolated workspace environment: ${String(error)}`, code: "environment_failed" }; }
-      try { options = buildPiProcessOptions(cwd, config, sessionPath, environment); }
+      try { options = await probeTimed("start-runtime:build-options", async () => buildPiProcessOptions(cwd, config, sessionPath, environment)); }
       catch (error) { return { error: `unable to prepare Pi runtime configuration: ${String(error)}`, code: "configuration_failed" }; }
     }
     if (!options) return { error: "PI_CLI_PATH is not configured", code: "spawn_failed" };
     let process: PiProcess;
     const managerKey = randomUUID();
-    try { process = await this.manager.start(managerKey, options); }
+    try { process = await probeTimed("start-runtime:manager-start", () => this.manager.start(managerKey, options!)); }
     catch (error) {
       if (error instanceof PiOrbitRequestError) {
         const detail = firstErrorDiagnostic(error.payload.diagnostics);

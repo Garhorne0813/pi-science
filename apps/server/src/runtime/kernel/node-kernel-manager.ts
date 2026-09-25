@@ -2,7 +2,8 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createInterface, type Interface } from "node:readline";
 import {
@@ -10,6 +11,8 @@ import {
   workspaceEnvironmentVariables,
   type WorkspaceEnvironmentStatus,
 } from "../workspace/workspace-environment.js";
+import { restrictResearchEnvironment } from "../jobs/job-environment.js";
+import { cachedResearchSandboxStatus, sandboxConversationCommand, type ResearchSandboxStatus } from "../jobs/research-sandbox.js";
 
 export type KernelLanguage = "python" | "r";
 
@@ -60,6 +63,8 @@ export interface KernelSessionSnapshot {
 
 export interface KernelManagerStatus {
   interpreters: { python: boolean; r: boolean };
+  execution_available: boolean;
+  unavailable_reason: string | null;
   sessions: KernelSessionSnapshot[];
   active_count: number;
   native: boolean;
@@ -71,12 +76,15 @@ export interface NodeKernelManagerDependencies {
   interpreterAvailable?: (command: string) => boolean;
   spawnProcess?: typeof spawn;
   killProcessTree?: (pid: number) => void;
+  sandboxCommand?: typeof sandboxConversationCommand;
+  sandboxStatus?: () => Promise<ResearchSandboxStatus>;
 }
 
 const PYTHON_BRIDGE = fileURLToPath(new URL("./bridges/kernel_bridge.py", import.meta.url));
 const R_BRIDGE = fileURLToPath(new URL("./bridges/kernel_bridge.R", import.meta.url));
 const HEALTH_CHECK_CODE = "1+1";
 const INTERRUPT_GRACE_MS = 2_000;
+export const WINDOWS_KERNEL_UNAVAILABLE = "Notebook execution is unavailable on Windows because the AppContainer policy does not support the kernel stdin protocol";
 
 class KernelTimeoutError extends Error {
   constructor(message: string) {
@@ -139,10 +147,36 @@ export class NodeKernelManager {
       interpreterAvailable: deps.interpreterAvailable ?? defaultInterpreterAvailable,
       spawnProcess: deps.spawnProcess ?? spawn,
       killProcessTree: deps.killProcessTree ?? defaultKillProcessTree,
+      sandboxCommand: deps.sandboxCommand ?? sandboxConversationCommand,
+      sandboxStatus: deps.sandboxStatus ?? (deps.sandboxCommand ? async () => ({ available: true, backend: "seatbelt" }) : () => cachedResearchSandboxStatus(deps.platform ?? process.platform)),
     };
   }
 
+  private windowsSandboxUnavailable(): boolean {
+    // Production uses the real sandbox function. Protocol tests inject a fake
+    // sandbox so they can still exercise Windows process lifecycle semantics.
+    // Sandy conversation jobs are non-interactive: their AppContainer policy
+    // deliberately disables stdin. A persistent Notebook kernel cannot use
+    // that policy because its request protocol is carried over stdin.
+    return this.deps.platform === "win32"
+      && this.deps.sandboxCommand === sandboxConversationCommand;
+  }
+
+  async executionCapability(): Promise<Pick<KernelManagerStatus, "execution_available" | "unavailable_reason">> {
+    if (this.windowsSandboxUnavailable()) return { execution_available: false, unavailable_reason: WINDOWS_KERNEL_UNAVAILABLE };
+    const sandbox = await this.deps.sandboxStatus();
+    return sandbox.available
+      ? { execution_available: true, unavailable_reason: null }
+      : { execution_available: false, unavailable_reason: `Notebook execution isolation unavailable: ${sandbox.reason}` };
+  }
+
+  activeCount(): number {
+    return [...this.sessions.values()].filter((session) => !session.exited).length;
+  }
+
   async execute(options: KernelExecuteOptions): Promise<KernelResult> {
+    const capability = await this.executionCapability();
+    if (!capability.execution_available) throw new Error(capability.unavailable_reason ?? "Notebook execution unavailable");
     const key = sessionKey(options);
     const session = await this.ensureSession(key, options);
     try {
@@ -185,14 +219,17 @@ export class NodeKernelManager {
     return session;
   }
 
-  status(): KernelManagerStatus {
+  async status(): Promise<KernelManagerStatus> {
     const sessions = [...this.sessions.values()];
-    const python = this.deps.interpreterAvailable(this.deps.platform === "win32" ? "python" : "python3");
-    const r = this.deps.interpreterAvailable("Rscript");
+    const capability = await this.executionCapability();
+    const executionAvailable = capability.execution_available;
+    const python = executionAvailable && this.deps.interpreterAvailable(this.deps.platform === "win32" ? "python" : "python3");
+    const r = executionAvailable && this.deps.interpreterAvailable("Rscript");
     return {
       interpreters: { python, r },
+      ...capability,
       sessions: sessions.map((session) => session.snapshot()),
-      active_count: sessions.filter((session) => !session.exited).length,
+      active_count: this.activeCount(),
       native: true,
     };
   }
@@ -255,6 +292,7 @@ class NodeKernelSession {
   private readonly stderrTail: string[] = [];
   private tail: Promise<void> = Promise.resolve();
   private stopPromise?: Promise<void>;
+  private sandboxCleanupDirectory?: string;
 
   private constructor(
     private readonly options: KernelExecuteOptions,
@@ -262,7 +300,7 @@ class NodeKernelSession {
   ) {
     if (options.language === "r") {
       const hash = createHash("sha256").update([options.cwd, options.environmentRevisionId ?? "legacy", randomUUID()].join("\0")).digest("hex").slice(0, 20);
-      this.rCodeFile = join(options.cwd, ".pi-science", "runtime", "kernels", `${hash}.R`);
+      this.rCodeFile = join(tmpdir(), "pi-science-kernels", `${hash}.R`);
     }
   }
 
@@ -375,6 +413,7 @@ class NodeKernelSession {
     this.reader?.close();
     this.reader = undefined;
     if (this.rCodeFile) await rm(this.rCodeFile, { force: true }).catch(() => undefined);
+    if (this.sandboxCleanupDirectory) await rm(this.sandboxCleanupDirectory, { recursive: true, force: true }).catch(() => undefined);
   }
 
   private async start(signal?: AbortSignal): Promise<void> {
@@ -383,14 +422,24 @@ class NodeKernelSession {
       ? [PYTHON_BRIDGE]
       : [R_BRIDGE, this.rCodeFile!];
     if (this.rCodeFile) {
-      await mkdir(join(this.options.cwd, ".pi-science", "runtime", "kernels"), { recursive: true });
-      await writeFile(this.rCodeFile, "", "utf8");
+      await mkdir(dirname(this.rCodeFile), { recursive: true, mode: 0o700 });
+      await writeFile(this.rCodeFile, "", { encoding: "utf8", mode: 0o600 });
     }
     if (signal?.aborted) throw kernelStartCancelledError();
-    const env = this.deps.workspaceEnvironmentVariables(this.options.environment);
-    const child = this.deps.spawnProcess(executable, args, {
+    if (!this.options.environment.ready || this.options.environment.manager !== "micromamba" || !this.options.environment.revision_id) throw new Error("Kernel execution requires a ready managed micromamba revision");
+    const env = restrictResearchEnvironment(this.deps.workspaceEnvironmentVariables(this.options.environment), this.deps.platform);
+    const isolated = await this.deps.sandboxCommand({
+      command: [executable, ...args],
+      workspace: this.options.cwd,
+      environment: env,
+      managedEnvironmentPrefix: this.options.environment.prefix,
+      trustedReadPaths: [dirname(this.options.language === "python" ? PYTHON_BRIDGE : R_BRIDGE), ...(this.rCodeFile ? [this.rCodeFile] : [])],
+      platform: this.deps.platform,
+    });
+    this.sandboxCleanupDirectory = isolated.cleanupDirectory;
+    const child = this.deps.spawnProcess(isolated.command[0]!, isolated.command.slice(1), {
       cwd: this.options.cwd,
-      env,
+      env: isolated.environment,
       stdio: ["pipe", "pipe", "pipe"],
       // A new process group lets Windows deliver CTRL_BREAK_EVENT (SIGBREAK)
       // to the kernel alone instead of terminating the whole tree.

@@ -1,19 +1,15 @@
-import type { ResearchLoop } from "@pi-science/contracts";
+import type { EvaluatorSpec, ResearchLoop } from "@pi-science/contracts";
 import type { ResearchSnapshot } from "./types.js";
+import { stagnantRounds } from "./decision.js";
 
 export function activeWallMs(loop: ResearchLoop, now = Date.now()): number {
   if (loop.status !== "running" || !loop.started_at) return loop.active_wall_ms;
   return loop.active_wall_ms + Math.max(0, now - Date.parse(loop.started_at));
 }
 
-export function stopReason(snapshot: ResearchSnapshot, now = Date.now()): string | null {
+export function stopReason(snapshot: ResearchSnapshot, now = Date.now(), evaluator: EvaluatorSpec | null = null): string | null {
   const loop = snapshot.loop;
   if (!loop) return "loop_missing";
-  const lastCandidate = snapshot.candidates.at(-1);
-  if (snapshot.candidates.length >= loop.budget.max_candidates
-    && lastCandidate && ["failed", "cancelled", "evaluated"].includes(lastCandidate.status)) {
-    return "candidate_budget_exhausted";
-  }
   if (activeWallMs(loop, now) >= loop.budget.max_wall_seconds * 1000) return "wall_time_budget_exhausted";
 
   const evaluated = snapshot.candidates.filter((candidate) => candidate.evaluation_status === "passed" && candidate.evaluation);
@@ -37,17 +33,13 @@ export function stopReason(snapshot: ResearchSnapshot, now = Date.now()): string
     if (reached) return "target_metrics_reached";
   }
 
-  if (evaluated.length >= loop.stop_conditions.patience + 1) {
-    const metricName = Object.keys(evaluated[0]!.evaluation!.metrics)[0];
-    if (metricName) {
-      const recent = evaluated.slice(-(loop.stop_conditions.patience + 1));
-      const first = recent[0]!.evaluation!.metrics[metricName];
-      const last = recent.at(-1)!.evaluation!.metrics[metricName];
-      if (first && last && first.direction === last.direction && first.source === "deterministic" && last.source === "deterministic") {
-        const improvement = first.direction === "minimize" ? first.value - last.value : last.value - first.value;
-        if (improvement <= 0 || improvement < loop.stop_conditions.min_improvement) return "patience_exhausted";
-      }
-    }
+  if (evaluator && evaluated.length >= loop.stop_conditions.patience) {
+    if (stagnantRounds(snapshot, evaluator) >= loop.stop_conditions.patience) return "patience_exhausted";
+  }
+  const lastCandidate = snapshot.candidates.at(-1);
+  if (snapshot.candidates.length >= loop.budget.max_candidates
+    && lastCandidate && ["failed", "cancelled", "evaluated"].includes(lastCandidate.status)) {
+    return "candidate_budget_exhausted";
   }
   return null;
 }

@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { createInterface } from "node:readline";
 import type { PiOrbitHost, PiOrbitRuntimeDescriptor } from "./pi-orbit-host.js";
+import { probeLog } from "../../support/probe-log.js";
+
+/** Web requests slower than this are reported by the timing probe. */
+const PROBE_SLOW_REQUEST_MS = 2_000;
 
 export interface PiOrbitRuntimeRequest {
   cwd: string;
@@ -342,10 +346,13 @@ export class PiProcess extends EventEmitter {
   private async startEventStream(): Promise<void> {
     const controller = new AbortController();
     this.eventAbort = controller;
+    const startedAt = Date.now();
     const response = await this.openEventStream(controller);
     this.eventStreamAlive = true;
+    probeLog("pi-process event stream open", { ms: Date.now() - startedAt, afterSequence: this.lastEventSequence });
     void this.consumeEventStream(response, controller).catch((error: unknown) => {
       this.eventStreamAlive = false;
+      probeLog("pi-process event stream failed", { message: String(error).slice(0, 300) });
       if (!this.closed && !controller.signal.aborted) this.emit("stderr", `Pi Orbit event stream failed: ${String(error)}\n`);
     });
   }
@@ -456,7 +463,9 @@ export class PiProcess extends EventEmitter {
   }
 
   private async webRequest(method: string, path: string, body?: Record<string, unknown>, timeoutMs = this.requestTimeoutMs): Promise<PiResult> {
+    const startedAt = Date.now();
     const response = await this.webHost!.request(method, path, body, timeoutMs);
+    if (Date.now() - startedAt >= PROBE_SLOW_REQUEST_MS) probeLog("pi-process slow web request", { method, path, ms: Date.now() - startedAt });
     let payload: unknown;
     try { payload = await response.json(); }
     catch { payload = {}; }

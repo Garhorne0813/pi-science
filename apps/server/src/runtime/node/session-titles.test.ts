@@ -1,8 +1,9 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionTitleRepository } from "./session-titles.js";
+import { metadataRoot, workspaceFile } from "../../storage/persistence.js";
 
 const cleanup: string[] = [];
 
@@ -34,7 +35,7 @@ describe("SessionTitleRepository", () => {
     expect(titles.get("s2")).toBe("other");
     expect(titles.size).toBe(2);
     // The superseded entry is actually removed from the file (not just shadowed).
-    const file = join(cwd, ".pi-science", "session-titles.jsonl");
+    const file = workspaceFile(cwd, "session-titles.jsonl");
     const raw = await readFile(file, "utf8");
     expect(raw.match(/\"first\"/)).toBeNull();
     expect(raw.match(/\"second\"/)).not.toBeNull();
@@ -67,14 +68,14 @@ describe("SessionTitleRepository", () => {
     await repo.setTitle(cwd, "s2", "two");
     await repo.setTitle(cwd, "s1", "one-updated");
     await repo.deleteTitle(cwd, "s2");
-    const file = join(cwd, ".pi-science", "session-titles.jsonl");
+    const file = workspaceFile(cwd, "session-titles.jsonl");
     const raw = await readFile(file, "utf8");
     expect(raw.endsWith("\n")).toBe(true);
     expect(raw.split("\n").filter(Boolean).map((line) => JSON.parse(line))).toEqual([
       { session_id: "s1", title: "one-updated", updated_at: expect.any(String) },
     ]);
     const { readdir } = await import("node:fs/promises");
-    const entries = await readdir(join(cwd, ".pi-science"));
+    const entries = await readdir(dirname(file));
     expect(entries).toEqual(expect.not.arrayContaining([expect.stringContaining(".tmp")]));
   });
 
@@ -82,9 +83,9 @@ describe("SessionTitleRepository", () => {
     const repo = new SessionTitleRepository();
     const cwd = await workspace();
     const { mkdir, writeFile } = await import("node:fs/promises");
-    await mkdir(join(cwd, ".pi-science"), { recursive: true });
+    await mkdir(metadataRoot(cwd), { recursive: true });
     await writeFile(
-      join(cwd, ".pi-science", "session-titles.jsonl"),
+      workspaceFile(cwd, "session-titles.jsonl"),
       '{"session_id":"s1","title":"ok","updated_at":"2026-01-01T00:00:00.000Z"}\nnot-json\n{"session_id":"s2","title":123}\n',
       "utf8",
     );

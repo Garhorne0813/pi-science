@@ -85,6 +85,17 @@ function updateOptimisticStatus(get: GetState, set: SetState, status: PromptRequ
   applyPromptDeliveryStatus(get, set, status.client_message_id, status);
 }
 
+function forgetMissingPromptRequest(get: GetState, set: SetState, cwd: string, sessionId: string, clientMessageId: string): void {
+  // A server restarted after accepting a prompt with an older protocol can
+  // have the transcript but no request ledger. Stop polling that absent ID;
+  // without an association, delivery cannot be confirmed from this endpoint.
+  removeLocalPromptRequest(clientMessageId);
+  const current = get();
+  if (current.cwd === cwd && current.activeSessionId === sessionId) {
+    applyPromptDeliveryStatus(get, set, clientMessageId, { status: "indeterminate", client_message_id: clientMessageId });
+  }
+}
+
 export function createRuntimeActions(set: SetState, get: GetState) {
   /** React StrictMode can replay the route effect while the first session
    * connection is still loading. Share that initial load for the same target;
@@ -342,7 +353,11 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         if (status.status === "pending" || status.status === "accepted") {
           void monitorPromptRequest(client, cwd, sessionId, record.clientMessageId);
         }
-      } catch {
+      } catch (error) {
+        if ((error as Error & { status?: number }).status === 404) {
+          forgetMissingPromptRequest(getState, setState, cwd, sessionId, record.clientMessageId);
+          continue;
+        }
         const status: PromptRequestStatus = {
           status: record.status === "persisted" ? "accepted" : record.status,
           client_message_id: record.clientMessageId,
@@ -366,7 +381,11 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         const status = await client.getPromptRequestStatus(sessionId, clientMessageId, cwd);
         updateOptimisticStatus(get, set, status);
         if (status.status === "persisted" || status.status === "rejected" || status.status === "indeterminate") return;
-      } catch {
+      } catch (error) {
+        if ((error as Error & { status?: number }).status === 404) {
+          forgetMissingPromptRequest(get, set, cwd, sessionId, clientMessageId);
+          return;
+        }
         // Keep the stored ID and current visual state; a later connect can
         // resume status reconciliation without copying prompt text locally.
       }

@@ -1,4 +1,4 @@
-import { copyFile, mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -225,19 +225,18 @@ describe("SQLite state store", () => {
     expect(await jobs.list(source, 10)).toEqual([]);
   });
 
-  it("keeps jobs isolated when a workspace is copied with the same project manifest", async () => {
+  it("keeps jobs isolated when a workspace directory is copied", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-science-sqlite-copy-"));
     directories.push(root);
     const source = join(root, "source");
     const copy = join(root, "copy");
     await mkdir(source);
-    await mkdir(join(copy, ".pi-science"), { recursive: true });
+    await mkdir(copy, { recursive: true });
     const state = await store();
     const workspaces = new WorkspaceRepository(state);
     const jobs = new JobRepository(state, workspaces);
 
     const saved = await jobs.save(runningJob(source));
-    await copyFile(join(source, ".pi-science", "project.json"), join(copy, ".pi-science", "project.json"));
     await workspaces.rememberWorkspace(copy);
 
     expect(await jobs.list(copy, 10)).toEqual([]);

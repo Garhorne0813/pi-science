@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { buildApp } from "./app.js";
 import { createServerModules } from "./server-modules.js";
 import type { ServerConfig } from "../config/config.js";
-import type { KernelExecuteOptions, NodeKernelManager } from "../runtime/kernel/node-kernel-manager.js";
+import { NodeKernelManager, type KernelExecuteOptions } from "../runtime/kernel/node-kernel-manager.js";
 import { InMemorySqliteStateStore } from "../storage/sqlite/state-store.js";
 
 const openApps: Array<{ close(): Promise<unknown> }> = [];
@@ -31,6 +31,8 @@ function config(_pythonOrigin: string, overrides: Partial<ServerConfig> = {}): S
 }
 
 const fakeKernels = {
+  status() { return { execution_available: true, unavailable_reason: null, interpreters: { python: true, r: true }, sessions: [], active_count: 0, native: true }; },
+  executionCapability() { return { execution_available: true, unavailable_reason: null }; },
   async execute(options: KernelExecuteOptions) {
     if (options.code === "write-output") await writeFile(join(options.cwd, "cell-output.csv"), "value\n42\n", "utf8");
     if (options.code === "kernel-error") return { ok: false, stdout: "before failure\n", stderr: "", result: null, error: "cell failed", interrupted: false, mime: {} };
@@ -147,6 +149,28 @@ describe("Node control plane", () => {
     const status = await app.inject({ method: "GET", url: "/api/kernels/status" });
     expect(status.json()).toMatchObject({ native: true, active_count: 0, interpreters: { python: expect.any(Boolean), r: expect.any(Boolean) } });
   });
+
+  it("returns explicit capability and 503 for Windows Notebook execution even when Sandy is configured", async () => {
+    const sandy = process.env.PI_SCIENCE_SANDY_PATH;
+    process.env.PI_SCIENCE_SANDY_PATH = "C:\\tools\\sandy.exe";
+    const workspace = join(tmpdir(), `pi-science-win-kernel-${Date.now()}`);
+    try {
+      await mkdir(join(workspace, ".pi-science"), { recursive: true });
+      const modules = { ...createServerModules(config("http://127.0.0.1:1")), kernels: new NodeKernelManager({ platform: "win32", interpreterAvailable: () => true }) };
+      const app = buildApp(config("http://127.0.0.1:1"), modules);
+      openApps.push(app);
+      expect((await app.inject({ method: "GET", url: "/api/kernels/status" })).json()).toMatchObject({ execution_available: false, interpreters: { python: false, r: false } });
+      for (const path of ["execute", "execute-stream"]) {
+        const response = await app.inject({ method: "POST", url: `/api/kernels/${path}?cwd=${encodeURIComponent(workspace)}`, payload: { language: "python", code: "1+1" } });
+        expect(response.statusCode).toBe(503);
+        expect(response.json()).toMatchObject({ code: "kernel_execution_unavailable" });
+      }
+    } finally {
+      if (sandy === undefined) delete process.env.PI_SCIENCE_SANDY_PATH;
+      else process.env.PI_SCIENCE_SANDY_PATH = sandy;
+      await rm(workspace, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   it("provisions the workspace environment before forwarding kernel execution", async () => {
     const workspace = join(tmpdir(), `pi-science-kernel-environment-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -310,6 +334,29 @@ describe("Node control plane", () => {
     // manager also owns research/review subagent runtimes, so its onClose hook
     // must run unconditionally exactly once.
     expect(shutdownSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 503 before environment provisioning when Linux isolation is unavailable", async () => {
+    const workspace = join(tmpdir(), `pi-science-linux-kernel-${Date.now()}`);
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    try {
+      const modules = createServerModules(config("http://127.0.0.1:1"));
+      const ensure = vi.spyOn(modules.environments, "ensure");
+      const app = buildApp(config("http://127.0.0.1:1"), {
+        ...modules,
+        kernels: new NodeKernelManager({ platform: "linux", interpreterAvailable: () => true, sandboxStatus: async () => ({ available: false, reason: "bubblewrap unavailable" }) }),
+      });
+      openApps.push(app);
+      expect((await app.inject({ method: "GET", url: "/api/kernels/status" })).json()).toMatchObject({ execution_available: false, interpreters: { python: false, r: false } });
+      for (const path of ["execute", "execute-stream"]) {
+        const response = await app.inject({ method: "POST", url: `/api/kernels/${path}?cwd=${encodeURIComponent(workspace)}`, payload: { language: "python", code: "1+1" } });
+        expect(response.statusCode).toBe(503);
+        expect(response.json()).toMatchObject({ code: "kernel_execution_unavailable" });
+      }
+      expect(ensure).not.toHaveBeenCalled();
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   it("calls the shared Pi runtime manager teardown exactly twice when nodePiManager is on (idempotent no-ops)", async () => {

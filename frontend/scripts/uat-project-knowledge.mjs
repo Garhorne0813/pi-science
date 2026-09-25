@@ -1,4 +1,5 @@
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright-core";
@@ -12,6 +13,15 @@ const workspace = path.join(os.tmpdir(), `pi-science-knowledge-uat-${process.pid
 const desktopScreenshot = path.join(os.tmpdir(), "pi-science-knowledge-uat-desktop.png");
 const mobileScreenshot = path.join(os.tmpdir(), "pi-science-knowledge-uat-mobile.png");
 const internalToken = process.env.PI_SCIENCE_INTERNAL_TOKEN;
+
+async function workspaceStateDirectory() {
+  const canonical = await realpath(workspace);
+  const identity = process.platform === "win32" ? canonical.toLowerCase() : canonical;
+  const key = createHash("sha256").update(identity).digest("hex");
+  const configuredHome = path.resolve(process.env.PI_SCIENCE_HOME || path.join(os.homedir(), ".pi-science"));
+  const home = await realpath(configuredHome).catch(() => configuredHome);
+  return path.join(home, "workspaces", key);
+}
 
 function authenticatedInit(init = {}) {
   const headers = new Headers(init.headers);
@@ -93,8 +103,9 @@ async function seedWorkspace() {
       applied_history_id: null,
     },
   ];
-  await mkdir(path.join(workspace, ".pi-science", "inbox"), { recursive: true });
-  await writeFile(path.join(workspace, ".pi-science", "inbox", "proposals.json"), `${JSON.stringify(proposals, null, 2)}\n`);
+  const stateDirectory = await workspaceStateDirectory();
+  await mkdir(path.join(stateDirectory, "inbox"), { recursive: true });
+  await writeFile(path.join(stateDirectory, "inbox", "proposals.json"), `${JSON.stringify(proposals, null, 2)}\n`);
 }
 
 
@@ -175,6 +186,7 @@ async function run() {
     console.log(`SCREENSHOT ${mobileScreenshot}`);
   } finally {
     await browser.close();
+    await rm(await workspaceStateDirectory(), { recursive: true, force: true });
     await rm(workspace, { recursive: true, force: true });
   }
 }

@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { notebookRuntime, type CellResult } from "../../lib/notebook";
+import { notebookRuntime, type CellResult, type KernelCapabilities } from "../../lib/notebook";
 import { useTranslation } from "react-i18next";
 import { sessionRunsQuery } from "../../lib/runs";
 import { subscribeExecutionInvalidation } from "../../lib/runs/execution-events";
@@ -25,7 +25,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
   const { t } = useTranslation();
   const [notebookId] = useState(() => requestedNotebookId || (sessionId ? `session-${sessionId}` : `nb-${Date.now()}`));
   const [cells, setCells] = useState<Cell[]>([]);
-  const [interpreters, setInterpreters] = useState<{ python: boolean; r: boolean } | null>(null);
+  const [interpreters, setInterpreters] = useState<KernelCapabilities | null>(null);
   const [draft, setDraft] = useState(() => {
     try { return window.localStorage.getItem(`pi-science:kernel-draft:${notebookId}`) || ""; }
     catch { return ""; }
@@ -98,8 +98,8 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
 
   const runCell = useCallback(async (cellId: string) => {
     const cell = cells.find((candidate) => candidate.id === cellId);
-    if (cell) await executeCell(cell.id, cell.code, cell.language);
-  }, [cells, executeCell]);
+    if (cell && interpreters?.[cell.language]) await executeCell(cell.id, cell.code, cell.language);
+  }, [cells, executeCell, interpreters]);
 
   const submitDraft = useCallback(async () => {
     const code = draft.trimEnd();
@@ -148,7 +148,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
               ? t("notebook.checkingKernels")
               : kernelsReady
                 ? t("notebook.kernelsReady", { kernels: `${interpreters?.python ? "Python" : ""}${interpreters?.python && interpreters?.r ? " / " : ""}${interpreters?.r ? "R" : ""}` })
-                : t("notebook.noKernel")}
+                : interpreters?.executionAvailable === false ? t("notebook.windowsUnavailable") : t("notebook.noKernel")}
           </div>
         </div>
         {recordedKernelRunning && (
@@ -218,7 +218,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
                   {cell.running ? (
                     <button onClick={() => void interruptKernel(cell.language)} disabled={interrupting} className="flex h-7 items-center gap-1 rounded-md bg-error px-2 font-medium text-white hover:opacity-90 disabled:opacity-50"><Square size={10} fill="currentColor" /> {t("common.stop")}</button>
                   ) : (
-                    <button onClick={() => void runCell(cell.id)} disabled={!cell.code.trim()} className="flex h-7 items-center gap-1 rounded-md bg-accent px-2 font-medium text-accent-fg hover:opacity-90 disabled:opacity-40"><Play size={11} /> {t("common.run")}</button>
+                    <button onClick={() => void runCell(cell.id)} disabled={!cell.code.trim() || !interpreters?.[cell.language]} className="flex h-7 items-center gap-1 rounded-md bg-accent px-2 font-medium text-accent-fg hover:opacity-90 disabled:opacity-40"><Play size={11} /> {t("common.run")}</button>
                   )}
                   <button onClick={() => removeCell(cell.id)} aria-label={t("notebook.removeCell")} className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-error/10 hover:text-error"><Trash2 size={11} /></button>
                 </div>

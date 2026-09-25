@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { executionRepository } from "../../runtime/executions/execution-repository.js";
 import { registerExecutionRoutes } from "./execution-routes.js";
+import { ensureProject } from "../../project/project-registry.js";
 
 const workspaces: string[] = [];
 
@@ -15,7 +16,7 @@ afterEach(async () => {
 async function workspace(): Promise<string> {
   const path = await mkdtemp(join(tmpdir(), "pi-science-execution-routes-"));
   workspaces.push(path);
-  await mkdir(join(path, ".pi-science"), { recursive: true });
+  await ensureProject(path);
   return path;
 }
 

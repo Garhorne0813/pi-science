@@ -1,5 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CredentialStore } from "../../../model-resources/credential-store.js";
 
@@ -36,7 +37,12 @@ export default async function piScienceMcp(pi: unknown): Promise<void> {
 
 export function loadProjectedServers(workspace: string): Record<string, Record<string, unknown>> {
   let projected: ProjectedSnapshot = { version: 1, project_id: "empty", mcpServers: {} };
-  const snapshotPath = join(workspace, ".pi-science", "mcp-runtime.json");
+  const stateRoot = process.env.PI_SCIENCE_STATE_ROOT;
+  if (!stateRoot) return {};
+  const canonical = canonicalPathSync(resolve(workspace));
+  const identity = process.platform === "win32" ? canonical.toLowerCase() : canonical;
+  const stateDirectory = join(stateRoot, "workspaces", createHash("sha256").update(identity).digest("hex"));
+  const snapshotPath = join(stateDirectory, "mcp-runtime.json");
   try {
     const parsed = JSON.parse(readFileSync(snapshotPath, "utf8")) as Partial<ProjectedSnapshot>;
     if (parsed.version !== 1 || typeof parsed.project_id !== "string" || !parsed.project_id || !parsed.mcpServers || typeof parsed.mcpServers !== "object" || Array.isArray(parsed.mcpServers)) {
@@ -59,6 +65,14 @@ export function loadProjectedServers(workspace: string): Record<string, Record<s
       ...(headers ? { headers } : {}),
     }];
   }));
+}
+
+function canonicalPathSync(path: string): string {
+  try { return realpathSync.native(path); }
+  catch {
+    const parent = dirname(path);
+    return parent === path ? path : join(canonicalPathSync(parent), basename(path));
+  }
 }
 
 function materialize(bindings?: Record<string, Binding>): Record<string, string> | undefined {

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DurableEventStore, parseSseBlock, type SseEventRecord } from "./event-store.js";
-import { configRoot } from "../../storage/persistence.js";
+import { configRoot, metadataRoot } from "../../storage/persistence.js";
 
 const cleanup: string[] = [];
 const originalHome = process.env.PI_SCIENCE_HOME;
@@ -25,7 +25,7 @@ afterEach(async () => {
 async function workspace(): Promise<string> {
   const cwd = join(tmpdir(), `pi-science-event-workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   cleanup.push(cwd);
-  await mkdir(join(cwd, ".pi-science", "events"), { recursive: true });
+  await mkdir(join(metadataRoot(cwd), "events"), { recursive: true });
   return cwd;
 }
 
@@ -37,7 +37,7 @@ function paths(cwd: string, sessionId: string): { primary: string; fallback: str
   const safeId = createHash("sha256").update(sessionId).digest("hex");
   const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 24);
   return {
-    primary: join(resolve(cwd), ".pi-science", "events", `${safeId}.jsonl`),
+    primary: join(metadataRoot(cwd), "events", `${safeId}.jsonl`),
     fallback: join(configRoot(), "events", workspaceKey, `${safeId}.jsonl`),
   };
 }

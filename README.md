@@ -38,6 +38,7 @@ Each project keeps its own conversations, files, runs, provenance, and reviewed 
 - Node.js 24.16 or newer
 - Python 3.11 or newer
 - pnpm
+- Linux: bubblewrap (`bwrap`) with working unprivileged user namespaces
 - An LLM provider API key, or a trusted OpenAI/Anthropic-compatible local endpoint
 - Windows: PowerShell 5.1 or newer
 
@@ -67,7 +68,13 @@ powershell -File scripts/install.ps1
 powershell -File scripts/start.ps1
 ```
 
-The Bash launcher is designed for macOS/Linux and is intended to run under WSL; CI validates its lifecycle on Linux. The PowerShell installer downloads and verifies the native Windows Pi runtime ZIP, so Git Bash is not required for a fresh Windows installation. Both launchers deliberately run `tsx watch` and the Vite development server, so they are not production deployment servers. Starting an installed checkout invokes package-local executables directly, so npm and pnpm wrappers are not runtime requirements; pnpm is still required for installation, builds, and dependency updates.
+The Bash launcher is designed for macOS/Linux and is intended to run under WSL; CI validates its lifecycle on Linux. The PowerShell installer downloads and verifies the native Windows Pi runtime ZIP, so Git Bash is not required for a fresh Windows installation. Both launchers run the control plane directly and the Vite development server; POSIX watch mode is an explicit development option (`PI_SCIENCE_SERVER_WATCH=1`). They are not production deployment servers. Starting an installed checkout invokes package-local executables directly, so npm and pnpm wrappers are not runtime requirements; pnpm is still required for installation, builds, and dependency updates.
+
+Unattended research execution on Windows additionally requires [Sandy](https://github.com/ahrvoje/sandy_cli) for AppContainer + Job Object isolation. Windows research scripts must use a `.cjs`, `.mjs`, or `.js` entrypoint. Set `PI_SCIENCE_SANDY_PATH` to the absolute path of `sandy.exe` **outside the workspace** before starting Pi Science. The installer does not download Sandy automatically; without it, research preflight refuses to start. Windows CI uses Sandy `v0.9992` with a pinned SHA-256 and exercises the isolation tests.
+
+Notebook Python/R execution is currently unavailable on native Windows because the Sandy policy used for non-interactive jobs disables the persistent stdin protocol required by kernels. The Notebook status API reports this capability explicitly and the UI disables cell execution; existing notebooks remain viewable and editable.
+
+Conversation Bash and direct `!` commands are also currently unavailable on native Windows. The pinned Sandy `v0.9992` AppContainer policy can grant a writable workspace, but it cannot safely exclude the reserved workspace-local `.pi-science` path from that recursive grant. Conversation execution therefore fails closed on Windows. Windows research jobs continue to use Sandy when configured.
 
 ### The `pi-science` command
 
@@ -242,9 +249,9 @@ configured provider as your sessions — a fresh isolated Pi runtime sends the
 most recent few messages (≤ 6 messages, each trimmed to ≤ 200 characters) and
 asks for a title of at most 8 words. This means **the latest conversation
 excerpt is sent to your configured LLM provider** on each settled turn. The
-result is persisted in the workspace at
-`.pi-science/session-titles.jsonl`; browser storage is retained only as an
-immediate fallback.
+result is persisted in the workspace's private application state under
+`~/.pi-science/workspaces/<workspace-hash>/session-titles.jsonl` (or
+`PI_SCIENCE_HOME`); browser storage is retained only as an immediate fallback.
 
 To disable it, set the environment variable before starting the services and
 restart:

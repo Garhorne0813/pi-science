@@ -191,6 +191,13 @@ export async function sendPrompt(baseUrl: string, sessionId: string, message: st
   const res = await request(`${baseUrl}/api/sessions/${sessionId}/prompt${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    // A prompt is a runtime-start path, not an ordinary REST call: the control
+    // plane starts (or restarts) the session runtime and prepares the isolated
+    // workspace environment before the turn can be accepted. First-time
+    // workspace provisioning creates a micromamba revision and costs tens of
+    // seconds, so the ordinary REST budget would abandon prompts the backend
+    // completes. Budget them like session creation.
+    timeoutMs: RUNTIME_START_TIMEOUT_MS,
     body: JSON.stringify({ message, client_message_id: clientMessageId }),
   });
   const data = await res.json().catch(() => ({}));

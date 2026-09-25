@@ -39,6 +39,11 @@ export function registerSessionReadRoutes(app: FastifyInstance, sessionRepositor
       }
       const cwd = await validateWorkspaceCwd(queryCwd(request));
       const project = await ensureProject(cwd);
+      // Opening a workspace loads its session list first; use that moment to
+      // prepare the isolated environment in the background so the first prompt
+      // in this workspace never pays for a first-time micromamba provision
+      // inside a request the user is waiting on.
+      nodeSessionService.primeWorkspaceEnvironment(cwd);
       const sessions = await sessionRepository.list(cwd);
       const live = nodeSessionService.liveSessions(cwd);
       for (const runtime of live.reverse()) {

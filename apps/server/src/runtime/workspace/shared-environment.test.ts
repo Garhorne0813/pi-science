@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { WorkspaceEnvironmentService } from "./workspace-environment.js";
+import { workspaceFile } from "../../storage/persistence.js";
 
 const previousHome = process.env.PI_SCIENCE_HOME;
 
@@ -40,7 +41,7 @@ describe("shared environment bindings", () => {
       expect(firstStatus.prefix).toBe(prefix);
       expect(secondStatus.prefix).toBe(prefix);
       expect(firstStatus.revision_id).toBe("rev_shared");
-      expect(JSON.parse(await readFile(join(first, ".pi-science", "environment.json"), "utf8"))).toMatchObject({ environment_id: "env_shared", revision_id: "rev_shared" });
+      expect(JSON.parse(await readFile(workspaceFile(first, "environment.json"), "utf8"))).toMatchObject({ environment_id: "env_shared", revision_id: "rev_shared" });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

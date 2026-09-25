@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { buildApp } from "../../app/app.js";
 import type { ServerConfig } from "../../config/config.js";
 import { turnArtifactRepository } from "../../runtime/artifacts/turn-artifact-repository.js";
+import { ensureProject } from "../../project/project-registry.js";
 
 const apps: Array<{ close(): Promise<unknown> }> = [];
 const tempDirs: string[] = [];
@@ -23,7 +24,8 @@ function config(): ServerConfig {
 async function workspace(): Promise<string> {
   const path = join(tmpdir(), `pi-science-turn-routes-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   tempDirs.push(path);
-  await mkdir(join(path, ".pi-science"), { recursive: true });
+  await mkdir(path, { recursive: true });
+  await ensureProject(path);
   return path;
 }
 

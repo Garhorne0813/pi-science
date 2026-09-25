@@ -41,8 +41,8 @@
 4. Verify the saved image: readable, non-empty, correctly labeled, not clipped.
 
 ### Remote computation
-1. Check `.pi-science/compute.json` for available machines (SSH servers, GPU
-   boxes, Slurm clusters).
+1. Check the app's configured compute machines for available SSH servers, GPU
+   boxes, and Slurm clusters.
 2. Write and test the computation script locally on a small subset first.
 3. Use the `remote-compute` skill to dispatch the job.
 4. Fetch results back and verify they match local test output.

@@ -165,7 +165,7 @@ describe("seedWorkspaceAssets", () => {
     expect(readFileSync(join(external, "keep.txt"), "utf8")).toBe("do not delete");
   });
 
-  it("replaces a symlink at cwd/.pi-science and never writes through it", () => {
+  it("does not touch a workspace-local .pi-science symlink", () => {
     const cwd = tempCwd();
     const external = tempExternal();
     writeFileSync(join(external, "keep.txt"), "do not delete", "utf8");
@@ -174,8 +174,7 @@ describe("seedWorkspaceAssets", () => {
     seedWorkspaceAssets(cwd);
 
     const info = lstatSync(join(cwd, ".pi-science"));
-    expect(info.isSymbolicLink()).toBe(false);
-    expect(info.isDirectory()).toBe(true);
+    expect(info.isSymbolicLink()).toBe(true);
     expect(readFileSync(join(external, "keep.txt"), "utf8")).toBe("do not delete");
   });
 

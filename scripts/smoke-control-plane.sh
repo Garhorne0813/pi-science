@@ -45,7 +45,7 @@ curl() {
 }
 
 SMOKE_WORKSPACE="$TEMP_DIR/workspace"
-mkdir -p "$SMOKE_WORKSPACE/.pi-science"
+mkdir -p "$SMOKE_WORKSPACE"
 printf 'smoke\n' > "$SMOKE_WORKSPACE/notes.txt"
 
 cleanup() {
@@ -162,6 +162,9 @@ assert_status 200 "http://127.0.0.1:${NODE_PORT}/api/settings/config"
 assert_body_contains '"api_keys"' "http://127.0.0.1:${NODE_PORT}/api/settings/config"
 
 WORKSPACE_Q="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$SMOKE_WORKSPACE")"
+WORKSPACE_BODY="$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1]}))' "$SMOKE_WORKSPACE")"
+curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
+    -d "$WORKSPACE_BODY" "http://127.0.0.1:${NODE_PORT}/api/workspaces/open" >/dev/null
 
 echo "[smoke] native settings, files, artifacts, jobs, and provenance"
 SETTINGS_JSON="$(curl --fail --silent --show-error -X PUT \

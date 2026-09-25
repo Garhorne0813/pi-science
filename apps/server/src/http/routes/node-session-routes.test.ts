@@ -8,6 +8,8 @@ import { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import { registerSessionReadRoutes } from "./session-routes.js";
 import { sessionRepository } from "../../runtime/node/session-repository.js";
 import { AI_TITLE_PROMPT_INSTRUCTION } from "../../runtime/title/title-prompt.js";
+import { metadataRoot, workspaceFile } from "../../storage/persistence.js";
+import { ensureProject } from "../../project/project-registry.js";
 
 const cleanup: string[] = [];
 const nodeSessionService = new NodeSessionService(undefined, undefined, undefined, {
@@ -70,7 +72,9 @@ afterEach(async () => {
 async function workspaceWithSessions(...ids: string[]): Promise<string> {
   const cwd = join(tmpdir(), `pi-science-route-workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   cleanup.push(cwd);
-  const directory = join(cwd, ".pi-science", "sessions");
+  await mkdir(cwd, { recursive: true });
+  await ensureProject(cwd);
+  const directory = join(metadataRoot(cwd), "sessions");
   await mkdir(directory, { recursive: true });
   for (const id of ids) {
     await writeFile(join(directory, `${id}.jsonl`), [
@@ -180,7 +184,7 @@ describe("native Node conversation routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ ok: true, title: "AI 自动标题" });
     // No client PUT involved: the title is already on disk and in the list.
-    const raw = await readFile(join(cwd, ".pi-science", "session-titles.jsonl"), "utf8");
+    const raw = await readFile(workspaceFile(cwd, "session-titles.jsonl"), "utf8");
     expect(raw).toContain('"session_id":"session-title-persist"');
     expect(raw).toContain("AI 自动标题");
     const listed = await server.inject({ method: "GET", url: `/api/sessions?cwd=${encodeURIComponent(cwd)}` });
@@ -196,7 +200,7 @@ describe("native Node conversation routes", () => {
     const response = await server.inject({ method: "POST", url: `/api/sessions/session-title-null/title?cwd=${encodeURIComponent(cwd)}` });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ ok: true, title: null });
-    await expect(readFile(join(cwd, ".pi-science", "session-titles.jsonl"), "utf8")).rejects.toThrow();
+    await expect(readFile(workspaceFile(cwd, "session-titles.jsonl"), "utf8")).rejects.toThrow();
     await server.close();
   });
 
@@ -282,7 +286,7 @@ describe("native Node conversation routes", () => {
 
   it("serves whole-session stats for an idle session by folding its JSONL", async () => {
     const cwd = await workspaceWithSessions("session-a");
-    await writeFile(join(cwd, ".pi-science", "sessions", "session-a.jsonl"), [
+    await writeFile(join(metadataRoot(cwd), "sessions", "session-a.jsonl"), [
       JSON.stringify({ type: "session", id: "session-a", cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
       JSON.stringify({ type: "message", id: "u1", timestamp: "2026-07-23T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: "hello" }] } }),
       JSON.stringify({ type: "message", id: "a1", timestamp: "2026-07-23T00:00:02.000Z", message: { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "read" }], usage: { input: 10, output: 2 } } }),
@@ -313,7 +317,7 @@ describe("native Node conversation routes", () => {
   it("does not re-add a hidden AI-title session merely because it was resumed", async () => {
     const cwd = await workspaceWithSessions();
     const sessionId = "legacy-title-runtime";
-    await writeFile(join(cwd, ".pi-science", "sessions", `${sessionId}.jsonl`), [
+    await writeFile(join(metadataRoot(cwd), "sessions", `${sessionId}.jsonl`), [
       JSON.stringify({ type: "session", id: sessionId, cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
       JSON.stringify({
         type: "message",
@@ -340,7 +344,7 @@ describe("native Node conversation routes", () => {
 
   it("serves older history pages from an opaque cursor and rejects invalid pagination", async () => {
     const cwd = await workspaceWithSessions("session-page");
-    await writeFile(join(cwd, ".pi-science", "sessions", "session-page.jsonl"), [
+    await writeFile(join(metadataRoot(cwd), "sessions", "session-page.jsonl"), [
       JSON.stringify({ type: "session", id: "session-page", cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
       ...["m1", "m2", "m3"].map((id) => JSON.stringify({
         type: "message",
@@ -385,7 +389,7 @@ describe("native Node conversation routes", () => {
 
   it("forwards persisted trajectory metadata in history messages", async () => {
     const cwd = await workspaceWithSessions("session-metadata");
-    await writeFile(join(cwd, ".pi-science", "sessions", "session-metadata.jsonl"), [
+    await writeFile(join(metadataRoot(cwd), "sessions", "session-metadata.jsonl"), [
       JSON.stringify({ type: "session", id: "session-metadata", cwd }),
       JSON.stringify({
         type: "message", id: "a1", timestamp: "2026-09-14T00:00:00.000Z",
@@ -465,8 +469,8 @@ describe("native Node conversation routes", () => {
 
     const deleted = await server.inject({ method: "DELETE", url: `/api/sessions/session-b?${query}` });
     expect(deleted.statusCode).toBe(200);
-    await expect(access(join(cwd, ".pi-science", "sessions", "session-b.jsonl"))).rejects.toThrow();
-    await expect(readFile(join(cwd, ".pi-science", "sessions", "session-a.jsonl"), "utf8")).resolves.toContain('"id":"session-a"');
+    await expect(access(join(metadataRoot(cwd), "sessions", "session-b.jsonl"))).rejects.toThrow();
+    await expect(readFile(join(metadataRoot(cwd), "sessions", "session-a.jsonl"), "utf8")).resolves.toContain('"id":"session-a"');
     // Deleting a session that never existed is idempotent success (ghost).
     const ghost = await server.inject({ method: "DELETE", url: `/api/sessions/ghost-no-such?${query}` });
     expect(ghost.statusCode).toBe(200);
@@ -578,7 +582,7 @@ describe("native Node conversation routes", () => {
 
     // The title file no longer references the deleted session.
     const { readFile } = await import("node:fs/promises");
-    const raw = await readFile(join(cwd, ".pi-science", "session-titles.jsonl"), "utf8").catch(() => "");
+    const raw = await readFile(workspaceFile(cwd, "session-titles.jsonl"), "utf8").catch(() => "");
     expect(raw.includes("gone soon")).toBe(false);
     await server.close();
   });

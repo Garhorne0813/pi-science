@@ -17,7 +17,8 @@ flowchart LR
     PH -->|按需启动| MCP[已启用的 MCP 连接器]
     CP -->|按需 spawn| K[原生 Python 和 R 内核]
     CP --> DB[(全局 state.sqlite)]
-    CP --> WS[(工作区文件和 .pi-science 元数据)]
+    CP --> WS[(工作区文件)]
+    CP --> PS[(全局 workspace 私有状态)]
     CP -->|有界的模型与探测 HTTP| EXT[已配置的模型与科学数据服务]
     MCP -->|有界的科学 API HTTP| EXT
     PH --> WS
@@ -124,8 +125,8 @@ JupyterLab 仍是可选能力，使用独立的应用级工具环境；项目 ke
 
 ## 工作区与持久化状态
 
-Pi-Science 采用 local-first 设计：workspace 始终是普通目录，可移植的项目级状态保存在
-其内部；跨项目的协调状态则单独保存在控制面配置目录中。
+Pi-Science 采用 local-first 设计：workspace 始终是普通目录，项目内容保留在其中；
+Pi-Science 的控制面状态统一保存在应用配置目录中。
 
 ```text
 project/
@@ -134,27 +135,28 @@ project/
 ├── .pi/
 │   ├── skills/
 │   └── agents/
-├── .pi-science/
-│   ├── project.json           # 稳定项目身份与显示元数据
-│   ├── environment.json       # 指向共享 Micromamba revision 的绑定
-│   ├── memory/
-│   │   └── ledger.json       # 项目记忆规范存储（记录、提案、决策）
-│   ├── sessions/             # 持久化的 Pi session JSONL 文件
-│   ├── agent/                # 项目级 runtime 配置回退目录
-│   ├── mcp-runtime.json      # 生成的已启用连接器与有效工具策略
-│   ├── runs/                 # 执行工作区与输出
-│   ├── solutions/            # 不可变 research candidate
-│   ├── session-titles.jsonl
-│   ├── turn-artifacts.jsonl
-│   ├── artifacts.jsonl
-│   ├── provenance.jsonl
-│   └── research-records-v2.jsonl
 └── 科研文件
+
+~/.pi-science/                       # 或 PI_SCIENCE_HOME
+└── workspaces/<规范路径的 SHA-256>/
+    ├── project.json                 # 稳定项目身份与显示元数据
+    ├── environment.json             # 共享 Micromamba revision 绑定
+    ├── memory/ledger.json
+    ├── sessions/
+    ├── mcp-runtime.json
+    ├── runs/
+    ├── solutions/
+    ├── session-titles.jsonl
+    ├── turn-artifacts.jsonl
+    ├── artifacts.jsonl
+    ├── provenance.jsonl
+    └── research-records-v2.jsonl
 ```
 
 如果设置了 `PI_SCIENCE_HOME`，它就是全局配置目录；否则默认使用
-`~/.pi-science`。首选位置不可写时，会回退到当前 checkout 下的
-`.runtime/pi-science`。生产环境默认启用 SQLite，并由专用 worker thread 管理
+`~/.pi-science`。每个 workspace 的状态目录由规范路径的 SHA-256 标识。首次注册时，
+旧版 workspace 内的 `.pi-science` 会整体迁移到全局目录并从 workspace 删除。
+生产环境默认启用 SQLite，并由专用 worker thread 管理
 `state.sqlite`。数据库使用 WAL journal，并保存：
 
 - 稳定项目身份和规范化 workspace 位置，包括托管、收藏、最近打开与位置缺失状态；
@@ -171,8 +173,7 @@ project/
 审核后的项目记忆按需创建。Agent 发现只有在用户接受后，才会成为正式项目知识。
 
 Memory Ledger 是项目记忆的规范存储：它把现有项目知识、审核提案、证据引用、审批状态
-和决策审计事件统一放在一起。已有的 `.pi-science/project-state.json` 会在第一次读取时
-迁移，并继续作为旧客户端和本地工具的兼容投影保留。
+和决策审计事件统一放在一起。旧版 `project-state.json` 会随 workspace 状态在首次注册时迁移。
 
 外部 workspace 通过打开 workspace 的 API 显式注册，其规范化路径和收藏状态写入
 SQLite，因此重启后仍可重新发现。启动时会幂等导入旧的
@@ -189,7 +190,7 @@ Node 控制面在 SQLite 中维护全局的、带版本的 Micromamba 环境注�
 Ready revision 不可变；安装包会创建并绑定新的 revision，因此一个 Session 不会修改
 其他项目正在使用的 revision。已有 workspace `.venv` 暂时作为迁移回退；格式异常的
 `.venv` 不会被自动覆盖。JavaScript 包仍保留在 workspace 内，全局 npm/pnpm 安装
-重定向到 `.pi-science/`。
+重定向到该 workspace 的私有应用状态目录。
 
 Session Notebook 从当前对话内部打开，统一展示 Agent 与用户单元的执行历史；磁盘
 `.ipynb` 文件从“文件”打开，只有保存后才持久化。JupyterLab 使用一个应用级工具环境，
@@ -244,7 +245,7 @@ flowchart LR
     S --> DB[(MCP SQLite repositories)]
     S --> P[探测和 tools/list]
     DB --> RP[McpRuntimeProjection]
-    RP --> F[workspace/.pi-science/mcp-runtime.json]
+    RP --> F[全局 workspace 状态/mcp-runtime.json]
     F --> A[Pi MCP adapter]
     A --> L[本地 stdio 或 socket server]
     A --> H[远程 HTTP 或 SSE server]
@@ -269,7 +270,7 @@ flowchart LR
   `拒绝` 决策既可以全局设置，也可以按项目覆盖；优先级依次是 `拒绝`、项目决策、全局
   决策、连接器审批模式。除非连接器显式允许全部工具，未知工具仍需要审批。
 - 影响 runtime 的定义或策略变更会为所有已知 workspace 生成权限为 0600、原子替换的
-  `.pi-science/mcp-runtime.json`，并重载活跃 runtime。快照只保存启用的定义和策略，不
+  私有状态目录中的 `mcp-runtime.json`，并重载活跃 runtime。快照只保存启用的定义和策略，不
   保存解析后的密钥。多个项目共享一个 Pi Orbit Host，因此 Pi 扩展会从每个 Session
   自己的 workspace 加载快照。
 - 探测流程执行 MCP handshake 和 `tools/list`，合并并发探测，并按连接器 revision 与
@@ -286,7 +287,7 @@ flowchart LR
 - Pi Orbit Host 只监听本机地址，控制面的每个请求都需要随机生成的 bearer token。
 - Token 只保留在后端；不会向浏览器 origin 开放 Host 的直接 CORS 访问。
 - 创建 runtime 前会规范化并校验 workspace 路径。
-- 每个已注册 workspace 在 `.pi-science/project.json` 中拥有稳定的项目身份；
+- 每个已注册 workspace 在私有状态目录的 `project.json` 中拥有稳定的项目身份；
   session 列表通过该清单解析 `project_id`。
 - 注册后的 workspace 位于应用信任边界内。控制面会在创建 runtime 前记录 Pi Orbit
   项目 trust，因此只应注册你信任其中项目指令与技能的 workspace。
@@ -318,11 +319,38 @@ flowchart LR
 - 持久任务在 SQLite 中使用 owner generation 和带期限的 lease。启动恢复会协调被中断的
   工作，同时防止旧进程覆盖新 owner 已写入的终态结果。
 
+## 普通对话执行
+
+必装的 Pi Science sandbox extension 将内置 Bash 工具和 `!` 命令路由到控制面的
+conversation job；Notebook 的 Python/R 内核使用同一套 OS 沙箱。工作区可写，绑定的
+micromamba 修订版只读，私有应用状态位于工作区外且不可访问，网络禁止。环境修订版或原生
+沙箱不可用时执行会失败关闭。Windows conversation Bash 在 `PI_SCIENCE_SANDY_PATH` 指向
+`sandy.exe` 时使用 Sandy 的非交互 AppContainer policy。由于该 policy 禁用持久 kernel
+协议所需的 stdin，原生 Windows 上的 Notebook Python/R 仍保持禁用；kernel status API
+会报告此限制，UI 也会禁用执行。
+
+Pi 内置文件工具仍在 supervisor 进程中运行；extension 会限制其路径在工作区内，并阻止访问
+`.pi-science` 或通过符号链接越界。这是应用层路径检查，不是 OS 隔离。其他可信 extension 和
+控制面的普通 local job 仍可在宿主执行，因此 Pi supervisor 整体尚未进入沙箱。
+
 ## 研究循环
 
 Research loop 由 Node 控制面协调。它使用有界 Pi Orbit subagent runtime 生成与分析
 candidate，使用任务系统执行和确定性评估，使用不可变 candidate snapshot，并通过
 append-only 记录支持恢复与谱系追踪。
+
+研究任务的候选脚本、基线和评估器通过本地 OS 沙箱启动：macOS 使用 Seatbelt，
+Linux 使用 Bubblewrap，Windows 使用 Sandy 的 AppContainer + Job Object。候选只能写当前 run 的 work/outputs，评估器只能写当前
+evaluation 目录；托管科学环境只读，网络默认禁止。预检、启动和恢复都要求沙箱可用，不会回退到
+普通本地进程。沙箱保护的是这些任务子进程；Pi supervisor 本身仍运行在常规
+Pi runtime 中，因此此实现尚不能把整个研究循环宣称为针对恶意模型/扩展的完整
+安全边界。macOS 的 sandbox-exec 已废弃，后续需要可替换的 VM/容器后端。
+Linux 主机需要支持非特权 user namespace 与 `--disable-userns` 的 Bubblewrap。
+Windows 主机需要安装 [Sandy](https://github.com/ahrvoje/sandy_cli)，
+并将工作区外的 `sandy.exe` 绝对路径写入 `PI_SCIENCE_SANDY_PATH`。研究任务使用临时 AppContainer，
+禁止网络和剪贴板访问，文件权限限定到批准目录，并由 Job Object 限制进程数和内存；
+不回退到权限较弱的 restricted token。预检目前验证 Sandy 可执行文件，启动失败仍安全关闭。
+在真实 Windows 主机完成端到端隔离验证前，不应将该后端视为已验证的生产安全边界。
 
 Research loop 状态机和持久化约定详见
 [research loop ADR](adr-research-loop-subagents.md)。

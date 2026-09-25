@@ -6,6 +6,10 @@ const KILL_GRACE_MS = 2_000;
 const PROCESS_CLOSE_FAILSAFE_MS = 5_000;
 const WINDOWS_EXIT_DRAIN_MS = 1_000;
 const MAX_OUTPUT_BYTES = 100_000;
+const MAX_STREAM_BYTES = 1_000_000;
+
+export interface OutputFrame { cursor: number; stream: "stdout" | "stderr"; data: string }
+interface OutputBuffer { frames: OutputFrame[]; bytes: number; nextCursor: number }
 
 export interface SpawnedJobProcess {
   child: ChildProcess;
@@ -30,6 +34,7 @@ export interface ProcessSupervisorOptions {
 /** Owns child-process lifecycle and output buffering for one coordinator. */
 export class ProcessSupervisor {
   private readonly children = new Map<string, ChildProcess>();
+  private readonly output = new Map<string, OutputBuffer>();
   private readonly platform: NodeJS.Platform;
 
   constructor(private readonly options: ProcessSupervisorOptions = {}) {
@@ -44,6 +49,7 @@ export class ProcessSupervisor {
       detached: this.platform !== "win32",
     });
     this.children.set(jobId, child);
+    this.output.set(jobId, { frames: [], bytes: 0, nextCursor: 1 });
 
     let stdout = Buffer.alloc(0);
     let stderr = Buffer.alloc(0);
@@ -54,8 +60,18 @@ export class ProcessSupervisor {
       if (combined.length > MAX_OUTPUT_BYTES) markTruncated();
       return combined.subarray(-MAX_OUTPUT_BYTES);
     };
-    child.stdout?.on("data", (chunk: Buffer) => { stdout = appendTail(stdout, chunk, () => { stdoutTruncated = true; }); });
-    child.stderr?.on("data", (chunk: Buffer) => { stderr = appendTail(stderr, chunk, () => { stderrTruncated = true; }); });
+    const appendStream = (stream: "stdout" | "stderr", chunk: Buffer) => {
+      const buffer = this.output.get(jobId);
+      if (!buffer) return;
+      buffer.frames.push({ cursor: buffer.nextCursor++, stream, data: chunk.toString("base64") });
+      buffer.bytes += chunk.length;
+      while (buffer.bytes > MAX_STREAM_BYTES && buffer.frames.length > 1) {
+        const removed = buffer.frames.shift()!;
+        buffer.bytes -= Buffer.byteLength(removed.data, "base64");
+      }
+    };
+    child.stdout?.on("data", (chunk: Buffer) => { stdout = appendTail(stdout, chunk, () => { stdoutTruncated = true; }); appendStream("stdout", chunk); });
+    child.stderr?.on("data", (chunk: Buffer) => { stderr = appendTail(stderr, chunk, () => { stderrTruncated = true; }); appendStream("stderr", chunk); });
 
     let timedOut = false;
     const result = new Promise<JobProcessResult>((resolve) => {
@@ -108,6 +124,13 @@ export class ProcessSupervisor {
     return this.children.get(jobId);
   }
 
+  outputSince(jobId: string, cursor: number): { cursor: number; lost: boolean; frames: OutputFrame[] } | null {
+    const buffer = this.output.get(jobId);
+    if (!buffer) return null;
+    const first = buffer.frames[0]?.cursor ?? buffer.nextCursor;
+    return { cursor: buffer.nextCursor - 1, lost: cursor < first - 1, frames: buffer.frames.filter((frame) => frame.cursor > cursor) };
+  }
+
   terminate(jobId: string): void;
   terminate(child: ChildProcess): void;
   terminate(jobOrChild: string | ChildProcess): void {
@@ -117,6 +140,8 @@ export class ProcessSupervisor {
 
   forget(jobId: string): void {
     this.children.delete(jobId);
+    const timer = setTimeout(() => this.output.delete(jobId), 60_000);
+    timer.unref();
   }
 
   async shutdown(): Promise<void> {

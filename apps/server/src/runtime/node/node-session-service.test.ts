@@ -10,7 +10,8 @@ import { PiOrbitRequestError } from "../pi/pi-orbit-host.js";
 import { loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
 import { CredentialStore } from "../../model-resources/credential-store.js";
 import { ModelResourceRepository, emptyModelResourceState } from "../../model-resources/model-resource-repository.js";
-import { readJsonLines } from "../../storage/persistence.js";
+import { metadataRoot, readJsonLines, workspaceFile } from "../../storage/persistence.js";
+import { ensureProject } from "../../project/project-registry.js";
 import { ProjectReviewService } from "../../project-review/service.js";
 import { parseReviewResult, type ReviewRunRequest, type ReviewRunResult, type ReviewSubagentRunner } from "../../project-review/types.js";
 import { SessionStatsProjector } from "./session-stats-projector.js";
@@ -139,8 +140,10 @@ afterEach(async () => {
 async function workspaceWithSessions(...ids: string[]): Promise<string> {
   const cwd = join(tmpdir(), `pi-science-workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   cleanup.push(cwd);
-  const directory = join(cwd, ".pi-science", "sessions");
+  await mkdir(cwd, { recursive: true });
+  const directory = join(metadataRoot(cwd), "sessions");
   await mkdir(directory, { recursive: true });
+  await ensureProject(cwd);
   for (const id of ids) await writeFile(join(directory, `${id}.jsonl`), `${JSON.stringify({ type: "session", id, cwd, timestamp: new Date().toISOString() })}\n`, "utf8");
   return realpath(cwd);
 }
@@ -150,7 +153,7 @@ async function workspaceWithSessions(...ids: string[]): Promise<string> {
  *  shadowing the workspace configuration until it is re-applied — so tests
  *  that verify the replay must seed the jsonl like this. */
 async function writeSessionWithLocalModel(cwd: string, id: string, provider: string, model: string, thinkingLevel: string): Promise<void> {
-  const sessionFile = join(cwd, ".pi-science", "sessions", `${id}.jsonl`);
+  const sessionFile = join(metadataRoot(cwd), "sessions", `${id}.jsonl`);
   const header = JSON.parse((await readFile(sessionFile, "utf8")).split("\n")[0]!) as { id: string; cwd: string };
   const now = new Date().toISOString();
   await writeFile(sessionFile, [
@@ -182,6 +185,81 @@ function installStaleRuntime(service: NodeSessionService, sessionId: string, cwd
   });
 }
 
+describe("workspace environment priming", () => {
+  const nodeEnv = process.env.NODE_ENV;
+  beforeEach(() => { process.env.NODE_ENV = "development"; });
+  afterEach(() => { if (nodeEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = nodeEnv; });
+
+  it("warms each workspace once, without waiting for the caller", async () => {
+    const environment = vi.fn(async (_cwd: string) => ({ ...process.env }));
+    const service = new NodeSessionService(undefined, undefined, undefined, { environment });
+    const cwd = await workspaceWithSessions("primed");
+    const other = await workspaceWithSessions("primed-other");
+
+    service.primeWorkspaceEnvironment(cwd);
+    service.primeWorkspaceEnvironment(cwd);
+    await vi.waitFor(() => expect(environment).toHaveBeenCalledTimes(1));
+    service.primeWorkspaceEnvironment(other);
+    await vi.waitFor(() => expect(environment).toHaveBeenCalledTimes(2));
+    service.primeWorkspaceEnvironment(cwd);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Same canonical path twice is one warm-up; a second workspace gets its own.
+    expect(environment.mock.calls.map((call) => call[0])).toEqual([cwd, other]);
+  });
+
+  it("serializes warm-ups so concurrent workspaces cannot race the package cache", async () => {
+    const started: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const environment = vi.fn(async (cwd: string) => {
+      started.push(cwd);
+      if (started.length === 1) await new Promise<void>((resolve) => { releaseFirst = resolve; });
+      return { ...process.env };
+    });
+    const service = new NodeSessionService(undefined, undefined, undefined, { environment });
+    const first = await workspaceWithSessions("prime-serial-a");
+    const second = await workspaceWithSessions("prime-serial-b");
+
+    service.primeWorkspaceEnvironment(first);
+    service.primeWorkspaceEnvironment(second);
+    await vi.waitFor(() => expect(started).toEqual([first]));
+
+    releaseFirst?.();
+    await vi.waitFor(() => expect(started).toEqual([first, second]));
+  });
+
+  it("retries a failed warm-up after the cooldown, not on every refresh", async () => {
+    let attempts = 0;
+    const environment = vi.fn(async () => {
+      attempts += 1;
+      throw new Error("provision failed");
+    });
+    const service = new NodeSessionService(undefined, undefined, undefined, { environment });
+    const cwd = await workspaceWithSessions("prime-retry");
+
+    service.primeWorkspaceEnvironment(cwd);
+    await vi.waitFor(() => expect(environment).toHaveBeenCalledTimes(1));
+    // Workspace entry repeats on every session-list refresh; a failed provision
+    // must not be re-attempted (and re-solve conda) on each of them.
+    for (let refresh = 0; refresh < 5; refresh += 1) service.primeWorkspaceEnvironment(cwd);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(environment).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not provision while tests run the route suite", async () => {
+    process.env.NODE_ENV = "test";
+    const environment = vi.fn(async () => ({ ...process.env }));
+    const service = new NodeSessionService(undefined, undefined, undefined, { environment });
+    const cwd = await workspaceWithSessions("prime-test-env");
+
+    service.primeWorkspaceEnvironment(cwd);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(environment).not.toHaveBeenCalled();
+  });
+});
+
 describe("Node session lifecycle", () => {
   it("fails fast when the Pi runtime is missing without provisioning the workspace environment", async () => {
     const environment = vi.fn(async () => ({ ...process.env }));
@@ -203,7 +281,7 @@ describe("Node session lifecycle", () => {
     const environment = JSON.parse(await readFile(process.env.FAKE_PI_ENV_LOG, "utf8"));
     expect(environment).toMatchObject({
       PI_SCIENCE_ENVIRONMENT_PREFIX: join(cwd, ".venv"),
-      npm_config_prefix: join(cwd, ".pi-science", "node-tools", "npm"),
+      npm_config_prefix: join(metadataRoot(cwd), "node-tools", "npm"),
     });
     expect(environment.PATH.split(delimiter)[0]).toBe(join(cwd, ".venv", process.platform === "win32" ? "Scripts" : "bin"));
     await service.shutdownAll();
@@ -435,6 +513,7 @@ describe("Node session lifecycle", () => {
       join(import.meta.dirname, "../pi/extensions/pi-science-notebook.ts"),
       join(import.meta.dirname, "../pi/extensions/pi-science-mcp.ts"),
       join(import.meta.dirname, "../pi/extensions/prompt-identity.ts"),
+      join(import.meta.dirname, "../pi/extensions/pi-science-sandbox.ts"),
     ]);
     await service.shutdownAll();
   });
@@ -1007,7 +1086,7 @@ describe("Node session lifecycle", () => {
     expect(turnEvent).toMatchObject({ type: "turn.artifacts", assistantMessageId: "msg-turn-1", turnOrdinal: 1 });
     const started = publish.mock.calls.find(([, , payload]) => payload.type === "agent_start")?.[2];
     expect(turnEvent.turnId).toBe(started?.turnId);
-    const persisted = JSON.parse((await readFile(join(cwd, ".pi-science", "turn-artifacts.jsonl"), "utf8")).trim());
+    const persisted = JSON.parse((await readFile(workspaceFile(cwd, "turn-artifacts.jsonl"), "utf8")).trim());
     expect(persisted.turn_id).toBe(started?.turnId);
     expect(turnEvent.artifacts).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "work/plot.png", kind: "image" }),
@@ -1019,7 +1098,7 @@ describe("Node session lifecycle", () => {
     process.env.FAKE_PI_MODE = "runs-without-events";
     const service = testService();
     const cwd = await workspaceWithSessions("session-rwe");
-    process.env.FAKE_PI_SESSION_FILE = join(cwd, ".pi-science", "sessions", "session-rwe.jsonl");
+    process.env.FAKE_PI_SESSION_FILE = join(metadataRoot(cwd), "sessions", "session-rwe.jsonl");
     process.env.FAKE_PI_WRITE_FILE = join(cwd, "work", "recovered.txt");
     await service.resume("session-rwe", cwd);
     const publish = vi.spyOn(conversationEventHub, "publish");
@@ -1037,7 +1116,7 @@ describe("Node session lifecycle", () => {
       expect.objectContaining({ path: "work/recovered.txt" }),
     ]));
     const turnId = turnEvent!.turnId as string;
-    const records = await readJsonLines<{ turn_id?: string; artifacts?: Array<{ path?: string }> }>(join(cwd, ".pi-science", "turn-artifacts.jsonl"));
+    const records = await readJsonLines<{ turn_id?: string; artifacts?: Array<{ path?: string }> }>(workspaceFile(cwd, "turn-artifacts.jsonl"));
     expect(records.some((r) => r.turn_id === turnId && r.artifacts?.some((a) => a.path === "work/recovered.txt"))).toBe(true);
     await service.shutdownAll();
     publish.mockRestore();
@@ -1090,7 +1169,7 @@ describe("Node session lifecycle", () => {
     expect(lastStats?.stats).toMatchObject({ userMessages: 4, assistantMessages: 5, toolCalls: 9, toolResults: 8, totalMessages: 18 });
     expect(lastStats?.stats?.tokens).toMatchObject({ input: 50000, output: 10000, cacheRead: 40000, cacheWrite: 5000, total: 105000 });
     // The checkpoint file is persisted (serialized under the runtime lock).
-    const checkpoint = join(cwd, ".pi-science", "sessions", "stats", "session-stats-events.json");
+    const checkpoint = join(metadataRoot(cwd), "sessions", "stats", "session-stats-events.json");
     await waitFor(async () => {
       try {
         const parsed = JSON.parse(await readFile(checkpoint, "utf8")) as { userMessages?: unknown };
@@ -1349,7 +1428,7 @@ describe("Node session lifecycle", () => {
     const service = testService();
     const cwd = await workspaceWithSessions();
     const sessionId = "flush-late";
-    const file = join(cwd, ".pi-science", "sessions", `${sessionId}.jsonl`);
+    const file = join(metadataRoot(cwd), "sessions", `${sessionId}.jsonl`);
     // An active runtime whose JSONL is written only when it is torn down —
     // the flush the delete path must wait for before it re-reads the disk.
     (service as unknown as { runtimes: Map<string, unknown> }).runtimes.set(
@@ -1393,23 +1472,25 @@ class FakeReviewRunner implements ReviewSubagentRunner {
 async function workspaceWithConversation(sessionId: string): Promise<string> {
   const cwd = join(tmpdir(), `pi-science-auto-review-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   cleanup.push(cwd);
-  await mkdir(join(cwd, ".pi-science", "sessions"), { recursive: true });
+  await mkdir(cwd, { recursive: true });
+  await mkdir(join(metadataRoot(cwd), "sessions"), { recursive: true });
+  await ensureProject(cwd);
   const rows = [
     JSON.stringify({ type: "session", id: sessionId, cwd, timestamp: new Date().toISOString() }),
     JSON.stringify({ type: "message", id: "message-0", timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: "why does the buffer drift?" }] } }),
     JSON.stringify({ type: "message", id: "message-1", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "because it warms above 20C" }] } }),
   ];
-  await writeFile(join(cwd, ".pi-science", "sessions", `${sessionId}.jsonl`), `${rows.join("\n")}\n`, "utf8");
+  await writeFile(join(metadataRoot(cwd), "sessions", `${sessionId}.jsonl`), `${rows.join("\n")}\n`, "utf8");
   return realpath(cwd);
 }
 
 /** `policy.auto_review` ships off, so every test that expects the reviewer to fire opts in first. */
 async function enableAutoReview(cwd: string): Promise<void> {
-  await writeFile(join(cwd, ".pi-science", "project-state.json"), JSON.stringify({ items: [], proposals: [], project_versions: [], policy: { auto_review: true }, history: [] }), "utf8");
+  await writeFile(workspaceFile(cwd, "project-state.json"), JSON.stringify({ items: [], proposals: [], project_versions: [], policy: { auto_review: true }, history: [] }), "utf8");
 }
 
 async function proposals(cwd: string): Promise<Array<Record<string, unknown>>> {
-  try { return JSON.parse(await readFile(join(cwd, ".pi-science", "project-state.json"), "utf8")).proposals; }
+  try { return JSON.parse(await readFile(workspaceFile(cwd, "project-state.json"), "utf8")).proposals; }
   catch { return []; }
 }
 
@@ -1458,7 +1539,7 @@ describe("automatic project review", () => {
     const runner = new FakeReviewRunner();
     const service = new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments, new ProjectReviewService(runner));
     const cwd = await workspaceWithConversation("session-a");
-    await writeFile(join(cwd, ".pi-science", "project-state.json"), JSON.stringify({ items: [], proposals: [], project_versions: [], policy: { auto_review: false }, history: [] }), "utf8");
+    await writeFile(workspaceFile(cwd, "project-state.json"), JSON.stringify({ items: [], proposals: [], project_versions: [], policy: { auto_review: false }, history: [] }), "utf8");
     await service.resume("session-a", cwd);
 
     await service.command("session-a", cwd, "abort");

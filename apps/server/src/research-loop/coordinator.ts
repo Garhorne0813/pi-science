@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { chmod, cp, lstat, mkdir, readFile, readdir, realpath, stat, writeFile } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { chmod, cp, lstat, mkdir, readFile, readdir, realpath, stat, unlink, writeFile } from "node:fs/promises";
+import { extname, join, relative, resolve, sep } from "node:path";
 import {
   createResearchLoopSchema,
   evaluatorSpecSchema,
@@ -11,9 +10,13 @@ import {
   type ResearchLoop,
 } from "@pi-science/contracts";
 import type { JobCoordinator, JobRecord } from "../runtime/jobs/job-coordinator.js";
+import { publishResearchOutputArtifact } from "../runtime/artifacts/workspace-artifact-publisher.js";
 import { metadataRoot } from "../storage/persistence.js";
+import { ensureProject } from "../project/project-registry.js";
 import { findBashExecutable } from "../support/platform-utils.js";
+import { cachedResearchSandboxStatus } from "../runtime/jobs/research-sandbox.js";
 import { snapshotCandidate, within } from "./candidate-snapshot.js";
+import { researchDecision } from "./decision.js";
 import { listReducedLoops, reduceResearchRecords } from "./reducer.js";
 import { ResearchRepository } from "./repository.js";
 import { activeWallMs, stopReason } from "./stop-policy.js";
@@ -33,6 +36,7 @@ export class ResearchLoopCoordinator {
   repository(cwd: string) { return new ResearchRepository(cwd); }
 
   async create(cwd: string, input: unknown): Promise<ResearchLoop> {
+    await ensureProject(cwd);
     const parsed = createResearchLoopSchema.parse(input);
     const now = new Date().toISOString();
     const loop = researchLoopSchema.parse({
@@ -59,12 +63,22 @@ export class ResearchLoopCoordinator {
   }
 
   async registerEvaluator(cwd: string, input: unknown) {
-    const evaluator = evaluatorSpecSchema.parse({ ...(input as object), created_at: new Date().toISOString() });
+    await ensureProject(cwd);
+    const supplied = input as Record<string, unknown>;
+    const command = supplied.command;
+    let digest = supplied.digest;
+    let source: { path: string; digest: string; bytes: Buffer } | null = null;
+    if (Array.isArray(command) && command[0] === "workspace-benchmark") {
+      source = await benchmarkScript(cwd, command);
+      digest = source.digest;
+    }
+    const evaluator = evaluatorSpecSchema.parse({ ...supplied, digest, created_at: new Date().toISOString() });
     const repository = this.repository(cwd);
     return repository.locked(async (records) => {
       const duplicate = records.some((row) => row.record_type === "evaluator.registered"
         && row.payload.evaluator_id === evaluator.evaluator_id && Number(row.payload.version) === evaluator.version);
       if (duplicate) throw new Error("evaluator version already exists");
+      if (source) await storeBenchmarkSnapshot(cwd, source);
       const record = await repository.appendUnlocked("evaluator.registered", evaluator, { producer: "user" });
       return { record_id: record.record_id, evaluator };
     });
@@ -87,7 +101,9 @@ export class ResearchLoopCoordinator {
   async detail(cwd: string, loopId: string) {
     const snapshot = await this.repository(cwd).snapshot(loopId);
     if (!snapshot.loop) return null;
-    return { ...snapshot.loop, candidates: snapshot.candidates, operations: snapshot.operations, frontier: frontier(snapshot.candidates) };
+    const records = await this.repository(cwd).records();
+    const evaluator = snapshot.loop.evaluator_ref ? findEvaluator(records, snapshot.loop.evaluator_ref.evaluator_id, snapshot.loop.evaluator_ref.version) : null;
+    return { ...snapshot.loop, candidates: snapshot.candidates, operations: snapshot.operations, frontier: frontier(snapshot.candidates), decision: researchDecision(snapshot, evaluator), execution_isolation: await cachedResearchSandboxStatus() };
   }
 
   async preflight(cwd: string, loopId: string) {
@@ -96,10 +112,14 @@ export class ResearchLoopCoordinator {
       const snapshot = reduceResearchRecords(records, loopId);
       const loop = requireLoop(snapshot);
       if (!["draft", "ready"].includes(loop.status)) throw new Error(`cannot preflight a ${loop.status} loop`);
-      const blockers = evaluatorBlockers(records, loop);
+      const blockers = await evaluatorBlockers(cwd, records, loop);
       if (blockers.length) return { ok: false, blockers, loop };
       if (loop.status === "ready") return { ok: true, blockers: [], loop };
-      const ready = nextLoop(loop, { status: "ready" });
+      const evaluator = findEvaluator(records, loop.evaluator_ref!.evaluator_id, loop.evaluator_ref!.version)!;
+      const baselineRun = evaluator.command[0] === "workspace-benchmark"
+        ? await this.runBaseline(cwd, loop, evaluator)
+        : null;
+      const ready = nextLoop(loop, { status: "ready", baseline: baselineRun?.metrics ?? null, baseline_job_id: baselineRun?.job_id ?? null });
       await repository.appendUnlocked("loop.state_changed", loopPayload(ready, "preflight_passed"), { loop_id: loopId });
       return { ok: true, blockers: [], loop: ready };
     });
@@ -123,8 +143,8 @@ export class ResearchLoopCoordinator {
       if (status === "running" && listReducedLoops(records).some((other) => other.loop_id !== loopId && ["running", "pausing", "cancelling"].includes(other.status))) {
         throw new Error("another research loop is already active in this workspace");
       }
-      if (action === "start") {
-        const blockers = evaluatorBlockers(records, loop);
+      if (action === "start" || action === "resume") {
+        const blockers = await evaluatorBlockers(cwd, records, loop);
         if (blockers.length) throw new Error(blockers.join("; "));
       }
       const pausing = ["pausing", "paused", "cancelling", "cancelled", "completed"].includes(status);
@@ -157,6 +177,26 @@ export class ResearchLoopCoordinator {
     this.closed = true;
     await this.runner.shutdown();
     await Promise.allSettled(this.driving.values());
+  }
+
+  private async runBaseline(cwd: string, loop: ResearchLoop, evaluator: EvaluatorSpec): Promise<{ metrics: Record<string, number>; job_id: string }> {
+    const script = await verifiedBenchmarkScript(cwd, evaluator);
+    const runRoot = join(metadataRoot(cwd), "runs", `baseline-${loop.loop_id}`);
+    await mkdir(runRoot, { recursive: true });
+    const resultPath = join(runRoot, "evaluation.json");
+    await unlink(resultPath).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
+    const submitted = await this.jobs.submit(cwd, {
+      command: await researchScriptCommand(script), execution_cwd: cwd, surface: "research-evaluator",
+      env: { PI_SCIENCE_SUBJECT_DIR: cwd, PI_SCIENCE_EVALUATION_PATH: resultPath, PI_SCIENCE_BASELINE: "1" },
+      requirement: { timeout_seconds: Math.min(loop.budget.max_wall_seconds, 300) },
+    });
+    let job = submitted;
+    while (!terminalJobs.has(job.status)) {
+      await delay(100);
+      job = await this.jobs.get(cwd, submitted.job_id) ?? job;
+    }
+    if (job.status !== "succeeded") throw new Error(`baseline benchmark failed: ${job.stderr.slice(-1000) || job.status}`);
+    return { metrics: await readBenchmarkMetrics(resultPath, evaluator), job_id: submitted.job_id };
   }
 
   private async drive(cwd: string, loopId: string): Promise<void> {
@@ -199,8 +239,12 @@ export class ResearchLoopCoordinator {
 
   private async advance(cwd: string, snapshot: ResearchSnapshot): Promise<boolean> {
     const loop = requireLoop(snapshot);
-    const reason = stopReason(snapshot);
+    const records = await this.repository(cwd).records();
+    const evaluator = loop.evaluator_ref ? findEvaluator(records, loop.evaluator_ref.evaluator_id, loop.evaluator_ref.version) : null;
+    const reason = stopReason(snapshot, Date.now(), evaluator);
     if (reason) { await this.completeLoop(cwd, loop, reason); return true; }
+    const isolation = await cachedResearchSandboxStatus();
+    if (!isolation.available) throw new Error(`research execution isolation unavailable: ${isolation.reason}`);
 
     const last = snapshot.candidates.at(-1);
     if (!last) {
@@ -248,8 +292,9 @@ export class ResearchLoopCoordinator {
           task_type: loop.task_type,
           objective: loop.objective,
           constraints: loop.constraints,
-          evaluation: evaluator ? { metrics: evaluator.metrics, hard_checks: evaluator.hard_checks, stop_conditions: loop.stop_conditions } : null,
+          evaluation: evaluator ? { metrics: evaluator.metrics, hard_checks: evaluator.hard_checks, stop_conditions: loop.stop_conditions, baseline: loop.baseline, benchmark_path: evaluator.command[0] === "workspace-benchmark" ? evaluator.command[1] : null } : null,
           candidates: compactCandidates(snapshot.candidates),
+          decision: researchDecision(snapshot, evaluator),
           budget_remaining: loop.budget.max_candidates - snapshot.candidates.length,
         },
       });
@@ -297,10 +342,8 @@ export class ResearchLoopCoordinator {
     await mkdir(outputs, { recursive: true });
     const script = resolve(work, candidate.proposal.solution.entrypoint);
     if (!within(work, script)) throw new Error("candidate entrypoint escapes work directory");
-    const bash = await findBashExecutable();
-    if (!bash) throw new Error("Research loop candidates require bash. Install Git for Windows or set PI_SCIENCE_BASH_PATH to bash.exe.");
     const job = await this.jobs.submit(cwd, {
-      command: [bash, script], execution_cwd: work, surface: "research-loop",
+      command: await researchScriptCommand(script), execution_cwd: work, surface: "research-loop",
       env: { PI_SCIENCE_OUTPUT_DIR: outputs, PI_SCIENCE_RUN_ID: runId, PI_SCIENCE_CANDIDATE_ID: candidate.candidate_id },
       requirement: { timeout_seconds: Math.min(loop.budget.max_wall_seconds, 86_400) },
     });
@@ -347,17 +390,19 @@ export class ResearchLoopCoordinator {
       }
       await repository.appendUnlocked("candidate.evaluation_reserved", { phase: "evaluation", attempt: 1, idempotency_key: `evaluate:${candidate.candidate_id}` }, { loop_id: loop.loop_id, candidate_id: candidate.candidate_id, operation_id: operationId });
     });
-    if (evaluator.command.length !== 1 || evaluator.command[0] !== "builtin:result-json") throw new Error("unsupported evaluator command");
+    const benchmark = evaluator.command[0] === "workspace-benchmark";
+    if (!benchmark && (evaluator.command.length !== 1 || evaluator.command[0] !== "builtin:result-json")) throw new Error("unsupported evaluator command");
     const outputsRoot = candidateOutputsRoot(cwd, candidate);
     const runRoot = resolve(outputsRoot, "..");
     const evaluatorRoot = join(runRoot, "evaluator");
     const evaluationPath = join(evaluatorRoot, "evaluation.json");
     const evaluatorScript = join(evaluatorRoot, "evaluate.mjs");
     await mkdir(evaluatorRoot, { recursive: true });
-    await writeFile(evaluatorScript, builtinEvaluatorSource(evaluator.metrics), { encoding: "utf8", mode: 0o500 });
+    if (!benchmark) await writeFile(evaluatorScript, builtinEvaluatorSource(evaluator.metrics), { encoding: "utf8", mode: 0o500 });
+    const script = benchmark ? await verifiedBenchmarkScript(cwd, evaluator) : evaluatorScript;
     const job = await this.jobs.submit(cwd, {
-      command: [process.execPath, evaluatorScript], execution_cwd: evaluatorRoot, surface: "research-evaluator",
-      env: { PI_SCIENCE_OUTPUT_DIR: outputsRoot, PI_SCIENCE_EVALUATION_PATH: evaluationPath },
+      command: benchmark ? await researchScriptCommand(script) : [process.execPath, script], execution_cwd: evaluatorRoot, surface: "research-evaluator",
+      env: { PI_SCIENCE_OUTPUT_DIR: outputsRoot, PI_SCIENCE_SUBJECT_DIR: outputsRoot, PI_SCIENCE_EVALUATION_PATH: evaluationPath, PI_SCIENCE_BASELINE: "0" },
       requirement: { timeout_seconds: Math.min(loop.budget.max_wall_seconds, 300) },
     });
     await this.publishSubmittedJob(cwd, loop.loop_id, candidate.candidate_id, operationId, job, "succeeded", "candidate.evaluation_started", {
@@ -373,7 +418,9 @@ export class ResearchLoopCoordinator {
     await repository.append("agent.run_reserved", payload, { loop_id: loop.loop_id, candidate_id: candidate.candidate_id, operation_id: operationId });
     await repository.append("agent.run_started", payload, { loop_id: loop.loop_id, candidate_id: candidate.candidate_id, operation_id: operationId, run_id: operationId });
     try {
-      const result = await this.runner.run({ operation_id: operationId, loop, phase: "analysis", context: { cwd, task_type: loop.task_type, objective: loop.objective, candidate, frontier: frontier(snapshot.candidates) } });
+      const records = await repository.records();
+      const evaluator = loop.evaluator_ref ? findEvaluator(records, loop.evaluator_ref.evaluator_id, loop.evaluator_ref.version) : null;
+      const result = await this.runner.run({ operation_id: operationId, loop, phase: "analysis", context: { cwd, task_type: loop.task_type, objective: loop.objective, candidate, frontier: frontier(snapshot.candidates), decision: researchDecision(snapshot, evaluator) } });
       const parsed = researchAgentResultSchema.parse(result.output);
       if (parsed.kind !== "analysis") throw new Error("analysis agent returned a candidate");
       await repository.locked(async (records) => {
@@ -520,6 +567,10 @@ export class ResearchLoopCoordinator {
     if (!evaluationInfo.isFile() || evaluationInfo.isSymbolicLink() || evaluationInfo.size > 1_000_000) throw new Error("evaluation result is invalid or too large");
     const raw = JSON.parse(await readFile(evaluationPath, "utf8")) as Record<string, unknown>;
     const rawMetrics = raw.metrics && typeof raw.metrics === "object" ? raw.metrics as Record<string, unknown> : {};
+    if (evaluator.command[0] === "workspace-benchmark") {
+      await verifiedBenchmarkScript(cwd, evaluator);
+      await readBenchmarkMetrics(evaluationPath, evaluator);
+    }
     const metrics = Object.fromEntries(evaluator.metrics.map((metric) => [metric.name, {
       value: Number(rawMetrics[metric.name]), direction: metric.direction, source: metric.source,
     }]));
@@ -535,15 +586,29 @@ export class ResearchLoopCoordinator {
         const info = await lstat(fullPath);
         const resolvedArtifact = await realpath(fullPath);
         if (!info.isFile() || info.isSymbolicLink() || !within(resolvedOutputsRoot, resolvedArtifact)) { artifactsValid = false; continue; }
-        const sha256 = await hashFile(fullPath);
-        artifacts.push({ path: expected.path, kind: expected.kind, sha256 });
+        const published = await publishResearchOutputArtifact(cwd, outputsRoot, expected.path, {
+          tool: "research-evaluator",
+          executionId: job.execution_id,
+          source: "research-loop",
+          kind: expected.kind,
+          loopId: loop.loop_id,
+          candidateId: candidate.candidate_id,
+          runId: String(candidate.execution.run_id ?? ""),
+        });
+        artifacts.push({ path: expected.path, kind: expected.kind, sha256: published.sha256, artifact_id: published.artifact_id, version: published.version });
       } catch { artifactsValid = false; }
     }
     const hardChecks = Object.fromEntries(evaluator.hard_checks.map((name) => [name,
       name === "artifact_verified" && artifactsValid && artifacts.length > 0 ? "passed" : "failed",
     ]));
     const passed = metricsValid && Object.values(hardChecks).every((status) => status === "passed");
-    const evaluation = { metrics: metricsValid ? metrics : {}, hard_checks: hardChecks, artifact_refs: artifacts, findings: [], model_tokens: 0, cost_usd: 0 };
+    const findings = loop.baseline ? Object.entries(metrics).flatMap(([name, metric]) => {
+      const baseline = loop.baseline?.[name];
+      if (baseline == null) return [];
+      const improvement = metric.direction === "minimize" ? baseline - metric.value : metric.value - baseline;
+      return [{ metric: name, baseline, candidate: metric.value, improvement }];
+    }) : [];
+    const evaluation = { metrics: metricsValid ? metrics : {}, hard_checks: hardChecks, artifact_refs: artifacts, findings, model_tokens: 0, cost_usd: 0 };
     await this.repository(cwd).append("candidate.evaluated", {
       phase: "evaluation", evaluation, evaluation_status: passed ? "passed" : "failed",
       evaluator_ref: loop.evaluator_ref, evaluator_job_id: job.job_id,
@@ -626,8 +691,10 @@ function findEvaluator(records: ResearchSnapshot["records"], id: string, version
   return parsed.success ? parsed.data : null;
 }
 
-function evaluatorBlockers(records: ResearchSnapshot["records"], loop: ResearchLoop): string[] {
+async function evaluatorBlockers(cwd: string, records: ResearchSnapshot["records"], loop: ResearchLoop): Promise<string[]> {
   const blockers: string[] = [];
+  const isolation = await cachedResearchSandboxStatus();
+  if (!isolation.available) blockers.push(`research execution isolation unavailable: ${isolation.reason}`);
   if (!loop.evaluator_ref) blockers.push("an approved deterministic evaluator is required");
   else {
     const evaluator = findEvaluator(records, loop.evaluator_ref.evaluator_id, loop.evaluator_ref.version);
@@ -636,10 +703,72 @@ function evaluatorBlockers(records: ResearchSnapshot["records"], loop: ResearchL
       if (evaluator.status !== "approved") blockers.push("evaluator must be approved");
       if (evaluator.digest !== loop.evaluator_ref.digest) blockers.push("evaluator digest does not match");
       if (evaluator.metrics.some((metric) => metric.source !== "deterministic")) blockers.push("MVP stop metrics must be deterministic");
-      if (evaluator.command.length !== 1 || evaluator.command[0] !== "builtin:result-json") blockers.push("MVP only supports the builtin deterministic result.json evaluator");
+      if (evaluator.command[0] === "workspace-benchmark") {
+        try { await verifiedBenchmarkScript(cwd, evaluator); }
+        catch (error) { blockers.push(String(error)); }
+      } else if (evaluator.command.length !== 1 || evaluator.command[0] !== "builtin:result-json") {
+        blockers.push("unsupported evaluator command");
+      }
     }
   }
   return blockers;
+}
+
+async function benchmarkScript(cwd: string, command: string[]): Promise<{ path: string; digest: string; bytes: Buffer }> {
+  if (command.length !== 2 || command[0] !== "workspace-benchmark") throw new Error("benchmark command must name one workspace script");
+  const workspace = await realpath(cwd);
+  const requested = resolve(workspace, command[1]!);
+  if (!requested.startsWith(`${workspace}${sep}`)) throw new Error("benchmark script escapes workspace");
+  const script = await realpath(requested);
+  if (!script.startsWith(`${workspace}${sep}`)) throw new Error("benchmark script resolves outside workspace");
+  const info = await lstat(script);
+  if (!info.isFile() || info.size > 1_000_000) throw new Error("benchmark script must be a regular file under 1 MB");
+  const bytes = await readFile(script);
+  if (bytes.length > 1_000_000) throw new Error("benchmark script must be a regular file under 1 MB");
+  return { path: script, digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`, bytes };
+}
+
+function benchmarkSnapshotPath(cwd: string, digest: string, source: string): string {
+  if (!/^sha256:[a-f0-9]{64}$/.test(digest)) throw new Error("invalid benchmark digest");
+  const extension = extname(source).toLowerCase();
+  return join(metadataRoot(cwd), "evaluators", digest.slice(7), `benchmark${extension}`);
+}
+
+async function storeBenchmarkSnapshot(cwd: string, source: { path: string; digest: string; bytes: Buffer }): Promise<string> {
+  const path = benchmarkSnapshotPath(cwd, source.digest, source.path);
+  await mkdir(resolve(path, ".."), { recursive: true });
+  try { await writeFile(path, source.bytes, { flag: "wx", mode: 0o400 }); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  const info = await lstat(path);
+  if (!info.isFile() || info.isSymbolicLink() || info.size > 1_000_000
+    || `sha256:${createHash("sha256").update(await readFile(path)).digest("hex")}` !== source.digest) {
+    throw new Error("approved benchmark snapshot is missing or changed");
+  }
+  return path;
+}
+
+async function researchScriptCommand(script: string): Promise<string[]> {
+  if (/\.(?:cjs|mjs|js)$/i.test(script)) return [process.execPath, script];
+  if (process.platform === "win32") throw new Error("Windows research scripts must use a .cjs, .mjs, or .js entrypoint; Git Bash cannot run in AppContainer");
+  const bash = await findBashExecutable();
+  if (!bash) throw new Error("research shell scripts require bash");
+  return [bash, script];
+}
+
+async function verifiedBenchmarkScript(cwd: string, evaluator: EvaluatorSpec): Promise<string> {
+  const source = await benchmarkScript(cwd, evaluator.command);
+  if (source.digest !== evaluator.digest) throw new Error("benchmark script changed since approval");
+  return storeBenchmarkSnapshot(cwd, source);
+}
+
+async function readBenchmarkMetrics(path: string, evaluator: EvaluatorSpec): Promise<Record<string, number>> {
+  const info = await lstat(path);
+  if (!info.isFile() || info.isSymbolicLink() || info.size > 1_000_000) throw new Error("benchmark result is invalid or too large");
+  const raw = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+  const values = raw.metrics && typeof raw.metrics === "object" ? raw.metrics as Record<string, unknown> : {};
+  const metrics = Object.fromEntries(evaluator.metrics.map((metric) => [metric.name, values[metric.name]]));
+  if (!Object.values(metrics).every((value) => typeof value === "number" && Number.isFinite(value))) throw new Error("benchmark did not provide all finite numeric metrics");
+  return metrics as Record<string, number>;
 }
 
 function requireLoop(snapshot: ResearchSnapshot): ResearchLoop {
@@ -655,7 +784,7 @@ function loopPayload(loop: ResearchLoop, reason: string): Record<string, unknown
   return {
     revision: loop.revision, status: loop.status, updated_at: loop.updated_at,
     started_at: loop.started_at, active_wall_ms: loop.active_wall_ms,
-    stop_reason: loop.stop_reason, current_operation_id: loop.current_operation_id, reason,
+    stop_reason: loop.stop_reason, current_operation_id: loop.current_operation_id, baseline: loop.baseline, baseline_job_id: loop.baseline_job_id, reason,
   };
 }
 
@@ -728,15 +857,4 @@ for (const spec of ${specs}) {
 }
 await writeFile(destination, JSON.stringify({ metrics }) + "\\n", "utf8");
 `;
-}
-
-async function hashFile(path: string): Promise<string> {
-  const digest = createHash("sha256");
-  await new Promise<void>((resolveHash, rejectHash) => {
-    const input = createReadStream(path);
-    input.on("data", (chunk) => digest.update(chunk));
-    input.once("error", rejectHash);
-    input.once("end", resolveHash);
-  });
-  return digest.digest("hex");
 }

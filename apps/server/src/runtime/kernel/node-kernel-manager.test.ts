@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NodeKernelManager, type KernelResult } from "./node-kernel-manager.js";
+import { NodeKernelManager, WINDOWS_KERNEL_UNAVAILABLE, type KernelResult, type NodeKernelManagerDependencies } from "./node-kernel-manager.js";
 import type { WorkspaceEnvironmentStatus } from "../workspace/workspace-environment.js";
 
 function systemPython(): string | null {
@@ -35,6 +35,47 @@ function systemRscript(): string | null {
 
 const rscript = systemRscript();
 const cleanup: string[] = [];
+
+// Kernel protocol tests use temporary interpreter symlinks; sandbox policy and
+// managed-prefix admission are verified separately from the bridge protocol.
+function newTestManager(deps: NodeKernelManagerDependencies = {}): NodeKernelManager {
+  return new NodeKernelManager({
+    ...deps,
+    sandboxCommand: async (input) => ({ command: input.command, environment: input.environment, backend: "seatbelt", cleanupDirectory: "" }),
+  });
+}
+
+it("reports Windows Notebook unavailable and rejects the production sandbox path before spawning even when Sandy is configured", async () => {
+  const sandy = process.env.PI_SCIENCE_SANDY_PATH;
+  process.env.PI_SCIENCE_SANDY_PATH = "C:\\tools\\sandy.exe";
+  const spawnProcess = vi.fn();
+  const interpreterAvailable = vi.fn(() => true);
+  try {
+    const manager = new NodeKernelManager({ platform: "win32", spawnProcess: spawnProcess as never, interpreterAvailable });
+    expect(await manager.status()).toMatchObject({ execution_available: false, unavailable_reason: WINDOWS_KERNEL_UNAVAILABLE, interpreters: { python: false, r: false } });
+    await expect(manager.execute({ language: "python", code: "1+1", cwd: "C:\\workspace", environment: {} as WorkspaceEnvironmentStatus, timeoutMs: 1000 })).rejects.toThrow(WINDOWS_KERNEL_UNAVAILABLE);
+    expect(spawnProcess).not.toHaveBeenCalled();
+    expect(interpreterAvailable).not.toHaveBeenCalled();
+  } finally {
+    if (sandy === undefined) delete process.env.PI_SCIENCE_SANDY_PATH;
+    else process.env.PI_SCIENCE_SANDY_PATH = sandy;
+  }
+});
+
+it("reports a missing Linux sandbox even when interpreters are installed", async () => {
+  const interpreterAvailable = vi.fn(() => true);
+  const manager = new NodeKernelManager({
+    platform: "linux",
+    interpreterAvailable,
+    sandboxStatus: async () => ({ available: false, reason: "bubblewrap probe failed" }),
+  });
+  expect(await manager.status()).toMatchObject({
+    execution_available: false,
+    unavailable_reason: expect.stringContaining("bubblewrap probe failed"),
+    interpreters: { python: false, r: false },
+  });
+  expect(interpreterAvailable).not.toHaveBeenCalled();
+});
 
 afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
@@ -74,7 +115,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       const result = await manager.execute({
         language: "python",
@@ -97,7 +138,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       const result = await manager.execute({
         language: "python",
@@ -122,7 +163,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       const result = await manager.execute({
         language: "python",
@@ -144,7 +185,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       const result = await manager.execute({
         language: "python",
@@ -167,7 +208,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       await manager.execute({ language: "python", code: "x = 40", cwd: workspace, environment: status(workspace, prefix), timeoutMs: 10_000 });
       const second = await manager.execute({ language: "python", code: "x + 2", cwd: workspace, environment: status(workspace, prefix), timeoutMs: 10_000 });
@@ -185,7 +226,7 @@ describe("NodeKernelManager native execution", () => {
     await createTestEnvironment(prefix);
     await writeFile(join(workspace, "local_module.py"), "value = 41\n", "utf8");
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       const result = await manager.execute({
         language: "python",
@@ -207,16 +248,16 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       await manager.execute({ language: "python", code: "1+1", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-1", timeoutMs: 10_000 });
-      const before = manager.status();
+      const before = await manager.status();
       expect(before.native).toBe(true);
       expect(before.active_count).toBe(1);
       expect(before.sessions).toEqual([expect.objectContaining({ notebookId: "nb-1", language: "python", cwd: workspace })]);
 
       await manager.shutdownNotebook("nb-1", workspace);
-      expect(manager.status().active_count).toBe(0);
+      expect((await manager.status()).active_count).toBe(0);
     } finally {
       await manager.shutdownAll();
     }
@@ -228,7 +269,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       const options = { language: "python" as const, cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-race", timeoutMs: 10_000 };
       const [first, second] = await Promise.all([
@@ -238,7 +279,7 @@ describe("NodeKernelManager native execution", () => {
       expect(first.ok).toBe(true);
       expect(second.ok).toBe(true);
       expect(second.result).toBe("42");
-      expect(manager.status().active_count).toBe(1);
+      expect((await manager.status()).active_count).toBe(1);
     } finally {
       await manager.shutdownAll();
     }
@@ -250,7 +291,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       const outcome = await manager.execute({ language: "python", code: "import time\ntime.sleep(5)", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-timeout", timeoutMs: 500 }).then(
         (value) => ({ resolved: true as const, value }),
@@ -260,11 +301,11 @@ describe("NodeKernelManager native execution", () => {
         // POSIX: SIGINT succeeded, the bridge reported the interrupt and the namespace survives.
         expect(outcome.value.ok).toBe(false);
         expect(outcome.value.interrupted).toBe(true);
-        expect(manager.status().active_count).toBe(1);
+        expect((await manager.status()).active_count).toBe(1);
       } else {
         // Windows or a failed interrupt: the session is torn down instead of leaking.
         expect(outcome.error.message).toMatch(/timed out|interrupt/i);
-        expect(manager.status().active_count).toBe(0);
+        expect((await manager.status()).active_count).toBe(0);
       }
     } finally {
       await manager.shutdownAll();
@@ -294,7 +335,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     const spawned: { command: string; args: string[]; options?: SpawnOptions }[] = [];
     const treeKills: number[] = [];
     const sessions: FakeSession[] = [];
-    const manager = new NodeKernelManager({
+    const manager = newTestManager({
       platform,
       workspaceEnvironmentVariables: () => ({}),
       interpreterAvailable: () => true,
@@ -372,7 +413,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
       const outcome = await execution;
       expect(outcome.resolved).toBe(false);
       if (!outcome.resolved) expect(outcome.error.message).toContain("cancelled by shutdown");
-      expect(manager.status().active_count).toBe(0);
+      expect((await manager.status()).active_count).toBe(0);
     } finally {
       const stopping = manager.shutdownAll().catch(() => undefined);
       for (const session of sessions) session.child.emit("close", 0);
@@ -411,7 +452,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
       const survivorOutcome = await survivor;
       expect(survivorOutcome.resolved).toBe(true);
       if (survivorOutcome.resolved) expect(survivorOutcome.value.ok).toBe(true);
-      expect(manager.status().active_count).toBe(1);
+      expect((await manager.status()).active_count).toBe(1);
     } finally {
       const stopping = manager.shutdownAll().catch(() => undefined);
       for (const session of sessions) session.child.emit("close", 0);
@@ -491,7 +532,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       await manager.execute({ language: "python", code: "x = 41", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-recover", timeoutMs: 8_000 });
       const outcome = await manager.execute({ language: "python", code: "import time\ntime.sleep(5)", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-recover", timeoutMs: 500 }).then(
@@ -503,7 +544,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
       const followup = await manager.execute({ language: "python", code: "x + 1", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-recover", timeoutMs: 5_000 });
       expect(followup.ok).toBe(true);
       expect(followup.result).toBe("42");
-      const snapshot = manager.status();
+      const snapshot = await manager.status();
       expect(snapshot.active_count).toBe(1);
       expect(snapshot.sessions.every((session) => session.alive)).toBe(true);
     } finally {
@@ -522,7 +563,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     await mkdir(binDir, { recursive: true });
     await symlink(rscript!, join(binDir, "Rscript"));
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       const first = await manager.execute({ language: "r", code: "answer <- 21", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-r", timeoutMs: 15_000 });
       expect(first.ok).toBe(true);
