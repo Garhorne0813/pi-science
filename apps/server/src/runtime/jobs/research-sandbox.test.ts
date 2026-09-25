@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { createServer, type AddressInfo } from "node:net";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { probeAsync, sandboxConversationCommand, sandboxResearchCommand, researchSandboxStatus, windowsResearchSandboxConfig } from "./research-sandbox.js";
+import { probeAsync, sandboxConversationCommand, sandboxResearchCommand, researchSandboxStatus, WINDOWS_CONVERSATION_UNAVAILABLE, windowsResearchSandboxConfig } from "./research-sandbox.js";
 import { metadataRoot } from "../../storage/persistence.js";
 
 const cleanup: string[] = [];
@@ -33,6 +33,16 @@ it("requires an absolute Windows sandbox executable path", () => {
     if (old === undefined) delete process.env.PI_SCIENCE_SANDY_PATH;
     else process.env.PI_SCIENCE_SANDY_PATH = old;
   }
+});
+
+it("fails closed for Windows conversation execution before probing Sandy", async () => {
+  await expect(sandboxConversationCommand({
+    command: ["C:\\Windows\\System32\\cmd.exe"],
+    workspace: "C:\\workspace",
+    environment: { PI_SCIENCE_ENVIRONMENT_REVISION_ID: "rev-test" },
+    managedEnvironmentPrefix: "C:\\env",
+    platform: "win32",
+  })).rejects.toThrow(WINDOWS_CONVERSATION_UNAVAILABLE);
 });
 
 it("renders a Windows AppContainer policy with no network or profile access", () => {
@@ -205,49 +215,6 @@ it("runs a conversation command with project writes and a read-only managed envi
     else process.env.PI_SCIENCE_HOME = previousHome;
     if (previousNodePath === undefined) delete process.env.PI_NODE_PATH;
     else process.env.PI_NODE_PATH = previousNodePath;
-  }
-});
-
-it.skipIf(process.platform !== "win32")("runs a Windows conversation command through the production Sandy path", async () => {
-  expect(researchSandboxStatus()).toMatchObject({ available: true, backend: "appcontainer" });
-  const root = await mkdtemp(join(tmpdir(), "pi-science-conversation-win-"));
-  cleanup.push(root);
-  const workspace = join(root, "project");
-  const stateHome = join(root, "control-home");
-  const prefix = join(stateHome, "micromamba", "envs", "rev-test");
-  const previousHome = process.env.PI_SCIENCE_HOME;
-  process.env.PI_SCIENCE_HOME = stateHome;
-  try {
-    await mkdir(workspace, { recursive: true });
-    await mkdir(prefix, { recursive: true });
-    await writeFile(join(prefix, "library.txt"), "package-data", "utf8");
-    const controlSecret = join(metadataRoot(workspace), "control-secret.txt");
-    await mkdir(metadataRoot(workspace), { recursive: true });
-    await writeFile(controlSecret, "control-secret", "utf8");
-    const script = join(workspace, "conversation.cjs");
-    await writeFile(script, `const fs=require("node:fs"); const path=require("node:path");
-      const source=path.join(process.env.PI_SCIENCE_ENVIRONMENT_PREFIX,"library.txt");
-      let stateBlocked=false; try { fs.readFileSync(process.env.PI_SCIENCE_CONTROL_SECRET); } catch { stateBlocked=true; }
-      try { fs.writeFileSync(source,"hacked"); } catch {}
-      fs.writeFileSync(path.join(process.cwd(),"result.json"),JSON.stringify({stateBlocked,value:fs.readFileSync(source,"utf8")}));`, "utf8");
-    const isolated = await sandboxConversationCommand({
-      command: [process.execPath, script], workspace,
-      environment: {
-        ...process.env,
-        PI_SCIENCE_CONTROL_SECRET: controlSecret,
-        PI_SCIENCE_ENVIRONMENT_PREFIX: prefix,
-        PI_SCIENCE_ENVIRONMENT_REVISION_ID: "rev-test",
-      },
-      managedEnvironmentPrefix: prefix,
-    });
-    cleanup.push(isolated.cleanupDirectory);
-    const result = spawnSync(isolated.command[0]!, isolated.command.slice(1), { cwd: workspace, env: isolated.environment, encoding: "utf8", timeout: 20_000 });
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(await readFile(join(workspace, "result.json"), "utf8"))).toEqual({ stateBlocked: true, value: "package-data" });
-    expect(await readFile(controlSecret, "utf8")).toBe("control-secret");
-  } finally {
-    if (previousHome === undefined) delete process.env.PI_SCIENCE_HOME;
-    else process.env.PI_SCIENCE_HOME = previousHome;
   }
 });
 

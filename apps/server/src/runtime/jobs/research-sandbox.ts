@@ -8,6 +8,9 @@ import { configRoot, legacyMetadataRoot, metadataRoot } from "../../storage/pers
 export type ResearchSandboxBackend = "seatbelt" | "bubblewrap" | "appcontainer";
 export type ResearchSandboxStatus = { available: true; backend: ResearchSandboxBackend } | { available: false; reason: string };
 
+export const WINDOWS_CONVERSATION_UNAVAILABLE =
+  "Conversation execution is unavailable on Windows because the current AppContainer sandbox cannot exclude the reserved .pi-science workspace path from a writable workspace";
+
 const macSystemRoots = ["/usr", "/bin", "/sbin", "/System", "/Library", "/opt", "/private/etc"];
 const linuxSystemRoots = ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt"];
 
@@ -325,7 +328,10 @@ export async function sandboxResearchCommand(input: { command: string[]; workspa
 /** Isolate a conversation command while keeping the project writable and its
  * shared, versioned interpreter read-only. The caller owns cleanupDirectory. */
 export async function sandboxConversationCommand(input: { command: string[]; conversationScript?: string; workspace: string; environment: NodeJS.ProcessEnv; managedEnvironmentPrefix?: string; trustedReadPaths?: string[]; timeoutSeconds?: number; platform?: NodeJS.Platform }): Promise<{ command: string[]; environment: NodeJS.ProcessEnv; backend: ResearchSandboxBackend; cleanupDirectory: string }> {
-  const status = await cachedResearchSandboxStatus(input.platform);
+  const platform = input.platform ?? process.platform;
+  if (platform === "win32") throw new Error(WINDOWS_CONVERSATION_UNAVAILABLE);
+
+  const status = await cachedResearchSandboxStatus(platform);
   if (!status.available) throw new Error(`conversation execution isolation unavailable: ${status.reason}`);
   if (!input.managedEnvironmentPrefix || !input.environment.PI_SCIENCE_ENVIRONMENT_REVISION_ID) throw new Error("conversation execution requires a bound managed environment revision");
   const workspace = await realpath(input.workspace);
