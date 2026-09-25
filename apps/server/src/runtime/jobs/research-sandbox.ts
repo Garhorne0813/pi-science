@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { lstat, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { tmpdir } from "node:os";
-import { configRoot, metadataRoot } from "../../storage/persistence.js";
+import { configRoot, legacyMetadataRoot, metadataRoot } from "../../storage/persistence.js";
 
 export type ResearchSandboxBackend = "seatbelt" | "bubblewrap" | "appcontainer";
 export type ResearchSandboxStatus = { available: true; backend: ResearchSandboxBackend } | { available: false; reason: string };
@@ -37,7 +37,7 @@ function macProfile(readable: string[], writable: string[], denied: string[] = [
     "(allow mach-lookup (global-name \"com.apple.system.opendirectoryd.libinfo\") (global-name \"com.apple.system.opendirectoryd.membership\") (global-name \"com.apple.logd\"))",
     `(allow file-read* ${[...ancestorRules, ...readRules].join(" ")})`,
     `(allow file-write* ${writeRules.join(" ")})`,
-    ...denied.map((path) => `(deny file-read* file-write* (subpath ${quote(path)}))`),
+    ...denied.map((path) => `(deny file-read* file-write* (literal ${quote(path)}) (subpath ${quote(path)}))`),
   ].join("\n");
 }
 
@@ -349,7 +349,7 @@ export async function sandboxConversationCommand(input: { command: string[]; con
       ? status.backend === "appcontainer" ? [...input.command, "/d", "/s", "/c", scriptPath] : [...input.command, scriptPath]
       : input.command;
     const aliases = status.backend === "seatbelt";
-    const legacyMetadata = metadataRoot(workspace);
+    const legacyMetadata = legacyMetadataRoot(workspace);
     const nestedLegacyMetadata = inside(workspace, legacyMetadata) ? legacyMetadata : null;
     const cleanupPaths = status.backend === "appcontainer" ? [canonicalCleanupDirectory] : [cleanupDirectory, canonicalCleanupDirectory];
     const readable = [...(status.backend === "appcontainer" ? [] : availableSystemRoots(systemRoots)), workspace, prefix, ...cleanupPaths, ...trustedReadPaths, ...await selectedNodeReadPaths(workspace), ...(aliases ? [input.workspace, input.managedEnvironmentPrefix, input.command[0]!, ...(input.trustedReadPaths ?? [])] : [])];

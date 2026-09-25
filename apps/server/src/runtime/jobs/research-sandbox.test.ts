@@ -160,7 +160,10 @@ it("runs a conversation command with project writes and a read-only managed envi
     const controlSecret = join(metadataRoot(workspace), "control-secret.txt");
     await mkdir(metadataRoot(workspace), { recursive: true });
     await writeFile(controlSecret, "control-secret");
-    const script = 'node --version > node-version.txt; cat "$PI_SCIENCE_ENVIRONMENT_PREFIX/library.txt" > result.txt; if cat "../host-secret.txt" 2>/dev/null; then echo READ_ESCAPED; fi; if cat "$PI_SCIENCE_CONTROL_SECRET" 2>/dev/null; then echo METADATA_READ; fi; if printf hacked > "$PI_SCIENCE_CONTROL_SECRET" 2>/dev/null; then echo METADATA_WRITE; fi; if printf hacked > "$PI_SCIENCE_ENVIRONMENT_PREFIX/library.txt" 2>/dev/null; then echo WRITE_ESCAPED; fi';
+    const legacySecret = join(workspace, ".pi-science", "legacy-secret.txt");
+    await mkdir(join(workspace, ".pi-science"));
+    await writeFile(legacySecret, "legacy-secret");
+    const script = 'node --version > node-version.txt; cat "$PI_SCIENCE_ENVIRONMENT_PREFIX/library.txt" > result.txt; if cat "../host-secret.txt" 2>/dev/null; then echo READ_ESCAPED; fi; if cat "$PI_SCIENCE_CONTROL_SECRET" 2>/dev/null; then echo METADATA_READ; fi; if printf hacked > "$PI_SCIENCE_CONTROL_SECRET" 2>/dev/null; then echo METADATA_WRITE; fi; if cat .pi-science/legacy-secret.txt 2>/dev/null; then echo LEGACY_READ; fi; if printf hacked > .pi-science/legacy-secret.txt 2>/dev/null; then echo LEGACY_WRITE; fi; if printf hacked > .pi-science/new.txt 2>/dev/null; then echo LEGACY_CREATE; fi; if rm .pi-science/legacy-secret.txt 2>/dev/null; then echo LEGACY_DELETE; fi; if printf hacked > "$PI_SCIENCE_ENVIRONMENT_PREFIX/library.txt" 2>/dev/null; then echo WRITE_ESCAPED; fi';
     const isolated = await sandboxConversationCommand({
       command: ["/bin/bash"], conversationScript: script, workspace,
       environment: { PATH: process.env.PATH, PI_SCIENCE_CONTROL_SECRET: controlSecret, PI_SCIENCE_ENVIRONMENT_PREFIX: prefix, PI_SCIENCE_ENVIRONMENT_REVISION_ID: "rev-test" },
@@ -174,10 +177,29 @@ it("runs a conversation command with project writes and a read-only managed envi
     expect(result.stdout).not.toContain("WRITE_ESCAPED");
     expect(result.stdout).not.toContain("METADATA_READ");
     expect(result.stdout).not.toContain("METADATA_WRITE");
+    expect(result.stdout).not.toContain("LEGACY_READ");
+    expect(result.stdout).not.toContain("LEGACY_WRITE");
+    expect(result.stdout).not.toContain("LEGACY_CREATE");
+    expect(result.stdout).not.toContain("LEGACY_DELETE");
     expect(await readFile(join(workspace, "result.txt"), "utf8")).toBe("package-data");
     expect(await readFile(join(workspace, "node-version.txt"), "utf8")).toBe(`${process.version}\n`);
     expect(await readFile(join(prefix, "library.txt"), "utf8")).toBe("package-data");
     expect(await readFile(controlSecret, "utf8")).toBe("control-secret");
+    expect(await readFile(legacySecret, "utf8")).toBe("legacy-secret");
+    await rm(join(workspace, ".pi-science"), { recursive: true });
+    const absentLegacy = await sandboxConversationCommand({
+      command: ["/bin/bash"],
+      conversationScript: 'if mkdir .pi-science 2>/dev/null; then echo LEGACY_MKDIR; fi; if printf hacked > .pi-science/new.txt 2>/dev/null; then echo LEGACY_CREATE; fi',
+      workspace,
+      environment: { PATH: process.env.PATH, PI_SCIENCE_ENVIRONMENT_REVISION_ID: "rev-test" },
+      managedEnvironmentPrefix: prefix,
+    });
+    cleanup.push(absentLegacy.cleanupDirectory);
+    const absentResult = spawnSync(absentLegacy.command[0]!, absentLegacy.command.slice(1), { cwd: workspace, env: absentLegacy.environment, encoding: "utf8" });
+    expect(absentResult.status, absentResult.stderr).toBe(0);
+    expect(absentResult.stdout).not.toContain("LEGACY_MKDIR");
+    expect(absentResult.stdout).not.toContain("LEGACY_CREATE");
+    await expect(readFile(join(workspace, ".pi-science", "new.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
     if (previousHome === undefined) delete process.env.PI_SCIENCE_HOME;
     else process.env.PI_SCIENCE_HOME = previousHome;
