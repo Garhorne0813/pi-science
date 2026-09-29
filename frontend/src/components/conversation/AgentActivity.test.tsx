@@ -182,9 +182,13 @@ describe("AgentActivity live stream", () => {
   });
 
   it.each([
-    ["invalid timestamp falls back to the first live render", "not-a-timestamp"],
-    ["future timestamp is clamped to zero", "2026-09-24T12:01:00.000Z"],
-  ])("%s", (_name, turnStartedAt) => {
+    // An unparseable timestamp falls back to the mount anchor, so the clock
+    // still advances from the first live render.
+    ["invalid timestamp falls back to the first live render", "not-a-timestamp", 3_000, "3.0s"],
+    // A future timestamp stays the anchor and is clamped to zero, so 120s of
+    // wall clock reads 1m30s from the timestamp rather than 2m00s from mount.
+    ["future timestamp is clamped to zero", "2026-09-24T12:01:00.000Z", 120_000, "1m30s"],
+  ])("%s", (_name, turnStartedAt, advanceMs, expected) => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-09-24T12:00:30.000Z"));
@@ -195,6 +199,8 @@ describe("AgentActivity live stream", () => {
         part="status"
       />);
       expect(container.querySelector('[aria-hidden="true"].font-mono')).toHaveTextContent("0.0s");
+      act(() => { vi.advanceTimersByTime(advanceMs); });
+      expect(container.querySelector('[aria-hidden="true"].font-mono')).toHaveTextContent(expected);
     } finally {
       vi.useRealTimers();
     }
