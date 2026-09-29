@@ -1,16 +1,11 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from "react";
 import type { SubagentMention } from "../../lib/conversation";
-import { queryClient } from "../../lib/client/query-client";
-import { subagentsDiscoveryQuery } from "../../lib/settings";
-import { cn } from "../../lib/ui";
-
-interface AvailableSubagent {
-  name: string;
-  description?: string;
-  source?: string;
-}
+import type { CompletionApply } from "../../lib/conversation/completion";
+import { useComposerCompletion } from "../../hooks/useComposerCompletion";
+import { useUiStore } from "../../lib/ui";
+import { CompletionMenu } from "./CompletionMenu";
 
 interface Props {
   cwd: string;
@@ -21,23 +16,14 @@ interface Props {
   onCompositionStart: () => void;
   onCompositionEnd: () => void;
   inputRef: RefObject<HTMLTextAreaElement | null>;
+  /** The composer's IME flag, shared with the send pipeline: while it is set every key belongs
+   *  to the IME, so no completion key is handled either. */
+  composingRef: RefObject<boolean>;
   placeholder: string;
-}
-
-interface Trigger {
-  start: number;
-  query: string;
 }
 
 const COMPOSER_MIN_HEIGHT = 64;
 const COMPOSER_MAX_HEIGHT = 160;
-
-function triggerAt(value: string, caret: number): Trigger | null {
-  const before = value.slice(0, caret);
-  const match = before.match(/(?:^|[\s([{])@([a-z0-9_-]*)$/i);
-  if (!match) return null;
-  return { start: caret - match[1].length - 1, query: match[1].toLowerCase() };
-}
 
 function changedRange(previous: string, next: string): { start: number; oldEnd: number; inserted: string } {
   let start = 0;
@@ -73,25 +59,12 @@ function renderHighlighted(value: string, mentions: SubagentMention[]) {
   return result;
 }
 
-export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onCompositionStart, onCompositionEnd, inputRef, placeholder }: Props) {
-  const [agents, setAgents] = useState<AvailableSubagent[]>([]);
+export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onCompositionStart, onCompositionEnd, inputRef, composingRef, placeholder }: Props) {
   const { t } = useTranslation();
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [dismissedStart, setDismissedStart] = useState<number | null>(null);
   const [caret, setCaret] = useState(value.length);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const mirrorRef = useRef<HTMLDivElement>(null);
   const selectionDirectionRef = useRef<"forward" | "backward" | "none">("none");
-  const listboxId = useId();
-
-  useEffect(() => {
-    let cancelled = false;
-    void queryClient.fetchQuery(subagentsDiscoveryQuery(cwd))
-      .then((data) => { if (!cancelled) setAgents(data.agents ?? []); })
-      .catch(() => { if (!cancelled) setAgents([]); });
-    return () => { cancelled = true; };
-  }, [cwd]);
+  const addWorkspaceReference = useUiStore((state) => state.addWorkspaceReference);
 
   useEffect(() => {
     const element = inputRef.current;
@@ -120,37 +93,6 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
     if (mirrorRef.current) mirrorRef.current.scrollTop = element.scrollTop;
   }, [inputRef, value]);
 
-  const trigger = useMemo(() => triggerAt(value, caret), [caret, value]);
-  const choices = useMemo(() => {
-    if (!trigger || dismissedStart === trigger.start) return [];
-    return agents.filter((agent) => agent.name.toLowerCase().includes(trigger.query));
-  }, [agents, dismissedStart, trigger]);
-
-  useEffect(() => setActiveIndex(0), [trigger?.query, choices.length]);
-  useEffect(() => {
-    const activeOption = optionRefs.current[activeIndex];
-    if (activeOption && typeof activeOption.scrollIntoView === "function") {
-      activeOption.scrollIntoView({ block: "nearest" });
-    }
-  }, [activeIndex]);
-  useEffect(() => {
-    if (dismissedStart !== null && value[dismissedStart] !== "@") setDismissedStart(null);
-  }, [dismissedStart, value]);
-
-  const dismiss = useCallback(() => {
-    if (trigger) setDismissedStart(trigger.start);
-  }, [trigger]);
-
-  useEffect(() => {
-    if (choices.length === 0) return undefined;
-    const pointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node) || !menuRef.current?.contains(target)) dismiss();
-    };
-    document.addEventListener("pointerdown", pointerDown, true);
-    return () => document.removeEventListener("pointerdown", pointerDown, true);
-  }, [choices.length, dismiss]);
-
   const placeCaret = useCallback((position: number) => {
     requestAnimationFrame(() => {
       inputRef.current?.focus();
@@ -158,28 +100,6 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
       setCaret(position);
     });
   }, [inputRef]);
-
-  const selectAgent = useCallback((agent: AvailableSubagent) => {
-    if (!trigger) return;
-    const token = `@${agent.name}`;
-    const suffix = value.slice(caret).startsWith(" ") ? "" : " ";
-    const inserted = `${token}${suffix}`;
-    const replacedLength = caret - trigger.start;
-    const delta = inserted.length - replacedLength;
-    const nextMentions = mentions
-      .filter((mention) => mention.end <= trigger.start || mention.start >= caret)
-      .map((mention) => mention.start >= caret ? { ...mention, start: mention.start + delta, end: mention.end + delta } : mention);
-    nextMentions.push({
-      id: `${agent.name}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      name: agent.name,
-      start: trigger.start,
-      end: trigger.start + token.length,
-    });
-    const next = value.slice(0, trigger.start) + inserted + value.slice(caret);
-    setDismissedStart(null);
-    onChange(next, nextMentions.sort((a, b) => a.start - b.start));
-    placeCaret(trigger.start + inserted.length);
-  }, [caret, mentions, onChange, placeCaret, trigger, value]);
 
   const handleChange = (nextValue: string) => {
     const edit = changedRange(value, nextValue);
@@ -204,6 +124,29 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
     setCaret(edit.start + edit.inserted.length);
   };
 
+  const applyCompletion = useCallback((apply: CompletionApply) => {
+    const delta = apply.caret - apply.end;
+    const nextMentions = mentions
+      .filter((mention) => !mentionIntersectsEdit(mention, apply.start, apply.end))
+      .map((mention) => mention.start >= apply.end ? { ...mention, start: mention.start + delta, end: mention.end + delta } : mention);
+    if (apply.payload?.kind === "mention") {
+      const mention: SubagentMention = {
+        id: `${apply.payload.name}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        name: apply.payload.name,
+        start: apply.start,
+        end: apply.start + apply.payload.token.length,
+      };
+      if (!nextMentions.some((existing) => existing.start === mention.start && existing.end === mention.end)) nextMentions.push(mention);
+    }
+    if (apply.payload?.kind === "reference") {
+      addWorkspaceReference({ cwd, ...apply.payload.reference });
+    }
+    onChange(apply.value, nextMentions.sort((a, b) => a.start - b.start));
+    placeCaret(apply.caret);
+  }, [addWorkspaceReference, cwd, mentions, onChange, placeCaret]);
+
+  const completion = useComposerCompletion({ cwd, value, caret, composingRef, onApply: applyCompletion });
+
   const handleSelect = (element: HTMLTextAreaElement) => {
     let start = element.selectionStart;
     let end = element.selectionEnd;
@@ -223,28 +166,14 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
   };
 
   const handleKey = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    if (choices.length > 0) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        dismiss();
-        return;
-      }
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        event.preventDefault();
-        event.stopPropagation();
-        setActiveIndex((index) => event.key === "ArrowDown" ? Math.min(index + 1, choices.length - 1) : Math.max(index - 1, 0));
-        return;
-      }
-      if (event.key === "Enter" || event.key === "Tab") {
-        event.preventDefault();
-        event.stopPropagation();
-        const agent = choices[activeIndex];
-        if (agent) selectAgent(agent);
-        return;
-      }
-    }
+    if (completion.handleKeyDown(event)) return;
     onKeyDown(event);
+  };
+
+  // Tab can carry focus out of the composer. The list belongs to the composer, so it goes with it
+  // rather than staying on screen with no key left to close it.
+  const handleBlur = () => {
+    completion.menu?.dismiss();
   };
 
   const syncScroll = (element: HTMLTextAreaElement) => {
@@ -255,26 +184,15 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
 
   return (
     <>
-      {choices.length > 0 && (
-        <div ref={menuRef} id={listboxId} role="listbox" aria-label={t("conversation.subagentList")} className="ui-popover absolute bottom-full left-0 right-0 z-50 mb-1 max-h-56 overflow-y-auto rounded-card p-1">
-          {choices.map((agent, index) => (
-            <button
-              key={`${agent.source ?? "agent"}-${agent.name}`}
-              ref={(element) => { optionRefs.current[index] = element; }}
-              type="button"
-              role="option"
-              id={`${listboxId}-option-${index}`}
-              aria-selected={index === activeIndex}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => selectAgent(agent)}
-              className={cn("flex w-full min-w-0 items-center gap-2 rounded-input px-2 py-1.5 text-left text-xs", index === activeIndex ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2")}
-            >
-              <span className="shrink-0 rounded bg-accent/10 px-1 font-mono text-accent">@{agent.name}</span>
-              {agent.source && <span className="shrink-0 text-[10px] text-muted/70">{agent.source}</span>}
-              <span className="min-w-0 flex-1 truncate">{agent.description}</span>
-            </button>
-          ))}
-        </div>
+      {completion.menu && (
+        <CompletionMenu
+          id={completion.menu.id}
+          label={completion.menu.label}
+          items={completion.menu.items}
+          activeIndex={completion.menu.activeIndex}
+          onSelect={completion.menu.select}
+          onDismiss={completion.menu.dismiss}
+        />
       )}
       <div className="relative min-h-[64px] max-h-[160px] overflow-hidden rounded-t-composer">
         <div
@@ -290,13 +208,14 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
           value={value}
           role="combobox"
           aria-label={t("conversation.messageInput")}
-          aria-expanded={choices.length > 0}
-          aria-controls={choices.length > 0 ? listboxId : undefined}
-          aria-activedescendant={choices.length > 0 ? `${listboxId}-option-${activeIndex}` : undefined}
+          aria-expanded={completion.menu !== null}
+          aria-controls={completion.menu?.id}
+          aria-activedescendant={completion.menu ? `${completion.menu.id}-option-${completion.menu.activeIndex}` : undefined}
           aria-autocomplete="list"
           onChange={(event) => handleChange(event.target.value)}
           onSelect={(event) => handleSelect(event.currentTarget)}
           onKeyDown={handleKey}
+          onBlur={handleBlur}
           onCompositionStart={onCompositionStart}
           onCompositionEnd={onCompositionEnd}
           onScroll={(event) => syncScroll(event.currentTarget)}

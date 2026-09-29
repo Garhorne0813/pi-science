@@ -7,6 +7,7 @@
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -47,14 +48,16 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {})
 
 function renderPage() {
   return render(
-    <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
-      <MemoryRouter initialEntries={[`/workspace/${CWD}/session/${SESSION_ID}`]}>
-        <Routes>
-          <Route path="/workspace/:cwd/session/:sessionId" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
-          <Route path="/workspace/:cwd/knowledge" element={<div>knowledge inbox</div>} />
-        </Routes>
-      </MemoryRouter>
-    </FeedbackContext.Provider>,
+    <QueryClientProvider client={queryClient}>
+      <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
+        <MemoryRouter initialEntries={[`/workspace/${CWD}/session/${SESSION_ID}`]}>
+          <Routes>
+            <Route path="/workspace/:cwd/session/:sessionId" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
+            <Route path="/workspace/:cwd/knowledge" element={<div>knowledge inbox</div>} />
+          </Routes>
+        </MemoryRouter>
+      </FeedbackContext.Provider>
+    </QueryClientProvider>,
   );
 }
 

@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentMention } from "../../lib/conversation";
@@ -16,6 +17,7 @@ function Harness() {
   const [value, setValue] = useState("");
   const [mentions, setMentions] = useState<SubagentMention[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const composingRef = useRef(false);
   return (
     <MentionComposer
       cwd="project"
@@ -26,6 +28,7 @@ function Harness() {
       onCompositionStart={() => undefined}
       onCompositionEnd={() => undefined}
       inputRef={inputRef}
+      composingRef={composingRef}
       placeholder="Prompt"
     />
   );
@@ -42,6 +45,14 @@ async function typeAt(value: string, position = value.length) {
   await Promise.resolve();
 }
 
+function renderComposer() {
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <Harness />
+    </QueryClientProvider>,
+  );
+}
+
 describe("MentionComposer", () => {
   beforeEach(() => {
     queryClient.clear();
@@ -54,8 +65,8 @@ describe("MentionComposer", () => {
   });
 
   it("shares discovery loading across composers in the same workspace", async () => {
-    const first = render(<Harness />);
-    const second = render(<Harness />);
+    const first = renderComposer();
+    const second = renderComposer();
 
     await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith("/api/settings/subagents/discovery")).length).toBe(1));
 
@@ -64,7 +75,7 @@ describe("MentionComposer", () => {
   });
 
   it("dismisses the menu with Escape or an outside click and keeps @ as text", async () => {
-    render(<Harness />);
+    renderComposer();
     await typeAt("@");
     expect(await screen.findByRole("listbox", { name: "Subagents" })).toBeInTheDocument();
 
@@ -80,7 +91,7 @@ describe("MentionComposer", () => {
   });
 
   it("inserts multiple highlighted mentions and deletes a mention atomically", async () => {
-    const { container } = render(<Harness />);
+    const { container } = renderComposer();
     await typeAt("@rev");
     fireEvent.click(await screen.findByRole("option", { name: /@reviewer/ }));
     await waitFor(() => expect(input()).toHaveValue("@reviewer "));
@@ -105,7 +116,7 @@ describe("MentionComposer", () => {
       value: scrollIntoView,
     });
 
-    render(<Harness />);
+    renderComposer();
     await typeAt("@");
     await screen.findByRole("listbox", { name: "Subagents" });
     fireEvent.keyDown(input(), { key: "ArrowDown" });
@@ -119,7 +130,7 @@ describe("MentionComposer", () => {
   });
 
   it("wires the textarea to the listbox as a combobox (aria-controls/activedescendant)", async () => {
-    render(<Harness />);
+    renderComposer();
     await typeAt("@");
     const listbox = await screen.findByRole("listbox", { name: "Subagents" });
 
@@ -137,7 +148,7 @@ describe("MentionComposer", () => {
   });
 
   it("grows with its content, scrolls at the maximum height, and shrinks again", async () => {
-    render(<Harness />);
+    renderComposer();
     const composer = input();
 
     Object.defineProperty(composer, "scrollHeight", { configurable: true, value: 120 });
@@ -157,7 +168,7 @@ describe("MentionComposer", () => {
   });
 
   it("keeps the latest line visible when appending beyond the maximum height", async () => {
-    const { container } = render(<Harness />);
+    const { container } = renderComposer();
     const composer = input();
     const mirror = container.querySelector<HTMLElement>("[aria-hidden='true']");
     Object.defineProperty(composer, "scrollHeight", { configurable: true, value: 240 });
@@ -169,7 +180,7 @@ describe("MentionComposer", () => {
   });
 
   it("preserves the scroll position when editing earlier overflowing text", async () => {
-    render(<Harness />);
+    renderComposer();
     const composer = input();
     Object.defineProperty(composer, "scrollHeight", { configurable: true, value: 240 });
     await typeAt("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight");
@@ -182,7 +193,7 @@ describe("MentionComposer", () => {
   });
 
   it("clips mirrored text and the textarea scrollbar inside the composer corners", () => {
-    const { container } = render(<Harness />);
+    const { container } = renderComposer();
     const clippingFrame = input().parentElement;
     const mirror = container.querySelector("[aria-hidden='true']");
 

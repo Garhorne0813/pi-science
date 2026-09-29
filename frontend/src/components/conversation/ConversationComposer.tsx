@@ -12,7 +12,6 @@ import { ConversationStatsLine } from "./ConversationStatsLine";
 import { MentionComposer } from "./MentionComposer";
 import { ModelControlMenu } from "./ModelControlMenu";
 import { cn } from "../../lib/ui";
-import { SlashCommandMenu } from "../SlashCommandMenu";
 
 const ComposerTodo = lazy(() => import("../todo/ComposerTodo").then((module) => ({ default: module.ComposerTodo })));
 
@@ -128,7 +127,6 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
               ))}
             </div>
           )}
-          <SlashCommandMenu input={input} onSelect={setInput} />
           <MentionComposer
             cwd={workspaceCwd}
             value={input}
@@ -137,8 +135,9 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
             onKeyDown={composer.handleKeyDown}
             onCompositionStart={() => { composer.composingRef.current = true; }}
             onCompositionEnd={() => { setTimeout(() => { composer.composingRef.current = false; }, 0); }}
-            placeholder={composer.dragOver ? "Drop files here…" : research.prompt}
             inputRef={composer.inputRef}
+            composingRef={composer.composingRef}
+            placeholder={composer.dragOver ? "Drop files here…" : research.prompt}
           />
           <div className="flex items-center justify-between gap-2 px-3 pb-1">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
