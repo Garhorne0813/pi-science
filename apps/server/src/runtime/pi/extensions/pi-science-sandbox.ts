@@ -2,7 +2,7 @@
 import { realpath } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { createBashTool } from "@earendil-works/pi-coding-agent";
+import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
 
 const TOKEN_HEADER = "x-pi-science-internal-token";
 const POLL_MS = 250;
@@ -150,15 +150,23 @@ async function fileToolPathAllowed(workspace: string, cwd: string, path: unknown
 }
 
 export default function registerSandbox(pi: any): void {
-  const cwd = process.env.PI_WORKSPACE_DIR || process.cwd();
-  pi.registerTool(createBashTool(cwd, { operations: { exec: executeSandboxed } }));
+  const bash = createBashToolDefinition(process.cwd(), { operations: { exec: executeSandboxed } });
+  // A single Orbit host serves multiple workspace sessions. Build the Bash
+  // execution for the calling session so its job uses that workspace root.
+  bash.execute = (toolCallId, params, signal, onUpdate, ctx) => {
+    if (!ctx?.cwd) throw new Error("Session workspace is unavailable");
+    return createBashToolDefinition(ctx.cwd, { operations: { exec: executeSandboxed } })
+      .execute(toolCallId, params, signal, onUpdate, ctx);
+  };
+  pi.registerTool(bash);
   pi.on("user_bash", () => ({ operations: { exec: executeSandboxed } }));
   pi.on("tool_call", async (event: { toolName: string; input: Record<string, unknown> }, ctx: { cwd?: string }) => {
     if (!FILE_TOOLS.has(event.toolName)) return;
-    const currentCwd = ctx.cwd || cwd;
+    const currentCwd = ctx.cwd;
+    if (!currentCwd) return { block: true, reason: "Session workspace is unavailable" };
     const path = event.input.path ?? currentCwd;
     try {
-      if (!(await fileToolPathAllowed(cwd, currentCwd, path))) return { block: true, reason: "File tools are limited to workspace files outside reserved legacy metadata paths" };
+      if (!(await fileToolPathAllowed(currentCwd, currentCwd, path))) return { block: true, reason: "File tools are limited to workspace files outside reserved legacy metadata paths" };
       if (event.toolName === "find" && typeof event.input.pattern === "string") {
         const pattern = event.input.pattern;
         if (isAbsolute(pattern) || pattern.split(/[\\/]/).includes("..") || pattern.split(/[\\/]/).some((part) => part.toLowerCase() === ".pi-science")) {

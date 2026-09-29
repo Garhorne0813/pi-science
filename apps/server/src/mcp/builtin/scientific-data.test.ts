@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   analyzeClinicalTrialEndpoints, cellTypeSearchInput, clinicalTrialEligibilityInput,
-  clinicalTrialsSearchInput, ensemblVepInput, getAlphaFoldPrediction, getClinicalTrial,
+  clinicalTrialsSearchInput, ensemblVepInput, getAlphaFoldPrediction, getClinicalTrial, getPdbEntry,
   getOpenAlexCitations, getOpenAlexReferences, myGeneInput, openAlexAuthorSearchInput,
-  openAlexReferencesInput, openAlexSearchInput, pdbSearchInput, queryMyGene, runEnsemblVep,
+  openAlexReferencesInput, openAlexSearchInput, pdbSearchInput, pdbEntryInput, alphaFoldInput, queryMyGene, runEnsemblVep,
   searchCellTypes, searchClinicalTrialEligibility, searchClinicalTrials, searchOpenAlexAuthors,
   searchOpenAlexWorks, searchOntologyTerms, searchPdbEntries, type ScientificDependencies,
 } from "./scientific-data.js";
@@ -26,6 +27,19 @@ describe("scientific data schemas", () => {
 
   it("requires at least one clinical-trial search criterion", () => {
     expect(clinicalTrialsSearchInput.safeParse({}).success).toBe(false);
+  });
+
+  it("accepts the structure parameter aliases used in failed calls", () => {
+    expect(pdbSearchInput.parse({ query: "P30520", rows: 5 })).toMatchObject({ rows: 5 });
+    expect(pdbEntryInput.parse({ entry_id: "2v40" })).toEqual({ entry_id: "2V40" });
+    expect(alphaFoldInput.parse({ accession: "p30520" })).toEqual({ accession: "P30520" });
+  });
+
+  it("publishes structure fields in the MCP JSON schema", () => {
+    const options = { unrepresentable: "any" } as const;
+    expect(Object.keys(z.toJSONSchema(pdbSearchInput, options).properties ?? {})).toContain("rows");
+    expect(Object.keys(z.toJSONSchema(pdbEntryInput, options).properties ?? {})).toContain("entry_id");
+    expect(Object.keys(z.toJSONSchema(alphaFoldInput, options).properties ?? {})).toContain("accession");
   });
 });
 
@@ -94,6 +108,18 @@ describe("scientific data provider mappings", () => {
     const body = JSON.parse(String(dependencies.requests[0]!.init?.body));
     expect(dependencies.requests[0]!.init?.method).toBe("POST"); expect(body).toMatchObject({ query: { service: "full_text", parameters: { value: "hemoglobin" } }, request_options: { paginate: { start: 10, rows: 5 } } });
     expect(result).toMatchObject({ total: 1, records: [{ identifier: "1ABC" }] });
+  });
+
+  it("maps the observed structure-tool aliases to provider requests", async () => {
+    const search = responses({ total_count: 0, result_set: [] });
+    await searchPdbEntries(pdbSearchInput.parse({ query: "P30520", rows: 3 }), search);
+    expect(JSON.parse(String(search.requests[0]!.init?.body)).request_options.paginate.rows).toBe(3);
+    const pdb = responses({ rcsb_id: "2V40" });
+    await getPdbEntry(pdbEntryInput.parse({ entry_id: "2v40" }), pdb);
+    expect(pdb.requests[0]!.url.pathname.endsWith("/2V40")).toBe(true);
+    const alpha = responses([{ entryId: "AF-P30520-F1" }]);
+    await getAlphaFoldPrediction(alphaFoldInput.parse({ accession: "p30520" }), alpha);
+    expect(alpha.requests[0]!.url.pathname.endsWith("/P30520")).toBe(true);
   });
 
   it("retrieves AlphaFold predictions by normalized UniProt accession", async () => {

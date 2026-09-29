@@ -511,6 +511,7 @@ describe("Node session lifecycle", () => {
     expect(values(launches[1]!, "-e")).toEqual([
       explicitExtension,
       join(import.meta.dirname, "../pi/extensions/pi-science-notebook.ts"),
+      join(import.meta.dirname, "../pi/extensions/pi-science-download.ts"),
       join(import.meta.dirname, "../pi/extensions/pi-science-mcp.ts"),
       join(import.meta.dirname, "../pi/extensions/prompt-identity.ts"),
       join(import.meta.dirname, "../pi/extensions/pi-science-sandbox.ts"),

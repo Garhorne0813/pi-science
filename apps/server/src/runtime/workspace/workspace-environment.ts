@@ -520,6 +520,22 @@ export class WorkspaceEnvironmentService {
     return workspaceEnvironmentVariables(await this.ensure(cwdValue), inherited);
   }
 
+  /** Conversation commands cannot execute from a workspace-local legacy .venv:
+   * that directory is writable by the agent. Use the shared managed revision
+   * for the sandbox without changing the workspace's notebook binding. */
+  async conversationEnvironment(cwdValue: string, inherited: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv> {
+    const status = await this.ensure(cwdValue);
+    if (status.revision_id) return workspaceEnvironmentVariables(status, inherited);
+    const revisions = await this.list();
+    const revision = revisions.find((item) => item.environment_id === DEFAULT_ENVIRONMENT_ID && item.status === "ready")
+      ?? await this.createRevision({ environment_id: DEFAULT_ENVIRONMENT_ID, name: "python-standard", display_name: "Python Standard", language: "python", packages: DEFAULT_PACKAGES });
+    if (!(await executable(environmentExecutable(revision.prefix, revision.language)))) throw new Error("Managed conversation environment is not ready");
+    return workspaceEnvironmentVariables(this.statusFor(resolve(cwdValue), revision.prefix, "micromamba", {
+      ready: true, environment_id: revision.environment_id, revision_id: revision.revision_id,
+      display_name: revision.display_name, packages: [...revision.packages],
+    }), inherited);
+  }
+
   async create(input: CreateEnvironmentInput): Promise<EnvironmentRevision> {
     const name = safeName(input.name);
     const preset = input.preset ? ENVIRONMENT_PRESETS[input.preset] : undefined;

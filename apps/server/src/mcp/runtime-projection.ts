@@ -10,7 +10,7 @@ export const MCP_RUNTIME_SNAPSHOT = "mcp-runtime.json";
 // Bump when the managed MCP implementation changes its tool/resource contract.
 // The adapter includes this value in its metadata-cache fingerprint so a
 // previously discovered tool list cannot survive a runtime upgrade.
-export const MCP_RUNTIME_CACHE_VERSION = 3;
+export const MCP_RUNTIME_CACHE_VERSION = 4;
 
 export interface ProjectedMcpServer {
   __piScienceAllowedTools?: string[];

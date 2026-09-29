@@ -87,6 +87,35 @@ describe("workspace environment platform defaults", () => {
   });
 });
 
+it.skipIf(process.platform === "win32")("runs conversation commands from a managed revision when a workspace still has a legacy venv", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "pi-science-legacy-conversation-"));
+  const managed = await mkdtemp(join(tmpdir(), "pi-science-managed-conversation-"));
+  try {
+    await mkdir(join(workspace, ".venv", "bin"), { recursive: true });
+    await writeFile(join(workspace, ".venv", "pyvenv.cfg"), "home = /usr/bin\n");
+    await writeFile(join(workspace, ".venv", "bin", "python"), "");
+    await chmod(join(workspace, ".venv", "bin", "python"), 0o755);
+    await mkdir(join(managed, "bin"));
+    await writeFile(join(managed, "bin", "python"), "");
+    await chmod(join(managed, "bin", "python"), 0o755);
+    const service = new WorkspaceEnvironmentService();
+    vi.spyOn(service, "list").mockResolvedValue([{
+      environment_id: "env_python_standard", revision_id: "rev_managed", name: "python-standard",
+      display_name: "Python Standard", language: "python", status: "ready", prefix: managed,
+      packages: DEFAULT_PACKAGES, platform: `${process.platform}-${process.arch}`, created_at: new Date().toISOString(),
+    }]);
+    const regular = await service.environment(workspace, { PATH: "/usr/bin" });
+    const conversation = await service.conversationEnvironment(workspace, { PATH: "/usr/bin" });
+    expect(regular.PI_SCIENCE_ENVIRONMENT_REVISION_ID).toBeUndefined();
+    expect(regular.PI_SCIENCE_ENVIRONMENT_PREFIX).toBe(join(workspace, ".venv"));
+    expect(conversation.PI_SCIENCE_ENVIRONMENT_REVISION_ID).toBe("rev_managed");
+    expect(conversation.PI_SCIENCE_ENVIRONMENT_PREFIX).toBe(managed);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(managed, { recursive: true, force: true });
+  }
+});
+
 describe("workspace environment package mutation", () => {
   const tempDirs: string[] = [];
 

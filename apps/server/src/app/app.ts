@@ -25,6 +25,7 @@ import { registerMcpRoutes } from "../http/routes/mcp-routes.js";
 import { createServerModules, type ServerModules } from "./server-modules.js";
 import { registerEnvironmentRoutes } from "../http/routes/environment-routes.js";
 import { registerGitRoutes } from "../http/routes/git-routes.js";
+import { registerDownloadRoutes } from "../http/routes/download-routes.js";
 import { serveFrontend } from "../http/frontend-static.js";
 import { validateWorkspaceCwd } from "../security/workspace-security.js";
 import { isArtifactSurfaceablePath } from "../runtime/artifacts/artifact-surface-policy.js";
@@ -171,6 +172,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   }
   registerEnvironmentRoutes(app, environments);
   registerGitRoutes(app);
+  registerDownloadRoutes(app);
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);
   if (config.nodeArtifacts !== false) registerTurnArtifactRoutes(app);
   if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings, modelResources, runtimeCatalog, sqliteEnabled ? mcp : undefined);

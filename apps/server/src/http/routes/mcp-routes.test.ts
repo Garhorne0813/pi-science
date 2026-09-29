@@ -2,14 +2,24 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Fastify from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpConnectorService } from "../../mcp/connector-service.js";
-import { McpRuntimeProjection } from "../../mcp/runtime-projection.js";
+import { McpRuntimeProjection, MCP_RUNTIME_CACHE_VERSION } from "../../mcp/runtime-projection.js";
 import { McpRepository } from "../../storage/sqlite/repositories/mcp-repository.js";
 import { WorkspaceRepository } from "../../storage/sqlite/repositories/workspace-repository.js";
 import { InMemorySqliteStateStore } from "../../storage/sqlite/state-store.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { workspaceFile } from "../../storage/persistence.js";
+
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:dns/promises")>();
+  return {
+    ...original,
+    lookup: (hostname: string) => hostname === "example.com"
+      ? Promise.resolve([{ address: "93.184.216.34", family: 4 }])
+      : original.lookup(hostname, { all: true, verbatim: true }),
+  };
+});
 
 const stores: InMemorySqliteStateStore[] = [];
 const directories: string[] = [];
@@ -176,7 +186,7 @@ describe("canonical MCP routes", () => {
       expect.objectContaining({ name: "chembl", tool_count: 4, settings: expect.objectContaining({ enabled: false }) }),
     ]));
     const runtimeSnapshot = JSON.parse(await readFile(workspaceFile(cwd, "mcp-runtime.json"), "utf8"));
-    expect(runtimeSnapshot.mcpServers["paper-search"]).toMatchObject({ __piScienceCacheVersion: 3, __piScienceToolCount: 5 });
+    expect(runtimeSnapshot.mcpServers["paper-search"]).toMatchObject({ __piScienceCacheVersion: MCP_RUNTIME_CACHE_VERSION, __piScienceToolCount: 5 });
 
     const proteinRecords = connectors.find((item) => item.name === "protein-records")!;
     await service.setSettings(proteinRecords.connector_id, {

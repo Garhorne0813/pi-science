@@ -27,7 +27,7 @@ export class JobCoordinator {
   private readonly cancelled = new Set<string>();
   private readonly now: () => number;
 
-  constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> & Partial<Pick<WorkspaceEnvironmentService, "status">> = new WorkspaceEnvironmentService(), private readonly hooks: JobCoordinatorHooks = {}, private readonly executions: Pick<ExecutionRepository, "start" | "finish"> = executionRepository, private readonly repository?: JobRepository) {
+  constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> & Partial<Pick<WorkspaceEnvironmentService, "status" | "conversationEnvironment">> = new WorkspaceEnvironmentService(), private readonly hooks: JobCoordinatorHooks = {}, private readonly executions: Pick<ExecutionRepository, "start" | "finish"> = executionRepository, private readonly repository?: JobRepository) {
     this.now = hooks.now ?? Date.now;
     this.processes = new ProcessSupervisor({ platform: hooks.platform, childStartIdentity: hooks.childStartIdentity });
     this.leases = new JobLeaseManager({ ...hooks, stopChild: (jobId) => this.processes.terminate(jobId) });
@@ -51,7 +51,10 @@ export class JobCoordinator {
     const command = parseCommand(body.command);
     if (!command.length) throw new Error("command is empty");
     const requirement = (body.requirement && typeof body.requirement === "object" ? body.requirement : {}) as JobRequirement;
-    const baseEnvironment = await this.environments.environment(cwd);
+    const surface = typeof body.surface === "string" ? body.surface : "local";
+    const baseEnvironment = surface === "conversation" && this.environments.conversationEnvironment
+      ? await this.environments.conversationEnvironment(cwd)
+      : await this.environments.environment(cwd);
     const check = this.capabilities(requirement, {
       cwd,
       environment: baseEnvironment,
@@ -60,7 +63,6 @@ export class JobCoordinator {
       environment_prefix: baseEnvironment.PI_SCIENCE_ENVIRONMENT_PREFIX ?? null,
     });
     if (check.status === "blocked") throw new Error(check.reasons.join("; "));
-    const surface = typeof body.surface === "string" ? body.surface : "local";
     const allowedEnvironmentKey = surface === "conversation"
       ? /^(?:PI_PROVIDER|PI_MODEL|PI_REASONING_LEVEL|PI_SESSION_ID)$/
       : /^PI_SCIENCE_[A-Z0-9_]+$/;

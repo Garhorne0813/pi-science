@@ -37,6 +37,7 @@ export interface PublishWorkspaceArtifactOptions {
   executionId?: string;
   sessionId?: string | null;
   source?: string;
+  inputs?: unknown[];
   notebookPath?: string | null;
   cellId?: string | null;
   kind?: string;
@@ -230,7 +231,7 @@ async function publishValidatedArtifact(
       blob_sha256: digest.sha256,
       published_at: publishedAt,
       producer,
-      inputs: [],
+      inputs: options.inputs ?? [],
       environment: {},
       verification: {
         status: "passed",

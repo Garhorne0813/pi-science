@@ -8,7 +8,7 @@
 import { appendJsonLine, configPath, readJson } from "../storage/persistence.js";
 
 export type EgressAuditEntry = {
-  connector_type: "mcp" | "literature" | "connector";
+  connector_type: "mcp" | "literature" | "connector" | "download";
   connector_id: string;
   project_id?: string | null;
   target_domain: string;

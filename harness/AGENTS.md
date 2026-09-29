@@ -54,6 +54,15 @@ regulatory, or other consequential scientific decisions.
 
 ## Scientific workflow
 
+For a request to download one protein structure given a UniProt accession, call
+`download_protein_structure` with `accession` (and an optional workspace-relative `destination`).
+The tool checks the UniProt protein name and organism, selects an experimental
+structure when available, falls back to AlphaFold, checks the mmCIF identity,
+and publishes the file. Report the verified protein identity, source, path,
+and artifact from its result. Do not make separate UniProt/PDB lookups,
+download multiple formats or models, create a task list, or run sequence/QC
+scripts unless the user asks for that analysis or the download result fails.
+
 For multi-step scientific work, use this default loop and collapse stages only
 when the task is genuinely simple:
 

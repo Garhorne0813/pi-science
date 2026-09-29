@@ -141,3 +141,29 @@ it("blocks file tools from leaving the workspace or reading application metadata
     await rm(outside, { recursive: true, force: true });
   }
 });
+
+it("routes Bash and file tools to the current session workspace on a shared host", async () => {
+  const host = await mkdtemp(join(tmpdir(), "pi-science-orbit-host-"));
+  const workspace = await mkdtemp(join(tmpdir(), "pi-science-session-workspace-"));
+  try {
+    vi.stubEnv("PI_WORKSPACE_DIR", host);
+    await writeFile(join(workspace, "session.txt"), "session");
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      calls.push(String(url));
+      if (String(url).includes("/api/jobs/conversation")) return new Response(JSON.stringify({ job_id: "job-1", status: "pending" }));
+      return new Response(JSON.stringify({ status: "succeeded", return_code: 0, cursor: 0, lost: false, frames: [] }));
+    }));
+    const tools = new Map<string, any>();
+    const events = new Map<string, any>();
+    registerSandbox({ registerTool: (tool: any) => tools.set(tool.name, tool), on: (name: string, handler: any) => events.set(name, handler) });
+    await tools.get("bash").execute("call", { command: "pwd" }, undefined, undefined, { cwd: workspace, sessionManager: { getSessionId: () => "session", getSessionFile: () => undefined } });
+    expect(calls[0]).toContain(`cwd=${encodeURIComponent(workspace)}`);
+    const check = events.get("tool_call");
+    expect(await check({ toolName: "read", input: { path: "session.txt" } }, { cwd: workspace })).toBeUndefined();
+    expect(await check({ toolName: "read", input: { path: join(host, "host.txt") } }, { cwd: workspace })).toMatchObject({ block: true });
+  } finally {
+    await rm(host, { recursive: true, force: true });
+    await rm(workspace, { recursive: true, force: true });
+  }
+});

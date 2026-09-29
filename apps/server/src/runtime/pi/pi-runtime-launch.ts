@@ -7,6 +7,7 @@ import type { PiConfig } from "@pi-science/contracts";
 import type { PiProcessOptions, RuntimeSkillPolicy } from "./pi-process.js";
 import { configRoot, metadataRoot } from "../../storage/persistence.js";
 import { canonicalRuntimeModelRef, projectedRuntimeModelRef, projectPiRuntime } from "./pi-runtime-projection.js";
+import { configuredLocalEgressProxyUrl, downloadDispatcher } from "../../security/download-egress.js";
 
 // The Pi Orbit host is a singleton per control plane: one port + one auth
 // token are allocated on the first buildPiProcessOptions call and reused by
@@ -43,6 +44,7 @@ const NOTEBOOK_EXTENSION = join(
   "extensions",
   "pi-science-notebook.ts",
 );
+const DOWNLOAD_EXTENSION = join(PROJECT_ROOT, "apps", "server", "src", "runtime", "pi", "extensions", "pi-science-download.ts");
 const MCP_EXTENSION = join(PROJECT_ROOT, "apps", "server", "src", "runtime", "pi", "extensions", "pi-science-mcp.ts");
 const SANDBOX_EXTENSION = join(PROJECT_ROOT, "apps", "server", "src", "runtime", "pi", "extensions", "pi-science-sandbox.ts");
 const PROMPT_IDENTITY_EXTENSION = join(PROJECT_ROOT, "apps", "server", "src", "runtime", "pi", "extensions", "prompt-identity.ts");
@@ -148,11 +150,26 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
   if (effectiveThinking) args.push("--thinking", effectiveThinking);
   if (useRpcMode && sessionPath) args.push("--session", sessionPath);
   for (const skill of useRpcMode ? [...seededSkills, ...config.skills] : config.skills) args.push("--skill", skill);
-  const extensionPaths = ensureSandboxExtension(ensurePromptIdentityExtension(ensureMcpExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(config.extensions)))));
+  const extensionPaths = ensureSandboxExtension(ensurePromptIdentityExtension(ensureMcpExtension(ensureDownloadExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(config.extensions))))));
   for (const extension of extensionPaths) args.push("-e", extension);
   const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
   const agentDir = join(dataRoot, "pi-agent", useRpcMode ? workspaceKey : "web-host");
   mkdirSync(agentDir, { recursive: true });
+  const egressProxy = configuredLocalEgressProxyUrl();
+  if (egressProxy) {
+    // Validate that this is an explicit loopback proxy before telling
+    // pi-web-access to trust its hostname resolution.
+    downloadDispatcher(egressProxy);
+    const searchConfigPath = join(agentDir, "web-search.json");
+    const saved = existsSync(searchConfigPath) ? JSON.parse(readFileSync(searchConfigPath, "utf8")) as Record<string, unknown> : {};
+    if (!saved.ssrf || typeof saved.ssrf !== "object" || Array.isArray(saved.ssrf)) {
+      saved.ssrf = { trustEnvProxy: true };
+      writeFileSync(searchConfigPath, `${JSON.stringify(saved, null, 2)}\n`, { mode: 0o600 });
+    } else if ((saved.ssrf as Record<string, unknown>).trustEnvProxy === undefined) {
+      saved.ssrf = { ...(saved.ssrf as Record<string, unknown>), trustEnvProxy: true };
+      writeFileSync(searchConfigPath, `${JSON.stringify(saved, null, 2)}\n`, { mode: 0o600 });
+    }
+  }
   const storedKeys = settings.api_keys;
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -161,6 +178,10 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
     PI_CONFIG_DIR: agentDir,
     PI_WORKSPACE_DIR: resolve(cwd),
     PI_SCIENCE_STATE_ROOT: dataRoot,
+    ...(egressProxy ? {
+      HTTP_PROXY: egressProxy, HTTPS_PROXY: egressProxy, NODE_USE_ENV_PROXY: "1",
+      NO_PROXY: [process.env.NO_PROXY, "localhost", "127.0.0.1", "::1"].filter(Boolean).join(","),
+    } : {}),
     PI_SCIENCE_MCP_ADAPTER_PATH: findRuntimeExtension("pi-mcp-adapter", cliPath, []) ?? join(PROJECT_ROOT, "runtime", "pi", "node_modules", "pi-mcp-adapter", "index.ts"),
     CONTEXT_MODE_DATA_DIR: agentDir,
     CONTEXT_MODE_DIR: join(agentDir, "context-mode"),
@@ -424,11 +445,11 @@ export function loadDefaultPiConfig(runtimeRoots?: string[]): PiConfig {
     provider: null,
     api_key: null,
     skills: Array.isArray(settings.skill_paths) ? settings.skill_paths.map(String).filter(Boolean) : [],
-    extensions: ensureSandboxExtension(ensurePromptIdentityExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(
+    extensions: ensureSandboxExtension(ensurePromptIdentityExtension(ensureDownloadExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(
       Array.isArray(settings.extension_paths)
         ? settings.extension_paths.map(String).filter(Boolean)
         : runtimeExtensionStatus(undefined, runtimeRoots).filter((item) => item.installed && (item.id !== "context-mode" || process.env.PI_SCIENCE_ENABLE_CONTEXT_MODE === "1")).map((item) => item.path!).filter(Boolean),
-    )))),
+    ))))),
   };
 }
 
@@ -517,6 +538,11 @@ function ensureNotebookExtension(paths: string[]): string[] {
     ...paths.filter((path) => path !== NOTEBOOK_EXTENSION),
     NOTEBOOK_EXTENSION,
   ];
+}
+
+function ensureDownloadExtension(paths: string[]): string[] {
+  if (!existsSync(DOWNLOAD_EXTENSION)) throw new Error("Pi-Science download extension is missing");
+  return [...paths.filter((path) => path !== DOWNLOAD_EXTENSION), DOWNLOAD_EXTENSION];
 }
 
 /** MCP is always loaded through Pi-Science's programmatic snapshot adapter.

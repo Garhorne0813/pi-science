@@ -42,13 +42,22 @@ export const clinicalTrialInput = z.strictObject({ nct_id: z.string().trim().reg
 export const clinicalTrialEligibilityInput = z.strictObject({ criteria: searchText, condition: z.string().trim().min(1).max(500).optional(), location: z.string().trim().min(1).max(500).optional(), page_size: pageSize, page_token: z.string().min(1).max(2_000).optional() });
 
 export const pdbSearchInput = z.strictObject({
-  query: searchText,
+  query: searchText.describe("PDB full-text search terms; for example, hemoglobin"),
   return_type: z.enum(["entry", "polymer_entity"]).default("entry"),
-  limit: pageSize,
+  limit: z.number().int().min(1).max(100).optional().describe("Maximum results, 1-100; defaults to 20"),
+  rows: z.number().int().min(1).max(100).optional().describe("Alias for limit"),
   offset,
 });
-export const pdbEntryInput = z.strictObject({ pdb_id: z.string().trim().regex(/^[0-9][A-Za-z0-9]{3}$/).transform((value) => value.toUpperCase()) });
-export const alphaFoldInput = z.strictObject({ uniprot_accession: z.string().trim().regex(/^[A-Z0-9][A-Z0-9-]{4,19}$/i).transform((value) => value.toUpperCase()) });
+const pdbIdentifier = z.string().trim().regex(/^[0-9][A-Za-z0-9]{3}$/).transform((value) => value.toUpperCase());
+export const pdbEntryInput = z.strictObject({
+  pdb_id: pdbIdentifier.optional().describe("Four-character PDB ID, for example 2V40"),
+  entry_id: pdbIdentifier.optional().describe("Alias for pdb_id"),
+});
+const uniprotAccession = z.string().trim().regex(/^[A-Z0-9][A-Z0-9-]{4,19}$/i).transform((value) => value.toUpperCase());
+export const alphaFoldInput = z.strictObject({
+  uniprot_accession: uniprotAccession.optional().describe("UniProt accession, for example P30520"),
+  accession: uniprotAccession.optional().describe("Alias for uniprot_accession"),
+});
 
 export const myGeneInput = z.strictObject({
   query: searchText,
@@ -161,19 +170,26 @@ export async function analyzeClinicalTrialEndpoints(input: z.infer<typeof clinic
 }
 
 export async function searchPdbEntries(input: z.infer<typeof pdbSearchInput>, dependencies: ScientificDependencies = {}) {
+  if (input.limit !== undefined && input.rows !== undefined && input.limit !== input.rows) throw new Error("limit and rows must match");
   const url = new URL("https://search.rcsb.org/rcsbsearch/v2/query");
-  const body = { query: { type: "terminal", service: "full_text", parameters: { value: input.query } }, return_type: input.return_type, request_options: { paginate: { start: input.offset, rows: input.limit }, results_content_type: ["experimental"] } };
+  const body = { query: { type: "terminal", service: "full_text", parameters: { value: input.query } }, return_type: input.return_type, request_options: { paginate: { start: input.offset, rows: input.limit ?? input.rows ?? 20 }, results_content_type: ["experimental"] } };
   const payload = await requestJson("structures", url, dependencies, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) as { total_count?: number; result_set?: Json[] };
   return envelope("rcsb-pdb", input, (payload.result_set ?? []).map((item) => ({ identifier: item.identifier, score: item.score })), payload.total_count ?? null, dependencies);
 }
 
 export async function getPdbEntry(input: z.infer<typeof pdbEntryInput>, dependencies: ScientificDependencies = {}) {
-  const url = new URL(`https://data.rcsb.org/rest/v1/core/entry/${input.pdb_id}`);
+  if (input.pdb_id && input.entry_id && input.pdb_id !== input.entry_id) throw new Error("pdb_id and entry_id must match");
+  const pdbId = input.pdb_id ?? input.entry_id;
+  if (!pdbId) throw new Error("pdb_id or entry_id is required");
+  const url = new URL(`https://data.rcsb.org/rest/v1/core/entry/${pdbId}`);
   return singleEnvelope("rcsb-pdb", input, await getJson("structures", url, dependencies) as Json, dependencies);
 }
 
 export async function getAlphaFoldPrediction(input: z.infer<typeof alphaFoldInput>, dependencies: ScientificDependencies = {}) {
-  const url = new URL(`https://alphafold.ebi.ac.uk/api/prediction/${input.uniprot_accession}`);
+  if (input.uniprot_accession && input.accession && input.uniprot_accession !== input.accession) throw new Error("uniprot_accession and accession must match");
+  const accession = input.uniprot_accession ?? input.accession;
+  if (!accession) throw new Error("uniprot_accession or accession is required");
+  const url = new URL(`https://alphafold.ebi.ac.uk/api/prediction/${accession}`);
   const payload = await getJson("structures", url, dependencies);
   return envelope("alphafold-db", input, Array.isArray(payload) ? payload as Json[] : [payload as Json], null, dependencies);
 }
