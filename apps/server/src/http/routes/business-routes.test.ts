@@ -373,7 +373,13 @@ describe("native control-plane business routes", () => {
       success: true,
       data: { models: [{ provider: "custom-local-provider", id: "local-model", name: "Local Model", reasoning: true }] },
     });
-    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
+    // The in-process pi-ai catalog also lists this legacy custom provider (it is
+    // projected into models.json from the same config) with the runtime's own
+    // level set, which is a separate precedence path. Inject an empty catalog so
+    // this case still isolates the hint-vs-runtime-listing merge it is about.
+    const modules = createServerModules();
+    const runtimeCatalog = { getCatalog: vi.fn(async () => ({ schemaVersion: 1 as const, providers: [] })) };
+    const app = buildApp(config(), { ...modules, sessions: nodeSessionService, runtimeCatalog: runtimeCatalog as unknown as typeof modules.runtimeCatalog }); apps.push(app);
     const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
     const model = settings.json().available_models.find((item: { id: string }) => item.id === "custom-local-provider/local-model");
     expect(model).toMatchObject({ reasoning: true, thinking_levels: ["off", "high", "xhigh"] });

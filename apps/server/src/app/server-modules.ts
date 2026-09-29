@@ -1,7 +1,7 @@
 import { ConversationEventHub } from "../runtime/events/conversation-event-hub.js";
 import { NodeSessionService } from "../runtime/node/node-session-service.js";
 import { PiManager } from "../runtime/pi/pi-manager.js";
-import { PiOrbitCatalogService } from "../runtime/pi/pi-orbit-catalog.js";
+import { PiRuntimeCatalogService } from "../runtime/pi/pi-runtime-catalog.js";
 import { SessionRepository } from "../runtime/node/session-repository.js";
 import { SettingsStore } from "../storage/settings-store.js";
 import { ModelResourceService } from "../model-resources/model-resource-service.js";
@@ -28,7 +28,7 @@ export interface ServerModules {
   readonly events: ConversationEventHub;
   readonly sessionRepository: SessionRepository;
   readonly piManager: PiManager;
-  readonly runtimeCatalog: PiOrbitCatalogService;
+  readonly runtimeCatalog: PiRuntimeCatalogService;
   readonly settings: SettingsStore;
   readonly modelResources: ModelResourceService;
   readonly jobs: JobCoordinator;
@@ -62,7 +62,7 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
   const events = new ConversationEventHub();
   const sessionRepository = new SessionRepository();
   const piManager = new PiManager();
-  const runtimeCatalog = new PiOrbitCatalogService(piManager);
+  const runtimeCatalog = new PiRuntimeCatalogService();
   const environments = new WorkspaceEnvironmentService(undefined, config?.micromambaExecutable, sqliteEnabled ? environmentRepository : undefined);
   const kernels = new NodeKernelManager();
   const notebooks = new NotebookService({

@@ -8,7 +8,7 @@ import { safeConnectorFetch, validateOutboundHttpUrl } from "../../security/outb
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { SettingsStore, type SettingsData as Settings } from "../../storage/settings-store.js";
 import { catalog as skillCatalog } from "../../catalog/skill-catalog.js";
-import type { PiOrbitCatalog, PiOrbitCatalogProvider, PiOrbitCatalogModel } from "../../runtime/pi/pi-orbit-catalog.js";
+import type { PiRuntimeCatalog, PiRuntimeCatalogProvider, PiRuntimeCatalogModel } from "../../runtime/pi/pi-runtime-catalog.js";
 import {
   createProjectSkill,
   deleteProjectSkill,
@@ -22,7 +22,7 @@ import {
 import { knownWorkspacePaths } from "./catalog-routes.js";
 import type { RuntimeSkillPolicy } from "../../runtime/pi/pi-process.js";
 import type { ModelResourceService } from "../../model-resources/model-resource-service.js";
-import type { PiOrbitCatalogService } from "../../runtime/pi/pi-orbit-catalog.js";
+import type { PiRuntimeCatalogService } from "../../runtime/pi/pi-runtime-catalog.js";
 import { resolveMcpConfig } from "../../catalog/mcp-config.js";
 import type { McpConnectorService } from "../../mcp/connector-service.js";
 const BUILTIN_SUBAGENTS = [
@@ -110,11 +110,11 @@ async function unifiedSkillCatalog() {
   for (const catalog of catalogs) for (const skill of catalog) if (!byName.has(skill.name)) byName.set(skill.name, skill);
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
-function catalogModels(catalog: PiOrbitCatalog): Array<Record<string, unknown>> {
-  return catalog.providers.flatMap((provider) => provider.models.map((model) => orbitModel(provider, model)));
+function catalogModels(catalog: PiRuntimeCatalog): Array<Record<string, unknown>> {
+  return catalog.providers.flatMap((provider) => provider.models.map((model) => catalogModel(provider, model)));
 }
 
-function orbitModel(provider: PiOrbitCatalogProvider, model: PiOrbitCatalogModel): Record<string, unknown> {
+function catalogModel(provider: PiRuntimeCatalogProvider, model: PiRuntimeCatalogModel): Record<string, unknown> {
   const thinkingLevels = normalizeThinkingLevels(model.thinkingLevels);
   return {
     id: `${provider.id}/${model.id}`,
@@ -131,7 +131,7 @@ function orbitModel(provider: PiOrbitCatalogProvider, model: PiOrbitCatalogModel
   };
 }
 
-async function readRuntimeCatalog(source?: Pick<PiOrbitCatalogService, "getCatalog">): Promise<PiOrbitCatalog> {
+async function readRuntimeCatalog(source?: Pick<PiRuntimeCatalogService, "getCatalog">): Promise<PiRuntimeCatalog> {
   if (!source) return { schemaVersion: 1, providers: [] };
   try { return await source.getCatalog(); }
   catch (error) {
@@ -249,7 +249,7 @@ function mergeModelCatalog(primary: Array<Record<string, unknown>>, overlay: Arr
   }
   return [...byId.values()];
 }
-async function modelCatalog(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, runtimeCatalog?: Pick<PiOrbitCatalogService, "getCatalog">): Promise<{ available: Array<Record<string, unknown>>; source: "pi" | "fallback" }> {
+async function modelCatalog(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, runtimeCatalog?: Pick<PiRuntimeCatalogService, "getCatalog">): Promise<{ available: Array<Record<string, unknown>>; source: "pi" | "fallback" }> {
   const catalog = await readRuntimeCatalog(runtimeCatalog);
   const catalogEntries = catalogModels(catalog);
   if (cwdValue) {
@@ -291,7 +291,7 @@ type ProviderInventoryEntry = {
 
 /** Builtin provider inventory from the Orbit runtime catalog. Workspace model
  *  availability still comes from the live session's `/api/models` command. */
-async function providerInventory(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, modelResources?: ModelResourceService, runtimeCatalog?: Pick<PiOrbitCatalogService, "getCatalog">): Promise<ProviderInventoryEntry[]> {
+async function providerInventory(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, modelResources?: ModelResourceService, runtimeCatalog?: Pick<PiRuntimeCatalogService, "getCatalog">): Promise<ProviderInventoryEntry[]> {
   const catalog = await readRuntimeCatalog(runtimeCatalog);
   let orbitModels: Record<string, string[]> | null = null;
   if (cwdValue) {
@@ -499,7 +499,7 @@ async function discoverProvider(baseUrl: string, apiKey: string, api: string, al
   return { safeUrl, models, modelHints };
 }
 
-export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService: NodeSessionService, settingsStore: SettingsStore, modelResources?: ModelResourceService, runtimeCatalog?: Pick<PiOrbitCatalogService, "getCatalog">, mcp?: McpConnectorService): void {
+export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService: NodeSessionService, settingsStore: SettingsStore, modelResources?: ModelResourceService, runtimeCatalog?: Pick<PiRuntimeCatalogService, "getCatalog">, mcp?: McpConnectorService): void {
   const load = () => settingsStore.read();
   const mutate = <T>(operation: (config: Settings) => T | Promise<T>) => settingsStore.update(operation);
   // Direct API clients may save without calling the discovery endpoint first.
@@ -834,48 +834,39 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
     if (!name || !discovered.some((skill) => skill.name === name)) return reply.code(400).send({ ok: false, code: "unknown_runtime_skills", error: `Unknown runtime skill: ${name || "(empty)"}` });
     const current = reconcileSkillPolicy(storedSkillPolicy(await load()), new Set(discovered.map((skill) => skill.name)));
     const policy = toggledSkillPolicy(current, name, body.enabled === true);
-    try {
-      await nodeSessionService.refreshAllRuntimeSkills();
-      await nodeSessionService.setGlobalSkillPolicy(policy);
-    }
-    catch (error) { return runtimeSkillFailure(reply, error); }
     await mutate((config) => {
       config.skill_policy = policy;
       delete config.skill_policies;
       delete config.skills_configured;
       delete config.skill_paths;
     });
+    try { await nodeSessionService.refreshAllRuntimeSkills(); }
+    catch (error) { return runtimeSkillFailure(reply, error); }
     return { ok: true, policy, configured: policy.mode !== "inherit" };
   });
   app.post("/api/settings/skills/refresh", async (_request, reply) => {
     const discovered = await unifiedSkillCatalog();
     const policy = reconcileSkillPolicy(storedSkillPolicy(await load()), new Set(discovered.map((skill) => skill.name)));
-    try {
-      await nodeSessionService.refreshAllRuntimeSkills();
-      await nodeSessionService.setGlobalSkillPolicy(policy);
-    }
-    catch (error) { return runtimeSkillFailure(reply, error); }
     await mutate((config) => {
       if (policy.mode === "inherit") {
         delete config.skill_policy;
       } else config.skill_policy = policy;
       delete config.skill_policies;
     });
+    try { await nodeSessionService.refreshAllRuntimeSkills(); }
+    catch (error) { return runtimeSkillFailure(reply, error); }
     return { ok: true, policy, configured: policy.mode !== "inherit" };
   });
   app.delete("/api/settings/skills", async (_request, reply) => {
     const policy: RuntimeSkillPolicy = { mode: "inherit" };
-    try {
-      await nodeSessionService.refreshAllRuntimeSkills();
-      await nodeSessionService.setGlobalSkillPolicy(policy);
-    }
-    catch (error) { return runtimeSkillFailure(reply, error); }
     await mutate((config) => {
       delete config.skill_policy;
       delete config.skill_policies;
       delete config.skills_configured;
       delete config.skill_paths;
     });
+    try { await nodeSessionService.refreshAllRuntimeSkills(); }
+    catch (error) { return runtimeSkillFailure(reply, error); }
     return { ok: true, policy, configured: false, message: "Skills reset to auto-discover mode" };
   });
   app.post("/api/settings/skills", async (request, reply) => {

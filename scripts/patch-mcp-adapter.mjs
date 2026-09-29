@@ -84,9 +84,10 @@ patch("tool-approval.ts", "PI_SCIENCE_PERMISSION_UI_V1", [
   ],
 ]);
 
-// Pi Orbit hosts many workspace sessions in one process. Allow the managed
-// wrapper to resolve its in-memory config from the current session context;
-// a config captured while the host boots would otherwise use orbit-host cwd.
+// The pi-runtime host runs many workspace sessions in one process. Allow the
+// managed wrapper to resolve its in-memory config from the current session
+// context; a config captured while the host boots would otherwise use the
+// host cwd.
 patch("types.ts", "PI_SCIENCE_SESSION_CONFIG_FACTORY_TYPES_V1", [[
   "  config?: McpConfig;\n  configPath?: string;",
   "  config?: McpConfig;\n  configPath?: string;\n  configFactory?: (ctx: { cwd: string }) => McpConfig;",

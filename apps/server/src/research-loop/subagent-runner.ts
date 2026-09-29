@@ -29,7 +29,6 @@ export class PiResearchSubagentRunner implements ResearchSubagentRunner {
     if (!options) throw new Error("Pi CLI is not configured");
     const index = options.args.indexOf("--session-dir");
     if (index >= 0) options.args[index + 1] = sessionDir;
-    if (options.web) options.web.runtime.sessionDir = sessionDir;
     options.requestTimeoutMs = 30_000;
 
     const managerKey = `research:${runId}`;

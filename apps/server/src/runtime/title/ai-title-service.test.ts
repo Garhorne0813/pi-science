@@ -102,8 +102,13 @@ describe("AiTitleService", () => {
     const stopped: string[] = [];
     let runtimeSessionDir = "";
     const manager = {
-      async start(key: string, options: { web?: { runtime?: { sessionDir?: string } } }) {
-        runtimeSessionDir = options.web?.runtime?.sessionDir ?? "";
+      // The stdio RPC runtime carries its session directory as the
+      // `--session-dir <dir>` argument pair (there is no web descriptor
+      // anymore), which is the contract the title factory must keep using.
+      async start(key: string, options: { args: string[] }) {
+        const flag = options.args.indexOf("--session-dir");
+        expect(flag).toBeGreaterThanOrEqual(0);
+        runtimeSessionDir = options.args[flag + 1] ?? "";
         await writeFile(join(runtimeSessionDir, "background-title.jsonl"), "ghost", "utf8");
         return { sendCommand: async () => ({ success: true, data: null }), shutdown: async () => {} };
       },
