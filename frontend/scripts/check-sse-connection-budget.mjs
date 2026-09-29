@@ -21,7 +21,17 @@ const RUNS_PAGE_BUDGET = [executionEndpoint, knowledgeEndpoint];
 const server = spawn(process.execPath, ["tests/visual/fixtures/mock-server.mjs"], {
   cwd: frontendRoot,
   env: { ...process.env, PORT: String(port) },
-  stdio: "inherit",
+  stdio: ["ignore", "pipe", "inherit"],
+});
+/** The child prints this only after its own listen() callback, so it proves this
+ *  child owns the port. A health probe before it lands can be answered by a
+ *  leftover fixture server on the same port, and the budget would then be
+ *  measured against the wrong dist/ instead of the build under test. */
+let serverListening = false;
+server.stdout.setEncoding("utf8");
+server.stdout.on("data", (chunk) => {
+  process.stdout.write(chunk);
+  if (chunk.includes("visual fixture server on http://127.0.0.1:")) serverListening = true;
 });
 let browser;
 
@@ -33,10 +43,12 @@ async function waitForHealth() {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     if (server.exitCode !== null) throw new Error(`Fixture server exited with ${server.exitCode}`);
-    try {
-      const response = await fetch(`${origin}/api/health`);
-      if (response.ok) return;
-    } catch { /* the fixture server is still starting */ }
+    if (serverListening) {
+      try {
+        const response = await fetch(`${origin}/api/health`);
+        if (response.ok) return;
+      } catch { /* the fixture server is still starting */ }
+    }
     await delay(250);
   }
   throw new Error("Timed out waiting for the fixture server health check");
@@ -98,6 +110,17 @@ async function activeSourceCount(page, endpoint) {
     .filter((source) => !source.closed && source.url.includes(needle)).length, endpoint);
 }
 
+/** Every budgeted stream must be released in the background, not only the one a
+ *  scenario names, so wait for the whole page to reach zero before asserting. */
+async function waitForNoActiveSources(page, label) {
+  try {
+    await page.waitForFunction(() => window.__sseBudget.sources.every((source) => source.closed), null, { timeout: 20_000 });
+  } catch {
+    const active = await activeSourcePaths(page);
+    throw new Error(`${label}: SSE subscriptions still open in the background: ${active.join(", ")}`);
+  }
+}
+
 /** Endpoint paths of every active EventSource, so a violation names the stream
  *  instead of only its count. */
 async function activeSourcePaths(page) {
@@ -151,7 +174,8 @@ try {
   const initialSource = (await sources(firstPage)).find((source) => source.url.includes(sessionEndpoint));
   assert(initialSource && !initialSource.opened, "The first conversation stream should still be CONNECTING in this case");
   await setHidden(firstPage, true);
-  await firstPage.waitForFunction((needle) => window.__sseBudget.sources.some((source) => source.url.includes(needle) && source.closed), sessionEndpoint);
+  await waitForNoActiveSources(firstPage, "The session page while hidden");
+  await assertStreamBudget(firstPage, "The session page while hidden", []);
   releaseFirstRequest();
   await firstPage.unroute(sessionRoute);
   await setHidden(firstPage, false);
@@ -171,7 +195,8 @@ try {
   assert(await activeSourceCount(secondPage, sessionEndpoint) === 1, "The second visible tab must retain one stream");
   await assertStreamBudget(secondPage, "With two visible session tabs", SESSION_PAGE_BUDGET);
   await setHidden(firstPage, true);
-  await firstPage.waitForFunction((needle) => window.__sseBudget.sources.filter((source) => !source.closed && source.url.includes(needle)).length === 0, sessionEndpoint);
+  await waitForNoActiveSources(firstPage, "The hidden tab while the other tab stays visible");
+  await assertStreamBudget(firstPage, "The hidden tab while the other tab stays visible", []);
   assert(await activeSourceCount(secondPage, sessionEndpoint) === 1, "Hiding one tab must not close the other tab's stream");
   await setHidden(firstPage, false);
   await waitForOpenSource(firstPage, sessionEndpoint);
@@ -193,7 +218,8 @@ try {
   assert(await activeSourceCount(runsPage, executionEndpoint) === 1, "The executions page must hold one invalidation SSE");
   await assertStreamBudget(runsPage, "The executions page", RUNS_PAGE_BUDGET);
   await setHidden(runsPage, true);
-  await runsPage.waitForFunction((needle) => window.__sseBudget.sources.filter((source) => !source.closed && source.url.includes(needle)).length === 0, executionEndpoint);
+  await waitForNoActiveSources(runsPage, "The executions page while hidden");
+  await assertStreamBudget(runsPage, "The executions page while hidden", []);
   await setHidden(runsPage, false);
   await waitForOpenSource(runsPage, executionEndpoint);
   assert(await activeSourceCount(runsPage, executionEndpoint) === 1, "Resuming executions must leave one invalidation SSE");
@@ -206,6 +232,11 @@ try {
   console.log("SSE connection budget passed: per-page subscription sets, two visible tabs, hidden-tab release, first CONNECTING resume, reload, executions resume, and /api/health.");
   await context.close();
 } finally {
-  await browser?.close();
-  server.kill("SIGTERM");
+  // A rejected close must never skip the SIGTERM: a leftover fixture server
+  // would answer the next run's health probe on the same fixed port.
+  try {
+    await browser?.close();
+  } finally {
+    server.kill("SIGTERM");
+  }
 }

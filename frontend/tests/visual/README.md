@@ -29,10 +29,12 @@ The Playwright `webServer` block starts the fixture mock server
 serves a fixed `/api/*` surface from `tests/visual/fixtures/data.mjs`
 (including a keep-alive SSE stream). The same `playwright.visual.config.ts`
 backs both `test:visual` and `test:accessibility`, so the server also runs
-for the axe gate — it never runs persistently outside these two commands.
+for the axe gate; `test:sse-budget` starts the same fixture server on its own
+port (4174) rather than through Playwright's `webServer`. It never runs
+persistently outside those commands.
 The mock server is hardened: malformed requests get 400, handler failures get
 500, and it never crashes the run; SIGTERM/SIGINT shut it down cleanly so no
-zombie process keeps port 4173.
+zombie process keeps its port.
 
 ## Viewport / theme matrix
 
@@ -109,9 +111,10 @@ Edge through the conversation and executions routes. `test:sse-budget` is the
 same check without the build step; the Linux `verify` job runs it right after
 `pnpm build`, beside `test:bundle`.
 
-It checks two visible conversation tabs, hidden-tab release, a first connection
-resumed before it opens, the no-cursor recovery sentinel, document reload,
-execution stream resume, and `/api/health`.
+It checks two visible conversation tabs, each background tab released to zero
+streams before the assertions run, a first connection resumed before it opens,
+the no-cursor recovery sentinel, document reload, execution stream resume, and
+`/api/health`.
 
 Each route is also held to its whole subscription set, not just the endpoint
 under test: a conversation route must hold exactly the conversation stream plus
