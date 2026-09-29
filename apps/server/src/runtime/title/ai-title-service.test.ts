@@ -82,7 +82,6 @@ describe("AiTitleService", () => {
 
   afterEach(() => {
     process.env.PI_SCIENCE_AI_TITLES = undefined;
-    process.env.PI_SCIENCE_PI_MODE = undefined;
   });
 
   it("returns null when the AI-title env flag disables the feature", () => {
@@ -91,9 +90,11 @@ describe("AiTitleService", () => {
     expect(aiTitlesEnabled()).toBe(false);
   });
 
-  it("disables the feature in RPC mode (no isolated runtime available)", () => {
+  it("keeps the feature enabled when the legacy RPC mode variable is set", () => {
+    // The runtime is always RPC now, and the title runtime uses its own
+    // temporary session directory, so the old gate must not disable titles.
     process.env.PI_SCIENCE_PI_MODE = "rpc";
-    expect(aiTitlesEnabled()).toBe(false);
+    expect(aiTitlesEnabled()).toBe(true);
     process.env.PI_SCIENCE_PI_MODE = undefined;
     expect(aiTitlesEnabled()).toBe(true);
   });

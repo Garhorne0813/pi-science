@@ -9,7 +9,7 @@ import { ModelResourceRepository, emptyModelResourceState } from "../../model-re
 import { runtimeCredentialEnvName } from "../../model-resources/runtime-credential-env.js";
 
 const cleanup: string[] = [];
-const original = { home: process.env.PI_SCIENCE_HOME, userHome: process.env.HOME, userProfile: process.env.USERPROFILE, cli: process.env.PI_CLI_PATH, tsx: process.env.PI_TSX_PATH, tsconfig: process.env.PI_TSCONFIG_PATH, piMode: process.env.PI_SCIENCE_PI_MODE };
+const original = { home: process.env.PI_SCIENCE_HOME, userHome: process.env.HOME, userProfile: process.env.USERPROFILE, cli: process.env.PI_CLI_PATH, tsx: process.env.PI_TSX_PATH, tsconfig: process.env.PI_TSCONFIG_PATH };
 
 beforeEach(async () => {
   const root = join(tmpdir(), `pi-science-runtime-launch-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -17,7 +17,6 @@ beforeEach(async () => {
   await mkdir(root, { recursive: true });
   process.env.PI_SCIENCE_HOME = join(root, "control-home");
   process.env.PI_CLI_PATH = join(root, "fake-pi.mjs");
-  delete process.env.PI_SCIENCE_PI_MODE;
 });
 
 afterEach(async () => {
@@ -29,8 +28,6 @@ afterEach(async () => {
   process.env.PI_CLI_PATH = original.cli;
   process.env.PI_TSX_PATH = original.tsx;
   process.env.PI_TSCONFIG_PATH = original.tsconfig;
-  if (original.piMode === undefined) delete process.env.PI_SCIENCE_PI_MODE;
-  else process.env.PI_SCIENCE_PI_MODE = original.piMode;
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });
 
@@ -580,9 +577,16 @@ describe("Pi runtime custom provider materialization", () => {
 
     await writePolicy({ mode: "none" });
     expect(argValues(buildPiProcessOptions(cwd)!.args, "--skill")).toEqual([]);
+    // Filtering the explicit paths is not enough: --approve trusts
+    // cwd/.pi/skills, so automatic discovery would load a disabled skill back.
+    expect(buildPiProcessOptions(cwd)!.args).toContain("--no-skills");
+
+    await writePolicy({ mode: "denylist", skills: ["literature-review"] });
+    expect(buildPiProcessOptions(cwd)!.args).toContain("--no-skills");
 
     await writePolicy({ mode: "inherit" });
     expect(argValues(buildPiProcessOptions(cwd)!.args, "--skill").length).toBeGreaterThan(0);
+    expect(buildPiProcessOptions(cwd)!.args).not.toContain("--no-skills");
   });
 
   it("surfaces models.json deletion failures except for a missing file", async () => {

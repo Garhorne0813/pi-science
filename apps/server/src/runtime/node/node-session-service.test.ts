@@ -15,7 +15,7 @@ import { parseReviewResult, type ReviewRunRequest, type ReviewRunResult, type Re
 import { SessionStatsProjector } from "./session-stats-projector.js";
 
 const cleanup: string[] = [];
-const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE, piMode: process.env.PI_SCIENCE_PI_MODE, argsLog: process.env.FAKE_PI_ARGS_LOG, stateDelay: process.env.FAKE_PI_STATE_DELAY, activeProbe: process.env.FAKE_PI_ACTIVE_PROBE, agentStartDelay: process.env.FAKE_PI_AGENT_START_DELAY, watchdog: process.env.PI_SCIENCE_EVENT_WATCHDOG_MS, sessionFile: process.env.FAKE_PI_SESSION_FILE, rejectModel: process.env.FAKE_PI_REJECT_MODEL, modelBusy: process.env.FAKE_PI_MODEL_BUSY_ATTEMPTS, recoveryRetries: process.env.PI_SCIENCE_RECOVERY_BUSY_RETRIES, recoveryRetryDelay: process.env.PI_SCIENCE_RECOVERY_BUSY_RETRY_DELAY_MS };
+const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE, argsLog: process.env.FAKE_PI_ARGS_LOG, stateDelay: process.env.FAKE_PI_STATE_DELAY, activeProbe: process.env.FAKE_PI_ACTIVE_PROBE, agentStartDelay: process.env.FAKE_PI_AGENT_START_DELAY, watchdog: process.env.PI_SCIENCE_EVENT_WATCHDOG_MS, sessionFile: process.env.FAKE_PI_SESSION_FILE, rejectModel: process.env.FAKE_PI_REJECT_MODEL, modelBusy: process.env.FAKE_PI_MODEL_BUSY_ATTEMPTS, recoveryRetries: process.env.PI_SCIENCE_RECOVERY_BUSY_RETRIES, recoveryRetryDelay: process.env.PI_SCIENCE_RECOVERY_BUSY_RETRY_DELAY_MS };
 
 /** Restore a captured env value: undefined means the variable was absent, so
  *  delete it (assigning undefined would store the literal string "undefined"). */
@@ -78,7 +78,6 @@ beforeEach(async () => {
   process.env.PI_SCIENCE_HOME = join(root, "data");
   process.env.PI_CLI_PATH = script;
   process.env.PI_NODE_PATH = process.execPath;
-  process.env.PI_SCIENCE_PI_MODE = "rpc";
   process.env.FAKE_PI_LOG = join(root, "rpc.jsonl");
   process.env.FAKE_PI_ARGS_LOG = join(root, "pi-args.json");
   process.env.FAKE_PI_STARTS = join(root, "starts.txt");
@@ -111,8 +110,6 @@ afterEach(async () => {
   else process.env.FAKE_PI_AGENT_START_DELAY = original.agentStartDelay;
   if (original.sessionFile === undefined) delete process.env.FAKE_PI_SESSION_FILE;
   else process.env.FAKE_PI_SESSION_FILE = original.sessionFile;
-  if (original.piMode === undefined) delete process.env.PI_SCIENCE_PI_MODE;
-  else process.env.PI_SCIENCE_PI_MODE = original.piMode;
   if (original.watchdog === undefined) delete process.env.PI_SCIENCE_EVENT_WATCHDOG_MS;
   else process.env.PI_SCIENCE_EVENT_WATCHDOG_MS = original.watchdog;
   if (original.rejectModel === undefined) delete process.env.FAKE_PI_REJECT_MODEL;

@@ -81,7 +81,9 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
   if (effectiveModel) args.push("--model", effectiveModel);
   if (effectiveThinking) args.push("--thinking", effectiveThinking);
   if (sessionPath) args.push("--session", sessionPath);
-  for (const skill of applySkillPolicy([...seededSkills, ...config.skills], globalSkillPolicy(settings))) args.push("--skill", skill);
+  const skillSelection = applySkillPolicy([...seededSkills, ...config.skills], globalSkillPolicy(settings));
+  if (!skillSelection.discover) args.push("--no-skills");
+  for (const skill of skillSelection.skills) args.push("--skill", skill);
   const extensionPaths = ensurePromptIdentityExtension(ensureMcpExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(config.extensions))));
   for (const extension of extensionPaths) args.push("-e", extension);
   const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
@@ -130,12 +132,17 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
 }
 
 /** RPC runtimes receive their skill set as spawn arguments, so the persisted
- *  skill policy is applied here instead of through a runtime control API. */
-function applySkillPolicy(paths: string[], policy: RuntimeSkillPolicy): string[] {
-  if (policy.mode === "inherit") return paths;
-  if (policy.mode === "none") return [];
+ *  skill policy is applied here instead of through a runtime control API. A
+ *  narrowing policy must also disable discovery: --approve trusts the
+ *  workspace's .pi/skills tree, so a disabled skill would load back on its own. */
+function applySkillPolicy(paths: string[], policy: RuntimeSkillPolicy): { skills: string[]; discover: boolean } {
+  if (policy.mode === "inherit") return { skills: paths, discover: true };
+  if (policy.mode === "none") return { skills: [], discover: false };
   const named = new Set(policy.skills);
-  return paths.filter((path) => (policy.mode === "allowlist" ? named.has(basename(path)) : !named.has(basename(path))));
+  return {
+    skills: paths.filter((path) => (policy.mode === "allowlist" ? named.has(basename(path)) : !named.has(basename(path)))),
+    discover: false,
+  };
 }
 
 function globalSkillPolicy(settings: Record<string, any>): RuntimeSkillPolicy {

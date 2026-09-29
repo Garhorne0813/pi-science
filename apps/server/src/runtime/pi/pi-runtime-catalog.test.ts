@@ -192,6 +192,29 @@ describe("Pi runtime catalog", () => {
   });
 });
 
+describe("catalog input invalidation", () => {
+  it("rebuilds the runtime when a catalog input file changes", async () => {
+    let fingerprint = "config:1|credentials:none";
+    let builds = 0;
+    const service = new PiRuntimeCatalogService(
+      (async () => { builds += 1; return fakeRuntime(); }) as never,
+      () => [],
+      () => fingerprint,
+    );
+
+    await service.getCatalog();
+    await service.getCatalog();
+    expect(builds).toBe(1);
+
+    // Deleting an API key rewrites config.json or the credential store. A
+    // cached runtime would keep the deleted secret in auth.json and keep
+    // reporting that provider as configured.
+    fingerprint = "config:2|credentials:none";
+    await service.getCatalog();
+    expect(builds).toBe(2);
+  });
+});
+
 describe("withoutProjectedUserProviders", () => {
   function catalogOf(...ids: string[]): PiRuntimeCatalog {
     return {

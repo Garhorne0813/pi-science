@@ -8,7 +8,7 @@
  */
 import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { configRoot } from "../../storage/persistence.js";
 import { ModelResourceRepository } from "../../model-resources/model-resource-repository.js";
@@ -87,6 +87,23 @@ function prepareCatalogAgentDir(): string {
   return agentDir;
 }
 
+/** Credentials and provider settings are read while the runtime is created, so
+ *  a cached runtime keeps serving a deleted API key as configured. Rebuild when
+ *  any catalog input file changes. */
+export function catalogInputFingerprint(): string {
+  const dataRoot = configRoot();
+  return ["config.json", "credentials.json", "model-resources.json"]
+    .map((name) => {
+      try {
+        const stat = statSync(join(dataRoot, name));
+        return `${name}:${stat.mtimeMs}:${stat.size}`;
+      } catch {
+        return `${name}:none`;
+      }
+    })
+    .join("|");
+}
+
 async function createCatalogRuntime(): Promise<ModelRuntime> {
   const agentDir = prepareCatalogAgentDir();
   return ModelRuntime.create({
@@ -100,10 +117,12 @@ async function createCatalogRuntime(): Promise<ModelRuntime> {
 export class PiRuntimeCatalogService {
   private pending: Promise<PiRuntimeCatalog> | undefined;
   private runtime: Promise<ModelRuntime> | undefined;
+  private runtimeFingerprint: string | undefined;
 
   constructor(
     private readonly runtimeFactory: () => Promise<ModelRuntime> = createCatalogRuntime,
     private readonly canonicalProviderIdsFactory: () => readonly string[] = canonicalProviderIds,
+    private readonly fingerprintFactory: () => string = catalogInputFingerprint,
   ) {}
 
   async getCatalog(): Promise<PiRuntimeCatalog> {
@@ -115,10 +134,17 @@ export class PiRuntimeCatalogService {
   }
 
   private runtimeInstance(): Promise<ModelRuntime> {
-    if (!this.runtime) {
+    const fingerprint = this.fingerprintFactory();
+    if (!this.runtime || fingerprint !== this.runtimeFingerprint) {
       const created = this.runtimeFactory();
       this.runtime = created;
-      created.catch(() => { if (this.runtime === created) this.runtime = undefined; });
+      this.runtimeFingerprint = fingerprint;
+      created.catch(() => {
+        if (this.runtime === created) {
+          this.runtime = undefined;
+          this.runtimeFingerprint = undefined;
+        }
+      });
     }
     return this.runtime;
   }

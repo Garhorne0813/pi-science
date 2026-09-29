@@ -91,11 +91,8 @@ const MAX_HISTORY_PAGE = 40;
 const MAX_MESSAGE_CHARS = 200;
 
 export function aiTitlesEnabled(): boolean {
-  // RPC-mode runtimes cannot be spawned with --no-session (the flag only
-  // exists on the web branch), so a title runtime would persist a ghost
-  // session JSONL in the workspace. The feature needs Pi Orbit, disable it
-  // under PI_SCIENCE_PI_MODE=rpc rather than polluting session storage.
-  if (process.env.PI_SCIENCE_PI_MODE === "rpc") return false;
+  // The title runtime runs in its own temporary session directory, so it never
+  // writes into the workspace's session storage.
   return process.env.PI_SCIENCE_AI_TITLES !== "0";
 }
 
