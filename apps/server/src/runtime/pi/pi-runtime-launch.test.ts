@@ -1,7 +1,7 @@
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildPiProcessOptions, loadDefaultPiConfig, runtimeExtensionStatus } from "./pi-runtime-launch.js";
 import { CredentialStore } from "../../model-resources/credential-store.js";
@@ -558,15 +558,17 @@ describe("Pi runtime custom provider materialization", () => {
 
     await writePolicy({ mode: "denylist", skills: ["literature-review"] });
     const denied = argValues(buildPiProcessOptions(cwd, { skills: [extraSkill], extensions: [] })!.args, "--skill");
-    expect(denied.some((path) => path.endsWith("/literature-review"))).toBe(false);
+    // Compare by basename: skill paths are built with path.join, so Windows
+    // separators are "\\" and a literal "/" suffix check would miss them.
+    expect(denied.map((path) => basename(path))).not.toContain("literature-review");
     expect(denied).toContain(extraSkill);
-    expect(denied.some((path) => path.endsWith("/pdf-explore"))).toBe(true);
+    expect(denied.map((path) => basename(path))).toContain("pdf-explore");
 
     await writePolicy({ mode: "allowlist", skills: ["literature-review", "extra-skill"] });
     const allowed = argValues(buildPiProcessOptions(cwd, { skills: [extraSkill], extensions: [] })!.args, "--skill");
-    expect(allowed.some((path) => path.endsWith("/literature-review"))).toBe(true);
+    expect(allowed.map((path) => basename(path))).toContain("literature-review");
     expect(allowed).toContain(extraSkill);
-    expect(allowed.some((path) => path.endsWith("/pdf-explore"))).toBe(false);
+    expect(allowed.map((path) => basename(path))).not.toContain("pdf-explore");
   });
 
   it("drops every --skill argument for the none policy and passes them all when inheriting", async () => {
