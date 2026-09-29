@@ -1,11 +1,12 @@
 <#
 .SYNOPSIS
-    Installs the Pi Orbit runtime and its extensions on Windows.
+    Installs the pi-runtime packages and their extensions on Windows.
 
 .DESCRIPTION
-    Downloads the Windows ZIP release, verifies it against SHA256SUMS, and
-    writes the same .cli-path marker used by fetch-pi.sh. A local PI_ORBIT_REPO
-    checkout remains available as an explicit development override.
+    Installs the pinned @earendil-works/pi-* packages plus the Pi extensions
+    from npm and writes the same .cli-path marker used by fetch-pi.sh. A local
+    PI_RUNTIME_REPO checkout remains available as an explicit development
+    override.
 #>
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +16,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectDir = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir ".."))
 $RuntimeDir = Join-Path $ProjectDir "runtime\pi"
 $CliMarker = Join-Path $RuntimeDir ".cli-path"
+$RuntimeCli = Join-Path $RuntimeDir "node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js"
 
 function Get-CommandPath {
     param([string]$Name)
@@ -45,18 +47,45 @@ function Write-TextFile {
     [System.IO.File]::WriteAllText($Path, $Content, [System.Text.UTF8Encoding]::new($false))
 }
 
-function Install-RuntimeExtensions {
+function Assert-InstalledVersion {
+    param([string]$PackageName, [string]$ExpectedVersion)
+
+    $packageManifest = Join-Path $RuntimeDir "node_modules\$PackageName\package.json"
+    $actual = ""
+    if (Test-Path -LiteralPath $packageManifest -PathType Leaf) {
+        $actual = (Get-Content -LiteralPath $packageManifest -Raw | ConvertFrom-Json).version
+    }
+    if ($actual -ne $ExpectedVersion) {
+        throw "$PackageName $actual was installed instead of the pinned $ExpectedVersion."
+    }
+}
+
+function Assert-PinnedVersions {
+    Assert-InstalledVersion -PackageName "@earendil-works/pi-coding-agent" -ExpectedVersion $PiRuntimeVersion
+    Assert-InstalledVersion -PackageName "@earendil-works/pi-agent-core" -ExpectedVersion $PiRuntimeVersion
+    Assert-InstalledVersion -PackageName "pi-mcp-adapter" -ExpectedVersion $PiMcpAdapterVersion
+    Assert-InstalledVersion -PackageName "pi-subagents" -ExpectedVersion $PiSubagentsVersion
+    Assert-InstalledVersion -PackageName "pi-web-access" -ExpectedVersion $PiWebAccessVersion
+    Assert-InstalledVersion -PackageName "context-mode" -ExpectedVersion $ContextModeVersion
+    Assert-InstalledVersion -PackageName "@juicesharp/rpiv-ask-user-question" -ExpectedVersion $AskUserQuestionVersion
+    Assert-InstalledVersion -PackageName "@juicesharp/rpiv-todo" -ExpectedVersion $TodoVersion
+}
+
+# The runtime and its extensions go into a single npm invocation: npm reifies
+# the whole runtime\pi prefix on every install, so a second `npm install
+# --no-save` into the same prefix evicts the packages of the first one.
+function Install-PiRuntime {
     $npmPath = Get-CommandPath "npm"
     if (-not $npmPath) {
-        throw "npm is required to install Pi runtime extensions."
+        throw "npm is required to install the Pi runtime and its extensions."
     }
 
-    $piMcpAdapterVersion = Get-Setting "PI_MCP_ADAPTER_VERSION" "2.18.0"
-    $piSubagentsVersion = Get-Setting "PI_SUBAGENTS_VERSION" "0.40.0"
-    $piWebAccessVersion = Get-Setting "PI_WEB_ACCESS_VERSION" "0.18.0"
-    $contextModeVersion = Get-Setting "CONTEXT_MODE_VERSION" "1.0.169"
-    $askUserQuestionVersion = Get-Setting "RPIV_ASK_USER_QUESTION_VERSION" "2.3.1"
-    $todoVersion = Get-Setting "RPIV_TODO_VERSION" "2.4.0"
+    # A manifest left by an older install carries ranges (^0.80.6, ^2.16.0) that
+    # npm re-resolves instead of keeping the pins below, so drop it first.
+    foreach ($staleManifest in @("package.json", "package-lock.json")) {
+        Remove-Item -LiteralPath (Join-Path $RuntimeDir $staleManifest) -Force -ErrorAction SilentlyContinue
+    }
+
     $arguments = @(
         "install",
         "--prefix", $RuntimeDir,
@@ -64,53 +93,33 @@ function Install-RuntimeExtensions {
         "--no-package-lock",
         "--omit=dev",
         "--cache", (Join-Path $RuntimeDir ".npm-cache"),
-        "pi-mcp-adapter@$piMcpAdapterVersion",
-        "pi-subagents@$piSubagentsVersion",
-        "pi-web-access@$piWebAccessVersion",
-        "context-mode@$contextModeVersion",
-        "@juicesharp/rpiv-ask-user-question@$askUserQuestionVersion",
-        "@juicesharp/rpiv-todo@$todoVersion"
+        "@earendil-works/pi-coding-agent@$PiRuntimeVersion",
+        "@earendil-works/pi-agent-core@$PiRuntimeVersion",
+        "pi-mcp-adapter@$PiMcpAdapterVersion",
+        "pi-subagents@$PiSubagentsVersion",
+        "pi-web-access@$PiWebAccessVersion",
+        "context-mode@$ContextModeVersion",
+        "@juicesharp/rpiv-ask-user-question@$AskUserQuestionVersion",
+        "@juicesharp/rpiv-todo@$TodoVersion"
     )
-    Write-Host "==> Installing Pi runtime extensions..."
+    Write-Host "==> Installing pi-runtime $PiRuntimeVersion and its extensions..."
     & $npmPath @arguments
     if ($LASTEXITCODE -ne 0) {
-        throw "npm exited with code $LASTEXITCODE while installing Pi runtime extensions."
+        throw "npm exited with code $LASTEXITCODE while installing the Pi runtime and its extensions."
     }
 
     $nodePath = Get-CommandPath "node"
     if (-not $nodePath) {
         throw "node is required to apply MCP adapter security patches."
     }
+    # The MCP adapter patches must land on the freshly installed adapter, so the
+    # patch run stays the last write to the extension tree.
     & $nodePath (Join-Path $ScriptDir "patch-mcp-adapter.mjs")
     if ($LASTEXITCODE -ne 0) {
         throw "node exited with code $LASTEXITCODE while applying MCP adapter security patches."
     }
-}
 
-function Get-ReleaseArchitecture {
-    $raw = $env:PROCESSOR_ARCHITEW6432
-    if ([string]::IsNullOrWhiteSpace($raw)) {
-        $raw = $env:PROCESSOR_ARCHITECTURE
-    }
-    switch ([string]$raw.ToUpperInvariant()) {
-        "AMD64" { return "x64" }
-        "X86_64" { return "x64" }
-        "ARM64" { return "arm64" }
-        default { throw "Unsupported Windows architecture: $raw" }
-    }
-}
-
-function Get-ExpectedHash {
-    param([string]$ChecksumFile, [string]$ArchiveName)
-
-    foreach ($line in [System.IO.File]::ReadAllLines($ChecksumFile)) {
-        if ($line -match '^\s*([0-9a-fA-F]{64})\s+\*?(.+?)\s*$') {
-            if ($matches[2].Trim() -eq $ArchiveName) {
-                return $matches[1].ToLowerInvariant()
-            }
-        }
-    }
-    throw "$ArchiveName is missing from SHA256SUMS."
+    Assert-PinnedVersions
 }
 
 function Install-LocalRuntime {
@@ -118,7 +127,7 @@ function Install-LocalRuntime {
 
     $cli = Join-Path $Repository "packages\coding-agent\src\cli.ts"
     if (-not (Test-Path -LiteralPath $cli -PathType Leaf)) {
-        throw "PI_ORBIT_REPO is not a Pi Orbit source checkout: $Repository"
+        throw "PI_RUNTIME_REPO is not a pi-runtime source checkout: $Repository"
     }
     $tsxCandidates = @(
         (Join-Path $Repository "node_modules\.bin\tsx.cmd"),
@@ -132,70 +141,45 @@ function Install-LocalRuntime {
         }
     }
     if (-not $hasTsx) {
-        throw "Pi Orbit source dependencies are missing. Run npm install in: $Repository"
+        throw "pi-runtime source dependencies are missing. Run npm install in: $Repository"
     }
 
     New-Item -ItemType Directory -Path $RuntimeDir -Force | Out-Null
     Write-TextFile -Path $CliMarker -Content ((Resolve-Path -LiteralPath $cli).Path + [Environment]::NewLine)
     Write-TextFile -Path (Join-Path $RuntimeDir ".dev-repo-path") -Content ((Resolve-Path -LiteralPath $Repository).Path + [Environment]::NewLine)
-    Install-RuntimeExtensions
-    Write-Host "==> Pi Orbit dev runtime ready: $Repository"
+    Install-PiRuntime
+    Write-Host "==> pi-runtime dev runtime ready: $Repository"
 }
 
-$localRepository = Get-Setting "PI_ORBIT_REPO" ""
+# Pinned versions live here only: a version bump is a single edit per package.
+$PiRuntimeVersion = Get-Setting "PI_RUNTIME_VERSION" "0.84.4"
+$PiMcpAdapterVersion = Get-Setting "PI_MCP_ADAPTER_VERSION" "2.18.0"
+$PiSubagentsVersion = Get-Setting "PI_SUBAGENTS_VERSION" "0.40.0"
+$PiWebAccessVersion = Get-Setting "PI_WEB_ACCESS_VERSION" "0.18.0"
+$ContextModeVersion = Get-Setting "CONTEXT_MODE_VERSION" "1.0.169"
+$AskUserQuestionVersion = Get-Setting "RPIV_ASK_USER_QUESTION_VERSION" "2.3.1"
+$TodoVersion = Get-Setting "RPIV_TODO_VERSION" "2.4.0"
+
+$localRepository = Get-Setting "PI_RUNTIME_REPO" ""
 if (-not [string]::IsNullOrWhiteSpace($localRepository)) {
     Install-LocalRuntime -Repository $localRepository
     exit 0
 }
 
-$version = Get-Setting "PI_ORBIT_VERSION" "0.4.0"
-$releaseRepository = Get-Setting "PI_ORBIT_RELEASE_REPO" "Garhorne0813/pi-orbit"
-$architecture = Get-ReleaseArchitecture
-$archiveName = "pi-orbit-windows-$architecture.zip"
-$tag = "pi-orbit-v$version"
-$releaseUrl = "https://github.com/$releaseRepository/releases/download/$tag"
-$installDirectory = Join-Path $RuntimeDir "releases\pi-orbit-$version"
-$expectedCli = Join-Path $installDirectory "pi-orbit\pi-orbit.exe"
-$downloadDirectory = Join-Path $RuntimeDir (".pi-orbit-download-$PID")
+Install-PiRuntime
 
-try {
-    if (-not (Test-Path -LiteralPath $expectedCli -PathType Leaf)) {
-        New-Item -ItemType Directory -Path $downloadDirectory -Force | Out-Null
-        $archivePath = Join-Path $downloadDirectory $archiveName
-        $checksumPath = Join-Path $downloadDirectory "SHA256SUMS"
-        Write-Host "==> Downloading Pi Orbit $version (windows-$architecture)..."
-        Invoke-WebRequest -UseBasicParsing -Uri "$releaseUrl/$archiveName" -OutFile $archivePath
-        Invoke-WebRequest -UseBasicParsing -Uri "$releaseUrl/SHA256SUMS" -OutFile $checksumPath
-
-        $expectedHash = Get-ExpectedHash -ChecksumFile $checksumPath -ArchiveName $archiveName
-        $actualHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($actualHash -ne $expectedHash) {
-            throw "SHA-256 verification failed for $archiveName."
-        }
-
-        New-Item -ItemType Directory -Path $installDirectory -Force | Out-Null
-        Expand-Archive -LiteralPath $archivePath -DestinationPath $installDirectory -Force
-    }
-
-    if (-not (Test-Path -LiteralPath $expectedCli -PathType Leaf)) {
-        $discoveredCli = Get-ChildItem -LiteralPath $installDirectory -Filter "pi-orbit.exe" -File -Recurse | Select-Object -First 1
-        if ($null -ne $discoveredCli) {
-            $expectedCli = $discoveredCli.FullName
-        }
-    }
-    if (-not (Test-Path -LiteralPath $expectedCli -PathType Leaf)) {
-        throw "Pi Orbit archive did not contain pi-orbit.exe under $installDirectory."
-    }
-
-    $helpOutput = @(& $expectedCli --help 2>&1 | Out-String)
-    if ($LASTEXITCODE -ne 0 -or ([string]$helpOutput -notmatch "--web-app-managed")) {
-        throw "Installed Pi Orbit does not support app-managed Web Mode: $expectedCli"
-    }
-    Install-RuntimeExtensions
-    Write-TextFile -Path $CliMarker -Content ($expectedCli + [Environment]::NewLine)
-    Write-Host "==> Pi Orbit $version ready: $expectedCli"
-} finally {
-    if (Test-Path -LiteralPath $downloadDirectory) {
-        Remove-Item -LiteralPath $downloadDirectory -Recurse -Force -ErrorAction SilentlyContinue
-    }
+if (-not (Test-Path -LiteralPath $RuntimeCli -PathType Leaf)) {
+    throw "$RuntimeCli was not produced by the pi-runtime npm install."
 }
+
+$nodePath = Get-CommandPath "node"
+if (-not $nodePath) {
+    throw "node is required to verify the pi-runtime CLI."
+}
+$null = @(& $nodePath $RuntimeCli --help 2>&1 | Out-String)
+if ($LASTEXITCODE -ne 0) {
+    throw "Installed pi-runtime CLI did not answer --help: $RuntimeCli"
+}
+
+Write-TextFile -Path $CliMarker -Content ($RuntimeCli + [Environment]::NewLine)
+Write-Host "==> pi-runtime $PiRuntimeVersion ready: $RuntimeCli"

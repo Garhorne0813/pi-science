@@ -1,5 +1,5 @@
-import { createHash, randomInt, randomUUID } from "node:crypto";
-import { dirname, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
@@ -13,8 +13,6 @@ import { canonicalRuntimeModelRef, projectedRuntimeModelRef, projectPiRuntime } 
 // every later call. Per-call allocation would grow an ever-unused pool (only
 // the first options object actually starts the host) until the pool is
 // exhausted and session creation fails hard.
-let sharedWebPort: number | null = null;
-let sharedWebToken: string | null = null;
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
 const PI_SCIENCE_SYSTEM_PROMPT = join(PROJECT_ROOT, "harness", "AGENTS.md");
 /** Outer Pi session variables that describe a Pi process this control plane
@@ -46,60 +44,13 @@ const NOTEBOOK_EXTENSION = join(
 const MCP_EXTENSION = join(PROJECT_ROOT, "apps", "server", "src", "runtime", "pi", "extensions", "pi-science-mcp.ts");
 const PROMPT_IDENTITY_EXTENSION = join(PROJECT_ROOT, "apps", "server", "src", "runtime", "pi", "extensions", "prompt-identity.ts");
 
-function webPort(): number {
-  if (sharedWebPort === null) sharedWebPort = randomInt(20_000, 60_000);
-  return sharedWebPort;
-}
-
-function webAuthToken(): string {
-  if (sharedWebToken === null) sharedWebToken = randomUUID();
-  return sharedWebToken;
-}
-
-/** Forget the shared port/token so the next call allocates fresh values.
- *  Called after a host start failure (e.g. EADDRINUSE: the single port is
- *  taken by another process) so the next attempt picks a new port and can
- *  self-heal without a control-plane restart. */
-export function resetWebRuntimeAllocation(): void {
-  sharedWebPort = null;
-  sharedWebToken = null;
-}
-
-/**
- * Build a copy of web-mode options with a fresh port and bearer token.
- *
- * Windows can reject an otherwise valid-looking port with EACCES when it is
- * in an excluded/reserved range. The host manager uses this helper only for
- * that recoverable bind failure; the original options remain safe to reuse
- * for runtime creation because web requests go through the host instance.
- */
-export function refreshWebRuntimeAllocation(options: PiProcessOptions): PiProcessOptions {
-  if (!options.web) return options;
-  resetWebRuntimeAllocation();
-  const port = webPort();
-  const authToken = webAuthToken();
-  const args = [...options.args];
-  const portFlag = args.indexOf("--port");
-  if (portFlag >= 0 && portFlag + 1 < args.length) args[portFlag + 1] = String(port);
-  return {
-    ...options,
-    args,
-    env: { ...options.env, PI_ORBIT_AUTH_TOKEN: authToken },
-    web: {
-      ...options.web,
-      baseUrl: `http://127.0.0.1:${port}`,
-      authToken,
-    },
-  };
-}
-
 export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPath?: string, workspaceEnvironment: NodeJS.ProcessEnv = {}, sessionDirectory?: string): PiProcessOptions | null {
   config ??= { skills: [], extensions: [] };
   const cliPath = process.env.PI_CLI_PATH;
   if (!cliPath) return null;
   const nodePath = process.env.PI_NODE_PATH || process.execPath;
   const dataRoot = configRoot();
-  const settings = readSettings(dataRoot);
+  const settings = readPiSettings(dataRoot);
   const skillPolicy = globalSkillPolicy(settings);
   const configuredModel = config.model ?? (typeof settings.model === "string" ? settings.model : "");
   // The projection decides the runtime provider split and the model aliases.
@@ -107,22 +58,8 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
   // and on the session API.
   const effectiveModel = configuredModel ? projectedRuntimeModelRef(configuredModel) : "";
   const effectiveThinking = config.thinking || (typeof settings.thinking === "string" ? settings.thinking : "high");
-  // The workspace model identity the agent can observe through the bash tool
-  // environment (PI_PROVIDER/PI_MODEL), derived from the same effectiveModel
-  // that is passed via --model. A value without a provider separator is kept
-  // as the model id alone; an unset model yields nulls so no stale value can
-  // reach the agent.
-  const effectiveModelSeparator = effectiveModel.indexOf("/");
-  const sessionModelEnv = effectiveModel
-    ? effectiveModelSeparator > 0
-      ? { PI_PROVIDER: effectiveModel.slice(0, effectiveModelSeparator), PI_MODEL: effectiveModel.slice(effectiveModelSeparator + 1) }
-      : { PI_PROVIDER: null, PI_MODEL: effectiveModel }
-    : { PI_PROVIDER: null, PI_MODEL: null };
   const args: string[] = [];
   let command = nodePath;
-  const useRpcMode = process.env.PI_SCIENCE_PI_MODE === "rpc";
-  const reservedWebPort = useRpcMode ? 0 : webPort();
-  const reservedWebToken = useRpcMode ? "" : webAuthToken();
   const seededSkills = seedWorkspaceAssets(cwd);
   if (cliPath.endsWith(".ts")) {
     const tsxPath = process.env.PI_TSX_PATH || findAdjacentRuntime(cliPath, join("node_modules", ".bin", "tsx"));
@@ -136,21 +73,21 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
     command = cliPath;
   }
   const sessionDir = sessionDirectory ? resolve(sessionDirectory) : join(cwd, ".pi-science", "sessions");
-  args.push("--mode", useRpcMode ? "rpc" : "web");
-  if (useRpcMode) args.push("--session-dir", sessionDir);
-  else args.push("--host", "127.0.0.1", "--port", String(reservedWebPort), "--web-app-managed", "--no-session");
+  args.push("--mode", "rpc", "--session-dir", sessionDir);
   // Pi Science workspaces own their .pi/skills/ resources; trust them by
   // default so project-built-in skills are available to the managed runtime.
   args.push("--approve");
   args.push("--no-extensions");
   if (effectiveModel) args.push("--model", effectiveModel);
   if (effectiveThinking) args.push("--thinking", effectiveThinking);
-  if (useRpcMode && sessionPath) args.push("--session", sessionPath);
-  for (const skill of useRpcMode ? [...seededSkills, ...config.skills] : config.skills) args.push("--skill", skill);
+  if (sessionPath) args.push("--session", sessionPath);
+  const skillSelection = applySkillPolicy([...seededSkills, ...config.skills], globalSkillPolicy(settings));
+  if (!skillSelection.discover) args.push("--no-skills");
+  for (const skill of skillSelection.skills) args.push("--skill", skill);
   const extensionPaths = ensurePromptIdentityExtension(ensureMcpExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(config.extensions))));
   for (const extension of extensionPaths) args.push("-e", extension);
   const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
-  let agentDir = join(dataRoot, "pi-agent", useRpcMode ? workspaceKey : "web-host");
+  let agentDir = join(dataRoot, "pi-agent", workspaceKey);
   try {
     mkdirSync(agentDir, { recursive: true });
   } catch (error) {
@@ -169,12 +106,6 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
     PI_SCIENCE_MCP_ADAPTER_PATH: findRuntimeExtension("pi-mcp-adapter", cliPath, []) ?? join(PROJECT_ROOT, "runtime", "pi", "node_modules", "pi-mcp-adapter", "index.ts"),
     CONTEXT_MODE_DATA_DIR: agentDir,
     CONTEXT_MODE_DIR: join(agentDir, "context-mode"),
-    ...(!useRpcMode ? { PI_ORBIT_AUTH_TOKEN: reservedWebToken } : {}),
-    ...(!useRpcMode ? {
-      PI_ORBIT_MAX_RUNTIMES: process.env.PI_ORBIT_MAX_RUNTIMES ?? "256",
-      PI_ORBIT_MAX_CONCURRENT_TURNS: process.env.PI_ORBIT_MAX_CONCURRENT_TURNS ?? "16",
-      PI_ORBIT_IDLE_TIMEOUT_MS: process.env.PI_ORBIT_IDLE_TIMEOUT_MS ?? String(24 * 60 * 60_000),
-    } : {}),
     ...(config.provider ? { PI_DEFAULT_PROVIDER: config.provider } : {}),
   };
   // The Pi Orbit host and every runtime child inherit this env, so a leftover
@@ -197,52 +128,20 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
   if (existsSync(PI_SCIENCE_SYSTEM_PROMPT)) args.push("--append-system-prompt", PI_SCIENCE_SYSTEM_PROMPT);
   args.push("--append-system-prompt", join(agentDir, "APPEND_SYSTEM.md"));
 
+  return { cwd, command, args, env };
+}
+
+/** RPC runtimes receive their skill set as spawn arguments, so the persisted
+ *  skill policy is applied here instead of through a runtime control API. A
+ *  narrowing policy must also disable discovery: --approve trusts the
+ *  workspace's .pi/skills tree, so a disabled skill would load back on its own. */
+function applySkillPolicy(paths: string[], policy: RuntimeSkillPolicy): { skills: string[]; discover: boolean } {
+  if (policy.mode === "inherit") return { skills: paths, discover: true };
+  if (policy.mode === "none") return { skills: [], discover: false };
+  const named = new Set(policy.skills);
   return {
-    cwd,
-    command,
-    args,
-    env,
-    ...(!useRpcMode ? {
-      web: {
-        baseUrl: `http://127.0.0.1:${reservedWebPort}`,
-        authToken: reservedWebToken,
-        runtime: {
-          cwd: resolve(cwd),
-          sessionDir,
-          ...(sessionPath ? { sessionPath } : {}),
-          ...(effectiveModel ? { model: effectiveModel } : {}),
-          ...(effectiveModel && effectiveThinking ? { thinking: effectiveThinking } : {}),
-          runtimeEnv: {
-            // Runtime-generated credential values must reach the Pi Orbit
-            // runtime child: it is created with exactly this env and does not
-            // inherit the host process env. models.json references them as
-            // $PI_RUNTIME_CREDENTIAL_*, so the values travel with the runtime
-            // creation request; the host API never returns runtimeEnv.
-            ...runtimeEnvSnapshot(env, projection.runtimeSecrets),
-            ...projection.runtimeSecrets,
-            // The runtime child inherits the host env, so the host's own auth
-            // token must never reach the agent: remove it (null) at the
-            // runtime boundary. PI_SESSION_ID/PI_SESSION_FILE only exist once
-            // the runtime is live, so they are removed here as well instead of
-            // leaking the outer session's values.
-            PI_ORBIT_AUTH_TOKEN: null,
-            PI_SESSION_ID: null,
-            PI_SESSION_FILE: null,
-            // The workspace model configuration is the session identity the
-            // agent can observe. Pi Orbit resolves per-command
-            // PI_PROVIDER/PI_MODEL/PI_REASONING_LEVEL from its own tool
-            // context only when that context is wired; in web mode it is not,
-            // and a nulled (or outer) value left agents misidentifying the
-            // model from unrelated shell variables such as FAST_LLM/SMART_LLM.
-            // Publish the effective workspace values instead: they match the
-            // --model/--thinking CLI args and the runtime descriptor.
-            ...sessionModelEnv,
-            ...(effectiveModel ? { PI_REASONING_LEVEL: effectiveThinking } : { PI_REASONING_LEVEL: null }),
-          },
-          skillPolicy,
-        },
-      },
-    } : {}),
+    skills: paths.filter((path) => (policy.mode === "allowlist" ? named.has(basename(path)) : !named.has(basename(path)))),
+    discover: false,
   };
 }
 
@@ -423,7 +322,7 @@ function findAdjacentRuntime(sourcePath: string, relativePath: string): string |
 
 export function loadDefaultPiConfig(runtimeRoots?: string[]): PiConfig {
   const dataRoot = configRoot();
-  const settings = readSettings(dataRoot);
+  const settings = readPiSettings(dataRoot);
   return {
     model: typeof settings.model === "string" && settings.model ? settings.model : null,
     thinking: typeof settings.thinking === "string" && settings.thinking ? settings.thinking : null,
@@ -544,7 +443,7 @@ function ensurePromptIdentityExtension(paths: string[]): string[] {
   return [...paths.filter((path) => path !== PROMPT_IDENTITY_EXTENSION), PROMPT_IDENTITY_EXTENSION];
 }
 
-function readSettings(dataRoot: string): Record<string, any> {
+export function readPiSettings(dataRoot: string): Record<string, any> {
   try { return JSON.parse(readFileSync(join(resolve(dataRoot), "config.json"), "utf8")) as Record<string, any>; }
   catch { return {}; }
 }
@@ -555,7 +454,7 @@ function readSettings(dataRoot: string): Record<string, any> {
  *  OAuth/other entries from direct pi usage: non-api_key entries are
  *  preserved untouched; api_key entries are Pi-Science-managed, so settings
  *  is the authority and stale removed keys are dropped. File mode 0600. */
-function materializeApiKeysAuth(agentDir: string, storedKeys: Record<string, unknown>): void {
+export function materializeApiKeysAuth(agentDir: string, storedKeys: Record<string, unknown>): void {
   const path = join(agentDir, "auth.json");
   let current: Record<string, unknown> = {};
   try { current = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>; }
@@ -581,7 +480,7 @@ function materializeApiKeysAuth(agentDir: string, storedKeys: Record<string, unk
   try { chmodSync(path, 0o600); } catch { /* permissions are best-effort (e.g. Windows) */ }
 }
 
-function materializeRuntimeSettings(agentDir: string, settings: Record<string, any>, config: PiConfig): void {
+export function materializeRuntimeSettings(agentDir: string, settings: Record<string, any>, config: PiConfig): void {
   const path = join(agentDir, "settings.json");
   let current: Record<string, unknown> = {};
   try { current = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>; }
@@ -610,11 +509,6 @@ const TODO_GUIDANCE = "Workflow planning: when a request requires multiple indep
 
 function materializeFollowUpGuidance(agentDir: string): void {
   writeFileSync(join(agentDir, "APPEND_SYSTEM.md"), `${FOLLOW_UP_GUIDANCE}${TODO_GUIDANCE}`, "utf8");
-}
-
-function runtimeEnvSnapshot(env: NodeJS.ProcessEnv, generatedSecrets: Record<string, string>): Record<string, string | null> {
-  const isSecretName = (key: string): boolean => Object.hasOwn(generatedSecrets, key) || /(?:API_KEY|TOKEN|PASSWORD|SECRET|PRIVATE_KEY)$/i.test(key);
-  return Object.fromEntries(Object.entries(env).filter(([key]) => !isSecretName(key)).map(([key, value]) => [key, value ?? null]));
 }
 
 function compactionReserveTokens(contextWindow: number, threshold: number, maxOutputTokens?: number): number {

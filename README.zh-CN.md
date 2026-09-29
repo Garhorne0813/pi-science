@@ -98,7 +98,7 @@ Windows 启动器在两个服务健康后写入 `.runtime/pi-science/run.state`�
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 ```
 
-安装器默认下载 Pi Orbit 0.4.0。Pi Orbit Web Mode 提供 `GET /api/catalog`，用于读取完整的 Provider / Model 运行时目录；现有 `GET /api/models` 仍只表示当前可用模型。可通过 `PI_ORBIT_VERSION` 选择其他兼容版本，或通过 `PI_ORBIT_REPO` 使用本地 Pi Orbit 源码仓库。
+安装器从 npm 安装固定版本的 Pi runtime 包。控制面以 RPC 模式为每个会话启动一个 `@earendil-works/pi-coding-agent` 进程，并从 pi-ai 的 model runtime 读取 Provider / Model 目录，`GET /api/models` 仍只表示当前可用模型。可通过 `PI_RUNTIME_VERSION` 选择其他运行时版本，或通过 `PI_RUNTIME_REPO` 使用本地运行时源码仓库。
 
 启动后进入 **设置 → LLM**，配置提供商和默认模型即可开始使用。已安装及从工作区发现的
 skills 可在 **设置 → Skills** 中启用、禁用或重置。内置和自定义 MCP 连接器统一在
@@ -166,7 +166,7 @@ Pi-Science 可以直接在浏览器中渲染常见科研格式。
 
 ## 系统架构
 
-Pi-Science 使用 local-first Node 控制面、一个承载隔离 agent runtime 的共享 Pi Orbit
+Pi-Science 使用 local-first Node 控制面、每个会话一个隔离的 Pi runtime
 Web Host，以及按需启动的原生 Python/R Kernel 进程。全局 workspace、环境和任务状态
 由 SQLite 协调，项目文件和可复现性记录仍保存在各自 workspace 内。托管 MCP 定义
 和全局策略也保存在 SQLite 中；每个 workspace 会收到一份原子 runtime 投影，其中只
@@ -218,7 +218,7 @@ export OPENAI_API_KEY=sk-...
 export PI_SCIENCE_AI_TITLES=0
 ```
 
-标题生成不会阻塞对话，失败时会保留侧边栏的派生名称。当 Pi runtime 以 RPC 模式（`PI_SCIENCE_PI_MODE=rpc`）运行时，该功能也会自动禁用，因为该模式无法在不持久化幽灵会话的情况下运行隔离的标题 runtime。
+标题生成不会阻塞对话，失败时会保留侧边栏的派生名称。标题 runtime 使用自己的临时会话目录，不会写入工作区的会话存储。
 
 ## 开发与测试
 
@@ -238,7 +238,7 @@ pnpm build
 ```bash
 pnpm smoke
 pnpm uat:conversation
-PI_CLI_PATH=/absolute/path/to/pi-orbit pnpm smoke:real-pi
+PI_CLI_PATH=$(cat runtime/pi/.cli-path) pnpm smoke:real-pi
 ```
 
 前端专项 UAT：

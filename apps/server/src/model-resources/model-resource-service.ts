@@ -15,7 +15,7 @@ import {
   type UpdateEndpointRequest,
   type UpdateProviderRequest,
 } from "@pi-science/contracts";
-import type { PiOrbitCatalogService } from "../runtime/pi/pi-orbit-catalog.js";
+import type { PiRuntimeCatalogService } from "../runtime/pi/pi-runtime-catalog.js";
 import { egressAuditEnabled, recordEgress } from "../security/egress-audit.js";
 import { safeConnectorFetch, validateOutboundHttpUrl } from "../security/outbound-security.js";
 import { SettingsStore } from "../storage/settings-store.js";
@@ -188,10 +188,10 @@ export class ModelResourceService {
   readonly repository: ModelResourceRepository;
   readonly credentials: CredentialStore;
   private readonly settings: SettingsStore;
-  private readonly runtimeCatalog?: Pick<PiOrbitCatalogService, "getCatalog">;
+  private readonly runtimeCatalog?: Pick<PiRuntimeCatalogService, "getCatalog">;
   private migrationPromise: Promise<MigrationResult> | undefined;
 
-  constructor(options: { repository?: ModelResourceRepository; credentials?: CredentialStore; settings?: SettingsStore; runtimeCatalog?: Pick<PiOrbitCatalogService, "getCatalog"> } = {}) {
+  constructor(options: { repository?: ModelResourceRepository; credentials?: CredentialStore; settings?: SettingsStore; runtimeCatalog?: Pick<PiRuntimeCatalogService, "getCatalog"> } = {}) {
     this.repository = options.repository ?? new ModelResourceRepository();
     this.credentials = options.credentials ?? new CredentialStore();
     this.settings = options.settings ?? new SettingsStore();

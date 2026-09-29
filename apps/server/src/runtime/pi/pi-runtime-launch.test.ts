@@ -1,15 +1,15 @@
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildPiProcessOptions, loadDefaultPiConfig, resetWebRuntimeAllocation, runtimeExtensionStatus } from "./pi-runtime-launch.js";
+import { buildPiProcessOptions, loadDefaultPiConfig, runtimeExtensionStatus } from "./pi-runtime-launch.js";
 import { CredentialStore } from "../../model-resources/credential-store.js";
 import { ModelResourceRepository, emptyModelResourceState } from "../../model-resources/model-resource-repository.js";
 import { runtimeCredentialEnvName } from "../../model-resources/runtime-credential-env.js";
 
 const cleanup: string[] = [];
-const original = { home: process.env.PI_SCIENCE_HOME, userHome: process.env.HOME, userProfile: process.env.USERPROFILE, cli: process.env.PI_CLI_PATH, tsx: process.env.PI_TSX_PATH, tsconfig: process.env.PI_TSCONFIG_PATH, piMode: process.env.PI_SCIENCE_PI_MODE };
+const original = { home: process.env.PI_SCIENCE_HOME, userHome: process.env.HOME, userProfile: process.env.USERPROFILE, cli: process.env.PI_CLI_PATH, tsx: process.env.PI_TSX_PATH, tsconfig: process.env.PI_TSCONFIG_PATH };
 
 beforeEach(async () => {
   const root = join(tmpdir(), `pi-science-runtime-launch-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -17,9 +17,6 @@ beforeEach(async () => {
   await mkdir(root, { recursive: true });
   process.env.PI_SCIENCE_HOME = join(root, "control-home");
   process.env.PI_CLI_PATH = join(root, "fake-pi.mjs");
-  delete process.env.PI_SCIENCE_PI_MODE;
-  // The shared port/token singleton must not leak across tests.
-  resetWebRuntimeAllocation();
 });
 
 afterEach(async () => {
@@ -31,17 +28,25 @@ afterEach(async () => {
   process.env.PI_CLI_PATH = original.cli;
   process.env.PI_TSX_PATH = original.tsx;
   process.env.PI_TSCONFIG_PATH = original.tsconfig;
-  if (original.piMode === undefined) delete process.env.PI_SCIENCE_PI_MODE;
-  else process.env.PI_SCIENCE_PI_MODE = original.piMode;
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });
+
+/** The managed agent dir the launch code derives from the workspace path
+ *  (sha256 of the resolved cwd, 12 hex chars). */
+function agentDirFor(cwd: string): string {
+  const key = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
+  return join(process.env.PI_SCIENCE_HOME!, "pi-agent", key);
+}
+
+function argValues(args: string[], flag: string): string[] {
+  return args.flatMap((arg, index) => arg === flag && args[index + 1] ? [args[index + 1]!] : []);
+}
 
 async function obstructModelsFile(customProviders?: unknown[]): Promise<string> {
   const cwd = join(tmpdir(), `pi-science-runtime-workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   cleanup.push(cwd);
   await mkdir(cwd, { recursive: true });
-  const agentDir = join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host");
-  await mkdir(join(agentDir, "models.json"), { recursive: true });
+  await mkdir(join(agentDirFor(cwd), "models.json"), { recursive: true });
   await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
   await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), `${JSON.stringify({ custom_providers: customProviders ?? [] })}\n`, "utf8");
   return cwd;
@@ -59,7 +64,7 @@ describe("Pi runtime custom provider materialization", () => {
 
     buildPiProcessOptions(cwd);
 
-    const catalog = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "models.json"), "utf8"));
+    const catalog = JSON.parse(await readFile(join(agentDirFor(cwd), "models.json"), "utf8"));
     expect(catalog.providers["custom-deepseek"].api).toBe("openai-completions");
     expect(catalog.providers["custom-deepseek"].models[0]).toMatchObject({
       id: "deepseek-v4-flash",
@@ -82,7 +87,7 @@ describe("Pi runtime custom provider materialization", () => {
 
     buildPiProcessOptions(cwd);
 
-    const catalog = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "models.json"), "utf8"));
+    const catalog = JSON.parse(await readFile(join(agentDirFor(cwd), "models.json"), "utf8"));
     // The API format is passed through exactly for every protocol.
     expect(catalog.providers["custom-responses"].api).toBe("openai-responses");
     expect(catalog.providers["custom-claude"].api).toBe("anthropic-messages");
@@ -107,9 +112,9 @@ describe("Pi runtime custom provider materialization", () => {
 
     buildPiProcessOptions(cwd);
 
-    const auth = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "auth.json"), "utf8"));
+    const auth = JSON.parse(await readFile(join(agentDirFor(cwd), "auth.json"), "utf8"));
     expect(auth["opencode-go"]).toEqual({ type: "api_key", key: "oc-go-secret" });
-    const mode = (await stat(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "auth.json"))).mode & 0o777;
+    const mode = (await stat(join(agentDirFor(cwd), "auth.json"))).mode & 0o777;
     // Windows has no POSIX mode bits (chmod is best-effort there); the content
     // assertions above still validate the materialization on every platform.
     if (process.platform !== "win32") expect(mode).toBe(0o600);
@@ -119,7 +124,7 @@ describe("Pi runtime custom provider materialization", () => {
     const cwd = join(tmpdir(), `pi-runtime-auth-merge-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(cwd);
     await mkdir(cwd, { recursive: true });
-    const agentDir = join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host");
+    const agentDir = agentDirFor(cwd);
     await mkdir(agentDir, { recursive: true });
     // Direct pi usage left an OAuth entry; a stale Pi-Science api_key remains.
     await writeFile(join(agentDir, "auth.json"), `${JSON.stringify({ anthropic: { type: "oauth", token: "t" }, openai: { type: "api_key", key: "old-openai" } })}\n`, "utf8");
@@ -139,7 +144,7 @@ describe("Pi runtime custom provider materialization", () => {
     const cwd = join(tmpdir(), `pi-runtime-auth-clear-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(cwd);
     await mkdir(cwd, { recursive: true });
-    const agentDir = join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host");
+    const agentDir = agentDirFor(cwd);
     await mkdir(agentDir, { recursive: true });
     await writeFile(join(agentDir, "auth.json"), `${JSON.stringify({ openai: { type: "api_key", key: "old-openai" } })}\n`, "utf8");
     await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
@@ -163,7 +168,7 @@ describe("Pi runtime custom provider materialization", () => {
       skills: [],
       extensions: [],
     });
-    const settings = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "settings.json"), "utf8"));
+    const settings = JSON.parse(await readFile(join(agentDirFor(cwd), "settings.json"), "utf8"));
     expect(settings.compaction).toMatchObject({ enabled: true, reserveTokens: 20480, keepRecentTokens: 20000 });
   });
 
@@ -172,7 +177,7 @@ describe("Pi runtime custom provider materialization", () => {
     cleanup.push(cwd);
     await mkdir(cwd, { recursive: true });
     buildPiProcessOptions(cwd);
-    const guidance = await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "APPEND_SYSTEM.md"), "utf8");
+    const guidance = await readFile(join(agentDirFor(cwd), "APPEND_SYSTEM.md"), "utf8");
     expect(guidance).toContain("<!--suggest: q1 | q2 | q3-->");
     expect(guidance).toContain("up to 3 short, concrete follow-up suggestions");
     expect(guidance).toContain("standalone message the user can copy and send directly");
@@ -189,7 +194,7 @@ describe("Pi runtime custom provider materialization", () => {
     cleanup.push(cwd);
     await mkdir(cwd, { recursive: true });
     buildPiProcessOptions(cwd);
-    const guidance = await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "APPEND_SYSTEM.md"), "utf8");
+    const guidance = await readFile(join(agentDirFor(cwd), "APPEND_SYSTEM.md"), "utf8");
     expect(guidance).toContain("call the todo tool (action: create)");
     expect(guidance).toContain("exactly one task in_progress at a time");
     expect(guidance).toContain("Simple single-step requests do not need a todo list");
@@ -200,19 +205,13 @@ describe("Pi runtime custom provider materialization", () => {
     cleanup.push(cwd);
     await mkdir(cwd, { recursive: true });
 
-    const webOptions = buildPiProcessOptions(cwd)!;
-    const webPrompts = webOptions.args.flatMap((arg, index) => arg === "--append-system-prompt" ? [webOptions.args[index + 1]] : []);
+    const options = buildPiProcessOptions(cwd)!;
+    const prompts = argValues(options.args, "--append-system-prompt");
     const systemPrompt = resolve(import.meta.dirname, "../../../../..", "harness", "AGENTS.md");
 
-    expect(webPrompts).toContain(systemPrompt);
-    expect(webPrompts.some((path) => path?.endsWith("APPEND_SYSTEM.md"))).toBe(true);
+    expect(prompts).toContain(systemPrompt);
+    expect(prompts.some((path) => path?.endsWith("APPEND_SYSTEM.md"))).toBe(true);
     await expect(readFile(join(cwd, "AGENTS.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-
-    process.env.PI_SCIENCE_PI_MODE = "rpc";
-    const rpcOptions = buildPiProcessOptions(cwd)!;
-    const rpcPrompts = rpcOptions.args.flatMap((arg, index) => arg === "--append-system-prompt" ? [rpcOptions.args[index + 1]] : []);
-    expect(rpcPrompts).toContain(systemPrompt);
-    expect(rpcPrompts.some((path) => path?.endsWith("APPEND_SYSTEM.md"))).toBe(true);
   });
 
   it("passes workspace package isolation into the agent runtime", async () => {
@@ -230,7 +229,7 @@ describe("Pi runtime custom provider materialization", () => {
     expect(options.env).toMatchObject(isolated);
   });
 
-  it("keeps outer Pi session variables out of the host and agent runtime env", async () => {
+  it("keeps the outer Pi session variables out of the runtime env", async () => {
     const cwd = join(tmpdir(), `pi-runtime-env-isolation-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(cwd);
     await mkdir(cwd, { recursive: true });
@@ -249,28 +248,17 @@ describe("Pi runtime custom provider materialization", () => {
     try {
       const options = buildPiProcessOptions(cwd, { model: "openrouter/openai/gpt-5.1", thinking: "high", skills: [], extensions: [] })!;
 
-      // The host env keeps the auth token but must not carry the outer Pi
-      // session variables (they would shadow the workspace configuration).
-      expect(options.env?.PI_ORBIT_AUTH_TOKEN).toBe(options.web?.authToken);
+      // A leftover outer Pi session variable would shadow the workspace
+      // configuration the runtime receives, so the runtime env must not carry
+      // any of them.
       expect(options.env?.PI_MODEL).toBeUndefined();
       expect(options.env?.PI_PROVIDER).toBeUndefined();
       expect(options.env?.PI_REASONING_LEVEL).toBeUndefined();
       expect(options.env?.PI_SESSION_ID).toBeUndefined();
       expect(options.env?.PI_SESSION_FILE).toBeUndefined();
-      // The runtime env explicitly removes (null) the host token and the
-      // per-session identity at the runtime boundary, and replaces the outer
-      // model variables with the authoritative workspace configuration so the
-      // agent's bash tool can identify the real model.
-      const runtimeEnv = options.web?.runtime.runtimeEnv;
-      expect(runtimeEnv).toBeDefined();
-      expect(runtimeEnv?.PI_ORBIT_AUTH_TOKEN).toBeNull();
-      expect(runtimeEnv?.PI_SESSION_ID).toBeNull();
-      expect(runtimeEnv?.PI_SESSION_FILE).toBeNull();
-      expect(runtimeEnv?.PI_PROVIDER).toBe("openrouter");
-      expect(runtimeEnv?.PI_MODEL).toBe("openai/gpt-5.1");
-      expect(runtimeEnv?.PI_REASONING_LEVEL).toBe("high");
-      expect(options.web?.runtime.model).toBe("openrouter/openai/gpt-5.1");
-      expect(options.web?.runtime.thinking).toBe("high");
+      // The authoritative workspace configuration travels as CLI arguments.
+      expect(argValues(options.args, "--model")).toEqual(["openrouter/openai/gpt-5.1"]);
+      expect(argValues(options.args, "--thinking")).toEqual(["high"]);
     } finally {
       for (const [key, value] of Object.entries(previous)) {
         const name = { model: "PI_MODEL", provider: "PI_PROVIDER", reasoning: "PI_REASONING_LEVEL", session: "PI_SESSION_ID", sessionFile: "PI_SESSION_FILE" }[key as keyof typeof previous]!;
@@ -280,23 +268,7 @@ describe("Pi runtime custom provider materialization", () => {
     }
   });
 
-  it("keeps the control-plane token in the host env but out of the runtime env", async () => {
-    const cwd = join(tmpdir(), `pi-runtime-control-token-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-    cleanup.push(cwd);
-    await mkdir(cwd, { recursive: true });
-    const previous = process.env.PI_SCIENCE_INTERNAL_TOKEN;
-    process.env.PI_SCIENCE_INTERNAL_TOKEN = "control-plane-token";
-    try {
-      const options = buildPiProcessOptions(cwd, { model: "openrouter/openai/gpt-5.1", thinking: "high", skills: [], extensions: [] })!;
-      expect(options.env?.PI_SCIENCE_INTERNAL_TOKEN).toBe("control-plane-token");
-      expect(options.web?.runtime.runtimeEnv?.PI_SCIENCE_INTERNAL_TOKEN).toBeUndefined();
-    } finally {
-      if (previous === undefined) delete process.env.PI_SCIENCE_INTERNAL_TOKEN;
-      else process.env.PI_SCIENCE_INTERNAL_TOKEN = previous;
-    }
-  });
-
-  it("passes generated runtime credentials into the Pi Orbit runtime env", async () => {
+  it("passes generated runtime credentials into the runtime env", async () => {
     const credentials = new CredentialStore();
     await credentials.put({ id: "cred-lab", kind: "api_key", backend: "managed", secret: "runtime-env-secret" });
     const state = emptyModelResourceState();
@@ -312,12 +284,10 @@ describe("Pi runtime custom provider materialization", () => {
     await mkdir(cwd, { recursive: true });
     const options = buildPiProcessOptions(cwd, { model: "user-lab/model-a", thinking: "low", skills: [], extensions: [] })!;
     const variable = runtimeCredentialEnvName("cred-lab");
-    // The host env and the runtime creation request both carry the value:
-    // Pi Orbit creates the runtime child with the runtimeEnv exactly, so
-    // models.json $PI_RUNTIME_CREDENTIAL_* references must resolve there.
+    // The single RPC runtime process owns the generated models.json, whose
+    // $PI_RUNTIME_CREDENTIAL_* reference must resolve in this spawn env.
     expect(options.env?.[variable]).toBe("runtime-env-secret");
-    expect(options.web?.runtime.runtimeEnv?.[variable]).toBe("runtime-env-secret");
-    expect(options.web?.runtime.model).toBe("user-lab/model-a");
+    expect(argValues(options.args, "--model")).toEqual(["user-lab/model-a"]);
   });
 
   it("launches with the projected runtime identity (split endpoint + model alias)", async () => {
@@ -345,11 +315,8 @@ describe("Pi runtime custom provider materialization", () => {
     cleanup.push(cwd);
     await mkdir(cwd, { recursive: true });
     const options = buildPiProcessOptions(cwd, { model: "user-lab/model-a", thinking: "low", skills: [], extensions: [] })!;
-    expect(options.web?.runtime.model).toBe("user-lab--ep-a/remote-model-a");
     expect(options.args).toContain("--model");
-    expect(options.args[options.args.indexOf("--model") + 1]).toBe("user-lab--ep-a/remote-model-a");
-    expect(options.web?.runtime.runtimeEnv?.PI_PROVIDER).toBe("user-lab--ep-a");
-    expect(options.web?.runtime.runtimeEnv?.PI_MODEL).toBe("remote-model-a");
+    expect(argValues(options.args, "--model")).toEqual(["user-lab--ep-a/remote-model-a"]);
   });
 
   it("launches with the projected runtime identity for a single endpoint + model alias", async () => {
@@ -367,9 +334,7 @@ describe("Pi runtime custom provider materialization", () => {
     cleanup.push(cwd);
     await mkdir(cwd, { recursive: true });
     const options = buildPiProcessOptions(cwd, { model: "user-lab/model-a", thinking: "low", skills: [], extensions: [] })!;
-    expect(options.web?.runtime.model).toBe("user-lab/remote-model-a");
-    expect(options.web?.runtime.runtimeEnv?.PI_PROVIDER).toBe("user-lab");
-    expect(options.web?.runtime.runtimeEnv?.PI_MODEL).toBe("remote-model-a");
+    expect(argValues(options.args, "--model")).toEqual(["user-lab/remote-model-a"]);
   });
 
   it("strips outer Pi session variables injected through the workspace environment too", async () => {
@@ -388,43 +353,8 @@ describe("Pi runtime custom provider materialization", () => {
       expect(options.env?.PI_SESSION_ID).toBeUndefined();
       // Legitimate workspace environment values still reach the runtime.
       expect(options.env?.PATH).toBe(join(cwd, ".venv", "bin"));
-      const runtimeEnv = options.web?.runtime.runtimeEnv;
-      // Without a workspace model there is nothing to expose: the outer and
-      // workspace-injected PI_MODEL are stripped, and the per-session
-      // identity stays removed at the boundary.
-      expect(runtimeEnv?.PI_MODEL).toBeNull();
-      expect(runtimeEnv?.PI_PROVIDER).toBeNull();
-      expect(runtimeEnv?.PI_REASONING_LEVEL).toBeNull();
-      expect(runtimeEnv?.PI_SESSION_ID).toBeNull();
-      expect(runtimeEnv?.PATH).toBe(join(cwd, ".venv", "bin"));
     } finally {
       delete process.env.PI_MODEL;
-    }
-  });
-
-  it("exposes the effective workspace model/provider/thinking to the agent bash env", async () => {
-    const cwd = join(tmpdir(), `pi-runtime-session-env-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-    cleanup.push(cwd);
-    await mkdir(cwd, { recursive: true });
-    const previous = process.env.PI_MODEL;
-    process.env.PI_MODEL = "outer/model";
-    try {
-      const options = buildPiProcessOptions(cwd, { model: "custom-custom-api/minimax-m2.5", thinking: "high", skills: [], extensions: [] })!;
-
-      const runtimeEnv = options.web?.runtime.runtimeEnv;
-      expect(runtimeEnv).toBeDefined();
-      // The agent's bash tool sees the real session model identity, not the
-      // outer shell value and not null.
-      expect(runtimeEnv?.PI_PROVIDER).toBe("custom-custom-api");
-      expect(runtimeEnv?.PI_MODEL).toBe("minimax-m2.5");
-      expect(runtimeEnv?.PI_REASONING_LEVEL).toBe("high");
-      expect(runtimeEnv?.PI_MODEL).not.toBe("outer/model");
-      // The runtime descriptor carries the same identity for the control plane.
-      expect(options.web?.runtime.model).toBe("custom-custom-api/minimax-m2.5");
-      expect(options.web?.runtime.thinking).toBe("high");
-    } finally {
-      if (previous === undefined) delete process.env.PI_MODEL;
-      else process.env.PI_MODEL = previous;
     }
   });
 
@@ -437,10 +367,8 @@ describe("Pi runtime custom provider materialization", () => {
 
     const options = buildPiProcessOptions(cwd)!;
 
-    const runtimeEnv = options.web?.runtime.runtimeEnv;
-    expect(runtimeEnv?.PI_PROVIDER).toBe("deepseek");
-    expect(runtimeEnv?.PI_MODEL).toBe("deepseek-chat");
-    expect(runtimeEnv?.PI_REASONING_LEVEL).toBe("off");
+    expect(argValues(options.args, "--model")).toEqual(["deepseek/deepseek-chat"]);
+    expect(argValues(options.args, "--thinking")).toEqual(["off"]);
   });
 
   it("passes a manifest-discovered runtime extension exactly once", async () => {
@@ -460,7 +388,7 @@ describe("Pi runtime custom provider materialization", () => {
     // Inject the test runtime root explicitly: without it, a vendored
     // managed runtime checkout (runtime/pi) shadows this tmpdir scenario.
     const options = buildPiProcessOptions(cwd, loadDefaultPiConfig([runtimeRoot]))!;
-    const extensions = options.args.flatMap((arg, index) => arg === "-e" ? [options.args[index + 1]] : []);
+    const extensions = argValues(options.args, "-e");
 
     expect(extensions.filter((path) => path === extension)).toHaveLength(1);
     expect(extensions).not.toContain("pi-subagents/index.ts");
@@ -510,19 +438,19 @@ describe("Pi runtime custom provider materialization", () => {
     await mkdir(cwd, { recursive: true });
     const upstream = join(cwd, "node_modules", "@juicesharp", "rpiv-ask-user-question", "index.ts");
     const options = buildPiProcessOptions(cwd, { skills: [], extensions: [upstream] })!;
-    const extensions = options.args.flatMap((arg, index) => arg === "-e" ? [options.args[index + 1]] : []);
+    const extensions = argValues(options.args, "-e");
     const adapter = join(import.meta.dirname, "extensions", "pi-science-ask-user-question-web.ts");
 
     expect(extensions[0]).toBe(adapter);
     expect(extensions).not.toContain(upstream);
   });
 
-  it("loads the built-in notebook tools into the managed default host", async () => {
+  it("loads the built-in notebook tools into the managed runtime", async () => {
     const cwd = join(tmpdir(), `pi-runtime-notebook-extension-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(cwd);
     await mkdir(cwd, { recursive: true });
     const options = buildPiProcessOptions(cwd)!;
-    const extensions = options.args.flatMap((arg, index) => arg === "-e" ? [options.args[index + 1]] : []);
+    const extensions = argValues(options.args, "-e");
     expect(extensions).toContain(join(import.meta.dirname, "extensions", "pi-science-notebook.ts"));
   });
 
@@ -532,7 +460,7 @@ describe("Pi runtime custom provider materialization", () => {
     await mkdir(cwd, { recursive: true });
     const ambient = join(cwd, "node_modules", "pi-mcp-adapter", "index.ts");
     const options = buildPiProcessOptions(cwd, { skills: [], extensions: [ambient] })!;
-    const extensions = options.args.flatMap((arg, index) => arg === "-e" ? [options.args[index + 1]] : []);
+    const extensions = argValues(options.args, "-e");
     expect(extensions).not.toContain(ambient);
     expect(extensions).toContain(join(import.meta.dirname, "extensions", "pi-science-mcp.ts"));
     expect(extensions).toContain(join(import.meta.dirname, "extensions", "prompt-identity.ts"));
@@ -546,7 +474,7 @@ describe("Pi runtime custom provider materialization", () => {
       cleanup.push(cwd);
       await mkdir(cwd, { recursive: true });
       const options = buildPiProcessOptions(cwd, { skills: [], extensions: [] })!;
-      const extensions = options.args.flatMap((arg, index) => arg === "-e" ? [options.args[index + 1]] : []);
+      const extensions = argValues(options.args, "-e");
       expect(extensions).toContain(join(import.meta.dirname, "extensions", "prompt-identity.ts"));
       expect(extensions).not.toContain(join(import.meta.dirname, "extensions", "pi-science-mcp.ts"));
     } finally {
@@ -572,42 +500,40 @@ describe("Pi runtime custom provider materialization", () => {
     expect(options.args.slice(0, 2)).toEqual([tsx, cli]);
   });
 
-  it("runs a native Pi Orbit release executable directly", async () => {
+  it("runs a native Pi CLI executable directly", async () => {
     const cwd = join(tmpdir(), `pi-runtime-native-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(cwd);
     await mkdir(cwd, { recursive: true });
-    const cli = join(cwd, "pi-orbit");
+    const cli = join(cwd, "pi");
     await writeFile(cli, "", "utf8");
     process.env.PI_CLI_PATH = cli;
 
     const options = buildPiProcessOptions(cwd)!;
 
     expect(options.command).toBe(cli);
-    expect(options.args[0]).toBe("--mode");
+    expect(options.args.slice(0, 2)).toEqual(["--mode", "rpc"]);
     expect(options.args).not.toContain(cli);
   });
 
-  it("launches Pi in authenticated app-managed web mode", async () => {
-    const cwd = join(tmpdir(), `pi-runtime-web-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  it("selects the session dir, session path, and managed agent dir of the RPC runtime", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-session-paths-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(cwd);
     await mkdir(cwd, { recursive: true });
+    const sessionPath = join(cwd, ".pi-science", "sessions", "persisted.jsonl");
+    const agentDir = agentDirFor(cwd);
 
-    const options = buildPiProcessOptions(cwd)!;
+    const options = buildPiProcessOptions(cwd, { skills: [], extensions: [] }, sessionPath)!;
 
-    expect(options.args).toContain("web");
-    expect(options.args).not.toContain("rpc");
-    expect(options.args).toContain("--web-app-managed");
-    expect(options.args).toContain("--no-session");
-    expect(options.args).toContain("--approve");
-    expect(options.args).not.toContain("--session-dir");
-    expect(options.args).not.toContain("--auth-token");
-    expect(options.web?.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-    expect(options.web?.authToken).toBeTruthy();
-    expect(options.env?.PI_ORBIT_AUTH_TOKEN).toBe(options.web?.authToken);
-    expect(options.web?.runtime).toMatchObject({ cwd, sessionDir: join(cwd, ".pi-science", "sessions") });
+    expect(argValues(options.args, "--session-dir")).toEqual([join(cwd, ".pi-science", "sessions")]);
+    expect(argValues(options.args, "--session")).toEqual([sessionPath]);
+    // The runtime reads models/auth/settings from this Pi-Science-owned dir, so
+    // launch and runtime must agree on the workspace-keyed location.
+    expect(options.env?.PI_CODING_AGENT_DIR).toBe(agentDir);
+    expect(options.env?.PI_CONFIG_DIR).toBe(agentDir);
+    await expect(readFile(join(agentDir, "models.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("allows isolated runtimes to override the web session directory", async () => {
+  it("allows isolated runtimes to override the session directory", async () => {
     const cwd = join(tmpdir(), `pi-runtime-isolated-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     const isolatedSessions = join(cwd, ".pi-science", "title-runtimes", "runtime-1");
     cleanup.push(cwd);
@@ -615,54 +541,52 @@ describe("Pi runtime custom provider materialization", () => {
 
     const options = buildPiProcessOptions(cwd, undefined, undefined, {}, isolatedSessions)!;
 
-    expect(options.web?.runtime.sessionDir).toBe(isolatedSessions);
-    expect(options.web?.runtime.sessionDir).not.toBe(join(cwd, ".pi-science", "sessions"));
+    expect(argValues(options.args, "--session-dir")).toEqual([isolatedSessions]);
+    expect(argValues(options.args, "--session-dir")).not.toContain(join(cwd, ".pi-science", "sessions"));
   });
 
-  it("restores the global skill policy when creating a Pi Orbit runtime", async () => {
+  it("filters the --skill arguments by the persisted allowlist/denylist policy", async () => {
     const cwd = join(tmpdir(), `pi-runtime-skills-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(cwd);
     await mkdir(cwd, { recursive: true });
     await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
-    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), JSON.stringify({
-      skill_policy: { mode: "denylist", skills: ["browser"] },
-    }), "utf8");
+    const extraSkill = join(cwd, "extra-skill");
+    const writePolicy = (skill_policy: unknown) => writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), JSON.stringify({ skill_policy }), "utf8");
 
-    const options = buildPiProcessOptions(cwd)!;
+    await writePolicy({ mode: "denylist", skills: ["literature-review"] });
+    const denied = argValues(buildPiProcessOptions(cwd, { skills: [extraSkill], extensions: [] })!.args, "--skill");
+    // Compare by basename: skill paths are built with path.join, so Windows
+    // separators are "\\" and a literal "/" suffix check would miss them.
+    expect(denied.map((path) => basename(path))).not.toContain("literature-review");
+    expect(denied).toContain(extraSkill);
+    expect(denied.map((path) => basename(path))).toContain("pdf-explore");
 
-    expect(options.web?.runtime.skillPolicy).toEqual({ mode: "denylist", skills: ["browser"] });
+    await writePolicy({ mode: "allowlist", skills: ["literature-review", "extra-skill"] });
+    const allowed = argValues(buildPiProcessOptions(cwd, { skills: [extraSkill], extensions: [] })!.args, "--skill");
+    expect(allowed.map((path) => basename(path))).toContain("literature-review");
+    expect(allowed).toContain(extraSkill);
+    expect(allowed.map((path) => basename(path))).not.toContain("pdf-explore");
   });
 
-  it("reuses the shared web port and token until reset allocates fresh ones", () => {
-    const cwd = join(tmpdir(), `pi-runtime-shared-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-    cleanup.push(cwd);
-    mkdirSync(cwd, { recursive: true });
-    const first = buildPiProcessOptions(cwd)!;
-    const second = buildPiProcessOptions(cwd)!;
-    expect(second.web?.baseUrl).toBe(first.web?.baseUrl);
-    expect(second.web?.authToken).toBe(first.web?.authToken);
-
-    // A host start failure (e.g. EADDRINUSE) resets the singleton so the next
-    // attempt self-heals with a different port/token.
-    resetWebRuntimeAllocation();
-    const after = buildPiProcessOptions(cwd)!;
-    expect(after.web?.baseUrl).not.toBe(first.web?.baseUrl);
-    expect(after.web?.authToken).not.toBe(first.web?.authToken);
-  });
-
-  it("reuses one port and auth token across calls instead of leaking new ones", async () => {
-    const cwd = join(tmpdir(), `pi-runtime-shared-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  it("drops every --skill argument for the none policy and passes them all when inheriting", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-skill-policy-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(cwd);
     await mkdir(cwd, { recursive: true });
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    const writePolicy = (skill_policy: unknown) => writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), JSON.stringify({ skill_policy }), "utf8");
 
-    const first = buildPiProcessOptions(cwd)!;
-    const second = buildPiProcessOptions(cwd)!;
-    const third = buildPiProcessOptions(cwd)!;
+    await writePolicy({ mode: "none" });
+    expect(argValues(buildPiProcessOptions(cwd)!.args, "--skill")).toEqual([]);
+    // Filtering the explicit paths is not enough: --approve trusts
+    // cwd/.pi/skills, so automatic discovery would load a disabled skill back.
+    expect(buildPiProcessOptions(cwd)!.args).toContain("--no-skills");
 
-    expect(second.web?.baseUrl).toBe(first.web?.baseUrl);
-    expect(third.web?.baseUrl).toBe(first.web?.baseUrl);
-    expect(second.web?.authToken).toBe(first.web?.authToken);
-    expect(third.env?.PI_ORBIT_AUTH_TOKEN).toBe(first.env?.PI_ORBIT_AUTH_TOKEN);
+    await writePolicy({ mode: "denylist", skills: ["literature-review"] });
+    expect(buildPiProcessOptions(cwd)!.args).toContain("--no-skills");
+
+    await writePolicy({ mode: "inherit" });
+    expect(argValues(buildPiProcessOptions(cwd)!.args, "--skill").length).toBeGreaterThan(0);
+    expect(buildPiProcessOptions(cwd)!.args).not.toContain("--no-skills");
   });
 
   it("surfaces models.json deletion failures except for a missing file", async () => {

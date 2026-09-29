@@ -7,7 +7,6 @@ import { ConversationEventHub, conversationEventHub } from "../events/conversati
 import { durableEventStore } from "../events/event-store.js";
 import { observeNodePiEvent } from "../events/node-event-observer.js";
 import { PiManager, piManager } from "../pi/pi-manager.js";
-import { PiOrbitRequestError } from "../pi/pi-orbit-host.js";
 import type { PiProcess, PiProcessOptions, PiResult, RuntimeSkillPolicy } from "../pi/pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
 import { canonicalFromRuntimeModelRef, canonicalRuntimeModelRef, projectedRuntimeModelRef } from "../pi/pi-runtime-projection.js";
@@ -177,7 +176,6 @@ export class NodeSessionService {
   /** Whole-session wall-clock timing (LLM/TTFT/decode/tool durations) folded
    *  from the raw Pi event stream; persisted via the stats checkpoint. */
   private readonly statsProjector = new SessionStatsProjector();
-  private hostReloadPending = false;
   private log: (level: "info" | "warn" | "error", message: string) => void = () => {};
   private beforeRuntimeStart: ((cwd: string) => Promise<void>) | null = null;
 
@@ -371,33 +369,6 @@ export class NodeSessionService {
       if (!ready.success) return ready;
       const sessionPath = await this.repository.findPath(cwd, sessionId);
       if (!sessionPath) return { success: false, code: "not_found", error: "session not found" };
-      if (source.process.runtimeIdentity) {
-        const result = await source.process.sendCommand(entryId ? "fork" : "clone", entryId ? { entryId } : {});
-        if (!result.success) return result;
-        const state = await this.refreshState(source);
-        if (!state.success || !source.activeSessionId || source.activeSessionId === sessionId) {
-          return { success: false, code: "reconcile_failed", error: "fork did not create a distinct session" };
-        }
-        const forkedSessionId = source.activeSessionId;
-        this.registerRuntime(source, sessionId);
-
-        // Pi Orbit enforces exclusive ownership of a persisted session. Fork
-        // the source runtime first (which releases that ownership), then
-        // recreate the original session in a separate runtime.
-        const restored = await this.startRuntime(cwd, { ...source.config }, sessionPath);
-        if ("error" in restored) {
-          this.log("warn", `fork succeeded but the source session could not be restored: ${restored.error}`);
-        } else {
-          const restoredState = await this.refreshState(restored);
-          if (restoredState.success && restored.activeSessionId === sessionId) this.registerRuntime(restored);
-          else {
-            await this.cleanupRuntime(restored);
-            this.log("warn", "fork succeeded but the source session runtime returned a mismatched identity");
-          }
-        }
-        invalidateSessionFileCache(cwd);
-        return { ...result, sessionId: forkedSessionId };
-      }
       const started = await this.startRuntime(cwd, { ...source.config });
       if ("error" in started) return started;
       const switched = await started.process.sendCommand("switch_session", { sessionPath });
@@ -760,15 +731,6 @@ export class NodeSessionService {
   async reloadConfiguration(): Promise<Array<{ cwd: string; oldId: string; newId: string }>> {
     return this.withLock("\0configuration-reload", async () => {
       const runtimes = [...new Set(this.runtimes.values())];
-      if (this.manager.hostProcessCount > 0) this.hostReloadPending = true;
-      if (this.hostReloadPending && runtimes.some((runtime) => runtime.busy)) {
-        for (const runtime of runtimes) runtime.restartPending = true;
-        return [];
-      }
-      if (this.hostReloadPending) {
-        await this.manager.recycleWebHost();
-        this.hostReloadPending = false;
-      }
       const replacements: Array<{ cwd: string; oldId: string; newId: string }> = [];
       const failures: Array<{ cwd: string; code: string; error: string }> = [];
       for (const [key, snapshot] of [...this.runtimes.entries()]) {
@@ -800,26 +762,15 @@ export class NodeSessionService {
     });
   }
 
-  async setGlobalSkillPolicy(policy: RuntimeSkillPolicy): Promise<void> {
-    const runtimes = [...new Set(this.runtimes.values())];
-    for (const runtime of runtimes) {
-      const result = await this.withLock(runtimeKey(runtime.cwd, runtime.activeSessionId), async () => {
-        if (runtime.busy) return { success: false, code: "runtime_busy", error: "Runtime is busy" };
-        return runtime.process.setRuntimeSkillPolicy(policy);
-      });
-      if (!result.success) throw Object.assign(new Error(String(result.error ?? "Unable to update runtime skills")), { code: String(result.code ?? "runtime_error") });
-    }
+  /** A runtime receives its skills as spawn arguments, so a persisted policy
+   *  change is applied by restarting runtimes, exactly like other config
+   *  reloads. Callers must persist the new policy before calling this. */
+  async setGlobalSkillPolicy(_policy: RuntimeSkillPolicy): Promise<void> {
+    await this.reloadConfiguration();
   }
 
   async refreshAllRuntimeSkills(): Promise<void> {
-    const runtimes = [...new Set(this.runtimes.values())];
-    for (const runtime of runtimes) {
-      const result = await this.withLock(runtimeKey(runtime.cwd, runtime.activeSessionId), async () => {
-        if (runtime.busy) return { success: false, code: "runtime_busy", error: "Runtime is busy" };
-        return runtime.process.refreshRuntimeSkills();
-      });
-      if (!result.success) throw Object.assign(new Error(String(result.error ?? "Unable to refresh runtime skills")), { code: String(result.code ?? "runtime_error") });
-    }
+    await this.reloadConfiguration();
   }
 
   async shutdownAll(): Promise<void> {
@@ -904,17 +855,10 @@ export class NodeSessionService {
     const managerKey = randomUUID();
     try { process = await this.manager.start(managerKey, options); }
     catch (error) {
-      if (error instanceof PiOrbitRequestError) {
-        const detail = firstErrorDiagnostic(error.payload.diagnostics);
-        return {
-          error: detail
-            ? `unable to start Pi Orbit runtime: ${error.message}: ${detail}`
-            : `unable to start Pi Orbit runtime: ${error.message}`,
-          code: error.code,
-          ...(error.payload.diagnostics === undefined ? {} : { diagnostics: error.payload.diagnostics }),
-        };
-      }
-      return { error: `unable to start Pi runtime: ${String(error)}`, code: "spawn_failed" };
+      const code = error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string"
+        ? (error as { code: string }).code
+        : "spawn_failed";
+      return { error: `unable to start Pi runtime: ${error instanceof Error ? error.message : String(error)}`, code };
     }
     const runtime: RuntimeRecord = { cwd, managerKey, process, activeSessionId: "", config: { ...config }, busy: false, restartPending: false, closing: false };
     this.eventHub.bind(cwd, process, {
@@ -991,14 +935,6 @@ export class NodeSessionService {
   }
 
   private async reloadRuntimeAfterTurn(runtime: RuntimeRecord): Promise<void> {
-    if (this.hostReloadPending) {
-      if ([...new Set(this.runtimes.values())].some((candidate) => candidate.busy)) return;
-      try { await this.reloadConfiguration(); }
-      catch (error) {
-        if (runtime.activeSessionId) await this.eventHub.publish(runtime.cwd, runtime.activeSessionId, { type: "error", sessionId: runtime.activeSessionId, message: `Failed to reload Pi runtime after settings changed: ${error instanceof Error ? error.message : String(error)}` });
-      }
-      return;
-    }
     await this.withLock(runtimeKey(runtime.cwd, runtime.activeSessionId), async () => {
       if (this.runtimes.get(runtimeKey(runtime.cwd, runtime.activeSessionId)) !== runtime || runtime.busy) return;
       const oldId = runtime.activeSessionId;
@@ -1057,12 +993,12 @@ export class NodeSessionService {
 
   /** Start (or extend) the event-stream watchdog while an operation is in
    *  flight. Pure-idle runtimes never run it: zero events are the normal idle
-   *  state. Only Pi Orbit runtimes have an event stream to watch. */
+   *  state. */
   private scheduleEventWatchdog(runtime: RuntimeRecord): void {
     if (runtime.watchdogTimer) clearTimeout(runtime.watchdogTimer);
     runtime.watchdogTimer = undefined;
     const intervalMs = eventWatchdogMs();
-    if (intervalMs <= 0 || !runtime.process.attachedToHost) return;
+    if (intervalMs <= 0 || runtime.process.isClosed) return;
     if (runtime.closing || (!runtime.busy && !runtime.operationPending)) return;
     runtime.watchdogTimer = setTimeout(() => {
       runtime.watchdogTimer = undefined;
@@ -1083,22 +1019,9 @@ export class NodeSessionService {
       this.scheduleEventWatchdog(runtime);
       return;
     }
-    // Stream silent for the whole window while work is supposed to happen:
-    // revive the connection first (cheap, never hold the lock on the
-    // untimeoutable request), escalating to a runtime restart only when the
-    // runtime also stops answering get_state.
-    const reconnects = runtime.watchdogReconnects ?? 0;
-    if (reconnects < 2) {
-      runtime.watchdogReconnects = reconnects + 1;
-      this.log("warn", `Pi Orbit event stream silent for ${eventWatchdogMs()}ms while busy; reconnecting (attempt ${reconnects + 1})`);
-      void runtime.process.reconnectEventStream().catch((error: unknown) => {
-        this.log("warn", `Pi Orbit event stream reconnect failed: ${String(error)}`);
-      });
-      this.scheduleEventWatchdog(runtime);
-      return;
-    }
-    // Reconnects exhausted: confirm the runtime is unresponsive before
-    // restarting it (a busy-but-answering runtime must never be torn down).
+    // Events arrive on the runtime's own stdout, so a silent runtime is probed
+    // directly: restart it only when it also stops answering get_state.
+    this.log("warn", `Pi runtime silent for ${eventWatchdogMs()}ms while busy; probing get_state`);
     const state = await runtime.process.sendCommand("get_state");
     if (state.success) {
       this.scheduleEventWatchdog(runtime);
@@ -1491,41 +1414,10 @@ export class NodeSessionService {
    *  stream is only logged. Runs inside the mutation lock, so the reconnect
    *  race is bounded to 5s because the underlying events request has no
    *  timeout of its own. */
-  private async ensureHealthyEventStream(runtime: RuntimeRecord, type: string): Promise<PiResult> {
-    const process = runtime.process;
-    if (!process.attachedToHost) return { success: true };
-    if (process.eventStreamAlive) {
-      if (process.lastEventAt > 0 && Date.now() - process.lastEventAt > eventWatchdogMs() * 2) {
-        this.log("warn", `Pi Orbit event stream stale (${Math.round((Date.now() - process.lastEventAt) / 1000)}s of silence) before ${type}; continuing`);
-      }
-      return { success: true };
-    }
-    if (!process.lastEventAt) return { success: true }; // still establishing
-    this.log("warn", `Pi Orbit event stream dead before ${type}; reconnecting`);
-    try {
-      await Promise.race([
-        process.reconnectEventStream(),
-        new Promise<never>((_, reject) => {
-          const timer = setTimeout(() => reject(new Error("event stream reconnect timed out after 5s")), 5_000);
-          timer.unref?.();
-        }),
-      ]);
-    } catch (error) {
-      this.log("warn", `Pi Orbit event stream reconnect failed: ${String(error)}`);
-    }
-    const state = await process.sendCommand("get_state");
-    if (state.success) return { success: true, data: state.data };
-    this.log("warn", `Pi Orbit runtime unresponsive before ${type} (get_state failed after reconnect); restarting`);
-    const config = { ...runtime.config };
-    const oldId = runtime.activeSessionId;
-    const restarted = await this.restartRuntimeUnlocked(runtime, config);
-    if ("error" in restarted) {
-      return { success: false, code: "runtime_restart_failed", error: `unable to restart runtime before ${type}: ${restarted.error}` };
-    }
-    if (oldId && restarted.activeSessionId !== oldId) {
-      return { success: false, code: "session_mismatch", error: `runtime restarted but session identity changed (${oldId} -> ${restarted.activeSessionId})` };
-    }
-    this.log("info", `Pi Orbit runtime restarted before ${type} (event stream was dead)`);
+  /** RPC events arrive on the runtime's own stdout, so there is no stream to
+   *  reconnect. Only a dead process blocks a mutation. */
+  private async ensureHealthyEventStream(runtime: RuntimeRecord, _type: string): Promise<PiResult> {
+    if (runtime.process.isClosed) return { success: false, code: "process_exit", error: "pi runtime is not running" };
     return { success: true };
   }
 
