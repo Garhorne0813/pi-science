@@ -51,7 +51,10 @@ function signalSessionRuns(cwd: string): void {
  *  so only the boundaries may invalidate: `startedAt` is written by
  *  tool_execution_start, and the terminal status/`endedAt` by
  *  tool_execution_end. Run-level starts and settles bracket the same window
- *  for executions the conversation stream never observes a tool call for. */
+ *  for executions the conversation stream never observes a tool call for.
+ *  `session.idle` is the wire name the hub publishes for a settled turn — Pi's
+ *  `agent_settled` is translated into it, never forwarded — so it is also what
+ *  settles a run whose terminal tool record never reached this stream. */
 function isExecutionBoundary(event: PiScienceEvent): boolean {
   switch (event.type) {
     case "agent_start":
@@ -60,6 +63,7 @@ function isExecutionBoundary(event: PiScienceEvent): boolean {
     case "run.cancelled":
     case "run.failed":
     case "agent_settled":
+    case "session.idle":
       return true;
     case "tool.updated": {
       const status = String(event.status ?? "");

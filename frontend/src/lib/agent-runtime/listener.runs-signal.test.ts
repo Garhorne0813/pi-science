@@ -66,6 +66,16 @@ describe("execution invalidation on the conversation stream", () => {
     expect(invalidate).toHaveBeenCalledTimes(1);
   });
 
+  it("invalidates on session.idle, the wire name the hub publishes when a turn settles", async () => {
+    const source = await connectStream();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    source.emit("session.idle", { type: "session.idle", sessionId: SESSION, outcome: "ok" });
+    await flushSignal();
+    // Settling a turn also invalidates the workspace file list, so this pins the
+    // runs key itself rather than the total number of invalidations.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: runsKey(CWD) });
+  });
+
   it("does not invalidate for the streaming updates between those boundaries", async () => {
     const source = await connectStream();
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
