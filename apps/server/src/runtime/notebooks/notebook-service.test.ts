@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NotebookService } from "./notebook-service.js";
 import type { WorkspaceEnvironmentStatus } from "../workspace/workspace-environment.js";
+import { metadataRoot } from "../../storage/persistence.js";
 
 const cleanup: string[] = [];
 
@@ -21,7 +22,7 @@ describe("NotebookService", () => {
     await mkdir(join(cwd, ".hidden"));
     await writeFile(join(cwd, ".hidden", "c.ipynb"), "{}", "utf8");
 
-    const service = new NotebookService({ configPath: (name) => join(cwd, ".pi-science", name) });
+    const service = new NotebookService({ configPath: (name) => join(cwd, ".test-config", name) });
     const files = await service.list(cwd);
     expect(files.map((file) => file.path)).toEqual(["a.ipynb", "nested/b.ipynb"]);
   });
@@ -29,7 +30,7 @@ describe("NotebookService", () => {
   it("reports jupyter env status and idle server state", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-jupyter-"));
     cleanup.push(cwd);
-    const service = new NotebookService({ configPath: (name) => join(cwd, ".pi-science", name) });
+    const service = new NotebookService({ configPath: (name) => join(cwd, ".test-config", name) });
 
     expect((await service.envStatus(cwd)).ready).toBe(false);
     expect(service.status()).toMatchObject({ running: false, port: null, url: null });
@@ -40,7 +41,7 @@ describe("NotebookService", () => {
     cleanup.push(cwd);
     const micromambaResolver = vi.fn(async () => "true");
     const service = new NotebookService({
-      configPath: (name) => join(cwd, ".pi-science", name),
+      configPath: (name) => join(cwd, ".test-config", name),
       micromambaResolver,
     });
 
@@ -54,12 +55,13 @@ describe("NotebookService", () => {
     const prefix = join(cwd, "project-env");
     const bin = join(prefix, process.platform === "win32" ? "Scripts" : "bin");
     const python = join(bin, process.platform === "win32" ? "python.exe" : "python");
-    await mkdir(join(cwd, ".pi-science"), { recursive: true });
+    await mkdir(join(cwd, ".test-config"), { recursive: true });
     await mkdir(bin, { recursive: true });
     await writeFile(python, "#!/bin/sh\nexit 0\n", "utf8");
     await chmod(python, 0o755);
-    const registryPath = join(cwd, ".pi-science", "environments", "registry.json");
-    await mkdir(join(cwd, ".pi-science", "environments"), { recursive: true });
+    const registryPath = join(cwd, ".test-config", "environments", "registry.json");
+    await mkdir(join(cwd, ".test-config", "environments"), { recursive: true });
+    await mkdir(metadataRoot(cwd), { recursive: true });
     await writeFile(registryPath, JSON.stringify({
       schema_version: 1,
       revisions: [{
@@ -68,7 +70,7 @@ describe("NotebookService", () => {
         platform: `${process.platform}-${process.arch}`, created_at: new Date().toISOString(),
       }],
     }), "utf8");
-    await writeFile(join(cwd, ".pi-science", "environment.json"), JSON.stringify({
+    await writeFile(join(metadataRoot(cwd), "environment.json"), JSON.stringify({
       schema_version: 1, environment_id: "env_python", revision_id: "rev_python", bound_at: new Date().toISOString(),
     }), "utf8");
 
@@ -85,7 +87,7 @@ describe("NotebookService", () => {
       } satisfies WorkspaceEnvironmentStatus;
     });
     const service = new NotebookService({
-      configPath: (name) => join(cwd, ".pi-science", name),
+      configPath: (name) => join(cwd, ".test-config", name),
       environments: { installPackages },
     });
 
@@ -102,10 +104,11 @@ describe("NotebookService", () => {
     cleanup.push(cwd);
     const prefix = join(cwd, "project-env");
     const python = join(prefix, "python.exe");
-    await mkdir(join(cwd, ".pi-science", "environments"), { recursive: true });
+    await mkdir(join(cwd, ".test-config", "environments"), { recursive: true });
+    await mkdir(metadataRoot(cwd), { recursive: true });
     await mkdir(prefix, { recursive: true });
     await writeFile(python, "", "utf8");
-    await writeFile(join(cwd, ".pi-science", "environments", "registry.json"), JSON.stringify({
+    await writeFile(join(cwd, ".test-config", "environments", "registry.json"), JSON.stringify({
       schema_version: 1,
       revisions: [{
         environment_id: "env_python", revision_id: "rev_windows_root", name: "python", display_name: "Python",
@@ -113,11 +116,11 @@ describe("NotebookService", () => {
         platform: "win32-x64", created_at: new Date().toISOString(),
       }],
     }), "utf8");
-    await writeFile(join(cwd, ".pi-science", "environment.json"), JSON.stringify({
+    await writeFile(join(metadataRoot(cwd), "environment.json"), JSON.stringify({
       schema_version: 1, environment_id: "env_python", revision_id: "rev_windows_root", bound_at: new Date().toISOString(),
     }), "utf8");
 
-    const service = new NotebookService({ configPath: (name) => join(cwd, ".pi-science", name), platform: "win32" });
+    const service = new NotebookService({ configPath: (name) => join(cwd, ".test-config", name), platform: "win32" });
     const installKernelspec = (service as unknown as { installProjectKernelspec: (workspace: string) => Promise<void> }).installProjectKernelspec.bind(service);
     await installKernelspec(cwd);
 
@@ -128,7 +131,7 @@ describe("NotebookService", () => {
   it("rejects a second setup while one is already running", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-jupyter-setup-race-"));
     cleanup.push(cwd);
-    const service = new NotebookService({ configPath: (name) => join(cwd, ".pi-science", name), micromambaExecutable: join(cwd, "missing", "micromamba") });
+    const service = new NotebookService({ configPath: (name) => join(cwd, ".test-config", name), micromambaExecutable: join(cwd, "missing", "micromamba") });
 
     const first = service.setup(cwd);
     await expect(service.setup(cwd)).rejects.toThrow("Setup already in progress");
@@ -140,7 +143,7 @@ describe("NotebookService", () => {
   it("serializes concurrent starts so only one runs at a time", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-jupyter-start-race-"));
     cleanup.push(cwd);
-    const service = new NotebookService({ configPath: (name) => join(cwd, ".pi-science", name) });
+    const service = new NotebookService({ configPath: (name) => join(cwd, ".test-config", name) });
     await mkdir(dirname(service.jupyterBin), { recursive: true });
     await writeFile(service.jupyterBin, "", "utf8");
     let active = 0;
@@ -166,7 +169,7 @@ describe("NotebookService", () => {
   it("cancels an in-flight start when the service is stopped", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-jupyter-start-cancel-"));
     cleanup.push(cwd);
-    const service = new NotebookService({ configPath: (name) => join(cwd, ".pi-science", name) });
+    const service = new NotebookService({ configPath: (name) => join(cwd, ".test-config", name) });
     await mkdir(dirname(service.jupyterBin), { recursive: true });
     await writeFile(service.jupyterBin, "", "utf8");
 
@@ -197,7 +200,7 @@ describe("NotebookService", () => {
     const other = await mkdtemp(join(tmpdir(), "pi-science-jupyter-other-"));
     cleanup.push(other);
     const record = join(cwd, "spawn-args.json");
-    const service = new NotebookService({ configPath: (name) => join(cwd, ".pi-science", name) });
+    const service = new NotebookService({ configPath: (name) => join(cwd, ".test-config", name) });
     await mkdir(dirname(service.jupyterBin), { recursive: true });
     await writeFile(service.jupyterBin, `#!/usr/bin/env node\nimport { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(record)}, JSON.stringify(process.argv.slice(2)));\nsetInterval(() => {}, 30_000);\n`, "utf8");
     await chmod(service.jupyterBin, 0o755);

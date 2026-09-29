@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
-import { configPath, readJson, withFileWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
+import { configPath, legacyMetadataRoot, metadataRoot, moveWorkspaceMetadata, readJson, removeWorkspaceMetadata, withFileWriteLock, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { probeMcpHealth, type McpDefinition } from "../../security/mcp-health.js";
 import { egressAuditEnabled, recordEgress } from "../../security/egress-audit.js";
@@ -17,7 +17,7 @@ import type { McpConnectorService } from "../../mcp/connector-service.js";
 import { resolveMcpConfig } from "../../catalog/mcp-config.js";
 import { findExecutable, pathIsInside, userHome } from "../../support/platform-utils.js";
 import { defaultPythonExecutable } from "../../runtime/workspace/workspace-environment.js";
-import { ensureProject, updateProject } from "../../project/project-registry.js";
+import { ensureProject, readProject, updateProject } from "../../project/project-registry.js";
 
 function q(request: { query: unknown }, key: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[key]; return typeof value === "string" && value ? value : fallback; }
 async function ws(request: { query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): Promise<string | null> { try { return await validateWorkspaceCwd(q(request, "cwd")); } catch (error) { reply.code(403).send({ error: String(error) }); return null; } }
@@ -50,7 +50,7 @@ export async function knownWorkspacePaths(workspaceRepository?: WorkspaceReposit
   if (workspaceRepository) {
     for (const location of await workspaceRepository.listKnown()) {
       try {
-        if ((await stat(join(location.path, ".pi-science"))).isDirectory()) paths.add(location.path);
+        if ((await stat(location.path)).isDirectory()) paths.add(location.path);
         else await workspaceRepository.markMissing(location.path);
       } catch { await workspaceRepository.markMissing(location.path); }
     }
@@ -59,7 +59,12 @@ export async function knownWorkspacePaths(workspaceRepository?: WorkspaceReposit
   try {
     for (const name of await readdir(rootDir())) {
       const path = join(rootDir(), name);
-      try { if ((await stat(join(path, ".pi-science"))).isDirectory()) paths.add(path); } catch { /* skip */ }
+      try {
+        if (!(await stat(path)).isDirectory()) continue;
+        const project = await readProject(path);
+        const legacy = await stat(legacyMetadataRoot(path)).then((value) => value.isDirectory()).catch(() => false);
+        if (project || legacy) { await ensureProject(path); paths.add(path); }
+      } catch { /* skip */ }
     }
   } catch { /* workspace root absent */ }
   const [registered, pinned] = await Promise.all([
@@ -68,12 +73,25 @@ export async function knownWorkspacePaths(workspaceRepository?: WorkspaceReposit
   ]);
   for (const value of [...registered, ...pinned]) {
     const path = resolve(value);
-    try { if ((await stat(join(path, ".pi-science"))).isDirectory()) paths.add(path); } catch { /* stale pin */ }
+    try { if ((await stat(path)).isDirectory()) paths.add(path); } catch { /* stale pin */ }
   }
   return [...paths];
 }
 async function workspaceInfo(path: string, workspaceRepository?: WorkspaceRepository): Promise<Record<string, unknown>> {
   const project = await ensureProject(path);
+  if (workspaceRepository && !(await workspaceRepository.getByPath(path, true))) {
+    const locations = await workspaceRepository.getByProject(project.id);
+    const missing: typeof locations = [];
+    for (const location of locations) {
+      if (!(await stat(location.path).catch(() => null))?.isDirectory()) missing.push(location);
+    }
+    const oldPaths = new Set(await Promise.all(missing.map(async (location) => join(await realpath(dirname(location.path)).catch(() => dirname(location.path)), basename(location.path)))));
+    if (oldPaths.size === 1) {
+      const source = missing.find((location) => location.is_pinned) ?? missing[0];
+      if (source) await workspaceRepository.moveLocation(project.id, source.path, path, true);
+      for (const location of missing) if (location !== source) await workspaceRepository.markMissing(location.path, Date.now(), true);
+    }
+  }
   await workspaceRepository?.rememberWorkspace(path, { managed: pathIsInside(rootDir(), path, true), preservePath: pathIsInside(rootDir(), path, true) });
   const [sessions, metadata] = await Promise.all([sessionRepository.list(path), stat(path)]);
   return {
@@ -99,10 +117,10 @@ async function managedWorkspacePath(pathValue: string, action: "delete" | "renam
   if (!pathIsInside(canonicalRoot, canonicalRequested)) throw new Error(`Cannot ${action} outside workspaces directory`);
   const workspaceParts = relative(canonicalRoot, canonicalRequested).split(sep).filter(Boolean);
   if (workspaceParts.length !== 1) throw new Error(`Cannot ${action} a nested workspace path`);
-  let marker;
-  try { marker = await stat(join(canonicalRequested, ".pi-science")); }
-  catch { throw new Error(`Cannot ${action} a directory that is not a workspace`); }
-  if (!marker.isDirectory()) throw new Error(`Cannot ${action} a directory that is not a workspace`);
+  const project = await readProject(canonicalRequested);
+  const legacy = await stat(legacyMetadataRoot(canonicalRequested)).then((value) => value.isDirectory()).catch(() => false);
+  if (!project && !legacy) throw new Error(`Cannot ${action} a directory that is not a workspace`);
+  await ensureProject(canonicalRequested);
   return canonicalRequested;
 }
 
@@ -361,8 +379,8 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
 
   // ── Workspaces ──
   app.get("/api/workspaces", async () => { const result = await Promise.all((await knownWorkspacePaths(workspaceRepository)).map((path) => workspaceInfo(path, workspaceRepository))); return result.sort((left, right) => String(right.last_modified).localeCompare(String(left.last_modified))); });
-  app.post("/api/workspaces", async (request, reply) => { const body = (request.body ?? {}) as { name?: unknown }; const name = String(body.name ?? "").trim().replace(/[\\/]/g, "-").slice(0, 100); if (!name) return reply.code(400).send({ error: "Invalid workspace name" }); const path = join(rootDir(), name); try { await stat(path); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* create */ } await import("node:fs/promises").then(({ mkdir }) => mkdir(join(path, ".pi-science"), { recursive: true })); return await workspaceInfo(path, workspaceRepository); });
-  app.post("/api/workspaces/open", async (request, reply) => { const requestedPath = expandUserPath(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); let path: string; try { if (!(await stat(requestedPath)).isDirectory()) return reply.code(400).send({ error: "Not a directory" }); path = await realpath(requestedPath); } catch { return reply.code(404).send({ error: "Folder not found" }); } await import("node:fs/promises").then(({ mkdir }) => mkdir(join(path, ".pi-science"), { recursive: true })); await rememberExternalWorkspace(path, workspaceRepository); return await workspaceInfo(path, workspaceRepository); });
+  app.post("/api/workspaces", async (request, reply) => { const body = (request.body ?? {}) as { name?: unknown }; const name = String(body.name ?? "").trim().replace(/[\\/]/g, "-").slice(0, 100); if (!name) return reply.code(400).send({ error: "Invalid workspace name" }); const path = join(rootDir(), name); try { await stat(path); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* create */ } await mkdir(path, { recursive: true }); return await workspaceInfo(path, workspaceRepository); });
+  app.post("/api/workspaces/open", async (request, reply) => { const requestedPath = expandUserPath(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); let path: string; try { if (!(await stat(requestedPath)).isDirectory()) return reply.code(400).send({ error: "Not a directory" }); path = await realpath(requestedPath); } catch { return reply.code(404).send({ error: "Folder not found" }); } const info = await workspaceInfo(path, workspaceRepository); await rememberExternalWorkspace(path, workspaceRepository); return info; });
   app.post("/api/workspaces/demo", async (request, reply) => {
     const demo = DEMOS[String((request.query as { name?: unknown }).name ?? "")];
     if (!demo) return reply.code(400).send({ error: "Unknown demo" });
@@ -375,16 +393,18 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
     // Preserve edits only when this workspace was installed from the same
     // source. A changed or missing sentinel means the bundled demo has been
     // upgraded and the stale generated workspace must be rebuilt.
-    const sentinel = join(target, ".pi-science", "demo-source");
+    const sentinel = workspaceFile(target, "demo-source");
     let installed = false;
     try {
       installed = (await readFile(sentinel, "utf8")).trim() === demo.source;
     } catch { /* first install or legacy workspace */ }
     if (!installed) {
       try { await rm(target, { recursive: true, force: true }); } catch { /* create below */ }
+      await removeWorkspaceMetadata(target);
       await cp(source, target, { recursive: true });
     }
-    await mkdir(join(target, ".pi-science"), { recursive: true });
+    await ensureProject(target);
+    await mkdir(metadataRoot(target), { recursive: true });
     await writeFile(sentinel, `${demo.source}\n`, "utf8");
     return await workspaceInfo(target, workspaceRepository);
   });
@@ -404,12 +424,25 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
     const destination = join(root, name);
     try { await stat(destination); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* available */ }
     const sourceProject = await ensureProject(source);
+    let workspaceMoved = false;
+    let stateMoved = false;
+    let registryMoved = false;
     try {
       await rename(source, destination);
-      await updateWorkspaceLocation(source, destination, workspaceRepository, sourceProject.id);
+      workspaceMoved = true;
+      await moveWorkspaceMetadata(source, destination);
+      stateMoved = true;
       await updateProject(destination, { name });
+      await updateWorkspaceLocation(source, destination, workspaceRepository, sourceProject.id);
+      registryMoved = true;
       return await workspaceInfo(destination, workspaceRepository);
-    } catch { return reply.code(404).send({ error: "Workspace not found" }); }
+    } catch (error) {
+      if (registryMoved) await updateWorkspaceLocation(destination, source, workspaceRepository, sourceProject.id).catch(() => undefined);
+      if (stateMoved) await moveWorkspaceMetadata(destination, source).catch(() => undefined);
+      if (workspaceMoved) await rename(destination, source).catch(() => undefined);
+      if (stateMoved && workspaceMoved) await updateProject(source, { name: sourceProject.name }).catch(() => undefined);
+      return reply.code(500).send({ error: error instanceof Error ? error.message : "Workspace rename failed" });
+    }
   });
   app.get("/api/workspaces/pinned", async () => ({ paths: workspaceRepository ? (await workspaceRepository.listPinned()).map((location) => location.path) : await readJson<string[]>(configPath("pinned.json"), []) }));
   app.post("/api/workspaces/pin", async (request) => {
@@ -443,13 +476,19 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
       return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) });
     }
     if (await research?.hasActive(path) || await jobs?.hasActive(path)) return reply.code(409).send({ error: "Cancel active research and jobs before deleting this workspace" });
-    try { await rm(path, { recursive: true }); return { ok: true }; } catch { return reply.code(404).send({ error: "Workspace not found" }); }
+    try { await rm(path, { recursive: true }); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return reply.code(404).send({ error: "Workspace not found" });
+      return reply.code(500).send({ error: error instanceof Error ? error.message : "Workspace deletion failed" });
+    }
+    try { await removeWorkspaceMetadata(path); return { ok: true }; }
+    catch (error) { return reply.code(500).send({ error: error instanceof Error ? error.message : "Workspace state deletion failed" }); }
   });
 
   // ── Compute machine registry ──
-  app.get("/api/compute/machines", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const value = await readJson<{ machines?: unknown[] }>(join(root, ".pi-science", "compute.json"), {}); return { machines: Array.isArray(value.machines) ? value.machines : [] }; });
-  app.post("/api/compute/machines", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const machine = (request.body ?? {}) as Record<string, unknown>; if (!machine.host) return reply.code(400).send({ error: "host is required" }); const port = Number(machine.port ?? 22); if (!Number.isInteger(port) || port < 1 || port > 65535) return reply.code(400).send({ error: "port must be between 1 and 65535" }); const path = join(root, ".pi-science", "compute.json"); const current = await readJson<{ machines?: Record<string, unknown>[] }>(path, {}); const machines = Array.isArray(current.machines) ? current.machines : []; const { password: _password, ...safeMachine } = machine; const item = { ...safeMachine, port, identity_file: String(machine.identity_file ?? "~/.ssh/id_rsa"), auth_method: machine.auth_method === "password" ? "password" : "key", label: String(machine.label ?? machine.host) }; const next = [...machines.filter((row) => row.label !== item.label), item]; await writeJsonAtomic(path, { machines: next }); return { ok: true, machines: next }; });
-  app.delete<{ Params: { label: string } }>("/api/compute/machines/:label", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const path = join(root, ".pi-science", "compute.json"); const current = await readJson<{ machines?: Record<string, unknown>[] }>(path, {}); await writeJsonAtomic(path, { machines: (current.machines ?? []).filter((row) => row.label !== request.params.label) }); return { ok: true }; });
+  app.get("/api/compute/machines", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const value = await readJson<{ machines?: unknown[] }>(workspaceFile(root, "compute.json"), {}); return { machines: Array.isArray(value.machines) ? value.machines : [] }; });
+  app.post("/api/compute/machines", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const machine = (request.body ?? {}) as Record<string, unknown>; if (!machine.host) return reply.code(400).send({ error: "host is required" }); const port = Number(machine.port ?? 22); if (!Number.isInteger(port) || port < 1 || port > 65535) return reply.code(400).send({ error: "port must be between 1 and 65535" }); const path = workspaceFile(root, "compute.json"); const current = await readJson<{ machines?: Record<string, unknown>[] }>(path, {}); const machines = Array.isArray(current.machines) ? current.machines : []; const { password: _password, ...safeMachine } = machine; const item = { ...safeMachine, port, identity_file: String(machine.identity_file ?? "~/.ssh/id_rsa"), auth_method: machine.auth_method === "password" ? "password" : "key", label: String(machine.label ?? machine.host) }; const next = [...machines.filter((row) => row.label !== item.label), item]; await writeJsonAtomic(path, { machines: next }); return { ok: true, machines: next }; });
+  app.delete<{ Params: { label: string } }>("/api/compute/machines/:label", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const path = workspaceFile(root, "compute.json"); const current = await readJson<{ machines?: Record<string, unknown>[] }>(path, {}); await writeJsonAtomic(path, { machines: (current.machines ?? []).filter((row) => row.label !== request.params.label) }); return { ok: true }; });
   app.post("/api/compute/probe", async (request, reply) => { const root = await ws(request, reply); if (!root) return; return probeComputeMachine((request.body ?? {}) as ComputeProbeInput); });
   app.post("/api/compute/run", async () => ({ ok: false, error: "Remote dispatch requires a configured executor" }));
 

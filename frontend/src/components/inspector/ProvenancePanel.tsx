@@ -15,7 +15,7 @@ import i18n from "@/i18n";
 function reproducePrompt(r: ProvenanceRecord): string {
   const pkgs = packageSnapshot(r.env);
   const pkgNote = pkgs
-    ? ` The environment had ${pkgs.count} installed Python packages, listed in \`.pi-science/env/${pkgs.hash}.txt\` — if the regenerated result differs, install matching versions from that lockfile and re-run.`
+    ? ` The environment had ${pkgs.count} installed Python packages in recorded environment snapshot \`${pkgs.hash}\` — if the regenerated result differs, inspect that snapshot in the Provenance panel, install matching versions, and re-run.`
     : "";
   const env = r.env
     ? ` It was produced with${r.env.python ? ` Python ${r.env.python} on` : ""} ${r.env.platform}.${pkgNote}`
@@ -28,7 +28,7 @@ function reproducePrompt(r: ProvenanceRecord): string {
   // record is not runnable, so tell the agent where the full code lives.
   const truncNote = content.endsWith("[truncated]")
     ? " NOTE: the recorded code below is truncated at the store's size cap — read the full " +
-      `record for \`${r.path}\` from \`.pi-science/provenance.jsonl\` before re-running.`
+      `record for \`${r.path}\` from the app's Provenance history before re-running.`
     : "";
   return (
     `Reproduce \`${r.path}\` (provenance v${r.version}).${env} ` +
@@ -58,7 +58,7 @@ function packageSnapshot(
 /**
  * The provenance History of one artifact: every recorded version with the code
  * that produced it, the tool, the model, and a link back to the originating
- * conversation. Data comes from `.pi-science/provenance.jsonl`.
+ * conversation. Data comes from the workspace's private provenance state.
  */
 export function ProvenancePanel({ path, language, cwd: cwdOverride }: { path: string; language?: string; cwd?: string }) {
   const { t } = useTranslation();

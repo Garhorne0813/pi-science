@@ -33,6 +33,27 @@ jobs:
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install Linux research sandbox
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Install pinned Windows research sandbox
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $sandyPath = Join-Path $env:RUNNER_TEMP 'sandy.exe'
+          Invoke-WebRequest 'https://github.com/ahrvoje/sandy_cli/releases/download/v0.9992/sandy.exe' -OutFile $sandyPath
+          $digest = (Get-FileHash -LiteralPath $sandyPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($digest -ne '8a337f199ed7e64bae3088ab247aa485cc063a4ae3e42bec1aad36a48016c535') {
+            throw "Sandy binary SHA-256 mismatch: $digest"
+          }
+          "PI_SCIENCE_SANDY_PATH=$sandyPath" >> $env:GITHUB_ENV
+
       - name: Verify pinned MCP adapter patch
         if: runner.os == 'Linux'
         run: bash scripts/test-mcp-adapter-patch.sh
@@ -102,3 +123,6 @@ jobs:
 
       - name: Test macOS launcher lifecycle
         run: bash scripts/test-launcher.sh
+
+      - name: Test macOS research sandbox integration
+        run: pnpm --filter @pi-science/server exec vitest run src/runtime/jobs/research-sandbox.test.ts

@@ -1,6 +1,5 @@
-import { createHash } from "node:crypto";
 import { unlinkSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { promptAssociationPath } from "../../node/prompt-request-repository.js";
 
 type PromptIdentityApi = {
   on(event: string, handler: (event: any, context: any) => unknown): void;
@@ -19,7 +18,7 @@ export function installPromptIdentity(piValue: unknown): void {
 
   pi.on("before_agent_start", (_event, context) => {
     const sessionId = context.sessionManager.getSessionId();
-    const path = markerPath(context.cwd, sessionId);
+    const path = promptAssociationPath(context.cwd, sessionId);
     try {
       const marker = JSON.parse(readFileSync(path, "utf8")) as {
         version?: unknown;
@@ -51,9 +50,4 @@ export function installPromptIdentity(piValue: unknown): void {
 
 export default function promptIdentityExtension(pi: unknown): void {
   installPromptIdentity(pi);
-}
-
-function markerPath(cwd: string, sessionId: string): string {
-  const key = createHash("sha256").update(sessionId).digest("hex");
-  return join(cwd, ".pi-science", "prompt-associations", `${key}.json`);
 }

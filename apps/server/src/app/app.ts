@@ -24,6 +24,8 @@ import { registerLiteratureRoutes } from "../http/routes/literature-routes.js";
 import { registerMcpRoutes } from "../http/routes/mcp-routes.js";
 import { createServerModules, type ServerModules } from "./server-modules.js";
 import { registerEnvironmentRoutes } from "../http/routes/environment-routes.js";
+import { registerGitRoutes } from "../http/routes/git-routes.js";
+import { registerDownloadRoutes } from "../http/routes/download-routes.js";
 import { serveFrontend } from "../http/frontend-static.js";
 import { validateWorkspaceCwd } from "../security/workspace-security.js";
 import { isArtifactSurfaceablePath } from "../runtime/artifacts/artifact-surface-policy.js";
@@ -83,6 +85,10 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
       let cwd: string;
       try { cwd = await validateWorkspaceCwd(cwdValue); }
       catch (error) { return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) }); }
+      if (pathname === "/api/kernels/execute" || pathname === "/api/kernels/execute-stream") {
+        const capability = await kernels.executionCapability();
+        if (!capability.execution_available) return reply.code(503).send({ error: capability.unavailable_reason, code: "kernel_execution_unavailable" });
+      }
       try { await environments.ensure(cwd); }
       catch (error) {
         app.log.error({ err: error, requestId: request.id, cwd }, "workspace environment provisioning failed");
@@ -119,7 +125,9 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   app.get("/api/health", async () => gatewayHealthSchema.parse({
     status: "ok",
     active_pi_processes: nodeSessionService.processCount,
-    active_kernels: kernels.status().active_count,
+    // Health polling must remain side-effect free. The full kernel status
+    // endpoint probes interpreters and is intentionally kept off this route.
+    active_kernels: kernels.activeCount(),
     service: "pi-science-server",
     control_plane: "node",
   }));
@@ -163,6 +171,8 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     });
   }
   registerEnvironmentRoutes(app, environments);
+  registerGitRoutes(app);
+  registerDownloadRoutes(app);
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);
   if (config.nodeArtifacts !== false) registerTurnArtifactRoutes(app);
   if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings, modelResources, runtimeCatalog, sqliteEnabled ? mcp : undefined);

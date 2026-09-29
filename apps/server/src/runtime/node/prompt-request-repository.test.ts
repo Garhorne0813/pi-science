@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { PromptRequestRepository, promptAssociationPath } from "./prompt-request-repository.js";
+import { metadataRoot, workspaceFile } from "../../storage/persistence.js";
 import { SessionRepository, invalidateSessionFileCache } from "./session-repository.js";
 
 const cleanup: string[] = [];
@@ -13,8 +14,8 @@ const secondClientMessageId = "91d824aa-51d3-4f63-839c-09e021b7970b";
 async function makeWorkspace(): Promise<string> {
   const cwd = await mkdtemp(join(tmpdir(), "pi-prompt-request-"));
   cleanup.push(cwd);
-  await mkdir(join(cwd, ".pi-science", "sessions"), { recursive: true });
-  await writeFile(join(cwd, ".pi-science", "sessions", `${sessionId}.jsonl`), JSON.stringify({ type: "session", id: sessionId, cwd }) + "\n", "utf8");
+  await mkdir(join(metadataRoot(cwd), "sessions"), { recursive: true });
+  await writeFile(join(metadataRoot(cwd), "sessions", `${sessionId}.jsonl`), JSON.stringify({ type: "session", id: sessionId, cwd }) + "\n", "utf8");
   invalidateSessionFileCache(cwd);
   return cwd;
 }
@@ -35,7 +36,7 @@ describe("PromptRequestRepository", () => {
     await expect(repository.prepare(cwd, sessionId, clientMessageId, "different"))
       .resolves.toEqual({ conflict: true });
 
-    const ledger = await readFile(join(cwd, ".pi-science", "prompt-requests.jsonl"), "utf8");
+    const ledger = await readFile(workspaceFile(cwd, "prompt-requests.jsonl"), "utf8");
     expect(ledger).not.toContain("private prompt payload");
     expect(await readFile(promptAssociationPath(cwd, sessionId), "utf8"))
       .toContain(clientMessageId);
@@ -46,7 +47,7 @@ describe("PromptRequestRepository", () => {
     const repository = new PromptRequestRepository(new SessionRepository(), "server-1");
     const first = await repository.prepare(cwd, sessionId, clientMessageId, "status");
     await repository.update(cwd, sessionId, clientMessageId, "accepted");
-    await appendFile(join(cwd, ".pi-science", "sessions", `${sessionId}.jsonl`), `${JSON.stringify({
+    await appendFile(join(metadataRoot(cwd), "sessions", `${sessionId}.jsonl`), `${JSON.stringify({
       type: "message",
       id: "durable-user-1",
       message: { role: "user", client_message_id: clientMessageId, content: [{ type: "text", text: "status" }] },
@@ -72,7 +73,7 @@ describe("PromptRequestRepository", () => {
     const first = new PromptRequestRepository(new SessionRepository(), "server-before-crash");
     await first.prepare(cwd, sessionId, clientMessageId, "private prompt payload");
     await first.update(cwd, sessionId, clientMessageId, "accepted");
-    const sessionPath = join(cwd, ".pi-science", "sessions", `${sessionId}.jsonl`);
+    const sessionPath = join(metadataRoot(cwd), "sessions", `${sessionId}.jsonl`);
     await appendFile(sessionPath, `${JSON.stringify({
       type: "message",
       id: "durable-user-1",

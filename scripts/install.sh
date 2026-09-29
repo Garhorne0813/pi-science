@@ -16,6 +16,7 @@ if ! pi_science_prepare_node 1; then
   exit 1
 fi
 NODE_PATH="$PI_SCIENCE_NODE_COMMAND"
+pi_science_check_sandbox || exit 1
 if ! command -v pnpm >/dev/null 2>&1; then
   echo "Error: pnpm is required. Enable it with: corepack enable pnpm" >&2
   exit 1

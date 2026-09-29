@@ -1,7 +1,7 @@
 import { appendJsonLine, readJsonLines, workspaceFile } from "../../storage/persistence.js";
 
 /** Persisted per-turn artifact summary (the "files this turn produced"
- *  preview). Kept in `<workspace>/.pi-science/turn-artifacts.jsonl` so the
+ *  preview). Kept in the workspace's private application state so the
  *  conversation UI can restore the strips after a reload without rescanning
  *  the workspace. */
 

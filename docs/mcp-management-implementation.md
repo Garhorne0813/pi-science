@@ -647,7 +647,7 @@ apps/server/src/runtime/pi/extensions/pi-science-mcp.ts
 
 职责：
 
-1. 从当前 workspace 的 `.pi-science/mcp-runtime.json` 读取控制面生成的快照；
+1. 按当前 workspace 的规范路径哈希，从全局私有状态目录读取控制面生成的 `mcp-runtime.json` 快照；
 2. 校验 version、project_id 和 schema；
 3. 调用 `createMcpAdapter({ config })`；
 4. 订阅 adapter status event；
@@ -659,7 +659,7 @@ apps/server/src/runtime/pi/extensions/pi-science-mcp.ts
 import { createMcpAdapter } from "pi-mcp-adapter";
 import { readFileSync } from "node:fs";
 
-const snapshot = parseSnapshot(readFileSync(join(workspace, ".pi-science/mcp-runtime.json"), "utf8"));
+const snapshot = parseSnapshot(readFileSync(join(workspaceStateRoot(workspace), "mcp-runtime.json"), "utf8"));
 export default createMcpAdapter({ config: { mcpServers: snapshot.mcpServers } });
 ```
 

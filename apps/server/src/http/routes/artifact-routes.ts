@@ -1,21 +1,37 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
-import { basename, extname, join } from "node:path";
+import { extname, join, relative } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { provenanceRecordSchema, type ProvenanceRecord } from "@pi-science/contracts";
+import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";
+import { artifactBlobPath, captureArtifactBlob, verifyArtifactBlob } from "../../runtime/artifacts/artifact-blob-store.js";
+import { artifactIdentity } from "../../runtime/artifacts/artifact-identity.js";
 import { appendJsonLine, appendJsonLineUnlocked, metadataRoot, readJsonLines, withFileWriteLock, workspaceFile } from "../../storage/persistence.js";
 import { persistArtifactFile } from "../../runtime/artifacts/artifact-content-store.js";
-import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { registerArtifactContentRoutes } from "./artifact-content-routes.js";
 
-interface Artifact { artifact_id: string; version: number; path: string; kind: string; mime: string; size: number; sha256: string; published_at: string; producer?: Record<string, unknown>; inputs?: unknown[]; environment?: Record<string, unknown>; verification?: Record<string, unknown> }
-const MAX_PUBLISH_BYTES = 2 * 1024 * 1024 * 1024;
+interface Artifact { artifact_id: string; version: number; path: string; kind: string; mime: string; size: number; sha256: string; blob_sha256?: string; published_at: string; producer?: Record<string, unknown>; inputs?: unknown[]; environment?: Record<string, unknown>; verification?: Record<string, unknown> }
+interface ArtifactVerificationEvent { artifact_id: string; version: number; verification: Record<string, unknown> }
 
-async function hashFile(path: string): Promise<{ sha256: string; size: number }> {
-  const hash = createHash("sha256"); let size = 0;
-  for await (const chunk of createReadStream(path)) { size += chunk.length; if (size > MAX_PUBLISH_BYTES) throw new Error("artifact is too large to publish"); hash.update(chunk); }
-  return { sha256: hash.digest("hex"), size };
+function artifactKey(artifact: Pick<Artifact, "artifact_id" | "version">): string {
+  return `${artifact.artifact_id}:${artifact.version}`;
+}
+
+async function withLatestVerification(cwd: string, artifacts: Artifact[]): Promise<Artifact[]> {
+  const events = await readJsonLines<ArtifactVerificationEvent>(workspaceFile(cwd, "artifact-verifications.jsonl"));
+  const latest = new Map(events.map((event) => [artifactKey(event), event.verification]));
+  return artifacts.map((artifact) => {
+    const verification = latest.get(artifactKey(artifact));
+    return verification ? { ...artifact, verification } : artifact;
+  });
+}
+
+async function findArtifact(cwd: string, artifactId: string, version?: number): Promise<Artifact | undefined> {
+  const rows = (await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl")))
+    .filter((row) => row.artifact_id === artifactId);
+  const item = version === undefined ? rows.at(-1) : rows.findLast((row) => row.version === version);
+  return item ? (await withLatestVerification(cwd, [item]))[0] : undefined;
 }
 
 function q(request: { query: unknown }, key: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[key]; return typeof value === "string" && value ? value : fallback; }
@@ -30,10 +46,80 @@ export async function recordProvenance(cwd: string, body: Record<string, unknown
 
 export function registerArtifactRoutes(app: FastifyInstance): void {
   registerArtifactContentRoutes(app);
-  app.get("/api/artifacts", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const query = request.query as { artifact_id?: string; limit?: string }; const all = await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl")); const filtered = query.artifact_id ? all.filter((item) => item.artifact_id === query.artifact_id) : all; return { artifacts: filtered.slice(-Math.min(1000, Math.max(1, Number(query.limit ?? 100)))).reverse() }; });
-  app.post("/api/artifacts/publish", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const body = (request.body ?? {}) as Record<string, unknown>; const path = String(body.path ?? ""); let target: string; try { target = await resolveWorkspaceFile(cwd, path); } catch (error) { return reply.code(400).send({ error: String(error) }); } let metadata; try { metadata = await stat(target); } catch { return reply.code(404).send({ error: `Artifact not found: ${path}` }); } if (!metadata.isFile()) return reply.code(400).send({ error: "Artifact path is not a file" }); let digest: { sha256: string; size: number }; try { digest = await hashFile(target); } catch (error) { return reply.code(413).send({ error: String(error) }); } const { sha256, size } = digest; const relative = target.slice(cwd.length + 1).replaceAll("\\", "/"); const artifactId = createHash("sha256").update(`${cwd}:${relative}`).digest("hex").slice(0, 24); try { await persistArtifactFile(cwd, target, sha256); } catch (error) { return reply.code(409).send({ error: String(error) }); } return withFileWriteLock(workspaceFile(cwd, "artifacts.jsonl"), async () => { const existing = (await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl"))).filter((item) => item.artifact_id === artifactId).at(-1); if (existing?.sha256 === sha256) return existing; const artifact: Artifact = { artifact_id: artifactId, version: (existing?.version ?? 0) + 1, path: relative, kind: kind(relative, mime(relative)), mime: mime(relative), size, sha256, published_at: new Date().toISOString(), producer: { tool: body.tool ?? "publish_artifact", session_id: body.session_id ?? "", model: body.model ?? null, run_id: body.run_id ?? null }, inputs: Array.isArray(body.inputs) ? body.inputs : [], environment: typeof body.environment === "object" && body.environment ? body.environment as Record<string, unknown> : {}, verification: { status: "passed", checks: { exists: true, readable: true, size, sha256 }, checked_at: new Date().toISOString() } }; await appendJsonLineUnlocked(workspaceFile(cwd, "artifacts.jsonl"), artifact); await recordProvenance(cwd, { path: relative, session_id: body.session_id ?? "artifact-publisher", tool: body.tool ?? "publish_artifact", model: body.model, run_id: body.run_id, content: `artifact:${artifactId}:${artifact.version}:${sha256}` }); return artifact; }); });
-  app.get<{ Params: { artifact_id: string } }>("/api/artifacts/:artifact_id", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const query = request.query as { version?: string }; const rows = (await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl"))).filter((item) => item.artifact_id === request.params.artifact_id); const item = query.version ? rows.find((row) => row.version === Number(query.version)) : rows.at(-1); return item ?? reply.code(404).send({ error: "Artifact not found" }); });
-  app.post("/api/artifacts/verify", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const body = (request.body ?? {}) as Record<string, unknown>; const rows = await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl")); const item = rows.filter((row) => row.artifact_id === String(body.artifact_id)).find((row) => body.version ? row.version === Number(body.version) : row.version === Math.max(...rows.filter((row) => row.artifact_id === String(body.artifact_id)).map((row) => row.version))); if (!item) return reply.code(404).send({ error: "Artifact not found" }); try { const target = await resolveWorkspaceFile(cwd, item.path); const bytes = await readFile(target); const actual = createHash("sha256").update(bytes).digest("hex"); const updated = { ...item, verification: { status: actual === item.sha256 ? "passed" : "failed", checks: { sha256: actual, expected: item.sha256 }, checked_at: new Date().toISOString() } }; await appendJsonLine(workspaceFile(cwd, "artifacts.jsonl"), updated); return updated; } catch (error) { return reply.code(404).send({ error: String(error) }); } });
+
+  app.get("/api/artifacts", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const query = request.query as { artifact_id?: string; limit?: string }; const all = await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl")); const filtered = query.artifact_id ? all.filter((item) => item.artifact_id === query.artifact_id) : all; const artifacts = filtered.slice(-Math.min(1000, Math.max(1, Number(query.limit ?? 100)))).reverse(); return { artifacts: await withLatestVerification(cwd, artifacts) }; });
+  app.post("/api/artifacts/publish", async (request, reply) => {
+    const cwd = await ws(request, reply); if (!cwd) return;
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const path = String(body.path ?? "");
+    let target: string;
+    try { target = await resolveWorkspaceFile(cwd, path); }
+    catch (error) { return reply.code(400).send({ error: String(error) }); }
+    let metadata;
+    try { metadata = await stat(target); }
+    catch { return reply.code(404).send({ error: `Artifact not found: ${path}` }); }
+    if (!metadata.isFile()) return reply.code(400).send({ error: "Artifact path is not a file" });
+    let digest: { sha256: string; size: number };
+    try { digest = await captureArtifactBlob(cwd, target); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("too large")) return reply.code(413).send({ error: message });
+      if (message.includes("Existing artifact blob failed verification")) return reply.code(409).send({ error: message });
+      throw error;
+    }
+    const { sha256, size } = digest;
+    const artifactPath = relative(cwd, target).replaceAll("\\", "/");
+    // The artifact content routes read versioned bytes from the content store,
+    // so publishing keeps both stores in sync for the same digest.
+    try { await persistArtifactFile(cwd, target, sha256); } catch (error) { return reply.code(409).send({ error: String(error) }); }
+    return withFileWriteLock(workspaceFile(cwd, "artifacts.jsonl"), async () => {
+      const artifacts = await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl"));
+      const artifactId = await artifactIdentity(cwd, artifactPath, artifacts);
+      const existing = artifacts.filter((item) => item.artifact_id === artifactId).at(-1);
+      if (existing?.sha256 === sha256 && existing.blob_sha256 === sha256) return existing;
+      const artifact: Artifact = {
+        artifact_id: artifactId, version: (existing?.version ?? 0) + 1,
+        path: artifactPath, kind: kind(artifactPath, mime(artifactPath)), mime: mime(artifactPath),
+        size, sha256, blob_sha256: sha256, published_at: new Date().toISOString(),
+        producer: { tool: body.tool ?? "publish_artifact", session_id: body.session_id ?? "", model: body.model ?? null, run_id: body.run_id ?? null },
+        inputs: Array.isArray(body.inputs) ? body.inputs : [],
+        environment: typeof body.environment === "object" && body.environment ? body.environment as Record<string, unknown> : {},
+        verification: { status: "passed", checks: { exists: true, readable: true, size, sha256 }, checked_at: new Date().toISOString() },
+      };
+      await appendJsonLineUnlocked(workspaceFile(cwd, "artifacts.jsonl"), artifact);
+      await recordProvenance(cwd, { path: artifactPath, session_id: body.session_id ?? "artifact-publisher", tool: body.tool ?? "publish_artifact", model: body.model, run_id: body.run_id, content: `artifact:${artifactId}:${artifact.version}:${sha256}` });
+      return artifact;
+    });
+  });
+  app.get<{ Params: { artifact_id: string } }>("/api/artifacts/:artifact_id", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const query = request.query as { version?: string }; const item = await findArtifact(cwd, request.params.artifact_id, query.version ? Number(query.version) : undefined); return item ?? reply.code(404).send({ error: "Artifact not found" }); });
+  app.get<{ Params: { artifact_id: string } }>("/api/artifacts/:artifact_id/content", async (request, reply) => {
+    const cwd = await ws(request, reply); if (!cwd) return;
+    const query = request.query as { version?: string };
+    const item = await findArtifact(cwd, request.params.artifact_id, query.version ? Number(query.version) : undefined);
+    if (!item) return reply.code(404).send({ error: "Artifact not found" });
+    if (!item.blob_sha256) return reply.code(409).send({ error: "Legacy artifact has no saved content" });
+    const target = artifactBlobPath(cwd, item.blob_sha256);
+    try {
+      const verified = await verifyArtifactBlob(cwd, { sha256: item.blob_sha256, size: item.size });
+      if (!verified.valid) return reply.code(409).send({ error: "Artifact content failed verification" });
+    } catch { return reply.code(404).send({ error: "Artifact content is missing" }); }
+    return reply.type(item.mime).header("content-disposition", `attachment; filename="${encodeURIComponent(item.path.split("/").at(-1) ?? "artifact")}"`).send(createReadStream(target));
+  });
+  app.post("/api/artifacts/verify", async (request, reply) => {
+    const cwd = await ws(request, reply); if (!cwd) return;
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const item = await findArtifact(cwd, String(body.artifact_id ?? ""), body.version ? Number(body.version) : undefined);
+    if (!item) return reply.code(404).send({ error: "Artifact not found" });
+    if (!item.blob_sha256) return reply.code(409).send({ error: "Legacy artifact has no saved content" });
+    const result = await verifyArtifactBlob(cwd, { sha256: item.blob_sha256, size: item.size })
+      .catch(() => null);
+    if (!result) return reply.code(404).send({ error: "Artifact content is missing" });
+    const verification = { status: result.valid ? "passed" : "failed", checks: { sha256: result.sha256, expected: item.sha256, size: result.size, expected_size: item.size }, checked_at: new Date().toISOString() };
+    await withFileWriteLock(workspaceFile(cwd, "artifact-verifications.jsonl"), async () => {
+      await appendJsonLineUnlocked(workspaceFile(cwd, "artifact-verifications.jsonl"), { artifact_id: item.artifact_id, version: item.version, verification });
+    });
+    return { ...item, verification };
+  });
   app.post("/api/artifacts/claim-check", async (request, reply) => { const body = (request.body ?? {}) as Record<string, unknown>; const values = Array.isArray(body.values) ? body.values.map(Number) : []; if (!values.length || values.some((value) => !Number.isFinite(value))) return reply.code(422).send({ error: "values must contain finite numbers" }); const direction = body.direction === undefined ? undefined : body.direction === "positive" || body.direction === "negative" ? body.direction : null; if (direction === null) return reply.code(422).send({ error: "direction must be positive or negative" }); const parseBound = (value: unknown): number | undefined => { if (value === undefined) return undefined; const parsed = Number(value); return Number.isFinite(parsed) ? parsed : undefined; }; const minimum = parseBound(body.minimum); const maximum = parseBound(body.maximum); if (body.minimum !== undefined && minimum === undefined || body.maximum !== undefined && maximum === undefined) return reply.code(422).send({ error: "minimum and maximum must be finite numbers" }); if (minimum !== undefined && maximum !== undefined && minimum > maximum) return reply.code(422).send({ error: "minimum must not exceed maximum" }); const violations = [...(direction === "positive" && values.some((value) => value < 0) ? ["values must be non-negative"] : []), ...(direction === "negative" && values.some((value) => value > 0) ? ["values must be non-positive"] : []), ...(minimum !== undefined && values.some((value) => value < minimum) ? [`values must be >= ${minimum}`] : []), ...(maximum !== undefined && values.some((value) => value > maximum) ? [`values must be <= ${maximum}`] : [])]; return { claim: String(body.claim ?? ""), status: violations.length ? "failed" : "passed", violations, summary: violations.length ? violations.join("; ") : "claim checks passed" }; });
 
   app.get("/api/provenance", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const query = request.query as { path?: string; session_id?: string; limit?: string }; let records = (await readJsonLines<unknown>(workspaceFile(cwd, "provenance.jsonl"))).flatMap((record) => { const parsed = provenanceRecordSchema.safeParse(record); return parsed.success ? [parsed.data] : []; }); if (query.path) records = records.filter((record) => record.path === query.path); if (query.session_id) records = records.filter((record) => record.sessionId === query.session_id); records.reverse(); return { records: records.slice(0, Math.min(1000, Math.max(1, Number(query.limit ?? 100)))), total: records.length }; });

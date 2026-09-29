@@ -3,11 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AiTitleService, aiTitlesEnabled, cleanTitle, PiTitleRuntimeFactory, type TitleRuntime } from "./ai-title-service.js";
+import { metadataRoot } from "../../storage/persistence.js";
 
 const cleanups: string[] = [];
 
 async function makeSession(cwd: string, sessionId: string, rows: Array<{ role: string; text: string }>) {
-  const root = join(cwd, ".pi-science", "sessions");
+  const root = join(metadataRoot(cwd), "sessions");
   await mkdir(root, { recursive: true });
   const file = join(root, `${sessionId}.jsonl`);
   const header = JSON.stringify({
@@ -114,8 +115,8 @@ describe("AiTitleService", () => {
     process.env.PI_CLI_PATH = "/nonexistent-pi-cli";
     const factory = new PiTitleRuntimeFactory(manager as never, { environment: async () => ({}) } as never);
     const runtime = await factory.start(cwd);
-    expect(runtimeSessionDir).toContain(join(cwd, ".pi-science", "title-runtimes"));
-    expect(runtimeSessionDir).not.toBe(join(cwd, ".pi-science", "sessions"));
+    expect(runtimeSessionDir).toContain(join(metadataRoot(cwd), "title-runtimes"));
+    expect(runtimeSessionDir).not.toBe(join(metadataRoot(cwd), "sessions"));
     await expect(access(runtimeSessionDir)).resolves.toBeUndefined();
     await runtime.dispose();
     expect(stopped).toHaveLength(1);

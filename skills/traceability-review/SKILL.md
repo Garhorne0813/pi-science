@@ -66,11 +66,10 @@ and fall back to whatever text you can read — do not fabricate identifiers.
 
 ## Check 3 · Figure ↔ code consistency
 
-1. Read `.pi-science/provenance.jsonl` in the workspace — one JSON record per
-   line: `{path, version, ts, tool, content, …}`; `ts` is epoch seconds. It
-   records every file version the agent wrote. The directory is hidden: read
-   the file directly (`cat .pi-science/provenance.jsonl`) instead of relying
-   on `ls`. Fall back to file mtimes only when the file is truly absent.
+1. Use provenance records supplied through the app's supported provenance
+   view when they are available. Private provenance storage is outside the
+   workspace and must not be accessed directly. Fall back to file mtimes when
+   the app has not supplied provenance records to the review.
 2. For each figure the document references:
    - Latest record `ts` for the figure file (fall back to file mtime when the
      figure has no record).

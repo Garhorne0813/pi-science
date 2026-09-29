@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { access, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../../app/app.js";
@@ -7,6 +7,7 @@ import type { ServerConfig } from "../../config/config.js";
 import { nodeSessionService } from "../../runtime/node/node-session-service.js";
 import { ResearchRepository } from "../../research-loop/repository.js";
 import { createServerModules } from "../../app/server-modules.js";
+import { metadataRoot, workspaceFile } from "../../storage/persistence.js";
 // Full runtime-only cases need a configured Pi Orbit catalog. Unit tests inject
 // their own catalog fixtures; these integration cases remain opt-in locally.
 const piAiCatalogAvailable = false;
@@ -506,7 +507,7 @@ describe("native control-plane business routes", () => {
       expect.objectContaining({ label: "cluster", host: "compute.example.org", port: 22, auth_method: "password", identity_file: "~/.ssh/id_rsa" }),
     ]);
     expect(saved.body).not.toContain("do-not-save");
-    expect(await readFile(join(cwd, ".pi-science", "compute.json"), "utf8")).not.toContain("do-not-save");
+    expect(await readFile(workspaceFile(cwd, "compute.json"), "utf8")).not.toContain("do-not-save");
 
     const invalidPort = await app.inject({
       method: "POST",
@@ -548,7 +549,7 @@ describe("native control-plane business routes", () => {
       expect.objectContaining({ name: "counted-workspace", path: cwd, project_id: expect.stringMatching(/^project_/), session_count: 2 }),
     ]);
     expect(response.json()[0].last_modified).not.toBe("");
-    const project = JSON.parse(await readFile(join(cwd, ".pi-science", "project.json"), "utf8")) as { id?: string; name?: string };
+    const project = JSON.parse(await readFile(workspaceFile(cwd, "project.json"), "utf8")) as { id?: string; name?: string };
     expect(project).toMatchObject({ id: response.json()[0].project_id, name: "counted-workspace" });
   });
 
@@ -581,6 +582,32 @@ describe("native control-plane business routes", () => {
     ]);
   });
 
+  it("recovers project history after an external workspace rename", async () => {
+    const sandbox = join(tmpdir(), `pi-science-external-rename-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const before = join(sandbox, "before");
+    const after = join(sandbox, "after");
+    tempDirs.push(sandbox);
+    await mkdir(before, { recursive: true });
+    process.env.PI_SCIENCE_HOME = join(sandbox, "home");
+    process.env.PI_SCIENCE_WORKSPACES = join(sandbox, "managed");
+    const modules = createServerModules(config(), { sqliteEnabled: true });
+    const app = buildApp(config(), modules);
+    apps.push(app);
+    const first = await app.inject({ method: "POST", url: "/api/workspaces/open", payload: { path: before } });
+    expect(first.statusCode).toBe(200);
+    await app.inject({ method: "POST", url: "/api/workspaces/pin", payload: { path: before } });
+    const state = metadataRoot(before);
+    await mkdir(join(state, "sessions"), { recursive: true });
+    await writeFile(join(state, "sessions", "saved.jsonl"), `${JSON.stringify({ type: "session", id: "saved", cwd: before, timestamp: "2026-07-24T01:00:00.000Z" })}\n`);
+    await writeFile(join(state, "artifact-proof"), "retained");
+    await rename(before, after);
+    const reopened = await app.inject({ method: "POST", url: "/api/workspaces/open", payload: { path: after } });
+    expect(reopened.statusCode).toBe(200);
+    expect(reopened.json()).toMatchObject({ project_id: first.json().project_id, session_count: 1 });
+    expect(await readFile(join(metadataRoot(after), "artifact-proof"), "utf8")).toBe("retained");
+    expect((await app.inject({ method: "GET", url: "/api/workspaces/pinned" })).json()).toEqual({ paths: [await realpath(after)] });
+  });
+
   it("installs a demo workspace from the shipped assets and reuses it on a repeat install", async () => {
     const root = join(tmpdir(), `pi-science-demo-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     tempDirs.push(root);
@@ -593,7 +620,8 @@ describe("native control-plane business routes", () => {
     expect(installed.statusCode).toBe(200);
     expect(installed.json()).toMatchObject({ name: "Molecular Playground", path: join(root, "Molecular Playground"), session_count: 0 });
     const path = installed.json().path as string;
-    expect((await stat(join(path, ".pi-science"))).isDirectory()).toBe(true);
+    await expect(stat(join(path, ".pi-science"))).rejects.toThrow();
+    expect((await stat(metadataRoot(path))).isDirectory()).toBe(true);
     expect((await stat(join(path, "data", "1LYS.pdb"))).isFile()).toBe(true);
     expect((await app.inject({ method: "GET", url: "/api/workspaces" })).json()).toEqual([
       expect.objectContaining({ name: "Molecular Playground" }),
@@ -738,7 +766,8 @@ describe("native control-plane business routes", () => {
 
     expect(renamed.statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/api/workspaces/pinned" })).json()).toEqual({ paths: [join(alias, "renamed")] });
-    await expect(stat(join(managed, "renamed", ".pi-science"))).resolves.toBeDefined();
+    await expect(stat(join(managed, "renamed", ".pi-science"))).rejects.toThrow();
+    await expect(stat(metadataRoot(join(managed, "renamed")))).resolves.toBeDefined();
   });
 
   it("rejects workspace deletion through a symlink or junction before recursive removal", async () => {
@@ -870,7 +899,7 @@ describe("native control-plane business routes", () => {
     expect(read.statusCode).toBe(200);
     expect(read.json()).toMatchObject({ path: "results/renamed.txt", data: "hello" });
 
-    const provenance = (await readFile(join(cwd, ".pi-science", "provenance.jsonl"), "utf8")).trim().split(/\r?\n/).map((line) => JSON.parse(line) as { path: string; diff?: string });
+    const provenance = (await readFile(workspaceFile(cwd, "provenance.jsonl"), "utf8")).trim().split(/\r?\n/).map((line) => JSON.parse(line) as { path: string; diff?: string });
     expect(provenance).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "incoming/nested.txt" }),
       expect.objectContaining({ path: "results/renamed.txt", diff: "incoming/nested.txt -> results/renamed.txt" }),

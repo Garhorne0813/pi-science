@@ -7,6 +7,8 @@ import type { ServerConfig } from "../config/config.js";
 import { ProjectReviewService } from "./service.js";
 import { parseReviewResult, type ReviewRunRequest, type ReviewRunResult, type ReviewSubagentRunner } from "./types.js";
 import { createServerModules } from "../app/server-modules.js";
+import { metadataRoot, workspaceFile } from "../storage/persistence.js";
+import { ensureProject } from "../project/project-registry.js";
 
 const apps: Array<{ close(): Promise<unknown> }> = [];
 const cleanup: string[] = [];
@@ -23,17 +25,19 @@ function config(): ServerConfig {
 async function workspace(sessionId = "session-a", messages = 2): Promise<string> {
   const cwd = join(tmpdir(), `pi-science-review-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   cleanup.push(cwd);
-  await mkdir(join(cwd, ".pi-science", "sessions"), { recursive: true });
+  await mkdir(cwd, { recursive: true });
+  await ensureProject(cwd);
+  await mkdir(join(metadataRoot(cwd), "sessions"), { recursive: true });
   const rows = [JSON.stringify({ type: "session", id: sessionId, cwd, timestamp: new Date().toISOString() })];
   for (let index = 0; index < messages; index += 1) {
     rows.push(JSON.stringify({ type: "message", id: `message-${index}`, timestamp: new Date().toISOString(), message: { role: index % 2 === 0 ? "user" : "assistant", content: [{ type: "text", text: `turn ${index} about buffer pH` }] } }));
   }
-  await writeFile(join(cwd, ".pi-science", "sessions", `${sessionId}.jsonl`), `${rows.join("\n")}\n`, "utf8");
+  await writeFile(join(metadataRoot(cwd), "sessions", `${sessionId}.jsonl`), `${rows.join("\n")}\n`, "utf8");
   return realpath(cwd);
 }
 
 async function readState(cwd: string): Promise<{ items: Array<Record<string, unknown>>; proposals: Array<Record<string, unknown>>; policy: Record<string, unknown> }> {
-  return JSON.parse(await readFile(join(cwd, ".pi-science", "project-state.json"), "utf8"));
+  return JSON.parse(await readFile(workspaceFile(cwd, "project-state.json"), "utf8"));
 }
 
 class FakeReviewRunner implements ReviewSubagentRunner {
@@ -115,7 +119,7 @@ describe("POST /api/project-knowledge/review", () => {
       operations: [],
       source: { session_id: "session-a", message_ids: ["message-0"], files: ["notes.md"], run_ids: [], citations: [] },
     });
-    const ledger = JSON.parse(await readFile(join(cwd, ".pi-science", "memory", "ledger.json"), "utf8")) as { proposals: Array<Record<string, unknown>> };
+    const ledger = JSON.parse(await readFile(join(metadataRoot(cwd), "memory", "ledger.json"), "utf8")) as { proposals: Array<Record<string, unknown>> };
     expect(ledger.proposals[0]).toMatchObject({ scope: "project", approval: { required: "manual", status: "pending" } });
     expect((ledger.proposals[0]?.source as { evidence?: unknown[] }).evidence).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "message", locator: "session-a@message-0" }),
@@ -161,7 +165,7 @@ describe("POST /api/project-knowledge/review", () => {
     expect(state.items).toHaveLength(2);
     expect(state.items.map((item) => item.proposal_id)).toEqual(proposalIds);
     expect(state.items.map((item) => item.title)).toEqual(["Buffer pH drifts", "Use fresh buffer"]);
-    const ledger = JSON.parse(await readFile(join(cwd, ".pi-science", "memory", "ledger.json"), "utf8")) as { records: Array<Record<string, unknown>>; decisions: Array<Record<string, unknown>> };
+    const ledger = JSON.parse(await readFile(join(metadataRoot(cwd), "memory", "ledger.json"), "utf8")) as { records: Array<Record<string, unknown>>; decisions: Array<Record<string, unknown>> };
     expect(ledger.records).toHaveLength(2);
     expect(ledger.records.every((item) => (item.approval as { status?: string }).status === "approved")).toBe(true);
     expect(ledger.decisions).toEqual(expect.arrayContaining([
@@ -187,14 +191,14 @@ describe("POST /api/project-knowledge/review", () => {
     const state = await readState(cwd);
     expect(state.proposals.every((proposal) => proposal.status === "accepted")).toBe(true);
     expect(state.items.map((item) => item.proposal_id).sort()).toEqual([...proposalIds].sort());
-    const ledger = JSON.parse(await readFile(join(cwd, ".pi-science", "memory", "ledger.json"), "utf8")) as { decisions: Array<Record<string, unknown>> };
+    const ledger = JSON.parse(await readFile(join(metadataRoot(cwd), "memory", "ledger.json"), "utf8")) as { decisions: Array<Record<string, unknown>> };
     expect(ledger.decisions.filter((decision) => decision.action === "accepted")).toHaveLength(2);
   });
 
   it("recovers accepted knowledge proposals written without corresponding items", async () => {
     const cwd = await workspace();
     const at = new Date().toISOString();
-    await writeFile(join(cwd, ".pi-science", "project-state.json"), JSON.stringify({
+    await writeFile(workspaceFile(cwd, "project-state.json"), JSON.stringify({
       items: [],
       proposals: [{
         id: "proposal-legacy-batch",
@@ -290,7 +294,7 @@ describe("POST /api/project-knowledge/review", () => {
 describe("project review policy gate", () => {
   it("skips an automatic review when policy.auto_review is disabled", async () => {
     const cwd = await workspace();
-    await writeFile(join(cwd, ".pi-science", "project-state.json"), JSON.stringify({ items: [], proposals: [], project_versions: [], policy: { auto_review: false }, history: [] }), "utf8");
+    await writeFile(workspaceFile(cwd, "project-state.json"), JSON.stringify({ items: [], proposals: [], project_versions: [], policy: { auto_review: false }, history: [] }), "utf8");
     const runner = new FakeReviewRunner();
     const review = new ProjectReviewService(runner);
 
@@ -320,7 +324,7 @@ describe("project review policy gate", () => {
     expect(initial.json().auto_review).toBe(false);
 
     const optedIn = await workspace("session-b");
-    await writeFile(join(optedIn, ".pi-science", "project-state.json"), JSON.stringify({ items: [], proposals: [], project_versions: [], policy: { auto_review: true }, history: [] }), "utf8");
+    await writeFile(workspaceFile(optedIn, "project-state.json"), JSON.stringify({ items: [], proposals: [], project_versions: [], policy: { auto_review: true }, history: [] }), "utf8");
     const stored = await app.inject({ method: "GET", url: `/api/project-knowledge/policy?cwd=${encodeURIComponent(optedIn)}` });
     expect(stored.json().auto_review).toBe(true);
     // The stored opt-in survives an unrelated policy write.
@@ -330,7 +334,7 @@ describe("project review policy gate", () => {
 
   it("runs an automatic review once the workspace has opted in", async () => {
     const cwd = await workspace();
-    await writeFile(join(cwd, ".pi-science", "project-state.json"), JSON.stringify({ items: [], proposals: [], project_versions: [], policy: { auto_review: true }, history: [] }), "utf8");
+    await writeFile(workspaceFile(cwd, "project-state.json"), JSON.stringify({ items: [], proposals: [], project_versions: [], policy: { auto_review: true }, history: [] }), "utf8");
     const runner = new FakeReviewRunner();
     const review = new ProjectReviewService(runner);
 
@@ -340,7 +344,7 @@ describe("project review policy gate", () => {
 
   it("ignores the policy gate for a manual review", async () => {
     const cwd = await workspace();
-    await writeFile(join(cwd, ".pi-science", "project-state.json"), JSON.stringify({ items: [], proposals: [], project_versions: [], policy: { auto_review: false }, history: [] }), "utf8");
+    await writeFile(workspaceFile(cwd, "project-state.json"), JSON.stringify({ items: [], proposals: [], project_versions: [], policy: { auto_review: false }, history: [] }), "utf8");
     const runner = new FakeReviewRunner();
 
     await expect(new ProjectReviewService(runner).run(cwd, { sessionId: "session-a", trigger: "manual" })).resolves.toMatchObject({ created: 1 });

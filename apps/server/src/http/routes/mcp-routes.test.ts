@@ -2,13 +2,24 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Fastify from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpConnectorService } from "../../mcp/connector-service.js";
-import { McpRuntimeProjection } from "../../mcp/runtime-projection.js";
+import { McpRuntimeProjection, MCP_RUNTIME_CACHE_VERSION } from "../../mcp/runtime-projection.js";
 import { McpRepository } from "../../storage/sqlite/repositories/mcp-repository.js";
 import { WorkspaceRepository } from "../../storage/sqlite/repositories/workspace-repository.js";
 import { InMemorySqliteStateStore } from "../../storage/sqlite/state-store.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
+import { workspaceFile } from "../../storage/persistence.js";
+
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:dns/promises")>();
+  return {
+    ...original,
+    lookup: (hostname: string) => hostname === "example.com"
+      ? Promise.resolve([{ address: "93.184.216.34", family: 4 }])
+      : original.lookup(hostname, { all: true, verbatim: true }),
+  };
+});
 
 const stores: InMemorySqliteStateStore[] = [];
 const directories: string[] = [];
@@ -39,12 +50,12 @@ describe("canonical MCP routes", () => {
 
     const listed = await app.inject({ method: "GET", url: "/api/mcp/connectors" });
     expect(listed.json().connectors).toHaveLength(1);
-    const snapshot = JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8"));
+    const snapshot = JSON.parse(await readFile(workspaceFile(cwd, "mcp-runtime.json"), "utf8"));
     expect(snapshot.mcpServers["local-tools"]).toMatchObject({ command: process.execPath, args: ["server.js"], cwd: "src", approveTools: true });
 
     const disabled = await app.inject({ method: "PUT", url: `/api/mcp/connectors/${connector.connector_id}/settings`, payload: { enabled: false, include_tools: [], exclude_tools: [], approval_mode: "ask", revision: connector.settings.revision } });
     expect(disabled.statusCode).toBe(200);
-    expect(JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8")).mcpServers).toEqual({});
+    expect(JSON.parse(await readFile(workspaceFile(cwd, "mcp-runtime.json"), "utf8")).mcpServers).toEqual({});
 
     expect((await app.inject({ method: "DELETE", url: `/api/mcp/connectors/${connector.connector_id}` })).statusCode).toBe(204);
     await app.close();
@@ -75,7 +86,7 @@ describe("canonical MCP routes", () => {
     expect(saved.json()).toMatchObject({ configured: true, backend: "managed", delivery: "bearer", target_name: "Authorization" });
     expect(JSON.stringify(saved.json())).not.toContain("super-secret-token");
     await service.setSettings(connector.connector_id, { enabled: true, include_tools: [], exclude_tools: [], approval_mode: "ask", revision: connector.settings.revision });
-    const snapshot = await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8");
+    const snapshot = await readFile(workspaceFile(cwd, "mcp-runtime.json"), "utf8");
     expect(snapshot).not.toContain("super-secret-token");
     expect(JSON.parse(snapshot).mcpServers["remote-auth"].__piScienceHeaders.Authorization).toMatchObject({ kind: "credential", prefix: "Bearer " });
     expect((await service.repository.toolCache(connector.connector_id))?.tools).toHaveLength(1);
@@ -91,7 +102,7 @@ describe("canonical MCP routes", () => {
     const { app, cwd, service } = await fixture();
     const connector = await service.create({ name: "uncached", display_name: "Uncached", transport: "stdio", command: process.execPath, runtime_config: {}, enabled: true });
     await service.setToolGrant(connector.connector_id, "explicitly_allowed", "allow");
-    const snapshot = JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8"));
+    const snapshot = JSON.parse(await readFile(workspaceFile(cwd, "mcp-runtime.json"), "utf8"));
     expect(snapshot.mcpServers.uncached).toMatchObject({ approveTools: true, __piScienceAllowedTools: ["explicitly_allowed"] });
     expect(await service.tools(connector.connector_id)).toMatchObject({ tools: [] });
     await app.close();
@@ -115,15 +126,15 @@ describe("canonical MCP routes", () => {
     const otherProjectView = await app.inject({ method: "GET", url: `/api/mcp/connectors/${connector.connector_id}/tools?cwd=${encodeURIComponent(otherCwd)}` });
     expect(otherProjectView.json().scope).toBe("project");
     expect(otherProjectView.json().tools).toEqual([expect.objectContaining({ decision: "allow", decision_scope: "global" })]);
-    const currentSnapshot = JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8"));
-    const otherSnapshot = JSON.parse(await readFile(join(otherCwd, ".pi-science", "mcp-runtime.json"), "utf8"));
+    const currentSnapshot = JSON.parse(await readFile(workspaceFile(cwd, "mcp-runtime.json"), "utf8"));
+    const otherSnapshot = JSON.parse(await readFile(workspaceFile(otherCwd, "mcp-runtime.json"), "utf8"));
     expect(currentSnapshot.mcpServers.scoped).toMatchObject({ excludeTools: ["safe"] });
     expect(otherSnapshot.mcpServers.scoped).toMatchObject({ __piScienceAllowedTools: ["safe"] });
 
     const reset = await app.inject({ method: "DELETE", url: `/api/mcp/connectors/${connector.connector_id}/tools/safe?cwd=${encodeURIComponent(cwd)}` });
     expect(reset.statusCode).toBe(204);
     expect((await service.tools(connector.connector_id, cwd)).tools).toEqual([expect.objectContaining({ decision: "allow", decision_scope: "global" })]);
-    expect(JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8")).mcpServers.scoped)
+    expect(JSON.parse(await readFile(workspaceFile(cwd, "mcp-runtime.json"), "utf8")).mcpServers.scoped)
       .toMatchObject({ __piScienceAllowedTools: ["safe"] });
     await app.close();
   });
@@ -174,8 +185,8 @@ describe("canonical MCP routes", () => {
       expect.objectContaining({ name: "target-discovery", tool_count: 4, settings: expect.objectContaining({ enabled: false }) }),
       expect.objectContaining({ name: "chembl", tool_count: 4, settings: expect.objectContaining({ enabled: false }) }),
     ]));
-    const runtimeSnapshot = JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8"));
-    expect(runtimeSnapshot.mcpServers["paper-search"]).toMatchObject({ __piScienceCacheVersion: 3, __piScienceToolCount: 5 });
+    const runtimeSnapshot = JSON.parse(await readFile(workspaceFile(cwd, "mcp-runtime.json"), "utf8"));
+    expect(runtimeSnapshot.mcpServers["paper-search"]).toMatchObject({ __piScienceCacheVersion: MCP_RUNTIME_CACHE_VERSION, __piScienceToolCount: 5 });
 
     const proteinRecords = connectors.find((item) => item.name === "protein-records")!;
     await service.setSettings(proteinRecords.connector_id, {
@@ -185,7 +196,7 @@ describe("canonical MCP routes", () => {
       approval_mode: "ask",
       revision: proteinRecords.settings.revision,
     });
-    const proteinSnapshot = JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8"));
+    const proteinSnapshot = JSON.parse(await readFile(workspaceFile(cwd, "mcp-runtime.json"), "utf8"));
     expect(proteinSnapshot.mcpServers["protein-records"].directTools).toEqual(["get_uniprot_entry"]);
 
     expect(await service.credential("mcp_builtin_paper_search")).toMatchObject({ capability: "optional", suggested_target_name: "NCBI_API_KEY" });
@@ -250,7 +261,7 @@ describe("canonical MCP routes", () => {
     const grant = await app.inject({ method: "PUT", url: "/api/mcp/connectors/mcp_builtin_paper_search/tools/search_pubmed", payload: { decision: "allow" } });
     expect(grant.statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/api/mcp/connectors" })).json().connectors.find((item: { name: string }) => item.name === "paper-search").settings.approval_mode).toBe("custom");
-    expect(JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8")).mcpServers["paper-search"])
+    expect(JSON.parse(await readFile(workspaceFile(cwd, "mcp-runtime.json"), "utf8")).mcpServers["paper-search"])
       .toMatchObject({ approveTools: true, __piScienceAllowedTools: ["search_pubmed"] });
     await app.close();
   });

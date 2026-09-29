@@ -1,9 +1,11 @@
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { researchLoopSchema } from "@pi-science/contracts";
 import { JobCoordinator, type JobRecord } from "../runtime/jobs/job-coordinator.js";
+import { artifactBlobPath } from "../runtime/artifacts/artifact-blob-store.js";
+import { metadataRoot } from "../storage/persistence.js";
 import { snapshotCandidate } from "./candidate-snapshot.js";
 import { ResearchLoopCoordinator } from "./coordinator.js";
 import { activeWallMs, stopReason } from "./stop-policy.js";
@@ -12,6 +14,10 @@ import type { AgentRunRequest, AgentRunResult, AgentRunUsage, ResearchSubagentRu
 const cleanup: string[] = [];
 const coordinators: ResearchLoopCoordinator[] = [];
 const jobs: JobCoordinator[] = [];
+
+// Sandy creates and tears down a fresh AppContainer for every native job.
+// Multi-candidate loop tests need more wall time on the Windows CI runner.
+if (process.platform === "win32") vi.setConfig({ testTimeout: 60_000 });
 
 afterEach(async () => {
   await Promise.allSettled(coordinators.splice(0).map((coordinator) => coordinator.shutdown()));
@@ -65,6 +71,11 @@ class FakeRunner implements ResearchSubagentRunner {
       const score = this.scores[Math.min(this.candidateCalls, this.scores.length - 1)] ?? null;
       this.candidateCalls += 1;
       const write = score === null ? "" : `printf '%s\\n' '{"score":${score}}' > "$PI_SCIENCE_OUTPUT_DIR/result.json"\n`;
+      const windows = process.platform === "win32";
+      const entrypoint = windows ? "solve.cjs" : "solve.sh";
+      const source = windows
+        ? score === null ? "// Intentionally produce no result artifact.\n" : `require('node:fs').writeFileSync(require('node:path').join(process.env.PI_SCIENCE_OUTPUT_DIR, 'result.json'), JSON.stringify({score:${score}}));`
+        : `#!/usr/bin/env bash\nset -eu\nmkdir -p "$PI_SCIENCE_OUTPUT_DIR"\n${write}`;
       return {
         run_id: request.operation_id,
         model_tokens: 10,
@@ -74,10 +85,8 @@ class FakeRunner implements ResearchSubagentRunner {
           proposal: {
             approach_summary: `candidate ${this.candidateCalls}`,
             rationale: "deterministic fixture",
-            files: {
-              "solve.sh": `#!/usr/bin/env bash\nset -eu\nmkdir -p "$PI_SCIENCE_OUTPUT_DIR"\n${write}`,
-            },
-            entrypoint: "solve.sh",
+            files: { [entrypoint]: source },
+            entrypoint,
             parent_candidate_ids: [],
             expected_artifacts: [{ path: "result.json", kind: "data" }],
           },
@@ -148,6 +157,11 @@ class SleepingRunner implements ResearchSubagentRunner {
   constructor(private readonly body = defaultSleepBody) {}
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
+    const windows = process.platform === "win32";
+    const entrypoint = windows ? "solve.cjs" : "solve.sh";
+    const source = windows
+      ? "require('node:fs').writeFileSync(require('node:path').join(process.env.PI_SCIENCE_OUTPUT_DIR, 'descendant-ready'), 'ready'); setTimeout(() => {}, 30000);"
+      : `#!/usr/bin/env bash\n${this.body}`;
     return {
       run_id: request.operation_id,
       model_tokens: 1,
@@ -155,8 +169,8 @@ class SleepingRunner implements ResearchSubagentRunner {
       output: {
         kind: "candidate",
         proposal: {
-          approach_summary: "sleep", rationale: "", files: { "solve.sh": `#!/usr/bin/env bash\n${this.body}` },
-          entrypoint: "solve.sh", parent_candidate_ids: [], expected_artifacts: [],
+          approach_summary: "sleep", rationale: "", files: { [entrypoint]: source },
+          entrypoint, parent_candidate_ids: [], expected_artifacts: [],
         },
       },
     };
@@ -218,8 +232,66 @@ async function configuredLoop(coordinator: ResearchLoopCoordinator, cwd: string,
   return preflight.loop;
 }
 
+it("measures a baseline and candidates with the approved workspace benchmark", async () => {
+  const cwd = await workspace();
+  const benchmark = process.platform === "win32" ? "measure.cjs" : "measure.sh";
+  await writeFile(join(cwd, benchmark), process.platform === "win32"
+    ? `require('node:fs').writeFileSync(process.env.PI_SCIENCE_EVALUATION_PATH, JSON.stringify({metrics:{score:process.env.PI_SCIENCE_BASELINE === '1' ? 1 : 2}}));`
+    : `#!/usr/bin/env bash
+set -eu
+if [ "$PI_SCIENCE_BASELINE" = "1" ]; then value=1; else value=2; fi
+printf '{"metrics":{"score":%s}}\\n' "$value" > "$PI_SCIENCE_EVALUATION_PATH"
+`);
+  const submittedJobs = jobCoordinator();
+  const coordinator = new ResearchLoopCoordinator(submittedJobs, new FakeRunner([0.95]));
+  coordinators.push(coordinator);
+  const registered = await coordinator.registerEvaluator(cwd, {
+    evaluator_id: "fixed-benchmark", version: 1, digest: "server-computed", status: "approved",
+    metrics: [{ name: "score", direction: "maximize" }], hard_checks: [],
+    command: ["workspace-benchmark", benchmark],
+  });
+  const loop = await coordinator.create(cwd, {
+    title: "Measure", objective: "Improve score",
+    evaluator_ref: { evaluator_id: "fixed-benchmark", version: 1, digest: registered.evaluator.digest },
+    stop_conditions: { target_metrics: { score: 2 } }, budget: { max_candidates: 1, max_wall_seconds: 60 },
+  });
+  const preflight = await coordinator.preflight(cwd, loop.loop_id);
+  expect(preflight.ok).toBe(true);
+  expect(preflight.loop.baseline).toEqual({ score: 1 });
+  expect(preflight.loop.baseline_job_id).toMatch(/^job_/);
+  const baselineJob = await submittedJobs.get(cwd, preflight.loop.baseline_job_id!);
+  expect(baselineJob?.command.at(-1)).toContain(join("evaluators", registered.evaluator.digest.slice(7)));
+  expect(baselineJob?.command.at(-1)).not.toBe(join(cwd, benchmark));
+  await coordinator.action(cwd, loop.loop_id, "start");
+  const detail = await waitFor(() => coordinator.detail(cwd, loop.loop_id), (value) => value?.status === "completed", 10_000);
+  expect(detail?.candidates[0]?.evaluation?.metrics.score?.value).toBe(2);
+  expect(detail?.candidates[0]?.evaluation?.metrics.score?.value).not.toBe(0.95);
+});
+
+it("rejects a benchmark changed after registration", async () => {
+  const cwd = await workspace();
+  const benchmark = process.platform === "win32" ? "measure.cjs" : "measure.sh";
+  const script = join(cwd, benchmark);
+  await writeFile(script, process.platform === "win32" ? "process.exit(0);" : "#!/usr/bin/env bash\nexit 0\n");
+  const coordinator = new ResearchLoopCoordinator(jobCoordinator(), new FakeRunner());
+  coordinators.push(coordinator);
+  const { evaluator } = await coordinator.registerEvaluator(cwd, {
+    evaluator_id: "changed-benchmark", version: 1, digest: "server-computed", status: "approved",
+    metrics: [{ name: "score", direction: "maximize" }], hard_checks: [],
+    command: ["workspace-benchmark", benchmark],
+  });
+  const loop = await coordinator.create(cwd, {
+    title: "Measure", objective: "Improve score",
+    evaluator_ref: { evaluator_id: evaluator.evaluator_id, version: 1, digest: evaluator.digest },
+  });
+  await writeFile(script, process.platform === "win32" ? "process.exit(1);" : "#!/usr/bin/env bash\nexit 1\n");
+  const preflight = await coordinator.preflight(cwd, loop.loop_id);
+  expect(preflight.ok).toBe(false);
+  expect(preflight.blockers.join(" ")).toContain("benchmark script changed");
+});
+
 async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean, timeoutMs = 8_000, diagnostics?: () => Promise<unknown>): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + timeoutMs * (process.platform === "win32" ? 3 : 1);
   let last: T;
   for (;;) {
     const value = await read();
@@ -231,7 +303,7 @@ async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean,
 }
 
 async function jobLockDiagnostics(cwd: string): Promise<unknown> {
-  const jobsDir = join(cwd, ".pi-science", "jobs");
+  const jobsDir = join(metadataRoot(cwd), "jobs");
   const names = await readdir(jobsDir).catch(() => []);
   return Promise.all(names.map(async (name) => {
     const path = join(jobsDir, name);
@@ -326,9 +398,16 @@ describe("subagent research loop", () => {
     expect(detail?.stop_reason).toBe("target_metrics_reached");
     expect(detail?.candidates).toHaveLength(2);
     expect(detail?.candidates.at(-1)?.evaluation?.metrics.score?.value).toBe(0.95);
+    const output = detail?.candidates.at(-1)?.evaluation?.artifact_refs[0];
+    expect(output).toMatchObject({ path: "result.json", kind: "data", version: 1 });
+    expect(output?.artifact_id).toBeTruthy();
+    expect(await readFile(artifactBlobPath(cwd, output!.sha256!), "utf8")).toContain('"score":0.95');
+    const manifest = (await readFile(join(metadataRoot(cwd), "artifacts.jsonl"), "utf8"))
+      .trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(manifest.at(-1)).toMatchObject({ artifact_id: output?.artifact_id, version: output?.version, producer: { loop_id: loop.loop_id, candidate_id: detail?.candidates.at(-1)?.candidate_id } });
     expect(runner.candidateCalls).toBe(2);
     expect(runner.analysisCalls).toBe(1);
-  }, 15_000);
+  }, process.platform === "win32" ? 45_000 : 15_000);
 
   it("passes the research task and evaluator contract into candidate generation", async () => {
     const cwd = await workspace();
@@ -359,7 +438,7 @@ describe("subagent research loop", () => {
       },
       budget_remaining: 4,
     });
-  }, 15_000);
+  }, process.platform === "win32" ? 45_000 : 15_000);
 
   it("recovers a lost reserved agent operation and retries it without duplicate candidate execution", async () => {
     const cwd = await workspace();
@@ -478,7 +557,7 @@ describe("subagent research loop", () => {
     expect(operation?.error).toMatch(/result\.json/);
     const records = await coordinator.repository(cwd).records();
     expect(records.some((row) => row.record_type === "loop.state_changed" && row.payload.status === "needs_attention")).toBe(false);
-  }, 20_000);
+  }, process.platform === "win32" ? 60_000 : 20_000);
 
   it("keeps a proposal generated while pausing and executes it after resume", async () => {
     const cwd = await workspace();
@@ -654,7 +733,7 @@ describe("subagent research loop", () => {
     expect(detail?.status).toBe("completed");
     expect(detail?.stop_reason).toBe("patience_exhausted");
     expect(detail?.candidates).toHaveLength(3);
-  }, 20_000);
+  }, process.platform === "win32" ? 60_000 : 20_000);
 
   it("charges the budget for the tokens a failed agent run already spent", async () => {
     const cwd = await workspace();

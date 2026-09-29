@@ -233,7 +233,7 @@ $StateWritten = $false
 
 try {
     Write-Host "==> Starting Node control plane on http://127.0.0.1:$ControlPlanePort"
-    $controlArguments = '"' + $ControlPlaneCli + '" watch src/app/main.ts'
+    $controlArguments = '"' + $ControlPlaneCli + '" src/app/main.ts'
     $ControlPlaneProcess = Start-Process -FilePath $NodePath -ArgumentList $controlArguments -WorkingDirectory (Join-Path $ProjectDir "apps\server") -RedirectStandardOutput $ControlLog -RedirectStandardError $ControlErrorLog -NoNewWindow -PassThru
 
     $controlDeadline = (Get-Date).AddSeconds($StartupTimeout)
@@ -280,13 +280,22 @@ try {
     Write-Host "  Logs:                $RuntimeDir"
     Write-Host "Press Ctrl+C to stop."
 
+    $failedHealthChecks = 0
     while ($true) {
-        Start-Sleep -Seconds 1
+        Start-Sleep -Seconds 2
         if ($ControlPlaneProcess.HasExited) {
             throw "Control plane exited. See $ControlLog and $ControlErrorLog"
         }
         if ($FrontendProcess.HasExited) {
             throw "Frontend exited. See $FrontendLog and $FrontendErrorLog"
+        }
+        if (Test-HttpReady -Uri "http://127.0.0.1:$ControlPlanePort/internal/ready") {
+            $failedHealthChecks = 0
+        } else {
+            $failedHealthChecks++
+            if ($failedHealthChecks -ge 3) {
+                throw "Control plane stopped responding. See $ControlLog and $ControlErrorLog"
+            }
         }
     }
 } catch {

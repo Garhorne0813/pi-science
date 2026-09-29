@@ -1,4 +1,5 @@
-import { mkdir, readdir, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readdir, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright-core";
@@ -15,6 +16,15 @@ const workspace = path.join(os.tmpdir(), "pi-science-conversation-uat");
 const screenshot = path.join(os.tmpdir(), "pi-science-conversation-uat.png");
 const browserApiOrigins = new Set([new URL(frontend).origin, new URL(backend).origin]);
 const internalToken = process.env.PI_SCIENCE_INTERNAL_TOKEN;
+
+async function workspaceStateDirectory() {
+  const canonical = await realpath(workspace);
+  const identity = process.platform === "win32" ? canonical.toLowerCase() : canonical;
+  const key = createHash("sha256").update(identity).digest("hex");
+  const configuredHome = path.resolve(process.env.PI_SCIENCE_HOME || path.join(os.homedir(), ".pi-science"));
+  const home = await realpath(configuredHome).catch(() => configuredHome);
+  return path.join(home, "workspaces", key);
+}
 
 function authenticatedInit(init = {}) {
   const headers = new Headers(init.headers);
@@ -42,7 +52,6 @@ function sessionIdFromUrl(url) {
 
 async function run() {
   await mkdir(workspace, { recursive: true });
-  await mkdir(path.join(workspace, ".pi-science"), { recursive: true });
   await api("/api/health");
   const config = await api("/api/settings/config");
   const browser = await chromium.launch({ executablePath: chromePath, headless: true });
@@ -244,6 +253,7 @@ async function run() {
         method: "DELETE",
       })).catch(() => undefined);
     }
+    await rm(await workspaceStateDirectory(), { recursive: true, force: true });
     // Keep the workspace directory itself. The app registers every workspace it
     // opens, and a registered path that no longer exists makes the next
     // control-plane start treat it as missing; cleaning the contents instead

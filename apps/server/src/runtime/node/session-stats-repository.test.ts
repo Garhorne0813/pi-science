@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SessionStats } from "@pi-science/contracts";
 import { deleteSessionStats, foldSessionFileStats, loadSessionStats, saveSessionStats } from "./session-stats-repository.js";
+import { metadataRoot } from "../../storage/persistence.js";
 
 const cleanup: string[] = [];
 
@@ -55,7 +56,7 @@ describe("session-stats-repository", () => {
 
   it("rejects a malformed checkpoint instead of returning it", async () => {
     const cwd = await workspace();
-    const dir = join(cwd, ".pi-science", "sessions", "stats");
+    const dir = join(metadataRoot(cwd), "sessions", "stats");
     await mkdir(dir, { recursive: true });
     // tokens is an object in the real DTO; the old buggy loader checked
     // Array.isArray and would have discarded valid checkpoints.
@@ -74,7 +75,7 @@ describe("session-stats-repository", () => {
 
   it("folds a session JSONL into whole-log counters with deduped tool calls and summed usage", async () => {
     const cwd = await workspace();
-    const dir = join(cwd, ".pi-science", "sessions");
+    const dir = join(metadataRoot(cwd), "sessions");
     await mkdir(dir, { recursive: true });
     const path = join(dir, "sess-3.jsonl");
     await writeFile(path, [
@@ -99,7 +100,7 @@ describe("session-stats-repository", () => {
 
   it("folds a file with no message lines into zeroed counters", async () => {
     const cwd = await workspace();
-    const dir = join(cwd, ".pi-science", "sessions");
+    const dir = join(metadataRoot(cwd), "sessions");
     await mkdir(dir, { recursive: true });
     const path = join(dir, "sess-4.jsonl");
     await writeFile(path, JSON.stringify({ type: "session", id: "sess-4", cwd }) + "\n", "utf8");

@@ -8,6 +8,7 @@ import {
   projectMemoryLedgerPath,
   readMemoryLedger,
 } from "./ledger.js";
+import { ensureProject } from "../project/project-registry.js";
 
 const cleanup: string[] = [];
 
@@ -97,6 +98,7 @@ describe("memory ledger", () => {
     const legacy = legacyState();
     legacy.items = [];
     await writeFile(join(cwd, ".pi-science", "project-state.json"), JSON.stringify(legacy), "utf8");
+    await ensureProject(cwd);
 
     const first = await readMemoryLedger(cwd);
     const second = await readMemoryLedger(cwd);

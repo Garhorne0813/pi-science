@@ -7,7 +7,7 @@ const TITLE_RENAME_RETRIES = 5;
 const TITLE_RENAME_RETRY_MS = 20;
 
 /** Persisted session display titles. Kept in
- *  `<workspace>/.pi-science/session-titles.jsonl` so the conversation list
+ *  the workspace's private application state so the conversation list
  *  survives browser changes and cache clears (localStorage is only a
  *  transient fallback). A session id maps to at most one title (upsert). */
 

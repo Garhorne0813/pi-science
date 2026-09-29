@@ -72,3 +72,23 @@ pi_science_node_error() {
   echo "Error: Node.js >=24.16.0 is required (found $version)." >&2
   echo "Install or activate it with: nvm install 24.16.0 && nvm use 24.16.0" >&2
 }
+
+# Match the bubblewrap options used by researchSandboxStatus in the server.
+pi_science_check_sandbox() {
+  [ "$(uname -s)" = Linux ] || return 0
+  if ! command -v bwrap >/dev/null 2>&1; then
+    echo "Error: bubblewrap (bwrap) is required for Bash and research execution." >&2
+    echo "Install it with your distribution package manager (for example: sudo apt-get install bubblewrap)." >&2
+    return 1
+  fi
+  local args=(--unshare-user --disable-userns --unshare-pid --unshare-ipc --unshare-uts --unshare-net --new-session --die-with-parent --proc /proc --dev /dev --tmpfs /tmp)
+  local root
+  for root in /usr /bin /sbin /lib /lib64 /etc /opt; do
+    [ ! -e "$root" ] || args+=(--ro-bind "$root" "$root")
+  done
+  if ! "$PI_SCIENCE_NODE_COMMAND" -e 'const r = require("node:child_process").spawnSync("bwrap", process.argv.slice(1), { timeout: 5000, stdio: "ignore" }); process.exit(r.status === 0 ? 0 : 1)' -- "${args[@]}" --chdir / -- /usr/bin/true; then
+    echo "Error: bubblewrap cannot create the required sandbox on this Linux host." >&2
+    echo "Enable unprivileged user namespaces and check AppArmor restrictions. On Ubuntu, an administrator can use: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0" >&2
+    return 1
+  fi
+}

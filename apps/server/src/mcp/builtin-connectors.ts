@@ -66,9 +66,9 @@ const scientificDomains = [
     description: "Search public PDB, AlphaFold, EMDB, IntAct, and Complex Portal structure and interaction data.",
     terms: "https://www.rcsb.org/pages/policies",
     tools: [
-      tool("search_pdb_entries", "Search PDB Entries", "Full-text search of RCSB PDB entries or polymer entities."),
-      tool("get_pdb_entry", "Get PDB Entry", "Retrieve core RCSB PDB metadata for a PDB entry."),
-      tool("get_alphafold_prediction", "Get AlphaFold Prediction", "Retrieve AlphaFold DB prediction metadata for a UniProt accession."),
+      tool("search_pdb_entries", "Search PDB Entries", "Search RCSB metadata with query and optional limit (rows alias); does not download files."),
+      tool("get_pdb_entry", "Get PDB Entry", "Retrieve RCSB metadata with pdb_id (entry_id alias), for example 2V40."),
+      tool("get_alphafold_prediction", "Get AlphaFold Prediction", "Retrieve AlphaFold metadata with uniprot_accession (accession alias), for example P30520."),
       tool("search_emdb_entries", "Search EMDB Entries", "Search Electron Microscopy Data Bank metadata."),
       tool("get_emdb_entry", "Get EMDB Entry", "Retrieve an EMDB entry by EMD accession."),
       tool("search_intact_interactions", "Search IntAct Interactions", "Search experimentally observed molecular interactions with MI-score controls."),

@@ -14,7 +14,7 @@ import {
   type NotebookDocument,
   type NotebookOutput,
 } from "./notebook-model";
-import { notebookRuntime, type CellResult } from "../../lib/notebook";
+import { notebookRuntime, type CellResult, type KernelCapabilities } from "../../lib/notebook";
 import { useTranslation } from "react-i18next";
 import { apiRequest } from "../../lib/client/api";
 import { openJsonEventStream } from "../../lib/client/event-stream";
@@ -55,7 +55,14 @@ export function NotebookEditor({
   const [openingJupyter, setOpeningJupyter] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [capabilities, setCapabilities] = useState<KernelCapabilities | null>(null);
   const notebookId = useMemo(() => stableNotebookId(path), [path]);
+
+  useEffect(() => {
+    let active = true;
+    void notebookRuntime.capabilities().then((value) => { if (active) setCapabilities(value); }).catch(() => { if (active) setCapabilities({ python: false, r: false }); });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -129,7 +136,7 @@ export function NotebookEditor({
 
   const runCell = async (cellId: string) => {
     const cell = cells.find((candidate) => candidate.id === cellId);
-    if (!cell || cell.cell_type !== "code" || !cell.code.trim() || language === "unsupported") return;
+    if (!cell || cell.cell_type !== "code" || !cell.code.trim() || !runnable || language === "unsupported") return;
     setCells((current) => current.map((candidate) => (
       candidate.id === cellId ? { ...candidate, running: true, liveResult: { ok: true, stdout: "", stderr: "", result: null, error: null } } : candidate
     )));
@@ -168,7 +175,7 @@ export function NotebookEditor({
   };
 
   const filename = path.split(/[\\/]/).pop() || path;
-  const runnable = language !== "unsupported";
+  const runnable = language === "python" ? Boolean(capabilities?.python) : language === "r" && Boolean(capabilities?.r);
   const interruptKernel = async () => {
     if (language === "unsupported" || interrupting) return;
     setInterrupting(true);
@@ -246,7 +253,7 @@ export function NotebookEditor({
         )}
         {!loading && !error && !runnable && (
           <div role="status" className="m-4 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-warn-text">
-            {t("notebook.unsupportedKernel")}
+            {capabilities?.executionAvailable === false ? t("notebook.windowsUnavailable") : language === "unsupported" ? t("notebook.unsupportedKernel") : t("notebook.noKernel")}
           </div>
         )}
         <div className="w-full bg-surface">

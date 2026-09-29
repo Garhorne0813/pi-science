@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { safeConnectorFetch, validateConnectorOutboundUrl } from "./outbound-security.js";
+import { isPrivateOrReservedAddress, safeConnectorFetch, validateConnectorOutboundUrl } from "./outbound-security.js";
 
 vi.mock("node:dns/promises", () => ({
   lookup: vi.fn(async (hostname: string) => {
@@ -13,6 +13,12 @@ vi.mock("node:dns/promises", () => ({
 }));
 
 describe("validateConnectorOutboundUrl", () => {
+  it("classifies fake IP and other special-use ranges as reserved", () => {
+    for (const address of ["198.18.1.148", "198.19.255.254", "100.64.0.1", "192.0.2.1", "198.51.100.4", "203.0.113.5", "2001:db8::1"]) {
+      expect(isPrivateOrReservedAddress(address)).toBe(true);
+    }
+    expect(isPrivateOrReservedAddress("93.184.216.34")).toBe(false);
+  });
   it("rejects non-http(s) protocols", async () => {
     await expect(validateConnectorOutboundUrl("ftp://example.com/file")).rejects.toThrow("only http(s) URLs are allowed");
     await expect(validateConnectorOutboundUrl("file:///etc/passwd")).rejects.toThrow("only http(s) URLs are allowed");

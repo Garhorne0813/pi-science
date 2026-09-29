@@ -1,7 +1,7 @@
 import { appendFile, mkdir, readFile, rename, stat, truncate, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
-import { configRoot } from "../../storage/persistence.js";
+import { configRoot, metadataRoot } from "../../storage/persistence.js";
 
 export interface SseEventRecord {
   event: string | null;
@@ -72,7 +72,7 @@ async function readParsedEvents(path: string): Promise<SseEventRecord[]> {
 
 function eventPath(cwd: string, sessionId: string): string {
   const safeId = createHash("sha256").update(sessionId).digest("hex");
-  return join(resolve(cwd), ".pi-science", "events", `${safeId}.jsonl`);
+  return join(metadataRoot(cwd), "events", `${safeId}.jsonl`);
 }
 
 function fallbackEventPath(cwd: string, sessionId: string): string {

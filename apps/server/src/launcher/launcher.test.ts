@@ -42,4 +42,55 @@ describe("launcher", () => {
     await launched.close();
     await expect(readFile(lockPath, "utf8")).rejects.toThrow();
   });
+
+  it("publishes its own origin and generated token for the sandbox runtime", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-science-launcher-env-"));
+    cleanup.push(dir);
+    const restore = stashControlPlaneEnv();
+    delete process.env.PI_SCIENCE_BACKEND_URL;
+    delete process.env.PI_SCIENCE_INTERNAL_TOKEN;
+    try {
+      const launched = await launchServer({
+        config: { ...testConfig(), internalToken: "generated-token", requireInternalToken: true },
+        lockPath: join(dir, "instance.lock"),
+      });
+      // The managed Pi Orbit runtime inherits this environment and its sandbox
+      // extension calls back into /api/jobs/conversation with it. A generated
+      // token or a non-default port must not leave that call unauthenticated.
+      expect(process.env.PI_SCIENCE_BACKEND_URL).toBe(launched.url);
+      expect(process.env.PI_SCIENCE_INTERNAL_TOKEN).toBe("generated-token");
+      await launched.close();
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps an explicitly configured control-plane origin and token", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-science-launcher-env-"));
+    cleanup.push(dir);
+    const restore = stashControlPlaneEnv();
+    process.env.PI_SCIENCE_BACKEND_URL = "http://127.0.0.1:9999";
+    process.env.PI_SCIENCE_INTERNAL_TOKEN = "explicit-token";
+    try {
+      const launched = await launchServer({
+        config: { ...testConfig(), internalToken: "generated-token", requireInternalToken: true },
+        lockPath: join(dir, "instance.lock"),
+      });
+      expect(process.env.PI_SCIENCE_BACKEND_URL).toBe("http://127.0.0.1:9999");
+      expect(process.env.PI_SCIENCE_INTERNAL_TOKEN).toBe("explicit-token");
+      await launched.close();
+    } finally {
+      restore();
+    }
+  });
 });
+
+function stashControlPlaneEnv(): () => void {
+  const previous = { url: process.env.PI_SCIENCE_BACKEND_URL, token: process.env.PI_SCIENCE_INTERNAL_TOKEN };
+  return () => {
+    if (previous.url === undefined) delete process.env.PI_SCIENCE_BACKEND_URL;
+    else process.env.PI_SCIENCE_BACKEND_URL = previous.url;
+    if (previous.token === undefined) delete process.env.PI_SCIENCE_INTERNAL_TOKEN;
+    else process.env.PI_SCIENCE_INTERNAL_TOKEN = previous.token;
+  };
+}

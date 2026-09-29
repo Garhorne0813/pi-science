@@ -109,7 +109,7 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
   if (url.includes("/api/executions/exec_kernel/logs")) return jsonResponse({ stdout: "kernel stdout", stderr: "", source: "preview", complete: false });
   if (url.includes("/api/executions/exec_job/logs")) return jsonResponse({ stdout: "", stderr: "job stderr", source: "job", complete: true });
   if (url.includes("/api/executions/exec_tool/logs")) return jsonResponse({ stdout: "tool output", stderr: "", source: "preview", complete: false });
-  if (url.includes("/api/artifacts/artifact-result")) return jsonResponse({ path: "outputs/result.csv" });
+  if (url.includes("/api/artifacts/artifact-result")) return jsonResponse({ path: "outputs/result.csv", blob_sha256: "a".repeat(64) });
   return jsonResponse({ error: `unhandled ${url}` }, 404);
 });
 
@@ -231,7 +231,12 @@ describe("RunsPage execution ledger", () => {
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/executions/exec_kernel/logs"), expect.anything());
   });
 
-  it("opens recorded files and resolves artifacts to their workspace file", async () => {
+  it("opens recorded files but downloads the exact saved artifact version", async () => {
+    const download = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      expect(this.href).toContain("/api/artifacts/artifact-result/content?");
+      expect(this.href).toContain("version=2");
+      expect(this.download).toBe("result.csv");
+    });
     renderPage("/workspace/project/runs?execution=exec_kernel");
     await screen.findByText("node-kernel-gateway");
     fireEvent.click(screen.getByRole("tab", { name: "Files" }));
@@ -241,7 +246,9 @@ describe("RunsPage execution ledger", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /artifact-result/ }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/artifacts/artifact-result"), expect.anything()));
-    expect(openInspectorMock).toHaveBeenLastCalledWith(expect.objectContaining({ path: "outputs/result.csv" }));
+    await waitFor(() => expect(download).toHaveBeenCalledOnce());
+    expect(openInspectorMock).toHaveBeenCalledTimes(1);
+    download.mockRestore();
   });
 
   it("copies execution evidence and drafts a reproduction in the originating session", async () => {

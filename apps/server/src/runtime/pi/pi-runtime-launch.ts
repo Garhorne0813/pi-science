@@ -5,8 +5,9 @@ import { homedir } from "node:os";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import type { PiConfig } from "@pi-science/contracts";
 import type { PiProcessOptions, RuntimeSkillPolicy } from "./pi-process.js";
-import { configRoot } from "../../storage/persistence.js";
+import { configRoot, metadataRoot } from "../../storage/persistence.js";
 import { canonicalRuntimeModelRef, projectedRuntimeModelRef, projectPiRuntime } from "./pi-runtime-projection.js";
+import { configuredLocalEgressProxyUrl, downloadDispatcher } from "../../security/download-egress.js";
 
 // The Pi Orbit host is a singleton per control plane: one port + one auth
 // token are allocated on the first buildPiProcessOptions call and reused by
@@ -43,7 +44,9 @@ const NOTEBOOK_EXTENSION = join(
   "extensions",
   "pi-science-notebook.ts",
 );
+const DOWNLOAD_EXTENSION = join(PROJECT_ROOT, "apps", "server", "src", "runtime", "pi", "extensions", "pi-science-download.ts");
 const MCP_EXTENSION = join(PROJECT_ROOT, "apps", "server", "src", "runtime", "pi", "extensions", "pi-science-mcp.ts");
+const SANDBOX_EXTENSION = join(PROJECT_ROOT, "apps", "server", "src", "runtime", "pi", "extensions", "pi-science-sandbox.ts");
 const PROMPT_IDENTITY_EXTENSION = join(PROJECT_ROOT, "apps", "server", "src", "runtime", "pi", "extensions", "prompt-identity.ts");
 
 function webPort(): number {
@@ -135,7 +138,7 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
   } else {
     command = cliPath;
   }
-  const sessionDir = sessionDirectory ? resolve(sessionDirectory) : join(cwd, ".pi-science", "sessions");
+  const sessionDir = sessionDirectory ? resolve(sessionDirectory) : join(metadataRoot(cwd), "sessions");
   args.push("--mode", useRpcMode ? "rpc" : "web");
   if (useRpcMode) args.push("--session-dir", sessionDir);
   else args.push("--host", "127.0.0.1", "--port", String(reservedWebPort), "--web-app-managed", "--no-session");
@@ -147,17 +150,25 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
   if (effectiveThinking) args.push("--thinking", effectiveThinking);
   if (useRpcMode && sessionPath) args.push("--session", sessionPath);
   for (const skill of useRpcMode ? [...seededSkills, ...config.skills] : config.skills) args.push("--skill", skill);
-  const extensionPaths = ensurePromptIdentityExtension(ensureMcpExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(config.extensions))));
+  const extensionPaths = ensureSandboxExtension(ensurePromptIdentityExtension(ensureMcpExtension(ensureDownloadExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(config.extensions))))));
   for (const extension of extensionPaths) args.push("-e", extension);
   const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
-  let agentDir = join(dataRoot, "pi-agent", useRpcMode ? workspaceKey : "web-host");
-  try {
-    mkdirSync(agentDir, { recursive: true });
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "EACCES" && code !== "EPERM" && code !== "EROFS") throw error;
-    agentDir = join(resolve(cwd), ".pi-science", "agent", workspaceKey);
-    mkdirSync(agentDir, { recursive: true });
+  const agentDir = join(dataRoot, "pi-agent", useRpcMode ? workspaceKey : "web-host");
+  mkdirSync(agentDir, { recursive: true });
+  const egressProxy = configuredLocalEgressProxyUrl();
+  if (egressProxy) {
+    // Validate that this is an explicit loopback proxy before telling
+    // pi-web-access to trust its hostname resolution.
+    downloadDispatcher(egressProxy);
+    const searchConfigPath = join(agentDir, "web-search.json");
+    const saved = existsSync(searchConfigPath) ? JSON.parse(readFileSync(searchConfigPath, "utf8")) as Record<string, unknown> : {};
+    if (!saved.ssrf || typeof saved.ssrf !== "object" || Array.isArray(saved.ssrf)) {
+      saved.ssrf = { trustEnvProxy: true };
+      writeFileSync(searchConfigPath, `${JSON.stringify(saved, null, 2)}\n`, { mode: 0o600 });
+    } else if ((saved.ssrf as Record<string, unknown>).trustEnvProxy === undefined) {
+      saved.ssrf = { ...(saved.ssrf as Record<string, unknown>), trustEnvProxy: true };
+      writeFileSync(searchConfigPath, `${JSON.stringify(saved, null, 2)}\n`, { mode: 0o600 });
+    }
   }
   const storedKeys = settings.api_keys;
   const env: NodeJS.ProcessEnv = {
@@ -166,6 +177,11 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
     PI_CODING_AGENT_DIR: agentDir,
     PI_CONFIG_DIR: agentDir,
     PI_WORKSPACE_DIR: resolve(cwd),
+    PI_SCIENCE_STATE_ROOT: dataRoot,
+    ...(egressProxy ? {
+      HTTP_PROXY: egressProxy, HTTPS_PROXY: egressProxy, NODE_USE_ENV_PROXY: "1",
+      NO_PROXY: [process.env.NO_PROXY, "localhost", "127.0.0.1", "::1"].filter(Boolean).join(","),
+    } : {}),
     PI_SCIENCE_MCP_ADAPTER_PATH: findRuntimeExtension("pi-mcp-adapter", cliPath, []) ?? join(PROJECT_ROOT, "runtime", "pi", "node_modules", "pi-mcp-adapter", "index.ts"),
     CONTEXT_MODE_DATA_DIR: agentDir,
     CONTEXT_MODE_DIR: join(agentDir, "context-mode"),
@@ -259,14 +275,9 @@ function globalSkillPolicy(settings: Record<string, any>): RuntimeSkillPolicy {
 
 export function seedWorkspaceAssets(cwd: string): string[] {
   const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
-  // The workspace metadata dirs are managed state. A symlink (or plain file)
-  // left at cwd/.pi or cwd/.pi-science would make every write below (skills
-  // mirror, stale cleanup) land inside — and delete from — the linked
-  // location, so replace foreign entries before any mkdir/cp runs.
-  replaceForeignEntry(join(cwd, ".pi-science"));
+  // The workspace-local .pi directory contains the skills exposed to Pi.
+  // Control-plane state lives under PI_SCIENCE_HOME and is never seeded here.
   replaceForeignEntry(join(cwd, ".pi"));
-  const metadata = join(cwd, ".pi-science");
-  mkdirSync(metadata, { recursive: true });
   const sourceSkills = join(projectRoot, "skills");
   const targetSkills = join(cwd, ".pi", "skills");
   // The .pi/skills tree is managed state: if a previous seed or the runtime
@@ -434,11 +445,11 @@ export function loadDefaultPiConfig(runtimeRoots?: string[]): PiConfig {
     provider: null,
     api_key: null,
     skills: Array.isArray(settings.skill_paths) ? settings.skill_paths.map(String).filter(Boolean) : [],
-    extensions: ensurePromptIdentityExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(
+    extensions: ensureSandboxExtension(ensurePromptIdentityExtension(ensureDownloadExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(
       Array.isArray(settings.extension_paths)
         ? settings.extension_paths.map(String).filter(Boolean)
         : runtimeExtensionStatus(undefined, runtimeRoots).filter((item) => item.installed && (item.id !== "context-mode" || process.env.PI_SCIENCE_ENABLE_CONTEXT_MODE === "1")).map((item) => item.path!).filter(Boolean),
-    ))),
+    ))))),
   };
 }
 
@@ -529,6 +540,11 @@ function ensureNotebookExtension(paths: string[]): string[] {
   ];
 }
 
+function ensureDownloadExtension(paths: string[]): string[] {
+  if (!existsSync(DOWNLOAD_EXTENSION)) throw new Error("Pi-Science download extension is missing");
+  return [...paths.filter((path) => path !== DOWNLOAD_EXTENSION), DOWNLOAD_EXTENSION];
+}
+
 /** MCP is always loaded through Pi-Science's programmatic snapshot adapter.
  * This prevents pi-mcp-adapter from merging ambient global/project files. */
 function ensureMcpExtension(paths: string[]): string[] {
@@ -539,9 +555,17 @@ function ensureMcpExtension(paths: string[]): string[] {
 /** Prompt identity is a persistence protocol dependency. Keep it loaded even
  * when optional MCP integrations are disabled or user extension settings are
  * customized. */
+/** Prompt identity is a persistence protocol dependency. Keep it loaded even
+ * when optional MCP integrations are disabled or user extension settings are
+ * customized. */
 function ensurePromptIdentityExtension(paths: string[]): string[] {
   if (!existsSync(PROMPT_IDENTITY_EXTENSION)) throw new Error("Pi-Science prompt identity extension is missing");
   return [...paths.filter((path) => path !== PROMPT_IDENTITY_EXTENSION), PROMPT_IDENTITY_EXTENSION];
+}
+
+function ensureSandboxExtension(paths: string[]): string[] {
+  if (!existsSync(SANDBOX_EXTENSION)) throw new Error("Pi-Science conversation sandbox extension is missing");
+  return [...paths.filter((path) => path !== SANDBOX_EXTENSION), SANDBOX_EXTENSION];
 }
 
 function readSettings(dataRoot: string): Record<string, any> {

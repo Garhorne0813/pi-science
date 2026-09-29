@@ -38,6 +38,7 @@
 - Node.js 24.16 或更高版本
 - Python 3.11 或更高版本
 - pnpm
+- Linux：bubblewrap（`bwrap`），并允许创建非特权用户命名空间
 - 一个 LLM 提供商 API Key，或可信的 OpenAI / Anthropic 兼容本地端点
 - Windows：PowerShell 5.1 或更高版本
 
@@ -67,7 +68,7 @@ powershell -File scripts/install.ps1
 powershell -File scripts/start.ps1
 ```
 
-Shell 启动器面向 macOS/Linux 设计，并计划用于 WSL；CI 当前只在 Linux 上验证其生命周期。PowerShell 安装器会下载并校验原生 Windows Pi runtime ZIP，因此 Windows 全新安装不需要 Git Bash。两种启动器都会运行 `tsx watch` 与 Vite 开发服务器，因此不是生产部署服务器。安装完成后的启动过程直接调用 package-local 可执行文件，因此运行时不需要 npm 或 pnpm wrapper；安装、构建和依赖更新仍然需要 pnpm。
+Shell 启动器面向 macOS/Linux 设计，并计划用于 WSL；CI 当前只在 Linux 上验证其生命周期。PowerShell 安装器会下载并校验原生 Windows Pi runtime ZIP，因此 Windows 全新安装不需要 Git Bash。两种启动器默认直接运行控制平面，并运行 Vite 开发服务器；POSIX 可通过 `PI_SCIENCE_SERVER_WATCH=1` 显式启用监听模式，因此不是生产部署服务器。安装完成后的启动过程直接调用 package-local 可执行文件，因此运行时不需要 npm 或 pnpm wrapper；安装、构建和依赖更新仍然需要 pnpm。
 
 ### `pi-science` 命令
 
@@ -210,7 +211,7 @@ export OPENAI_API_KEY=sk-...
 
 ## AI 会话标题
 
-当一轮对话稳定后，Pi-Science 可以自动生成简短的 AI 标题（**默认启用**）。该功能通过与对话相同的 provider 发起一次简短请求：新建一个隔离的 Pi runtime，发送最近不超过 6 条消息（每条截断到不超过 200 字符），并请求生成不超过 8 个词的标题。这意味着，每次对话轮次稳定后，**最近的对话片段都会发送给你配置的 LLM 提供商**。生成的结果会持久化到工作区的 `.pi-science/session-titles.jsonl`；浏览器存储仅作为即时回退。
+当一轮对话稳定后，Pi-Science 可以自动生成简短的 AI 标题（**默认启用**）。该功能通过与对话相同的 provider 发起一次简短请求：新建一个隔离的 Pi runtime，发送最近不超过 6 条消息（每条截断到不超过 200 字符），并请求生成不超过 8 个词的标题。这意味着，每次对话轮次稳定后，**最近的对话片段都会发送给你配置的 LLM 提供商**。生成的结果会持久化到工作区对应的私有应用状态目录 `~/.pi-science/workspaces/<workspace-hash>/session-titles.jsonl`（或 `PI_SCIENCE_HOME`）；浏览器存储仅作为即时回退。
 
 如需禁用，请在启动服务前设置环境变量并重启：
 

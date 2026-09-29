@@ -18,6 +18,8 @@ export interface CellResult {
 export interface KernelCapabilities {
   python: boolean;
   r: boolean;
+  executionAvailable?: boolean;
+  unavailableReason?: string | null;
 }
 
 export type KernelStreamEvent =
@@ -28,10 +30,10 @@ export const notebookRuntime = {
   async capabilities(): Promise<KernelCapabilities> {
     const data = await queryClient.fetchQuery({
       queryKey: ["kernels", "status"],
-      queryFn: () => apiRequest<{ interpreters?: Partial<KernelCapabilities> }>("/api/kernels/status", { errorFallback: "Unable to inspect kernels" }),
+      queryFn: () => apiRequest<{ interpreters?: Partial<KernelCapabilities>; execution_available?: boolean; unavailable_reason?: string | null }>("/api/kernels/status", { errorFallback: "Unable to inspect kernels" }),
       staleTime: 0,
     });
-    return { python: Boolean(data.interpreters?.python), r: Boolean(data.interpreters?.r) };
+    return { python: Boolean(data.interpreters?.python), r: Boolean(data.interpreters?.r), executionAvailable: data.execution_available ?? true, unavailableReason: data.unavailable_reason ?? null };
   },
 
   /** Cell execution is a mutation with side effects in the kernel — never cached. */

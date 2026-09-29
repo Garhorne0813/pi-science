@@ -1,10 +1,12 @@
-import { appendFile, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
-import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
-import { dirname, join, resolve } from "node:path";
+import { appendFile, mkdir, open, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { basename, dirname, join, resolve } from "node:path";
 import { userHome } from "../support/platform-utils.js";
+import { tmpdir } from "node:os";
 
 const writeQueues = new Map<string, Promise<void>>();
+const configRoots = new Map<string, string>();
 const LOCK_STALE_MS = 30_000;
 const LOCK_RETRY_MIN_MS = 5;
 const LOCK_RETRY_MAX_MS = 100;
@@ -31,7 +33,44 @@ function waitForWriteQueue(operation: Promise<void>, timeoutMs: number, path: st
 }
 
 export function metadataRoot(workspace: string): string {
+  return workspaceStateRoot(workspace);
+}
+
+export function workspaceStateRoot(workspace: string): string {
+  const resolved = resolve(workspace);
+  const canonical = canonicalPathSync(resolved);
+  const identity = process.platform === "win32" ? canonical.toLowerCase() : canonical;
+  const key = createHash("sha256").update(identity).digest("hex");
+  return configPath(join("workspaces", key));
+}
+
+function canonicalPathSync(path: string): string {
+  try { return realpathSync.native(path); }
+  catch {
+    const parent = dirname(path);
+    return parent === path ? path : join(canonicalPathSync(parent), basename(path));
+  }
+}
+
+/** Pre-v0.2 location retained only for one-time migration and discovery. */
+export function legacyMetadataRoot(workspace: string): string {
   return join(resolve(workspace), ".pi-science");
+}
+
+export async function moveWorkspaceMetadata(sourceWorkspace: string, destinationWorkspace: string): Promise<void> {
+  const source = workspaceStateRoot(sourceWorkspace);
+  const destination = workspaceStateRoot(destinationWorkspace);
+  if (source === destination) return;
+  await mkdir(dirname(destination), { recursive: true });
+  try { await rename(source, destination); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+}
+
+export async function removeWorkspaceMetadata(workspace: string): Promise<void> {
+  await Promise.all([
+    rm(workspaceStateRoot(workspace), { recursive: true, force: true }),
+    rm(legacyMetadataRoot(workspace), { recursive: true, force: true }),
+  ]);
 }
 
 /** Serializes writers for a workspace's metadata under a single workspace-level lock. */
@@ -216,24 +255,25 @@ export async function writeJsonAtomic(path: string, value: unknown, options: Wri
 
 export function configRoot(): string {
   const configured = process.env.PI_SCIENCE_HOME;
-  const candidates = [
-    configured ? resolve(configured) : resolve(userHome(), ".pi-science"),
-    resolve(process.cwd(), ".runtime", "pi-science"),
-  ];
-  for (const candidate of candidates) {
-    const probe = join(candidate, `.write-probe-${process.pid}`);
-    try {
-      mkdirSync(candidate, { recursive: true });
-      writeFileSync(probe, "", "utf8");
-      unlinkSync(probe);
-      return candidate;
-    } catch {
-      try { unlinkSync(probe); } catch { /* best effort */ }
-      // Try the project-local runtime root when the home directory is managed
-      // or mounted read-only.
-    }
+  const candidate = configured
+    ? resolve(configured)
+    : process.env.NODE_ENV === "test"
+      ? resolve(tmpdir(), "pi-science-tests", String(process.pid))
+      : resolve(userHome(), ".pi-science");
+  const cached = configRoots.get(candidate);
+  if (cached) return cached;
+  const probe = join(candidate, `.write-probe-${process.pid}`);
+  try {
+    mkdirSync(candidate, { recursive: true });
+    writeFileSync(probe, "", "utf8");
+    unlinkSync(probe);
+    const canonical = canonicalPathSync(candidate);
+    configRoots.set(candidate, canonical);
+    return canonical;
+  } catch (error) {
+    try { unlinkSync(probe); } catch { /* best effort */ }
+    throw new Error(`Pi-Science state directory is not writable: ${candidate}`, { cause: error });
   }
-  return candidates[0]!;
 }
 
 export function configPath(name: string): string {

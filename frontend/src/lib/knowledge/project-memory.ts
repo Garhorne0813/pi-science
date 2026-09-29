@@ -49,6 +49,8 @@ export interface ResearchLoop {
   status: "draft" | "ready" | "running" | "pausing" | "paused" | "cancelling" | "completed" | "failed" | "cancelled" | "needs_attention";
   mode: "serial";
   evaluator_ref?: EvaluatorRef | null;
+  baseline?: Record<string, number> | null;
+  baseline_job_id?: string | null;
   budget: {
     max_candidates: number;
     max_wall_seconds: number;
@@ -79,6 +81,17 @@ export interface ResearchLoopDetail extends ResearchLoop {
   candidates: ExperienceRecord[];
   operations: Array<{ operation_id: string; phase: string; status: string; updated_at: string; error?: string }>;
   frontier: ExperienceRecord[];
+  decision?: {
+    best_candidate_id: string | null;
+    best_score: number | null;
+    best_metrics: Record<string, number>;
+    frontier_candidate_ids: string[];
+    stagnant_rounds: number;
+    next_strategy: string | null;
+    last_diagnosis: string[];
+    recent_failures: Array<{ candidate_id: string; reason: string }>;
+  };
+  execution_isolation?: { available: true; backend: "seatbelt" | "bubblewrap" | "appcontainer" } | { available: false; reason: string };
 }
 
 function query(cwd: string) {
@@ -160,7 +173,7 @@ export const projectMemoryApi = {
     hard_checks: string[];
     command?: string[];
   }) {
-    return write<Record<string, unknown>>(`/api/project-memory/evaluators?${query(cwd)}`, {
+    return write<{ evaluator: { digest: string } }>(`/api/project-memory/evaluators?${query(cwd)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
