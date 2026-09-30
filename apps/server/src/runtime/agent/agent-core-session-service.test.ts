@@ -2,12 +2,38 @@ import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readJson, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
 import { AgentCoreSessionService } from "./agent-core-session-service.js";
 import { CredentialStore } from "../../model-resources/credential-store.js";
 
 describe("agent-core session configuration", () => {
+  it("rejects model changes while the session is busy without touching the worker", async () => {
+    const cwd = resolve(join(tmpdir(), "pi-science-core-busy-test"));
+    const sessionId = "busy-session";
+    const sendCommand = vi.fn();
+    const runtime = { cwd, sessionId, isClosed: false, sendCommand };
+    const service = new AgentCoreSessionService({} as never, {} as never);
+    (service as unknown as { live: Map<string, unknown> }).live.set(`${cwd}\0${sessionId}`,
+      { key: "test", runtime, busy: true, restartPending: false, model: "openai/old", thinking: "low" });
+    expect(await service.configure(cwd, sessionId, "openai/new", "high", { skills: [], extensions: [] }))
+      .toMatchObject({ success: false, code: "busy" });
+    expect(sendCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects a busy runtime snapshot before sending configuration mutations", async () => {
+    const cwd = resolve(join(tmpdir(), "pi-science-core-busy-snapshot-test"));
+    const sessionId = "busy-snapshot-session";
+    const sendCommand = vi.fn().mockResolvedValue({ success: true, data: { busy: true } });
+    const runtime = { cwd, sessionId, isClosed: false, sendCommand };
+    const service = new AgentCoreSessionService({} as never, {} as never);
+    (service as unknown as { live: Map<string, unknown> }).live.set(`${cwd}\0${sessionId}`,
+      { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low" });
+    expect(await service.configure(cwd, sessionId, "openai/new", "high", { skills: [], extensions: [] }))
+      .toMatchObject({ success: false, code: "busy" });
+    expect(sendCommand).toHaveBeenCalledExactlyOnceWith("get_state");
+  });
+
   it("selects custom model and MCP credential names for the worker", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-science-core-env-"));
     const previousHome = process.env.PI_SCIENCE_HOME;

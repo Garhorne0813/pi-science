@@ -300,9 +300,11 @@ export class AgentCoreSessionService {
     }
     const opened = await this.open(cwd, sessionId, config);
     if ("success" in opened) return opened;
+    if (opened.busy) return { success: false, code: "busy", error: "agent is busy; wait for the current task to finish or stop it" };
     const previous = await opened.runtime.sendCommand("get_state").catch(failed);
     if (!previous.success) return previous;
-    const before = previous.data as { model?: { provider?: string; modelId?: string }; thinkingLevel?: string } | undefined;
+    const before = previous.data as { busy?: boolean; model?: { provider?: string; modelId?: string }; thinkingLevel?: string } | undefined;
+    if (before?.busy) return { success: false, code: "busy", error: "agent is busy; wait for the current task to finish or stop it" };
     const previousModel = before?.model?.provider && before.model.modelId ? before.model as { provider: string; modelId: string } : splitModel(opened.model);
     const previousThinking = before?.thinkingLevel ?? opened.thinking;
     if (!previousModel) return { success: false, code: "reconcile_failed", error: "Unable to identify the current model before configuration" };
