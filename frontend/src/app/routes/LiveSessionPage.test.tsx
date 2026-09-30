@@ -808,6 +808,25 @@ describe("slash-command dispatcher", () => {
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
+  it("keeps the workspace's skill commands when a new conversation starts", async () => {
+    overrides.push((url) => (
+      url.includes("/commands?")
+        ? Promise.resolve(jsonResponse({ commands: [{ name: "skill:review", description: "Review files", source: "skill" }] }))
+        : null
+    ));
+    await renderReady();
+    act(() => { useRuntimeStore.getState().setDraft("/skill:rev"); });
+    await waitFor(() => expect(screen.getByRole("listbox")).toHaveTextContent("/skill:review"));
+
+    // A new conversation in the same workspace has no session yet. The skills did not change, so
+    // the composer must still offer them.
+    act(() => { useRuntimeStore.setState({ activeSessionId: null }); });
+    await waitFor(() => expect(textarea()).toHaveValue(""));
+    act(() => { useRuntimeStore.getState().setDraft("/skill:rev"); });
+
+    await waitFor(() => expect(screen.getByRole("listbox")).toHaveTextContent("/skill:review"));
+  });
+
   it("/compact posts to the compact endpoint and reports it without sending a prompt", async () => {
     const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
