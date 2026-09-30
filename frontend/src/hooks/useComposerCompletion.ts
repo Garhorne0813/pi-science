@@ -1,8 +1,8 @@
-import { useCallback, useId, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { KeyboardEvent as ReactKeyboardEvent, RefObject } from "react";
-import { allCommands, getDynamicCommandsSnapshot, subscribeDynamicCommands } from "../lib/conversation";
+import { allCommands, dynamicCommandsFor, subscribeDynamicCommands } from "../lib/conversation";
 import {
   completionProviders,
   completionScope,
@@ -34,11 +34,21 @@ export interface ComposerCompletion {
   handleKeyDown: (event: ReactKeyboardEvent<HTMLTextAreaElement>) => boolean;
 }
 
-/** A menu the user closed or opened by hand, keyed to the trigger token it was decided for. The
- *  decision outlives typing inside that token and dies with it. */
+/** A menu the user closed or opened by hand, keyed to the trigger token it was decided for. */
 interface MenuOverride {
+  /** `providerId:spanStart`, so the decision is forgotten when the caret moves to another token. */
   scope: string;
+  /** The draft at decision time. */
+  value: string;
   mode: "open" | "closed";
+}
+
+/** The decision lives while the draft is still the one it was made for, or a longer version of it.
+ *  Extending the token keeps it, so Escape can hold a list shut while the user types the rest of a
+ *  name. Clearing the draft or replacing the token ends it, so a dismissal can never leave a menu
+ *  that cannot be reopened. */
+function overrideIsLive(override: MenuOverride | null, scope: string | null, value: string): boolean {
+  return Boolean(override && override.scope === scope && value.startsWith(override.value));
 }
 
 /** The composer's completion controller. It owns detection, the candidate list's open/closed
@@ -54,7 +64,11 @@ export function useComposerCompletion(params: {
   const { cwd, value, caret, composingRef, onApply } = params;
   const { t } = useTranslation();
   const listboxId = useId();
-  const dynamicCommands = useSyncExternalStore(subscribeDynamicCommands, getDynamicCommandsSnapshot, getDynamicCommandsSnapshot);
+  const dynamicCommands = useSyncExternalStore(
+    subscribeDynamicCommands,
+    () => dynamicCommandsFor(cwd),
+    () => dynamicCommandsFor(cwd),
+  );
   // Providers look commands up by name, so the context carries the builtins and the discovered
   // `skill:*` commands together rather than the dynamic half alone.
   const commands = useMemo(() => allCommands(dynamicCommands), [dynamicCommands]);
@@ -83,20 +97,25 @@ export function useComposerCompletion(params: {
   );
 
   const scope = detected ? completionScope(detected.query) : null;
+  const override = overrideIsLive(menuOverride, scope, value) ? menuOverride : null;
   const view = useMemo(
     () => completionView({
       detected,
       items,
       activeIndex: cursor.scope === scope ? cursor.index : 0,
-      dismissedScope: menuOverride?.mode === "closed" ? menuOverride.scope : null,
-      openedScope: menuOverride?.mode === "open" ? menuOverride.scope : null,
+      dismissedScope: override?.mode === "closed" ? override.scope : null,
+      openedScope: override?.mode === "open" ? override.scope : null,
     }),
-    [cursor, detected, items, menuOverride, scope],
+    [cursor, detected, items, override, scope],
   );
 
+  useEffect(() => {
+    setMenuOverride((current) => (overrideIsLive(current, scope, value) ? current : null));
+  }, [scope, value]);
+
   const dismiss = useCallback(() => {
-    if (scope) setMenuOverride({ scope, mode: "closed" });
-  }, [scope]);
+    if (scope) setMenuOverride({ scope, value, mode: "closed" });
+  }, [scope, value]);
 
   const select = useCallback((item: CompletionItem) => {
     if (!detected) return;
@@ -107,12 +126,12 @@ export function useComposerCompletion(params: {
   const runCommand = useCallback((command: CompletionCommand): boolean => {
     if (command.kind === "ignore") return false;
     if (command.kind === "open-menu") {
-      if (scope) setMenuOverride({ scope, mode: "open" });
+      if (scope) setMenuOverride({ scope, value, mode: "open" });
       return true;
     }
     onApply(command);
     return true;
-  }, [onApply, scope]);
+  }, [onApply, scope, value]);
 
   const handleKeyDown = useCallback((event: ReactKeyboardEvent<HTMLTextAreaElement>): boolean => {
     // An IME owns every key while it composes: Tab moves between its candidates and Enter

@@ -38,6 +38,20 @@ describe("slash commands", () => {
     expect(allCommands().filter((command) => command.name === "compact")).toHaveLength(1);
   });
 
+  it("keeps commands for their own workspace and drops them for another", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      commands: [{ name: "skill:review", description: "Review files", source: "skill" }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    const { dynamicCommandsFor, fetchDynamicCommands, retainDynamicCommands } = await import("./slash-commands");
+    await fetchDynamicCommands("session-a", "/workspace-a");
+    expect(dynamicCommandsFor("/workspace-a").map((command) => command.name)).toEqual(["skill:review"]);
+    retainDynamicCommands("/workspace-a");
+    expect(dynamicCommandsFor("/workspace-a").map((command) => command.name)).toEqual(["skill:review"]);
+    retainDynamicCommands("/workspace-b");
+    expect(dynamicCommandsFor("/workspace-b")).toEqual([]);
+    expect(dynamicCommandsFor("/workspace-a")).toEqual([]);
+  });
+
   it("ranks a name prefix above a name substring above a description match", () => {
     const commands: SlashCommand[] = [
       { name: "sync", description: "uploads changes", group: "utility" },

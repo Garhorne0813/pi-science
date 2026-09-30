@@ -12,7 +12,7 @@ import { useUiStore } from "../../lib/ui";
 import { cn } from "../../lib/ui";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace";
 import { projectKnowledgeApi, useReviewPolicy } from "../../lib/knowledge";
-import { agentActionTextByBlock, fetchDynamicCommands, resetDynamicCommands } from "../../lib/conversation";
+import { agentActionTextByBlock, fetchDynamicCommands, retainDynamicCommands } from "../../lib/conversation";
 import { ConversationComposer } from "../../components/conversation/ConversationComposer";
 import { ConversationWelcome } from "../../components/conversation/ConversationWelcome";
 import { InteractionPrompt } from "../../components/conversation/InteractionPrompt";
@@ -207,7 +207,7 @@ export function LiveSessionPage() {
     if (activeSessionId) {
       void fetchDynamicCommands(activeSessionId, workspaceCwd);
     } else {
-      resetDynamicCommands();
+      retainDynamicCommands(workspaceCwd);
     }
   }, [activeSessionId, workspaceCwd]);
 

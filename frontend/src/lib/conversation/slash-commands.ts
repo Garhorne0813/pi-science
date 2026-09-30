@@ -30,6 +30,8 @@ const BUILTIN_COMMANDS: SlashCommand[] = [
 ];
 
 let dynamicCommands: SlashCommand[] = [];
+let dynamicCommandsCwd: string | null = null;
+const NO_DYNAMIC_COMMANDS: SlashCommand[] = [];
 const dynamicCommandListeners = new Set<() => void>();
 
 function notifyDynamicCommands(): void {
@@ -43,6 +45,11 @@ export function subscribeDynamicCommands(listener: () => void): () => void {
 
 export function getDynamicCommandsSnapshot(): SlashCommand[] {
   return dynamicCommands;
+}
+
+/** Commands discovered for `cwd`, or none while the cache belongs to another workspace. */
+export function dynamicCommandsFor(cwd: string): SlashCommand[] {
+  return dynamicCommandsCwd === cwd ? dynamicCommands : NO_DYNAMIC_COMMANDS;
 }
 
 export async function fetchDynamicCommands(sessionId: string, cwd: string): Promise<void> {
@@ -61,19 +68,29 @@ export async function fetchDynamicCommands(sessionId: string, cwd: string): Prom
         source: command.source,
         group: "skill" as const,
       }));
+    dynamicCommandsCwd = cwd;
     notifyDynamicCommands();
   } catch (error) {
     // An HTTP error means the session has no command list to offer yet — keep the
     // ones already loaded, as the pre-Query code did by returning on `!response.ok`.
     if (!(error instanceof ApiError)) {
       dynamicCommands = [];
+      dynamicCommandsCwd = cwd;
       notifyDynamicCommands();
     }
   }
 }
 
+/** Drop the cached commands unless they were discovered for `cwd`. Starting a new conversation in
+ *  the same workspace keeps them; switching workspaces does not. */
+export function retainDynamicCommands(cwd: string): void {
+  if (dynamicCommandsCwd === cwd) return;
+  resetDynamicCommands();
+}
+
 export function resetDynamicCommands(): void {
   dynamicCommands = [];
+  dynamicCommandsCwd = null;
   notifyDynamicCommands();
 }
 
