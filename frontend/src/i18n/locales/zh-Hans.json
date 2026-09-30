@@ -214,6 +214,7 @@
   "conversation.attachment": "附件",
   "conversation.messageInput": "消息",
   "conversation.subagentList": "子代理",
+  "conversation.completion.keyboardHint": "Tab 补全 · ↑↓ 选择 · Esc 收起",
   "conversation.completionList": "补全候选",
   "conversation.completion.groupAgents": "代理",
   "conversation.completion.groupFiles": "文件",

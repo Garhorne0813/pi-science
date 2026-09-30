@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { KeyboardEvent as ReactKeyboardEvent, RefObject } from "react";
-import { allCommands, dynamicCommandsFor, subscribeDynamicCommands } from "../lib/conversation";
+import { allCommands, slashCommandsQuery } from "../lib/conversation";
+import { useRuntimeStore } from "../lib/agent-runtime";
 import {
   completionProviders,
   completionScope,
@@ -64,14 +65,11 @@ export function useComposerCompletion(params: {
   const { cwd, value, caret, composingRef, onApply } = params;
   const { t } = useTranslation();
   const listboxId = useId();
-  const dynamicCommands = useSyncExternalStore(
-    subscribeDynamicCommands,
-    () => dynamicCommandsFor(cwd),
-    () => dynamicCommandsFor(cwd),
-  );
+  const sessionId = useRuntimeStore((state) => state.cwd === cwd ? state.activeSessionId : null);
+  const commandsQuery = useQuery(slashCommandsQuery(cwd, sessionId));
   // Providers look commands up by name, so the context carries the builtins and the discovered
   // `skill:*` commands together rather than the dynamic half alone.
-  const commands = useMemo(() => allCommands(dynamicCommands), [dynamicCommands]);
+  const commands = useMemo(() => allCommands(commandsQuery.data ?? []), [commandsQuery.data]);
   const agentsQuery = useQuery(subagentsDiscoveryQuery(cwd));
   const agents = useMemo(() => agentsQuery.data?.agents ?? [], [agentsQuery.data]);
   const [menuOverride, setMenuOverride] = useState<MenuOverride | null>(null);
@@ -92,7 +90,8 @@ export function useComposerCompletion(params: {
   }, [directoryQuery.data]);
 
   const items = useMemo(
-    () => (detected ? completeQuery(detected, { value, caret, cwd, entries, agents, commands }) : []),
+    () => (detected ? completeQuery(detected, { value, caret, cwd, entries, agents, commands })
+      .filter((item) => planAccept({ query: detected.query, item, value }).kind === "apply") : []),
     [agents, caret, commands, cwd, detected, entries, value],
   );
 
@@ -110,9 +109,10 @@ export function useComposerCompletion(params: {
       items,
       activeIndex: cursor.key === cursorKey ? cursor.index : 0,
       dismissedScope: override?.mode === "closed" ? override.scope : null,
-      openedScope: override?.mode === "open" ? override.scope : null,
+      // Preview every available candidate before Tab. Tab accepts the highlighted row.
+      openedScope: scope,
     }),
-    [cursor, cursorKey, detected, items, override],
+    [cursor, cursorKey, detected, items, override, scope],
   );
 
   useEffect(() => {
@@ -148,6 +148,7 @@ export function useComposerCompletion(params: {
       if (!view.visible) return false;
       event.preventDefault();
       event.stopPropagation();
+      if (scope) setMenuOverride({ scope, value, mode: "open" });
       if (cursorKey) setCursor({ key: cursorKey, index: Math.min(Math.max(view.activeIndex + (event.key === "ArrowDown" ? 1 : -1), 0), items.length - 1) });
       return true;
     }
@@ -160,6 +161,8 @@ export function useComposerCompletion(params: {
     }
     if (event.key === "Enter" && !event.shiftKey) {
       if (!view.visible) return false;
+      // Passive path/argument previews must not turn normal Enter-to-send into completion.
+      if (detected?.provider.trigger === "tab" && override?.mode !== "open") return false;
       if (!runCommand(planAccept({ query: detected?.query ?? null, item: view.activeItem, value }))) return false;
       event.preventDefault();
       event.stopPropagation();
@@ -172,7 +175,7 @@ export function useComposerCompletion(params: {
       return true;
     }
     return false;
-  }, [caret, composingRef, cursorKey, detected, dismiss, items, runCommand, value, view]);
+  }, [caret, composingRef, cursorKey, detected, dismiss, items, override, runCommand, scope, value, view]);
 
   const menu = useMemo<ComposerCompletionMenu | null>(() => {
     if (!view.visible) return null;

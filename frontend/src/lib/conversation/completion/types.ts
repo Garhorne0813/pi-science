@@ -101,9 +101,8 @@ export interface CompletionContext {
 
 export interface CompletionProvider {
   id: string;
-  /** How the list becomes visible. A "typing" provider shows candidates while the user types,
-   *  so Tab and Enter both accept the active row. A "tab" provider stays hidden until the user
-   *  asks for it, so Tab first fills in the common prefix and only then opens the list. */
+  /** A typing provider lets Enter accept automatically. A tab provider previews candidates
+   *  while typing but leaves Enter to send until the user navigates the list. */
   trigger: "typing" | "tab";
   /** The query this provider owns at the caret, or null when it owns nothing. Must be pure and
    *  must not read `CompletionContext.entries` or `CompletionContext.agents`: the loader asks a

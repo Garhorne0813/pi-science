@@ -25,7 +25,6 @@ import { FeedbackContext } from "../../components/feedback/feedback-context";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
 import { queryClient } from "../../lib/client/query-client";
-import { resetDynamicCommands } from "../../lib/conversation";
 import i18n from "../../i18n";
 
 const CWD = "proj";
@@ -77,7 +76,6 @@ beforeEach(() => {
     clear: () => storage.clear(),
   });
   queryClient.clear();
-  resetDynamicCommands();
   useUiStore.setState({ inspectorOpen: false, inspectorData: null, workspaceReferences: [] });
   useRuntimeStore.setState({
     status: "ready",

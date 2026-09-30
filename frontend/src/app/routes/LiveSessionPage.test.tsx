@@ -68,7 +68,6 @@ import { FeedbackContext } from "../../components/feedback/feedback-context";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
 import { queryClient } from "../../lib/client/query-client";
-import { resetDynamicCommands } from "../../lib/conversation";
 import type { PendingInteraction, PendingQuestionnaire } from "../../lib/agent-runtime";
 import i18n from "../../i18n";
 import type { ThreadBlock } from "../../types/thread";
@@ -259,7 +258,6 @@ beforeEach(() => {
     clear: () => storage.clear(),
   });
   queryClient.clear();
-  resetDynamicCommands();
   useUiStore.setState({ inspectorOpen: false, inspectorData: null, workspaceReferences: [], settingsOpen: false, settingsScope: null, });
   useRuntimeStore.setState({
     status: "ready",
@@ -808,23 +806,24 @@ describe("slash-command dispatcher", () => {
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
-  it("keeps the workspace's skill commands when a new conversation starts", async () => {
-    overrides.push((url) => (
-      url.includes("/commands?")
-        ? Promise.resolve(jsonResponse({ commands: [{ name: "skill:review", description: "Review files", source: "skill" }] }))
-        : null
-    ));
-    await renderReady();
+  it("discovers skills on a cold new conversation and preserves its draft", async () => {
+    let finish!: (id: string) => void;
+    const pending = new Promise<string>((resolve) => { finish = resolve; });
+    const create = vi.fn(() => pending);
+    overrides.push((url) => url.includes("/commands?")
+      ? Promise.resolve(jsonResponse({ commands: [{ name: "skill:review", description: "Review files", source: "skill" }] }))
+      : null);
+    useRuntimeStore.setState({ activeSessionId: null, createNewSession: create });
+    renderWorkspaceLanding();
+    expect(create).not.toHaveBeenCalled();
     act(() => { useRuntimeStore.getState().setDraft("/skill:rev"); });
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    act(() => { useRuntimeStore.setState({ activeSessionId: "s2" }); finish("s2"); });
     await waitFor(() => expect(screen.getByRole("listbox")).toHaveTextContent("/skill:review"));
-
-    // A new conversation in the same workspace has no session yet. The skills did not change, so
-    // the composer must still offer them.
-    act(() => { useRuntimeStore.setState({ activeSessionId: null }); });
-    await waitFor(() => expect(textarea()).toHaveValue(""));
-    act(() => { useRuntimeStore.getState().setDraft("/skill:rev"); });
-
-    await waitFor(() => expect(screen.getByRole("listbox")).toHaveTextContent("/skill:review"));
+    expect(textarea()).toHaveValue("/skill:rev");
+    fireEvent.keyDown(textarea(), { key: "Tab" });
+    await waitFor(() => expect(textarea()).toHaveValue("/skill:review"));
+    expect(create).toHaveBeenCalledTimes(1);
   });
 
   it("/compact posts to the compact endpoint and reports it without sending a prompt", async () => {

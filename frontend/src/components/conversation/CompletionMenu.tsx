@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { File, FolderOpen } from "lucide-react";
-import { cn } from "../../lib/ui";
 import type { CompletionGroup, CompletionItem } from "../../lib/conversation/completion";
 import { workspaceFiles } from "../../lib/workspace/workspace-files";
 
@@ -67,10 +66,9 @@ export function CompletionMenu({ id, label, items, activeIndex, onSelect, onDism
       tabIndex={-1}
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => onSelect(item)}
-      className={cn(
-        "flex min-w-0 w-full items-center gap-2 rounded-input px-2 py-1.5 text-left text-ui-caption",
-        index === activeIndex ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2",
-      )}
+      // tailwind-merge does not know the custom font-size names and treats text-ui-caption
+      // as a color, dropping it when text-text/text-muted follows. Keep the size explicit.
+      className={`flex min-w-0 w-full items-center gap-2 rounded-input px-2 py-1.5 text-left text-ui-caption ${index === activeIndex ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2"}`}
     >
       {item.kind === "directory" && <FolderOpen size={12} className="shrink-0 text-accent" />}
       {item.kind === "file" && <File size={12} className="shrink-0 text-accent" />}
@@ -78,11 +76,15 @@ export function CompletionMenu({ id, label, items, activeIndex, onSelect, onDism
       {item.detail && <span className="shrink-0 text-ui-micro text-muted/70">{item.detail}</span>}
       {item.description && <span className="min-w-0 flex-1 truncate" title={item.description}>{item.description}</span>}
       {item.size !== undefined && <span className="shrink-0 font-mono text-ui-micro text-muted/60">{workspaceFiles.formatSize(item.size)}</span>}
+      {index === activeIndex && <kbd aria-hidden="true" className="ml-auto shrink-0 rounded border border-border px-1 text-ui-micro text-muted">Tab</kbd>}
     </button>
   );
 
   return (
     <div ref={menuRef} role="listbox" id={id} aria-label={label} className="ui-popover absolute bottom-full left-0 right-0 z-50 mb-1 max-h-56 w-full max-w-full overflow-y-auto rounded-card p-1">
+      <div id={`${id}-help`} className="sticky top-0 z-10 border-b border-faint bg-surface-raised px-2 py-1 text-ui-micro text-muted">
+        {t("conversation.completion.keyboardHint")}
+      </div>
       {groups.size > 1
         ? runs.map((run) => (
             <div key={run.group ?? run.start} role="group" aria-label={heading(run.group)}>

@@ -210,6 +210,7 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
           aria-label={t("conversation.messageInput")}
           aria-expanded={completion.menu !== null}
           aria-controls={completion.menu?.id}
+          aria-describedby={completion.menu ? `${completion.menu.id}-help` : undefined}
           aria-activedescendant={completion.menu ? `${completion.menu.id}-option-${completion.menu.activeIndex}` : undefined}
           aria-autocomplete="list"
           onChange={(event) => handleChange(event.target.value)}

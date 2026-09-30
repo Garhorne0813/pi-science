@@ -45,6 +45,11 @@ afterEach(() => {
 });
 
 describe("CompletionMenu", () => {
+  it("keeps the caption font size alongside active and inactive text colors", () => {
+    render(menu({}));
+    for (const row of screen.getAllByRole("option")) expect(row).toHaveClass("text-ui-caption");
+    expect(screen.getByText("Tab")).toBeInTheDocument();
+  });
   it("renders no listbox for an empty candidate list", () => {
     render(menu({ items: [] }));
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();

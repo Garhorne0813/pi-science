@@ -10,6 +10,58 @@ installRuntimeTestEnvironment();
 
 
 describe("runtime session actions", () => {
+  it("shares blank runtime creation between completion and the first prompt", async () => {
+    let finish!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { finish = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/sessions" && init?.method === "POST") return pending;
+      if (url.includes("/prompt?") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body));
+        return jsonResponse({ ok: true, status: "persisted", client_message_id: body.client_message_id, durable_message_id: "first-message" }, 202);
+      }
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("completion-draft"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useRuntimeStore.setState({ cwd: "/workspace", activeSessionId: null, status: "ready", draft: "/skill:review" });
+    const completion = useRuntimeStore.getState().createNewSession();
+    const strictModeReplay = useRuntimeStore.getState().createNewSession();
+    const prompt = useRuntimeStore.getState().sendPrompt("/skill:review");
+    finish(jsonResponse({ id: "completion-draft", cwd: "/workspace" }));
+    await vi.waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    FakeEventSource.instances[0].open();
+    await expect(Promise.all([completion, strictModeReplay, prompt])).resolves.toEqual([
+      "completion-draft", "completion-draft", "completion-draft",
+    ]);
+    expect(fetchMock.mock.calls.filter(([url, init]) => String(url) === "/api/sessions" && init?.method === "POST")).toHaveLength(1);
+    expect(useRuntimeStore.getState().draft).toBe("/skill:review");
+    useRuntimeStore.getState().disconnect();
+  });
+
+  it("discards a late blank runtime after switching conversations in the same workspace", async () => {
+    let finish!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { finish = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/sessions" && init?.method === "POST") return pending;
+      if (String(input).startsWith("/api/sessions?")) return jsonResponse([]);
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useRuntimeStore.setState({ cwd: "/workspace", activeSessionId: null, status: "ready" });
+    const creating = useRuntimeStore.getState().createNewSession();
+    const rejected = expect(creating).rejects.toThrow("Conversation changed");
+    await useRuntimeStore.getState().connect("/workspace");
+    finish(jsonResponse({ id: "obsolete-draft", cwd: "/workspace" }));
+    await rejected;
+    expect(useRuntimeStore.getState().activeSessionId).toBeNull();
+    expect(useRuntimeStore.getState().status).toBe("ready");
+    expect(useRuntimeStore.getState().thread.blocks).toEqual([]);
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).includes("/obsolete-draft?") && init?.method === "DELETE")).toBe(true);
+  });
+
   it("does not create ghost sessions when StrictMode reopens a workspace route", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

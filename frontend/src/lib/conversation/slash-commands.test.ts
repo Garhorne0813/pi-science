@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { allCommands, commandHint, commandTakesArguments, matchCommands, resetDynamicCommands } from "./slash-commands";
+import { allCommands, commandHint, commandTakesArguments, matchCommands, slashCommandsQuery } from "./slash-commands";
 import type { SlashCommand } from "./slash-commands";
 import { queryClient } from "../client/query-client";
 
 afterEach(() => {
-  resetDynamicCommands();
   queryClient.clear();
   vi.unstubAllGlobals();
 });
@@ -30,26 +29,32 @@ describe("slash commands", () => {
         { name: "summarize", description: "Summarize text", source: "prompt" },
       ],
     }), { status: 200, headers: { "Content-Type": "application/json" } })));
-    const { fetchDynamicCommands } = await import("./slash-commands");
-    await fetchDynamicCommands("session-a", "/workspace");
-    expect(allCommands().map((command) => command.name)).toContain("skill:review");
-    expect(allCommands().map((command) => command.name)).not.toContain("deploy");
-    expect(allCommands().map((command) => command.name)).not.toContain("summarize");
-    expect(allCommands().filter((command) => command.name === "compact")).toHaveLength(1);
+    const commands = await queryClient.fetchQuery(slashCommandsQuery("/workspace", "session-a"));
+    expect(allCommands(commands).map((command) => command.name)).toContain("skill:review");
+    expect(allCommands(commands).map((command) => command.name)).not.toContain("deploy");
+    expect(allCommands(commands).map((command) => command.name)).not.toContain("summarize");
+    expect(allCommands(commands).filter((command) => command.name === "compact")).toHaveLength(1);
   });
 
-  it("keeps commands for their own workspace and drops them for another", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      commands: [{ name: "skill:review", description: "Review files", source: "skill" }],
-    }), { status: 200, headers: { "Content-Type": "application/json" } })));
-    const { dynamicCommandsFor, fetchDynamicCommands, retainDynamicCommands } = await import("./slash-commands");
-    await fetchDynamicCommands("session-a", "/workspace-a");
-    expect(dynamicCommandsFor("/workspace-a").map((command) => command.name)).toEqual(["skill:review"]);
-    retainDynamicCommands("/workspace-a");
-    expect(dynamicCommandsFor("/workspace-a").map((command) => command.name)).toEqual(["skill:review"]);
-    retainDynamicCommands("/workspace-b");
-    expect(dynamicCommandsFor("/workspace-b")).toEqual([]);
-    expect(dynamicCommandsFor("/workspace-a")).toEqual([]);
+  it("isolates workspaces and sessions when requests finish out of order", async () => {
+    const resolve = new Map<string, (response: Response) => void>();
+    vi.stubGlobal("fetch", vi.fn((url: string) => new Promise<Response>((done) => { resolve.set(url, done); })));
+    const a = slashCommandsQuery("/a", "s1");
+    const b = slashCommandsQuery("/b", "s1");
+    const next = slashCommandsQuery("/b", "s2");
+    const first = queryClient.fetchQuery(a);
+    const second = queryClient.fetchQuery(b);
+    const third = queryClient.fetchQuery(next);
+    const finish = (index: number, name: string) => [...resolve.values()][index](new Response(JSON.stringify({
+      commands: [{ name: `skill:${name}`, source: "skill" }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    finish(2, "next"); await third;
+    finish(1, "b"); await second;
+    finish(0, "a"); await first;
+    expect(queryClient.getQueryData(a.queryKey)).toMatchObject([{ name: "skill:a" }]);
+    expect(queryClient.getQueryData(b.queryKey)).toMatchObject([{ name: "skill:b" }]);
+    expect(queryClient.getQueryData(next.queryKey)).toMatchObject([{ name: "skill:next" }]);
+    expect(slashCommandsQuery("/b", null).enabled).toBe(false);
   });
 
   it("ranks a name prefix above a name substring above a description match", () => {

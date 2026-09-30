@@ -214,6 +214,7 @@
   "conversation.attachment": "Attachment",
   "conversation.messageInput": "Message",
   "conversation.subagentList": "Subagents",
+  "conversation.completion.keyboardHint": "Tab to complete · ↑↓ to choose · Esc to close",
   "conversation.completionList": "Completions",
   "conversation.completion.groupAgents": "Agents",
   "conversation.completion.groupFiles": "Files",

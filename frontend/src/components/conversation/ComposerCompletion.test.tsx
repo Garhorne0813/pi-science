@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentMention } from "../../lib/conversation";
 import { queryClient } from "../../lib/client/query-client";
+import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
 import { subagentsDiscoveryQuery } from "../../lib/settings";
 import { MentionComposer } from "./MentionComposer";
@@ -112,6 +113,7 @@ async function press(key: string, options: { shiftKey?: boolean } = {}): Promise
 
 beforeEach(() => {
   queryClient.clear();
+  useRuntimeStore.setState({ cwd: "project", activeSessionId: "s1" });
   filesFail = false;
   onKeyDown.mockClear();
   useUiStore.setState({ workspaceReferences: [] });
@@ -165,9 +167,6 @@ describe("composer completion keyboard paths", () => {
   });
 
   it("TC-03 accepts a discovered skill command with Tab", async () => {
-    const { fetchDynamicCommands } = await import("../../lib/conversation");
-    await act(async () => { await fetchDynamicCommands("s1", "project"); });
-
     renderComposer();
     await type("/skill:rev");
     await press("Tab");
@@ -182,20 +181,32 @@ describe("composer completion keyboard paths", () => {
     expect(input().selectionStart).toBe("data/protein.csv".length);
   });
 
-  it("TC-05 fills the common prefix first and opens the candidates on the second Tab", async () => {
+  it("TC-05 previews paths before Tab and accepts the highlighted row", async () => {
     renderComposer();
     await type("pro");
-    await press("Tab");
-    expect(input()).toHaveValue("protein");
-    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
-
-    await press("Tab");
     const listbox = screen.getByRole("listbox");
+    expect(listbox).toHaveTextContent("Tab to complete");
     const labels = [...listbox.querySelectorAll("[role='option']")].map((option) => option.querySelector("span")?.textContent);
-    // Directories lead, and nothing outside the prefix leaks into the list.
     expect(labels[0]).toBe("protein_structure/");
     expect(new Set(labels)).toEqual(new Set(["protein_structure/", "protein.csv", "protein_old.csv"]));
-    expect(input()).toHaveValue("protein");
+    expect(input()).toHaveValue("pro");
+    for (let index = 0; index < labels.indexOf("protein.csv"); index += 1) await press("ArrowDown");
+    await press("Tab");
+    expect(input()).toHaveValue("protein.csv");
+  });
+
+  it("keeps Enter sending for passive path and argument previews", async () => {
+    renderComposer();
+    await type("data/pro");
+    expect(screen.getByRole("listbox")).toHaveTextContent("protein.csv");
+    await press("Enter");
+    expect(input()).toHaveValue("data/pro");
+    expect(onKeyDown).toHaveBeenCalledTimes(1);
+    await type("/export j");
+    expect(screen.getByRole("listbox")).toHaveTextContent("jsonl");
+    await press("Enter");
+    expect(input()).toHaveValue("/export j");
+    expect(onKeyDown).toHaveBeenCalledTimes(2);
   });
 
   it("TC-06 leaves Tab to the browser when nothing matches", async () => {
@@ -235,9 +246,9 @@ describe("composer completion keyboard paths", () => {
   });
 
   it("resets the active row when filtering removes the previously selected agent", async () => {
-    fetchMock.mockImplementationOnce(async () => json({ agents: [
+    queryClient.setQueryData(subagentsDiscoveryQuery("project").queryKey, { agents: [
       { name: "reviewer" }, { name: "researcher" }, { name: "scout" },
-    ] }));
+    ] });
     renderComposer();
     await type("@");
     await press("ArrowDown");
@@ -279,7 +290,7 @@ describe("composer completion keyboard paths", () => {
     const { container } = renderComposer("@reviewer text");
     await type("@reviewer text", 9);
     await press("Tab");
-    const mirror = container.querySelector("[aria-hidden='true']");
+    const mirror = container.querySelector("div[aria-hidden='true']");
     await waitFor(() => expect(mirror?.querySelector("span")?.textContent).toBe("@reviewer"));
     expect(input()).toHaveValue("@reviewer text");
   });
@@ -300,10 +311,9 @@ describe("composer completion keyboard paths", () => {
     expect(onKeyDown.mock.calls[0][0].defaultPrevented).toBe(false);
   });
 
-  it("offers both argument values when the command name is complete and Tab asks for them", async () => {
+  it("previews both argument values before Tab", async () => {
     renderComposer();
     await type("/export ");
-    await press("Tab");
     const labels = [...screen.getByRole("listbox").querySelectorAll("[role='option']")].map((option) => option.querySelector("span")?.textContent);
     expect(labels).toEqual(["html", "jsonl"]);
 
@@ -342,12 +352,10 @@ describe("composer completion keyboard paths", () => {
   it("dismisses the candidate list with Escape and keeps the typed text", async () => {
     renderComposer();
     await type("pro");
-    await press("Tab");
-    await press("Tab");
     expect(screen.getByRole("listbox")).toBeInTheDocument();
 
     await press("Escape");
-    expect(input()).toHaveValue("protein");
+    expect(input()).toHaveValue("pro");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
