@@ -78,7 +78,7 @@ export function CompletionMenu({ id, label, items, activeIndex, onSelect, onActi
     >
       {item.kind === "directory" && <FolderOpen size={12} className="shrink-0 text-accent" />}
       {item.kind === "file" && <File size={12} className="shrink-0 text-accent" />}
-      <span title={item.label} className="max-w-[55%] min-w-0 shrink-0 truncate rounded bg-accent-soft px-1 font-mono text-text sm:max-w-none">{item.label}</span>
+      <span title={item.label} className="max-w-[55%] min-w-0 shrink-0 truncate rounded bg-accent-soft px-1 font-mono text-text">{item.label}</span>
       {item.description && <span className="min-w-0 flex-1 truncate" title={item.description}>{item.description}</span>}
       {item.detail && <span className="shrink-0 text-ui-meta text-muted">{item.detail}</span>}
       {item.payload?.kind === "reference" && <span className="shrink-0 text-ui-meta text-muted">{t("conversation.completion.reference")}</span>}
