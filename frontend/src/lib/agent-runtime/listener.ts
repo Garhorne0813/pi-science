@@ -38,11 +38,14 @@ const RUNS_SIGNAL_DEBOUNCE_MS = 150;
 let runsSignalTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Executions stay a REST surface, so this stream can only invalidate them.
- *  Coalesce the burst a parallel tool fan-out produces into one refetch. */
-function signalSessionRuns(cwd: string): void {
+ *  Coalesce the burst a parallel tool fan-out produces into one refetch. A
+ *  workspace switch reuses the same client and keeps the pending timer, so the
+ *  workspace is read when the timer fires: the signal lands on the workspace
+ *  on screen, never on the one that queued it. */
+function signalSessionRuns(): void {
   runsSignalTimer ??= setTimeout(() => {
     runsSignalTimer = null;
-    void queryClient.invalidateQueries({ queryKey: runsKey(cwd) });
+    void queryClient.invalidateQueries({ queryKey: runsKey(useRuntimeStore.getState().cwd) });
   }, RUNS_SIGNAL_DEBOUNCE_MS);
 }
 
@@ -305,7 +308,7 @@ export function registerEventListener(client: PiScienceClient) {
     // stream is what keeps the session's execution badge event-driven instead
     // of waiting out the REST poll interval.
     if (isExecutionBoundary(event) || isRecoveryAttach(event) || event.type === "stream.gap") {
-      signalSessionRuns(state.cwd);
+      signalSessionRuns();
     }
 
     if (event.type === "session.replaced") {

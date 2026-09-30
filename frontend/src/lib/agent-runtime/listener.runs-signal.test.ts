@@ -152,4 +152,25 @@ describe("execution invalidation on the conversation stream", () => {
     await flushSignal();
     expect(invalidate).not.toHaveBeenCalled();
   });
+
+  it("invalidates the workspace on screen when a switch lands inside the debounce window", async () => {
+    const otherCwd = "/workspace-b";
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state(url.includes("session-b") ? "session-b" : "session-a"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect(CWD, "session-a");
+    FakeEventSource.instances.at(-1)!.open();
+    FakeEventSource.instances.at(-1)!.emit("run.started", { type: "run.started", sessionId: "session-a", turnId: "turn-a" });
+
+    queryClient.setQueryData(runsKey(otherCwd), []);
+    await useRuntimeStore.getState().connect(otherCwd, "session-b");
+    FakeEventSource.instances.at(-1)!.open();
+
+    await flushSignal();
+    expect(queryClient.getQueryState(runsKey(otherCwd))?.isInvalidated).toBe(true);
+  });
 });
