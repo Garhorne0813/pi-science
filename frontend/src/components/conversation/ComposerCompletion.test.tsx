@@ -303,6 +303,28 @@ describe("composer completion keyboard paths", () => {
     expect(input()).toHaveValue("@revi");
   });
 
+  it("reopens a dismissed list once the token is replaced", async () => {
+    renderComposer();
+    await type("@rev");
+    await press("Escape");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    await type("");
+    await type("@rev");
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+  });
+
+  it("brings a dismissed list back with Tab", async () => {
+    renderComposer();
+    await type("@rev");
+    await press("Escape");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    await press("Tab");
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    expect(input()).toHaveValue("@rev");
+  });
+
   it("names a mixed candidate list as completions and an agents-only list as subagents", async () => {
     renderComposer();
     await type("@data/pro");

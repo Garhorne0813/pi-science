@@ -164,6 +164,12 @@ describe("planTab", () => {
     expect(planTab({ view: hidden, detected, items: [item("/export", "command")], value: "ex", caret: 2 })).toEqual({ kind: "ignore" });
   });
 
+  it("brings a dismissed list back when Tab asks for it", () => {
+    const dismissed = { visible: false, available: false, activeIndex: 0, activeItem: null };
+    const detected: DetectedCompletion = { provider: fakeProvider("slash", "typing"), query: { providerId: "slash", kind: "command", start: 0, end: 2, query: "ex" } };
+    expect(planTab({ view: dismissed, detected, items: [item("/export", "command")], value: "ex", caret: 2 })).toEqual({ kind: "open-menu" });
+  });
+
   it("leaves Tab to the browser when nothing is detected", () => {
     expect(planTab({ view: hidden, detected: null, items: [], value: "hi", caret: 2 })).toEqual({ kind: "ignore" });
   });

@@ -90,7 +90,11 @@ export function planTab(input: {
 }): CompletionCommand {
   const { view, detected, items, value } = input;
   if (view.visible) return planAccept({ query: detected?.query ?? null, item: view.activeItem, value });
-  if (!detected || detected.provider.trigger !== "tab" || items.length === 0) return { kind: "ignore" };
+  if (!detected || items.length === 0) return { kind: "ignore" };
+  // Candidates exist but the user dismissed the list. Tab is the key that asks for completions, so
+  // it brings the list back instead of leaving a menu that can never be reopened.
+  if (!view.available) return { kind: "open-menu" };
+  if (detected.provider.trigger !== "tab") return { kind: "ignore" };
   const { query } = detected;
   const prefix = commonPrefix(items);
   if (prefix.length > query.query.length) {
