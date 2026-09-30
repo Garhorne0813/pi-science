@@ -32,7 +32,7 @@ const WORKSPACE_ENV_KEYS = new Set([
 function workerEntry(): { path: string; execArgv: string[] } {
   const compiled = fileURLToPath(new URL("./worker/main.js", import.meta.url));
   if (existsSync(compiled)) return { path: compiled, execArgv: [] };
-  return { path: fileURLToPath(new URL("./worker/main.ts", import.meta.url)), execArgv: ["--import", fileURLToPath(import.meta.resolve("tsx"))] };
+  return { path: fileURLToPath(new URL("./worker/main.ts", import.meta.url)), execArgv: ["--import", import.meta.resolve("tsx")] };
 }
 
 function workerEnvironment(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
