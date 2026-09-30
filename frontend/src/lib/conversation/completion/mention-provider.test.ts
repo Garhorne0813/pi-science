@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import i18n from "../../../i18n";
 import { mentionProvider } from "./mention-provider";
+import { planAccept } from "./engine";
 import type { CompletionContext } from "./types";
 
 const AGENTS = [
@@ -74,6 +75,22 @@ describe("mentionProvider candidates", () => {
 
   it("keeps the existing space when the draft already has one there", () => {
     expect(complete("@scout tail", 6)[0].insertText).toBe("@scout");
+  });
+
+  it("uses separate boundaries for agent names and file paths in a mixed list", () => {
+    const value = "@rev,notes.csv tail";
+    const caret = 4;
+    const entries = [{ name: "rev,notes.csv", path: "rev,notes.csv", isDir: false, size: 10 }];
+    const query = detect(value, caret);
+    const candidates = complete(value, caret, entries);
+    expect(candidates.map((item) => item.kind)).toEqual(["subagent", "file"]);
+    expect(planAccept({ query, item: candidates[0], value })).toMatchObject({
+      value: "@reviewer ,notes.csv tail", end: caret,
+    });
+    expect(planAccept({ query, item: candidates[1], value })).toMatchObject({
+      value: " tail", end: value.indexOf(" "),
+      payload: { kind: "reference", reference: { path: "rev,notes.csv" } },
+    });
   });
 
   it("lists the matching directory entries as workspace references", () => {

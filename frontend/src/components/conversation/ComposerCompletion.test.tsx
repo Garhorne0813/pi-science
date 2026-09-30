@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentMention } from "../../lib/conversation";
 import { queryClient } from "../../lib/client/query-client";
 import { useUiStore } from "../../lib/ui";
+import { subagentsDiscoveryQuery } from "../../lib/settings";
 import { MentionComposer } from "./MentionComposer";
 
 /** A workspace the completion engine can see, keyed by subdir. */
@@ -212,6 +213,66 @@ describe("composer completion keyboard paths", () => {
     await press("Tab");
     await waitFor(() => expect(input()).toHaveValue("@reviewer "));
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it.each([")", "]", "}", ",then"])("preserves %s after an agent mention", async (suffix) => {
+    renderComposer();
+    await type(`Ask (@rev${suffix} continue`, 9);
+    await press("Tab");
+    expect(input()).toHaveValue(`Ask (@reviewer ${suffix} continue`);
+  });
+
+  it("replaces the rest of an agent name but keeps the following punctuation and space", async () => {
+    renderComposer();
+    await type("Ask (@reviewer),then continue", 9);
+    await press("Tab");
+    expect(input()).toHaveValue("Ask (@reviewer ),then continue");
+
+    await type("");
+    await type("@reviewer tail", 4);
+    await press("Tab");
+    expect(input()).toHaveValue("@reviewer tail");
+  });
+
+  it("resets the active row when filtering removes the previously selected agent", async () => {
+    fetchMock.mockImplementationOnce(async () => json({ agents: [
+      { name: "reviewer" }, { name: "researcher" }, { name: "scout" },
+    ] }));
+    renderComposer();
+    await type("@");
+    await press("ArrowDown");
+    await press("ArrowDown");
+    expect(screen.getAllByRole("option")[2]).toHaveAttribute("aria-selected", "true");
+
+    await type("@re");
+    expect(screen.getAllByRole("option")[0]).toHaveAttribute("aria-selected", "true");
+    await press("Tab");
+    expect(input()).toHaveValue("@reviewer ");
+  });
+
+  it("does not reuse a previous token's row when a new token starts at the same position", async () => {
+    renderComposer();
+    await type("@");
+    await press("ArrowDown");
+    await type("");
+    await type("@");
+    await press("Tab");
+    expect(input()).toHaveValue("@reviewer ");
+  });
+
+  it("resets navigation when a refreshed candidate list changes order", async () => {
+    renderComposer();
+    await type("@");
+    await press("ArrowDown");
+    act(() => {
+      queryClient.setQueryData(subagentsDiscoveryQuery("project").queryKey, {
+        agents: [{ name: "scout" }, { name: "reviewer" }],
+      });
+    });
+    await settle();
+    expect(screen.getAllByRole("option")[0]).toHaveAttribute("aria-selected", "true");
+    await press("Tab");
+    expect(input()).toHaveValue("@scout ");
   });
 
   it("turns an already-complete @name into a mention even when the text does not change", async () => {

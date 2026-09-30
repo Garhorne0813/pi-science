@@ -75,7 +75,7 @@ export function useComposerCompletion(params: {
   const agentsQuery = useQuery(subagentsDiscoveryQuery(cwd));
   const agents = useMemo(() => agentsQuery.data?.agents ?? [], [agentsQuery.data]);
   const [menuOverride, setMenuOverride] = useState<MenuOverride | null>(null);
-  const [cursor, setCursor] = useState<{ scope: string | null; index: number }>({ scope: null, index: 0 });
+  const [cursor, setCursor] = useState<{ key: string | null; index: number }>({ key: null, index: 0 });
 
   // Detection reads the text and the catalogues only, so it can run before the directory for
   // the detected token is loaded.
@@ -97,16 +97,22 @@ export function useComposerCompletion(params: {
   );
 
   const scope = detected ? completionScope(detected.query) : null;
+  // An old row number must not select a different candidate after filtering or reordering.
+  // Keep menu dismissal scoped to the token, but scope navigation to this exact candidate list.
+  const cursorKey = detected ? JSON.stringify([cwd, scope, detected.query.query, items.map((item) => item.id)]) : null;
+  useEffect(() => {
+    setCursor((current) => current.key === cursorKey ? current : { key: cursorKey, index: 0 });
+  }, [cursorKey]);
   const override = overrideIsLive(menuOverride, scope, value) ? menuOverride : null;
   const view = useMemo(
     () => completionView({
       detected,
       items,
-      activeIndex: cursor.scope === scope ? cursor.index : 0,
+      activeIndex: cursor.key === cursorKey ? cursor.index : 0,
       dismissedScope: override?.mode === "closed" ? override.scope : null,
       openedScope: override?.mode === "open" ? override.scope : null,
     }),
-    [cursor, detected, items, override, scope],
+    [cursor, cursorKey, detected, items, override],
   );
 
   useEffect(() => {
@@ -142,7 +148,7 @@ export function useComposerCompletion(params: {
       if (!view.visible) return false;
       event.preventDefault();
       event.stopPropagation();
-      if (scope) setCursor({ scope, index: Math.min(Math.max(view.activeIndex + (event.key === "ArrowDown" ? 1 : -1), 0), items.length - 1) });
+      if (cursorKey) setCursor({ key: cursorKey, index: Math.min(Math.max(view.activeIndex + (event.key === "ArrowDown" ? 1 : -1), 0), items.length - 1) });
       return true;
     }
     if (event.key === "Escape") {
@@ -166,7 +172,7 @@ export function useComposerCompletion(params: {
       return true;
     }
     return false;
-  }, [caret, composingRef, detected, dismiss, items, runCommand, scope, value, view]);
+  }, [caret, composingRef, cursorKey, detected, dismiss, items, runCommand, value, view]);
 
   const menu = useMemo<ComposerCompletionMenu | null>(() => {
     if (!view.visible) return null;

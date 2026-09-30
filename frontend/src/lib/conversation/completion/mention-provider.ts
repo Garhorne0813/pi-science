@@ -36,6 +36,10 @@ export const mentionProvider: CompletionProvider = {
   complete(query: CompletionQuery, context: CompletionContext): CompletionItem[] {
     const items: CompletionItem[] = [];
     const needle = query.query.toLowerCase();
+    // Agent names stop at punctuation, while a file candidate can own punctuation in its path.
+    // Still replace the rest of a partially typed name when the caret sits inside it.
+    let mentionEnd = context.caret;
+    while (mentionEnd < query.end && /[a-z0-9_-]/i.test(context.value[mentionEnd])) mentionEnd += 1;
     for (const agent of context.agents) {
       if (!agent.name.toLowerCase().includes(needle)) continue;
       const token = `@${agent.name}`;
@@ -46,7 +50,8 @@ export const mentionProvider: CompletionProvider = {
         description: agent.description,
         detail: agent.source,
         group: "agents",
-        insertText: `${token}${context.value.slice(context.caret).startsWith(" ") ? "" : " "}`,
+        insertText: `${token}${context.value.slice(mentionEnd).startsWith(" ") ? "" : " "}`,
+        ...(mentionEnd < query.end ? { replaceEnd: mentionEnd } : {}),
         payload: { kind: "mention", name: agent.name, token },
       });
     }

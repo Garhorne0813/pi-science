@@ -119,7 +119,8 @@ export function planAccept(input: {
 }): CompletionCommand {
   const { query, item, value } = input;
   if (!query || !item) return { kind: "ignore" };
-  const next = value.slice(0, query.start) + item.insertText + value.slice(query.end);
+  const end = item.replaceEnd ?? query.end;
+  const next = value.slice(0, query.start) + item.insertText + value.slice(end);
   // An exact match has nothing left to complete, so the key falls through to its normal meaning.
   // A candidate that fills a structured slot still applies: the text is already right, and the
   // mention or reference it carries does not exist yet.
@@ -129,7 +130,7 @@ export function planAccept(input: {
     value: next,
     caret: query.start + item.insertText.length,
     start: query.start,
-    end: query.end,
+    end,
     payload: item.payload,
   };
 }

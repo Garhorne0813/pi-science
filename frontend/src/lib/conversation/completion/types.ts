@@ -24,7 +24,7 @@ export interface CompletionAgent {
   source?: string;
 }
 
-/** A candidate row. `insertText` replaces `[query.start, query.end)`; an empty string deletes
+/** A candidate row. `insertText` replaces `[query.start, replaceEnd ?? query.end)`; an empty string deletes
  *  the span, which is how a `@file` mention turns into a reference chip. */
 export interface CompletionItem {
   /** Natural key, unique inside one list: "command:export", "file:data/a.csv". */
@@ -39,6 +39,8 @@ export interface CompletionItem {
   /** Heading this row sits under. Rows keep provider order inside a group. */
   group?: CompletionGroup;
   insertText: string;
+  /** Candidate-specific end when a mixed list contains tokens with different boundaries. */
+  replaceEnd?: number;
   /** Present when accepting also fills a structured composer slot, such as a workspace
    *  reference or a highlighted subagent mention. */
   payload?: CompletionPayload;
