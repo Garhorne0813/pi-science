@@ -35,12 +35,13 @@ function workerEntry(): { path: string; execArgv: string[] } {
   return { path: fileURLToPath(new URL("./worker/main.ts", import.meta.url)), execArgv: ["--import", import.meta.resolve("tsx")] };
 }
 
-function workerEnvironment(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
+export function workerEnvironment(overrides: Record<string, string> = {}, credentialEnvNames: string[] = []): NodeJS.ProcessEnv {
   const system = Object.fromEntries(SYSTEM_ENV_KEYS.flatMap((name) => {
     const value = process.env[name];
     return value === undefined ? [] : [[name, value]];
   }));
-  const workspace = Object.fromEntries(Object.entries(overrides).filter(([name]) => WORKSPACE_ENV_KEYS.has(name)));
+  const allowed = new Set([...WORKSPACE_ENV_KEYS, ...credentialEnvNames]);
+  const workspace = Object.fromEntries(Object.entries(overrides).filter(([name]) => allowed.has(name)));
   return { ...system, ...workspace };
 }
 
@@ -71,7 +72,7 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
 
   static async start(options: AgentRuntimeStartOptions, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<AgentCoreRuntimeClient> {
     const entry = workerEntry();
-    const env = workerEnvironment(options.env);
+    const env = workerEnvironment(options.env, options.credentialEnvNames);
     const child = fork(entry.path, [], {
       cwd: options.cwd,
       env,

@@ -83,4 +83,45 @@ describe("agent-core managed MCP tools", () => {
       await rm(cwd, { recursive: true, force: true });
     }
   }, 20_000);
+
+  it("bounds discovery across stalled connectors and reports both diagnostics", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-mcp-stalled-"));
+    const stalled = createServer(() => undefined);
+    stalled.listen(0, "127.0.0.1");
+    await once(stalled, "listening");
+    try {
+      const address = stalled.address();
+      if (!address || typeof address === "string") throw new Error("missing port");
+      await mkdir(join(cwd, ".pi-science"));
+      const endpoint = `http://127.0.0.1:${address.port}/mcp`;
+      await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test",
+        mcpServers: Object.fromEntries(["first", "second"].map((name) => [name, {
+          url: endpoint, transport: "streamable_http", requestTimeoutMs: 15_000,
+          __piScienceConnectorId: `connector_${name}`, __piScienceAllowPrivate: true,
+        }])) }));
+      const started = Date.now();
+      const mcp = await AgentMcpTools.open(cwd, new InteractionBridge(() => undefined), {}, 300);
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(mcp.tools).toEqual([]);
+      expect(mcp.diagnostics).toHaveLength(2);
+      await mcp.close();
+    } finally {
+      stalled.closeAllConnections();
+      stalled.close();
+      await rm(cwd, { recursive: true, force: true });
+    }
+  }, 5_000);
+
+  it("keeps the session usable when a connector binding is missing", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-mcp-missing-"));
+    try {
+      await mkdir(join(cwd, ".pi-science"));
+      await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test",
+        mcpServers: { unavailable: { __piScienceConnectorId: "connector_missing", command: "node",
+          __piScienceEnvironment: { TOKEN: { kind: "environment", name: "UNSET_LAB_KEY_FOR_TEST" } } } } }));
+      const mcp = await AgentMcpTools.open(cwd, new InteractionBridge(() => undefined), {});
+      expect(mcp.tools).toEqual([]);
+      expect(mcp.diagnostics).toEqual(["unavailable: Missing MCP environment variable: UNSET_LAB_KEY_FOR_TEST"]);
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
 });

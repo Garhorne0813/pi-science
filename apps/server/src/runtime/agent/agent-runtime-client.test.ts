@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AgentCoreRuntimeClient } from "./agent-runtime-client.js";
+import { AgentCoreRuntimeClient, workerEnvironment } from "./agent-runtime-client.js";
 
 const roots: string[] = [];
 const clients: AgentCoreRuntimeClient[] = [];
@@ -21,6 +21,11 @@ afterEach(async () => {
 });
 
 describe("AgentCoreRuntimeClient", () => {
+  it("passes only declared custom credential variables to a worker", () => {
+    const input = { MY_LAB_TOKEN: "test-secret", UNRELATED_SECRET: "do-not-forward" };
+    expect(workerEnvironment(input, ["MY_LAB_TOKEN"])).toMatchObject({ MY_LAB_TOKEN: "test-secret" });
+    expect(workerEnvironment(input, ["MY_LAB_TOKEN"])).not.toHaveProperty("UNRELATED_SECRET");
+  });
   it("creates a durable session in a child process and reopens it", async () => {
     const start = await options();
     const first = await AgentCoreRuntimeClient.start(start, 5_000);

@@ -10,6 +10,7 @@ export interface AgentRuntimeStartOptions {
   skillPaths?: string[];
   skillPolicy?: RuntimeSkillPolicy;
   env?: Record<string, string>;
+  credentialEnvNames?: string[];
 }
 
 export type WorkerCommand =

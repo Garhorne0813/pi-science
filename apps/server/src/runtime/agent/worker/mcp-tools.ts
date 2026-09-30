@@ -29,6 +29,24 @@ type ServerDefinition = {
   auth?: "oauth" | "bearer" | false;
 };
 
+const DISCOVERY_BUDGET_MS = 10_000;
+
+async function beforeDeadline<T>(operation: Promise<T>, deadline: number, client: Client): Promise<T> {
+  const remaining = Math.max(1, deadline - Date.now());
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          void client.close().catch(() => undefined);
+          reject(new Error("MCP discovery budget exceeded"));
+        }, remaining);
+      }),
+    ]);
+  } finally { if (timer) clearTimeout(timer); }
+}
+
 function permissionRequired(server: ServerDefinition, toolName: string): boolean {
   if (server.__piScienceAllowedTools?.includes(toolName)) return false;
   if (server.approveTools === false) return false;
@@ -47,17 +65,20 @@ export class AgentMcpTools {
   readonly tools: AgentHarnessTool<{ env: NodeExecutionEnv }>[] = [];
   readonly diagnostics: string[] = [];
 
-  static async open(cwd: string, bridge: InteractionBridge, environment: Record<string, string>): Promise<AgentMcpTools> {
+  static async open(cwd: string, bridge: InteractionBridge, environment: Record<string, string>, budgetMs = DISCOVERY_BUDGET_MS): Promise<AgentMcpTools> {
     const result = new AgentMcpTools();
-    const servers = loadProjectedServers(cwd) as Record<string, ServerDefinition>;
-    for (const [name, server] of Object.entries(servers)) {
-      try { await result.connect(name, server, cwd, bridge, environment); }
+    const servers = loadProjectedServers(cwd, (name, error) => {
+      result.diagnostics.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+    }) as Record<string, ServerDefinition>;
+    const deadline = Date.now() + budgetMs;
+    await Promise.all(Object.entries(servers).map(async ([name, server]) => {
+      try { await result.connect(name, server, cwd, bridge, environment, deadline); }
       catch (error) { result.diagnostics.push(`${name}: ${error instanceof Error ? error.message : String(error)}${typeof (error as { code?: unknown }).code === "number" ? ` (HTTP ${(error as { code: number }).code})` : ""}`); }
-    }
+    }));
     return result;
   }
 
-  private async connect(name: string, server: ServerDefinition, cwd: string, bridge: InteractionBridge, environment: Record<string, string>): Promise<void> {
+  private async connect(name: string, server: ServerDefinition, cwd: string, bridge: InteractionBridge, environment: Record<string, string>, deadline: number): Promise<void> {
     if (server.auth === "oauth" && !Object.keys(server.headers ?? {}).some((key) => key.toLowerCase() === "authorization")) {
       throw new Error("OAuth MCP connector requires an authorized credential binding");
     }
@@ -79,8 +100,8 @@ export class AgentMcpTools {
     } else throw new Error("unsupported MCP transport");
     const client = new Client({ name: "pi-science-agent-core", version: "0.1.0" });
     try {
-      await client.connect(transport, { timeout: server.requestTimeoutMs ?? 15_000 });
-      const listing = await client.listTools(undefined, { timeout: server.requestTimeoutMs ?? 15_000 });
+      await beforeDeadline(client.connect(transport, { timeout: Math.min(server.requestTimeoutMs ?? 15_000, Math.max(1, deadline - Date.now())) }), deadline, client);
+      const listing = await beforeDeadline(client.listTools(undefined, { timeout: Math.min(server.requestTimeoutMs ?? 15_000, Math.max(1, deadline - Date.now())) }), deadline, client);
       const count = listing.tools.length;
       if (count > 500) throw new Error("MCP server advertised too many tools");
       for (const tool of listing.tools) {

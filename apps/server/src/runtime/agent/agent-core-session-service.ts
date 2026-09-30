@@ -12,6 +12,8 @@ import type { AgentCoreRuntimeClient } from "./agent-runtime-client.js";
 import type { RuntimeResult, RuntimeSkillPolicy } from "./agent-runtime-types.js";
 import type { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
 import { seedWorkspaceAssets } from "../pi/pi-runtime-launch.js";
+import { CredentialStore } from "../../model-resources/credential-store.js";
+import { projectedEnvironmentNames } from "../pi/extensions/pi-science-mcp.js";
 
 type Live = { key: string; runtime: AgentCoreRuntimeClient; busy: boolean; restartPending: boolean; model: string; thinking: string | null };
 
@@ -67,6 +69,14 @@ export class AgentCoreSessionService {
       ...(this.server.backendUrl ? { PI_SCIENCE_BACKEND_URL: this.server.backendUrl } : {}),
       ...(this.server.internalToken ? { PI_SCIENCE_INTERNAL_TOKEN: this.server.internalToken } : {}),
     } as Record<string, string>;
+  }
+
+  private async credentialEnvNames(cwd: string): Promise<string[]> {
+    const metadata = await new CredentialStore().listMetadata();
+    return [...new Set([
+      ...metadata.filter((item) => item.backend === "environment").map((item) => item.environment_variable).filter((name): name is string => Boolean(name)),
+      ...projectedEnvironmentNames(cwd),
+    ])];
   }
 
   async owns(cwd: string, sessionId: string): Promise<boolean> {
@@ -134,6 +144,7 @@ export class AgentCoreSessionService {
         skillPaths: config.skills,
         skillPolicy: await globalSkillPolicy(),
         env: await this.workerEnvironment(cwd),
+        credentialEnvNames: await this.credentialEnvNames(cwd),
       });
       try { await writeJsonAtomic(configPath(cwd, runtime.sessionId), { model: config.model, thinking: config.thinking, skills: config.skills }); }
       catch (error) { await this.manager.stop(key); throw error; }
@@ -195,6 +206,7 @@ export class AgentCoreSessionService {
         skillPaths: saved?.skills ?? config.skills,
         skillPolicy: await globalSkillPolicy(),
         env: await this.workerEnvironment(cwd),
+        credentialEnvNames: await this.credentialEnvNames(cwd),
       });
       return this.attach(key, runtime, saved?.model ?? config.model!, saved?.thinking ?? config.thinking ?? null);
     } catch (error) { return failed(error); }
@@ -283,18 +295,51 @@ export class AgentCoreSessionService {
   async configure(cwd: string, sessionId: string, model: string, level: string | undefined, config: PiConfig): Promise<RuntimeResult> {
     const ref = splitModel(model);
     if (!ref) return { success: false, code: "invalid_model", error: "Model must use provider/model notation" };
+    if (level && !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(level)) {
+      return { success: false, code: "invalid_thinking", error: "invalid thinking level" };
+    }
     const opened = await this.open(cwd, sessionId, config);
     if ("success" in opened) return opened;
+    const previous = await opened.runtime.sendCommand("get_state").catch(failed);
+    if (!previous.success) return previous;
+    const before = previous.data as { model?: { provider?: string; modelId?: string }; thinkingLevel?: string } | undefined;
+    const previousModel = before?.model?.provider && before.model.modelId ? before.model as { provider: string; modelId: string } : splitModel(opened.model);
+    const previousThinking = before?.thinkingLevel ?? opened.thinking;
+    if (!previousModel) return { success: false, code: "reconcile_failed", error: "Unable to identify the current model before configuration" };
+    const rollback = async (failure: RuntimeResult): Promise<RuntimeResult> => {
+      const restoredModel = await opened.runtime.sendCommand("set_model", previousModel).catch(failed);
+      const restoredThinking = previousThinking
+        ? await opened.runtime.sendCommand("set_thinking_level", { level: previousThinking }).catch(failed)
+        : { success: true };
+      const restoredState = await opened.runtime.sendCommand("get_state").catch(failed);
+      const state = restoredState.data as { model?: { provider?: string; modelId?: string }; thinkingLevel?: string } | undefined;
+      if (!restoredModel.success || !restoredThinking.success || !restoredState.success
+        || state?.model?.provider !== previousModel.provider || state.model.modelId !== previousModel.modelId
+        || (previousThinking && state.thinkingLevel !== previousThinking)) {
+        await this.stopForReload(opened).catch(() => undefined);
+        return { success: false, code: "reconcile_failed", error: `Configuration failed and the worker could not be restored: ${failure.error ?? "unknown error"}` };
+      }
+      return failure;
+    };
     const result = await opened.runtime.sendCommand("set_model", ref).catch(failed);
-    if (!result.success) return result;
+    if (!result.success) return rollback(result);
     if (level) {
       const changed = await opened.runtime.sendCommand("set_thinking_level", { level }).catch(failed);
-      if (!changed.success) return changed;
+      if (!changed.success) return rollback(changed);
     }
+    const verified = await opened.runtime.sendCommand("get_state").catch(failed);
+    const state = verified.data as { model?: { provider?: string; modelId?: string }; thinkingLevel?: string } | undefined;
+    if (!verified.success || state?.model?.provider !== ref.provider || state.model.modelId !== ref.modelId
+      || (level && state.thinkingLevel !== level)) {
+      return rollback({ success: false, code: "reconcile_failed", error: "Agent runtime did not apply the requested configuration" });
+    }
+    const nextThinking = state.thinkingLevel ?? previousThinking;
+    try {
+      const saved = await readJson<{ skills?: string[] } | null>(configPath(cwd, sessionId), null);
+      await writeJsonAtomic(configPath(cwd, sessionId), { model, thinking: nextThinking, skills: saved?.skills ?? config.skills });
+    } catch (error) { return rollback(failed(error)); }
     opened.model = model;
-    opened.thinking = level ?? opened.thinking;
-    const saved = await readJson<{ skills?: string[] } | null>(configPath(cwd, sessionId), null);
-    await writeJsonAtomic(configPath(cwd, sessionId), { model, thinking: opened.thinking, skills: saved?.skills ?? config.skills });
+    opened.thinking = nextThinking ?? null;
     return { success: true, sessionId, model, thinking: opened.thinking, restarted: false };
   }
 
