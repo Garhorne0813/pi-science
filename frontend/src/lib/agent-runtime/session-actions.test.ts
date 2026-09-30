@@ -249,6 +249,7 @@ describe("runtime session actions", () => {
     const current = useRuntimeStore.getState();
     expect(current.activeSessionId).toBe("session-a");
     expect(current.working).toBe(true);
+    expect(current.turnLifecycle).toBe("active");
     expect(current.model).toBe("custom-custom-api/gpt-5.6-luna");
     expect(current.thinking).toBe("max");
     expect(current.contextTokens).toBe(24000);
@@ -257,6 +258,88 @@ describe("runtime session actions", () => {
     expect(current.compactionThresholdPercent).toBe(85);
     expect(current.thread.blocks[0]).toMatchObject({ kind: "user", text: "hello" });
     expect(current.status).toBe("ready");
+  });
+
+  it("restores compaction as active and queued messages as queued", async () => {
+    let runtimeState = state("session-a", { is_compacting: true });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [{ id: "user-compact", role: "user", content: [{ type: "text", text: "compact" }] }] });
+      if (url.includes("/state")) return jsonResponse(runtimeState);
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    expect(useRuntimeStore.getState()).toMatchObject({ working: true, turnLifecycle: "active" });
+
+    useRuntimeStore.getState().disconnect();
+    runtimeState = state("session-a", { pending_message_count: 1 });
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    expect(useRuntimeStore.getState()).toMatchObject({ working: true, turnLifecycle: "queued" });
+  });
+
+  it("restores a pending interaction as waiting", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [{ id: "user-waiting", role: "user", content: [{ type: "text", text: "confirm" }] }] });
+      if (url.includes("/state")) return jsonResponse(state("session-waiting", { is_streaming: true }));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: "session-waiting",
+      pendingInteraction: { requestId: "question-1", method: "confirm", title: "Continue?" },
+    });
+
+    await useRuntimeStore.getState().connect("/workspace", "session-waiting");
+    expect(useRuntimeStore.getState()).toMatchObject({ working: false, turnLifecycle: "waiting" });
+  });
+
+  it("does not reactivate a restored final answer from a stale busy snapshot", async () => {
+    const userBlock: ThreadBlock = { kind: "user", id: "user-final", text: "finished?", timestamp: "2026-09-24T12:00:00.000Z" };
+    const finalBlock: ThreadBlock = { kind: "agent", id: "agent-final", presentationRole: "final", parts: [{ id: "answer", text: "Done." }] };
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: "session-final",
+      thread: { blocks: [userBlock, finalBlock], index: { "user-final": 0, "agent-final": 1 }, loaded: true },
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-final", { is_streaming: true }));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-final");
+    expect(useRuntimeStore.getState()).toMatchObject({ working: false, turnLifecycle: "settled" });
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(expect.objectContaining({ id: "agent-final", presentationRole: "final" }));
+  });
+
+  it("checks the final answer on the reducer's active turn owner", async () => {
+    const blocks: ThreadBlock[] = [
+      { kind: "user", id: "user-active", turnId: "turn-active", text: "still working" },
+      { kind: "agent", id: "agent-active", turnId: "turn-active", partial: true, parts: [{ id: "active-part", text: "Working" }] },
+      { kind: "user", id: "user-later", turnId: "turn-later", text: "completed later turn" },
+      { kind: "agent", id: "agent-later", turnId: "turn-later", presentationRole: "final", parts: [{ id: "later-answer", text: "Done." }] },
+    ];
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: "session-owner",
+      thread: { blocks, index: Object.fromEntries(blocks.map((block, index) => [block.id, index])), loaded: true, foldState: { activeTurnId: "turn-active" } as never },
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-owner", { is_streaming: true }));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-owner");
+    expect(useRuntimeStore.getState()).toMatchObject({ working: true, turnLifecycle: "active" });
   });
 
   it("keeps a partial questionnaire busy until its bridge request arrives", async () => {

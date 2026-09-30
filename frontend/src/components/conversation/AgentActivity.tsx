@@ -60,12 +60,14 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
   const [traceExpanded, setTraceExpanded] = useState(false);
 
   if (isLiveLifecycle(lifecycle)) {
-    const state = lifecycle === "waiting" || lifecycle === "stopping" || shown?.state === "interaction" ? "waiting" : "running";
+    const state = lifecycle === "queued" || lifecycle === "waiting" || lifecycle === "stopping" || shown?.state === "interaction" ? "waiting" : "running";
     // Running tense of the process label. The latest partial thinking block
     // takes the phase while the model is reasoning (no tool has taken over).
     const lastActivity = activities.at(-1);
     const thinkingLive = lastActivity?.kind === "thinking" && lastActivity.partial === true;
-    const title = lifecycle === "recovering"
+    const title = lifecycle === "queued"
+      ? t("conversation.activity.queued")
+      : lifecycle === "recovering"
       ? t("conversation.activity.narrative.recover")
       : lifecycle === "waiting" && !shown
         ? t("conversation.activity.waitingInput")
@@ -93,7 +95,7 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
             after the phase word. */}
         <div className="flex min-h-primary w-full items-center gap-2 py-1 text-left">
           <span key={state} className="mx-1 flex w-3.5 shrink-0 justify-center"><ActivityIcon state={state} slot={visualSlot} config={progressAppearance} compact label={title} activityState={activityStateFor(lifecycle, shown)} /></span>
-          <ActivityLabel title={title} detail={null} error={false} elapsed={<LiveElapsed live />} />
+          <ActivityLabel title={title} detail={null} error={false} elapsed={<LiveElapsed live turnStartedAt={turnStartedAt} />} />
         </div>
       </div>
     );
@@ -295,18 +297,24 @@ function ActivityLabel({ title, detail, error = false, elapsed }: { title: strin
 
 /** Self-ticking turn clock. Lives in its own component so the 4 Hz tick
  *  re-renders only this chip, never the activity row's narration tree. */
-function LiveElapsed({ live }: { live: boolean }) {
+function LiveElapsed({ live, turnStartedAt }: { live: boolean; turnStartedAt?: string }) {
   const [, tick] = useState(0);
-  const startedAt = useRef<number | null>(null);
-  if (live && startedAt.current === null) startedAt.current = Date.now();
-  if (!live) startedAt.current = null;
+  const mountStartedAt = useRef<number | null>(null);
+  const restoredStartedAt = useMemo(() => {
+    if (!turnStartedAt) return null;
+    const parsed = Date.parse(turnStartedAt);
+    return Number.isFinite(parsed) ? parsed : null;
+  }, [turnStartedAt]);
+  if (live && mountStartedAt.current === null) mountStartedAt.current = Date.now();
+  if (!live) mountStartedAt.current = null;
   useEffect(() => {
     if (!live) return;
     const timer = window.setInterval(() => tick((value) => value + 1), 250);
     return () => window.clearInterval(timer);
   }, [live]);
-  if (!live || startedAt.current === null) return null;
-  return <span aria-hidden="true" className="shrink-0 font-mono text-ui-micro tabular-nums text-muted">{formatSeconds(Math.max(0, (Date.now() - startedAt.current) / 1000))}</span>;
+  const startedAt = restoredStartedAt ?? mountStartedAt.current;
+  if (!live || startedAt === null) return null;
+  return <span aria-hidden="true" className="shrink-0 font-mono text-ui-micro tabular-nums text-muted">{formatSeconds(Math.max(0, (Date.now() - startedAt) / 1000))}</span>;
 }
 
 function formatSeconds(totalSeconds: number): string {

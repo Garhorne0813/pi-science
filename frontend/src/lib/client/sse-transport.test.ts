@@ -8,6 +8,40 @@ installClientTestEnvironment();
 
 
 describe("PiScienceClient conversation transport", () => {
+  it("releases a hidden tab's stream and resumes from the applied cursor", () => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    const client = new PiScienceClient();
+    client.connect("session-a", "/workspace");
+    const first = FakeEventSource.instances[0];
+    first.open();
+    first.emit("text.updated", { type: "text.updated", sessionId: "session-a", text: "before" }, "epoch:42");
+
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(first.readyState).toBe(FakeEventSource.CLOSED);
+    client.reconnect("session-a", "/workspace");
+    expect(FakeEventSource.instances).toHaveLength(1);
+
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(FakeEventSource.instances[1].url).toContain("lastEventId=epoch%3A42");
+    client.disconnect();
+  });
+
+  it("requests gap recovery when a hidden stream has no applied cursor", () => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    const client = new PiScienceClient();
+    client.connect("session-a", "/workspace");
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(FakeEventSource.instances[1].url).toContain("lastEventId=pi-recovery-sentinel%3A0");
+    client.disconnect();
+  });
+
   it("keeps listeners across reconnects and drops stale or cross-session events", () => {
     const client = new PiScienceClient();
     const events: string[] = [];
