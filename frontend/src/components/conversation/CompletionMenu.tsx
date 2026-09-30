@@ -82,7 +82,7 @@ export function CompletionMenu({ id, label, items, activeIndex, onSelect, onDism
 
   return (
     <div ref={menuRef} role="listbox" id={id} aria-label={label} className="ui-popover absolute bottom-full left-0 right-0 z-50 mb-1 max-h-56 w-full max-w-full overflow-y-auto rounded-card p-1">
-      <div id={`${id}-help`} className="sticky top-0 z-10 border-b border-faint bg-surface-raised px-2 py-1 text-ui-micro text-muted">
+      <div id={`${id}-help`} className="sr-only">
         {t("conversation.completion.keyboardHint")}
       </div>
       {groups.size > 1
