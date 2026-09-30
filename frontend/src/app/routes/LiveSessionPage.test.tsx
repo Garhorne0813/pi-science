@@ -15,6 +15,7 @@
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ComponentType, ReactNode, Ref } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -67,7 +68,6 @@ import { FeedbackContext } from "../../components/feedback/feedback-context";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
 import { queryClient } from "../../lib/client/query-client";
-import { resetDynamicCommands } from "../../lib/conversation";
 import type { PendingInteraction, PendingQuestionnaire } from "../../lib/agent-runtime";
 import i18n from "../../i18n";
 import type { ThreadBlock } from "../../types/thread";
@@ -192,26 +192,30 @@ function sendButton(): HTMLElement {
 
 function renderPage(search = "") {
   return render(
-    <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
-      <MemoryRouter initialEntries={[`/workspace/${CWD}/session/${SESSION_ID}${search}`]}>
-        <Routes>
-          {/* The app mounts WorkspaceProvider around the route tree (app/router.tsx). */}
-          <Route path="/workspace/:cwd/session/:sessionId" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
-        </Routes>
-      </MemoryRouter>
-    </FeedbackContext.Provider>,
+    <QueryClientProvider client={queryClient}>
+      <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
+        <MemoryRouter initialEntries={[`/workspace/${CWD}/session/${SESSION_ID}${search}`]}>
+          <Routes>
+            {/* The app mounts WorkspaceProvider around the route tree (app/router.tsx). */}
+            <Route path="/workspace/:cwd/session/:sessionId" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
+          </Routes>
+        </MemoryRouter>
+      </FeedbackContext.Provider>
+    </QueryClientProvider>,
   );
 }
 
 function renderWorkspaceLanding() {
   return render(
-    <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
-      <MemoryRouter initialEntries={[`/workspace/${CWD}`]}>
-        <Routes>
-          <Route path="/workspace/:cwd" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
-        </Routes>
-      </MemoryRouter>
-    </FeedbackContext.Provider>,
+    <QueryClientProvider client={queryClient}>
+      <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
+        <MemoryRouter initialEntries={[`/workspace/${CWD}`]}>
+          <Routes>
+            <Route path="/workspace/:cwd" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
+          </Routes>
+        </MemoryRouter>
+      </FeedbackContext.Provider>
+    </QueryClientProvider>,
   );
 }
 
@@ -254,7 +258,6 @@ beforeEach(() => {
     clear: () => storage.clear(),
   });
   queryClient.clear();
-  resetDynamicCommands();
   useUiStore.setState({ inspectorOpen: false, inspectorData: null, workspaceReferences: [], settingsOpen: false, settingsScope: null, });
   useRuntimeStore.setState({
     status: "ready",
@@ -784,7 +787,9 @@ describe("slash-command dispatcher", () => {
     act(() => { useRuntimeStore.getState().setDraft("/"); });
 
     expect(screen.getByRole("listbox")).toBeInTheDocument();
-    fireEvent.keyDown(window, { key: "Escape" });
+    // Escape is handled on the textarea, not on window: the composer must not eat keys that
+    // belong to another surface, such as the settings dialog.
+    fireEvent.keyDown(textarea(), { key: "Escape" });
 
     expect(textarea()).toHaveValue("/");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
@@ -799,6 +804,26 @@ describe("slash-command dispatcher", () => {
 
     await waitFor(() => expect(textarea()).toHaveValue(""));
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("discovers skills on a cold new conversation and preserves its draft", async () => {
+    let finish!: (id: string) => void;
+    const pending = new Promise<string>((resolve) => { finish = resolve; });
+    const create = vi.fn(() => pending);
+    overrides.push((url) => url.includes("/commands?")
+      ? Promise.resolve(jsonResponse({ commands: [{ name: "skill:review", description: "Review files", source: "skill" }] }))
+      : null);
+    useRuntimeStore.setState({ activeSessionId: null, createNewSession: create });
+    renderWorkspaceLanding();
+    expect(create).not.toHaveBeenCalled();
+    act(() => { useRuntimeStore.getState().setDraft("/skill:rev"); });
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    act(() => { useRuntimeStore.setState({ activeSessionId: "s2" }); finish("s2"); });
+    await waitFor(() => expect(screen.getByRole("listbox")).toHaveTextContent("/skill:review"));
+    expect(textarea()).toHaveValue("/skill:rev");
+    fireEvent.keyDown(textarea(), { key: "Tab" });
+    await waitFor(() => expect(textarea()).toHaveValue("/skill:review"));
+    expect(create).toHaveBeenCalledTimes(1);
   });
 
   it("/compact posts to the compact endpoint and reports it without sending a prompt", async () => {

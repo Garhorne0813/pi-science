@@ -54,13 +54,17 @@ export function useComposer(params: {
     [allWorkspaceReferences, cwd],
   );
   const clearWorkspaceReferences = useUiStore((state) => state.clearWorkspaceReferences);
-  const composerContextRef = useRef<string | null>(null);
+  const composerContextRef = useRef<{ cwd: string; conversationKey: string | null; sessionId: string | null } | null>(null);
 
   useEffect(() => {
-    const composerContext = `${cwd}\0${conversationKey ?? ""}\0${activeSessionId ?? ""}`;
+    const composerContext = { cwd, conversationKey, sessionId: activeSessionId };
     const previousContext = composerContextRef.current;
     composerContextRef.current = composerContext;
-    if (previousContext !== null && previousContext !== composerContext) {
+    const sameDraft = previousContext?.cwd === cwd && previousContext.conversationKey === conversationKey;
+    // Attaching a runtime to the current blank draft is not switching conversations.
+    // Keep text, mentions, references and attachments while slash discovery initializes it.
+    const adoptedDraft = sameDraft && previousContext?.sessionId === null && activeSessionId !== null;
+    if (previousContext && (!sameDraft || previousContext.sessionId !== activeSessionId) && !adoptedDraft) {
       setInput("");
       setMentions([]);
       setFiles([]);

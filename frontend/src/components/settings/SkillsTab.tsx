@@ -20,6 +20,7 @@ type Skill = {
 type SkillsResponse = { skills?: Skill[]; configured?: boolean };
 
 function invalidateSkills() {
+  void queryClient.invalidateQueries({ queryKey: ["slash-commands"] });
   void queryClient.invalidateQueries({ queryKey: settingsKey("skills") });
   invalidateSettings();
 }
