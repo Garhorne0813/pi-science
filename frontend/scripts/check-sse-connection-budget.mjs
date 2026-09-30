@@ -140,7 +140,7 @@ function describeStreams(paths) {
 
 /** Counting a single endpoint would let a second subscription come back
  *  unnoticed, so the whole page is compared against its known budget as a
- *  multiset. A duplicate and a missing stream both fail and name the endpoint. */
+ *  multiset. */
 async function assertStreamBudget(page, label, allowed) {
   const active = (await activeSourcePaths(page)).sort();
   const budget = [...allowed].sort();
