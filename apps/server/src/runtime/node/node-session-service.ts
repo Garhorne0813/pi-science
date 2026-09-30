@@ -1,14 +1,18 @@
 import type { CreateSessionRequest, PiConfig, SessionState, SessionStats } from "@pi-science/contracts";
 import { randomUUID } from "node:crypto";
 import { mkdir, unlink } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import nodeProcess from "node:process";
 import { ConversationEventHub, conversationEventHub } from "../events/conversation-event-hub.js";
 import { durableEventStore } from "../events/event-store.js";
 import { observeNodePiEvent } from "../events/node-event-observer.js";
+import type { AgentRuntime, RuntimeResult, RuntimeSkillPolicy } from "../agent/agent-runtime-types.js";
+import { OrbitRuntimeAdapter } from "../agent/orbit-runtime-adapter.js";
+import { AgentCoreSessionService } from "../agent/agent-core-session-service.js";
+import { agentModelCatalog } from "../agent/worker/agent-models.js";
 import { PiManager, piManager } from "../pi/pi-manager.js";
 import { PiOrbitRequestError } from "../pi/pi-orbit-host.js";
-import type { PiProcess, PiProcessOptions, PiResult, RuntimeSkillPolicy } from "../pi/pi-process.js";
+import type { PiProcessOptions, PiResult } from "../pi/pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
 import { canonicalFromRuntimeModelRef, canonicalRuntimeModelRef, projectedRuntimeModelRef } from "../pi/pi-runtime-projection.js";
 import type { ProjectReviewService } from "../../project-review/service.js";
@@ -19,7 +23,7 @@ import { foldEventRecordsTiming, maxTiming, mergeSessionStats, SessionStatsProje
 import { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
 import { diffWorkspaceSnapshots, previewKind, previewMime, snapshotWorkspace, type WorkspaceSnapshotEntry } from "../artifacts/workspace-artifact-snapshot.js";
 import { turnArtifactRepository } from "../artifacts/turn-artifact-repository.js";
-import { readJsonLines, workspaceFile } from "../../storage/persistence.js";
+import { metadataRoot, readJsonLines, workspaceFile } from "../../storage/persistence.js";
 import { ensureProject } from "../../project/project-registry.js";
 import type { ModelResourceService } from "../../model-resources/model-resource-service.js";
 
@@ -34,7 +38,7 @@ type StatsEventStore = {
 type RuntimeRecord = {
   cwd: string;
   managerKey: string;
-  process: PiProcess;
+  process: AgentRuntime;
   activeSessionId: string;
   config: PiConfig;
   busy: boolean;
@@ -171,6 +175,7 @@ function firstErrorDiagnostic(diagnostics: unknown): string | null {
 }
 
 export class NodeSessionService {
+  private readonly agentCore: AgentCoreSessionService;
   private readonly runtimes = new Map<string, RuntimeRecord>();
   private readonly locks = new Map<string, Promise<void>>();
   private readonly autoReviews = new Set<string>();
@@ -189,7 +194,10 @@ export class NodeSessionService {
     private readonly projectReview: Pick<ProjectReviewService, "run"> | null = null,
     private readonly statsEventStore: StatsEventStore = durableEventStore,
     private readonly modelResources: Pick<ModelResourceService, "ensureMigrated" | "isModelAvailable"> | null = null,
-  ) {}
+    agentCoreServer: { backendUrl?: string; internalToken?: string } = {},
+  ) {
+    this.agentCore = new AgentCoreSessionService(eventHub, environments, agentCoreServer);
+  }
 
   configureLogging(log: (level: "info" | "warn" | "error", message: string) => void): void {
     this.log = log;
@@ -197,6 +205,7 @@ export class NodeSessionService {
 
   configureBeforeRuntimeStart(hook: ((cwd: string) => Promise<void>) | null): void {
     this.beforeRuntimeStart = hook;
+    this.agentCore.configureBeforeStart(hook);
   }
 
   async create(body: CreateSessionRequest): Promise<{ id: string; cwd: string; project_id: string } | RuntimeFailure & { sessionId?: string }> {
@@ -206,7 +215,11 @@ export class NodeSessionService {
     const migration = await this.ensureModelResources();
     if (migration) return migration;
     const project = await ensureProject(cwd);
-    await mkdir(resolve(cwd, ".pi-science", "sessions"), { recursive: true });
+    if (process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core") {
+      const created = await this.agentCore.create(cwd, effectiveConfig(body.config));
+      return "error" in created ? created : { id: created.id, cwd, project_id: project.id };
+    }
+    await mkdir(join(metadataRoot(cwd), "sessions"), { recursive: true });
     return this.withLock(`create:${cwd}`, async () => {
       let runtime: RuntimeRecord | undefined;
       const config = effectiveConfig(body.config);
@@ -227,6 +240,11 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
+    if (["prompt", "steer", "follow_up", "compact"].includes(type)) {
+      const imported = await this.maybeImportLegacy(cwd, sessionId);
+      if (imported && !imported.success) return imported;
+    }
+    if (await this.agentCore.owns(cwd, sessionId)) return this.agentCore.command(cwd, sessionId, type, params, effectiveConfig());
     return this.withLock(`${cwd}\0${sessionId}`, async () => {
       // Abort is safe to acknowledge when there is no live runtime. Command
       // discovery must activate the persisted session so project skills and
@@ -331,6 +349,7 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
+    if (await this.agentCore.owns(cwd, sessionId)) return this.agentCore.notify(cwd, sessionId, type, params);
     const key = runtimeKey(cwd, sessionId);
     const deliver = async (runtime: RuntimeRecord): Promise<PiResult> => {
       try {
@@ -364,6 +383,9 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
+    const imported = await this.maybeImportLegacy(cwd, sessionId);
+    if (imported && !imported.success) return imported;
+    if (await this.agentCore.owns(cwd, sessionId)) return this.agentCore.fork(cwd, sessionId, entryId, effectiveConfig());
     return this.withLock(`${cwd}\0${sessionId}`, async () => {
       const source = await this.activateUnlocked(sessionId, cwd);
       if ("error" in source) return source;
@@ -371,7 +393,7 @@ export class NodeSessionService {
       if (!ready.success) return ready;
       const sessionPath = await this.repository.findPath(cwd, sessionId);
       if (!sessionPath) return { success: false, code: "not_found", error: "session not found" };
-      if (source.process.runtimeIdentity) {
+      if (source.process.legacyOrbit?.runtimeIdentity) {
         const result = await source.process.sendCommand(entryId ? "fork" : "clone", entryId ? { entryId } : {});
         if (!result.success) return result;
         const state = await this.refreshState(source);
@@ -419,6 +441,9 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
+    const imported = await this.maybeImportLegacy(cwd, sessionId);
+    if (imported && !imported.success) return imported;
+    if (await this.agentCore.owns(cwd, sessionId)) return this.agentCore.configure(cwd, sessionId, model, thinking, effectiveConfig());
     if (!model.includes("/")) return { success: false, code: "invalid_request", error: "model must use provider/model notation" };
     if (this.modelResources) {
       try { await this.modelResources.ensureMigrated(); }
@@ -472,7 +497,8 @@ export class NodeSessionService {
   }
 
   activeSessionId(cwdValue: string): string | null {
-    try { return [...this.runtimes.values()].find((runtime) => runtime.cwd === resolve(cwdValue))?.activeSessionId ?? null; }
+    try { return this.agentCore.liveSessions(resolve(cwdValue))[0]?.id
+      ?? [...this.runtimes.values()].find((runtime) => runtime.cwd === resolve(cwdValue))?.activeSessionId ?? null; }
     catch { return null; }
   }
 
@@ -483,9 +509,9 @@ export class NodeSessionService {
   liveSessions(cwdValue: string): Array<{ id: string; cwd: string }> {
     try {
       const cwd = resolve(cwdValue);
-      return [...this.runtimes.values()]
+      return [...this.agentCore.liveSessions(cwd), ...[...this.runtimes.values()]
         .filter((runtime) => runtime.cwd === cwd && runtime.activeSessionId)
-        .map((runtime) => ({ id: runtime.activeSessionId, cwd }));
+        .map((runtime) => ({ id: runtime.activeSessionId, cwd }))];
     } catch { return []; }
   }
 
@@ -493,6 +519,11 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
+    if (process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core") {
+      return { success: true, data: { models: await agentModelCatalog() } };
+    }
+    const core = this.agentCore.liveRuntime(cwd);
+    if (core) return core.sendCommand("get_available_models");
     const runtime = [...this.runtimes.values()].find((candidate) => candidate.cwd === cwd && !candidate.closing);
     if (!runtime?.activeSessionId) return { success: false, code: "not_found", error: "pi process not found" };
     const key = runtimeKey(cwd, runtime.activeSessionId);
@@ -509,6 +540,12 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
+    const core = this.agentCore.liveRuntime(cwd, expectedModel);
+    if (core) {
+      const result = await core.sendCommand("get_available_thinking_levels");
+      return result.success && result.data && typeof result.data === "object"
+        ? { ...result, data: { ...result.data, model: expectedModel ?? null } } : result;
+    }
     const expectedCanonical = expectedModel ? canonicalRuntimeModelRef(expectedModel) : null;
     // Runtime state uses projected provider/model IDs. Compare canonical IDs so
     // split providers and model aliases still match the saved settings model.
@@ -551,6 +588,9 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
+    const imported = await this.maybeImportLegacy(cwd, sessionId);
+    if (imported && !imported.success) return imported;
+    if (await this.agentCore.owns(cwd, sessionId)) return this.agentCore.resume(cwd, sessionId, effectiveConfig());
     return this.withLock(`${cwd}\0${sessionId}`, async () => {
       let activated = await this.activateUnlocked(sessionId, cwd);
       if ("error" in activated) return activated;
@@ -572,6 +612,7 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { error: String(error), code: "workspace_invalid" }; }
+    if (await this.agentCore.owns(cwd, sessionId)) return this.agentCore.state(cwd, sessionId, effectiveConfig());
     return this.withLock(`${cwd}\0${sessionId}`, async () => {
       let runtime = this.runtimes.get(runtimeKey(cwd, sessionId));
       if (runtime && (runtime.closing || runtime.process.isClosed)) {
@@ -652,6 +693,7 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { error: String(error), code: "workspace_invalid" }; }
+    if (await this.agentCore.owns(cwd, sessionId)) return this.agentCore.stats(cwd, sessionId);
     return this.withLock(runtimeKey(cwd, sessionId), async () => {
       const runtime = this.runtimes.get(runtimeKey(cwd, sessionId));
       const stats = await this.collectStats(cwd, sessionId, runtime && runtime.activeSessionId === sessionId ? runtime : undefined);
@@ -731,6 +773,7 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
+    if (await this.agentCore.owns(cwd, sessionId)) return this.agentCore.delete(cwd, sessionId);
     return this.withLock(`${cwd}\0${sessionId}`, async () => {
       const runtime = this.runtimes.get(runtimeKey(cwd, sessionId));
       if (runtime?.activeSessionId === sessionId) {
@@ -759,6 +802,7 @@ export class NodeSessionService {
 
   async reloadConfiguration(): Promise<Array<{ cwd: string; oldId: string; newId: string }>> {
     return this.withLock("\0configuration-reload", async () => {
+      await this.agentCore.reloadConfiguration();
       const runtimes = [...new Set(this.runtimes.values())];
       if (this.manager.hostProcessCount > 0) this.hostReloadPending = true;
       if (this.hostReloadPending && runtimes.some((runtime) => runtime.busy)) {
@@ -801,22 +845,24 @@ export class NodeSessionService {
   }
 
   async setGlobalSkillPolicy(policy: RuntimeSkillPolicy): Promise<void> {
+    await this.agentCore.setGlobalSkillPolicy(policy);
     const runtimes = [...new Set(this.runtimes.values())];
     for (const runtime of runtimes) {
       const result = await this.withLock(runtimeKey(runtime.cwd, runtime.activeSessionId), async () => {
         if (runtime.busy) return { success: false, code: "runtime_busy", error: "Runtime is busy" };
-        return runtime.process.setRuntimeSkillPolicy(policy);
+        return runtime.process.setSkillPolicy(policy);
       });
       if (!result.success) throw Object.assign(new Error(String(result.error ?? "Unable to update runtime skills")), { code: String(result.code ?? "runtime_error") });
     }
   }
 
   async refreshAllRuntimeSkills(): Promise<void> {
+    await this.agentCore.refreshAllSkills();
     const runtimes = [...new Set(this.runtimes.values())];
     for (const runtime of runtimes) {
       const result = await this.withLock(runtimeKey(runtime.cwd, runtime.activeSessionId), async () => {
         if (runtime.busy) return { success: false, code: "runtime_busy", error: "Runtime is busy" };
-        return runtime.process.refreshRuntimeSkills();
+        return runtime.process.refreshSkills();
       });
       if (!result.success) throw Object.assign(new Error(String(result.error ?? "Unable to refresh runtime skills")), { code: String(result.code ?? "runtime_error") });
     }
@@ -830,12 +876,13 @@ export class NodeSessionService {
       this.eventHub.expectExit(runtime.process);
     }
     await this.manager.shutdownAll();
+    await this.agentCore.shutdownAll();
     await this.eventHub.flush();
     this.runtimes.clear();
   }
 
   get activeCount(): number { return this.runtimes.size; }
-  get processCount(): number { return this.manager.processCount; }
+  get processCount(): number { return this.manager.processCount + this.agentCore.processCount; }
 
   private async ensureModelResources(): Promise<RuntimeFailure | null> {
     if (!this.modelResources) return null;
@@ -845,6 +892,19 @@ export class NodeSessionService {
     } catch (error) {
       return { error: `unable to migrate model resources: ${error instanceof Error ? error.message : String(error)}`, code: "model_resources_migration_failed" };
     }
+  }
+
+  private async maybeImportLegacy(cwd: string, sessionId: string): Promise<RuntimeResult | null> {
+    if (process.env.PI_SCIENCE_AGENT_RUNTIME !== "agent-core") return null;
+    if (await this.agentCore.owns(cwd, sessionId)) return null;
+    return this.withLock(`agent-import:${runtimeKey(cwd, sessionId)}`, async () => {
+      if (await this.agentCore.owns(cwd, sessionId)) return null;
+      const active = this.runtimes.get(runtimeKey(cwd, sessionId));
+      if (active && !active.closing && !active.process.isClosed) return null;
+      const path = await this.repository.findPath(cwd, sessionId);
+      if (!path) return null;
+      return this.agentCore.importLegacy(cwd, sessionId, path, effectiveConfig());
+    });
   }
 
   private async activateUnlocked(sessionId: string, cwd: string): Promise<RuntimeRecord | ServiceFailure> {
@@ -900,9 +960,9 @@ export class NodeSessionService {
       catch (error) { return { error: `unable to prepare Pi runtime configuration: ${String(error)}`, code: "configuration_failed" }; }
     }
     if (!options) return { error: "PI_CLI_PATH is not configured", code: "spawn_failed" };
-    let process: PiProcess;
+    let process: AgentRuntime;
     const managerKey = randomUUID();
-    try { process = await this.manager.start(managerKey, options); }
+    try { process = new OrbitRuntimeAdapter(await this.manager.start(managerKey, options), cwd); }
     catch (error) {
       if (error instanceof PiOrbitRequestError) {
         const detail = firstErrorDiagnostic(error.payload.diagnostics);
@@ -1062,7 +1122,7 @@ export class NodeSessionService {
     if (runtime.watchdogTimer) clearTimeout(runtime.watchdogTimer);
     runtime.watchdogTimer = undefined;
     const intervalMs = eventWatchdogMs();
-    if (intervalMs <= 0 || !runtime.process.attachedToHost) return;
+    if (intervalMs <= 0 || !runtime.process.legacyOrbit?.attachedToHost) return;
     if (runtime.closing || (!runtime.busy && !runtime.operationPending)) return;
     runtime.watchdogTimer = setTimeout(() => {
       runtime.watchdogTimer = undefined;
@@ -1077,9 +1137,11 @@ export class NodeSessionService {
 
   private async runEventWatchdog(runtime: RuntimeRecord): Promise<void> {
     if (runtime.closing || (!runtime.busy && !runtime.operationPending)) return;
+    const orbit = runtime.process.legacyOrbit;
+    if (!orbit?.attachedToHost) return;
     // A live stream keeps lastEventAt fresh. Anything that arrived within the
     // interval is proof of life; re-arm and move on.
-    if (runtime.process.lastEventAt > 0 && Date.now() - runtime.process.lastEventAt < eventWatchdogMs()) {
+    if (orbit.lastEventAt > 0 && Date.now() - orbit.lastEventAt < eventWatchdogMs()) {
       this.scheduleEventWatchdog(runtime);
       return;
     }
@@ -1091,7 +1153,7 @@ export class NodeSessionService {
     if (reconnects < 2) {
       runtime.watchdogReconnects = reconnects + 1;
       this.log("warn", `Pi Orbit event stream silent for ${eventWatchdogMs()}ms while busy; reconnecting (attempt ${reconnects + 1})`);
-      void runtime.process.reconnectEventStream().catch((error: unknown) => {
+      void orbit.reconnectEventStream().catch((error: unknown) => {
         this.log("warn", `Pi Orbit event stream reconnect failed: ${String(error)}`);
       });
       this.scheduleEventWatchdog(runtime);
@@ -1436,7 +1498,7 @@ export class NodeSessionService {
    *  switching; the workspace configuration must win on every recovery path.
    *  Fails fast on the first rejected step (after transient busy retries) and
    *  leaves the runtime untouched. */
-  private async replaySessionConfig(process: PiProcess, config: PiConfig): Promise<PiResult> {
+  private async replaySessionConfig(process: AgentRuntime, config: PiConfig): Promise<PiResult> {
     const model = config.model ? projectedRuntimeModelRef(config.model) : null;
     if (model?.includes("/")) {
       const separator = model.indexOf("/");
@@ -1459,7 +1521,7 @@ export class NodeSessionService {
    *  absorbs that window. Any other failure (unknown model, unreadable
    *  session) is a config/session error and fails fast — the recovery path
    *  must never silently continue on a model the runtime rejected. */
-  private async sendRecoveryCommand(process: PiProcess, type: string, params: Record<string, unknown>): Promise<PiResult> {
+  private async sendRecoveryCommand(process: AgentRuntime, type: string, params: Record<string, unknown>): Promise<PiResult> {
     for (let attempt = 0; ; attempt += 1) {
       const result = await process.sendCommand(type, params);
       if (result.success || (result.code !== "runtime_busy" && result.code !== "busy")) return result;
@@ -1493,18 +1555,19 @@ export class NodeSessionService {
    *  timeout of its own. */
   private async ensureHealthyEventStream(runtime: RuntimeRecord, type: string): Promise<PiResult> {
     const process = runtime.process;
-    if (!process.attachedToHost) return { success: true };
-    if (process.eventStreamAlive) {
-      if (process.lastEventAt > 0 && Date.now() - process.lastEventAt > eventWatchdogMs() * 2) {
-        this.log("warn", `Pi Orbit event stream stale (${Math.round((Date.now() - process.lastEventAt) / 1000)}s of silence) before ${type}; continuing`);
+    const orbit = process.legacyOrbit;
+    if (!orbit?.attachedToHost) return { success: true };
+    if (orbit.eventStreamAlive) {
+      if (orbit.lastEventAt > 0 && Date.now() - orbit.lastEventAt > eventWatchdogMs() * 2) {
+        this.log("warn", `Pi Orbit event stream stale (${Math.round((Date.now() - orbit.lastEventAt) / 1000)}s of silence) before ${type}; continuing`);
       }
       return { success: true };
     }
-    if (!process.lastEventAt) return { success: true }; // still establishing
+    if (!orbit.lastEventAt) return { success: true }; // still establishing
     this.log("warn", `Pi Orbit event stream dead before ${type}; reconnecting`);
     try {
       await Promise.race([
-        process.reconnectEventStream(),
+        orbit.reconnectEventStream(),
         new Promise<never>((_, reject) => {
           const timer = setTimeout(() => reject(new Error("event stream reconnect timed out after 5s")), 5_000);
           timer.unref?.();

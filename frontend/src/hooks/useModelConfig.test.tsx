@@ -123,7 +123,9 @@ describe("useModelConfig", () => {
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const url = String(input);
       if (url.startsWith("/api/settings/config")) {
-        return Promise.resolve(jsonResponse({ ok: true, providers: [], available_models: [], model: undefined, thinking: undefined }));
+        return Promise.resolve(jsonResponse({ ok: true, providers: [], available_models: [
+          { id: "deepseek/deepseek-v4-pro", provider: "deepseek", model: "deepseek-v4-pro", label: "V4 Pro" },
+        ], model: undefined, thinking: undefined }));
       }
       if (url.startsWith("/api/settings/model")) {
         return Promise.resolve(jsonResponse({ ok: true }));
@@ -135,6 +137,22 @@ describe("useModelConfig", () => {
     const { result } = renderHook(() => useModelConfig("proj", "s1"), { wrapper });
     await waitFor(() => expect(result.current.selectedModel).toBe("deepseek/deepseek-v4-pro"));
     expect(result.current.thinking).toBe("max");
+  });
+
+  it("requires a model switch when the saved model is absent from the runtime catalog", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      if (url.startsWith("/api/settings/config")) return jsonResponse({
+        available_models: [{ id: "deepseek/deepseek-v4-pro", provider: "deepseek", model: "deepseek-v4-pro", label: "V4 Pro" }],
+        model: "", unavailable_model: "deepseek/deepseek-v4-flash", thinking: "high",
+      });
+      return defaultFetch(url, init);
+    });
+    useRuntimeStore.setState({ model: "deepseek/deepseek-v4-pro", thinking: "high" });
+    const { result } = renderHook(() => useModelConfig("proj", "s1"), { wrapper });
+    await waitFor(() => expect(result.current.needsModelSwitch).toBe(true));
+    expect(result.current.selectedModel).toBe("");
+    expect(result.current.modelError).toContain("deepseek/deepseek-v4-flash");
   });
 
   it("does not let a previous workspace's saved config block this workspace's runtime model", async () => {

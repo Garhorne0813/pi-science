@@ -22,6 +22,21 @@ beforeAll(async () => {
 });
 
 describe("ModelControlMenu", () => {
+  it("prompts to switch when the saved model is unavailable", () => {
+    render(
+      <ModelControlMenu
+        models={[model]}
+        selectedModel=""
+        needsModelSwitch
+        thinking="off"
+        thinkingLevels={[]}
+        onModelChange={vi.fn()}
+        onThinkingChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Select model and thinking level and view context" })).toHaveTextContent("Switch model");
+  });
+
   it("shows context usage as a proportional ring without visible usage text", () => {
     render(
       <ModelControlMenu

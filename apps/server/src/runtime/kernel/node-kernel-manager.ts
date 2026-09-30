@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface, type Interface } from "node:readline";
+import { metadataRoot } from "../../storage/persistence.js";
 import {
   environmentPythonExecutable,
   workspaceEnvironmentVariables,
@@ -262,7 +263,7 @@ class NodeKernelSession {
   ) {
     if (options.language === "r") {
       const hash = createHash("sha256").update([options.cwd, options.environmentRevisionId ?? "legacy", randomUUID()].join("\0")).digest("hex").slice(0, 20);
-      this.rCodeFile = join(options.cwd, ".pi-science", "runtime", "kernels", `${hash}.R`);
+      this.rCodeFile = join(metadataRoot(options.cwd), "runtime", "kernels", `${hash}.R`);
     }
   }
 
@@ -383,7 +384,7 @@ class NodeKernelSession {
       ? [PYTHON_BRIDGE]
       : [R_BRIDGE, this.rCodeFile!];
     if (this.rCodeFile) {
-      await mkdir(join(this.options.cwd, ".pi-science", "runtime", "kernels"), { recursive: true });
+      await mkdir(join(metadataRoot(this.options.cwd), "runtime", "kernels"), { recursive: true });
       await writeFile(this.rCodeFile, "", "utf8");
     }
     if (signal?.aborted) throw kernelStartCancelledError();

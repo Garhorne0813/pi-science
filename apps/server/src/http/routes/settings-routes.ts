@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { defaultProgressAppearance, progressAppearanceInputSchema, progressAppearanceSchema } from "@pi-science/contracts";
 import { configPath } from "../../storage/persistence.js";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
+import { agentModelCatalog } from "../../runtime/agent/worker/agent-models.js";
 import { runtimeExtensionStatus } from "../../runtime/pi/pi-runtime-launch.js";
 import { safeConnectorFetch, validateOutboundHttpUrl } from "../../security/outbound-security.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
@@ -250,6 +251,10 @@ function mergeModelCatalog(primary: Array<Record<string, unknown>>, overlay: Arr
   return [...byId.values()];
 }
 async function modelCatalog(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, runtimeCatalog?: Pick<PiOrbitCatalogService, "getCatalog">): Promise<{ available: Array<Record<string, unknown>>; source: "pi" | "fallback" }> {
+  const agentCore = process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core";
+  if (agentCore && !cwdValue) {
+    return { available: (await agentModelCatalog()).map(normalizePiModel).filter((item): item is Record<string, unknown> => Boolean(item)), source: "pi" };
+  }
   const catalog = await readRuntimeCatalog(runtimeCatalog);
   const catalogEntries = catalogModels(catalog);
   if (cwdValue) {
@@ -267,10 +272,11 @@ async function modelCatalog(nodeSessionService: NodeSessionService, config: Sett
         if (!existing.max_output_tokens) existing.max_output_tokens = source.max_output_tokens;
         if (!Array.isArray(existing.input_formats) || existing.input_formats.length === 0) existing.input_formats = source.input_formats;
       }
-      const customOnly = customModels(config).filter((item) => !runtimeById.has(String(item.id)));
+      const customOnly = agentCore ? [] : customModels(config).filter((item) => !runtimeById.has(String(item.id)));
       return { available: [...runtimeById.values(), ...customOnly], source: "pi" };
     }
   }
+  if (agentCore) return { available: [], source: "fallback" };
   const configuredProviders = new Set(catalog.providers.filter((provider) => provider.auth.configured).map((provider) => provider.id));
   const builtinModels = catalogEntries.filter((item) => configuredProviders.has(String(item.provider)));
   const custom = customModels(config);
@@ -294,8 +300,8 @@ type ProviderInventoryEntry = {
 async function providerInventory(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, modelResources?: ModelResourceService, runtimeCatalog?: Pick<PiOrbitCatalogService, "getCatalog">): Promise<ProviderInventoryEntry[]> {
   const catalog = await readRuntimeCatalog(runtimeCatalog);
   let orbitModels: Record<string, string[]> | null = null;
-  if (cwdValue) {
-    const result = await nodeSessionService.availableModels(cwdValue);
+  if (cwdValue || process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core") {
+    const result = cwdValue ? await nodeSessionService.availableModels(cwdValue) : { success: true, data: { models: await agentModelCatalog() } };
     const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
     if (result.success && Array.isArray(data.models)) {
       orbitModels = {};
@@ -321,7 +327,7 @@ async function providerInventory(nodeSessionService: NodeSessionService, config:
     entries.push({
       id: provider.id,
       name: provider.name,
-      models: orbitModels?.[provider.id] ?? provider.models.map((model) => `${provider.id}/${model.id}`),
+      models: orbitModels?.[provider.id] ?? (process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core" ? [] : provider.models.map((model) => `${provider.id}/${model.id}`)),
       auth: {
         kind: provider.auth.apiKey && provider.auth.oauth ? "api_key_or_oauth" : provider.auth.oauth ? "oauth" : provider.auth.apiKey ? "api_key" : "none",
         api_key_supported: provider.auth.apiKey,
@@ -538,7 +544,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
     let available = catalog.available;
     const canonicalState = modelResources?.repository.readSync();
     const hasCanonicalResources = Boolean(canonicalState && (canonicalState.migration || canonicalState.providers.length > 0 || canonicalState.models.length > 0));
-    if (modelResources && hasCanonicalResources) {
+    if (modelResources && hasCanonicalResources && process.env.PI_SCIENCE_AGENT_RUNTIME !== "agent-core") {
       const resourceModels = await modelResources.listModels();
       const projected = resourceModels
         .filter((item) => item.provider_id.startsWith("user-") && item.available)
@@ -559,6 +565,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       available = mergeModelCatalog(available, projected);
     }
     const configured = typeof config.model === "string" && available.some((item) => item.id === config.model) ? config.model : "";
+    const unavailableModel = typeof config.model === "string" && config.model && !configured ? config.model : null;
     let thinking = configured ? String(config.thinking ?? "high") : "off";
     let runtimeLevelsApplied = false;
     if (configured && cwdValue) {
@@ -660,7 +667,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       const resourceState = modelResources.repository.readSync();
       for (const [id, ref] of Object.entries(resourceState.credential_refs)) if (modelResources.credentials.readSync(ref)?.secret) apiKeys[id] = true;
     }
-    return { api_keys: apiKeys, model: configured, thinking, model_context_window: config.model_context_window ?? null, model_max_output_tokens: Number(selected?.max_output_tokens ?? 0) || null, progress_appearance: effectiveProgressAppearance, compaction_enabled: config.compaction_enabled !== false, compaction_threshold_percent: compactionThreshold(config, available, configured), allow_private_providers: config.allow_private_providers !== false, providers, custom_providers: (config.custom_providers ?? []).map(publicCustom), available_models: available, model_catalog_source: catalog.source };
+    return { api_keys: apiKeys, model: configured, unavailable_model: unavailableModel, thinking, model_context_window: config.model_context_window ?? null, model_max_output_tokens: Number(selected?.max_output_tokens ?? 0) || null, progress_appearance: effectiveProgressAppearance, compaction_enabled: config.compaction_enabled !== false, compaction_threshold_percent: compactionThreshold(config, available, configured), allow_private_providers: config.allow_private_providers !== false, providers, custom_providers: (config.custom_providers ?? []).map(publicCustom), available_models: available, model_catalog_source: catalog.source };
   });
   // UI-only state: a dedicated cheap read (no provider inventory or model
   // catalog work) and a write that never reloads runtimes or replaces
@@ -697,7 +704,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       await mutate((config) => { if (String(config.model ?? "").startsWith(`${request.params.provider}/`)) config.model = ""; });
     } else await mutate((config) => { if (config.api_keys) delete config.api_keys[request.params.provider]; if (String(config.model ?? "").startsWith(`${request.params.provider}/`)) config.model = ""; });
     return respondWithReload(nodeSessionService, reply, { ok: true, provider: request.params.provider }); });
-  app.put("/api/settings/model", async (request, reply) => { const body = (request.body ?? {}) as { model?: unknown; thinking?: unknown }; const model = String(body.model ?? ""); const requestedThinking = String(body.thinking ?? "high"); const cwdValue = query(request, "cwd", ""); const current = await load(); const canonicalState = modelResources?.repository.readSync(); const useCanonicalResources = Boolean(modelResources && (canonicalState?.migration || canonicalState?.providers?.length || canonicalState?.models?.length));
+  app.put("/api/settings/model", async (request, reply) => { const body = (request.body ?? {}) as { model?: unknown; thinking?: unknown }; const model = String(body.model ?? ""); const requestedThinking = String(body.thinking ?? "high"); const cwdValue = query(request, "cwd", ""); const current = await load(); const canonicalState = modelResources?.repository.readSync(); const useCanonicalResources = process.env.PI_SCIENCE_AGENT_RUNTIME !== "agent-core" && Boolean(modelResources && (canonicalState?.migration || canonicalState?.providers?.length || canonicalState?.models?.length));
     if (useCanonicalResources && modelResources) {
       const canonicalModel = canonicalState?.aliases[model] ?? model;
       const selected = (await modelResources.listModels({ available: true })).find((item) => item.id === canonicalModel);

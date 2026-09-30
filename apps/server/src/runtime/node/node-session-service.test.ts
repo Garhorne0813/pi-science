@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConversationEventHub, conversationEventHub } from "../events/conversation-event-hub.js";
 import type { SseEventRecord } from "../events/event-store.js";
 import { NodeSessionService } from "./node-session-service.js";
+import { OrbitRuntimeAdapter } from "../agent/orbit-runtime-adapter.js";
 import { PiManager } from "../pi/pi-manager.js";
 import { PiOrbitRequestError } from "../pi/pi-orbit-host.js";
 import { loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
@@ -902,8 +903,8 @@ describe("Node session lifecycle", () => {
 
     await expect(service.command("session-conditional-terminal", cwd, "prompt", { message: "test" })).resolves.toMatchObject({ success: true });
     await appendReady;
-    const runtime = [...(service as unknown as { runtimes: Map<string, { process: { emit: (event: string, payload: unknown) => boolean } }> }).runtimes.values()][0]!;
-    runtime.process.emit("event", { type: "agent_start" });
+    const runtime = [...(service as unknown as { runtimes: Map<string, { process: OrbitRuntimeAdapter }> }).runtimes.values()][0]!;
+    runtime.process.process.emit("event", { type: "agent_start" });
     releaseAppend();
     await eventHub.flush();
 
@@ -1528,7 +1529,7 @@ describe("Event-stream watchdog", () => {
     const runtime = {
       cwd: resolve(cwd),
       managerKey: "test-key",
-      process,
+      process: new OrbitRuntimeAdapter(process, cwd),
       activeSessionId: sessionId,
       config: { model: null, provider: null, api_key: null, thinking: null, compaction_enabled: true, compaction_threshold_percent: 87, model_context_window: null, skills: [], extensions: [] },
       busy: false,

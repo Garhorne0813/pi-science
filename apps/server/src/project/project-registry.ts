@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
-import { withFileWriteLock, writeJsonAtomic } from "../storage/persistence.js";
+import { metadataRoot, withFileWriteLock, writeJsonAtomic } from "../storage/persistence.js";
 
 export const PROJECT_MANIFEST_VERSION = 1 as const;
 
@@ -15,10 +15,6 @@ export interface ProjectManifest {
 
 export interface ProjectUpdate {
   name?: string;
-}
-
-function metadataRoot(cwd: string): string {
-  return join(resolve(cwd), ".pi-science");
 }
 
 export function projectManifestPath(cwd: string): string {
@@ -51,7 +47,7 @@ export async function readProject(cwd: string): Promise<ProjectManifest | null> 
   try {
     raw = await readFile(path, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
     throw error;
   }
   let value: unknown;

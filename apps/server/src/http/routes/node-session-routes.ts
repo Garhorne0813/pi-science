@@ -103,7 +103,7 @@ export function registerNodeSessionRoutes(
 
       let result: Awaited<ReturnType<NodeSessionService["command"]>>;
       try {
-        result = await nodeSessionService.command(sessionId, workspace, "prompt", { message: promptMessage });
+        result = await nodeSessionService.command(sessionId, workspace, "prompt", { message: promptMessage, client_message_id: requestId });
       } catch (error) {
         const delivery = await promptRequests.update(workspace, sessionId, requestId, "indeterminate", { error_code: "prompt_command_threw" });
         return reply.code(502).send({ ok: false, code: "prompt_command_threw", error: String(error), ...(delivery ?? {}) });

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { durableEventStore, type EventPublishGuard, type SseEventRecord } from "./event-store.js";
-import type { PiEvent, PiProcess } from "../pi/pi-process.js";
+import type { RuntimeEvent as PiEvent, RuntimeEventSource } from "../agent/agent-runtime-types.js";
 import { toolActivityPresentation, toolActivityTitle } from "../presentation/tool-activity-presenters.js";
 
 type Subscriber = {
@@ -423,10 +423,10 @@ export class ConversationEventHub {
   private readonly publishing = new Map<string, Promise<void>>();
   private readonly pendingText = new Map<string, PendingText>();
   private readonly turns = new Map<string, TurnState>();
-  private readonly bound = new WeakSet<PiProcess>();
-  private readonly expectedExits = new WeakSet<PiProcess>();
+  private readonly bound = new WeakSet<RuntimeEventSource>();
+  private readonly expectedExits = new WeakSet<RuntimeEventSource>();
   /** Per-process throttle for immediate stderr forwarding (ms). */
-  private readonly stderrLogAt = new WeakMap<PiProcess, number>();
+  private readonly stderrLogAt = new WeakMap<RuntimeEventSource, number>();
   private log: (level: "info" | "warn" | "error", message: string) => void = () => {};
 
   constructor(
@@ -447,7 +447,7 @@ export class ConversationEventHub {
     await Promise.allSettled([...this.publishing.values()]);
   }
 
-  expectExit(process: PiProcess): void {
+  expectExit(process: RuntimeEventSource): void {
     this.expectedExits.add(process);
   }
 
@@ -495,7 +495,7 @@ export class ConversationEventHub {
     else this.pendingInteractions.delete(key);
   }
 
-  bind(cwd: string, process: PiProcess, options: BindingOptions): void {
+  bind(cwd: string, process: RuntimeEventSource, options: BindingOptions): void {
     if (this.bound.has(process)) return;
     this.bound.add(process);
     const boundAt = Date.now();
@@ -808,8 +808,8 @@ export class ConversationEventHub {
     }
     if (event.type === "agent_start") {
       turn.turnOrdinal += 1;
-      turn.turnId = newConversationId("turn", sessionId, turn.turnOrdinal);
-      turn.runId = newConversationId("run", sessionId, turn.turnOrdinal);
+      turn.turnId = typeof event.turnId === "string" && event.turnId ? event.turnId : newConversationId("turn", sessionId, turn.turnOrdinal);
+      turn.runId = typeof event.runId === "string" && event.runId ? event.runId : newConversationId("run", sessionId, turn.turnOrdinal);
       turn.hadText = false;
       turn.hadError = false;
       turn.hadActivity = false;

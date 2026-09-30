@@ -5,6 +5,8 @@ import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { readProject } from "../../project/project-registry.js";
 import { isAiTitlePrompt } from "../title/title-prompt.js";
+import { metadataRoot } from "../../storage/persistence.js";
+import { AgentSessionRepository } from "../agent/agent-session-repository.js";
 
 export interface SessionInfoRecord {
   id: string;
@@ -84,7 +86,7 @@ interface ParsedSessionHeader {
 }
 
 function sessionsRoot(cwd: string): string {
-  return join(resolve(cwd), ".pi-science", "sessions");
+  return join(metadataRoot(cwd), "sessions");
 }
 
 const HISTORY_PAGE_SIZE = 50;
@@ -628,8 +630,11 @@ function isUserVisibleSession(root: string, file: SessionFile): boolean {
 }
 
 export class SessionRepository {
+  private readonly agentSessions = new AgentSessionRepository();
+
   async findPath(cwd: string, sessionId: string): Promise<string | null> {
-    return (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId)?.path ?? null;
+    return await this.agentSessions.findPath(cwd, sessionId)
+      ?? (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId)?.path ?? null;
   }
 
   /** Delete-path lookup that bypasses the scan cache entirely and re-reads the
@@ -641,7 +646,8 @@ export class SessionRepository {
   async findPathOnDisk(cwd: string, sessionId: string): Promise<string | null> {
     const root = sessionsRoot(cwd);
     const scan = await performScan(root);
-    return filesFromDirs(scan?.dirs ?? {}).find(({ header }) => header.id === sessionId)?.path ?? null;
+    return filesFromDirs(scan?.dirs ?? {}).find(({ header }) => header.id === sessionId)?.path
+      ?? this.agentSessions.findPath(cwd, sessionId);
   }
 
   async list(cwd: string): Promise<SessionInfoRecord[]> {
@@ -661,7 +667,7 @@ export class SessionRepository {
       if (file.sessionInfo) return true;
       return !parentSession;
     });
-    const rows = await mapWithConcurrency(visibleFiles, 16, async ({ header, modified, path, mtimeMs, size, ...fileFlags }) => {
+    const rows: SessionInfoRecord[] = await mapWithConcurrency(visibleFiles, 16, async ({ header, modified, path, mtimeMs, size, ...fileFlags }) => {
       const headerTimestamp = typeof header.timestamp === "string" ? header.timestamp : null;
       // updated_at = last real message time, else the session header timestamp
       // (new sessions without messages), else the file mtime as a fallback.
@@ -677,8 +683,13 @@ export class SessionRepository {
     });
     // Sort by the effective updated_at (last message time when present) so the
     // list ordering matches the displayed timestamps.
+    for (const agentSession of await this.agentSessions.list(cwd)) {
+      const legacy = rows.findIndex((row) => row.id === agentSession.id);
+      if (legacy >= 0) rows.splice(legacy, 1);
+      rows.push(agentSession);
+    }
     return rows.sort((left, right) => (
-      right.updated_at.localeCompare(left.updated_at) || right.id.localeCompare(left.id)
+      (right.updated_at ?? "").localeCompare(left.updated_at ?? "") || right.id.localeCompare(left.id)
     ));
   }
 
@@ -687,9 +698,10 @@ export class SessionRepository {
     sessionId: string,
     options: { before?: string; limit?: number } = {},
   ): Promise<SessionMessagePage> {
+    if (await this.agentSessions.findPath(cwd, sessionId)) return this.agentSessions.messagesPage(cwd, sessionId, options);
     const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
     if (!file) {
-      return { messages: [], next_cursor: null, has_more: false, snapshot_version: "0:0" };
+      return this.agentSessions.messagesPage(cwd, sessionId, options);
     }
     let metadata;
     try {
@@ -719,8 +731,9 @@ export class SessionRepository {
   }
 
   async userMessageIndex(cwd: string, sessionId: string): Promise<{ messages: SessionUserMessageIndexEntry[]; snapshot_version: string }> {
+    if (await this.agentSessions.findPath(cwd, sessionId)) return this.agentSessions.userMessageIndex(cwd, sessionId);
     const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
-    if (!file) return { messages: [], snapshot_version: "0:0" };
+    if (!file) return this.agentSessions.userMessageIndex(cwd, sessionId);
     try {
       const metadata = await stat(file.path);
       return {
@@ -733,8 +746,9 @@ export class SessionRepository {
   }
 
   async messages(cwd: string, sessionId: string): Promise<SessionMessageRecord[]> {
+    if (await this.agentSessions.findPath(cwd, sessionId)) return this.agentSessions.messages(cwd, sessionId);
     const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
-    if (!file) return [];
+    if (!file) return this.agentSessions.messages(cwd, sessionId);
     const rows: SessionMessageRecord[] = [];
     try {
       // Stream the JSONL file line-by-line instead of loading it all into

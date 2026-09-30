@@ -5,6 +5,21 @@ import type { SseEventRecord } from "./event-store.js";
 import type { PiProcess } from "../pi/pi-process.js";
 
 describe("conversation event identities", () => {
+  it("preserves durable identities supplied by AgentHarness", async () => {
+    const records: SseEventRecord[] = [];
+    const hub = new ConversationEventHub({
+      append: async (_cwd, _sessionId, record) => { records.push(record); },
+      readAfter: async () => [],
+    });
+    const source = new EventEmitter() as PiProcess;
+    hub.bind("/tmp/pi-science-harness-identity", source, { activeSessionId: () => "session-1", onBusy: () => undefined, onExit: () => undefined });
+    source.emit("event", { type: "agent_start", runId: "durable-run", turnId: "durable-turn" });
+    source.emit("event", { type: "agent_settled", runId: "durable-run" });
+    await hub.flush();
+    const start = records.map((record) => JSON.parse(record.data) as Record<string, unknown>).find((record) => record.type === "agent_start");
+    expect(start).toMatchObject({ runId: "durable-run", turnId: "durable-turn" });
+  });
+
   it("does not reuse run or turn identities after the hub is recreated", async () => {
     const records: SseEventRecord[] = [];
     const store = {

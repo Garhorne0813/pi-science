@@ -13,6 +13,7 @@ const piAiCatalogAvailable = false;
 
 const apps: Array<{ close(): Promise<unknown> }> = [];
 const tempDirs: string[] = [];
+const originalAgentRuntime = process.env.PI_SCIENCE_AGENT_RUNTIME;
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -22,6 +23,8 @@ afterEach(async () => {
   delete process.env.PI_SCIENCE_WORKSPACES;
   delete process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS;
   delete process.env.DEEPSEEK_API_KEY;
+  if (originalAgentRuntime === undefined) delete process.env.PI_SCIENCE_AGENT_RUNTIME;
+  else process.env.PI_SCIENCE_AGENT_RUNTIME = originalAgentRuntime;
 });
 
 function config(): ServerConfig {
@@ -225,6 +228,26 @@ describe("native control-plane business routes", () => {
         { id: "deepseek/deepseek-v4-flash", reasoning: true, thinking_levels: ["off", "minimal", "low", "medium", "high", "max"], context_window: 1000000 },
       ],
     });
+  });
+
+  it("reports a saved model that the active runtime no longer offers", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_AGENT_RUNTIME = "agent-core";
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME, "config.json"), JSON.stringify({ model: "deepseek/deepseek-v4-flash", thinking: "high" }), "utf8");
+    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({ success: true, data: { models: [
+      { provider: "deepseek", id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", reasoning: true },
+    ] } });
+    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService });
+    apps.push(app);
+    const response = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ model: "", unavailable_model: "deepseek/deepseek-v4-flash" });
+    expect(response.json().available_models).toEqual([expect.objectContaining({ id: "deepseek/deepseek-v4-pro" })]);
+    const rejected = await app.inject({ method: "PUT", url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
+      payload: { model: "deepseek/deepseek-v4-flash", thinking: "high" } });
+    expect(rejected.statusCode).toBe(400);
   });
 
   it("clamps a saved thinking level to the selected model's supported levels", async () => {

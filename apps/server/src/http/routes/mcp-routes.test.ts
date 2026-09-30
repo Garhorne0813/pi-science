@@ -175,7 +175,7 @@ describe("canonical MCP routes", () => {
       expect.objectContaining({ name: "chembl", tool_count: 4, settings: expect.objectContaining({ enabled: false }) }),
     ]));
     const runtimeSnapshot = JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8"));
-    expect(runtimeSnapshot.mcpServers["paper-search"]).toMatchObject({ __piScienceCacheVersion: 3, __piScienceToolCount: 5 });
+    expect(runtimeSnapshot.mcpServers["paper-search"]).toMatchObject({ __piScienceCacheVersion: 4, __piScienceToolCount: 5 });
 
     const proteinRecords = connectors.find((item) => item.name === "protein-records")!;
     await service.setSettings(proteinRecords.connector_id, {

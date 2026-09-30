@@ -73,7 +73,10 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
   const settings = new SettingsStore();
   const modelResources = new ModelResourceService({ settings, runtimeCatalog });
   const projectReview = new ProjectReviewService(new PiReviewSubagentRunner(environments, piManager), sessionRepository);
-  const sessions = new NodeSessionService(events, piManager, sessionRepository, environments, projectReview, undefined, modelResources);
+  const sessions = new NodeSessionService(events, piManager, sessionRepository, environments, projectReview, undefined, modelResources, {
+    backendUrl: config ? `http://127.0.0.1:${config.port}` : undefined,
+    internalToken: config?.internalToken,
+  });
   const mcpRepository = new McpRepository(stateStore);
   const mcp = new McpConnectorService(mcpRepository, workspaces, settings, sessions, new McpRuntimeProjection(mcpRepository));
   if (sqliteEnabled) sessions.configureBeforeRuntimeStart((cwd) => mcp.materializeWorkspace(cwd));
