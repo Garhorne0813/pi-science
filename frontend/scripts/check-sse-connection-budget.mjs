@@ -131,16 +131,21 @@ async function activeSourcePaths(page) {
     }));
 }
 
+function describeStreams(paths) {
+  const counts = new Map();
+  for (const path of paths) counts.set(path, (counts.get(path) ?? 0) + 1);
+  if (counts.size === 0) return "none";
+  return [...counts].map(([path, count]) => count > 1 ? `${path} x${count}` : path).join(", ");
+}
+
 /** Counting a single endpoint would let a second subscription come back
- *  unnoticed, so the whole page is compared against its known budget. */
+ *  unnoticed, so the whole page is compared against its known budget as a
+ *  multiset. A duplicate and a missing stream both fail and name the endpoint. */
 async function assertStreamBudget(page, label, allowed) {
-  const active = await activeSourcePaths(page);
-  const unexpected = active.filter((path) => !allowed.includes(path));
-  assert(unexpected.length === 0, `${label}: unexpected SSE subscriptions ${unexpected.join(", ")} (budgeted: ${allowed.join(", ")})`);
-  assert(
-    active.length === allowed.length,
-    `${label}: expected ${allowed.length} SSE subscription(s) (${allowed.join(", ")}), found ${active.length} (${active.join(", ")})`,
-  );
+  const active = (await activeSourcePaths(page)).sort();
+  const budget = [...allowed].sort();
+  const balanced = active.length === budget.length && active.every((path, index) => path === budget[index]);
+  assert(balanced, `${label}: SSE subscriptions are ${describeStreams(active)}, budgeted ${describeStreams(budget)}`);
 }
 
 async function openSession(page) {
