@@ -16,6 +16,7 @@ const WORKSPACE: Record<string, Array<{ path: string; name: string; isDir: boole
     { path: "protein_old.csv", name: "protein_old.csv", isDir: false, size: 1024, modified: 0 },
     { path: "protein_structure", name: "protein_structure", isDir: true, size: 0, modified: 0 },
     { path: "notes.md", name: "notes.md", isDir: false, size: 512, modified: 0 },
+    { path: "report.md", name: "report.md", isDir: false, size: 620, modified: 0 },
   ],
   data: [
     { path: "data/protein.csv", name: "protein.csv", isDir: false, size: 4096, modified: 0 },
@@ -330,6 +331,23 @@ describe("composer completion keyboard paths", () => {
     expect(input()).toHaveValue("report.md");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     expect(onKeyDown.mock.calls[0][0].defaultPrevented).toBe(false);
+
+    // The fixture really holds that file, so the Tab above was left alone for the exact match
+    // instead of for a missing candidate.
+    await type("report.m");
+    await press("Tab");
+    expect(input()).toHaveValue("report.md");
+  });
+
+  it("shows no menu and sends when a path token already names its only file", async () => {
+    renderComposer();
+    await type("data/protein.csv");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    await press("Enter");
+    expect(input()).toHaveValue("data/protein.csv");
+    expect(onKeyDown).toHaveBeenCalledTimes(1);
+    expect(onKeyDown.mock.calls[0][0].key).toBe("Enter");
   });
 
   it("previews both argument values once Tab asks for the list", async () => {
@@ -416,6 +434,9 @@ describe("composer completion keyboard paths", () => {
     fireEvent.compositionEnd(input());
     // The IME keeps the keys until the tick ends, so the list stays closed with them.
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    fireEvent.keyDown(input(), { key: "Tab" });
+    expect(input()).toHaveValue("data/pro");
+    expect(onKeyDown).toHaveBeenCalledTimes(2);
     await settle();
     expect(screen.getByRole("listbox")).toBeInTheDocument();
   });
