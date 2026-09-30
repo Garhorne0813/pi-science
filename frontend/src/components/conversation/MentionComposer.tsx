@@ -16,6 +16,8 @@ interface Props {
   onCompositionStart: () => void;
   onCompositionEnd: () => void;
   inputRef: RefObject<HTMLTextAreaElement | null>;
+  /** The composer's IME flag for rendering: the menu hides while the IME composes. */
+  composing: boolean;
   /** The composer's IME flag, shared with the send pipeline: while it is set every key belongs
    *  to the IME, so no completion key is handled either. */
   composingRef: RefObject<boolean>;
@@ -59,7 +61,7 @@ function renderHighlighted(value: string, mentions: SubagentMention[]) {
   return result;
 }
 
-export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onCompositionStart, onCompositionEnd, inputRef, composingRef, placeholder }: Props) {
+export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onCompositionStart, onCompositionEnd, inputRef, composing, composingRef, placeholder }: Props) {
   const { t } = useTranslation();
   const [caret, setCaret] = useState(value.length);
   const mirrorRef = useRef<HTMLDivElement>(null);
@@ -145,7 +147,7 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
     placeCaret(apply.caret);
   }, [addWorkspaceReference, cwd, mentions, onChange, placeCaret]);
 
-  const completion = useComposerCompletion({ cwd, value, caret, composingRef, onApply: applyCompletion });
+  const completion = useComposerCompletion({ cwd, value, caret, composing, composingRef, onApply: applyCompletion });
 
   const handleSelect = (element: HTMLTextAreaElement) => {
     let start = element.selectionStart;
@@ -191,7 +193,9 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
           items={completion.menu.items}
           activeIndex={completion.menu.activeIndex}
           onSelect={completion.menu.select}
+          onActiveChange={completion.menu.setActive}
           onDismiss={completion.menu.dismiss}
+          inputRef={inputRef}
         />
       )}
       <div className="relative min-h-[64px] max-h-[160px] overflow-hidden rounded-t-composer">

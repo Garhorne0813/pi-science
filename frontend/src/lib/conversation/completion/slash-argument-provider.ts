@@ -10,7 +10,6 @@ function findCommand(name: string, commands: readonly SlashCommand[]): SlashComm
 
 export const slashArgumentProvider: CompletionProvider = {
   id: "slash-argument",
-  trigger: "tab",
 
   detect(context: CompletionContext): CompletionQuery | null {
     const before = context.value.slice(0, context.caret);
@@ -20,6 +19,7 @@ export const slashArgumentProvider: CompletionProvider = {
     const argument = match[2];
     const values = findCommand(name, context.commands)?.arguments?.[0]?.values;
     if (!values || values.length === 0) return null;
+    const writesArgument = argument.length > 0;
     return {
       providerId: "slash-argument",
       kind: "argument",
@@ -27,6 +27,7 @@ export const slashArgumentProvider: CompletionProvider = {
       end: tokenBounds(context.value, context.caret).end,
       query: argument,
       argument: { command: name, index: 0 },
+      autoOpen: writesArgument,
     };
   },
 

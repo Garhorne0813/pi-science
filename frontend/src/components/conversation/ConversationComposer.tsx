@@ -1,4 +1,4 @@
-import { lazy, Suspense, type ReactNode } from "react";
+import { lazy, Suspense, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowDown, ArrowUp, File, FolderOpen, Loader2, Plus, Sparkles, Square, X } from "lucide-react";
@@ -55,6 +55,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
   const navigate = useNavigate();
   const { input, setInput, files, setFiles, workspaceReferences } = composer;
   const sendPrompt = useRuntimeStore((state) => state.sendPrompt);
+  const [composing, setComposing] = useState(false);
   const retryRequest = activeSessionId && input.trim()
     ? findLocalPromptRequest(workspaceCwd, activeSessionId, promptContentDigest(input.trim()))
     : null;
@@ -133,9 +134,10 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
             mentions={composer.mentions}
             onChange={(value, mentions) => { setInput(value); composer.setMentions(mentions); }}
             onKeyDown={composer.handleKeyDown}
-            onCompositionStart={() => { composer.composingRef.current = true; }}
-            onCompositionEnd={() => { setTimeout(() => { composer.composingRef.current = false; }, 0); }}
+            onCompositionStart={() => { composer.composingRef.current = true; setComposing(true); }}
+            onCompositionEnd={() => { setTimeout(() => { composer.composingRef.current = false; setComposing(false); }, 0); }}
             inputRef={composer.inputRef}
+            composing={composing}
             composingRef={composer.composingRef}
             placeholder={composer.dragOver ? "Drop files here…" : research.prompt}
           />

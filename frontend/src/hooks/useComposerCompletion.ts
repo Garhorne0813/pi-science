@@ -13,7 +13,6 @@ import {
   planAccept,
   planTab,
   type CompletionApply,
-  type CompletionCommand,
   type CompletionItem,
 } from "../lib/conversation/completion";
 import { subagentsDiscoveryQuery } from "../lib/settings";
@@ -26,6 +25,7 @@ export interface ComposerCompletionMenu {
   items: CompletionItem[];
   activeIndex: number;
   select: (item: CompletionItem) => void;
+  setActive: (index: number) => void;
   dismiss: () => void;
 }
 
@@ -58,11 +58,13 @@ export function useComposerCompletion(params: {
   cwd: string;
   value: string;
   caret: number;
+  /** The IME is composing: no list belongs on screen. `composingRef` keeps the keys. */
+  composing: boolean;
   /** The composer's IME flag. While it is set every key belongs to the IME. */
   composingRef: RefObject<boolean>;
   onApply: (apply: CompletionApply) => void;
 }): ComposerCompletion {
-  const { cwd, value, caret, composingRef, onApply } = params;
+  const { cwd, value, caret, composing, composingRef, onApply } = params;
   const { t } = useTranslation();
   const listboxId = useId();
   const sessionId = useRuntimeStore((state) => state.cwd === cwd ? state.activeSessionId : null);
@@ -109,10 +111,10 @@ export function useComposerCompletion(params: {
       items,
       activeIndex: cursor.key === cursorKey ? cursor.index : 0,
       dismissedScope: override?.mode === "closed" ? override.scope : null,
-      // Preview every available candidate before Tab. Tab accepts the highlighted row.
-      openedScope: scope,
+      openedScope: override?.mode === "open" ? override.scope : null,
+      composing,
     }),
-    [cursor, cursorKey, detected, items, override, scope],
+    [composing, cursor, cursorKey, detected, items, override],
   );
 
   useEffect(() => {
@@ -129,15 +131,9 @@ export function useComposerCompletion(params: {
     if (command.kind === "apply") onApply(command);
   }, [detected, onApply, value]);
 
-  const runCommand = useCallback((command: CompletionCommand): boolean => {
-    if (command.kind === "ignore") return false;
-    if (command.kind === "open-menu") {
-      if (scope) setMenuOverride({ scope, value, mode: "open" });
-      return true;
-    }
-    onApply(command);
-    return true;
-  }, [onApply, scope, value]);
+  const setActive = useCallback((index: number) => {
+    setCursor((current) => current.key === cursorKey && current.index === index ? current : { key: cursorKey, index });
+  }, [cursorKey]);
 
   const handleKeyDown = useCallback((event: ReactKeyboardEvent<HTMLTextAreaElement>): boolean => {
     // An IME owns every key while it composes: Tab moves between its candidates and Enter
@@ -161,21 +157,24 @@ export function useComposerCompletion(params: {
     }
     if (event.key === "Enter" && !event.shiftKey) {
       if (!view.visible) return false;
-      // Passive path/argument previews must not turn normal Enter-to-send into completion.
-      if (detected?.provider.trigger === "tab" && override?.mode !== "open") return false;
-      if (!runCommand(planAccept({ query: detected?.query ?? null, item: view.activeItem, value }))) return false;
+      const command = planAccept({ query: detected?.query ?? null, item: view.activeItem, value });
+      if (command.kind !== "apply") return false;
+      onApply(command);
       event.preventDefault();
       event.stopPropagation();
       return true;
     }
     if (event.key === "Tab" && !event.shiftKey) {
-      if (!runCommand(planTab({ view, detected, items, value, caret }))) return false;
+      const command = planTab({ view, detected, items, value, caret });
+      if (command.kind === "ignore") return false;
+      if (scope) setMenuOverride({ scope, value, mode: "open" });
+      if (command.kind === "apply") onApply(command);
       event.preventDefault();
       event.stopPropagation();
       return true;
     }
     return false;
-  }, [caret, composingRef, cursorKey, detected, dismiss, items, override, runCommand, scope, value, view]);
+  }, [caret, composingRef, cursorKey, detected, dismiss, items, onApply, scope, value, view]);
 
   const menu = useMemo<ComposerCompletionMenu | null>(() => {
     if (!view.visible) return null;
@@ -186,9 +185,10 @@ export function useComposerCompletion(params: {
       items,
       activeIndex: view.activeIndex,
       select,
+      setActive,
       dismiss,
     };
-  }, [dismiss, items, listboxId, select, t, view]);
+  }, [dismiss, items, listboxId, select, setActive, t, view]);
 
   return { menu, handleKeyDown };
 }

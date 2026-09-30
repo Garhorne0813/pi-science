@@ -16,6 +16,7 @@ const fetchMock = vi.fn(async (_input: RequestInfo | URL) => new Response(JSON.s
 function Harness() {
   const [value, setValue] = useState("");
   const [mentions, setMentions] = useState<SubagentMention[]>([]);
+  const [composing, setComposing] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
   return (
@@ -25,9 +26,10 @@ function Harness() {
       mentions={mentions}
       onChange={(next, nextMentions) => { setValue(next); setMentions(nextMentions); }}
       onKeyDown={() => undefined}
-      onCompositionStart={() => undefined}
-      onCompositionEnd={() => undefined}
+      onCompositionStart={() => { composingRef.current = true; setComposing(true); }}
+      onCompositionEnd={() => { setTimeout(() => { composingRef.current = false; setComposing(false); }, 0); }}
       inputRef={inputRef}
+      composing={composing}
       composingRef={composingRef}
       placeholder="Prompt"
     />

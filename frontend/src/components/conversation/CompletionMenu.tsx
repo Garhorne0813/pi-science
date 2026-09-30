@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { File, FolderOpen } from "lucide-react";
+import type { RefObject } from "react";
 import type { CompletionGroup, CompletionItem } from "../../lib/conversation/completion";
 import { workspaceFiles } from "../../lib/workspace/workspace-files";
 
@@ -12,7 +13,10 @@ interface Props {
   items: CompletionItem[];
   activeIndex: number;
   onSelect: (item: CompletionItem) => void;
+  onActiveChange: (index: number) => void;
   onDismiss: () => void;
+  /** The input this menu belongs to. A pointerdown inside it moves the caret, so it is not a dismissal. */
+  inputRef?: RefObject<HTMLTextAreaElement | null>;
 }
 
 /** Adjacent rows that share one group value, with the index of the run's first row in `items`. */
@@ -26,7 +30,7 @@ function groupRuns(items: CompletionItem[]): Array<{ group: CompletionGroup | un
   return runs;
 }
 
-export function CompletionMenu({ id, label, items, activeIndex, onSelect, onDismiss }: Props) {
+export function CompletionMenu({ id, label, items, activeIndex, onSelect, onActiveChange, onDismiss, inputRef }: Props) {
   const { t } = useTranslation();
   const menuRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -39,11 +43,12 @@ export function CompletionMenu({ id, label, items, activeIndex, onSelect, onDism
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target;
+      if (target instanceof Node && inputRef?.current?.contains(target)) return;
       if (!(target instanceof Node) || !menuRef.current?.contains(target)) onDismiss();
     };
     document.addEventListener("pointerdown", handlePointerDown, true);
     return () => document.removeEventListener("pointerdown", handlePointerDown, true);
-  }, [onDismiss]);
+  }, [inputRef, onDismiss]);
 
   if (items.length === 0) return null;
 
@@ -65,6 +70,7 @@ export function CompletionMenu({ id, label, items, activeIndex, onSelect, onDism
       // aria-activedescendant points somewhere else.
       tabIndex={-1}
       onMouseDown={(event) => event.preventDefault()}
+      onMouseEnter={() => onActiveChange(index)}
       onClick={() => onSelect(item)}
       // tailwind-merge does not know the custom font-size names and treats text-ui-caption
       // as a color, dropping it when text-text/text-muted follows. Keep the size explicit.
@@ -72,11 +78,11 @@ export function CompletionMenu({ id, label, items, activeIndex, onSelect, onDism
     >
       {item.kind === "directory" && <FolderOpen size={12} className="shrink-0 text-accent" />}
       {item.kind === "file" && <File size={12} className="shrink-0 text-accent" />}
-      <span title={item.insertText || item.label} className="max-w-[55%] min-w-0 shrink-0 truncate rounded bg-surface-2 px-1 font-mono text-accent sm:max-w-none">{item.label}</span>
-      {item.detail && <span className="shrink-0 text-ui-micro text-muted/70">{item.detail}</span>}
+      <span title={item.label} className="max-w-[55%] min-w-0 shrink-0 truncate rounded bg-accent-soft px-1 font-mono text-text sm:max-w-none">{item.label}</span>
       {item.description && <span className="min-w-0 flex-1 truncate" title={item.description}>{item.description}</span>}
-      {item.size !== undefined && <span className="shrink-0 font-mono text-ui-micro text-muted/60">{workspaceFiles.formatSize(item.size)}</span>}
-      {index === activeIndex && <kbd aria-hidden="true" className="ml-auto shrink-0 rounded border border-border px-1 text-ui-micro text-muted">Tab</kbd>}
+      {item.detail && <span className="shrink-0 text-ui-meta text-muted">{item.detail}</span>}
+      {item.payload?.kind === "reference" && <span className="shrink-0 text-ui-meta text-muted">{t("conversation.completion.reference")}</span>}
+      {item.kind !== "directory" && item.size !== undefined && <span className="shrink-0 font-mono text-ui-meta text-muted">{workspaceFiles.formatSize(item.size)}</span>}
     </button>
   );
 
@@ -88,7 +94,7 @@ export function CompletionMenu({ id, label, items, activeIndex, onSelect, onDism
       {groups.size > 1
         ? runs.map((run) => (
             <div key={run.group ?? run.start} role="group" aria-label={heading(run.group)}>
-              <div aria-hidden="true" className="px-2 pt-1.5 pb-0.5 text-ui-micro text-muted/70">{heading(run.group)}</div>
+              <div aria-hidden="true" className="px-2 pt-1.5 pb-0.5 text-ui-meta text-muted">{heading(run.group)}</div>
               {run.items.map((item, offset) => renderRow(item, run.start + offset))}
             </div>
           ))

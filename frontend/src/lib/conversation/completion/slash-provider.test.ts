@@ -7,7 +7,7 @@ const context = (value: string): CompletionContext => ({ value, caret: value.len
 
 describe("slashCommandProvider.detect", () => {
   it("detects a slash command typed with no whitespace", () => {
-    expect(slashCommandProvider.detect(context("/ex"))).toEqual({ providerId: "slash", kind: "command", start: 0, end: 3, query: "ex" });
+    expect(slashCommandProvider.detect(context("/ex"))).toEqual({ providerId: "slash", kind: "command", start: 0, end: 3, query: "ex", autoOpen: true });
   });
 
   it("leaves the caret alone once whitespace follows the command", () => {

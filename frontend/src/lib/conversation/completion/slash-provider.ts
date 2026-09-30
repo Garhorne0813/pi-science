@@ -4,12 +4,11 @@ import type { CompletionContext, CompletionItem, CompletionProvider, CompletionQ
 
 export const slashCommandProvider: CompletionProvider = {
   id: "slash",
-  trigger: "typing",
 
   detect(context: CompletionContext): CompletionQuery | null {
     const before = context.value.slice(0, context.caret);
     if (!before.startsWith("/") || /\s/.test(before)) return null;
-    return { providerId: "slash", kind: "command", start: 0, end: tokenBounds(context.value, context.caret).end, query: before.slice(1) };
+    return { providerId: "slash", kind: "command", start: 0, end: tokenBounds(context.value, context.caret).end, query: before.slice(1), autoOpen: true };
   },
 
   complete(query: CompletionQuery, context: CompletionContext): CompletionItem[] {

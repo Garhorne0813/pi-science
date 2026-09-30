@@ -25,13 +25,13 @@ export function compareEntries(a: CompletionEntry, b: CompletionEntry): number {
 
 export const pathProvider: CompletionProvider = {
   id: "path",
-  trigger: "tab",
 
   detect(context: CompletionContext): CompletionQuery | null {
     const bounds = tokenBounds(context.value, context.caret);
     const directory = splitPathToken(context.value.slice(bounds.start, context.caret));
     if (!directory) return null;
-    return { providerId: "path", kind: "directory", start: bounds.start, end: bounds.end, query: context.value.slice(bounds.start, context.caret), directory };
+    const writesIntoDirectory = Boolean(directory.base);
+    return { providerId: "path", kind: "directory", start: bounds.start, end: bounds.end, query: context.value.slice(bounds.start, context.caret), directory, autoOpen: writesIntoDirectory };
   },
 
   complete(query: CompletionQuery, context: CompletionContext): CompletionItem[] {
@@ -47,7 +47,7 @@ export const pathProvider: CompletionProvider = {
         label: entry.name + (entry.isDir ? "/" : ""),
         insertText: directory.base + entry.name + (entry.isDir ? "/" : ""),
         size: entry.size,
-        description: entry.path,
+        description: entry.path === entry.name ? undefined : entry.path,
       }));
   },
 };

@@ -16,7 +16,6 @@ function mentionDirectory(token: string) {
 
 export const mentionProvider: CompletionProvider = {
   id: "mention",
-  trigger: "typing",
 
   detect(context: CompletionContext): CompletionQuery | null {
     const match = context.value.slice(0, context.caret).match(TRIGGER_AT);
@@ -29,6 +28,7 @@ export const mentionProvider: CompletionProvider = {
       start: context.caret - token.length - 1,
       end: tokenBounds(context.value, context.caret).end,
       query: token,
+      autoOpen: true,
       ...(directory ? { directory } : {}),
     };
   },
@@ -67,7 +67,7 @@ export const mentionProvider: CompletionProvider = {
         id: `mention:path:${entry.path}`,
         kind: entry.isDir ? "directory" : "file",
         label: entry.name + (entry.isDir ? "/" : ""),
-        description: entry.path,
+        description: entry.path === entry.name ? undefined : entry.path,
         group,
         // Accepting a path here drops the token and fills the composer's reference chips instead.
         insertText: "",

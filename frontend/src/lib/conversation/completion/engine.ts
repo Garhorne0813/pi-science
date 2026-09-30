@@ -70,13 +70,15 @@ export function completionView(input: {
   activeIndex: number;
   /** Scope the user closed with Escape. */
   dismissedScope: string | null;
-  /** Scope the user opened with Tab for a "tab" provider. */
+  /** Scope the user opened with Tab for a query that does not open by itself. */
   openedScope: string | null;
+  /** The IME is composing, so no list belongs on screen. */
+  composing: boolean;
 }): CompletionView {
   const { detected, items } = input;
   const scope = detected ? completionScope(detected.query) : null;
   const available = detected !== null && items.length > 0 && scope !== input.dismissedScope;
-  const visible = available && detected !== null && (detected.provider.trigger === "typing" || scope === input.openedScope);
+  const visible = available && detected !== null && !input.composing && (detected.query.autoOpen || scope === input.openedScope);
   const activeIndex = Math.min(Math.max(input.activeIndex, 0), Math.max(items.length - 1, 0));
   return { visible, available, activeIndex, activeItem: items[activeIndex] ?? null };
 }
@@ -91,10 +93,7 @@ export function planTab(input: {
   const { view, detected, items, value } = input;
   if (view.visible) return planAccept({ query: detected?.query ?? null, item: view.activeItem, value });
   if (!detected || items.length === 0) return { kind: "ignore" };
-  // Candidates exist but the user dismissed the list. Tab is the key that asks for completions, so
-  // it brings the list back instead of leaving a menu that can never be reopened.
   if (!view.available) return { kind: "open-menu" };
-  if (detected.provider.trigger !== "tab") return { kind: "ignore" };
   const { query } = detected;
   const prefix = commonPrefix(items);
   if (prefix.length > query.query.length) {

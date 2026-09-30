@@ -58,7 +58,12 @@ describe("pathProvider.detect", () => {
       end: 19,
       query: "results/pro",
       directory: { subdir: "results", prefix: "pro", base: "results/" },
+      autoOpen: true,
     });
+  });
+
+  it("keeps the menu closed for a bare word the user is not writing as a path", () => {
+    expect(pathProvider.detect(context("protein"))!.autoOpen).toBe(false);
   });
 
   it("detects nothing when no token precedes the caret", () => {
@@ -109,9 +114,11 @@ describe("pathProvider.complete", () => {
     ];
     const query = pathProvider.detect(context("pro"))!;
     expect(query.directory).toEqual({ subdir: "", prefix: "pro", base: "" });
-    expect(pathProvider.complete(query, context("pro", rootEntries)).map((candidate) => candidate.insertText)).toEqual([
+    const candidates = pathProvider.complete(query, context("pro", rootEntries));
+    expect(candidates.map((candidate) => candidate.insertText)).toEqual([
       "protein_structure/", "protein_old.csv", "protein.csv",
     ]);
+    expect(candidates.map((candidate) => candidate.description)).toEqual([undefined, undefined, undefined]);
   });
 
   it("fills the bare-token prefix without opening the list", () => {
@@ -123,7 +130,7 @@ describe("pathProvider.complete", () => {
     const value = "pro";
     const detected = { provider: pathProvider, query: pathProvider.detect(context(value))! };
     const items = pathProvider.complete(detected.query, context(value, rootEntries));
-    const view = completionView({ detected, items, activeIndex: 0, dismissedScope: null, openedScope: null });
+    const view = completionView({ detected, items, activeIndex: 0, dismissedScope: null, openedScope: null, composing: false });
     expect(planTab({ view, detected, items, value, caret: 3 })).toEqual({ kind: "apply", value: "protein", caret: 7, start: 0, end: 3 });
   });
 });

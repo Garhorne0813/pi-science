@@ -61,6 +61,7 @@ const onKeyDown = vi.fn();
 function Harness({ initialValue = "" }: { initialValue?: string }) {
   const [value, setValue] = useState(initialValue);
   const [mentions, setMentions] = useState<SubagentMention[]>([]);
+  const [composing, setComposing] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
   return (
@@ -70,9 +71,10 @@ function Harness({ initialValue = "" }: { initialValue?: string }) {
       mentions={mentions}
       onChange={(next, nextMentions) => { setValue(next); setMentions(nextMentions); }}
       onKeyDown={onKeyDown}
-      onCompositionStart={() => { composingRef.current = true; }}
-      onCompositionEnd={() => { composingRef.current = false; }}
+      onCompositionStart={() => { composingRef.current = true; setComposing(true); }}
+      onCompositionEnd={() => { setTimeout(() => { composingRef.current = false; setComposing(false); }, 0); }}
       inputRef={inputRef}
+      composing={composing}
       composingRef={composingRef}
       placeholder="Prompt"
     />
@@ -181,32 +183,51 @@ describe("composer completion keyboard paths", () => {
     expect(input().selectionStart).toBe("data/protein.csv".length);
   });
 
-  it("TC-05 previews paths before Tab and accepts the highlighted row", async () => {
+  it("TC-05 fills the common prefix with the first Tab and opens the path list", async () => {
     renderComposer();
     await type("pro");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    await press("Tab");
+    expect(input()).toHaveValue("protein");
     const listbox = screen.getByRole("listbox");
     expect(listbox).toHaveTextContent("Tab to complete");
     const labels = [...listbox.querySelectorAll("[role='option']")].map((option) => option.querySelector("span")?.textContent);
-    expect(labels[0]).toBe("protein_structure/");
     expect(new Set(labels)).toEqual(new Set(["protein_structure/", "protein.csv", "protein_old.csv"]));
-    expect(input()).toHaveValue("pro");
-    for (let index = 0; index < labels.indexOf("protein.csv"); index += 1) await press("ArrowDown");
+
     await press("Tab");
-    expect(input()).toHaveValue("protein.csv");
+    expect(input()).toHaveValue("protein_structure/");
   });
 
-  it("keeps Enter sending for passive path and argument previews", async () => {
+  it("accepts the highlighted path candidate with Enter instead of sending", async () => {
     renderComposer();
     await type("data/pro");
     expect(screen.getByRole("listbox")).toHaveTextContent("protein.csv");
+
     await press("Enter");
-    expect(input()).toHaveValue("data/pro");
-    expect(onKeyDown).toHaveBeenCalledTimes(1);
+    expect(input()).toHaveValue("data/protein.csv");
+    expect(onKeyDown).not.toHaveBeenCalled();
+  });
+
+  it("accepts the highlighted argument candidate with Enter instead of sending", async () => {
+    renderComposer();
     await type("/export j");
     expect(screen.getByRole("listbox")).toHaveTextContent("jsonl");
+
     await press("Enter");
-    expect(input()).toHaveValue("/export j");
-    expect(onKeyDown).toHaveBeenCalledTimes(2);
+    expect(input()).toHaveValue("/export jsonl");
+    expect(onKeyDown).not.toHaveBeenCalled();
+  });
+
+  it("shows no menu for an ordinary word that prefixes a root file and still sends on Enter", async () => {
+    renderComposer();
+    await type("protein");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    await press("Enter");
+    expect(input()).toHaveValue("protein");
+    expect(onKeyDown).toHaveBeenCalledTimes(1);
+    expect(onKeyDown.mock.calls[0][0].key).toBe("Enter");
   });
 
   it("TC-06 leaves Tab to the browser when nothing matches", async () => {
@@ -311,14 +332,34 @@ describe("composer completion keyboard paths", () => {
     expect(onKeyDown.mock.calls[0][0].defaultPrevented).toBe(false);
   });
 
-  it("previews both argument values before Tab", async () => {
+  it("previews both argument values once Tab asks for the list", async () => {
     renderComposer();
     await type("/export ");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    await press("Tab");
     const labels = [...screen.getByRole("listbox").querySelectorAll("[role='option']")].map((option) => option.querySelector("span")?.textContent);
     expect(labels).toEqual(["html", "jsonl"]);
+    expect(input()).toHaveValue("/export ");
 
     await press("Tab");
     expect(input()).toHaveValue("/export html");
+  });
+
+  it("sends while the argument list is closed and accepts its row once Tab opens it", async () => {
+    renderComposer();
+    await type("/export ");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    await press("Enter");
+    expect(input()).toHaveValue("/export ");
+    expect(onKeyDown).toHaveBeenCalledTimes(1);
+
+    await press("Tab");
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    await press("Enter");
+    expect(input()).toHaveValue("/export html");
+    expect(onKeyDown).toHaveBeenCalledTimes(1);
   });
 
   it("continues a directory completion into the next level", async () => {
@@ -351,12 +392,66 @@ describe("composer completion keyboard paths", () => {
 
   it("dismisses the candidate list with Escape and keeps the typed text", async () => {
     renderComposer();
-    await type("pro");
+    await type("data/pro");
     expect(screen.getByRole("listbox")).toBeInTheDocument();
 
     await press("Escape");
-    expect(input()).toHaveValue("pro");
+    expect(input()).toHaveValue("data/pro");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("hides the list while the IME composes, refuses its keys, and shows it again once the IME releases the input", async () => {
+    renderComposer();
+    await type("data/pro");
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+    fireEvent.compositionStart(input());
+    await settle();
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(input(), { key: "Tab" });
+    expect(input()).toHaveValue("data/pro");
+    expect(onKeyDown).toHaveBeenCalledTimes(1);
+
+    fireEvent.compositionEnd(input());
+    // The IME keeps the keys until the tick ends, so the list stays closed with them.
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    await settle();
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+  });
+
+  it("keeps the list open when the textarea is clicked", async () => {
+    renderComposer();
+    await type("data/pro");
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+    fireEvent.pointerDown(input());
+    await settle();
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    expect(input()).toHaveValue("data/pro");
+  });
+
+  it("accepts the row under the pointer with Tab", async () => {
+    renderComposer();
+    await type("@");
+    const options = screen.getAllByRole("option");
+    fireEvent.mouseEnter(options[1]);
+    await settle();
+    expect(screen.getAllByRole("option")[1]).toHaveAttribute("aria-selected", "true");
+
+    await press("Tab");
+    await waitFor(() => expect(input()).toHaveValue("@scout "));
+  });
+
+  it("accepts the row under the pointer with Enter", async () => {
+    renderComposer();
+    await type("@");
+    fireEvent.mouseEnter(screen.getAllByRole("option")[1]);
+    await settle();
+
+    await press("Enter");
+    await waitFor(() => expect(input()).toHaveValue("@scout "));
+    expect(onKeyDown).not.toHaveBeenCalled();
   });
 
   it("keeps a dismissed list closed while the same token keeps growing", async () => {

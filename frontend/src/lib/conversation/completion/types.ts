@@ -44,7 +44,7 @@ export interface CompletionItem {
   /** Present when accepting also fills a structured composer slot, such as a workspace
    *  reference or a highlighted subagent mention. */
   payload?: CompletionPayload;
-  /** Source byte size of a file or directory entry, formatted by the menu. */
+  /** Source byte size of a file or directory entry. The menu formats it and shows it on files. */
   size?: number;
 }
 
@@ -76,6 +76,10 @@ export interface CompletionQuery {
   directory?: CompletionDirectory;
   /** Set when the answer depends on which command argument the caret is in. */
   argument?: { command: string; index: number };
+  /** Candidates appear while the user types, without waiting for Tab. Set this only when the token
+   *  itself is explicit enough to deserve the menu: a command, a mention, a typed argument, or a path
+   *  the user is writing into a directory. */
+  autoOpen: boolean;
 }
 
 /** A workspace-relative path split at the caret: list `subdir`, keep `base`, match `prefix`. */
@@ -101,12 +105,10 @@ export interface CompletionContext {
 
 export interface CompletionProvider {
   id: string;
-  /** A typing provider lets Enter accept automatically. A tab provider previews candidates
-   *  while typing but leaves Enter to send until the user navigates the list. */
-  trigger: "typing" | "tab";
-  /** The query this provider owns at the caret, or null when it owns nothing. Must be pure and
-   *  must not read `CompletionContext.entries` or `CompletionContext.agents`: the loader asks a
-   *  provider first, then loads what that provider said it needs. */
+  /** The query this provider owns at the caret, or null. Set `autoOpen` when the token is explicit
+   *  enough to show the menu while the user types. Must be pure and must not read
+   *  `CompletionContext.entries` or `CompletionContext.agents`: the loader asks a provider first,
+   *  then loads what that provider said it needs. */
   detect(context: CompletionContext): CompletionQuery | null;
   /** Candidates for a query this provider produced. Empty means no completion exists, and the
    *  composer leaves the key to the browser. */

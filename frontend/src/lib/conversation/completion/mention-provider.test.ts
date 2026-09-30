@@ -41,6 +41,7 @@ describe("mentionProvider detection", () => {
       end: 12,
       query: "rev",
       directory: { subdir: "", prefix: "rev", base: "" },
+      autoOpen: true,
     });
   });
 
@@ -116,6 +117,14 @@ describe("mentionProvider candidates", () => {
         size: 2048,
       },
     ]);
+  });
+
+  it("prints a root entry's path only when it adds the directory", () => {
+    const root = [{ name: "protein.csv", path: "protein.csv", isDir: false, size: 2048 }];
+    const candidates = mentionProvider.complete(detect("@pro"), context("@pro", 4, root));
+    expect(candidates.map((candidate) => candidate.description)).toEqual([undefined]);
+    const nested = mentionProvider.complete(detect("@data/pro"), context("@data/pro"));
+    expect(nested.map((candidate) => candidate.description)).toEqual(["data/protein_structure", "data/protein.csv"]);
   });
 
   it("answers a bare @ with agents only", () => {

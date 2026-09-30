@@ -9,13 +9,13 @@ const context = (value: string): CompletionContext => ({ value, caret: value.len
 describe("slashArgumentProvider.detect", () => {
   it("detects the argument of a known command", () => {
     expect(slashArgumentProvider.detect(context("/export j"))).toEqual({
-      providerId: "slash-argument", kind: "argument", start: 8, end: 9, query: "j", argument: { command: "export", index: 0 },
+      providerId: "slash-argument", kind: "argument", start: 8, end: 9, query: "j", argument: { command: "export", index: 0 }, autoOpen: true,
     });
   });
 
   it("detects the empty argument right after the space", () => {
     expect(slashArgumentProvider.detect(context("/export "))).toEqual({
-      providerId: "slash-argument", kind: "argument", start: 8, end: 8, query: "", argument: { command: "export", index: 0 },
+      providerId: "slash-argument", kind: "argument", start: 8, end: 8, query: "", argument: { command: "export", index: 0 }, autoOpen: false,
     });
   });
 
@@ -56,7 +56,7 @@ describe("slash argument Tab", () => {
     const value = "/export j";
     const detected = { provider: slashArgumentProvider, query: slashArgumentProvider.detect(context(value))! };
     const items = slashArgumentProvider.complete(detected.query, context(value));
-    const view = completionView({ detected, items, activeIndex: 0, dismissedScope: null, openedScope: null });
+    const view = completionView({ detected, items, activeIndex: 0, dismissedScope: null, openedScope: null, composing: false });
     expect(planTab({ view, detected, items, value, caret: value.length })).toEqual({ kind: "apply", value: "/export jsonl", caret: 13, start: 8, end: 9 });
   });
 
@@ -64,9 +64,10 @@ describe("slash argument Tab", () => {
     const value = "/export ";
     const detected = { provider: slashArgumentProvider, query: slashArgumentProvider.detect(context(value))! };
     const items = slashArgumentProvider.complete(detected.query, context(value));
-    const closed = completionView({ detected, items, activeIndex: 0, dismissedScope: null, openedScope: null });
-    const opened = completionView({ detected, items, activeIndex: 0, dismissedScope: null, openedScope: completionScope(detected.query) });
+    const closed = completionView({ detected, items, activeIndex: 0, dismissedScope: null, openedScope: null, composing: false });
+    const opened = completionView({ detected, items, activeIndex: 0, dismissedScope: null, openedScope: completionScope(detected.query), composing: false });
     expect(items.map((item) => item.label)).toEqual(["html", "jsonl"]);
+    expect(closed.visible).toBe(false);
     expect(planTab({ view: closed, detected, items, value, caret: value.length })).toEqual({ kind: "open-menu" });
     expect(planTab({ view: opened, detected, items, value, caret: value.length })).toEqual({ kind: "apply", value: "/export html", caret: 12, start: 8, end: 8 });
   });
