@@ -5,6 +5,7 @@ import { AgentSessionRegistry } from "./agent-session-registry.js";
 import { readProject } from "../../project/project-registry.js";
 import { metadataRoot } from "../../storage/persistence.js";
 import type { SessionStats } from "@pi-science/contracts";
+import { appliedRuntimeSettings, contextUsage } from "./agent-runtime-settings.js";
 import type { SessionInfoRecord, SessionMessagePage, SessionMessageRecord, SessionUserMessageIndexEntry } from "../node/session-repository.js";
 
 const context = BACKGROUND_CONTEXT;
@@ -56,6 +57,21 @@ export class AgentSessionRepository {
 
   async findPath(cwd: string, sessionId: string): Promise<string | null> {
     return this.withRepo(cwd, async (repo) => (await this.metadata(repo, cwd, sessionId))?.path ?? null);
+  }
+
+  async runtimeState(cwd: string, sessionId: string) {
+    return this.withRepo(cwd, async (repo) => {
+      const metadata = await this.metadata(repo, cwd, sessionId);
+      if (!metadata) throw new Error("agent session not found");
+      const session = await repo.open(metadata, context);
+      try {
+        const applied = (await session.getValue(appliedRuntimeSettings, context))?.value;
+        const branch = await session.branch("main", context);
+        return { ...await contextUsage(await branch?.findEntries({ order: "oldestFirst" }, context) ?? [], applied?.contextWindow ?? null),
+          compaction_enabled: applied?.compaction.enabled,
+          compaction_threshold_percent: applied?.thresholdPercent ?? null };
+      } finally { await session.close(context); }
+    });
   }
 
   async list(cwd: string): Promise<SessionInfoRecord[]> {

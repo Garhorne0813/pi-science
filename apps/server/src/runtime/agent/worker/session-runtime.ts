@@ -1,7 +1,9 @@
 import { isAbsolute, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { AgentHarness, BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv, createBashTool, createEditTool, createReadTool, createWriteTool, loadSkills, type AgentHarness as Harness, type AgentLane, type JsonlSessionMetadata, type Session, type WatchHandle, type LaneSnapshot, type Skill } from "@earendil-works/pi-agent-core/node";
+import { AgentHarness, BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv, createBashTool, createEditTool, createReadTool, createWriteTool, laneState, loadSkills, type AgentHarness as Harness, type AgentLane, type JsonlSessionMetadata, type Session, type WatchHandle, type LaneSnapshot, type Skill } from "@earendil-works/pi-agent-core/node";
 import { agentModelCatalog, agentModels } from "./agent-models.js";
+import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { appliedRuntimeSettings, contextUsage, resolveCompaction, type AppliedRuntimeSettings, type RuntimeSettings } from "../agent-runtime-settings.js";
 import { AgentCoreEventAdapter } from "../agent-event-adapter.js";
 import { userPrompt } from "../agent-message.js";
 import { notebookHarnessTools } from "./notebook-tools.js";
@@ -53,6 +55,9 @@ export class SessionRuntime {
   private activated = false;
   private activateWatch: (() => void) | undefined;
   private mutationTail: Promise<unknown> = Promise.resolve();
+  private settings: RuntimeSettings = {};
+  private applied!: AppliedRuntimeSettings;
+  private models!: ReturnType<typeof agentModels>;
 
   private constructor(
     sessionId: string,
@@ -90,7 +95,7 @@ export class SessionRuntime {
     if (!isAbsolute(options.cwd) || resolve(options.cwd) !== options.cwd) throw new Error("worker cwd must be absolute and normalized");
     const requiredRoot = join(metadataRoot(options.cwd), "agent-sessions");
     if (resolve(options.sessionsRoot) !== resolve(requiredRoot)) throw new Error("agent sessions root must be workspace-local");
-    const models = agentModels();
+    const models = agentModels(options.settings);
     const model = models.getModel(options.model.provider, options.model.modelId);
     if (!model) throw new Error(`model not found: ${options.model.provider}/${options.model.modelId}`);
     const environment = toolEnvironment(options.env ?? {});
@@ -107,6 +112,9 @@ export class SessionRuntime {
             return repo.open(metadata, context);
           })()
         : await repo.create({ cwd: options.cwd }, context);
+      const saved = (await session.getValue(appliedRuntimeSettings, context))?.value;
+      const recovering = (await session.getValue(laneState("main"), context))?.value.currentOperationId;
+      if (recovering && saved?.model === `${model.provider}/${model.id}`) model.contextWindow = saved.contextWindow;
       const discovered = await loadSkills(executionEnv, skillPaths, context);
       mcp = await AgentMcpTools.open(options.cwd, interactions, options.env ?? {});
       const skillPolicy = options.skillPolicy ?? { mode: "inherit" };
@@ -114,7 +122,8 @@ export class SessionRuntime {
         session,
         models,
         model,
-        thinkingLevel: options.thinking,
+        thinkingLevel: clampThinkingLevel(model, options.thinking ?? "high"),
+        compaction: resolveCompaction(model.contextWindow, options.settings).compaction,
         tools: [createReadTool(), createBashTool({ prepare: (execution) => {
           execution.env = environment;
           execution.inheritEnv = false;
@@ -129,6 +138,19 @@ export class SessionRuntime {
       const lane = await harness.lane("main", context);
       const watch = await lane.watch(context);
       const runtime = new SessionRuntime(session.metadata.id, lane, harness, repo, executionEnv, session.metadata, session, watch, interactions, mcp, skillPaths, discovered.skills, skillPolicy, fatal);
+      runtime.settings = options.settings ?? {};
+      runtime.models = models;
+      const snapshot = await watch.resnapshot(context);
+      const currentModel = models.getModel(snapshot.configuration.model.provider, snapshot.configuration.model.modelId);
+      if (!currentModel) throw new Error("persisted model is unavailable");
+      const normalizedThinking = clampThinkingLevel(currentModel, snapshot.configuration.thinkingLevel);
+      if (!snapshot.operation && normalizedThinking !== snapshot.configuration.thinkingLevel) await lane.setThinkingLevel(normalizedThinking, context);
+      runtime.applied = open.length && saved ? saved : {
+        model: `${currentModel.provider}/${currentModel.id}`, contextWindow: currentModel.contextWindow,
+        ...resolveCompaction(currentModel.contextWindow, runtime.settings),
+      };
+      await harness.setCompactionSettings(runtime.applied.compaction, context);
+      await session.setValue(appliedRuntimeSettings, runtime.applied, context);
       const adapter = new AgentCoreEventAdapter();
       runtime.activateWatch = () => {
         watch.start((event) => {
@@ -183,6 +205,9 @@ export class SessionRuntime {
             operation: snapshot.operation,
             queues: snapshot.queues,
             faulted: snapshot.faulted,
+            ...await contextUsage(snapshot.transcript, this.applied.contextWindow),
+            compaction: await this.harness.getCompactionSettings(context),
+            compaction_threshold_percent: this.applied.thresholdPercent,
           } };
         }
         case "prompt": {
@@ -233,10 +258,14 @@ export class SessionRuntime {
         case "configure":
         case "set_model":
         case "set_thinking_level": return await this.configure(type, params);
-        case "get_available_thinking_levels":
-          return { success: true, data: { levels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] } };
+        case "get_available_thinking_levels": {
+          const { model: ref } = (await this.watch.resnapshot(context)).configuration;
+          const model = this.models.getModel(ref.provider, ref.modelId);
+          return model ? { success: true, data: { levels: getSupportedThinkingLevels(model), model: `${ref.provider}/${ref.modelId}` } }
+            : { success: false, code: "invalid_model", error: "model is unavailable" };
+        }
         case "get_available_models":
-          return { success: true, data: { models: await agentModelCatalog() } };
+          return { success: true, data: { models: await agentModelCatalog(this.models) } };
         case "get_commands": return { success: true, data: { commands: [] } };
         case "get_skills": return { success: true, data: { skills: this.skillStatus(), policy: this.skillPolicy } };
         case "set_skill_policy": {
@@ -294,22 +323,30 @@ export class SessionRuntime {
     if (before.operation) return { success: false, code: "busy", error: "agent is busy; wait for the current task to finish or stop it" };
     const model = type === "set_thinking_level" ? before.configuration.model
       : { provider: params.provider, modelId: params.modelId };
-    if (typeof model.provider !== "string" || typeof model.modelId !== "string"
-      || !agentModels().getModel(model.provider, model.modelId)) {
+    const models = this.models;
+    const selected = typeof model.provider === "string" && typeof model.modelId === "string" ? models.getModel(model.provider, model.modelId) : undefined;
+    if (!selected) {
       return { success: false, code: "invalid_model", error: "model is not in the agent-core catalog" };
     }
-    const ref = { provider: model.provider, modelId: model.modelId };
-    const level = params.level ?? before.configuration.thinkingLevel;
-    if (typeof level !== "string" || !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(level)) {
+    const ref = { provider: selected.provider, modelId: selected.id };
+    const level = params.level ?? clampThinkingLevel(selected, before.configuration.thinkingLevel);
+    if (typeof level !== "string" || !getSupportedThinkingLevels(selected).includes(level as NonNullable<AgentRuntimeStartOptions["thinking"]>)) {
       return { success: false, code: "invalid_thinking", error: "invalid thinking level" };
     }
     try {
       await this.lane.setModel(ref, context);
       await this.lane.setThinkingLevel(level as AgentRuntimeStartOptions["thinking"] & string, context);
+      const applied = { model: `${ref.provider}/${ref.modelId}`, contextWindow: selected.contextWindow,
+        ...resolveCompaction(selected.contextWindow, this.settings) };
+      await this.harness.setCompactionSettings(applied.compaction, context);
+      await this.session.setValue(appliedRuntimeSettings, applied, context);
+      this.applied = applied;
     } catch (error) {
       try {
         await this.lane.setModel(before.configuration.model, context);
         await this.lane.setThinkingLevel(before.configuration.thinkingLevel, context);
+        await this.harness.setCompactionSettings(this.applied.compaction, context);
+        await this.session.setValue(appliedRuntimeSettings, this.applied, context);
       } catch (restoreError) {
         // Stop this worker rather than admit a new mutation against unknown
         // state. Reopening reads the durable lane configuration as authority.

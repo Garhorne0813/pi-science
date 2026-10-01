@@ -1,4 +1,5 @@
 import type { RuntimeEvent, RuntimeResult, RuntimeSkillPolicy } from "../agent-runtime-types.js";
+import type { RuntimeSettings } from "../agent-runtime-settings.js";
 
 export interface AgentRuntimeStartOptions {
   cwd: string;
@@ -6,6 +7,7 @@ export interface AgentRuntimeStartOptions {
   sessionsRoot: string;
   model: { provider: string; modelId: string };
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  settings?: RuntimeSettings;
   systemPrompt?: string;
   skillPaths?: string[];
   skillPolicy?: RuntimeSkillPolicy;

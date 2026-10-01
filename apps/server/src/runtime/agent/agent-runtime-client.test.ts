@@ -58,7 +58,7 @@ describe("AgentCoreRuntimeClient", () => {
     expect(first.sessionId).toBeTruthy();
     expect(await first.sendCommand("get_state")).toMatchObject({
       success: true,
-      data: { sessionId: first.sessionId, busy: false, model: start.model, thinkingLevel: "low",
+      data: { sessionId: first.sessionId, busy: false, model: start.model, thinkingLevel: "off",
         activeTools: expect.arrayContaining(["read", "bash", "edit", "write"]) },
     });
     await first.shutdown();

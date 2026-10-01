@@ -42,7 +42,7 @@ describe("agent-core main service integration", () => {
     expect(created).toMatchObject({ id: expect.any(String), cwd });
     if (!("id" in created)) throw new Error(String(created.error));
     expect((await new SessionRepository().list(cwd)).map((item) => item.id)).toContain(created.id);
-    expect(await first.state(created.id, cwd)).toMatchObject({ id: created.id, model: "openai/gpt-4.1-mini", thinking: "low" });
+    expect(await first.state(created.id, cwd)).toMatchObject({ id: created.id, model: "openai/gpt-4.1-mini", thinking: "off" });
     const requestId = "0379079d-63a2-428d-aec1-8ea88e46441f";
     expect(await first.command(created.id, cwd, "prompt", { message: "hello", client_message_id: requestId })).toMatchObject({ success: true });
     const repository = new SessionRepository();

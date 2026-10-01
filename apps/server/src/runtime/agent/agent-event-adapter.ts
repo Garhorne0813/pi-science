@@ -4,6 +4,13 @@ import type { RuntimeEvent } from "./agent-runtime-types.js";
 /** Converts durable harness events to the first-stage Pi browser event shape. */
 export function adaptHarnessEvent(event: HarnessEvent): RuntimeEvent[] {
   switch (event.type) {
+    case "compaction_start":
+      return [{ type: "compaction_start", runId: event.runId, reason: event.reason }];
+    case "compaction_end":
+      return event.status === "failed"
+        ? [{ type: "compaction_error", runId: event.runId, message: event.error.message },
+          { type: "error", runId: event.runId, message: event.error.message }]
+        : [{ type: "compaction_end", runId: event.runId, reason: event.reason, outcome: event.status }];
     case "run_start":
       return [{ type: "agent_start", runId: event.runId }];
     case "run_end":

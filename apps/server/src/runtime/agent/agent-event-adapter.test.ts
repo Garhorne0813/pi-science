@@ -11,6 +11,15 @@ function event(value: Record<string, unknown>): HarnessEvent {
 }
 
 describe("AgentCoreEventAdapter", () => {
+  it("forwards manual and automatic compaction outcomes through existing browser events", () => {
+    const adapter = new AgentCoreEventAdapter();
+    expect(adapter.adapt(event({ type: "compaction_start", runId: "compact", reason: "manual" })))
+      .toEqual([{ type: "compaction_start", runId: "compact", reason: "manual" }]);
+    expect(adapter.adapt(event({ type: "compaction_end", runId: "compact", reason: "manual", status: "aborted" })))
+      .toEqual([{ type: "compaction_end", runId: "compact", reason: "manual", outcome: "aborted" }]);
+    expect(adapter.adapt(event({ type: "compaction_end", runId: "compact", status: "failed", error: { message: "summary failed" } })))
+      .toEqual([{ type: "compaction_error", runId: "compact", message: "summary failed" }, { type: "error", runId: "compact", message: "summary failed" }]);
+  });
   it("does not duplicate the lifecycle start when recovery also emits run_resume", () => {
     const adapter = new AgentCoreEventAdapter();
     expect(adapter.beginRecovery("recovered-run")).toMatchObject({ type: "agent_start", runId: "recovered-run", recovery: true });

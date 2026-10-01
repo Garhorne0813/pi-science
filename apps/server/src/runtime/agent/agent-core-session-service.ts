@@ -154,6 +154,7 @@ export class AgentCoreSessionService {
         sessionsRoot: join(metadataRoot(cwd), "agent-sessions"),
         model,
         thinking: thinking(config.thinking),
+        settings: config,
         systemPrompt: await systemPrompt(),
         skillPaths: config.skills,
         skillPolicy: await globalSkillPolicy(),
@@ -245,6 +246,7 @@ export class AgentCoreSessionService {
         sessionsRoot: join(metadataRoot(cwd), "agent-sessions"),
         model,
         thinking: thinking(persisted?.thinkingLevel ?? config.thinking),
+        settings: config,
         systemPrompt: await systemPrompt(),
         skillPaths: saved?.skills ?? config.skills,
         skillPolicy: await globalSkillPolicy(),
@@ -321,11 +323,11 @@ export class AgentCoreSessionService {
     if (!current || current.runtime.isClosed) {
       if (!(await this.repository.findPath(cwd, sessionId))) return { error: "session not found in this workspace", code: "not_found" };
       const saved = await this.repository.configuration(cwd, sessionId);
+      const facts = await this.repository.runtimeState(cwd, sessionId);
       return { id: sessionId, cwd, is_streaming: false, is_compacting: false, pending_message_count: 0,
         model: saved?.model ? `${saved.model.provider}/${saved.model.modelId}` : config.model ?? null,
-        thinking: saved?.thinkingLevel ?? config.thinking ?? null, context_tokens: null,
-        context_window: null, context_percent: null, compaction_enabled: config.compaction_enabled !== false,
-        compaction_threshold_percent: config.compaction_threshold_percent ?? null };
+        thinking: saved?.thinkingLevel ?? config.thinking ?? null,
+        ...facts };
     }
     const result = await current.runtime.sendCommand("get_state").catch(failed);
     if (!result.success) return { error: String(result.error), code: String(result.code) };
@@ -336,9 +338,11 @@ export class AgentCoreSessionService {
       pending_message_count: Array.isArray(data.queues) ? data.queues.length : 0,
       model: model?.provider && model.modelId ? `${model.provider}/${model.modelId}` : current.model,
       thinking: typeof data.thinkingLevel === "string" ? data.thinkingLevel : current.thinking,
-      context_tokens: null, context_window: null, context_percent: null,
-      compaction_enabled: config.compaction_enabled !== false,
-      compaction_threshold_percent: config.compaction_threshold_percent ?? null };
+      context_tokens: typeof data.context_tokens === "number" ? data.context_tokens : null,
+      context_window: typeof data.context_window === "number" ? data.context_window : null,
+      context_percent: typeof data.context_percent === "number" ? data.context_percent : null,
+      compaction_enabled: (data.compaction as { enabled?: boolean } | undefined)?.enabled,
+      compaction_threshold_percent: typeof data.compaction_threshold_percent === "number" ? data.compaction_threshold_percent : null };
   }
 
   async configure(cwd: string, sessionId: string, model: string, level: string | undefined, config: PiConfig): Promise<RuntimeResult> {

@@ -37,13 +37,13 @@ describe("agent-core worker mutations", () => {
       return setThinking(level, ctx);
     });
     const [failed, committed] = await Promise.all([
-      instance.command("configure", { provider: "openai", modelId: "gpt-4.1", level: "medium" }),
-      instance.command("configure", { provider: "openai", modelId: "gpt-4.1-mini", level: "high" }),
+      instance.command("configure", { provider: "openai", modelId: "gpt-5", level: "medium" }),
+      instance.command("configure", { provider: "openai", modelId: "gpt-5-mini", level: "high" }),
     ]);
     expect(failed).toMatchObject({ success: false });
     expect(committed).toMatchObject({ success: true });
     expect(await instance.command("get_state", {})).toMatchObject({ success: true,
-      data: { model: { provider: "openai", modelId: "gpt-4.1-mini" }, thinkingLevel: "high" } });
+      data: { model: { provider: "openai", modelId: "gpt-5-mini" }, thinkingLevel: "high" } });
   });
 
   it("validates the complete configuration before changing the durable lane", async () => {
@@ -53,7 +53,7 @@ describe("agent-core worker mutations", () => {
     expect(await instance.command("set_model", { provider: "openai", modelId: "not-a-model" }))
       .toMatchObject({ success: false, code: "invalid_model" });
     expect(await instance.command("get_state", {})).toMatchObject({ success: true,
-      data: { model: { provider: "openai", modelId: "gpt-4.1-mini" }, thinkingLevel: "low" } });
+      data: { model: { provider: "openai", modelId: "gpt-4.1-mini" }, thinkingLevel: "off" } });
   });
 
   it("keeps abort reachable while a configuration mutation is waiting", async () => {
@@ -65,7 +65,7 @@ describe("agent-core worker mutations", () => {
       await blocked;
       return setThinking(level, ctx);
     });
-    const configure = instance.command("configure", { provider: "openai", modelId: "gpt-4.1", level: "high" });
+    const configure = instance.command("configure", { provider: "openai", modelId: "gpt-5", level: "high" });
     try {
       await vi.waitFor(() => expect(setter).toHaveBeenCalled());
       expect(await instance.command("abort", {})).toMatchObject({ success: false }); // No active model operation.

@@ -431,6 +431,9 @@ export function loadDefaultPiConfig(runtimeRoots?: string[]): PiConfig {
     compaction_enabled: settings.compaction_enabled !== false,
     compaction_threshold_percent: validThreshold(settings.compaction_threshold_percent),
     model_context_window: positiveInteger(settings.model_context_window),
+    model_context_window_override: typeof settings.model_context_window_override?.model === "string"
+      && positiveInteger(settings.model_context_window_override.context_window)
+      ? { model: settings.model_context_window_override.model, context_window: positiveInteger(settings.model_context_window_override.context_window)! } : undefined,
     model_max_output_tokens: positiveInteger(settings.model_max_output_tokens),
     provider: null,
     api_key: null,

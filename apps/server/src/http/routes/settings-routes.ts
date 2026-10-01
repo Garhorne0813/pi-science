@@ -4,6 +4,7 @@ import { defaultProgressAppearance, progressAppearanceInputSchema, progressAppea
 import { configPath } from "../../storage/persistence.js";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import { agentModelCatalog } from "../../runtime/agent/worker/agent-models.js";
+import { resolveCompaction } from "../../runtime/agent/agent-runtime-settings.js";
 import { runtimeExtensionStatus } from "../../runtime/pi/pi-runtime-launch.js";
 import { safeConnectorFetch, validateOutboundHttpUrl } from "../../security/outbound-security.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
@@ -212,7 +213,7 @@ function normalizePiModel(value: unknown): Record<string, unknown> | null {
   if (!provider || !model) return null;
   const explicitReasoning = typeof item.reasoning === "boolean";
   const reasoning = explicitReasoning ? item.reasoning === true : undefined;
-  const listedLevels = normalizeThinkingLevels(item.thinkingLevels);
+  const listedLevels = normalizeThinkingLevels(item.thinkingLevels ?? item.thinking_levels);
   const levelMap = item.thinkingLevelMap && typeof item.thinkingLevelMap === "object" ? item.thinkingLevelMap as Record<string, unknown> : {};
   const hasExplicitLevels = Object.keys(levelMap).length > 0;
   // A runtime entry WITHOUT capability metadata (no reasoning flag, no
@@ -272,7 +273,7 @@ async function modelCatalog(nodeSessionService: NodeSessionService, config: Sett
         if (!existing.max_output_tokens) existing.max_output_tokens = source.max_output_tokens;
         if (!Array.isArray(existing.input_formats) || existing.input_formats.length === 0) existing.input_formats = source.input_formats;
       }
-      const customOnly = agentCore ? [] : customModels(config).filter((item) => !runtimeById.has(String(item.id)));
+      const customOnly = customModels(config).filter((item) => !runtimeById.has(String(item.id)));
       return { available: [...runtimeById.values(), ...customOnly], source: "pi" };
     }
   }
@@ -344,7 +345,12 @@ async function providerInventory(nodeSessionService: NodeSessionService, config:
 function publicCustom(item: NonNullable<Settings["custom_providers"]>[number] & { has_key?: boolean }): Record<string, unknown> { return { id: item.id, name: item.name, base_url: item.base_url, api: item.api, models: item.models, has_key: Boolean(item.api_key) || item.has_key === true, reasoning: item.reasoning, context_window: item.context_window, model_hints: item.model_hints }; }
 function slug(value: string): string { return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "custom-api"; }
 function query(request: { query: unknown }, name: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[name]; return typeof value === "string" && value ? value : fallback; }
-function compactionThreshold(config: Settings, available: Array<Record<string, unknown>>, configured: string): number { if (typeof config.compaction_threshold_percent === "number") return config.compaction_threshold_percent; const contextWindow = Number(available.find((item) => item.id === configured)?.context_window ?? config.model_context_window ?? 0); return contextWindow > 16384 ? Math.min(95, Math.max(50, Math.round((1 - 16384 / contextWindow) * 100))) : 85; }
+function compactionThreshold(config: Settings, available: Array<Record<string, unknown>>, configured: string): number {
+  const override = config.model_context_window_override;
+  const contextWindow = override?.model === configured ? override.context_window
+    : Number(available.find((item) => item.id === configured)?.context_window ?? 0);
+  return resolveCompaction(contextWindow || 16384, config).thresholdPercent;
+}
 async function readBoundedJson(response: Response, maxBytes: number): Promise<Record<string, unknown>> { if (Number(response.headers.get("content-length") ?? 0) > maxBytes) throw new Error("Model discovery response is too large"); if (!response.body) return {}; const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0; try { while (true) { const next = await reader.read(); if (next.done) break; size += next.value.byteLength; if (size > maxBytes) throw new Error("Model discovery response is too large"); chunks.push(next.value); } } finally { reader.releaseLock(); } const bytes = new Uint8Array(size); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; } const text = new TextDecoder().decode(bytes); try { return JSON.parse(text) as Record<string, unknown>; } catch { return text ? { message: text } : {}; } }
 
 type ModelHint = { context_window?: number; reasoning?: boolean; thinking_levels?: string[]; source?: string };
@@ -544,7 +550,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
     let available = catalog.available;
     const canonicalState = modelResources?.repository.readSync();
     const hasCanonicalResources = Boolean(canonicalState && (canonicalState.migration || canonicalState.providers.length > 0 || canonicalState.models.length > 0));
-    if (modelResources && hasCanonicalResources && process.env.PI_SCIENCE_AGENT_RUNTIME !== "agent-core") {
+    if (modelResources && hasCanonicalResources) {
       const resourceModels = await modelResources.listModels();
       const projected = resourceModels
         .filter((item) => item.provider_id.startsWith("user-") && item.available)
@@ -704,7 +710,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       await mutate((config) => { if (String(config.model ?? "").startsWith(`${request.params.provider}/`)) config.model = ""; });
     } else await mutate((config) => { if (config.api_keys) delete config.api_keys[request.params.provider]; if (String(config.model ?? "").startsWith(`${request.params.provider}/`)) config.model = ""; });
     return respondWithReload(nodeSessionService, reply, { ok: true, provider: request.params.provider }); });
-  app.put("/api/settings/model", async (request, reply) => { const body = (request.body ?? {}) as { model?: unknown; thinking?: unknown }; const model = String(body.model ?? ""); const requestedThinking = String(body.thinking ?? "high"); const cwdValue = query(request, "cwd", ""); const current = await load(); const canonicalState = modelResources?.repository.readSync(); const useCanonicalResources = process.env.PI_SCIENCE_AGENT_RUNTIME !== "agent-core" && Boolean(modelResources && (canonicalState?.migration || canonicalState?.providers?.length || canonicalState?.models?.length));
+  app.put("/api/settings/model", async (request, reply) => { const body = (request.body ?? {}) as { model?: unknown; thinking?: unknown }; const model = String(body.model ?? ""); const requestedThinking = String(body.thinking ?? "high"); const cwdValue = query(request, "cwd", ""); const current = await load(); const canonicalState = modelResources?.repository.readSync(); const useCanonicalResources = Boolean(modelResources && (canonicalState?.migration || canonicalState?.providers?.length || canonicalState?.models?.length));
     if (useCanonicalResources && modelResources) {
       const canonicalModel = canonicalState?.aliases[model] ?? model;
       const selected = (await modelResources.listModels({ available: true })).find((item) => item.id === canonicalModel);

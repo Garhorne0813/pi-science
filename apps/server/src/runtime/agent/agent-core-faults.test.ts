@@ -110,9 +110,9 @@ describe("agent-core fault recovery", () => {
     if (!("id" in created)) throw new Error(String(created.error));
     const committed: Array<{ model: unknown; thinking: unknown }> = [];
     const requests = [
-      first.configure(created.id, cwd, "openai/gpt-4.1", "medium"),
+      first.configure(created.id, cwd, "openai/gpt-5", "medium"),
       first.configure(created.id, cwd, "openai/not-a-real-model", "high"),
-      first.configure(created.id, cwd, "openai/gpt-4.1-mini", "high"),
+      first.configure(created.id, cwd, "openai/gpt-5-mini", "high"),
     ];
     const results = await Promise.all(requests.map((request) => request.then((result) => {
       if (result.success) committed.push({ model: result.model, thinking: result.thinking });

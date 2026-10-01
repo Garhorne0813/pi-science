@@ -9,7 +9,8 @@ import { observeNodePiEvent } from "../events/node-event-observer.js";
 import type { AgentRuntime, RuntimeResult, RuntimeSkillPolicy } from "../agent/agent-runtime-types.js";
 import { OrbitRuntimeAdapter } from "../agent/orbit-runtime-adapter.js";
 import { AgentCoreSessionService } from "../agent/agent-core-session-service.js";
-import { agentModelCatalog } from "../agent/worker/agent-models.js";
+import { agentModelCatalog, agentModels } from "../agent/worker/agent-models.js";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { PiManager, piManager } from "../pi/pi-manager.js";
 import { PiOrbitRequestError } from "../pi/pi-orbit-host.js";
 import type { PiProcessOptions, PiResult } from "../pi/pi-process.js";
@@ -155,6 +156,7 @@ function effectiveConfig(requested?: Partial<PiConfig>): PiConfig {
     compaction_enabled: requested?.compaction_enabled ?? defaults.compaction_enabled ?? true,
     compaction_threshold_percent: requested?.compaction_threshold_percent ?? defaults.compaction_threshold_percent,
     model_context_window: requested?.model_context_window ?? defaults.model_context_window,
+    model_context_window_override: requested?.model_context_window_override ?? defaults.model_context_window_override,
     model_max_output_tokens: requested?.model_max_output_tokens ?? defaults.model_max_output_tokens,
     skills: requested?.skills?.length ? requested.skills : defaults.skills,
     extensions: requested?.extensions?.length ? requested.extensions : defaults.extensions,
@@ -540,11 +542,16 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
+    if (process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core" && expectedModel) {
+      const separator = expectedModel.indexOf("/");
+      const model = agentModels().getModel(expectedModel.slice(0, separator), expectedModel.slice(separator + 1));
+      return model ? { success: true, data: { model: expectedModel, levels: getSupportedThinkingLevels(model) } }
+        : { success: false, code: "invalid_model", error: "model is unavailable" };
+    }
     const core = this.agentCore.liveRuntime(cwd, expectedModel);
     if (core) {
       const result = await core.sendCommand("get_available_thinking_levels");
-      return result.success && result.data && typeof result.data === "object"
-        ? { ...result, data: { ...result.data, model: expectedModel ?? null } } : result;
+      return result;
     }
     const expectedCanonical = expectedModel ? canonicalRuntimeModelRef(expectedModel) : null;
     // Runtime state uses projected provider/model IDs. Compare canonical IDs so
