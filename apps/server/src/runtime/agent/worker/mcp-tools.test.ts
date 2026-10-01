@@ -11,6 +11,46 @@ import { AgentMcpTools } from "./mcp-tools.js";
 import { InteractionBridge } from "./interaction-bridge.js";
 
 describe("agent-core managed MCP tools", () => {
+  it("projects only each stdio connector's credentials and ordinary system variables", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-mcp-env-"));
+    const previousFirst = process.env.PR115_MCP_FIRST;
+    const previousSecond = process.env.PR115_MCP_SECOND;
+    let mcp: AgentMcpTools | undefined;
+    try {
+      process.env.PR115_MCP_FIRST = "first-test-token";
+      process.env.PR115_MCP_SECOND = "second-test-token";
+      await mkdir(join(cwd, ".pi-science"));
+      const server = join(cwd, "environment.mjs");
+      await writeFile(server, [
+        `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
+        `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
+        `const server = new McpServer({ name: "environment-test", version: "1" });`,
+        `server.registerTool("inspect", { description: "Inspect allowed environment" }, async () => ({ content: [{ type: "text", text: JSON.stringify({token:process.env.TOKEN,model:!!process.env.OPENAI_API_KEY,internal:!!process.env.PI_SCIENCE_INTERNAL_TOKEN,firstSource:!!process.env.PR115_MCP_FIRST,secondSource:!!process.env.PR115_MCP_SECOND,path:!!process.env.PATH}) }] }));`,
+        `await server.connect(new StdioServerTransport());`,
+      ].join("\n"));
+      await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test",
+        mcpServers: Object.fromEntries(["first", "second"].map((name) => [name, { command: process.execPath, args: [server],
+          approveTools: false, __piScienceConnectorId: `connector_${name}`,
+          __piScienceEnvironment: { TOKEN: { kind: "environment", name: `PR115_MCP_${name.toUpperCase()}` } } }])) }));
+      mcp = await AgentMcpTools.open(cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "",
+        OPENAI_API_KEY: "model-test-token", PI_SCIENCE_INTERNAL_TOKEN: "server-test-token",
+        PR115_MCP_FIRST: "first-test-token", PR115_MCP_SECOND: "second-test-token" });
+      expect(mcp.diagnostics).toEqual([]);
+      for (const name of ["first", "second"]) {
+        const tool = mcp.tools.find((item) => item.name === `mcp__${name}__inspect`)!;
+        const result = await tool.execute("inspect-environment", {}, () => undefined, {} as never, {} as never, {} as never);
+        const text = result.content[0];
+        expect(text?.type).toBe("text");
+        expect(JSON.parse(text && text.type === "text" ? text.text : "")).toEqual({ token: `${name}-test-token`,
+          model: false, internal: false, firstSource: false, secondSource: false, path: true });
+      }
+    } finally {
+      if (previousFirst === undefined) delete process.env.PR115_MCP_FIRST; else process.env.PR115_MCP_FIRST = previousFirst;
+      if (previousSecond === undefined) delete process.env.PR115_MCP_SECOND; else process.env.PR115_MCP_SECOND = previousSecond;
+      await mcp?.close();
+      await rm(cwd, { recursive: true, force: true });
+    }
+  }, 20_000);
   it("uses the official SDK for a managed stdio connector and calls an exposed tool", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-mcp-"));
     let mcp: AgentMcpTools | undefined;

@@ -36,6 +36,12 @@ export type PreparePromptResult =
   | { conflict: true };
 
 const SERVER_INSTANCE_ID = randomUUID();
+const INDETERMINATE_CODES = new Set([
+  "timeout", "process_closed", "process_exit", "write_failed", "spawn_failed",
+  "runtime_command_failed", "internal_error", "agent_runtime_error", "worker_error",
+]);
+
+export function isPromptDeliveryIndeterminate(code: string): boolean { return INDETERMINATE_CODES.has(code); }
 
 function requestFile(cwd: string): string {
   return workspaceFile(cwd, "prompt-requests.jsonl");
@@ -96,6 +102,21 @@ export class PromptRequestRepository {
       if (prior && prior.content_sha256 !== contentSha256) return { conflict: true };
 
       if (prior?.status === "persisted") return { dispatch: false, status: asStatus(prior) };
+      if (prior) {
+        // A lost acknowledgement can leave even a rejected ledger record next
+        // to an already-durable message. Reconcile this ID before any dispatch.
+        const matches = (await this.sessions.messages(cwd, sessionId))
+          .filter((message) => message.role === "user" && message.client_message_id === clientMessageId);
+        if (matches.length === 1) {
+          prior = await this.appendState(file, prior, "persisted", { durable_message_id: matches[0]!.id });
+          return { dispatch: false, status: asStatus(prior) };
+        }
+        if (matches.length > 1 || (prior.status === "rejected" && isPromptDeliveryIndeterminate(prior.error_code ?? ""))) {
+          prior = await this.appendState(file, prior, "indeterminate", {
+            error_code: matches.length > 1 ? "multiple_durable_messages" : prior.error_code,
+          });
+        }
+      }
       if (prior && prior.status !== "rejected") {
         if (prior.server_instance_id !== this.serverInstanceId && prior.status !== "indeterminate") {
           prior = await this.appendState(file, prior, "indeterminate", { error_code: "server_restarted_before_confirmation" });
@@ -196,6 +217,10 @@ export class PromptRequestRepository {
     if (matches.length > 1) {
       const indeterminate = await this.update(cwd, sessionId, clientMessageId, "indeterminate", { error_code: "multiple_durable_messages" });
       return indeterminate;
+    }
+
+    if (record.status === "rejected" && isPromptDeliveryIndeterminate(record.error_code ?? "")) {
+      return this.update(cwd, sessionId, clientMessageId, "indeterminate", { error_code: record.error_code });
     }
 
     if (record.server_instance_id !== this.serverInstanceId && record.status !== "persisted" && record.status !== "rejected" && record.status !== "indeterminate") {

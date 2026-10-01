@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
-import { BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv, type Entry, type JsonlSessionMetadata } from "@earendil-works/pi-agent-core/node";
+import { BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv, laneConfig, type Entry, type JsonlSessionMetadata, type LaneConfiguration } from "@earendil-works/pi-agent-core/node";
+import { AgentSessionRegistry } from "./agent-session-registry.js";
 import { readProject } from "../../project/project-registry.js";
 import { metadataRoot } from "../../storage/persistence.js";
 import type { SessionStats } from "@pi-science/contracts";
@@ -27,6 +28,7 @@ function asMessage(entry: Entry): SessionMessageRecord | null {
 
 /** Read-only projection of AgentHarness v4 sessions into the existing browser history protocol. */
 export class AgentSessionRepository {
+  private readonly registry = new AgentSessionRegistry();
   private async withRepo<T>(cwd: string, read: (repo: JsonlSessionRepo) => Promise<T>): Promise<T> {
     const environment = new NodeExecutionEnv({ cwd });
     const repo = new JsonlSessionRepo({ fileSystem: environment, sessionsRoot: join(metadataRoot(cwd), "agent-sessions") });
@@ -38,7 +40,18 @@ export class AgentSessionRepository {
   }
 
   private async metadata(repo: JsonlSessionRepo, cwd: string, sessionId: string): Promise<JsonlSessionMetadata | undefined> {
+    if ((await this.registry.get(cwd, sessionId))?.state === "deleted") return undefined;
     return (await repo.list({ cwd }, context)).find((item) => item.id === sessionId);
+  }
+
+  async configuration(cwd: string, sessionId: string): Promise<LaneConfiguration | null> {
+    return this.withRepo(cwd, async (repo) => {
+      const metadata = await this.metadata(repo, cwd, sessionId);
+      if (!metadata) return null;
+      const session = await repo.open(metadata, context);
+      try { return (await session.getValue(laneConfig("main"), context))?.value ?? null; }
+      finally { await session.close(context); }
+    });
   }
 
   async findPath(cwd: string, sessionId: string): Promise<string | null> {
@@ -47,8 +60,9 @@ export class AgentSessionRepository {
 
   async list(cwd: string): Promise<SessionInfoRecord[]> {
     const project = await readProject(cwd);
+    const registered = await this.registry.all(cwd);
     return this.withRepo(cwd, async (repo) => (await repo.list({ cwd }, context))
-      .filter((item) => !item.parentSessionId)
+      .filter((item) => !item.parentSessionId && (!Object.hasOwn(registered, item.id) || registered[item.id]?.state !== "deleted"))
       .map((item) => ({
         id: item.id,
         cwd,

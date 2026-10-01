@@ -1,8 +1,10 @@
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentCoreRuntimeClient, workerEnvironment } from "./agent-runtime-client.js";
+import { SessionRuntime } from "./worker/session-runtime.js";
+import { BACKGROUND_CONTEXT, type AgentLane } from "@earendil-works/pi-agent-core/node";
 
 const roots: string[] = [];
 const clients: AgentCoreRuntimeClient[] = [];
@@ -75,6 +77,10 @@ describe("AgentCoreRuntimeClient", () => {
     });
     const result = await client.sendCommand("prompt", { message: "Say hello", client_message_id: "browser-123" });
     expect(result).toMatchObject({ success: true, operationId: expect.any(String) });
+    expect(await client.sendCommand("prompt", { message: "Say hello", client_message_id: "browser-123" }))
+      .toMatchObject({ success: true, operationId: result.operationId, deduplicated: true });
+    expect(await client.sendCommand("prompt", { message: "Changed payload", client_message_id: "browser-123" }))
+      .toMatchObject({ success: false, code: "client_message_id_conflict" });
     // No credential is provided; the run fails after admission, through the event stream.
     await settled;
     expect(events).toContain("agent_start");
@@ -86,11 +92,36 @@ describe("AgentCoreRuntimeClient", () => {
     await client.shutdown();
     const reopened = await AgentCoreRuntimeClient.start({ ...start, sessionId: client.sessionId }, 5_000);
     clients.push(reopened);
+    expect(await reopened.sendCommand("prompt", { message: "Say hello", client_message_id: "browser-123" }))
+      .toMatchObject({ success: true, operationId: result.operationId, deduplicated: true });
     expect(await reopened.sendCommand("get_messages")).toMatchObject({
       success: true,
       data: { messages: expect.arrayContaining([expect.objectContaining({ message: expect.objectContaining({ client_message_id: "browser-123" }) })]) },
     });
+    const history = (await reopened.sendCommand("get_messages")).data as { messages: Array<{ message: { client_message_id?: string } }> };
+    expect(history.messages.filter((entry) => entry.message.client_message_id === "browser-123")).toHaveLength(1);
   });
+
+  it("keeps a recovered operation paused until the consumer binds and activates", async () => {
+    const start = await options();
+    const fixture = await SessionRuntime.open(start, () => undefined, (error) => { throw error; });
+    let sessionId: string;
+    try {
+      const lane = (fixture as unknown as { lane: AgentLane }).lane;
+      expect((await lane.accept({ kind: "prompt", prompt: "recover this accepted operation" }, BACKGROUND_CONTEXT)).ok).toBe(true);
+      sessionId = fixture.sessionId;
+    } finally { await fixture.close(); }
+    const recovered = await AgentCoreRuntimeClient.start({ ...start, sessionId, deferActivation: true }, 5_000);
+    clients.push(recovered);
+    const events: Array<{ type: string; recovery?: boolean }> = [];
+    recovered.on("event", (event) => events.push(event));
+    expect(await recovered.sendCommand("get_state")).toMatchObject({ success: true, data: { busy: true } });
+    expect(events).toEqual([]);
+    expect(await recovered.sendCommand("activate")).toMatchObject({ success: true });
+    await vi.waitFor(() => expect(events.some((event) => event.type === "agent_settled")).toBe(true), { timeout: 5_000 });
+    expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ type: "agent_start", recovery: true })]));
+    expect(await recovered.sendCommand("get_state")).toMatchObject({ success: true, data: { busy: false } });
+  }, 20_000);
 
   it("forks a durable branch while the source worker remains open", async () => {
     const start = await options();

@@ -11,6 +11,8 @@ export interface AgentRuntimeStartOptions {
   skillPolicy?: RuntimeSkillPolicy;
   env?: Record<string, string>;
   credentialEnvNames?: string[];
+  /** The session service binds events and applies its snapshot before activation. */
+  deferActivation?: boolean;
 }
 
 export type WorkerCommand =

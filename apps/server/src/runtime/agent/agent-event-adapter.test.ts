@@ -11,6 +11,13 @@ function event(value: Record<string, unknown>): HarnessEvent {
 }
 
 describe("AgentCoreEventAdapter", () => {
+  it("does not duplicate the lifecycle start when recovery also emits run_resume", () => {
+    const adapter = new AgentCoreEventAdapter();
+    expect(adapter.beginRecovery("recovered-run")).toMatchObject({ type: "agent_start", runId: "recovered-run", recovery: true });
+    expect(adapter.adapt(event({ type: "run_resume", runId: "recovered-run" }))).toEqual([]);
+    expect(adapter.adapt(event({ type: "run_end", runId: "recovered-run", status: "completed" })))
+      .toEqual([{ type: "agent_settled", runId: "recovered-run", status: "completed" }]);
+  });
   it("keeps the harness run and turn identities through the browser event shape", () => {
     const adapter = new AgentCoreEventAdapter();
     expect(adapter.adapt(event({ type: "run_start", runId: "run-1", startedAt: 1 }))).toEqual([]);

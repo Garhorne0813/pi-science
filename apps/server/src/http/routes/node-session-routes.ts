@@ -6,7 +6,7 @@ import type { SessionTitleRepository } from "../../runtime/node/session-titles.j
 import { sessionTitleRepository } from "../../runtime/node/session-titles.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { AiTitleService } from "../../runtime/title/ai-title-service.js";
-import { PromptRequestRepository } from "../../runtime/node/prompt-request-repository.js";
+import { PromptRequestRepository, isPromptDeliveryIndeterminate } from "../../runtime/node/prompt-request-repository.js";
 
 function cwd(request: { query: unknown }): string {
   const value = (request.query as { cwd?: unknown }).cwd;
@@ -116,8 +116,7 @@ export function registerNodeSessionRoutes(
       // A transport failure can happen after Pi accepted the command. Preserve
       // that ambiguity; only a definite HTTP/runtime rejection is retryable.
       const errorCode = typeof result.code === "string" ? result.code : "runtime_command_failed";
-      const indeterminateCodes = new Set(["timeout", "process_closed", "process_exit", "write_failed", "spawn_failed", "runtime_command_failed", "internal_error"]);
-      const state = indeterminateCodes.has(errorCode) ? "indeterminate" as const : "rejected" as const;
+      const state = isPromptDeliveryIndeterminate(errorCode) ? "indeterminate" as const : "rejected" as const;
       const delivery = await promptRequests.update(workspace, sessionId, requestId, state, { error_code: errorCode });
       if (state === "rejected") await promptRequests.clearAssociation(workspace, sessionId, requestId);
       return reply.code(status(result.code)).send({ ok: false, ...result, ...(delivery ?? {}) });

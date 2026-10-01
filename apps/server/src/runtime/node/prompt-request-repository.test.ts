@@ -24,6 +24,40 @@ afterEach(async () => {
 });
 
 describe("PromptRequestRepository", () => {
+  it("reconciles this ID's durable message before retrying a rejected request", async () => {
+    const cwd = await makeWorkspace();
+    const repository = new PromptRequestRepository(new SessionRepository(), "server-1");
+    await repository.prepare(cwd, sessionId, clientMessageId, "hello");
+    await repository.update(cwd, sessionId, clientMessageId, "rejected", { error_code: "agent_runtime_error" });
+    await appendFile(join(cwd, ".pi-science", "sessions", `${sessionId}.jsonl`), `${JSON.stringify({ type: "message", id: "accepted-before-timeout",
+      message: { role: "user", client_message_id: clientMessageId, content: [{ type: "text", text: "hello" }] } })}\n`);
+    invalidateSessionFileCache(cwd);
+    expect(await repository.prepare(cwd, sessionId, clientMessageId, "hello"))
+      .toMatchObject({ dispatch: false, status: { status: "persisted", durable_message_id: "accepted-before-timeout" } });
+  });
+
+  it("does not redispatch legacy ambiguous rejections when no message has arrived yet", async () => {
+    const cwd = await makeWorkspace();
+    const repository = new PromptRequestRepository(new SessionRepository(), "server-1");
+    await repository.prepare(cwd, sessionId, clientMessageId, "hello");
+    await repository.update(cwd, sessionId, clientMessageId, "rejected", { error_code: "agent_runtime_error" });
+    const restarted = new PromptRequestRepository(new SessionRepository(), "server-2");
+    expect(await restarted.prepare(cwd, sessionId, clientMessageId, "hello"))
+      .toMatchObject({ dispatch: false, status: { status: "indeterminate" } });
+    await appendFile(join(cwd, ".pi-science", "sessions", `${sessionId}.jsonl`), `${JSON.stringify({ type: "message", id: "delayed-admission",
+      message: { role: "user", client_message_id: clientMessageId, content: [{ type: "text", text: "hello" }] } })}\n`);
+    invalidateSessionFileCache(cwd);
+    expect(await restarted.prepare(cwd, sessionId, clientMessageId, "hello"))
+      .toMatchObject({ dispatch: false, status: { status: "persisted", durable_message_id: "delayed-admission" } });
+  });
+
+  it("allows retry after a definite rejection that never wrote a user message", async () => {
+    const cwd = await makeWorkspace();
+    const repository = new PromptRequestRepository(new SessionRepository(), "server-1");
+    await repository.prepare(cwd, sessionId, clientMessageId, "hello");
+    await repository.update(cwd, sessionId, clientMessageId, "rejected", { error_code: "busy" });
+    expect(await repository.prepare(cwd, sessionId, clientMessageId, "hello")).toMatchObject({ dispatch: true });
+  });
   it("persists intent metadata, deduplicates the same request, and conflicts on changed content", async () => {
     const cwd = await makeWorkspace();
     const repository = new PromptRequestRepository(new SessionRepository(), "server-1");

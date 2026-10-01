@@ -86,6 +86,10 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
       const sessionId = result.data && typeof result.data === "object" ? (result.data as { sessionId?: unknown }).sessionId : undefined;
       if (typeof sessionId !== "string" || !sessionId) throw new Error("agent runtime returned no session ID");
       client.currentSessionId = sessionId;
+      if (!options.deferActivation) {
+        const activated = await client.sendCommand("activate");
+        if (!activated.success) throw new Error(activated.error ?? "agent runtime activation failed");
+      }
       return client;
     } catch (error) {
       await client.shutdown();

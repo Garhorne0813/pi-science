@@ -7,6 +7,7 @@ import { readProject } from "../../project/project-registry.js";
 import { isAiTitlePrompt } from "../title/title-prompt.js";
 import { metadataRoot } from "../../storage/persistence.js";
 import { AgentSessionRepository } from "../agent/agent-session-repository.js";
+import { AgentSessionRegistry } from "../agent/agent-session-registry.js";
 
 export interface SessionInfoRecord {
   id: string;
@@ -631,8 +632,11 @@ function isUserVisibleSession(root: string, file: SessionFile): boolean {
 
 export class SessionRepository {
   private readonly agentSessions = new AgentSessionRepository();
+  private readonly agentRegistry = new AgentSessionRegistry();
 
   async findPath(cwd: string, sessionId: string): Promise<string | null> {
+    const registration = await this.agentRegistry.get(cwd, sessionId);
+    if (registration) return registration.state === "deleted" ? null : this.agentSessions.findPath(cwd, sessionId);
     return await this.agentSessions.findPath(cwd, sessionId)
       ?? (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId)?.path ?? null;
   }
@@ -644,6 +648,8 @@ export class SessionRepository {
    *  resurrects on the next list. Callers should invalidate the cache first so
    *  the fresh scan cannot be poisoned by an in-flight stale one. */
   async findPathOnDisk(cwd: string, sessionId: string): Promise<string | null> {
+    const registration = await this.agentRegistry.get(cwd, sessionId);
+    if (registration) return registration.state === "deleted" ? null : this.agentSessions.findPath(cwd, sessionId);
     const root = sessionsRoot(cwd);
     const scan = await performScan(root);
     return filesFromDirs(scan?.dirs ?? {}).find(({ header }) => header.id === sessionId)?.path
@@ -651,12 +657,14 @@ export class SessionRepository {
   }
 
   async list(cwd: string): Promise<SessionInfoRecord[]> {
-    const [files, project] = await Promise.all([
+    const [files, project, registered] = await Promise.all([
       sessionFilesWithMtime(sessionsRoot(cwd)),
       readProject(cwd),
+      this.agentRegistry.all(cwd),
     ]);
     const root = sessionsRoot(cwd);
     const visibleFiles = files.filter((file) => {
+      if (typeof file.header.id === "string" && Object.hasOwn(registered, file.header.id)) return false;
       if (!isUserVisibleSession(root, file)) return false;
       const parentSession = typeof file.header.parentSession === "string" ? file.header.parentSession : "";
       // A named top-level session is a user-created fork. An unnamed session
@@ -698,6 +706,7 @@ export class SessionRepository {
     sessionId: string,
     options: { before?: string; limit?: number } = {},
   ): Promise<SessionMessagePage> {
+    if (await this.agentRegistry.get(cwd, sessionId)) return this.agentSessions.messagesPage(cwd, sessionId, options);
     if (await this.agentSessions.findPath(cwd, sessionId)) return this.agentSessions.messagesPage(cwd, sessionId, options);
     const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
     if (!file) {
@@ -731,6 +740,7 @@ export class SessionRepository {
   }
 
   async userMessageIndex(cwd: string, sessionId: string): Promise<{ messages: SessionUserMessageIndexEntry[]; snapshot_version: string }> {
+    if (await this.agentRegistry.get(cwd, sessionId)) return this.agentSessions.userMessageIndex(cwd, sessionId);
     if (await this.agentSessions.findPath(cwd, sessionId)) return this.agentSessions.userMessageIndex(cwd, sessionId);
     const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
     if (!file) return this.agentSessions.userMessageIndex(cwd, sessionId);
@@ -746,6 +756,7 @@ export class SessionRepository {
   }
 
   async messages(cwd: string, sessionId: string): Promise<SessionMessageRecord[]> {
+    if (await this.agentRegistry.get(cwd, sessionId)) return this.agentSessions.messages(cwd, sessionId);
     if (await this.agentSessions.findPath(cwd, sessionId)) return this.agentSessions.messages(cwd, sessionId);
     const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
     if (!file) return this.agentSessions.messages(cwd, sessionId);

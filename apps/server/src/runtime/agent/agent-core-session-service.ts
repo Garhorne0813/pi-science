@@ -14,6 +14,8 @@ import type { WorkspaceEnvironmentService } from "../workspace/workspace-environ
 import { seedWorkspaceAssets } from "../pi/pi-runtime-launch.js";
 import { CredentialStore } from "../../model-resources/credential-store.js";
 import { projectedEnvironmentNames } from "../pi/extensions/pi-science-mcp.js";
+import { AgentRuntimeExitedError, AgentRuntimeTimeoutError } from "./agent-runtime-errors.js";
+import { AgentSessionRegistry } from "./agent-session-registry.js";
 
 type Live = { key: string; runtime: AgentCoreRuntimeClient; busy: boolean; restartPending: boolean; model: string; thinking: string | null };
 
@@ -43,15 +45,19 @@ function thinking(value: string | null | undefined): "off" | "minimal" | "low" |
     ? value as ReturnType<typeof thinking> : "high";
 }
 function failed(error: unknown): RuntimeResult {
-  return { success: false, code: "agent_runtime_error", error: error instanceof Error ? error.message : String(error) };
+  const code = error instanceof AgentRuntimeTimeoutError ? "timeout"
+    : error instanceof AgentRuntimeExitedError ? "process_exit" : "runtime_command_failed";
+  return { success: false, code, error: error instanceof Error ? error.message : String(error) };
 }
 
 /** Development rollout path: one AgentHarness worker per v4 session. */
 export class AgentCoreSessionService {
   private readonly manager = new AgentRuntimeManager();
   private readonly repository = new AgentSessionRepository();
+  private readonly registry = new AgentSessionRegistry();
   private readonly live = new Map<string, Live>();
   private readonly opening = new Map<string, Promise<Live | RuntimeResult>>();
+  private readonly mutations = new Map<string, Promise<unknown>>();
   private beforeStart: ((cwd: string) => Promise<void>) | null = null;
 
   constructor(
@@ -80,11 +86,17 @@ export class AgentCoreSessionService {
   }
 
   async owns(cwd: string, sessionId: string): Promise<boolean> {
-    return this.live.has(identity(cwd, sessionId)) || (await this.repository.findPath(cwd, sessionId)) !== null;
+    return Boolean(await this.registry.get(cwd, sessionId))
+      || this.live.has(identity(cwd, sessionId)) || (await this.repository.findPath(cwd, sessionId)) !== null;
   }
 
   /** Copies a Pi v3 transcript, then lets JsonlSessionRepo upgrade the copy on its first write. */
   async importLegacy(cwd: string, sessionId: string, source: string, config: PiConfig): Promise<RuntimeResult> {
+    return this.withMutation(cwd, sessionId, () => this.importLegacyOnce(cwd, sessionId, source, config));
+  }
+
+  private async importLegacyOnce(cwd: string, sessionId: string, source: string, config: PiConfig): Promise<RuntimeResult> {
+    if ((await this.registry.get(cwd, sessionId))?.state === "deleted") return { success: false, code: "not_found", error: "session was deleted" };
     if (await this.owns(cwd, sessionId)) return { success: true };
     const handle = await open(source, "r");
     let firstLine = "";
@@ -106,16 +118,18 @@ export class AgentCoreSessionService {
     try {
       await copyFile(source, temporary);
       await rename(temporary, destination);
-      await writeJsonAtomic(configPath(cwd, sessionId), { model: config.model, thinking: config.thinking, skills: config.skills });
-      const opened = await this.open(cwd, sessionId, config);
-      if ("success" in opened) throw new Error(String(opened.error));
-      return { success: true };
+      await writeJsonAtomic(configPath(cwd, sessionId), { skills: config.skills });
+      await this.registry.register(cwd, sessionId, destination, source);
     } catch (error) {
       await unlink(temporary).catch(() => undefined);
       await unlink(destination).catch(() => undefined);
       await unlink(configPath(cwd, sessionId)).catch(() => undefined);
       return { success: false, code: "legacy_import_failed", error: String(error) };
     }
+    // Copy/ownership are committed before starting a worker. An unavailable
+    // model must not discard a completed migration or rediscover its backup.
+    const opened = await this.open(cwd, sessionId, config);
+    return "success" in opened ? opened : { success: true };
   }
 
   liveSessions(cwd: string): Array<{ id: string; cwd: string }> {
@@ -145,15 +159,21 @@ export class AgentCoreSessionService {
         skillPolicy: await globalSkillPolicy(),
         env: await this.workerEnvironment(cwd),
         credentialEnvNames: await this.credentialEnvNames(cwd),
+        deferActivation: true,
       });
-      try { await writeJsonAtomic(configPath(cwd, runtime.sessionId), { model: config.model, thinking: config.thinking, skills: config.skills }); }
+      try {
+        await writeJsonAtomic(configPath(cwd, runtime.sessionId), { skills: config.skills });
+        const path = await this.repository.findPath(cwd, runtime.sessionId);
+        if (!path) throw new Error("created agent session has no durable transcript");
+        await this.registry.register(cwd, runtime.sessionId, path);
+      }
       catch (error) { await this.manager.stop(key); throw error; }
-      this.attach(key, runtime, config.model!, config.thinking ?? null);
+      await this.attach(key, runtime, config.model!, config.thinking ?? null);
       return { id: runtime.sessionId };
     } catch (error) { return { error: String(error), code: "spawn_failed" }; }
   }
 
-  private attach(key: string, runtime: AgentCoreRuntimeClient, model: string, level: string | null): Live {
+  private async attach(key: string, runtime: AgentCoreRuntimeClient, model: string, level: string | null): Promise<Live> {
     const item: Live = { key, runtime, busy: false, restartPending: false, model, thinking: level };
     this.live.set(identity(runtime.cwd, runtime.sessionId), item);
     this.events.bind(runtime.cwd, runtime, {
@@ -172,15 +192,35 @@ export class AgentCoreSessionService {
       },
       onExit: () => { this.live.delete(identity(runtime.cwd, runtime.sessionId)); },
     });
+    try {
+      // No drive or recovery starts until this snapshot has been applied. All
+      // subsequent state changes arrive through the already-bound event stream.
+      const snapshot = await runtime.sendCommand("get_state");
+      if (!snapshot.success) throw new Error(String(snapshot.error));
+      const data = snapshot.data as { busy?: boolean; model?: { provider: string; modelId: string }; thinkingLevel?: string };
+      item.busy = Boolean(data.busy);
+      if (data.model) item.model = `${data.model.provider}/${data.model.modelId}`;
+      if (data.thinkingLevel) item.thinking = data.thinkingLevel;
+      const activated = await runtime.sendCommand("activate");
+      if (!activated.success) throw new Error(String(activated.error));
+    } catch (error) {
+      this.events.expectExit(runtime);
+      await this.manager.stop(key);
+      this.live.delete(identity(runtime.cwd, runtime.sessionId));
+      throw error;
+    }
     return item;
   }
 
   private async open(cwd: string, sessionId: string, config: PiConfig): Promise<Live | RuntimeResult> {
+    if ((await this.registry.get(cwd, sessionId))?.state === "deleted") return { success: false, code: "not_found", error: "session was deleted" };
     const key = identity(cwd, sessionId);
-    const current = this.live.get(key);
-    if (current && !current.runtime.isClosed) return current;
+    // attach() exposes the live record while binding. Even abort must wait for
+    // activation before it can change a recovered operation's lifecycle.
     const pending = this.opening.get(key);
     if (pending) return pending;
+    const current = this.live.get(key);
+    if (current && !current.runtime.isClosed) return current;
     const started = this.openOnce(cwd, sessionId, config);
     this.opening.set(key, started);
     try { return await started; }
@@ -189,30 +229,39 @@ export class AgentCoreSessionService {
 
   private async openOnce(cwd: string, sessionId: string, config: PiConfig): Promise<Live | RuntimeResult> {
     const key = identity(cwd, sessionId);
-    if (!(await this.repository.findPath(cwd, sessionId))) return { success: false, code: "not_found", error: "session not found in this workspace" };
-    const saved = await readJson<{ model?: string; thinking?: string; skills?: string[] } | null>(configPath(cwd, sessionId), null);
-    const model = splitModel(saved?.model ?? config.model);
+    const path = await this.repository.findPath(cwd, sessionId);
+    if (!path) return { success: false, code: "not_found", error: "session not found in this workspace" };
+    const saved = await readJson<{ skills?: string[] } | null>(configPath(cwd, sessionId), null);
+    const persisted = await this.repository.configuration(cwd, sessionId);
+    const model = persisted?.model ?? splitModel(config.model);
     if (!model) return { success: false, code: "invalid_model", error: "An agent-core session requires a provider/model setting" };
     try {
       await this.beforeStart?.(cwd);
       seedWorkspaceAssets(cwd);
+      await this.registry.register(cwd, sessionId, path);
       const runtime = await this.manager.start(key, {
         cwd,
         sessionId,
         sessionsRoot: join(metadataRoot(cwd), "agent-sessions"),
         model,
-        thinking: thinking(saved?.thinking ?? config.thinking),
+        thinking: thinking(persisted?.thinkingLevel ?? config.thinking),
         systemPrompt: await systemPrompt(),
         skillPaths: saved?.skills ?? config.skills,
         skillPolicy: await globalSkillPolicy(),
         env: await this.workerEnvironment(cwd),
         credentialEnvNames: await this.credentialEnvNames(cwd),
+        deferActivation: true,
       });
-      return this.attach(key, runtime, saved?.model ?? config.model!, saved?.thinking ?? config.thinking ?? null);
+      return await this.attach(key, runtime, `${model.provider}/${model.modelId}`, persisted?.thinkingLevel ?? config.thinking ?? null);
     } catch (error) { return failed(error); }
   }
 
   async command(cwd: string, sessionId: string, type: string, params: Record<string, unknown>, config: PiConfig): Promise<RuntimeResult> {
+    if (["abort", "steer", "follow_up"].includes(type)) return this.commandOnce(cwd, sessionId, type, params, config);
+    return this.withMutation(cwd, sessionId, () => this.commandOnce(cwd, sessionId, type, params, config));
+  }
+
+  private async commandOnce(cwd: string, sessionId: string, type: string, params: Record<string, unknown>, config: PiConfig): Promise<RuntimeResult> {
     const opened = await this.open(cwd, sessionId, config);
     if ("success" in opened) return opened;
     try { return await opened.runtime.sendCommand(type, params); }
@@ -263,18 +312,18 @@ export class AgentCoreSessionService {
   }
 
   async resume(cwd: string, sessionId: string, config: PiConfig): Promise<RuntimeResult> {
-    const opened = await this.open(cwd, sessionId, config);
-    if ("success" in opened) return opened;
-    return opened.runtime.sendCommand("get_state");
+    return this.command(cwd, sessionId, "get_state", {}, config);
   }
 
   async state(cwd: string, sessionId: string, config: PiConfig): Promise<SessionState | { error: string; code: string }> {
+    if ((await this.registry.get(cwd, sessionId))?.state === "deleted") return { error: "session was deleted", code: "not_found" };
     const current = this.live.get(identity(cwd, sessionId));
     if (!current || current.runtime.isClosed) {
       if (!(await this.repository.findPath(cwd, sessionId))) return { error: "session not found in this workspace", code: "not_found" };
-      const saved = await readJson<{ model?: string; thinking?: string } | null>(configPath(cwd, sessionId), null);
+      const saved = await this.repository.configuration(cwd, sessionId);
       return { id: sessionId, cwd, is_streaming: false, is_compacting: false, pending_message_count: 0,
-        model: saved?.model ?? config.model ?? null, thinking: saved?.thinking ?? config.thinking ?? null, context_tokens: null,
+        model: saved?.model ? `${saved.model.provider}/${saved.model.modelId}` : config.model ?? null,
+        thinking: saved?.thinkingLevel ?? config.thinking ?? null, context_tokens: null,
         context_window: null, context_percent: null, compaction_enabled: config.compaction_enabled !== false,
         compaction_threshold_percent: config.compaction_threshold_percent ?? null };
     }
@@ -293,63 +342,40 @@ export class AgentCoreSessionService {
   }
 
   async configure(cwd: string, sessionId: string, model: string, level: string | undefined, config: PiConfig): Promise<RuntimeResult> {
+    return this.withMutation(cwd, sessionId, () => this.configureOnce(cwd, sessionId, model, level, config));
+  }
+
+  private async configureOnce(cwd: string, sessionId: string, model: string, level: string | undefined, config: PiConfig): Promise<RuntimeResult> {
     const ref = splitModel(model);
     if (!ref) return { success: false, code: "invalid_model", error: "Model must use provider/model notation" };
-    if (level && !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(level)) {
+    if (level !== undefined && !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(level)) {
       return { success: false, code: "invalid_thinking", error: "invalid thinking level" };
     }
     const opened = await this.open(cwd, sessionId, config);
     if ("success" in opened) return opened;
     if (opened.busy) return { success: false, code: "busy", error: "agent is busy; wait for the current task to finish or stop it" };
-    const previous = await opened.runtime.sendCommand("get_state").catch(failed);
-    if (!previous.success) return previous;
-    const before = previous.data as { busy?: boolean; model?: { provider?: string; modelId?: string }; thinkingLevel?: string } | undefined;
-    if (before?.busy) return { success: false, code: "busy", error: "agent is busy; wait for the current task to finish or stop it" };
-    const previousModel = before?.model?.provider && before.model.modelId ? before.model as { provider: string; modelId: string } : splitModel(opened.model);
-    const previousThinking = before?.thinkingLevel ?? opened.thinking;
-    if (!previousModel) return { success: false, code: "reconcile_failed", error: "Unable to identify the current model before configuration" };
-    const rollback = async (failure: RuntimeResult): Promise<RuntimeResult> => {
-      const restoredModel = await opened.runtime.sendCommand("set_model", previousModel).catch(failed);
-      const restoredThinking = previousThinking
-        ? await opened.runtime.sendCommand("set_thinking_level", { level: previousThinking }).catch(failed)
-        : { success: true };
-      const restoredState = await opened.runtime.sendCommand("get_state").catch(failed);
-      const state = restoredState.data as { model?: { provider?: string; modelId?: string }; thinkingLevel?: string } | undefined;
-      if (!restoredModel.success || !restoredThinking.success || !restoredState.success
-        || state?.model?.provider !== previousModel.provider || state.model.modelId !== previousModel.modelId
-        || (previousThinking && state.thinkingLevel !== previousThinking)) {
-        await this.stopForReload(opened).catch(() => undefined);
-        return { success: false, code: "reconcile_failed", error: `Configuration failed and the worker could not be restored: ${failure.error ?? "unknown error"}` };
-      }
-      return failure;
-    };
-    const result = await opened.runtime.sendCommand("set_model", ref).catch(failed);
-    if (!result.success) return rollback(result);
-    if (level) {
-      const changed = await opened.runtime.sendCommand("set_thinking_level", { level }).catch(failed);
-      if (!changed.success) return rollback(changed);
+    const result = await opened.runtime.sendCommand("configure", { ...ref, ...(level ? { level } : {}) }).catch(failed);
+    if (!result.success) return result;
+    const state = result.data as { model?: { provider?: string; modelId?: string }; thinkingLevel?: string } | undefined;
+    if (state?.model?.provider !== ref.provider || state.model.modelId !== ref.modelId
+      || typeof state.thinkingLevel !== "string" || (level !== undefined && state.thinkingLevel !== level)) {
+      await this.stopForReload(opened).catch(() => undefined);
+      return { success: false, code: "reconcile_failed", error: "agent runtime returned an inconsistent configuration" };
     }
-    const verified = await opened.runtime.sendCommand("get_state").catch(failed);
-    const state = verified.data as { model?: { provider?: string; modelId?: string }; thinkingLevel?: string } | undefined;
-    if (!verified.success || state?.model?.provider !== ref.provider || state.model.modelId !== ref.modelId
-      || (level && state.thinkingLevel !== level)) {
-      return rollback({ success: false, code: "reconcile_failed", error: "Agent runtime did not apply the requested configuration" });
-    }
-    const nextThinking = state.thinkingLevel ?? previousThinking;
-    try {
-      const saved = await readJson<{ skills?: string[] } | null>(configPath(cwd, sessionId), null);
-      await writeJsonAtomic(configPath(cwd, sessionId), { model, thinking: nextThinking, skills: saved?.skills ?? config.skills });
-    } catch (error) { return rollback(failed(error)); }
-    opened.model = model;
-    opened.thinking = nextThinking ?? null;
-    return { success: true, sessionId, model, thinking: opened.thinking, restarted: false };
+    opened.model = `${state.model.provider}/${state.model.modelId}`;
+    opened.thinking = state.thinkingLevel;
+    // The harness log is the configuration authority. The sidecar contains
+    // product settings only, so a cache write cannot roll back a newer commit.
+    return { success: true, sessionId, model: opened.model, thinking: opened.thinking, restarted: false };
   }
 
   async fork(cwd: string, sessionId: string, entryId: string | undefined, config: PiConfig): Promise<RuntimeResult> {
     const result = await this.command(cwd, sessionId, entryId ? "fork" : "clone", entryId ? { entryId } : {}, config);
     if (result.success && typeof result.sessionId === "string") {
-      const saved = await readJson<{ model?: string; thinking?: string; skills?: string[] } | null>(configPath(cwd, sessionId), null);
-      await writeJsonAtomic(configPath(cwd, result.sessionId), saved ?? { model: config.model, thinking: config.thinking, skills: config.skills });
+      const saved = await readJson<{ skills?: string[] } | null>(configPath(cwd, sessionId), null);
+      await writeJsonAtomic(configPath(cwd, result.sessionId), { skills: saved?.skills ?? config.skills });
+      const path = await this.repository.findPath(cwd, result.sessionId);
+      if (path) await this.registry.register(cwd, result.sessionId, path);
     }
     return result;
   }
@@ -360,15 +386,40 @@ export class AgentCoreSessionService {
   }
 
   async delete(cwd: string, sessionId: string): Promise<RuntimeResult> {
+    return this.withMutation(cwd, sessionId, () => this.deleteOnce(cwd, sessionId));
+  }
+
+  private async deleteOnce(cwd: string, sessionId: string): Promise<RuntimeResult> {
     const key = identity(cwd, sessionId);
     const live = this.live.get(key);
     if (live?.busy) return { success: false, code: "busy", error: "cannot delete a conversation while it is running" };
-    if (live) { this.events.expectExit(live.runtime); await this.manager.stop(live.key); this.live.delete(key); }
-    const path = await this.repository.findPath(cwd, sessionId);
+    if (live && !live.runtime.isClosed) {
+      const snapshot = await live.runtime.sendCommand("get_state").catch(failed);
+      if (!snapshot.success) return snapshot;
+      if ((snapshot.data as { busy?: boolean }).busy) return { success: false, code: "busy", error: "cannot delete a conversation while it is running" };
+    }
+    const registered = await this.registry.get(cwd, sessionId);
+    const path = registered?.target ?? await this.repository.findPath(cwd, sessionId);
     if (!path) return { success: false, code: "not_found", error: "session not found in this workspace" };
-    await unlink(path);
-    await unlink(configPath(cwd, sessionId)).catch(() => undefined);
-    return { success: true };
+    try {
+      // Commit deletion before cleanup: retries and server restarts must never
+      // rediscover an imported transcript through its retained legacy source.
+      await this.registry.markDeleted(cwd, sessionId, path);
+      if (live) { this.events.expectExit(live.runtime); await this.manager.stop(live.key); this.live.delete(key); }
+      const remove = async (file: string) => { await unlink(file).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; }); };
+      await remove(path);
+      await remove(configPath(cwd, sessionId));
+      return { success: true };
+    } catch (error) { return { success: false, code: "delete_failed", error: String(error) }; }
+  }
+
+  private async withMutation<T>(cwd: string, sessionId: string, operation: () => Promise<T>): Promise<T> {
+    const key = identity(cwd, sessionId);
+    const previous = this.mutations.get(key) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(operation);
+    this.mutations.set(key, next);
+    try { return await next; }
+    finally { if (this.mutations.get(key) === next) this.mutations.delete(key); }
   }
 
   async shutdownAll(): Promise<void> {

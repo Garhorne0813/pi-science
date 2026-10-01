@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 import { readJson, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
 import { AgentCoreSessionService } from "./agent-core-session-service.js";
 import { CredentialStore } from "../../model-resources/credential-store.js";
+import { AgentRuntimeExitedError, AgentRuntimeTimeoutError } from "./agent-runtime-errors.js";
+import { EventEmitter } from "node:events";
 
 describe("agent-core session configuration", () => {
   it("rejects model changes while the session is busy without touching the worker", async () => {
@@ -21,17 +23,17 @@ describe("agent-core session configuration", () => {
     expect(sendCommand).not.toHaveBeenCalled();
   });
 
-  it("rejects a busy runtime snapshot before sending configuration mutations", async () => {
+  it("preserves a worker's authoritative busy rejection", async () => {
     const cwd = resolve(join(tmpdir(), "pi-science-core-busy-snapshot-test"));
     const sessionId = "busy-snapshot-session";
-    const sendCommand = vi.fn().mockResolvedValue({ success: true, data: { busy: true } });
+    const sendCommand = vi.fn().mockResolvedValue({ success: false, code: "busy" });
     const runtime = { cwd, sessionId, isClosed: false, sendCommand };
     const service = new AgentCoreSessionService({} as never, {} as never);
     (service as unknown as { live: Map<string, unknown> }).live.set(`${cwd}\0${sessionId}`,
       { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low" });
     expect(await service.configure(cwd, sessionId, "openai/new", "high", { skills: [], extensions: [] }))
       .toMatchObject({ success: false, code: "busy" });
-    expect(sendCommand).toHaveBeenCalledExactlyOnceWith("get_state");
+    expect(sendCommand).toHaveBeenCalledExactlyOnceWith("configure", { provider: "openai", modelId: "new", level: "high" });
   });
 
   it("selects custom model and MCP credential names for the worker", async () => {
@@ -56,61 +58,116 @@ describe("agent-core session configuration", () => {
     }
   });
 
-  it("restores runtime and keeps saved configuration when changing thinking fails", async () => {
+  it("serializes configuration requests and never sends an old host rollback", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-config-"));
     try {
       const sessionId = "session-test";
       const path = workspaceFile(cwd, `agent-session-config/${createHash("sha256").update(sessionId).digest("hex")}.json`);
       await writeJsonAtomic(path, { model: "openai/old", thinking: "low", skills: ["lab"] });
-      const state = { model: { provider: "openai", modelId: "old" }, thinkingLevel: "low" };
-      const commands: string[] = [];
-      let rejectThinking = true;
-      const runtime = { cwd, sessionId, isClosed: false, sendCommand: async (name: string, params?: Record<string, string>) => {
-        commands.push(name);
-        if (name === "get_state") return { success: true, data: structuredClone(state) };
-        if (name === "set_model") { state.model = { provider: params!.provider!, modelId: params!.modelId! }; return { success: true }; }
-        if (name === "set_thinking_level") {
-          if (rejectThinking) { rejectThinking = false; return { success: false, code: "rejected", error: "thinking rejected" }; }
-          state.thinkingLevel = params!.level!;
-          return { success: true };
-        }
-        throw new Error(`unexpected command: ${name}`);
-      } };
+      let release!: () => void;
+      const blocked = new Promise<void>((resolve) => { release = resolve; });
+      const sendCommand = vi.fn(async (_name: string, params: Record<string, string>) => {
+        if (params.modelId === "first") { await blocked; return { success: false, code: "invalid_model" }; }
+        return { success: true, data: { model: { provider: params.provider, modelId: params.modelId }, thinkingLevel: params.level } };
+      });
+      const runtime = { cwd, sessionId, isClosed: false, sendCommand };
       const service = new AgentCoreSessionService({} as never, {} as never);
       const live = { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low" };
       (service as unknown as { live: Map<string, unknown> }).live.set(`${resolve(cwd)}\0${sessionId}`, live);
       const config = { skills: [], extensions: [] };
-      const result = await service.configure(cwd, sessionId, "openai/new", "high", config);
-      expect(result).toMatchObject({ success: false, code: "rejected" });
-      expect(state).toEqual({ model: { provider: "openai", modelId: "old" }, thinkingLevel: "low" });
-      expect(live).toMatchObject({ model: "openai/old", thinking: "low" });
+      const first = service.configure(cwd, sessionId, "openai/first", "medium", config);
+      const second = service.configure(cwd, sessionId, "openai/second", "high", config);
+      await vi.waitFor(() => expect(sendCommand).toHaveBeenCalledTimes(1));
+      release();
+      expect(await first).toMatchObject({ success: false, code: "invalid_model" });
+      expect(await second).toMatchObject({ success: true, model: "openai/second", thinking: "high" });
+      expect(live).toMatchObject({ model: "openai/second", thinking: "high" });
+      expect(sendCommand.mock.calls.map(([name]) => name)).toEqual(["configure", "configure"]);
+      // Stale sidecar cache values no longer participate in configuration.
       expect(await readJson(path, null)).toEqual({ model: "openai/old", thinking: "low", skills: ["lab"] });
-      expect(commands).toEqual(["get_state", "set_model", "set_thinking_level", "set_model", "set_thinking_level", "get_state"]);
       expect(await service.configure(cwd, sessionId, "openai/new", "invalid", config)).toMatchObject({ success: false, code: "invalid_thinking" });
-      expect(commands).toHaveLength(6);
+      expect(sendCommand).toHaveBeenCalledTimes(2);
     } finally { await rm(cwd, { recursive: true, force: true }); }
   });
 
-  it("restores runtime when the configuration file cannot be persisted", async () => {
+  it("keeps durable worker configuration authoritative when the sidecar cannot be written", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-config-write-"));
     try {
       const sessionId = "session-write-test";
       const path = workspaceFile(cwd, `agent-session-config/${createHash("sha256").update(sessionId).digest("hex")}.json`);
       await mkdir(path, { recursive: true }); // A directory at the file path makes atomic rename fail.
-      const state = { model: { provider: "openai", modelId: "old" }, thinkingLevel: "low" };
-      const runtime = { cwd, sessionId, isClosed: false, sendCommand: async (name: string, params?: Record<string, string>) => {
-        if (name === "get_state") return { success: true, data: structuredClone(state) };
-        if (name === "set_model") { state.model = { provider: params!.provider!, modelId: params!.modelId! }; return { success: true }; }
-        if (name === "set_thinking_level") { state.thinkingLevel = params!.level!; return { success: true }; }
-        throw new Error(`unexpected command: ${name}`);
-      } };
+      const runtime = { cwd, sessionId, isClosed: false, sendCommand: async () => ({ success: true,
+        data: { model: { provider: "openai", modelId: "new" }, thinkingLevel: "high" } }) };
       const service = new AgentCoreSessionService({} as never, {} as never);
       const live = { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low" };
       (service as unknown as { live: Map<string, unknown> }).live.set(`${resolve(cwd)}\0${sessionId}`, live);
       expect(await service.configure(cwd, sessionId, "openai/new", "high", { skills: [], extensions: [] }))
-        .toMatchObject({ success: false, code: "agent_runtime_error" });
-      expect(state).toEqual({ model: { provider: "openai", modelId: "old" }, thinkingLevel: "low" });
-      expect(live).toMatchObject({ model: "openai/old", thinking: "low" });
+        .toMatchObject({ success: true, model: "openai/new", thinking: "high" });
+      expect(live).toMatchObject({ model: "openai/new", thinking: "high" });
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    [new AgentRuntimeTimeoutError("prompt", 30_000), "timeout"],
+    [new AgentRuntimeExitedError("worker exited after accepting prompt"), "process_exit"],
+  ])("preserves ambiguous transport failures: %s", async (error, code) => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-transport-"));
+    try {
+      const runtime = { cwd, sessionId: "transport", isClosed: false, sendCommand: vi.fn().mockRejectedValue(error) };
+      const service = new AgentCoreSessionService({} as never, {} as never);
+      (service as unknown as { live: Map<string, unknown> }).live.set(`${resolve(cwd)}\0transport`,
+        { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low" });
+      expect(await service.command(cwd, "transport", "prompt", { message: "hello" }, { skills: [], extensions: [] }))
+        .toMatchObject({ success: false, code });
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+
+  it("applies the initial snapshot before activation events change busy state", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-attach-"));
+    try {
+      const runtime = Object.assign(new EventEmitter(), { cwd, sessionId: "recovered", isClosed: false,
+        sendCommand: async (command: string) => {
+          if (command === "get_state") return { success: true, data: { busy: true } };
+          runtime.emit("event", { type: "agent_start", runId: "recovery", turnId: "recovery" });
+          runtime.emit("event", { type: "agent_settled", runId: "recovery" });
+          return { success: true };
+        } });
+      const hub = { bind: (_cwd: string, source: EventEmitter, callbacks: { onBusy(busy: boolean): void }) => {
+        source.on("event", (event: { type: string }) => {
+          if (event.type === "agent_start") callbacks.onBusy(true);
+          if (event.type === "agent_settled") callbacks.onBusy(false);
+        });
+      } };
+      const service = new AgentCoreSessionService(hub as never, {} as never);
+      const live = await (service as unknown as { attach(key: string, runtime: unknown, model: string, level: string): Promise<{ busy: boolean }> })
+        .attach("test", runtime, "openai/old", "low");
+      expect(live.busy).toBe(false);
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+
+  it("waits for activation before aborting a partially attached recovery", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-opening-"));
+    try {
+      const sessionId = "opening-recovery";
+      const runtime = { cwd, sessionId, isClosed: false, sendCommand: vi.fn().mockResolvedValue({ success: true }) };
+      const live = { key: "test", runtime, busy: true, restartPending: false, model: "openai/old", thinking: "low" };
+      const service = new AgentCoreSessionService({} as never, {} as never);
+      const internals = service as unknown as { live: Map<string, typeof live>; opening: Map<string, Promise<typeof live>>;
+        registry: { get(cwd: string, sessionId: string): Promise<unknown> } };
+      const lookup = vi.spyOn(internals.registry, "get").mockResolvedValue(undefined);
+      let activate!: (value: typeof live) => void;
+      const opening = new Promise<typeof live>((resolveOpening) => { activate = resolveOpening; });
+      const key = `${resolve(cwd)}\0${sessionId}`;
+      internals.live.set(key, live);
+      internals.opening.set(key, opening);
+      const aborted = service.command(cwd, sessionId, "abort", {}, { skills: [], extensions: [] });
+      try {
+        await vi.waitFor(() => expect(lookup).toHaveBeenCalled());
+        await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
+        expect(runtime.sendCommand).not.toHaveBeenCalled();
+      } finally { activate(live); lookup.mockRestore(); }
+      expect(await aborted).toMatchObject({ success: true });
+      expect(runtime.sendCommand).toHaveBeenCalledExactlyOnceWith("abort", {});
     } finally { await rm(cwd, { recursive: true, force: true }); }
   });
 });

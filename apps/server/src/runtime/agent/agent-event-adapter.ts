@@ -46,6 +46,14 @@ export class AgentCoreEventAdapter {
   private earlyEvents: RuntimeEvent[] = [];
   private readonly toolArgs = new Map<string, unknown>();
 
+  beginRecovery(runId: string): RuntimeEvent {
+    this.pendingRunId = runId;
+    this.started = true;
+    this.earlyEvents = [];
+    this.toolArgs.clear();
+    return { type: "agent_start", runId, turnId: runId, recovery: true };
+  }
+
   adapt(event: HarnessEvent): RuntimeEvent[] {
     if (event.type === "tool_start") this.toolArgs.set(event.toolCallId, event.args);
     let toolEnd: RuntimeEvent[] | undefined;
@@ -64,10 +72,8 @@ export class AgentCoreEventAdapter {
       return [];
     }
     if (event.type === "run_resume") {
-      this.pendingRunId = event.runId;
-      this.started = true;
-      this.earlyEvents = [];
-      return [{ type: "agent_start", runId: event.runId, turnId: event.runId, recovery: true }];
+      if (this.pendingRunId === event.runId && this.started) return [];
+      return [this.beginRecovery(event.runId)];
     }
     if (event.type === "turn_start" && this.pendingRunId === event.runId && !this.started) {
       this.started = true;

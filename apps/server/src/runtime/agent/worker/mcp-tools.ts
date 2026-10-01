@@ -8,6 +8,7 @@ import { loadProjectedServers } from "../../pi/extensions/pi-science-mcp.js";
 import { createMcpFetch } from "../../../mcp/runtime-fetch.js";
 import { UnixSocketClientTransport } from "../../../mcp/connector-probe.js";
 import type { InteractionBridge } from "./interaction-bridge.js";
+import { toolEnvironment } from "../agent-runtime-environment.js";
 
 type ServerDefinition = {
   command?: string;
@@ -88,7 +89,7 @@ export class AgentMcpTools {
       transport = new UnixSocketClientTransport(server.socket);
     } else if ((server.transport === "stdio" || !server.transport) && server.command) {
       transport = new StdioClientTransport({ command: server.command, args: server.args ?? [], cwd: server.cwd ?? cwd,
-        env: { ...environment, ...server.env }, stderr: "pipe" });
+        env: { ...toolEnvironment(environment), ...server.env }, stderr: "pipe" });
     } else if ((server.transport === "sse" || server.transport === "streamable_http" || !server.transport) && server.url) {
       const connectorId = server.__piScienceConnectorId;
       const checkedFetch = createMcpFetch({ connectorId, projectId: server.__piScienceProjectId,

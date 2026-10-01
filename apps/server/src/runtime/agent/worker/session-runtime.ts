@@ -1,4 +1,5 @@
 import { isAbsolute, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
 import { AgentHarness, BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv, createBashTool, createEditTool, createReadTool, createWriteTool, loadSkills, type AgentHarness as Harness, type AgentLane, type JsonlSessionMetadata, type Session, type WatchHandle, type LaneSnapshot, type Skill } from "@earendil-works/pi-agent-core/node";
 import { agentModelCatalog, agentModels } from "./agent-models.js";
 import { AgentCoreEventAdapter } from "../agent-event-adapter.js";
@@ -10,6 +11,7 @@ import { AgentMcpTools } from "./mcp-tools.js";
 import type { RuntimeEvent, RuntimeResult, RuntimeSkillPolicy } from "../agent-runtime-types.js";
 import { metadataRoot } from "../../../storage/persistence.js";
 import type { AgentRuntimeStartOptions } from "./protocol.js";
+import { toolEnvironment } from "../agent-runtime-environment.js";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -48,6 +50,9 @@ export class SessionRuntime {
   private allSkills: Skill[];
   private skillPolicy: RuntimeSkillPolicy = { mode: "inherit" };
   private closed = false;
+  private activated = false;
+  private activateWatch: (() => void) | undefined;
+  private mutationTail: Promise<unknown> = Promise.resolve();
 
   private constructor(
     sessionId: string,
@@ -88,7 +93,8 @@ export class SessionRuntime {
     const models = agentModels();
     const model = models.getModel(options.model.provider, options.model.modelId);
     if (!model) throw new Error(`model not found: ${options.model.provider}/${options.model.modelId}`);
-    const executionEnv = new NodeExecutionEnv({ cwd: options.cwd, shellEnv: options.env });
+    const environment = toolEnvironment(options.env ?? {});
+    const executionEnv = new NodeExecutionEnv({ cwd: options.cwd, shellEnv: environment });
     const repo = new JsonlSessionRepo({ fileSystem: executionEnv, sessionsRoot: requiredRoot });
     const interactions = new InteractionBridge(publish);
     let mcp: AgentMcpTools | undefined;
@@ -109,7 +115,10 @@ export class SessionRuntime {
         models,
         model,
         thinkingLevel: options.thinking,
-        tools: [createReadTool(), createBashTool(), createEditTool(), createWriteTool(),
+        tools: [createReadTool(), createBashTool({ prepare: (execution) => {
+          execution.env = environment;
+          execution.inheritEnv = false;
+        } }), createEditTool(), createWriteTool(),
           ...notebookHarnessTools(options.cwd, session.metadata.id), questionnaireHarnessTool(interactions), ...mcp.tools],
         toolContext: { env: executionEnv },
         resources: { skills: applySkillPolicy(discovered.skills, skillPolicy) },
@@ -121,12 +130,18 @@ export class SessionRuntime {
       const watch = await lane.watch(context);
       const runtime = new SessionRuntime(session.metadata.id, lane, harness, repo, executionEnv, session.metadata, session, watch, interactions, mcp, skillPaths, discovered.skills, skillPolicy, fatal);
       const adapter = new AgentCoreEventAdapter();
-      watch.start((event) => {
-        for (const mapped of adapter.adapt(event)) publish(mapped);
-      });
-      if (open.some((operation) => operation.lane === "main")) {
-        void lane.resume(context).catch(fatal);
-      }
+      runtime.activateWatch = () => {
+        watch.start((event) => {
+          for (const mapped of adapter.adapt(event)) publish(mapped);
+        });
+        const recovered = open.find((operation) => operation.lane === "main");
+        if (recovered) {
+          // A just-accepted run resumes from "starting" without run_resume.
+          // Seed its lifecycle from the durable snapshot after binding.
+          if (recovered.kind === "run") publish(adapter.beginRecovery(recovered.operationId));
+          void lane.resume(context).catch(fatal);
+        }
+      };
       return runtime;
     } catch (error) {
       interactions.close();
@@ -138,9 +153,25 @@ export class SessionRuntime {
   }
 
   async command(type: string, params: Record<string, unknown>): Promise<RuntimeResult> {
+    // Drive/resume run in the background; abort and interaction responses must
+    // remain reachable while short admission/configuration mutations serialize.
+    if (["abort", "steer", "follow_up"].includes(type)) return this.execute(type, params);
+    const command = this.mutationTail.then(() => this.execute(type, params));
+    this.mutationTail = command.catch(() => undefined);
+    return command;
+  }
+
+  private async execute(type: string, params: Record<string, unknown>): Promise<RuntimeResult> {
     if (this.closed) return { success: false, code: "closed", error: "agent runtime is closed" };
     try {
       switch (type) {
+        case "activate": {
+          if (!this.activated) {
+            this.activated = true;
+            this.activateWatch?.();
+          }
+          return { success: true };
+        }
         case "get_state": {
           const snapshot = await this.watch.resnapshot(context);
           return { success: true, data: {
@@ -155,15 +186,31 @@ export class SessionRuntime {
           } };
         }
         case "prompt": {
+          if (!this.activated) return { success: false, code: "not_ready", error: "agent runtime has not been activated" };
           const message = params.message;
           if (typeof message !== "string" || !message.trim()) return { success: false, code: "invalid_message", error: "prompt message is required" };
           const clientMessageId = typeof params.client_message_id === "string" ? params.client_message_id : undefined;
-          const admitted = await this.lane.accept({ kind: "prompt", prompt: userPrompt(message, clientMessageId) }, context);
+          const operationId = clientMessageId
+            ? `prompt-${createHash("sha256").update(`${this.sessionId}\0${clientMessageId}`).digest("hex")}` : undefined;
+          if (clientMessageId) {
+            // Admission commits the user message and operation together. Read
+            // the complete session, including branches no longer at the tip.
+            const prior = (await this.session.findEntries(undefined, context)).find((entry) => entry.type === "message"
+              && entry.message.role === "user" && entry.message.client_message_id === clientMessageId);
+            if (prior?.type === "message" && prior.message.role === "user") {
+              const content = prior.message.content;
+              const text = typeof content === "string" ? content
+                : content.every((part) => part.type === "text") ? content.map((part) => part.type === "text" ? part.text : "").join("") : null;
+              if (text !== message) return { success: false, code: "client_message_id_conflict", error: "client_message_id was already used with different prompt content" };
+              return { success: true, operationId, durableMessageId: prior.id, deduplicated: true };
+            }
+          }
+          const admitted = await this.lane.accept({ kind: "prompt", operationId, prompt: userPrompt(message, clientMessageId) }, context);
           if (!admitted.ok) return resultValue(admitted);
-          const operationId = admitted.value.operationId;
-          void this.lane.drive({ operationId, waitForRetry: true, pollDeferred: true }, context)
+          const acceptedId = admitted.value.operationId;
+          void this.lane.drive({ operationId: acceptedId, waitForRetry: true, pollDeferred: true }, context)
             .catch(this.fatal); // A fresh worker resumes the durable operation.
-          return { success: true, operationId };
+          return { success: true, operationId: acceptedId };
         }
         case "steer":
         case "follow_up": {
@@ -175,6 +222,7 @@ export class SessionRuntime {
         }
         case "abort": return resultValue(await this.lane.abort(context));
         case "compact": {
+          if (!this.activated) return { success: false, code: "not_ready", error: "agent runtime has not been activated" };
           const customInstructions = typeof params.customInstructions === "string" ? params.customInstructions : undefined;
           const admitted = await this.lane.accept({ kind: "compaction", customInstructions }, context);
           if (!admitted.ok) return resultValue(admitted);
@@ -182,19 +230,9 @@ export class SessionRuntime {
           void this.lane.drive({ operationId, waitForRetry: true, pollDeferred: true }, context).catch(this.fatal);
           return { success: true, operationId };
         }
-        case "set_model": {
-          const provider = params.provider;
-          const modelId = params.modelId;
-          if (typeof provider !== "string" || typeof modelId !== "string") return { success: false, code: "invalid_model", error: "provider and modelId are required" };
-          await this.lane.setModel({ provider, modelId }, context);
-          return { success: true };
-        }
-        case "set_thinking_level": {
-          const level = params.level;
-          if (typeof level !== "string" || !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(level)) return { success: false, code: "invalid_thinking", error: "invalid thinking level" };
-          await this.lane.setThinkingLevel(level as AgentRuntimeStartOptions["thinking"] & string, context);
-          return { success: true };
-        }
+        case "configure":
+        case "set_model":
+        case "set_thinking_level": return await this.configure(type, params);
         case "get_available_thinking_levels":
           return { success: true, data: { levels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] } };
         case "get_available_models":
@@ -251,6 +289,40 @@ export class SessionRuntime {
     }
   }
 
+  private async configure(type: string, params: Record<string, unknown>): Promise<RuntimeResult> {
+    const before = await this.watch.resnapshot(context);
+    if (before.operation) return { success: false, code: "busy", error: "agent is busy; wait for the current task to finish or stop it" };
+    const model = type === "set_thinking_level" ? before.configuration.model
+      : { provider: params.provider, modelId: params.modelId };
+    if (typeof model.provider !== "string" || typeof model.modelId !== "string"
+      || !agentModels().getModel(model.provider, model.modelId)) {
+      return { success: false, code: "invalid_model", error: "model is not in the agent-core catalog" };
+    }
+    const ref = { provider: model.provider, modelId: model.modelId };
+    const level = params.level ?? before.configuration.thinkingLevel;
+    if (typeof level !== "string" || !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(level)) {
+      return { success: false, code: "invalid_thinking", error: "invalid thinking level" };
+    }
+    try {
+      await this.lane.setModel(ref, context);
+      await this.lane.setThinkingLevel(level as AgentRuntimeStartOptions["thinking"] & string, context);
+    } catch (error) {
+      try {
+        await this.lane.setModel(before.configuration.model, context);
+        await this.lane.setThinkingLevel(before.configuration.thinkingLevel, context);
+      } catch (restoreError) {
+        // Stop this worker rather than admit a new mutation against unknown
+        // state. Reopening reads the durable lane configuration as authority.
+        this.closed = true;
+        this.fatal(restoreError);
+        return { success: false, code: "reconcile_failed", error: "unable to restore the durable lane configuration" };
+      }
+      return failure(error);
+    }
+    const snapshot = await this.watch.resnapshot(context);
+    return { success: true, data: { model: snapshot.configuration.model, thinkingLevel: snapshot.configuration.thinkingLevel } };
+  }
+
   notify(type: string, params: Record<string, unknown>): RuntimeResult {
     return this.interactions.notify(type, params);
   }
@@ -270,6 +342,7 @@ export class SessionRuntime {
     this.closed = true;
     this.interactions.close();
     this.watch.unsubscribe();
+    await this.mutationTail;
     await this.harness.close(context);
     await this.mcp.close();
     await this.repo.close(context);
