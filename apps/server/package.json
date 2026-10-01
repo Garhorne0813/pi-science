@@ -11,8 +11,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "0.87.1",
-    "@earendil-works/pi-ai": "0.87.1",
+    "@earendil-works/pi-agent-core": "0.99.2",
+    "@earendil-works/pi-ai": "0.99.2",
     "@fastify/cors": "^11.3.0",
     "@fastify/http-proxy": "^11.6.0",
     "@fastify/rate-limit": "^11.2.0",
