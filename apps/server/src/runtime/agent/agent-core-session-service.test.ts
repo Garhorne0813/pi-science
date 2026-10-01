@@ -115,10 +115,12 @@ describe("agent-core session configuration", () => {
     try {
       const runtime = { cwd, sessionId: "transport", isClosed: false, sendCommand: vi.fn().mockRejectedValue(error) };
       const service = new AgentCoreSessionService({} as never, {} as never);
+      const recover = vi.spyOn(service as unknown as { recover(item: unknown): Promise<void> }, "recover").mockResolvedValue();
       (service as unknown as { live: Map<string, unknown> }).live.set(`${resolve(cwd)}\0transport`,
         { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low" });
       expect(await service.command(cwd, "transport", "prompt", { message: "hello" }, { skills: [], extensions: [] }))
         .toMatchObject({ success: false, code });
+      expect(recover).toHaveBeenCalledOnce();
     } finally { await rm(cwd, { recursive: true, force: true }); }
   });
 

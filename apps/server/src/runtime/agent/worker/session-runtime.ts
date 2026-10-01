@@ -1,11 +1,10 @@
 import { isAbsolute, join, resolve } from "node:path";
-import { createHash } from "node:crypto";
 import { AgentHarness, BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv, createBashTool, createEditTool, createReadTool, createWriteTool, laneState, loadSkills, type AgentHarness as Harness, type AgentLane, type JsonlSessionMetadata, type Session, type WatchHandle, type LaneSnapshot, type Skill } from "@earendil-works/pi-agent-core/node";
 import { agentModelCatalog, agentModels } from "./agent-models.js";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { appliedRuntimeSettings, contextUsage, resolveCompaction, type AppliedRuntimeSettings, type RuntimeSettings } from "../agent-runtime-settings.js";
 import { AgentCoreEventAdapter } from "../agent-event-adapter.js";
-import { userPrompt } from "../agent-message.js";
+import { promptOperationId, userPrompt } from "../agent-message.js";
 import { notebookHarnessTools } from "./notebook-tools.js";
 import { InteractionBridge } from "./interaction-bridge.js";
 import { questionnaireHarnessTool } from "./questionnaire-tool.js";
@@ -58,6 +57,7 @@ export class SessionRuntime {
   private settings: RuntimeSettings = {};
   private applied!: AppliedRuntimeSettings;
   private models!: ReturnType<typeof agentModels>;
+  private eventSequence: () => number = () => 0;
 
   private constructor(
     sessionId: string,
@@ -92,6 +92,8 @@ export class SessionRuntime {
   }
 
   static async open(options: AgentRuntimeStartOptions, publish: (event: RuntimeEvent) => void, fatal: (error: unknown) => void): Promise<SessionRuntime> {
+    let eventSequence = 0;
+    const emit = (event: RuntimeEvent) => publish({ ...event, runtime_sequence: ++eventSequence });
     if (!isAbsolute(options.cwd) || resolve(options.cwd) !== options.cwd) throw new Error("worker cwd must be absolute and normalized");
     const requiredRoot = join(metadataRoot(options.cwd), "agent-sessions");
     if (resolve(options.sessionsRoot) !== resolve(requiredRoot)) throw new Error("agent sessions root must be workspace-local");
@@ -101,7 +103,7 @@ export class SessionRuntime {
     const environment = toolEnvironment(options.env ?? {});
     const executionEnv = new NodeExecutionEnv({ cwd: options.cwd, shellEnv: environment });
     const repo = new JsonlSessionRepo({ fileSystem: executionEnv, sessionsRoot: requiredRoot });
-    const interactions = new InteractionBridge(publish);
+    const interactions = new InteractionBridge(emit);
     let mcp: AgentMcpTools | undefined;
     const skillPaths = [join(options.cwd, ".pi", "skills"), ...(options.skillPaths ?? [])];
     try {
@@ -140,6 +142,7 @@ export class SessionRuntime {
       const runtime = new SessionRuntime(session.metadata.id, lane, harness, repo, executionEnv, session.metadata, session, watch, interactions, mcp, skillPaths, discovered.skills, skillPolicy, fatal);
       runtime.settings = options.settings ?? {};
       runtime.models = models;
+      runtime.eventSequence = () => eventSequence;
       const snapshot = await watch.resnapshot(context);
       const currentModel = models.getModel(snapshot.configuration.model.provider, snapshot.configuration.model.modelId);
       if (!currentModel) throw new Error("persisted model is unavailable");
@@ -154,13 +157,13 @@ export class SessionRuntime {
       const adapter = new AgentCoreEventAdapter();
       runtime.activateWatch = () => {
         watch.start((event) => {
-          for (const mapped of adapter.adapt(event)) publish(mapped);
+          for (const mapped of adapter.adapt(event)) emit(mapped);
         });
         const recovered = open.find((operation) => operation.lane === "main");
         if (recovered) {
           // A just-accepted run resumes from "starting" without run_resume.
           // Seed its lifecycle from the durable snapshot after binding.
-          if (recovered.kind === "run") publish(adapter.beginRecovery(recovered.operationId));
+          if (recovered.kind === "run") emit(adapter.beginRecovery(recovered.operationId));
           void lane.resume(context).catch(fatal);
         }
       };
@@ -205,6 +208,8 @@ export class SessionRuntime {
             operation: snapshot.operation,
             queues: snapshot.queues,
             faulted: snapshot.faulted,
+            lastResult: snapshot.lastResult,
+            eventSequence: this.eventSequence(),
             ...await contextUsage(snapshot.transcript, this.applied.contextWindow),
             compaction: await this.harness.getCompactionSettings(context),
             compaction_threshold_percent: this.applied.thresholdPercent,
@@ -216,7 +221,7 @@ export class SessionRuntime {
           if (typeof message !== "string" || !message.trim()) return { success: false, code: "invalid_message", error: "prompt message is required" };
           const clientMessageId = typeof params.client_message_id === "string" ? params.client_message_id : undefined;
           const operationId = clientMessageId
-            ? `prompt-${createHash("sha256").update(`${this.sessionId}\0${clientMessageId}`).digest("hex")}` : undefined;
+            ? promptOperationId(this.sessionId, clientMessageId) : undefined;
           if (clientMessageId) {
             // Admission commits the user message and operation together. Read
             // the complete session, including branches no longer at the tip.

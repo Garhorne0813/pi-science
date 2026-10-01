@@ -338,6 +338,18 @@ describe("project review policy gate", () => {
     expect(runner.calls).toHaveLength(1);
   });
 
+  it("does not repeat an automatic review for the same turn after a service restart", async () => {
+    const cwd = await workspace();
+    await writeFile(join(cwd, ".pi-science", "project-state.json"), JSON.stringify({ policy: { auto_review: true }, history: [] }));
+    const runner = new FakeReviewRunner();
+    const first = await new ProjectReviewService(runner).run(cwd, { sessionId: "session-a", trigger: "auto", turnId: "durable-turn" });
+    const second = await new ProjectReviewService(runner).run(cwd, { sessionId: "session-a", trigger: "auto", turnId: "durable-turn" });
+    expect(first.created).toBe(1);
+    expect(second.created).toBe(0);
+    expect(second.run_id).toBe(first.run_id);
+    expect(runner.calls).toHaveLength(1);
+  });
+
   it("ignores the policy gate for a manual review", async () => {
     const cwd = await workspace();
     await writeFile(join(cwd, ".pi-science", "project-state.json"), JSON.stringify({ items: [], proposals: [], project_versions: [], policy: { auto_review: false }, history: [] }), "utf8");

@@ -46,7 +46,7 @@ export function adaptHarnessEvent(event: HarnessEvent): RuntimeEvent[] {
   }
 }
 
-/** Delays run_start until the harness supplies its durable turnId. */
+/** One stable product turn per durable run; internal model/tool turns stay separate. */
 export class AgentCoreEventAdapter {
   private pendingRunId: string | null = null;
   private started = false;
@@ -86,7 +86,7 @@ export class AgentCoreEventAdapter {
       this.started = true;
       const early = this.earlyEvents;
       this.earlyEvents = [];
-      return [{ type: "agent_start", runId: event.runId, turnId: event.turnId }, ...early];
+      return [{ type: "agent_start", runId: event.runId, turnId: event.runId }, ...early];
     }
     const mapped = toolEnd ?? adaptHarnessEvent(event);
     if (event.type === "run_end" && this.pendingRunId === event.runId) {

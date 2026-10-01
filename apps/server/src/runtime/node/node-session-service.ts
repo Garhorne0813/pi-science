@@ -22,9 +22,9 @@ import { SessionRepository, invalidateSessionFileCache, sessionRepository } from
 import { deleteSessionStats, foldSessionFileStats, loadSessionStats, saveSessionStats } from "./session-stats-repository.js";
 import { foldEventRecordsTiming, maxTiming, mergeSessionStats, SessionStatsProjector, timingFromStats, type SessionTiming } from "./session-stats-projector.js";
 import { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
-import { diffWorkspaceSnapshots, previewKind, previewMime, snapshotWorkspace, type WorkspaceSnapshotEntry } from "../artifacts/workspace-artifact-snapshot.js";
-import { turnArtifactRepository } from "../artifacts/turn-artifact-repository.js";
-import { metadataRoot, readJsonLines, workspaceFile } from "../../storage/persistence.js";
+import { snapshotWorkspace, type WorkspaceSnapshotEntry } from "../artifacts/workspace-artifact-snapshot.js";
+import { finishTurnArtifacts as finishSharedTurnArtifacts } from "../artifacts/turn-lifecycle.js";
+import { metadataRoot, workspaceFile } from "../../storage/persistence.js";
 import { ensureProject } from "../../project/project-registry.js";
 import type { ModelResourceService } from "../../model-resources/model-resource-service.js";
 
@@ -199,6 +199,17 @@ export class NodeSessionService {
     agentCoreServer: { backendUrl?: string; internalToken?: string } = {},
   ) {
     this.agentCore = new AgentCoreSessionService(eventHub, environments, agentCoreServer);
+    this.agentCore.configureProductLifecycle({
+      observe: (cwd, sessionId, event) => this.statsProjector.track(runtimeKey(cwd, sessionId), event, Date.now()),
+      settled: (cwd, sessionId, turnId) => this.scheduleAutoReview(cwd, sessionId, turnId),
+      stats: async (cwd, sessionId, counters) => {
+        const checkpoint = await loadSessionStats(cwd, sessionId).catch(() => null);
+        const timing = this.statsProjector.timingWithCheckpoint(runtimeKey(cwd, sessionId), timingFromStats(checkpoint));
+        const stats = mergeSessionStats({ ...counters }, maxTiming(timing, await this.backfillTiming(cwd, sessionId)));
+        await saveSessionStats(cwd, sessionId, stats);
+        return stats;
+      },
+    });
   }
 
   configureLogging(log: (level: "info" | "warn" | "error", message: string) => void): void {
@@ -285,6 +296,7 @@ export class NodeSessionService {
         }
 
         const oldId = runtime.activeSessionId;
+        if (type === "prompt") runtime.turnBaseline = Promise.resolve(await snapshotWorkspace(cwd));
         if (type === "prompt" || type === "compact") this.beginPendingOperation(runtime, type);
         const result = await runtime.process.sendCommand(type, params);
         if (!result.success) {
@@ -1031,7 +1043,7 @@ export class NodeSessionService {
           // clears its active identity before observing agent_settled.
           runtime.turnId = identity?.turnId;
           runtime.turnOrdinal = identity?.turnOrdinal;
-          runtime.turnBaseline = snapshotWorkspace(cwd);
+          runtime.turnBaseline ??= snapshotWorkspace(cwd);
           runtime.turnAssistantPartId = undefined;
         }
         // Pi's raw event type is "message_update" with an inner
@@ -1048,8 +1060,9 @@ export class NodeSessionService {
           }
         }
         if (event.type === "agent_settled") {
+          const turnId = runtime.turnId;
           await this.finishTurnArtifacts(runtime, event, sessionId);
-          this.scheduleAutoReview(cwd, sessionId);
+          this.scheduleAutoReview(cwd, sessionId, turnId);
           void this.refreshAndPublishStats(runtime, sessionId);
         }
       },
@@ -1352,100 +1365,19 @@ export class NodeSessionService {
    *  strip per session (session_id is persisted and published), so the
    *  mis-attribution is cosmetic only. */
   private async finishTurnArtifacts(runtime: RuntimeRecord, event: Record<string, unknown>, sessionId: string): Promise<void> {
-    const turnId = runtime.turnId;
-    if (!turnId) return;
-    runtime.turnId = undefined;
-    const baseline = runtime.turnBaseline;
-    runtime.turnBaseline = undefined;
-    if (!baseline) return;
-    const turnOrdinal = runtime.turnOrdinal ?? null;
-    const endedAt = new Date().toISOString();
-    const lastAssistantPartId = runtime.turnAssistantPartId;
-    const before = await baseline;
-    const after = await snapshotWorkspace(runtime.cwd);
-    if (!after) return;
-    const { created, modified } = diffWorkspaceSnapshots(before, after);
-    const changed = [...created, ...modified];
-    if (changed.length === 0) return;
-    const items = await this.toTurnArtifactItems(runtime.cwd, changed);
-    if (items.length === 0) return;
-    // The tracked last assistant message id of this turn is the most accurate
-    // anchor (PRD: artifact cards must land after the turn's FINAL assistant
-    // message). A settled event's own ids may point to an earlier message of
-    // a multi-message turn, so they are consulted only as secondary fallbacks.
-    const assistantMessageId = lastAssistantPartId
-      ?? (typeof event.assistantMessageId === "string"
-        ? event.assistantMessageId
-        : typeof event.messageId === "string"
-          ? event.messageId
-          : null);
-    const record = {
-      turn_id: turnId,
-      session_id: sessionId,
-      assistant_message_id: assistantMessageId,
-      turn_ordinal: turnOrdinal,
-      ended_at: endedAt,
-      artifacts: items,
-    };
-    // Defensive idempotency: a reconciliation-recovered turn and a late
-    // (replayed) agent_settled could both carry the same turn id; never append
-    // a duplicate record for one turn.
-    const existing = await turnArtifactRepository.forSession(runtime.cwd, sessionId).catch(() => []);
-    if (!existing.some((r) => r.turn_id === turnId)) {
-      await turnArtifactRepository.append(runtime.cwd, record).catch(() => undefined);
-    }
-    await this.eventHub.publish(runtime.cwd, sessionId, {
-      type: "turn.artifacts",
-      sessionId,
-      turnId,
-      turnOrdinal,
-      assistantMessageId,
-      // Published so the live fold can anchor the strip the same way the
-      // history restore does. `turnOrdinal` is diagnostic and resets with the hub,
-      // not user-message turns, so it cannot identify the owning turn on its own.
-      endedAt,
-      artifacts: items,
-    }).catch(() => undefined);
-  }
-
-  private async toTurnArtifactItems(cwd: string, entries: WorkspaceSnapshotEntry[]): Promise<Array<{ path: string; kind: string; mime: string; size: number; artifactId?: string; version?: number }>> {
-    let manifests: Array<{ artifact_id?: string; version?: unknown; path?: unknown }> = [];
-    try {
-      manifests = await readJsonLines<{ artifact_id?: string; version?: unknown; path?: unknown }>(workspaceFile(cwd, "artifacts.jsonl"));
-    } catch {
-      manifests = [];
-    }
-    const byPath = new Map<string, { artifactId: string; version: number }>();
-    for (const manifest of manifests) {
-      const path = typeof manifest.path === "string" ? manifest.path : "";
-      if (!path || typeof manifest.artifact_id !== "string") continue;
-      byPath.set(path, { artifactId: manifest.artifact_id, version: Number(manifest.version ?? 0) });
-    }
-    return entries
-      .map((entry) => {
-        const manifest = byPath.get(entry.path);
-        return {
-          path: entry.path,
-          kind: previewKind(entry.path),
-          mime: previewMime(entry.path),
-          size: entry.size,
-          ...(manifest ? { artifactId: manifest.artifactId, version: manifest.version } : {}),
-        };
-      })
-      .sort((a, b) => b.size - a.size)
-      .slice(0, 12);
+    await finishSharedTurnArtifacts(this.eventHub, runtime, event, sessionId);
   }
 
   /** One auto review per settled turn: a second settle for a session whose
    *  review is still in flight is dropped, and the reviewer itself is
    *  single-flight per workspace and gated on policy.auto_review. */
-  private scheduleAutoReview(cwd: string, sessionId: string): void {
+  private scheduleAutoReview(cwd: string, sessionId: string, turnId?: string): void {
     const review = this.projectReview;
     if (!review || !sessionId) return;
     const key = runtimeKey(cwd, sessionId);
     if (this.autoReviews.has(key)) return;
     this.autoReviews.add(key);
-    void review.run(cwd, { sessionId, trigger: "auto" })
+    void review.run(cwd, { sessionId, trigger: "auto", ...(turnId ? { turnId } : {}) })
       .catch((error: unknown) => this.log("warn", `automatic project review failed for session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`))
       .finally(() => this.autoReviews.delete(key));
   }

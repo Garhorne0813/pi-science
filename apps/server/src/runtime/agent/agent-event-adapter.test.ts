@@ -32,7 +32,7 @@ describe("AgentCoreEventAdapter", () => {
     expect(adapter.adapt(event({ type: "run_start", runId: "run-1", startedAt: 1 }))).toEqual([]);
     expect(adapter.adapt(event({ type: "message_start", runId: "run-1", message: { role: "user", content: "hello" } }))).toEqual([]);
     expect(adapter.adapt(event({ type: "turn_start", runId: "run-1", turnId: "turn-1" }))).toMatchObject([
-      { type: "agent_start", runId: "run-1", turnId: "turn-1" },
+      { type: "agent_start", runId: "run-1", turnId: "run-1" },
       { type: "message_start", runId: "run-1" },
     ]);
     expect(adapter.adapt(event({ type: "tool_start", runId: "run-1", turnId: "turn-1", toolCallId: "tool-1", toolName: "read", args: {} }))).toEqual([

@@ -16,8 +16,16 @@ import { CredentialStore } from "../../model-resources/credential-store.js";
 import { projectedEnvironmentNames } from "../pi/extensions/pi-science-mcp.js";
 import { AgentRuntimeExitedError, AgentRuntimeTimeoutError } from "./agent-runtime-errors.js";
 import { AgentSessionRegistry } from "./agent-session-registry.js";
+import { DurableTurnLifecycle } from "../artifacts/turn-lifecycle.js";
+import { promptOperationId } from "./agent-message.js";
 
-type Live = { key: string; runtime: AgentCoreRuntimeClient; busy: boolean; restartPending: boolean; model: string; thinking: string | null };
+type Live = { key: string; runtime: AgentCoreRuntimeClient; busy: boolean; restartPending: boolean; model: string; thinking: string | null;
+  config: PiConfig; eventSequence: number; expectedOperationId?: string; watchdog?: NodeJS.Timeout; suppressRecovery?: boolean };
+type ProductHooks = {
+  observe?: (cwd: string, sessionId: string, event: Record<string, unknown>) => void;
+  settled?: (cwd: string, sessionId: string, turnId: string) => void;
+  stats?: (cwd: string, sessionId: string, stats: SessionStats) => Promise<SessionStats>;
+};
 
 function identity(cwd: string, id: string): string { return `${resolve(cwd)}\0${id}`; }
 function configPath(cwd: string, sessionId: string): string {
@@ -59,12 +67,20 @@ export class AgentCoreSessionService {
   private readonly opening = new Map<string, Promise<Live | RuntimeResult>>();
   private readonly mutations = new Map<string, Promise<unknown>>();
   private beforeStart: ((cwd: string) => Promise<void>) | null = null;
+  private readonly turns: DurableTurnLifecycle;
+  private hooks: ProductHooks = {};
+  private readonly recovering = new Map<string, Promise<void>>();
+  private readonly recoveryAttempts = new Map<string, number>();
+  private readonly recoveryTimers = new Map<string, NodeJS.Timeout>();
+  private stopping = false;
 
   constructor(
     private readonly events: ConversationEventHub,
     private readonly environments: Pick<WorkspaceEnvironmentService, "environment">,
     private readonly server: { backendUrl?: string; internalToken?: string } = {},
-  ) {}
+  ) { this.turns = new DurableTurnLifecycle(events); }
+
+  configureProductLifecycle(hooks: ProductHooks): void { this.hooks = hooks; }
 
   configureBeforeStart(hook: ((cwd: string) => Promise<void>) | null): void { this.beforeStart = hook; }
 
@@ -118,7 +134,7 @@ export class AgentCoreSessionService {
     try {
       await copyFile(source, temporary);
       await rename(temporary, destination);
-      await writeJsonAtomic(configPath(cwd, sessionId), { skills: config.skills });
+      await writeJsonAtomic(configPath(cwd, sessionId), { skills: config.skills, model_context_window_override: config.model_context_window_override });
       await this.registry.register(cwd, sessionId, destination, source);
     } catch (error) {
       await unlink(temporary).catch(() => undefined);
@@ -163,48 +179,74 @@ export class AgentCoreSessionService {
         deferActivation: true,
       });
       try {
-        await writeJsonAtomic(configPath(cwd, runtime.sessionId), { skills: config.skills });
+        await writeJsonAtomic(configPath(cwd, runtime.sessionId), { skills: config.skills, model_context_window_override: config.model_context_window_override });
         const path = await this.repository.findPath(cwd, runtime.sessionId);
         if (!path) throw new Error("created agent session has no durable transcript");
         await this.registry.register(cwd, runtime.sessionId, path);
       }
       catch (error) { await this.manager.stop(key); throw error; }
-      await this.attach(key, runtime, config.model!, config.thinking ?? null);
+      await this.attach(key, runtime, config.model!, config.thinking ?? null, config);
       return { id: runtime.sessionId };
     } catch (error) { return { error: String(error), code: "spawn_failed" }; }
   }
 
-  private async attach(key: string, runtime: AgentCoreRuntimeClient, model: string, level: string | null): Promise<Live> {
-    const item: Live = { key, runtime, busy: false, restartPending: false, model, thinking: level };
+  private async attach(key: string, runtime: AgentCoreRuntimeClient, model: string, level: string | null, config: PiConfig): Promise<Live> {
+    const item: Live = { key, runtime, busy: false, restartPending: false, model, thinking: level, config, eventSequence: 0 };
     this.live.set(identity(runtime.cwd, runtime.sessionId), item);
+    runtime.on("event", (event) => {
+      if (typeof event.runtime_sequence === "number") item.eventSequence = event.runtime_sequence;
+      if (event.type === "agent_start" && typeof event.runId === "string") item.expectedOperationId = event.runId;
+      if (event.type === "agent_settled") {
+        item.expectedOperationId = undefined;
+        this.recoveryAttempts.delete(identity(runtime.cwd, runtime.sessionId));
+      }
+      this.scheduleWatchdog(item);
+    });
     this.events.bind(runtime.cwd, runtime, {
       activeSessionId: () => runtime.sessionId,
-      observe: async (event, sessionId) => {
+      observe: async (event, sessionId, turn) => {
+        this.hooks.observe?.(runtime.cwd, sessionId, event);
         await observeNodePiEvent(runtime.cwd, item.model, event, sessionId,
           (payload) => this.events.publish(runtime.cwd, sessionId, payload));
-        if (event.type === "agent_settled") {
+        if (await this.turns.observe(runtime.cwd, sessionId, event, turn)) {
+          this.hooks.settled?.(runtime.cwd, sessionId, String(event.runId));
+        }
+        if (["message_end", "tool_execution_end", "agent_settled"].includes(event.type)) {
           const stats = await this.repository.stats(runtime.cwd, sessionId);
-          if (stats) await this.events.publish(runtime.cwd, sessionId, { type: "session.stats", sessionId, stats });
+          if (stats) await this.events.publish(runtime.cwd, sessionId, { type: "session.stats", sessionId,
+            stats: await this.hooks.stats?.(runtime.cwd, sessionId, stats) ?? stats });
         }
       },
       onBusy: (busy) => {
         item.busy = busy;
+        this.scheduleWatchdog(item);
         if (!busy && item.restartPending) void this.stopForReload(item);
       },
-      onExit: () => { this.live.delete(identity(runtime.cwd, runtime.sessionId)); },
+      onExit: () => {
+        if (item.watchdog) clearTimeout(item.watchdog);
+        if (this.live.get(identity(runtime.cwd, runtime.sessionId)) === item) this.live.delete(identity(runtime.cwd, runtime.sessionId));
+        if (item.expectedOperationId && !item.suppressRecovery && !this.stopping) queueMicrotask(() => { void this.recover(item); });
+      },
     });
     try {
       // No drive or recovery starts until this snapshot has been applied. All
       // subsequent state changes arrive through the already-bound event stream.
       const snapshot = await runtime.sendCommand("get_state");
       if (!snapshot.success) throw new Error(String(snapshot.error));
-      const data = snapshot.data as { busy?: boolean; model?: { provider: string; modelId: string }; thinkingLevel?: string };
+      const data = snapshot.data as { busy?: boolean; model?: { provider: string; modelId: string }; thinkingLevel?: string;
+        operation?: { id: string }; lastResult?: { operationId: string; status: string } };
       item.busy = Boolean(data.busy);
+      item.expectedOperationId = data.operation?.id;
       if (data.model) item.model = `${data.model.provider}/${data.model.modelId}`;
       if (data.thinkingLevel) item.thinking = data.thinkingLevel;
+      if (!data.busy && data.lastResult && await this.turns.unfinished(runtime.cwd, runtime.sessionId, data.lastResult.operationId)) {
+        runtime.emit("event", { type: "agent_start", runId: data.lastResult.operationId, turnId: data.lastResult.operationId, recovery: true });
+        runtime.emit("event", { type: "agent_settled", runId: data.lastResult.operationId, status: data.lastResult.status, recovery: true });
+      }
       const activated = await runtime.sendCommand("activate");
       if (!activated.success) throw new Error(String(activated.error));
     } catch (error) {
+      item.suppressRecovery = true;
       this.events.expectExit(runtime);
       await this.manager.stop(key);
       this.live.delete(identity(runtime.cwd, runtime.sessionId));
@@ -232,7 +274,7 @@ export class AgentCoreSessionService {
     const key = identity(cwd, sessionId);
     const path = await this.repository.findPath(cwd, sessionId);
     if (!path) return { success: false, code: "not_found", error: "session not found in this workspace" };
-    const saved = await readJson<{ skills?: string[] } | null>(configPath(cwd, sessionId), null);
+    const saved = await readJson<Pick<PiConfig, "skills" | "model_context_window_override"> | null>(configPath(cwd, sessionId), null);
     const persisted = await this.repository.configuration(cwd, sessionId);
     const model = persisted?.model ?? splitModel(config.model);
     if (!model) return { success: false, code: "invalid_model", error: "An agent-core session requires a provider/model setting" };
@@ -246,7 +288,8 @@ export class AgentCoreSessionService {
         sessionsRoot: join(metadataRoot(cwd), "agent-sessions"),
         model,
         thinking: thinking(persisted?.thinkingLevel ?? config.thinking),
-        settings: config,
+        settings: { ...config, model_context_window_override: config.model_context_window_override?.model === `${model.provider}/${model.modelId}`
+          ? config.model_context_window_override : saved?.model_context_window_override },
         systemPrompt: await systemPrompt(),
         skillPaths: saved?.skills ?? config.skills,
         skillPolicy: await globalSkillPolicy(),
@@ -254,7 +297,7 @@ export class AgentCoreSessionService {
         credentialEnvNames: await this.credentialEnvNames(cwd),
         deferActivation: true,
       });
-      return await this.attach(key, runtime, `${model.provider}/${model.modelId}`, persisted?.thinkingLevel ?? config.thinking ?? null);
+      return await this.attach(key, runtime, `${model.provider}/${model.modelId}`, persisted?.thinkingLevel ?? config.thinking ?? null, config);
     } catch (error) { return failed(error); }
   }
 
@@ -266,8 +309,29 @@ export class AgentCoreSessionService {
   private async commandOnce(cwd: string, sessionId: string, type: string, params: Record<string, unknown>, config: PiConfig): Promise<RuntimeResult> {
     const opened = await this.open(cwd, sessionId, config);
     if ("success" in opened) return opened;
-    try { return await opened.runtime.sendCommand(type, params); }
-    catch (error) { return failed(error); }
+    if (type === "prompt") {
+      const clientMessageId = typeof params.client_message_id === "string" ? params.client_message_id : randomUUID();
+      params = { ...params, client_message_id: clientMessageId };
+      const operationId = promptOperationId(sessionId, clientMessageId);
+      try { await this.turns.prepare(cwd, sessionId, operationId); }
+      catch (error) { return { success: false, code: "lifecycle_prepare_failed", error: String(error) }; }
+      opened.expectedOperationId ??= operationId;
+      this.scheduleWatchdog(opened);
+    }
+    try {
+      const result = await opened.runtime.sendCommand(type, params);
+      if (type === "prompt" && result.code === "busy" && typeof params.client_message_id === "string") {
+        await this.turns.discardRejected(cwd, sessionId, promptOperationId(sessionId, params.client_message_id)).catch(() => undefined);
+      }
+      if (type === "prompt" && !opened.busy && (!result.success || result.deduplicated)) {
+        opened.expectedOperationId = undefined;
+        this.scheduleWatchdog(opened);
+      }
+      return result;
+    } catch (error) {
+      if (error instanceof AgentRuntimeTimeoutError || error instanceof AgentRuntimeExitedError) void this.recover(opened);
+      return failed(error);
+    }
   }
 
   async notify(cwd: string, sessionId: string, type: string, params: Record<string, unknown>): Promise<RuntimeResult> {
@@ -308,6 +372,8 @@ export class AgentCoreSessionService {
   private async stopForReload(item: Live): Promise<void> {
     if (this.live.get(identity(item.runtime.cwd, item.runtime.sessionId)) !== item) return;
     item.restartPending = false;
+    item.suppressRecovery = true;
+    if (item.watchdog) clearTimeout(item.watchdog);
     this.events.expectExit(item.runtime);
     await this.manager.stop(item.key);
     this.live.delete(identity(item.runtime.cwd, item.runtime.sessionId));
@@ -376,8 +442,9 @@ export class AgentCoreSessionService {
   async fork(cwd: string, sessionId: string, entryId: string | undefined, config: PiConfig): Promise<RuntimeResult> {
     const result = await this.command(cwd, sessionId, entryId ? "fork" : "clone", entryId ? { entryId } : {}, config);
     if (result.success && typeof result.sessionId === "string") {
-      const saved = await readJson<{ skills?: string[] } | null>(configPath(cwd, sessionId), null);
-      await writeJsonAtomic(configPath(cwd, result.sessionId), { skills: saved?.skills ?? config.skills });
+      const saved = await readJson<Pick<PiConfig, "skills" | "model_context_window_override"> | null>(configPath(cwd, sessionId), null);
+      await writeJsonAtomic(configPath(cwd, result.sessionId), { skills: saved?.skills ?? config.skills,
+        model_context_window_override: saved?.model_context_window_override ?? config.model_context_window_override });
       const path = await this.repository.findPath(cwd, result.sessionId);
       if (path) await this.registry.register(cwd, result.sessionId, path);
     }
@@ -386,7 +453,7 @@ export class AgentCoreSessionService {
 
   async stats(cwd: string, sessionId: string): Promise<{ stats: SessionStats } | { error: string; code: string }> {
     const stats = await this.repository.stats(cwd, sessionId);
-    return stats ? { stats } : { error: "session not found in this workspace", code: "not_found" };
+    return stats ? { stats: await this.hooks.stats?.(cwd, sessionId, stats) ?? stats } : { error: "session not found in this workspace", code: "not_found" };
   }
 
   async delete(cwd: string, sessionId: string): Promise<RuntimeResult> {
@@ -409,7 +476,7 @@ export class AgentCoreSessionService {
       // Commit deletion before cleanup: retries and server restarts must never
       // rediscover an imported transcript through its retained legacy source.
       await this.registry.markDeleted(cwd, sessionId, path);
-      if (live) { this.events.expectExit(live.runtime); await this.manager.stop(live.key); this.live.delete(key); }
+      if (live) { live.suppressRecovery = true; this.events.expectExit(live.runtime); await this.manager.stop(live.key); this.live.delete(key); }
       const remove = async (file: string) => { await unlink(file).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; }); };
       await remove(path);
       await remove(configPath(cwd, sessionId));
@@ -427,10 +494,77 @@ export class AgentCoreSessionService {
   }
 
   async shutdownAll(): Promise<void> {
+    this.stopping = true;
+    for (const timer of this.recoveryTimers.values()) clearTimeout(timer);
+    this.recoveryTimers.clear();
+    for (const item of this.live.values()) if (item.watchdog) clearTimeout(item.watchdog);
+    await Promise.allSettled(this.recovering.values());
     for (const item of this.live.values()) this.events.expectExit(item.runtime);
     await this.manager.shutdownAll();
     this.live.clear();
   }
 
   get processCount(): number { return this.manager.processCount; }
+
+  private scheduleWatchdog(item: Live): void {
+    if (item.watchdog) clearTimeout(item.watchdog);
+    item.watchdog = undefined;
+    const delay = Number(process.env.PI_SCIENCE_EVENT_WATCHDOG_MS ?? 60000);
+    if (this.stopping || item.suppressRecovery || item.runtime.isClosed || !item.expectedOperationId || !Number.isFinite(delay) || delay <= 0) return;
+    item.watchdog = setTimeout(() => { void this.probe(item); }, delay);
+    item.watchdog.unref?.();
+  }
+
+  private async probe(item: Live): Promise<void> {
+    if (this.stopping || this.live.get(identity(item.runtime.cwd, item.runtime.sessionId)) !== item) return;
+    try {
+      const result = await item.runtime.sendCommand("get_state", {}, 5000);
+      if (!result.success) throw new Error(String(result.error));
+      const data = result.data as { busy?: boolean; faulted?: boolean; eventSequence?: number;
+        lastResult?: { operationId: string; status: string } };
+      // A quiet model/tool is legitimate. A sequence gap proves that worker
+      // events were emitted but lost; a failed probe proves unresponsiveness.
+      if (data.faulted || Number(data.eventSequence ?? 0) > item.eventSequence) { await this.recover(item); return; }
+      if (!data.busy && item.expectedOperationId && data.lastResult?.operationId === item.expectedOperationId) {
+        item.runtime.emit("event", { type: "agent_settled", runId: data.lastResult.operationId, status: data.lastResult.status, recovery: true });
+      } else this.scheduleWatchdog(item);
+    } catch { await this.recover(item); }
+  }
+
+  private recover(item: Live): Promise<void> {
+    const cwd = item.runtime.cwd, sessionId = item.runtime.sessionId;
+    const key = identity(cwd, sessionId);
+    if (this.stopping) return Promise.resolve();
+    const existing = this.recovering.get(key);
+    if (existing) return existing;
+    const work = this.withMutation(cwd, sessionId, async () => {
+      if (this.stopping) return;
+      const current = this.live.get(key);
+      if (current && current !== item && !current.runtime.isClosed) return;
+      const attempt = (this.recoveryAttempts.get(key) ?? 0) + 1;
+      this.recoveryAttempts.set(key, attempt);
+      if (attempt > 3) return;
+      item.suppressRecovery = true;
+      if (item.watchdog) clearTimeout(item.watchdog);
+      await this.events.publish(cwd, sessionId, { type: "error", sessionId, code: "worker_recovering", recoverable: true,
+        message: "The agent worker stopped responding; restoring its durable operation." });
+      this.events.expectExit(item.runtime);
+      await this.manager.stop(item.key); // Await exit before opening the same durable session.
+      if (this.live.get(key) === item) this.live.delete(key);
+      if (this.stopping) return;
+      const opened = await this.open(cwd, sessionId, item.config);
+      if ("success" in opened) {
+        await this.events.publish(cwd, sessionId, { type: "error", sessionId, code: "worker_recovery_failed", terminal: attempt >= 3, message: String(opened.error) });
+        if (attempt < 3) {
+          const timer = setTimeout(() => { this.recoveryTimers.delete(key); void this.recover(item); }, 250 * attempt);
+          timer.unref?.();
+          this.recoveryTimers.set(key, timer);
+        }
+      } else if (!opened.busy) await this.events.publish(cwd, sessionId, { type: "session.idle", sessionId });
+    }).catch(async (error) => {
+      try { await this.events.publish(cwd, sessionId, { type: "error", sessionId, code: "worker_recovery_failed", terminal: true, message: String(error) }); } catch { /* The event store may itself be unavailable. */ }
+    }).finally(() => { if (this.recovering.get(key) === work) this.recovering.delete(key); });
+    this.recovering.set(key, work);
+    return work;
+  }
 }

@@ -100,8 +100,8 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
   get sessionId(): string { return this.currentSessionId; }
   get isClosed(): boolean { return this.closed; }
 
-  sendCommand(type: string, params: Record<string, unknown> = {}): Promise<RuntimeResult> {
-    return this.request({ type: "command", command: type, params }, type);
+  sendCommand(type: string, params: Record<string, unknown> = {}, timeoutMs = this.timeoutMs): Promise<RuntimeResult> {
+    return this.request({ type: "command", command: type, params }, type, timeoutMs);
   }
 
   async sendNotification(type: string, params: Record<string, unknown> = {}): Promise<void> {
@@ -123,14 +123,14 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
     finally { clearTimeout(timer); }
   }
 
-  private request(command: WorkerRequest, label: string): Promise<RuntimeResult> {
+  private request(command: WorkerRequest, label: string, timeoutMs = this.timeoutMs): Promise<RuntimeResult> {
     if (this.closed) return Promise.reject(new AgentRuntimeExitedError("agent worker is closed"));
     const requestId = randomUUID();
     return new Promise<RuntimeResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
-        reject(new AgentRuntimeTimeoutError(label, this.timeoutMs));
-      }, this.timeoutMs);
+        reject(new AgentRuntimeTimeoutError(label, timeoutMs));
+      }, timeoutMs);
       this.pending.set(requestId, { resolve, reject, timer });
       void this.send({ ...command, requestId } as WorkerCommand).catch((error: Error) => {
         const pending = this.pending.get(requestId);
