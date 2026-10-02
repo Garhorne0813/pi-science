@@ -212,7 +212,12 @@ chmod +x "$FIXTURE/frontend/node_modules/.bin/vite"
 FAIL_PORT="$(free_port)"
 if PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_CONTROL_PLANE_PORT="$FAIL_PORT" PI_SCIENCE_RUNTIME_PORT="$(free_port)" PI_SCIENCE_FRONTEND_PORT="$(free_port)" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=3 bash "$FIXTURE/scripts/start.sh" >"$TEMP_ROOT/failure.log" 2>&1; then fail "frontend startup failure returned success"; fi
 wait_port_available "$FAIL_PORT" || fail "startup failure left the control-plane port occupied"
-assert_contains "$TEMP_ROOT/failure.log" 'frontend exited during startup'
+# An immediate exit may precede process identity capture on macOS. Both
+# diagnostics fail closed and must still release the ready control plane.
+if ! grep -Fq 'frontend exited during startup' "$TEMP_ROOT/failure.log" && ! grep -Fq 'unable to establish frontend process identity' "$TEMP_ROOT/failure.log"; then
+  cat "$TEMP_ROOT/failure.log" >&2
+  fail "frontend startup failure was not diagnosed"
+fi
 
 # Missing package-local dependencies fail before starting either service.
 cp "$FIXTURE/apps/server/node_modules/tsx/dist/cli.mjs" "$TEMP_ROOT/fake-tsx.mjs"
