@@ -9,6 +9,27 @@ import type { PiProcess } from "../pi/pi-process.js";
 
 const workspaces: string[] = [];
 
+it("flush waits for durable observer work before shutdown completes", async () => {
+  const cwd = await workspace();
+  const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
+  const runtime = new EventEmitter();
+  let release!: () => void;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const persistence = new Promise<void>((resolve) => { release = resolve; });
+  hub.bind(cwd, runtime as PiProcess, { activeSessionId: () => "shutdown-session", onBusy: () => undefined, onExit: () => undefined,
+    observe: async () => { entered(); await persistence; } });
+  runtime.emit("event", { type: "agent_settled", status: "completed" });
+  await started;
+  let completed = false;
+  const flushed = hub.flush().then(() => { completed = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(completed).toBe(false);
+  release();
+  await flushed;
+  expect(completed).toBe(true);
+});
+
 afterEach(async () => {
   await Promise.all(workspaces.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });

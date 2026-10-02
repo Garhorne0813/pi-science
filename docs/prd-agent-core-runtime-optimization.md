@@ -1,6 +1,6 @@
 # PR #115：agent-core 运行时优化方案
 
-日期：2026-10-01。状态：实施中；进度和验证条件见 [实施记录](agent-core-runtime-implementation.md)。
+日期：2026-10-01。状态：主要代码改造已完成，保持内部 opt-in；发布验收与扩展边界见 [实施记录](agent-core-runtime-implementation.md) 和 [能力清单](agent-core-capability-inventory.md)。
 
 基线：PR #115，提交 `6110b446da7cbff2a41e94ff12173cb8aacfff01`。当前 `pi-agent-core`、`pi-ai` 均锁定 `0.87.1`；本次检查 npm 时，两者最新版本均为 `0.99.2`。
 

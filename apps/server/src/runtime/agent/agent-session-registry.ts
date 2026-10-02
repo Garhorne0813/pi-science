@@ -6,6 +6,8 @@ export type AgentSessionRegistration = {
   target: string;
   source?: string;
   migration?: "copied";
+  purpose?: "conversation" | "subagent" | "research" | "review";
+  parentSessionId?: string;
 };
 type Registry = { version: 1; sessions: Record<string, AgentSessionRegistration> };
 
@@ -22,10 +24,12 @@ export class AgentSessionRegistry {
     return Object.hasOwn(sessions, sessionId) ? sessions[sessionId] : undefined;
   }
 
-  async register(cwd: string, sessionId: string, target: string, source?: string): Promise<void> {
+  async register(cwd: string, sessionId: string, target: string, source?: string,
+    ownership?: Pick<AgentSessionRegistration, "purpose" | "parentSessionId">): Promise<void> {
     await this.update(cwd, sessionId, (previous) => {
       if (previous?.state === "deleted") throw new Error("cannot reopen a deleted agent session");
       return { ...previous, backend: "agent-core", state: "active", target,
+        purpose: previous?.purpose ?? ownership?.purpose ?? "conversation", ...ownership,
         ...(source ? { source, migration: "copied" } : {}) };
     });
   }

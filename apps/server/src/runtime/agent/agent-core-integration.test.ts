@@ -14,8 +14,11 @@ const roots: string[] = [];
 const services: NodeSessionService[] = [];
 const previousMode = process.env.PI_SCIENCE_AGENT_RUNTIME;
 const previousHome = process.env.PI_SCIENCE_HOME;
+const previousMigration = process.env.PI_SCIENCE_AGENT_CORE_MIGRATE_LEGACY;
 
 afterEach(async () => {
+  if (previousMigration === undefined) delete process.env.PI_SCIENCE_AGENT_CORE_MIGRATE_LEGACY;
+  else process.env.PI_SCIENCE_AGENT_CORE_MIGRATE_LEGACY = previousMigration;
   await Promise.allSettled(services.splice(0).map((service) => service.shutdownAll()));
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   if (previousMode === undefined) delete process.env.PI_SCIENCE_AGENT_RUNTIME;
@@ -65,6 +68,7 @@ describe("agent-core main service integration", () => {
   }, 20_000);
 
   it("imports a Pi v3 session on resume and keeps the original transcript", async () => {
+    process.env.PI_SCIENCE_AGENT_CORE_MIGRATE_LEGACY = "1";
     const cwd = await realpath(await mkdtemp(join(tmpdir(), "pi-science-core-legacy-")));
     roots.push(cwd);
     const legacyRoot = join(cwd, ".pi-science", "sessions");

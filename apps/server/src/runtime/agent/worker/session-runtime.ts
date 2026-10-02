@@ -6,6 +6,8 @@ import { appliedRuntimeSettings, contextUsage, resolveCompaction, type AppliedRu
 import { AgentCoreEventAdapter } from "../agent-event-adapter.js";
 import { promptOperationId, userPrompt } from "../agent-message.js";
 import { notebookHarnessTools } from "./notebook-tools.js";
+import { todoHarnessTool } from "./todo-tool.js";
+import { SubagentBridge, subagentHarnessTool } from "./subagent-tool.js";
 import { InteractionBridge } from "./interaction-bridge.js";
 import { questionnaireHarnessTool } from "./questionnaire-tool.js";
 import { AgentMcpTools } from "./mcp-tools.js";
@@ -13,6 +15,7 @@ import type { RuntimeEvent, RuntimeResult, RuntimeSkillPolicy } from "../agent-r
 import { metadataRoot } from "../../../storage/persistence.js";
 import type { AgentRuntimeStartOptions } from "./protocol.js";
 import { toolEnvironment } from "../agent-runtime-environment.js";
+import { loadPromptTemplates, formatPromptTemplateInvocation, parseCommandArgs, formatSkillInvocation, type PromptTemplate } from "@earendil-works/pi-agent-core/node";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -49,12 +52,14 @@ export class SessionRuntime {
   private readonly mcp: AgentMcpTools;
   private readonly skillPaths: string[];
   private allSkills: Skill[];
+  private promptTemplates: PromptTemplate[] = [];
   private skillPolicy: RuntimeSkillPolicy = { mode: "inherit" };
   private closed = false;
   private activated = false;
   private activateWatch: (() => void) | undefined;
   private mutationTail: Promise<unknown> = Promise.resolve();
   private settings: RuntimeSettings = {};
+  private subagents?: SubagentBridge;
   private applied!: AppliedRuntimeSettings;
   private models!: ReturnType<typeof agentModels>;
   private eventSequence: () => number = () => 0;
@@ -113,13 +118,15 @@ export class SessionRuntime {
             if (!metadata) throw new Error(`agent session not found: ${options.sessionId}`);
             return repo.open(metadata, context);
           })()
-        : await repo.create({ cwd: options.cwd }, context);
+        : await repo.create({ cwd: options.cwd, ...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {}) }, context);
       const saved = (await session.getValue(appliedRuntimeSettings, context))?.value;
       const recovering = (await session.getValue(laneState("main"), context))?.value.currentOperationId;
       if (recovering && saved?.model === `${model.provider}/${model.id}`) model.contextWindow = saved.contextWindow;
       const discovered = await loadSkills(executionEnv, skillPaths, context);
+      const templates = await loadPromptTemplates(executionEnv, join(options.cwd, ".pi", "prompts"), context);
       mcp = await AgentMcpTools.open(options.cwd, interactions, options.env ?? {});
       const skillPolicy = options.skillPolicy ?? { mode: "inherit" };
+      const subagents = new SubagentBridge(emit);
       const { harness, open } = await AgentHarness.create({
         session,
         models,
@@ -130,9 +137,10 @@ export class SessionRuntime {
           execution.env = environment;
           execution.inheritEnv = false;
         } }), createEditTool(), createWriteTool(),
-          ...notebookHarnessTools(options.cwd, session.metadata.id), questionnaireHarnessTool(interactions), ...mcp.tools],
+          todoHarnessTool(session), subagentHarnessTool(subagents), ...notebookHarnessTools(options.cwd, session.metadata.id), questionnaireHarnessTool(interactions), ...mcp.tools]
+          .filter((tool) => !options.allowedTools || options.allowedTools.includes(tool.name)),
         toolContext: { env: executionEnv },
-        resources: { skills: applySkillPolicy(discovered.skills, skillPolicy) },
+        resources: { skills: applySkillPolicy(discovered.skills, skillPolicy), promptTemplates: templates.promptTemplates },
         systemPrompt: options.systemPrompt ?? "You are a helpful scientific research assistant.",
         steeringMode: "one-at-a-time",
         followUpMode: "one-at-a-time",
@@ -141,6 +149,8 @@ export class SessionRuntime {
       const watch = await lane.watch(context);
       const runtime = new SessionRuntime(session.metadata.id, lane, harness, repo, executionEnv, session.metadata, session, watch, interactions, mcp, skillPaths, discovered.skills, skillPolicy, fatal);
       runtime.settings = options.settings ?? {};
+      runtime.promptTemplates = templates.promptTemplates;
+      runtime.subagents = subagents;
       runtime.models = models;
       runtime.eventSequence = () => eventSequence;
       const snapshot = await watch.resnapshot(context);
@@ -217,8 +227,18 @@ export class SessionRuntime {
         }
         case "prompt": {
           if (!this.activated) return { success: false, code: "not_ready", error: "agent runtime has not been activated" };
-          const message = params.message;
-          if (typeof message !== "string" || !message.trim()) return { success: false, code: "invalid_message", error: "prompt message is required" };
+          const rawMessage = params.message;
+          if (typeof rawMessage !== "string" || !rawMessage.trim()) return { success: false, code: "invalid_message", error: "prompt message is required" };
+          let message: string = rawMessage;
+          const invocation = message.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
+          if (invocation?.[1]?.startsWith("skill:")) {
+            const skill = this.enabledSkills().find((item) => item.name === invocation[1]!.slice(6));
+            if (!skill) return { success: false, code: "unknown_skill", error: "Skill is unavailable under the current policy" };
+            message = formatSkillInvocation(skill, invocation[2]);
+          } else if (invocation) {
+            const template = this.promptTemplates.find((item) => item.name === invocation[1]);
+            if (template) message = formatPromptTemplateInvocation(template, parseCommandArgs(invocation[2] ?? ""));
+          }
           const clientMessageId = typeof params.client_message_id === "string" ? params.client_message_id : undefined;
           const operationId = clientMessageId
             ? promptOperationId(this.sessionId, clientMessageId) : undefined;
@@ -271,7 +291,10 @@ export class SessionRuntime {
         }
         case "get_available_models":
           return { success: true, data: { models: await agentModelCatalog(this.models) } };
-        case "get_commands": return { success: true, data: { commands: [] } };
+        case "get_commands": return { success: true, data: { commands: [
+          ...this.enabledSkills().map((skill) => ({ name: `skill:${skill.name}`, description: skill.description, source: "skill", group: "skill" })),
+          ...this.promptTemplates.map((template) => ({ name: template.name, description: template.description ?? "", source: "prompt", group: "utility" })),
+        ] } };
         case "get_skills": return { success: true, data: { skills: this.skillStatus(), policy: this.skillPolicy } };
         case "set_skill_policy": {
           const policy = params.policy as RuntimeSkillPolicy | undefined;
@@ -280,18 +303,19 @@ export class SessionRuntime {
             return { success: false, code: "invalid_skill_policy", error: "invalid skill policy" };
           }
           this.skillPolicy = policy;
-          await this.harness.setResources({ skills: this.enabledSkills() }, context);
+          await this.harness.setResources({ skills: this.enabledSkills(), promptTemplates: this.promptTemplates }, context);
           return { success: true, data: { skills: this.skillStatus(), policy } };
         }
         case "refresh_skills": {
           this.allSkills = (await loadSkills(this.executionEnv, this.skillPaths, context)).skills;
-          await this.harness.setResources({ skills: this.enabledSkills() }, context);
+          this.promptTemplates = (await loadPromptTemplates(this.executionEnv, join(this.executionEnv.cwd, ".pi", "prompts"), context)).promptTemplates;
+          await this.harness.setResources({ skills: this.enabledSkills(), promptTemplates: this.promptTemplates }, context);
           return { success: true, data: { skills: this.skillStatus(), policy: this.skillPolicy } };
         }
         case "get_entries": return { success: true, data: { entries: await this.lane.findEntries(undefined, context) } };
-        case "get_messages": return { success: true, data: { messages: (await this.lane.findEntries(undefined, context)).filter((entry) => entry.type === "message") } };
+        case "get_messages": return { success: true, data: { messages: (await this.lane.findEntries({ order: "oldestFirst" }, context)).filter((entry) => entry.type === "message") } };
         case "get_last_assistant_text": {
-          const entries = await this.lane.findEntries(undefined, context);
+          const entries = await this.lane.findEntries({ order: "oldestFirst" }, context);
           const assistant = entries.findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
           const content = assistant?.type === "message" && assistant.message.role === "assistant" ? assistant.message.content : [];
           return { success: true, data: { text: content.filter((part) => part.type === "text").map((part) => part.text).join("") } };
@@ -311,6 +335,10 @@ export class SessionRuntime {
           return { success: true, data: { sessionId: id }, sessionId: id };
         }
         case "get_session_stats": return { success: true, data: (await this.watch.resnapshot(context)).stats };
+        case "get_operation_result": {
+          if (typeof params.operationId !== "string") return { success: false, code: "invalid_operation", error: "operationId is required" };
+          return { success: true, data: await this.lane.getResult(params.operationId, context) };
+        }
         case "set_session_name": {
           const name = params.name;
           await this.harness.setName(typeof name === "string" ? name : undefined, context);
@@ -366,6 +394,7 @@ export class SessionRuntime {
   }
 
   notify(type: string, params: Record<string, unknown>): RuntimeResult {
+    if (type === "subagent_response") return this.subagents?.respond(params) ?? { success: false };
     return this.interactions.notify(type, params);
   }
 
@@ -380,6 +409,7 @@ export class SessionRuntime {
   }
 
   async close(): Promise<void> {
+    this.subagents?.close();
     if (this.closed) return;
     this.closed = true;
     this.interactions.close();

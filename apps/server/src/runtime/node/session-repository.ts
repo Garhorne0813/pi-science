@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { join, relative, resolve } from "node:path";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
+import { boundedToolDetails } from "./message-details.js";
 import { readProject } from "../../project/project-registry.js";
 import { isAiTitlePrompt } from "../title/title-prompt.js";
 import { metadataRoot } from "../../storage/persistence.js";
@@ -132,7 +133,6 @@ async function messageBoundaryHash(path: string, offset: number): Promise<string
   }
 }
 
-const MAX_TOOL_DETAILS_BYTES = 100_000;
 
 function parseMessageLine(line: string): SessionMessageRecord | null {
   if (!line.trim()) return null;
@@ -159,11 +159,8 @@ function parseMessageLine(line: string): SessionMessageRecord | null {
       ...(typeof message.sequence === "number" && Number.isInteger(message.sequence) && message.sequence >= 0 ? { sequence: message.sequence } : {}),
       ...(message.classificationSource === "explicit" || message.classificationSource === "legacy_inferred" || message.classificationSource === "unknown" ? { classificationSource: message.classificationSource } : {}),
     };
-    if (message.details !== undefined) {
-      try {
-        if (JSON.stringify(message.details).length <= MAX_TOOL_DETAILS_BYTES) record.details = message.details;
-      } catch { /* non-serializable details are dropped */ }
-    }
+    const details = boundedToolDetails(message.details);
+    if (details !== undefined) record.details = details;
     return record;
   } catch {
     return null;

@@ -18,6 +18,8 @@ import { AgentRuntimeExitedError, AgentRuntimeTimeoutError } from "./agent-runti
 import { AgentSessionRegistry } from "./agent-session-registry.js";
 import { DurableTurnLifecycle } from "../artifacts/turn-lifecycle.js";
 import { promptOperationId } from "./agent-message.js";
+import { createReadStream } from "node:fs";
+import { createInterface } from "node:readline";
 
 type Live = { key: string; runtime: AgentCoreRuntimeClient; busy: boolean; restartPending: boolean; model: string; thinking: string | null;
   config: PiConfig; eventSequence: number; expectedOperationId?: string; watchdog?: NodeJS.Timeout; suppressRecovery?: boolean };
@@ -133,7 +135,27 @@ export class AgentCoreSessionService {
     const temporary = `${destination}.${randomUUID()}.tmp`;
     try {
       await copyFile(source, temporary);
+      // Validate the complete copied file before granting durable ownership.
+      // Core tolerates damaged JSONL tails during ordinary crash recovery; an
+      // explicit migration must reject corruption rather than silently drop it.
+      let expectedMessages = 0;
+      const ids = new Set<string>();
+      const lines = createInterface({ input: createReadStream(temporary), crlfDelay: Infinity });
+      try {
+        for await (const line of lines) {
+          if (!line.trim()) continue;
+          const entry = JSON.parse(line) as { type?: string; id?: string; parentId?: string | null };
+          if (entry.type === "session") continue;
+          if (typeof entry.id !== "string" || ids.has(entry.id)) throw new Error("Legacy transcript has missing or duplicate entry IDs");
+          if (entry.parentId && !ids.has(entry.parentId)) throw new Error("Legacy transcript has a missing parent entry");
+          ids.add(entry.id);
+          if (entry.type === "message") expectedMessages++;
+        }
+      } finally { lines.close(); }
       await rename(temporary, destination);
+      const imported = await this.repository.messages(cwd, sessionId);
+      if (imported.length !== expectedMessages) throw new Error("Legacy import did not preserve every message");
+      await this.repository.runtimeState(cwd, sessionId);
       await writeJsonAtomic(configPath(cwd, sessionId), { skills: config.skills, model_context_window_override: config.model_context_window_override });
       await this.registry.register(cwd, sessionId, destination, source);
     } catch (error) {
@@ -502,6 +524,7 @@ export class AgentCoreSessionService {
     for (const item of this.live.values()) this.events.expectExit(item.runtime);
     await this.manager.shutdownAll();
     this.live.clear();
+    await this.events.flush();
   }
 
   get processCount(): number { return this.manager.processCount; }

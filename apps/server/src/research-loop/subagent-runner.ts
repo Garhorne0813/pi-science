@@ -4,18 +4,19 @@ import { join } from "node:path";
 import { researchAgentResultSchema } from "@pi-science/contracts";
 import { metadataRoot } from "../storage/persistence.js";
 import { PiManager, piManager } from "../runtime/pi/pi-manager.js";
-import type { PiProcess, PiEvent } from "../runtime/pi/pi-process.js";
+import type { PiEvent } from "../runtime/pi/pi-process.js";
+import type { RunnerTransport as AgentRuntime } from "../runtime/agent/runner-transport.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "../runtime/pi/pi-runtime-launch.js";
 import type { WorkspaceEnvironmentService } from "../runtime/workspace/workspace-environment.js";
 import type { AgentRunRequest, AgentRunResult, AgentRunUsage, ResearchSubagentRunner } from "./types.js";
 
-type ActiveRun = { managerKey: string; process: PiProcess; state: "running" | "completed" | "failed"; usage: AgentRunUsage };
+type ActiveRun = { managerKey: string; process: AgentRuntime; state: "running" | "completed" | "failed"; usage: AgentRunUsage };
 
 export class PiResearchSubagentRunner implements ResearchSubagentRunner {
   private readonly active = new Map<string, ActiveRun>();
 
   constructor(
-    private readonly environments: Pick<WorkspaceEnvironmentService, "environment">,
+    protected readonly environments: Pick<WorkspaceEnvironmentService, "environment">,
     private readonly manager: PiManager = piManager,
   ) {}
 
@@ -23,17 +24,8 @@ export class PiResearchSubagentRunner implements ResearchSubagentRunner {
     const runId = request.operation_id || `agent-${randomUUID().replaceAll("-", "").slice(0, 16)}`;
     const cwd = String(request.context.cwd ?? "");
     if (!cwd) throw new Error("research subagent context is missing cwd");
-    const sessionDir = join(metadataRoot(cwd), "research-sessions", request.loop.loop_id);
-    await mkdir(sessionDir, { recursive: true });
-    const options = buildPiProcessOptions(cwd, loadDefaultPiConfig(), undefined, await this.environments.environment(cwd));
-    if (!options) throw new Error("Pi CLI is not configured");
-    const index = options.args.indexOf("--session-dir");
-    if (index >= 0) options.args[index + 1] = sessionDir;
-    if (options.web) options.web.runtime.sessionDir = sessionDir;
-    options.requestTimeoutMs = 30_000;
-
     const managerKey = `research:${runId}`;
-    const process = await this.manager.start(managerKey, options);
+    const process = await this.startProcess(cwd, managerKey, request.loop.loop_id);
     const active: ActiveRun = { managerKey, process, state: "running", usage: { model_tokens: 0, cost_usd: 0 } };
     this.active.set(runId, active);
     let text = "";
@@ -59,6 +51,7 @@ export class PiResearchSubagentRunner implements ResearchSubagentRunner {
     });
     process.once("exit", () => rejectCycle?.(new Error("research supervisor exited before completing")));
 
+    let promptIndex = 0;
     const promptAndWait = async (message: string): Promise<string> => {
       text = "";
       const completed = new Promise<void>((resolvePrompt, rejectPrompt) => {
@@ -75,7 +68,8 @@ export class PiResearchSubagentRunner implements ResearchSubagentRunner {
         settle = () => finish();
         rejectCycle = (error) => finish(error);
       });
-      const acknowledged = await process.sendCommand("prompt", { message });
+      const acknowledged = await process.sendCommand("prompt", { message,
+        ...(process.durablePrompts ? { client_message_id: `${managerKey}:${promptIndex++}` } : {}) });
       if (!acknowledged.success) {
         rejectCycle?.(new Error(String(acknowledged.error ?? "research supervisor rejected prompt")));
       }
@@ -108,7 +102,7 @@ export class PiResearchSubagentRunner implements ResearchSubagentRunner {
     } finally {
       process.removeAllListeners("event");
       process.removeAllListeners("exit");
-      await this.manager.stop(managerKey).catch(() => undefined);
+      await this.stopProcess(managerKey).catch(() => undefined);
       this.trimRuns();
     }
   }
@@ -126,11 +120,25 @@ export class PiResearchSubagentRunner implements ResearchSubagentRunner {
     const run = this.active.get(runId);
     if (!run || run.state !== "running") return;
     run.state = "failed";
-    await this.manager.stop(run.managerKey);
+    await this.stopProcess(run.managerKey);
   }
 
+  protected async startProcess(cwd: string, managerKey: string, owner: string): Promise<AgentRuntime> {
+    const sessionDir = join(metadataRoot(cwd), "research-sessions", owner);
+    await mkdir(sessionDir, { recursive: true });
+    const options = buildPiProcessOptions(cwd, loadDefaultPiConfig(), undefined, await this.environments.environment(cwd));
+    if (!options) throw new Error("Pi CLI is not configured");
+    const index = options.args.indexOf("--session-dir");
+    if (index >= 0) options.args[index + 1] = sessionDir;
+    if (options.web) options.web.runtime.sessionDir = sessionDir;
+    options.requestTimeoutMs = 30_000;
+    return this.manager.start(managerKey, options);
+  }
+
+  protected stopProcess(key: string): Promise<void> { return this.manager.stop(key); }
+
   async shutdown(): Promise<void> {
-    await Promise.allSettled([...this.active.values()].filter((run) => run.state === "running").map((run) => this.manager.stop(run.managerKey)));
+    await Promise.allSettled([...this.active.values()].filter((run) => run.state === "running").map((run) => this.stopProcess(run.managerKey)));
   }
 
   private trimRuns(): void {

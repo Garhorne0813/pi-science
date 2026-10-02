@@ -40,6 +40,7 @@ function service() {
 }
 
 async function legacyWorkspace() {
+  vi.stubEnv("PI_SCIENCE_AGENT_CORE_MIGRATE_LEGACY", "1");
   const cwd = await workspace();
   const id = "legacy-delete-regression";
   const source = workspaceFile(cwd, "sessions/legacy.jsonl");

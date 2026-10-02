@@ -915,6 +915,7 @@ export class NodeSessionService {
 
   private async maybeImportLegacy(cwd: string, sessionId: string): Promise<RuntimeResult | null> {
     if (process.env.PI_SCIENCE_AGENT_RUNTIME !== "agent-core") return null;
+    if (process.env.PI_SCIENCE_AGENT_CORE_MIGRATE_LEGACY !== "1") return null;
     if (await this.agentCore.owns(cwd, sessionId)) return null;
     return this.withLock(`agent-import:${runtimeKey(cwd, sessionId)}`, async () => {
       if (await this.agentCore.owns(cwd, sessionId)) return null;

@@ -69,7 +69,7 @@ export class AgentCoreEventAdapter {
       this.toolArgs.delete(event.toolCallId);
       toolEnd = [{ type: "tool_execution_end", runId: event.runId, turnId: event.turnId,
         toolCallId: event.toolCallId, toolName: event.toolName, args,
-        result: event.result, isError: event.isError }];
+        result: event.result, details: event.result.details, isError: event.isError }];
     }
     if (event.type === "run_start") {
       this.toolArgs.clear();

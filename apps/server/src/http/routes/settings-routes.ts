@@ -273,7 +273,7 @@ async function modelCatalog(nodeSessionService: NodeSessionService, config: Sett
         if (!existing.max_output_tokens) existing.max_output_tokens = source.max_output_tokens;
         if (!Array.isArray(existing.input_formats) || existing.input_formats.length === 0) existing.input_formats = source.input_formats;
       }
-      const customOnly = customModels(config).filter((item) => !runtimeById.has(String(item.id)));
+      const customOnly = agentCore ? [] : customModels(config).filter((item) => !runtimeById.has(String(item.id)));
       return { available: [...runtimeById.values(), ...customOnly], source: "pi" };
     }
   }
@@ -554,6 +554,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       const resourceModels = await modelResources.listModels();
       const projected = resourceModels
         .filter((item) => item.provider_id.startsWith("user-") && item.available)
+        .filter((item) => process.env.PI_SCIENCE_AGENT_RUNTIME !== "agent-core" || catalog.available.some((model) => model.id === item.id))
         .map((item) => ({
           id: item.id,
           provider: item.provider_id,
@@ -569,6 +570,10 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
           availability_reason: item.availability_reason,
         }));
       available = mergeModelCatalog(available, projected);
+      if (process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core") available = available.map((item) => {
+        const actual = catalog.available.find((model) => model.id === item.id);
+        return actual ? { ...item, thinking_levels: actual.thinking_levels, reasoning: actual.reasoning, context_window: actual.context_window } : item;
+      });
     }
     const configured = typeof config.model === "string" && available.some((item) => item.id === config.model) ? config.model : "";
     const unavailableModel = typeof config.model === "string" && config.model && !configured ? config.model : null;
@@ -715,7 +720,10 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       const canonicalModel = canonicalState?.aliases[model] ?? model;
       const selected = (await modelResources.listModels({ available: true })).find((item) => item.id === canonicalModel);
       if (model && !selected) return reply.code(422).send({ code: "no_routable_endpoint", error: "Model is not available from a configured provider" });
-      let levels = normalizeThinkingLevels(selected?.capabilities.thinking_levels);
+      const coreModel = process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core"
+        ? (await agentModelCatalog()).map(normalizePiModel).find((item) => item?.id === canonicalModel) : undefined;
+      if (model && process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core" && !coreModel) return reply.code(422).send({ code: "unsupported_runtime_model", error: "Model is unavailable in agent-core" });
+      let levels = normalizeThinkingLevels(coreModel?.thinking_levels ?? selected?.capabilities.thinking_levels);
       let runtimeLevelsVerified = false;
       if (cwdValue && canonicalModel) {
         const actual = await nodeSessionService.availableThinkingLevels(cwdValue, canonicalModel).catch(() => null);

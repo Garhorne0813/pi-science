@@ -4,6 +4,9 @@ import type { RuntimeSettings } from "../agent-runtime-settings.js";
 export interface AgentRuntimeStartOptions {
   cwd: string;
   sessionId?: string;
+  parentSessionId?: string;
+  depth?: number;
+  allowedTools?: string[];
   sessionsRoot: string;
   model: { provider: string; modelId: string };
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";

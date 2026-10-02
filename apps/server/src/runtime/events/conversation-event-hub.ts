@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { boundedToolDetails } from "../node/message-details.js";
 import { resolve } from "node:path";
 import { durableEventStore, type EventPublishGuard, type SseEventRecord } from "./event-store.js";
 import type { RuntimeEvent as PiEvent, RuntimeEventSource } from "../agent/agent-runtime-types.js";
@@ -421,6 +422,7 @@ export class ConversationEventHub {
   private readonly subscribers = new Map<string, Set<Subscriber>>();
   private readonly pendingInteractions = new Map<string, SseEventRecord[]>();
   private readonly publishing = new Map<string, Promise<void>>();
+  private readonly observing = new Set<Promise<void>>();
   private readonly pendingText = new Map<string, PendingText>();
   private readonly turns = new Map<string, TurnState>();
   private readonly bound = new WeakSet<RuntimeEventSource>();
@@ -443,8 +445,17 @@ export class ConversationEventHub {
     // Process exit handlers append terminal records through their event queue.
     // Yield once so those publishes are registered before taking the snapshot.
     await new Promise<void>((resolve) => setImmediate(resolve));
-    await Promise.all([...this.pendingText.values()].map((pending) => this.flushPendingText(pending.cwd, pending.sessionId)));
-    await Promise.allSettled([...this.publishing.values()]);
+    do {
+      await Promise.allSettled([...this.observing]);
+      await Promise.all([...this.pendingText.values()].map((pending) => this.flushPendingText(pending.cwd, pending.sessionId)));
+      await Promise.allSettled([...this.publishing.values()]);
+    } while (this.observing.size || this.publishing.size || this.pendingText.size);
+  }
+
+  private trackObservation(pending: Promise<void>): void {
+    this.observing.add(pending);
+    const done = () => this.observing.delete(pending);
+    void pending.then(done, done);
   }
 
   expectExit(process: RuntimeEventSource): void {
@@ -544,6 +555,7 @@ export class ConversationEventHub {
         }
         await Promise.resolve(options.observe?.(event, sessionId, identity)).catch(() => undefined);
       });
+      this.trackObservation(eventQueue);
     });
     process.on("exit", ({ code, signal }: { code: number | null; signal: NodeJS.Signals | null }) => {
       const sessionId = options.activeSessionId();
@@ -557,7 +569,7 @@ export class ConversationEventHub {
         .map((item) => item.text)
         .join("");
       const suffix = recentStderr ? `\n${cap(recentStderr, 8_000)}` : "";
-      void eventQueue.catch(() => undefined).then(async () => {
+      const terminal = eventQueue.catch(() => undefined).then(async () => {
         await this.publish(cwd, sessionId, {
           type: "error",
           sessionId,
@@ -566,6 +578,7 @@ export class ConversationEventHub {
         });
         await this.publish(cwd, sessionId, { type: "session.idle", sessionId });
       });
+      this.trackObservation(terminal);
     });
   }
 
@@ -975,7 +988,7 @@ export class ConversationEventHub {
           output: output.text,
           ...(output.truncated ? { outputTruncated: true, originalOutputBytes: output.originalBytes } : {}),
           ...(presentation ? { presentation: safeValue(presentation) } : {}),
-          ...(event.details === undefined ? {} : { details: safeValue(event.details) }),
+          ...(event.details === undefined ? {} : { details: tool === "todo" ? boundedToolDetails(event.details) : safeValue(event.details) }),
           endedAt: new Date().toISOString(),
         });
         return records;

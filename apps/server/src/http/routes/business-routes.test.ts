@@ -247,7 +247,8 @@ describe("native control-plane business routes", () => {
     expect(response.json().available_models).toEqual([expect.objectContaining({ id: "deepseek/deepseek-v4-pro" })]);
     const rejected = await app.inject({ method: "PUT", url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
       payload: { model: "deepseek/deepseek-v4-flash", thinking: "high" } });
-    expect(rejected.statusCode).toBe(400);
+    expect(rejected.statusCode).toBe(422);
+    expect(rejected.json()).toMatchObject({ error: expect.any(String) });
   });
 
   it("clamps a saved thinking level to the selected model's supported levels", async () => {

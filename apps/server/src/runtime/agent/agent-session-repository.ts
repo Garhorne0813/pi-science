@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { boundedToolDetails } from "../node/message-details.js";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv, laneConfig, type Entry, type JsonlSessionMetadata, type LaneConfiguration } from "@earendil-works/pi-agent-core/node";
 import { AgentSessionRegistry } from "./agent-session-registry.js";
@@ -23,6 +24,7 @@ function asMessage(entry: Entry): SessionMessageRecord | null {
     ...(typeof message.toolCallId === "string" ? { toolCallId: message.toolCallId } : {}),
     ...(typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
     ...(typeof message.isError === "boolean" ? { isError: message.isError } : {}),
+    ...(boundedToolDetails(message.details) === undefined ? {} : { details: boundedToolDetails(message.details) }),
     timestamp: new Date(entry.timestamp).toISOString(),
   };
 }
@@ -78,7 +80,10 @@ export class AgentSessionRepository {
     const project = await readProject(cwd);
     const registered = await this.registry.all(cwd);
     return this.withRepo(cwd, async (repo) => (await repo.list({ cwd }, context))
-      .filter((item) => !item.parentSessionId && (!Object.hasOwn(registered, item.id) || registered[item.id]?.state !== "deleted"))
+      .filter((item) => {
+        const owner = Object.hasOwn(registered, item.id) ? registered[item.id] : undefined;
+        return owner?.state !== "deleted" && (owner ? (owner.purpose ?? "conversation") === "conversation" : !item.parentSessionId);
+      })
       .map((item) => ({
         id: item.id,
         cwd,

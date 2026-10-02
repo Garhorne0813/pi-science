@@ -45,7 +45,7 @@ export async function observeNodePiEvent(
   publish: Publish,
 ): Promise<void> {
   if (["agent_start", "agent_end", "agent_settled", "error"].includes(event.type)) {
-    void serialized(workspaceFile(cwd, "skill-events.jsonl"), () => appendJsonLine(workspaceFile(cwd, "skill-events.jsonl"), {
+    await serialized(workspaceFile(cwd, "skill-events.jsonl"), () => appendJsonLine(workspaceFile(cwd, "skill-events.jsonl"), {
       type: "skill_event", session_id: sessionId, ts: Date.now() / 1000, event: event.type,
     })).catch(() => undefined);
   }
@@ -66,7 +66,7 @@ export async function observeNodePiEvent(
     }
   }
   if (event.type === "tool_execution_end") {
-    void serialized(workspaceFile(cwd, "skill-events.jsonl"), () => appendJsonLine(workspaceFile(cwd, "skill-events.jsonl"), {
+    await serialized(workspaceFile(cwd, "skill-events.jsonl"), () => appendJsonLine(workspaceFile(cwd, "skill-events.jsonl"), {
       type: "skill_event", session_id: sessionId, ts: Date.now() / 1000, event: "tool",
       tool: String(event.toolName ?? ""), status: event.isError ? "error" : "ok",
     })).catch(() => undefined);

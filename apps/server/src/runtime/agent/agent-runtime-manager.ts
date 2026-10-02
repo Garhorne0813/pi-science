@@ -3,6 +3,15 @@ import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { metadataRoot } from "../../storage/persistence.js";
 import { AgentCoreRuntimeClient } from "./agent-runtime-client.js";
 import type { AgentRuntimeStartOptions } from "./worker/protocol.js";
+import { bindSubagentDispatch } from "./subagent-dispatch.js";
+
+// Includes pending starts and workers belonging to every app-owned manager.
+const capacity = new Set<symbol>();
+const processOwners = new Map<string, symbol>();
+function workerLimit(): number {
+  const value = Number(process.env.PI_SCIENCE_AGENT_MAX_WORKERS ?? 16);
+  return Number.isSafeInteger(value) && value > 0 ? value : 16;
+}
 
 function sessionKey(cwd: string, sessionId: string): string {
   return `${resolve(cwd)}\0${sessionId}`;
@@ -69,8 +78,29 @@ export class AgentRuntimeManager {
   get processCount(): number { return this.runtimes.size; }
 
   private async startOnce(key: string, options: AgentRuntimeStartOptions, ownerKey: string): Promise<AgentCoreRuntimeClient> {
-    const runtime = await AgentCoreRuntimeClient.start(options);
+    if (capacity.size >= workerLimit()) throw new Error("Agent worker capacity limit reached");
+    const slot = Symbol(key); capacity.add(slot);
+    const requestedOwner = options.sessionId ? sessionKey(options.cwd, options.sessionId) : undefined;
+    if (requestedOwner && processOwners.has(requestedOwner)) {
+      capacity.delete(slot);
+      throw new Error("Agent session is already owned by another manager");
+    }
+    if (requestedOwner) processOwners.set(requestedOwner, slot);
+    let runtime: AgentCoreRuntimeClient;
+    try { runtime = await AgentCoreRuntimeClient.start({ ...options, deferActivation: true }); }
+    catch (error) { capacity.delete(slot); if (requestedOwner) processOwners.delete(requestedOwner); throw error; }
+    const release = () => {
+      capacity.delete(slot);
+      for (const [identity, owner] of processOwners) if (owner === slot) processOwners.delete(identity);
+    };
+    runtime.once("exit", release);
+    bindSubagentDispatch(this, runtime, options);
     const canonical = sessionKey(options.cwd, runtime.sessionId);
+    if (processOwners.has(canonical) && processOwners.get(canonical) !== slot) {
+      await runtime.shutdown();
+      throw new Error("Agent session is already owned by another manager");
+    }
+    processOwners.set(canonical, slot);
     const otherOwner = this.owners.get(canonical);
     if (otherOwner && otherOwner !== key) {
       await runtime.shutdown();
@@ -82,6 +112,12 @@ export class AgentRuntimeManager {
     runtime.once("exit", () => this.forget(key, runtime));
     runtime.on("event", () => this.scheduleIdleCheck(key, runtime));
     this.scheduleIdleCheck(key, runtime);
+    if (!options.deferActivation) {
+      try {
+        const activated = await runtime.sendCommand("activate");
+        if (!activated.success) throw new Error(activated.error ?? "Unable to activate worker");
+      } catch (error) { await this.stop(key); throw error; }
+    }
     return runtime;
   }
 

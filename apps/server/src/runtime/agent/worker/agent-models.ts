@@ -52,7 +52,7 @@ export function agentModels(settings: RuntimeSettings = {}) {
       const useCapabilities = !base || item.capability_source !== "fallback";
       catalog.push({
         ...(base ?? {}), id: item.model_id, provider: provider.id, name: item.display_name, api,
-        baseUrl: route.base_url,
+        baseUrl: route.api === "ollama" ? `${route.base_url.replace(/\/+$/, "").replace(/\/v1$/, "")}/v1` : route.base_url,
         reasoning: useCapabilities ? caps.reasoning : base!.reasoning,
         input: useCapabilities ? ["text", ...(caps.vision ? ["image" as const] : [])] : base!.input,
         contextWindow: useCapabilities ? caps.context_window ?? base?.contextWindow ?? 128000 : base!.contextWindow,

@@ -2,7 +2,8 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { metadataRoot } from "../storage/persistence.js";
 import { PiManager, piManager } from "../runtime/pi/pi-manager.js";
-import type { PiProcess, PiEvent } from "../runtime/pi/pi-process.js";
+import type { PiEvent } from "../runtime/pi/pi-process.js";
+import type { RunnerTransport as AgentRuntime } from "../runtime/agent/runner-transport.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "../runtime/pi/pi-runtime-launch.js";
 import type { WorkspaceEnvironmentService } from "../runtime/workspace/workspace-environment.js";
 import { knowledgeTypes, parseReviewResult, type ConversationExcerpt, type ReviewRunRequest, type ReviewRunResult, type ReviewSubagentRunner } from "./types.js";
@@ -15,25 +16,16 @@ const REPAIR_ATTEMPTS = 1;
  *  sibling of the research-loop runner rather than a shared abstraction: the
  *  two have different lifecycles (one-shot vs. long-lived loop). */
 export class PiReviewSubagentRunner implements ReviewSubagentRunner {
-  private readonly active = new Map<PiProcess, string>();
+  private readonly active = new Map<AgentRuntime, string>();
 
   constructor(
-    private readonly environments: Pick<WorkspaceEnvironmentService, "environment">,
+    protected readonly environments: Pick<WorkspaceEnvironmentService, "environment">,
     private readonly manager: PiManager = piManager,
   ) {}
 
   async run(request: ReviewRunRequest): Promise<ReviewRunResult> {
-    const sessionDir = join(metadataRoot(request.cwd), "review-sessions", request.run_id);
-    await mkdir(sessionDir, { recursive: true });
-    const options = buildPiProcessOptions(request.cwd, loadDefaultPiConfig(), undefined, await this.environments.environment(request.cwd));
-    if (!options) throw new Error("Pi CLI is not configured");
-    const index = options.args.indexOf("--session-dir");
-    if (index >= 0) options.args[index + 1] = sessionDir;
-    if (options.web) options.web.runtime.sessionDir = sessionDir;
-    options.requestTimeoutMs = 30_000;
-
     const managerKey = `review:${request.run_id}`;
-    const process = await this.manager.start(managerKey, options);
+    const process = await this.startProcess(request.cwd, managerKey, request.run_id);
     this.active.set(process, managerKey);
     const deadline = Date.now() + RUN_TIMEOUT_MS;
     let text = "";
@@ -51,6 +43,7 @@ export class PiReviewSubagentRunner implements ReviewSubagentRunner {
     });
     process.once("exit", () => rejectCycle?.(new Error("project reviewer exited before completing")));
 
+    let promptIndex = 0;
     const promptAndWait = async (message: string): Promise<string> => {
       text = "";
       const completed = new Promise<void>((resolvePrompt, rejectPrompt) => {
@@ -67,7 +60,8 @@ export class PiReviewSubagentRunner implements ReviewSubagentRunner {
         settle = () => finish();
         rejectCycle = (error) => finish(error);
       });
-      const acknowledged = await process.sendCommand("prompt", { message });
+      const acknowledged = await process.sendCommand("prompt", { message,
+        ...(process.durablePrompts ? { client_message_id: `${managerKey}:${promptIndex++}` } : {}) });
       if (!acknowledged.success) rejectCycle?.(new Error(String(acknowledged.error ?? "project reviewer rejected prompt")));
       await completed;
       return text;
@@ -91,12 +85,26 @@ export class PiReviewSubagentRunner implements ReviewSubagentRunner {
       process.removeAllListeners("event");
       process.removeAllListeners("exit");
       this.active.delete(process);
-      await this.manager.stop(managerKey).catch(() => undefined);
+      await this.stopProcess(managerKey).catch(() => undefined);
     }
   }
 
+  protected async startProcess(cwd: string, managerKey: string, owner: string): Promise<AgentRuntime> {
+    const sessionDir = join(metadataRoot(cwd), "review-sessions", owner);
+    await mkdir(sessionDir, { recursive: true });
+    const options = buildPiProcessOptions(cwd, loadDefaultPiConfig(), undefined, await this.environments.environment(cwd));
+    if (!options) throw new Error("Pi CLI is not configured");
+    const index = options.args.indexOf("--session-dir");
+    if (index >= 0) options.args[index + 1] = sessionDir;
+    if (options.web) options.web.runtime.sessionDir = sessionDir;
+    options.requestTimeoutMs = 30_000;
+    return this.manager.start(managerKey, options);
+  }
+
+  protected stopProcess(key: string): Promise<void> { return this.manager.stop(key); }
+
   async shutdown(): Promise<void> {
-    await Promise.allSettled([...this.active.values()].map((managerKey) => this.manager.stop(managerKey)));
+    await Promise.allSettled([...this.active.values()].map((managerKey) => this.stopProcess(managerKey)));
     this.active.clear();
   }
 }
