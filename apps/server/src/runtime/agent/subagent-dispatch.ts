@@ -19,7 +19,13 @@ const builtin: Record<string, string> = {
 };
 
 /** Child requests travel over the owning worker's authenticated IPC connection. */
-export function bindSubagentDispatch(manager: AgentRuntimeManager, parent: AgentCoreRuntimeClient, options: AgentRuntimeStartOptions): void {
+export function bindSubagentDispatch(manager: AgentRuntimeManager, parent: AgentCoreRuntimeClient, options: AgentRuntimeStartOptions): () => Promise<void> {
+  const pending = new Set<Promise<unknown>>();
+  const track = (value: Promise<unknown>) => {
+    pending.add(value);
+    const done = () => pending.delete(value);
+    void value.then(done, done);
+  };
   const active = new Map<string, Set<string>>();
   const cancelled = new Set<string>();
   const cancel = async (id: string) => {
@@ -27,10 +33,10 @@ export function bindSubagentDispatch(manager: AgentRuntimeManager, parent: Agent
     const keys = active.get(id);
     if (keys) await Promise.allSettled([...keys].map((key) => manager.stop(key)));
   };
-  parent.once("exit", () => { void Promise.allSettled([...active.keys()].map(cancel)); });
+  parent.once("exit", () => { track(Promise.allSettled([...active.keys()].map(cancel))); });
   parent.on("event", (event: RuntimeEvent) => {
     const id = String(event.id ?? "");
-    if (event.type === "subagent_cancel") { void cancel(id); return; }
+    if (event.type === "subagent_cancel") { track(cancel(id)); return; }
     if (event.type !== "subagent_request") return;
     const run = async () => {
       if ((options.depth ?? 0) >= 2) throw new Error("Subagent depth limit reached");
@@ -101,7 +107,10 @@ export function bindSubagentDispatch(manager: AgentRuntimeManager, parent: Agent
           })) } };
       } finally { active.delete(id); cancelled.delete(id); }
     };
-    void run().then((data) => parent.sendNotification("subagent_response", { id, result: { success: true, data } }),
-      (error) => parent.sendNotification("subagent_response", { id, result: { success: false, error: String(error) } })).catch(() => undefined);
+    track(run().then((data) => parent.sendNotification("subagent_response", { id, result: { success: true, data } }),
+      (error) => parent.sendNotification("subagent_response", { id, result: { success: false, error: String(error) } })).catch(() => undefined));
   });
+  return async () => {
+    while (pending.size) await Promise.allSettled([...pending]);
+  };
 }

@@ -30,6 +30,7 @@ export class AgentRuntimeManager {
   private readonly pendingStarts = new Map<string, Promise<AgentCoreRuntimeClient>>();
   private readonly owners = new Map<string, string>();
   private readonly idleTimers = new Map<string, NodeJS.Timeout>();
+  private readonly dispatchDrains = new Map<AgentCoreRuntimeClient, () => Promise<void>>();
 
   async start(key: string, options: AgentRuntimeStartOptions): Promise<AgentCoreRuntimeClient> {
     const cwd = await validateWorkspaceCwd(options.cwd);
@@ -66,13 +67,18 @@ export class AgentRuntimeManager {
     if (!runtime) return;
     this.forget(key, runtime);
     await runtime.shutdown();
+    await this.dispatchDrains.get(runtime)?.();
   }
 
   async shutdownAll(): Promise<void> {
     await Promise.allSettled(this.pendingStarts.values());
     const entries = [...this.runtimes.entries()];
     for (const [key, runtime] of entries) this.forget(key, runtime);
-    await Promise.allSettled(entries.map(([, runtime]) => runtime.shutdown()));
+    await Promise.allSettled(entries.map(async ([, runtime]) => {
+      await runtime.shutdown();
+      await this.dispatchDrains.get(runtime)?.();
+    }));
+    await Promise.allSettled([...this.dispatchDrains.values()].map((drain) => drain()));
   }
 
   get processCount(): number { return this.runtimes.size; }
@@ -94,7 +100,12 @@ export class AgentRuntimeManager {
       for (const [identity, owner] of processOwners) if (owner === slot) processOwners.delete(identity);
     };
     runtime.once("exit", release);
-    bindSubagentDispatch(this, runtime, options);
+    const drain = bindSubagentDispatch(this, runtime, options);
+    this.dispatchDrains.set(runtime, drain);
+    runtime.once("exit", () => {
+      const done = () => this.dispatchDrains.delete(runtime);
+      void drain().then(done, done);
+    });
     const canonical = sessionKey(options.cwd, runtime.sessionId);
     if (processOwners.has(canonical) && processOwners.get(canonical) !== slot) {
       await runtime.shutdown();

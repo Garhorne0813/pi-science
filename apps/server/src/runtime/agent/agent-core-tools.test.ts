@@ -132,6 +132,44 @@ describe("agent-core product tools", () => {
     await vi.waitFor(() => expect(manager.processCount).toBe(1), { timeout: 5000 });
   }, 20000);
 
+  it("waits for host-side child result persistence before shutdown completes", async () => {
+    const fixture = await modelFixture((_body, index) => index === 1
+      ? { name: "subagent", args: { agent: "planner", task: "Inspect evidence" } } : "Child evidence");
+    const manager = new AgentRuntimeManager(); cleanup.push(() => manager.shutdownAll());
+    const persistence = await import("../../storage/persistence.js");
+    const write = persistence.writeJsonAtomic;
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    let entered = false;
+    const spy = vi.spyOn(persistence, "writeJsonAtomic").mockImplementation(async (path, value) => {
+      if (path.includes("agent-task-results")) { entered = true; await blocked; }
+      await write(path, value);
+    });
+    let shutdown: Promise<void> | undefined;
+    try {
+      const parent = await openHiddenTask(manager, "drain-parent", { cwd: fixture.cwd,
+        sessionsRoot: join(fixture.cwd, ".pi-science", "agent-sessions"), model: fixture.model, thinking: "off" }, "owner");
+      const result = runHiddenPrompt(parent, "Delegate", "drain-once", Date.now() + 10000);
+      void result.catch(() => undefined);
+      await vi.waitFor(() => expect(entered).toBe(true), { timeout: 5000 });
+      expect(await parent.sendCommand("abort")).toMatchObject({ success: true });
+      await expect(result).rejects.toThrow("aborted");
+      let stopped = false;
+      shutdown = manager.shutdownAll().then(() => { stopped = true; });
+      await vi.waitFor(() => expect(parent.isClosed).toBe(true), { timeout: 5000 });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(stopped).toBe(false);
+      release();
+      await shutdown;
+      expect(stopped).toBe(true);
+      expect(manager.processCount).toBe(0);
+    } finally {
+      release();
+      await shutdown;
+      spy.mockRestore();
+    }
+  }, 20000);
+
   it("lists and invokes skills/templates under the current resource policy", async () => {
     const requests: string[] = [];
     const fixture = await modelFixture((body) => { requests.push(JSON.stringify(body.messages)); return "Resource applied"; });
