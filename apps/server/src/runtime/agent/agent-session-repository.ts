@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { listWorkspaceSessions } from "./workspace-session-identity.js";
 import { boundedToolDetails } from "../node/message-details.js";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv, laneConfig, type Entry, type JsonlSessionMetadata, type LaneConfiguration } from "@earendil-works/pi-agent-core/node";
@@ -44,7 +45,7 @@ export class AgentSessionRepository {
 
   private async metadata(repo: JsonlSessionRepo, cwd: string, sessionId: string): Promise<JsonlSessionMetadata | undefined> {
     if ((await this.registry.get(cwd, sessionId))?.state === "deleted") return undefined;
-    return (await repo.list({ cwd }, context)).find((item) => item.id === sessionId);
+    return (await listWorkspaceSessions(repo, cwd)).find((item) => item.id === sessionId);
   }
 
   async configuration(cwd: string, sessionId: string): Promise<LaneConfiguration | null> {
@@ -79,7 +80,7 @@ export class AgentSessionRepository {
   async list(cwd: string): Promise<SessionInfoRecord[]> {
     const project = await readProject(cwd);
     const registered = await this.registry.all(cwd);
-    return this.withRepo(cwd, async (repo) => (await repo.list({ cwd }, context))
+    return this.withRepo(cwd, async (repo) => (await listWorkspaceSessions(repo, cwd))
       .filter((item) => {
         const owner = Object.hasOwn(registered, item.id) ? registered[item.id] : undefined;
         return owner?.state !== "deleted" && (owner ? (owner.purpose ?? "conversation") === "conversation" : !item.parentSessionId);

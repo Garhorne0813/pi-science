@@ -79,7 +79,7 @@ describe("agent-core product turns", () => {
     const records = await turnArtifactRepository.forSession(cwd, id);
     expect(records).toHaveLength(1);
     expect(records[0]?.artifacts).toEqual([expect.objectContaining({ path: "result.txt" })]);
-    expect(review.run).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(review.run).toHaveBeenCalledOnce(), { timeout: 5000 });
     expect(await service.stats(id, cwd)).toMatchObject({ stats: { userMessages: 1, toolCalls: 1, toolResults: 1, tokens: { total: 220 } } });
     const runtime = core.liveRuntime(cwd)!;
     runtime.emit("event", { type: "agent_start", runId: records[0]!.turn_id, turnId: records[0]!.turn_id, recovery: true });
@@ -87,7 +87,7 @@ describe("agent-core product turns", () => {
     await vi.waitFor(() => expect(events.filter((event) => event.type === "session.stats").length).toBeGreaterThan(4));
     expect(await turnArtifactRepository.forSession(cwd, id)).toHaveLength(1);
     expect(events.filter((event) => event.type === "turn.artifacts")).toHaveLength(1);
-    expect(review.run).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(review.run).toHaveBeenCalledOnce(), { timeout: 5000 });
   }, 20000);
 
   it("automatically reopens a killed worker and resumes one durable prompt", async () => {
@@ -114,7 +114,7 @@ describe("agent-core product turns", () => {
     await vi.waitFor(() => expect(events.some((event) => event.type === "turn.artifacts")).toBe(true), { timeout: 5000 });
     expect(core.liveRuntime(cwd)).not.toBe(original);
     expect(await turnArtifactRepository.forSession(cwd, id)).toHaveLength(1);
-    expect(review.run).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(review.run).toHaveBeenCalledOnce(), { timeout: 5000 });
     expect((await new SessionRepository().messages(cwd, id)).filter((message) => message.client_message_id === "lost-settle")).toHaveLength(1);
   }, 20000);
 });

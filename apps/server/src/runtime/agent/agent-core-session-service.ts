@@ -1,5 +1,6 @@
 import type { PiConfig, SessionState, SessionStats } from "@pi-science/contracts";
 import { createHash, randomUUID } from "node:crypto";
+import { workspaceIdentity } from "./workspace-session-identity.js";
 import { copyFile, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,7 +30,7 @@ type ProductHooks = {
   stats?: (cwd: string, sessionId: string, stats: SessionStats) => Promise<SessionStats>;
 };
 
-function identity(cwd: string, id: string): string { return `${resolve(cwd)}\0${id}`; }
+function identity(cwd: string, id: string): string { return `${workspaceIdentity(cwd)}\0${id}`; }
 function configPath(cwd: string, sessionId: string): string {
   return workspaceFile(cwd, `agent-session-config/${createHash("sha256").update(sessionId).digest("hex")}.json`);
 }
@@ -171,12 +172,12 @@ export class AgentCoreSessionService {
   }
 
   liveSessions(cwd: string): Array<{ id: string; cwd: string }> {
-    return [...this.live.values()].filter((item) => item.runtime.cwd === cwd && !item.runtime.isClosed)
+    return [...this.live.values()].filter((item) => workspaceIdentity(item.runtime.cwd) === workspaceIdentity(cwd) && !item.runtime.isClosed)
       .map((item) => ({ id: item.runtime.sessionId, cwd }));
   }
 
   liveRuntime(cwd: string, expectedModel?: string): AgentCoreRuntimeClient | null {
-    return [...this.live.values()].find((item) => item.runtime.cwd === cwd && !item.runtime.isClosed
+    return [...this.live.values()].find((item) => workspaceIdentity(item.runtime.cwd) === workspaceIdentity(cwd) && !item.runtime.isClosed
       && (!expectedModel || item.model === expectedModel))?.runtime ?? null;
   }
 

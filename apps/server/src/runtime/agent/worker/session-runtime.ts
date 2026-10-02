@@ -1,4 +1,5 @@
 import { isAbsolute, join, resolve } from "node:path";
+import { listWorkspaceSessions } from "../workspace-session-identity.js";
 import { AgentHarness, BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv, createBashTool, createEditTool, createReadTool, createWriteTool, laneState, loadSkills, type AgentHarness as Harness, type AgentLane, type JsonlSessionMetadata, type Session, type WatchHandle, type LaneSnapshot, type Skill } from "@earendil-works/pi-agent-core/node";
 import { agentModelCatalog, agentModels } from "./agent-models.js";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
@@ -114,7 +115,7 @@ export class SessionRuntime {
     try {
       const session = options.sessionId
         ? await (async () => {
-            const metadata = (await repo.list({ cwd: options.cwd }, context)).find((item) => item.id === options.sessionId);
+            const metadata = (await listWorkspaceSessions(repo, options.cwd)).find((item) => item.id === options.sessionId);
             if (!metadata) throw new Error(`agent session not found: ${options.sessionId}`);
             return repo.open(metadata, context);
           })()
