@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { decodeCommand, decodeNotification } from "./command-contract.js";
 import { isAbsolute, join, resolve } from "node:path";
 import { listWorkspaceSessions } from "../workspace-session-identity.js";
 import { AgentHarness, BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv, createBashTool, createEditTool, createReadTool, createWriteTool, laneState, loadSkills, type AgentHarness as Harness, type AgentLane, type JsonlSessionMetadata, type Session, type WatchHandle, type LaneSnapshot, type Skill } from "@earendil-works/pi-agent-core/node";
@@ -63,6 +65,7 @@ export class SessionRuntime {
   private subagents?: SubagentBridge;
   private applied!: AppliedRuntimeSettings;
   private models!: ReturnType<typeof agentModels>;
+  private runtimeEpoch = "";
   private eventSequence: () => number = () => 0;
 
   private constructor(
@@ -98,8 +101,9 @@ export class SessionRuntime {
   }
 
   static async open(options: AgentRuntimeStartOptions, publish: (event: RuntimeEvent) => void, fatal: (error: unknown) => void): Promise<SessionRuntime> {
+    const runtimeEpoch = randomUUID();
     let eventSequence = 0;
-    const emit = (event: RuntimeEvent) => publish({ ...event, runtime_sequence: ++eventSequence });
+    const emit = (event: RuntimeEvent) => publish({ ...event, runtime_epoch: runtimeEpoch, runtime_sequence: ++eventSequence });
     if (!isAbsolute(options.cwd) || resolve(options.cwd) !== options.cwd) throw new Error("worker cwd must be absolute and normalized");
     const requiredRoot = join(metadataRoot(options.cwd), "agent-sessions");
     if (resolve(options.sessionsRoot) !== resolve(requiredRoot)) throw new Error("agent sessions root must be workspace-local");
@@ -153,6 +157,7 @@ export class SessionRuntime {
       runtime.promptTemplates = templates.promptTemplates;
       runtime.subagents = subagents;
       runtime.models = models;
+      runtime.runtimeEpoch = runtimeEpoch;
       runtime.eventSequence = () => eventSequence;
       const snapshot = await watch.resnapshot(context);
       const currentModel = models.getModel(snapshot.configuration.model.provider, snapshot.configuration.model.modelId);
@@ -189,6 +194,9 @@ export class SessionRuntime {
   }
 
   async command(type: string, params: Record<string, unknown>): Promise<RuntimeResult> {
+    const decoded = decodeCommand(type, params);
+    if (!decoded.ok) return decoded.result;
+    params = decoded.value.params;
     // Drive/resume run in the background; abort and interaction responses must
     // remain reachable while short admission/configuration mutations serialize.
     if (["abort", "steer", "follow_up"].includes(type)) return this.execute(type, params);
@@ -221,6 +229,7 @@ export class SessionRuntime {
             faulted: snapshot.faulted,
             lastResult: snapshot.lastResult,
             eventSequence: this.eventSequence(),
+            runtimeEpoch: this.runtimeEpoch,
             ...await contextUsage(snapshot.transcript, this.applied.contextWindow),
             compaction: await this.harness.getCompactionSettings(context),
             compaction_threshold_percent: this.applied.thresholdPercent,
@@ -395,6 +404,9 @@ export class SessionRuntime {
   }
 
   notify(type: string, params: Record<string, unknown>): RuntimeResult {
+    const decoded = decodeNotification(type, params);
+    if (!decoded.ok) return decoded.result;
+    params = decoded.value.params;
     if (type === "subagent_response") return this.subagents?.respond(params) ?? { success: false };
     return this.interactions.notify(type, params);
   }

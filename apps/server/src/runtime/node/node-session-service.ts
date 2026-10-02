@@ -6,7 +6,7 @@ import nodeProcess from "node:process";
 import { ConversationEventHub, conversationEventHub } from "../events/conversation-event-hub.js";
 import { durableEventStore } from "../events/event-store.js";
 import { observeNodePiEvent } from "../events/node-event-observer.js";
-import type { AgentRuntime, RuntimeResult, RuntimeSkillPolicy } from "../agent/agent-runtime-types.js";
+import type { RuntimeResult, RuntimeSkillPolicy } from "../agent/agent-runtime-types.js";
 import { OrbitRuntimeAdapter } from "../agent/orbit-runtime-adapter.js";
 import { AgentCoreSessionService } from "../agent/agent-core-session-service.js";
 import { agentModelCatalog, agentModels } from "../agent/worker/agent-models.js";
@@ -39,7 +39,7 @@ type StatsEventStore = {
 type RuntimeRecord = {
   cwd: string;
   managerKey: string;
-  process: AgentRuntime;
+  process: OrbitRuntimeAdapter;
   activeSessionId: string;
   config: PiConfig;
   busy: boolean;
@@ -980,7 +980,7 @@ export class NodeSessionService {
       catch (error) { return { error: `unable to prepare Pi runtime configuration: ${String(error)}`, code: "configuration_failed" }; }
     }
     if (!options) return { error: "PI_CLI_PATH is not configured", code: "spawn_failed" };
-    let process: AgentRuntime;
+    let process: OrbitRuntimeAdapter;
     const managerKey = randomUUID();
     try { process = new OrbitRuntimeAdapter(await this.manager.start(managerKey, options), cwd); }
     catch (error) {
@@ -1438,7 +1438,7 @@ export class NodeSessionService {
    *  switching; the workspace configuration must win on every recovery path.
    *  Fails fast on the first rejected step (after transient busy retries) and
    *  leaves the runtime untouched. */
-  private async replaySessionConfig(process: AgentRuntime, config: PiConfig): Promise<PiResult> {
+  private async replaySessionConfig(process: OrbitRuntimeAdapter, config: PiConfig): Promise<PiResult> {
     const model = config.model ? projectedRuntimeModelRef(config.model) : null;
     if (model?.includes("/")) {
       const separator = model.indexOf("/");
@@ -1461,7 +1461,7 @@ export class NodeSessionService {
    *  absorbs that window. Any other failure (unknown model, unreadable
    *  session) is a config/session error and fails fast — the recovery path
    *  must never silently continue on a model the runtime rejected. */
-  private async sendRecoveryCommand(process: AgentRuntime, type: string, params: Record<string, unknown>): Promise<PiResult> {
+  private async sendRecoveryCommand(process: OrbitRuntimeAdapter, type: string, params: Record<string, unknown>): Promise<PiResult> {
     for (let attempt = 0; ; attempt += 1) {
       const result = await process.sendCommand(type, params);
       if (result.success || (result.code !== "runtime_busy" && result.code !== "busy")) return result;

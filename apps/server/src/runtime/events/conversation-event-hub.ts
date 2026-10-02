@@ -1,3 +1,5 @@
+import type { AssistantContentKind } from "./assistant-content.js";
+import { productInput } from "./legacy-runtime-event.js";
 import { randomUUID } from "node:crypto";
 import { boundedToolDetails } from "../node/message-details.js";
 import { resolve } from "node:path";
@@ -40,6 +42,7 @@ type BindingOptions = {
 type TurnState = {
   hadText: boolean;
   hadError: boolean;
+  lastRuntimeError?: string;
   hadActivity: boolean;
   /** Accumulated assistant content deltas keyed by `${messageKey}:${contentIndex}`.
    *  Text and thinking parts share the map: the content index is unique per part. */
@@ -253,56 +256,6 @@ function eventField(event: PiEvent, key: string): unknown {
   return undefined;
 }
 
-type AssistantContentKind = "text" | "thinking";
-
-const ASSISTANT_EVENT_TYPES: Record<AssistantContentKind, string[]> = {
-  text: ["text_delta", "text", "text_end"],
-  thinking: ["thinking_delta", "thinking", "thinking_end"],
-};
-
-function partSnapshot(value: unknown, contentIndex: number, kind: AssistantContentKind): string | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const content = (value as Record<string, unknown>).content;
-  if (!Array.isArray(content)) return undefined;
-  const part = content[contentIndex];
-  if (!part || typeof part !== "object" || Array.isArray(part)) return undefined;
-  const record = part as Record<string, unknown>;
-  if (record.type !== kind) return undefined;
-  const text = record[kind === "thinking" ? "thinking" : "text"];
-  return typeof text === "string" ? text : undefined;
-}
-
-function assistantContent(event: PiEvent): { kind: AssistantContentKind; type: string; text: string; snapshot?: string; messageId: string; contentIndex: string; presentationRole?: "intermediate" | "final" } | null {
-  if (event.type !== "message_update") return null;
-  const assistant = event.assistantMessageEvent as Record<string, unknown> | undefined;
-  if (!assistant) return null;
-  const type = String(assistant.type ?? "");
-  const kind = (Object.keys(ASSISTANT_EVENT_TYPES) as AssistantContentKind[]).find((candidate) => ASSISTANT_EVENT_TYPES[candidate].includes(type));
-  if (!kind) return null;
-  const message = event.message as Record<string, unknown> | undefined;
-  const contentIndex = Number(assistant.contentIndex ?? 0);
-  const text = String(
-    type.endsWith("_delta")
-      ? assistant.delta ?? assistant.text ?? assistant.content ?? ""
-      : assistant[kind === "thinking" ? "thinking" : "content"] ?? assistant.text ?? assistant.delta ?? "",
-  );
-  // Pi may include the complete in-progress assistant message on every delta.
-  // Prefer that authoritative snapshot over heuristics on provider chunks:
-  // some providers resend or overlap deltas, while the snapshot remains
-  // correct. `event.message` is a compatibility fallback for older runtimes.
-  const snapshot = partSnapshot(assistant.partial, contentIndex, kind)
-    ?? partSnapshot(message, contentIndex, kind);
-  const role = assistant.presentationRole ?? message?.presentationRole;
-  return {
-    kind,
-    type,
-    text,
-    ...(snapshot === undefined ? {} : { snapshot }),
-    messageId: typeof message?.id === "string" ? message.id : "",
-    contentIndex: String(assistant.contentIndex ?? "0"),
-    ...(role === "final" || role === "intermediate" ? { presentationRole: role } : {}),
-  };
-}
 
 function recordKey(record: SseEventRecord): string {
   return record.id ?? `${record.created_at}\0${record.event ?? ""}\0${record.data}`;
@@ -410,7 +363,7 @@ function chunkTextPayload(payload: Record<string, unknown>): Record<string, unkn
 }
 
 function modelError(event: PiEvent): string | null {
-  if (event.type !== "message_end") return null;
+  if (event.type !== "message.completed") return null;
   const message = (event.message && typeof event.message === "object" ? event.message : event) as Record<string, unknown>;
   const stopReason = String(message.stopReason ?? event.stopReason ?? "");
   const errorMessage = message.errorMessage ?? event.errorMessage;
@@ -531,16 +484,17 @@ export class ConversationEventHub {
       const sessionId = options.activeSessionId();
       if (sessionId) void this.publish(cwd, sessionId, { type: "error", sessionId, message: `Malformed Pi RPC output: ${cap(line, 500)}`, recoverable: true });
     });
-    process.on("event", (event: PiEvent) => {
+    process.on("event", (input: PiEvent) => {
+      const event = productInput(input);
       const sessionId = this.eventSessionId(event) ?? options.activeSessionId();
       if (!sessionId) return;
-      if (event.type === "agent_start") {
+      if (event.type === "operation.started") {
         turnNumber += 1;
         turnStartedAt = Date.now();
         stderr.length = 0;
         options.onBusy(true);
       }
-      if (event.type === "agent_settled") options.onBusy(false);
+      if (event.type === "operation.settled") options.onBusy(false);
       eventQueue = eventQueue.catch(() => undefined).then(async () => {
         const normalizedEvents = this.normalize(cwd, sessionId, event);
         const owner = normalizedEvents.find((item) => typeof item.turnId === "string");
@@ -553,7 +507,7 @@ export class ConversationEventHub {
             await this.publish(cwd, sessionId, normalized);
           }
         }
-        await Promise.resolve(options.observe?.(event, sessionId, identity)).catch(() => undefined);
+        await Promise.resolve(options.observe?.(input, sessionId, identity)).catch(() => undefined);
       });
       this.trackObservation(eventQueue);
     });
@@ -799,7 +753,8 @@ export class ConversationEventHub {
     return null;
   }
 
-  private normalize(cwd: string, sessionId: string, event: PiEvent): Record<string, unknown>[] {
+  private normalize(cwd: string, sessionId: string, input: PiEvent): Record<string, unknown>[] {
+    const event = productInput(input);
     const key = streamKey(cwd, sessionId);
     let turn = this.turns.get(key);
     if (!turn) {
@@ -819,12 +774,13 @@ export class ConversationEventHub {
       };
       this.turns.set(key, turn);
     }
-    if (event.type === "agent_start") {
+    if (event.type === "operation.started") {
       turn.turnOrdinal += 1;
       turn.turnId = typeof event.turnId === "string" && event.turnId ? event.turnId : newConversationId("turn", sessionId, turn.turnOrdinal);
       turn.runId = typeof event.runId === "string" && event.runId ? event.runId : newConversationId("run", sessionId, turn.turnOrdinal);
       turn.hadText = false;
       turn.hadError = false;
+      turn.lastRuntimeError = undefined;
       turn.hadActivity = false;
       turn.contentByKey.clear();
       turn.bashTails.clear();
@@ -838,7 +794,7 @@ export class ConversationEventHub {
       turn.runId = newConversationId("run", sessionId, turn.turnOrdinal);
     }
 
-    const content = assistantContent(event);
+    const content = event.type === "message.updated" ? event.content as import("./assistant-content.js").AssistantContent | undefined : undefined;
     if (content) {
       if (!content.messageId && !turn.activeAnonymousKey) {
         turn.activeAnonymousKey = `anonymous-${++turn.anonymousSerial}`;
@@ -869,7 +825,7 @@ export class ConversationEventHub {
         // Pi may emit the complete accumulated text in delta events.
         // Treat that form as a replacement and only emit the new suffix;
         // genuine deltas continue to be appended.
-        if (accumulated && content.text.startsWith(accumulated)) {
+        if (content.source === "legacy" && accumulated && content.text.startsWith(accumulated)) {
           emitted = content.text.slice(accumulated.length);
           turn.contentByKey.set(key, content.text);
         } else {
@@ -903,11 +859,13 @@ export class ConversationEventHub {
     const exactError = modelError(event);
     if (exactError) {
       turn.hadError = true;
+      if (turn.lastRuntimeError === exactError) return [];
+      turn.lastRuntimeError = exactError;
       return [{ type: "error", sessionId, ...turnFields(turn), message: cap(exactError) }];
     }
 
     switch (event.type) {
-      case "message_start": {
+      case "message.started": {
         const message = event.message as Record<string, unknown> | undefined;
         if (message?.role !== "assistant") return [];
         const partId = typeof message.id === "string" && message.id
@@ -917,7 +875,7 @@ export class ConversationEventHub {
         const presentationRole = message?.presentationRole === "final" || message?.presentationRole === "intermediate" ? message.presentationRole : undefined;
         return [{ type: "text.updated", sessionId, partId, itemId: partId, ...turnFields(turn), phase: eventPhase(presentationRole), baseRevision: 0, revision: 0, text: "", ...(presentationRole ? { presentationRole } : {}) }];
       }
-      case "tool_execution_start": {
+      case "tool.started": {
         turn.hadActivity = true;
         const callId = String(event.toolCallId ?? "");
         const tool = String(event.toolName ?? "unknown");
@@ -931,7 +889,7 @@ export class ConversationEventHub {
         records.push({ type: "tool.updated", sessionId, callId, itemId: callId, ...turnFields(turn), ...(title ? { title } : {}), ...(presentation ? { presentation: safeValue(presentation) } : {}), tool, status: "running", input: safeValue(event.args ?? {}), startedAt: new Date().toISOString() });
         return records;
       }
-      case "tool_execution_update": {
+      case "tool.updated": {
         turn.hadActivity = true;
         const record: Record<string, unknown> = { type: "tool.updated", sessionId, callId: String(event.toolCallId ?? ""), itemId: String(event.toolCallId ?? ""), ...turnFields(turn), tool: String(event.toolName ?? ""), status: "running" };
         // Partial results arrive as result-shaped snapshots; unwrap the text
@@ -949,7 +907,7 @@ export class ConversationEventHub {
         }
         return [record];
       }
-      case "bash_execution_update": {
+      case "legacy.bash.update": {
         // Some runtimes stream bash stdout through these updates instead of
         // tool_execution_update. Unwrap the text, keep a bounded tail, and
         // throttle emissions so a chatty install cannot flood the stream; the
@@ -969,7 +927,7 @@ export class ConversationEventHub {
         turn.bashTails.set(callId, tail);
         return [{ type: "tool.updated", sessionId, callId, itemId: callId, ...turnFields(turn), tool: "bash", status: "running", partialOutput: tail.text }];
       }
-      case "tool_execution_end": {
+      case "tool.completed": {
         turn.hadActivity = true;
         const callId = String(event.toolCallId ?? "");
         const tool = String(event.toolName ?? "");
@@ -993,7 +951,7 @@ export class ConversationEventHub {
         });
         return records;
       }
-      case "extension_ui_request": {
+      case "interaction.requested": {
         turn.hadActivity = true;
         const method = String(eventField(event, "method") ?? "");
         const rawTitle = eventField(event, "title");
@@ -1032,28 +990,32 @@ export class ConversationEventHub {
         }
         return [];
       }
-      case "artifact_published":
+      case "artifact.published":
         turn.hadActivity = true;
         return [{ type: "artifact.published", sessionId, ...turnFields(turn), artifactId: String(event.artifactId ?? ""), path: String(event.path ?? ""), version: event.version, mime: String(event.mime ?? ""), verification: safeValue(event.verification ?? {}) }];
-      case "compaction_start":
-      case "compaction_update":
-      case "compaction_end":
-      case "compaction_error":
-        return [{ type: "compaction.updated", sessionId, ...turnFields(turn), status: event.type.replace("compaction_", ""), message: cap(event.message ?? event.error ?? ""), progress: event.progress }];
-      case "extension_error":
+      case "compaction.start":
+      case "compaction.update":
+      case "compaction.end":
+      case "compaction.error":
+        return [{ type: "compaction.updated", sessionId, ...turnFields(turn), status: event.type.replace("compaction.", ""), message: cap(event.message ?? event.error ?? ""), progress: event.progress }];
+      case "runtime.extension_error":
         turn.hadError = true;
         return [{ type: "error", sessionId, ...turnFields(turn), message: cap(event.message ?? event.error ?? "Extension failed") }];
-      case "error":
+      case "runtime.error": {
         turn.hadError = true;
-        return [{ type: "error", sessionId, ...turnFields(turn), message: cap(event.message ?? event.error ?? "Pi runtime error") }];
-      case "retry_start":
-      case "retry_update":
-      case "retry_end":
-      case "status":
-        return [{ type: "status.updated", sessionId, ...turnFields(turn), status: event.type, message: cap(event.message ?? ""), attempt: event.attempt }];
-      case "agent_end":
+        const message = String(event.message ?? event.error ?? "Pi runtime error");
+        if (turn.lastRuntimeError === message) return [];
+        turn.lastRuntimeError = message;
+        return [{ type: "error", sessionId, ...turnFields(turn), message: cap(message) }];
+      }
+      case "retry.start":
+      case "retry.update":
+      case "retry.end":
+      case "runtime.status":
+        return [{ type: "status.updated", sessionId, ...turnFields(turn), status: ({ "retry.start": "retry_start", "retry.update": "retry_update", "retry.end": "retry_end", "runtime.status": "status" } as Record<string, string>)[event.type], message: cap(event.message ?? ""), attempt: event.attempt }];
+      case "operation.ended":
         return [{ type: "agent_end", sessionId, ...turnFields(turn) }];
-      case "agent_settled": {
+      case "operation.settled": {
         const records: Record<string, unknown>[] = [];
         if (!turn.hadText && !turn.hadError && !turn.hadActivity && !event.handledWithoutTurn) {
           records.push({
@@ -1072,6 +1034,7 @@ export class ConversationEventHub {
         });
         turn.hadText = false;
         turn.hadError = false;
+        turn.lastRuntimeError = undefined;
         turn.hadActivity = false;
         turn.contentByKey.clear();
       turn.bashTails.clear();

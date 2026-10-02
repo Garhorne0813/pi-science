@@ -1,3 +1,4 @@
+import { productInput } from "../events/legacy-runtime-event.js";
 import { createHash } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { readJson, readJsonLines, withFileWriteLock, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
@@ -56,20 +57,21 @@ export class DurableTurnLifecycle {
   }
 
   async observe(cwd: string, sessionId: string, event: Record<string, unknown>, identity?: { turnId: string; turnOrdinal: number }): Promise<boolean> {
+    event = productInput(event as { type: string });
     const operationId = typeof event.runId === "string" ? event.runId : "";
     if (!operationId) return false;
     const file = this.file(cwd, sessionId, operationId);
-    if (event.type === "message_update") {
+    if (event.type === "message.updated") {
       const message = event.message as { id?: string } | undefined;
-      const update = event.assistantMessageEvent as { type?: string } | undefined;
+      const update = event.content as { type?: string } | undefined;
       if (message?.id && ["text_delta", "text", "text_end"].includes(update?.type ?? "")) this.anchors.set(file, message.id);
       return false;
     }
-    if (event.type !== "agent_start" && event.type !== "agent_settled") return false;
+    if (event.type !== "operation.started" && event.type !== "operation.settled") return false;
     return withFileWriteLock(file, async () => {
       const record = await readJson<DurableTurn | null>(file, null);
       if (!record || record.completed) return false;
-      if (event.type === "agent_start") {
+      if (event.type === "operation.started") {
         record.started = true;
         record.turnId = identity?.turnId ?? record.turnId;
         record.turnOrdinal = identity?.turnOrdinal ?? record.turnOrdinal;

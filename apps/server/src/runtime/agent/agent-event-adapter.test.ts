@@ -14,35 +14,35 @@ describe("AgentCoreEventAdapter", () => {
   it("forwards manual and automatic compaction outcomes through existing browser events", () => {
     const adapter = new AgentCoreEventAdapter();
     expect(adapter.adapt(event({ type: "compaction_start", runId: "compact", reason: "manual" })))
-      .toEqual([{ type: "compaction_start", runId: "compact", reason: "manual" }]);
+      .toEqual([{ type: "compaction.start", runId: "compact", reason: "manual" }]);
     expect(adapter.adapt(event({ type: "compaction_end", runId: "compact", reason: "manual", status: "aborted" })))
-      .toEqual([{ type: "compaction_end", runId: "compact", reason: "manual", outcome: "aborted" }]);
+      .toEqual([{ type: "compaction.end", runId: "compact", reason: "manual", outcome: "aborted" }]);
     expect(adapter.adapt(event({ type: "compaction_end", runId: "compact", status: "failed", error: { message: "summary failed" } })))
-      .toEqual([{ type: "compaction_error", runId: "compact", message: "summary failed" }, { type: "error", runId: "compact", message: "summary failed" }]);
+      .toEqual([{ type: "compaction.error", runId: "compact", message: "summary failed" }, { type: "runtime.error", runId: "compact", message: "summary failed" }]);
   });
   it("does not duplicate the lifecycle start when recovery also emits run_resume", () => {
     const adapter = new AgentCoreEventAdapter();
-    expect(adapter.beginRecovery("recovered-run")).toMatchObject({ type: "agent_start", runId: "recovered-run", recovery: true });
+    expect(adapter.beginRecovery("recovered-run")).toMatchObject({ type: "operation.started", runId: "recovered-run", recovery: true });
     expect(adapter.adapt(event({ type: "run_resume", runId: "recovered-run" }))).toEqual([]);
     expect(adapter.adapt(event({ type: "run_end", runId: "recovered-run", status: "completed" })))
-      .toEqual([{ type: "agent_settled", runId: "recovered-run", status: "completed" }]);
+      .toEqual([{ type: "operation.settled", runId: "recovered-run", status: "completed" }]);
   });
   it("keeps the harness run and turn identities through the browser event shape", () => {
     const adapter = new AgentCoreEventAdapter();
     expect(adapter.adapt(event({ type: "run_start", runId: "run-1", startedAt: 1 }))).toEqual([]);
     expect(adapter.adapt(event({ type: "message_start", runId: "run-1", message: { role: "user", content: "hello" } }))).toEqual([]);
     expect(adapter.adapt(event({ type: "turn_start", runId: "run-1", turnId: "turn-1" }))).toMatchObject([
-      { type: "agent_start", runId: "run-1", turnId: "run-1" },
-      { type: "message_start", runId: "run-1" },
+      { type: "operation.started", runId: "run-1", turnId: "run-1" },
+      { type: "message.started", runId: "run-1" },
     ]);
     expect(adapter.adapt(event({ type: "tool_start", runId: "run-1", turnId: "turn-1", toolCallId: "tool-1", toolName: "read", args: {} }))).toEqual([
-      { type: "tool_execution_start", runId: "run-1", turnId: "turn-1", toolCallId: "tool-1", toolName: "read", args: {} },
+      { type: "tool.started", runId: "run-1", turnId: "turn-1", toolCallId: "tool-1", toolName: "read", args: {} },
     ]);
     expect(adapter.adapt(event({ type: "tool_end", runId: "run-1", turnId: "turn-1", toolCallId: "tool-1", toolName: "read", result: { content: [] }, isError: false }))).toEqual([
-      { type: "tool_execution_end", runId: "run-1", turnId: "turn-1", toolCallId: "tool-1", toolName: "read", args: {}, result: { content: [] }, isError: false },
+      { type: "tool.completed", runId: "run-1", turnId: "turn-1", toolCallId: "tool-1", toolName: "read", args: {}, result: { content: [] }, isError: false },
     ]);
     expect(adapter.adapt(event({ type: "run_end", runId: "run-1", status: "completed", fromTipId: null, tipId: "entry-1", endedAt: 2 }))).toEqual([
-      { type: "agent_settled", runId: "run-1", status: "completed" },
+      { type: "operation.settled", runId: "run-1", status: "completed" },
     ]);
   });
 
@@ -50,9 +50,9 @@ describe("AgentCoreEventAdapter", () => {
     const adapter = new AgentCoreEventAdapter();
     adapter.adapt(event({ type: "run_start", runId: "run-2", startedAt: 1 }));
     expect(adapter.adapt(event({ type: "run_end", runId: "run-2", status: "failed", error: { code: "auth", message: "missing key" }, fromTipId: null, tipId: null, endedAt: 2 }))).toEqual([
-      { type: "agent_start", runId: "run-2", turnId: "run-2" },
-      { type: "error", runId: "run-2", message: "missing key" },
-      { type: "agent_settled", runId: "run-2", status: "failed" },
+      { type: "operation.started", runId: "run-2", turnId: "run-2" },
+      { type: "runtime.error", runId: "run-2", message: "missing key" },
+      { type: "operation.settled", runId: "run-2", status: "failed" },
     ]);
   });
 
@@ -61,9 +61,23 @@ describe("AgentCoreEventAdapter", () => {
     expect(adapter.adapt(event({ type: "message_end", runId: "run", message: {
       role: "assistant", content: [], stopReason: "error", errorMessage: "Provider is not configured: deepseek",
     } }))).toEqual([
-      { type: "message_end", runId: "run", message: expect.any(Object) },
-      { type: "error", runId: "run", message: "Provider is not configured: deepseek" },
+      { type: "message.completed", runId: "run", message: expect.any(Object) },
+      { type: "runtime.error", runId: "run", message: "Provider is not configured: deepseek" },
     ]);
+  });
+
+  it("uses replay frames instead of a later mutable assistant snapshot", () => {
+    const adapter = new AgentCoreEventAdapter();
+    const mapped = adapter.adapt(event({ type: "message_update", runId: "r",
+      message: { role: "assistant", content: [{ type: "text", text: "aab" }] },
+      event: { type: "text_delta", contentIndex: 0, delta: "ab" },
+      frame: { type: "text_delta", contentIndex: 0, delta: "a" },
+    }));
+    expect(mapped).toEqual([expect.objectContaining({ type: "message.updated", content: {
+      source: "core", kind: "text", type: "text_delta", text: "a", messageId: "", contentIndex: "0",
+    } })]);
+    expect(mapped[0]).not.toHaveProperty("assistantMessageEvent");
+    expect(mapped[0]!.message).toEqual({ role: "assistant" });
   });
 
   it("keeps write arguments available for artifact tracking", async () => {

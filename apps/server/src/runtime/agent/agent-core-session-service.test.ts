@@ -131,14 +131,14 @@ describe("agent-core session configuration", () => {
       const runtime = Object.assign(new EventEmitter(), { cwd, sessionId: "recovered", isClosed: false,
         sendCommand: async (command: string) => {
           if (command === "get_state") return { success: true, data: { busy: true } };
-          runtime.emit("event", { type: "agent_start", runId: "recovery", turnId: "recovery" });
-          runtime.emit("event", { type: "agent_settled", runId: "recovery" });
+          runtime.emit("event", { type: "operation.started", runId: "recovery", turnId: "recovery" });
+          runtime.emit("event", { type: "operation.settled", runId: "recovery" });
           return { success: true };
         } });
       const hub = { bind: (_cwd: string, source: EventEmitter, callbacks: { onBusy(busy: boolean): void }) => {
         source.on("event", (event: { type: string }) => {
-          if (event.type === "agent_start") callbacks.onBusy(true);
-          if (event.type === "agent_settled") callbacks.onBusy(false);
+          if (event.type === "operation.started") callbacks.onBusy(true);
+          if (event.type === "operation.settled") callbacks.onBusy(false);
         });
       } };
       const service = new AgentCoreSessionService(hub as never, {} as never);

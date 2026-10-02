@@ -5,17 +5,19 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { AgentRuntimeExitedError, AgentRuntimeTimeoutError } from "./agent-runtime-errors.js";
 import type { AgentRuntime, RuntimeResult, RuntimeSkillPolicy } from "./agent-runtime-types.js";
-import type { AgentRuntimeStartOptions, WorkerCommand, WorkerEvent } from "./worker/protocol.js";
+import { workerEventSchema, type AgentRuntimeStartOptions, type WorkerCommand } from "./worker/protocol.js";
+import { decodeCommand, decodeNotification, validResultData, type RuntimeCommand, type RuntimeNotification, type RuntimeCommandName, type CommandParams, type CommandResult } from "./worker/command-contract.js";
 
 type Pending = {
+  command: string;
   resolve: (value: RuntimeResult) => void;
   reject: (reason: Error) => void;
   timer: NodeJS.Timeout;
 };
 type WorkerRequest =
   | { type: "initialize"; options: AgentRuntimeStartOptions }
-  | { type: "command"; command: string; params: Record<string, unknown> }
-  | { type: "notification"; notification: string; params: Record<string, unknown> };
+  | ({ type: "command" } & RuntimeCommand)
+  | ({ type: "notification" } & RuntimeNotification);
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const SYSTEM_ENV_KEYS = ["PATH", "HOME", "USER", "TMPDIR", "TEMP", "TMP", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "PI_SCIENCE_HOME", "PI_SCIENCE_STATE_ROOT"] as const;
@@ -60,7 +62,7 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
   ) {
     super();
     this.timeoutMs = timeoutMs;
-    child.on("message", (message: WorkerEvent) => this.handleMessage(message));
+    child.on("message", (message: unknown) => this.handleMessage(message));
     child.stderr?.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
       this.stderrTail = `${this.stderrTail}${text}`.slice(-4_000);
@@ -100,12 +102,17 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
   get sessionId(): string { return this.currentSessionId; }
   get isClosed(): boolean { return this.closed; }
 
+  sendCommand<K extends RuntimeCommandName>(type: K, params?: CommandParams<K>, timeoutMs?: number): Promise<CommandResult<K>>;
+  sendCommand(type: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<RuntimeResult>;
   sendCommand(type: string, params: Record<string, unknown> = {}, timeoutMs = this.timeoutMs): Promise<RuntimeResult> {
-    return this.request({ type: "command", command: type, params }, type, timeoutMs);
+    const decoded = decodeCommand(type, params);
+    return decoded.ok ? this.request({ type: "command", ...decoded.value }, type, timeoutMs) : Promise.resolve(decoded.result);
   }
 
   async sendNotification(type: string, params: Record<string, unknown> = {}): Promise<void> {
-    const result = await this.request({ type: "notification", notification: type, params }, type);
+    const decoded = decodeNotification(type, params);
+    if (!decoded.ok) throw new Error(decoded.result.error);
+    const result = await this.request({ type: "notification", ...decoded.value }, type);
     if (!result.success) throw new Error(result.error ?? `agent notification ${type} failed`);
   }
 
@@ -131,7 +138,7 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
         this.pending.delete(requestId);
         reject(new AgentRuntimeTimeoutError(label, timeoutMs));
       }, timeoutMs);
-      this.pending.set(requestId, { resolve, reject, timer });
+      this.pending.set(requestId, { command: label, resolve, reject, timer });
       void this.send({ ...command, requestId } as WorkerCommand).catch((error: Error) => {
         const pending = this.pending.get(requestId);
         if (!pending) return;
@@ -149,17 +156,29 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
     });
   }
 
-  private handleMessage(message: WorkerEvent): void {
-    if (!message || typeof message !== "object") return;
-    if (message.type === "runtime_event") this.emit("event", message.event);
-    if (message.type === "fatal") this.emit("stderr", message.error);
-    if (message.type === "ready") this.currentSessionId = message.sessionId;
-    if (message.type !== "result") return;
-    const pending = this.pending.get(message.requestId);
+  private handleMessage(message: unknown): void {
+    const decoded = workerEventSchema.safeParse(message);
+    if (!decoded.success) {
+      if (message && typeof message === "object" && "requestId" in message && typeof message.requestId === "string") {
+        const pending = this.pending.get(message.requestId);
+        if (pending) { this.pending.delete(message.requestId); clearTimeout(pending.timer); pending.reject(new Error("invalid agent worker response")); }
+      }
+      this.emit("malformed", "invalid agent worker event");
+      return;
+    }
+    const value = decoded.data;
+    if (value.type === "runtime_event") this.emit("event", value.event);
+    if (value.type === "fatal") this.emit("stderr", value.error);
+    if (value.type === "ready") this.currentSessionId = value.sessionId;
+    if (value.type !== "result") return;
+    const pending = this.pending.get(value.requestId);
     if (!pending) return;
-    this.pending.delete(message.requestId);
+    this.pending.delete(value.requestId);
     clearTimeout(pending.timer);
-    pending.resolve(message.result);
+    if (!validResultData(pending.command, value.result)) {
+      this.emit("malformed", `invalid result for ${pending.command}`);
+      pending.reject(new Error(`invalid agent worker result for ${pending.command}`));
+    } else pending.resolve(value.result);
   }
 
   private handleExit(code: number | null, signal: NodeJS.Signals | null, cause?: Error): void {

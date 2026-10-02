@@ -38,7 +38,7 @@ describe("AgentCoreRuntimeClient", () => {
     const events: Array<{ type: string }> = [];
     client.on("event", (event) => events.push(event));
     expect(await client.sendCommand("activate")).toMatchObject({ success: true });
-    await vi.waitFor(() => expect(events.some((event) => event.type === "agent_settled")).toBe(true), { timeout: 5_000 });
+    await vi.waitFor(() => expect(events.some((event) => event.type === "operation.settled")).toBe(true), { timeout: 5_000 });
     expect(await client.sendCommand("prompt", { message: "Recover the accepted 0.87.1 prompt", client_message_id: "fixture-087-client" }))
       .toMatchObject({ success: true, deduplicated: true });
     const history = (await client.sendCommand("get_messages")).data as { messages: Array<{ message: { client_message_id?: string } }> };
@@ -56,7 +56,10 @@ describe("AgentCoreRuntimeClient", () => {
     const first = await AgentCoreRuntimeClient.start(start, 5_000);
     clients.push(first);
     expect(first.sessionId).toBeTruthy();
-    expect(await first.sendCommand("get_state")).toMatchObject({
+    const state = await first.sendCommand("get_state");
+    const epoch = state.data!.runtimeEpoch;
+    expect(epoch).toBeTruthy();
+    expect(state).toMatchObject({
       success: true,
       data: { sessionId: first.sessionId, busy: false, model: start.model, thinkingLevel: "off",
         activeTools: expect.arrayContaining(["read", "bash", "edit", "write"]) },
@@ -66,7 +69,9 @@ describe("AgentCoreRuntimeClient", () => {
     const second = await AgentCoreRuntimeClient.start({ ...start, sessionId: first.sessionId }, 5_000);
     clients.push(second);
     expect(second.sessionId).toBe(first.sessionId);
-    expect((await second.sendCommand("get_state")).success).toBe(true);
+    const reopened = await second.sendCommand("get_state");
+    expect(reopened.data!.runtimeEpoch).not.toBe(epoch);
+    expect(reopened.success).toBe(true);
   });
 
   it("isolates a worker crash and reopens its durable session", async () => {
@@ -95,7 +100,7 @@ describe("AgentCoreRuntimeClient", () => {
       const timer = setTimeout(() => reject(new Error("run did not settle")), 5_000);
       client.on("event", (event: { type: string }) => {
         events.push(event.type);
-        if (event.type === "agent_settled") { clearTimeout(timer); resolve(); }
+        if (event.type === "operation.settled") { clearTimeout(timer); resolve(); }
       });
     });
     const result = await client.sendCommand("prompt", { message: "Say hello", client_message_id: "browser-123" });
@@ -106,7 +111,7 @@ describe("AgentCoreRuntimeClient", () => {
       .toMatchObject({ success: false, code: "client_message_id_conflict" });
     // No credential is provided; the run fails after admission, through the event stream.
     await settled;
-    expect(events).toContain("agent_start");
+    expect(events).toContain("operation.started");
     expect((await client.sendCommand("get_state")).data).toMatchObject({ busy: false });
     expect(await client.sendCommand("get_messages")).toMatchObject({
       success: true,
@@ -141,8 +146,8 @@ describe("AgentCoreRuntimeClient", () => {
     expect(await recovered.sendCommand("get_state")).toMatchObject({ success: true, data: { busy: true } });
     expect(events).toEqual([]);
     expect(await recovered.sendCommand("activate")).toMatchObject({ success: true });
-    await vi.waitFor(() => expect(events.some((event) => event.type === "agent_settled")).toBe(true), { timeout: 5_000 });
-    expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ type: "agent_start", recovery: true })]));
+    await vi.waitFor(() => expect(events.some((event) => event.type === "operation.settled")).toBe(true), { timeout: 5_000 });
+    expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ type: "operation.started", recovery: true })]));
     expect(await recovered.sendCommand("get_state")).toMatchObject({ success: true, data: { busy: false } });
   }, 20_000);
 

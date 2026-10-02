@@ -82,8 +82,8 @@ describe("agent-core product turns", () => {
     await vi.waitFor(() => expect(review.run).toHaveBeenCalledOnce(), { timeout: 5000 });
     expect(await service.stats(id, cwd)).toMatchObject({ stats: { userMessages: 1, toolCalls: 1, toolResults: 1, tokens: { total: 220 } } });
     const runtime = core.liveRuntime(cwd)!;
-    runtime.emit("event", { type: "agent_start", runId: records[0]!.turn_id, turnId: records[0]!.turn_id, recovery: true });
-    runtime.emit("event", { type: "agent_settled", runId: records[0]!.turn_id, status: "completed" });
+    runtime.emit("event", { type: "operation.started", runId: records[0]!.turn_id, turnId: records[0]!.turn_id, recovery: true });
+    runtime.emit("event", { type: "operation.settled", runId: records[0]!.turn_id, status: "completed" });
     await vi.waitFor(() => expect(events.filter((event) => event.type === "session.stats").length).toBeGreaterThan(4));
     expect(await turnArtifactRepository.forSession(cwd, id)).toHaveLength(1);
     expect(events.filter((event) => event.type === "turn.artifacts")).toHaveLength(1);
@@ -109,7 +109,7 @@ describe("agent-core product turns", () => {
     const { cwd, id, service, core, events, review } = await fixture();
     const original = core.liveRuntime(cwd)!;
     const emit = original.emit.bind(original);
-    vi.spyOn(original, "emit").mockImplementation((type, ...args) => type === "event" && args[0]?.type === "agent_settled" ? false : emit(type, ...args));
+    vi.spyOn(original, "emit").mockImplementation((type, ...args) => type === "event" && args[0]?.type === "operation.settled" ? false : emit(type, ...args));
     expect(await service.command(id, cwd, "prompt", { message: "write and recover", client_message_id: "lost-settle" })).toMatchObject({ success: true });
     await vi.waitFor(() => expect(events.some((event) => event.type === "turn.artifacts")).toBe(true), { timeout: 5000 });
     expect(core.liveRuntime(cwd)).not.toBe(original);

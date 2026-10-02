@@ -1,5 +1,5 @@
 import type { RuntimeResult } from "../agent-runtime-types.js";
-import type { WorkerCommand, WorkerEvent } from "./protocol.js";
+import { workerRequestSchema, type WorkerEvent } from "./protocol.js";
 import { SessionRuntime } from "./session-runtime.js";
 
 let runtime: SessionRuntime | undefined;
@@ -13,8 +13,15 @@ function errorResult(error: unknown): RuntimeResult {
   return { success: false, code: "worker_error", error: error instanceof Error ? error.message : String(error) };
 }
 
-async function handle(message: WorkerCommand): Promise<void> {
-  if (!message || typeof message !== "object") return;
+async function handle(input: unknown): Promise<void> {
+  const decoded = workerRequestSchema.safeParse(input);
+  if (!decoded.success) {
+    const requestId = input && typeof input === "object" && "requestId" in input ? input.requestId : undefined;
+    if (typeof requestId === "string" && requestId) send({ type: "result", requestId, result: { success: false, code: "invalid_ipc", error: "invalid worker request" } });
+    else send({ type: "fatal", error: "invalid worker request without correlation identity" });
+    return;
+  }
+  const message = decoded.data;
   if (message.type === "shutdown") {
     await shutdown();
     return;
@@ -50,7 +57,7 @@ async function shutdown(): Promise<void> {
   process.exit(0);
 }
 
-process.on("message", (message: WorkerCommand) => { void handle(message); });
+process.on("message", (message: unknown) => { void handle(message); });
 process.once("disconnect", () => { void shutdown(); });
 process.once("SIGTERM", () => { void shutdown(); });
 process.once("uncaughtException", (error) => {

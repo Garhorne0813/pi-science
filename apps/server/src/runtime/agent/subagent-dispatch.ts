@@ -36,8 +36,8 @@ export function bindSubagentDispatch(manager: AgentRuntimeManager, parent: Agent
   parent.once("exit", () => { track(Promise.allSettled([...active.keys()].map(cancel))); });
   parent.on("event", (event: RuntimeEvent) => {
     const id = String(event.id ?? "");
-    if (event.type === "subagent_cancel") { track(cancel(id)); return; }
-    if (event.type !== "subagent_request") return;
+    if (event.type === "subagent.cancelled") { track(cancel(id)); return; }
+    if (event.type !== "subagent.requested") return;
     const run = async () => {
       if ((options.depth ?? 0) >= 2) throw new Error("Subagent depth limit reached");
       const params = paramsSchema.parse(event.params);

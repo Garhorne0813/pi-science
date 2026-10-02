@@ -156,9 +156,9 @@ export class AgentRuntimeManager {
     this.idleTimers.delete(key);
     try {
       const state = await runtime.sendCommand("get_state");
-      const data = state.data && typeof state.data === "object" ? state.data as Record<string, unknown> : {};
-      const queued = Array.isArray(data.queues) && data.queues.length > 0;
-      if (!state.success || data.busy || queued || data.pendingInteraction) {
+      const data = state.data;
+      const queued = Array.isArray(data?.queues) && data?.queues.length > 0;
+      if (!state.success || !data || data.busy || queued || data?.pendingInteraction) {
         this.scheduleIdleCheck(key, runtime);
         return;
       }

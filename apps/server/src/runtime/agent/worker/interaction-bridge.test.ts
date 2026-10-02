@@ -12,7 +12,7 @@ describe("agent-core questionnaire bridge", () => {
         { label: "A", description: "First" }, { label: "B", description: "Second" },
       ] }],
     }, () => undefined, {} as never, {} as never, { abortSignal: undefined } as never);
-    expect(events).toMatchObject([{ type: "extension_ui_request", method: "input",
+    expect(events).toMatchObject([{ type: "interaction.requested", method: "input",
       title: "pi-science-questionnaire-v1:call-1", id: expect.any(String) }]);
     expect(bridge.notify("extension_ui_response", { id: events[0]!.id,
       value: JSON.stringify({ cancelled: false, answers: [{ questionIndex: 0, kind: "option", answer: "B" }] }) })).toMatchObject({ success: true });

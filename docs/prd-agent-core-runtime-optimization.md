@@ -6,6 +6,8 @@
 
 本方案依据最近两次关于运行时 PRD、上下文压缩与 subagent/todo 能力来源的分析，更新原文档基于 `7efa2048` 的判断。OS 级 sandbox 按已有约定暂缓；继续保留 `PI_SCIENCE_AGENT_RUNTIME=agent-core` 开关和 Orbit 路径。
 
+后续通信层精简与前端协议收敛见 [Agent-core 通信与前端协议收敛方案](prd-agent-core-communication-optimization.md)。该方案尚未实施，不代表 Orbit 已满足退役条件。
+
 ## 1. 目标与范围
 
 让 agent-core 会话具备现有研究对话所需的产品能力：配置与运行事实一致，压缩可观测，turn 产物和复查正常，todo 与子代理可恢复，迁移不丢数据。

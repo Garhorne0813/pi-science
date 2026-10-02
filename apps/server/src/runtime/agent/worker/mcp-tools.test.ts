@@ -75,7 +75,7 @@ describe("agent-core managed MCP tools", () => {
       expect(mcp.tools.map((tool) => tool.name)).toEqual(["mcp__local__echo"]);
       const pending = mcp.tools[0]!.execute("call-1", { value: "hello" }, () => undefined,
         {} as never, {} as never, { abortSignal: undefined } as never);
-      expect(interactions).toMatchObject([{ type: "extension_ui_request", kind: "permission", method: "confirm", id: expect.any(String) }]);
+      expect(interactions).toMatchObject([{ type: "interaction.requested", kind: "permission", method: "confirm", id: expect.any(String) }]);
       bridge.notify("extension_ui_response", { id: interactions[0]!.id, confirmed: true });
       const result = await pending;
       expect(result.content).toEqual([{ type: "text", text: "hello" }]);

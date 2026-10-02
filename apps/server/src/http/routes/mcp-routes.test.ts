@@ -68,7 +68,7 @@ describe("canonical MCP routes", () => {
 
   it("manages connector credentials without exposing them in runtime snapshots", async () => {
     const { app, cwd, service } = await fixture();
-    const connector = await service.create({ name: "remote-auth", display_name: "Remote auth", transport: "streamable_http", endpoint_url: "https://example.com/mcp", runtime_config: {}, enabled: false });
+    const connector = await service.create({ name: "remote-auth", display_name: "Remote auth", transport: "streamable_http", endpoint_url: "https://93.184.216.34/mcp", runtime_config: {}, enabled: false });
     await service.repository.replaceToolCache({ connector_id: connector.connector_id, config_revision: connector.revision, fingerprint: "stable", tools: [{ name: "search", title: "Search", description: "", read_only: true, decision: "ask" }], fetched_at: 1, expires_at: Number.MAX_SAFE_INTEGER });
     const saved = await app.inject({ method: "PUT", url: `/api/mcp/connectors/${connector.connector_id}/credential`, payload: { backend: "managed", delivery: "bearer", target_name: "Authorization", secret: "super-secret-token", revision: connector.revision } });
     expect(saved.statusCode).toBe(200);

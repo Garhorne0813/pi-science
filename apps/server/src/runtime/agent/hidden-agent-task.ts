@@ -44,7 +44,7 @@ export async function runHiddenPrompt(runtime: AgentCoreRuntimeClient, message: 
   const completed = new Promise<void>((resolve, reject) => {
     const event = (value: RuntimeEvent) => {
       observe?.(value);
-      if (value.type === "agent_settled" && value.runId === expected) finish(value.status === "completed" ? undefined : new Error(`Child operation ${value.status}`));
+      if (value.type === "operation.settled" && value.runId === expected) finish(value.status === "completed" ? undefined : new Error(`Child operation ${value.status}`));
     };
     const exit = () => finish(new Error("Hidden agent worker exited"));
     const timer = setTimeout(() => finish(new Error("Hidden agent timed out")), Math.max(1, deadline - Date.now()));
@@ -57,7 +57,8 @@ export async function runHiddenPrompt(runtime: AgentCoreRuntimeClient, message: 
   try {
     const state = await runtime.sendCommand("get_state");
     if (!state.success) throw new Error(state.error ?? "Unable to read child state");
-    const data = state.data as { busy: boolean; lastResult?: { operationId: string; status: string }; operation?: { id: string } };
+    const data = state.data;
+    if (!data) throw new Error("Child returned no state");
     if (!data.busy && data.lastResult?.operationId === expected) finish(data.lastResult.status === "completed" ? undefined : new Error(`Child operation ${data.lastResult.status}`));
     else {
       if (data.busy && data.operation?.id !== expected) throw new Error("Child is executing another operation");
@@ -68,7 +69,7 @@ export async function runHiddenPrompt(runtime: AgentCoreRuntimeClient, message: 
         if (!admitted.success) throw new Error(admitted.error ?? "Child rejected prompt");
         if (admitted.deduplicated) {
           const result = await runtime.sendCommand("get_operation_result", { operationId: expected });
-          const record = result.data as { status?: string } | undefined;
+          const record = result.data;
           finish(record?.status === "completed" ? undefined : new Error(`Child operation ${record?.status ?? "has no result"}`));
         }
       }

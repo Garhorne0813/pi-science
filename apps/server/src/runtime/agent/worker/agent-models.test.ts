@@ -73,13 +73,13 @@ describe("agent-core model credentials", () => {
         expect(await runtime.command("get_state", {})).toMatchObject({ data: { context_tokens: null, context_window: 4096,
           compaction: { enabled: false, reserveTokens: 820 }, compaction_threshold_percent: 80, thinkingLevel: "high" } });
         expect(await runtime.command("prompt", { message: "hello", client_message_id: "custom-model-run" })).toMatchObject({ success: true });
-        await vi.waitFor(() => expect(events.some((event) => event.type === "agent_settled")).toBe(true));
+        await vi.waitFor(() => expect(events.some((event) => event.type === "operation.settled")).toBe(true));
         expect(await runtime.command("get_state", {})).toMatchObject({ data: { context_tokens: 102, context_window: 4096, context_percent: 102 / 4096 * 100 } });
         expect(await new AgentSessionRepository().runtimeState(root, runtime.sessionId)).toMatchObject({ context_tokens: 102,
           context_window: 4096, compaction_enabled: false, compaction_threshold_percent: 80 });
         expect(await runtime.command("compact", {})).toMatchObject({ success: true });
-        await vi.waitFor(() => expect(events.some((event) => event.type === "compaction_end" || event.type === "compaction_error")).toBe(true));
-        expect(events.some((event) => event.type === "compaction_start")).toBe(true);
+        await vi.waitFor(() => expect(events.some((event) => event.type === "compaction.end" || event.type === "compaction.error")).toBe(true));
+        expect(events.some((event) => event.type === "compaction.start")).toBe(true);
       } finally { await runtime.close(); }
       await service.updateProvider(provider.id, { enabled: false });
       expect((await agentModelCatalog()).some((model) => model.provider === provider.id)).toBe(false);

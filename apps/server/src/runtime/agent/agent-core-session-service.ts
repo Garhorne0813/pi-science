@@ -55,7 +55,7 @@ function thinking(value: string | null | undefined): "off" | "minimal" | "low" |
   return value && ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(value)
     ? value as ReturnType<typeof thinking> : "high";
 }
-function failed(error: unknown): RuntimeResult {
+function failed(error: unknown): RuntimeResult<never> {
   const code = error instanceof AgentRuntimeTimeoutError ? "timeout"
     : error instanceof AgentRuntimeExitedError ? "process_exit" : "runtime_command_failed";
   return { success: false, code, error: error instanceof Error ? error.message : String(error) };
@@ -218,8 +218,8 @@ export class AgentCoreSessionService {
     this.live.set(identity(runtime.cwd, runtime.sessionId), item);
     runtime.on("event", (event) => {
       if (typeof event.runtime_sequence === "number") item.eventSequence = event.runtime_sequence;
-      if (event.type === "agent_start" && typeof event.runId === "string") item.expectedOperationId = event.runId;
-      if (event.type === "agent_settled") {
+      if (event.type === "operation.started" && typeof event.runId === "string") item.expectedOperationId = event.runId;
+      if (event.type === "operation.settled") {
         item.expectedOperationId = undefined;
         this.recoveryAttempts.delete(identity(runtime.cwd, runtime.sessionId));
       }
@@ -234,7 +234,7 @@ export class AgentCoreSessionService {
         if (await this.turns.observe(runtime.cwd, sessionId, event, turn)) {
           this.hooks.settled?.(runtime.cwd, sessionId, String(event.runId));
         }
-        if (["message_end", "tool_execution_end", "agent_settled"].includes(event.type)) {
+        if (["message.completed", "tool.completed", "operation.settled"].includes(event.type)) {
           const stats = await this.repository.stats(runtime.cwd, sessionId);
           if (stats) await this.events.publish(runtime.cwd, sessionId, { type: "session.stats", sessionId,
             stats: await this.hooks.stats?.(runtime.cwd, sessionId, stats) ?? stats });
@@ -256,15 +256,15 @@ export class AgentCoreSessionService {
       // subsequent state changes arrive through the already-bound event stream.
       const snapshot = await runtime.sendCommand("get_state");
       if (!snapshot.success) throw new Error(String(snapshot.error));
-      const data = snapshot.data as { busy?: boolean; model?: { provider: string; modelId: string }; thinkingLevel?: string;
-        operation?: { id: string }; lastResult?: { operationId: string; status: string } };
+      const data = snapshot.data;
+      if (!data) throw new Error("Worker returned no snapshot");
       item.busy = Boolean(data.busy);
       item.expectedOperationId = data.operation?.id;
       if (data.model) item.model = `${data.model.provider}/${data.model.modelId}`;
       if (data.thinkingLevel) item.thinking = data.thinkingLevel;
       if (!data.busy && data.lastResult && await this.turns.unfinished(runtime.cwd, runtime.sessionId, data.lastResult.operationId)) {
-        runtime.emit("event", { type: "agent_start", runId: data.lastResult.operationId, turnId: data.lastResult.operationId, recovery: true });
-        runtime.emit("event", { type: "agent_settled", runId: data.lastResult.operationId, status: data.lastResult.status, recovery: true });
+        runtime.emit("event", { type: "operation.started", runId: data.lastResult.operationId, turnId: data.lastResult.operationId, recovery: true });
+        runtime.emit("event", { type: "operation.settled", runId: data.lastResult.operationId, status: data.lastResult.status, recovery: true });
       }
       const activated = await runtime.sendCommand("activate");
       if (!activated.success) throw new Error(String(activated.error));
@@ -420,9 +420,10 @@ export class AgentCoreSessionService {
     }
     const result = await current.runtime.sendCommand("get_state").catch(failed);
     if (!result.success) return { error: String(result.error), code: String(result.code) };
-    const data = result.data as Record<string, unknown>;
-    const model = data.model as { provider?: string; modelId?: string } | undefined;
-    const operation = data.operation as { kind?: string } | null;
+    const data = result.data;
+    if (!data) return { error: "Worker returned no snapshot", code: "invalid_ipc" };
+    const model = data.model;
+    const operation = data.operation;
     return { id: sessionId, cwd, is_streaming: Boolean(data.busy), is_compacting: operation?.kind === "compaction",
       pending_message_count: Array.isArray(data.queues) ? data.queues.length : 0,
       model: model?.provider && model.modelId ? `${model.provider}/${model.modelId}` : current.model,
@@ -430,7 +431,7 @@ export class AgentCoreSessionService {
       context_tokens: typeof data.context_tokens === "number" ? data.context_tokens : null,
       context_window: typeof data.context_window === "number" ? data.context_window : null,
       context_percent: typeof data.context_percent === "number" ? data.context_percent : null,
-      compaction_enabled: (data.compaction as { enabled?: boolean } | undefined)?.enabled,
+      compaction_enabled: data.compaction.enabled,
       compaction_threshold_percent: typeof data.compaction_threshold_percent === "number" ? data.compaction_threshold_percent : null };
   }
 
@@ -490,7 +491,7 @@ export class AgentCoreSessionService {
     if (live && !live.runtime.isClosed) {
       const snapshot = await live.runtime.sendCommand("get_state").catch(failed);
       if (!snapshot.success) return snapshot;
-      if ((snapshot.data as { busy?: boolean }).busy) return { success: false, code: "busy", error: "cannot delete a conversation while it is running" };
+      if (snapshot.data?.busy) return { success: false, code: "busy", error: "cannot delete a conversation while it is running" };
     }
     const registered = await this.registry.get(cwd, sessionId);
     const path = registered?.target ?? await this.repository.findPath(cwd, sessionId);
@@ -544,13 +545,13 @@ export class AgentCoreSessionService {
     try {
       const result = await item.runtime.sendCommand("get_state", {}, 5000);
       if (!result.success) throw new Error(String(result.error));
-      const data = result.data as { busy?: boolean; faulted?: boolean; eventSequence?: number;
-        lastResult?: { operationId: string; status: string } };
+      const data = result.data;
+      if (!data) throw new Error("Worker returned no snapshot");
       // A quiet model/tool is legitimate. A sequence gap proves that worker
       // events were emitted but lost; a failed probe proves unresponsiveness.
       if (data.faulted || Number(data.eventSequence ?? 0) > item.eventSequence) { await this.recover(item); return; }
       if (!data.busy && item.expectedOperationId && data.lastResult?.operationId === item.expectedOperationId) {
-        item.runtime.emit("event", { type: "agent_settled", runId: data.lastResult.operationId, status: data.lastResult.status, recovery: true });
+        item.runtime.emit("event", { type: "operation.settled", runId: data.lastResult.operationId, status: data.lastResult.status, recovery: true });
       } else this.scheduleWatchdog(item);
     } catch { await this.recover(item); }
   }

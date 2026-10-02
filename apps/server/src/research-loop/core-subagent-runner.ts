@@ -1,10 +1,10 @@
-import { PiResearchSubagentRunner } from "./subagent-runner.js";
+import { ResearchTaskRunner } from "./task-runner.js";
 import { AgentRuntimeManager } from "../runtime/agent/agent-runtime-manager.js";
 import { openCoreRunner } from "../runtime/agent/core-runner-runtime.js";
 import type { WorkspaceEnvironmentService } from "../runtime/workspace/workspace-environment.js";
-import type { RunnerTransport as AgentRuntime } from "../runtime/agent/runner-transport.js";
+import type { TaskRuntime as AgentRuntime } from "../runtime/agent/runner-transport.js";
 
-export class CoreResearchSubagentRunner extends PiResearchSubagentRunner {
+export class CoreResearchSubagentRunner extends ResearchTaskRunner {
   private readonly core = new AgentRuntimeManager();
   private readonly keys = new Map<string, string>();
   constructor(environments: Pick<WorkspaceEnvironmentService, "environment">,

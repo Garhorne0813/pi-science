@@ -1,8 +1,8 @@
-export interface RuntimeResult {
+export interface RuntimeResult<T = unknown> {
   success: boolean;
   code?: string;
   error?: string;
-  data?: unknown;
+  data?: T;
   [key: string]: unknown;
 }
 
@@ -19,21 +19,11 @@ export interface RuntimeEvent {
 
 export type RuntimeExit = { code: number | null; signal: NodeJS.Signals | null };
 
-/** Temporary Orbit transport hooks used by the existing recovery path. */
-export interface LegacyOrbitTransport {
-  readonly runtimeIdentity?: { piSessionId: string };
-  readonly attachedToHost: boolean;
-  readonly lastEventAt: number;
-  readonly eventStreamAlive: boolean;
-  reconnectEventStream(): Promise<void>;
-}
-
 /** The browser event hub and session service depend on this boundary only. */
 export interface AgentRuntime {
   readonly sessionId: string;
   readonly cwd: string;
   readonly isClosed: boolean;
-  readonly legacyOrbit?: LegacyOrbitTransport;
 
   sendCommand(type: string, params?: Record<string, unknown>): Promise<RuntimeResult>;
   sendNotification(type: string, params?: Record<string, unknown>): Promise<void>;

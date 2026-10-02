@@ -18,7 +18,7 @@ export class InteractionBridge {
       };
       signal?.addEventListener("abort", onAbort, { once: true });
       this.pending.set(id, { resolve, reject, cleanup: () => signal?.removeEventListener("abort", onAbort) });
-      this.publish({ type: "extension_ui_request", id, method: options.method ?? "input", title, prefill,
+      this.publish({ type: "interaction.requested", id, method: options.method ?? "input", title, prefill,
         ...(options.kind ? { kind: options.kind } : {}), ...(options.message ? { message: options.message } : {}) });
     });
   }

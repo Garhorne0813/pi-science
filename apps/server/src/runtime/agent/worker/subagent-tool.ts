@@ -11,12 +11,12 @@ export class SubagentBridge {
     const id = randomUUID();
     return new Promise((resolve) => {
       const abort = () => {
-        this.publish({ type: "subagent_cancel", id });
+        this.publish({ type: "subagent.cancelled", id });
         this.respond({ id, result: { success: false, error: "Subagent cancelled" } });
       };
       signal?.addEventListener("abort", abort, { once: true });
       this.pending.set(id, { resolve, cleanup: () => signal?.removeEventListener("abort", abort) });
-      this.publish({ type: "subagent_request", id, ...params });
+      this.publish({ type: "subagent.requested", id, ...params });
     });
   }
   respond(params: Record<string, unknown>): RuntimeResult {
