@@ -14,6 +14,8 @@ import { ResearchLoopCoordinator } from "../research-loop/coordinator.js";
 import { PiResearchSubagentRunner } from "../research-loop/subagent-runner.js";
 import { ProjectReviewService } from "../project-review/service.js";
 import { PiReviewSubagentRunner } from "../project-review/subagent-runner.js";
+import { CoreReviewSubagentRunner } from "../project-review/core-subagent-runner.js";
+import { CoreResearchSubagentRunner } from "../research-loop/core-subagent-runner.js";
 import { configPath } from "../storage/persistence.js";
 import { EnvironmentRepository } from "../storage/sqlite/repositories/environment-repository.js";
 import { JobRepository } from "../storage/sqlite/repositories/job-repository.js";
@@ -72,12 +74,17 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
   });
   const settings = new SettingsStore();
   const modelResources = new ModelResourceService({ settings, runtimeCatalog });
-  const projectReview = new ProjectReviewService(new PiReviewSubagentRunner(environments, piManager), sessionRepository);
-  const sessions = new NodeSessionService(events, piManager, sessionRepository, environments, projectReview, undefined, modelResources);
+  const coreEnabled = process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core";
+  const coreServer = { backendUrl: config ? `http://127.0.0.1:${config.port}` : undefined, internalToken: config?.internalToken };
+  const projectReview = new ProjectReviewService(coreEnabled ? new CoreReviewSubagentRunner(environments, coreServer) : new PiReviewSubagentRunner(environments, piManager), sessionRepository);
+  const sessions = new NodeSessionService(events, piManager, sessionRepository, environments, projectReview, undefined, modelResources, {
+    backendUrl: config ? `http://127.0.0.1:${config.port}` : undefined,
+    internalToken: config?.internalToken,
+  });
   const mcpRepository = new McpRepository(stateStore);
   const mcp = new McpConnectorService(mcpRepository, workspaces, settings, sessions, new McpRuntimeProjection(mcpRepository));
   if (sqliteEnabled) sessions.configureBeforeRuntimeStart((cwd) => mcp.materializeWorkspace(cwd));
   const jobs = new JobCoordinator(environments, {}, undefined, sqliteEnabled ? jobRepository : undefined);
-  const research = new ResearchLoopCoordinator(jobs, new PiResearchSubagentRunner(environments, piManager));
+  const research = new ResearchLoopCoordinator(jobs, coreEnabled ? new CoreResearchSubagentRunner(environments, coreServer) : new PiResearchSubagentRunner(environments, piManager));
   return { sessions, events, sessionRepository, piManager, runtimeCatalog, settings, modelResources, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled, mcp };
 }

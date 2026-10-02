@@ -3,6 +3,8 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { defaultProgressAppearance, progressAppearanceInputSchema, progressAppearanceSchema } from "@pi-science/contracts";
 import { configPath } from "../../storage/persistence.js";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
+import { agentModelCatalog } from "../../runtime/agent/worker/agent-models.js";
+import { resolveCompaction } from "../../runtime/agent/agent-runtime-settings.js";
 import { runtimeExtensionStatus } from "../../runtime/pi/pi-runtime-launch.js";
 import { safeConnectorFetch, validateOutboundHttpUrl } from "../../security/outbound-security.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
@@ -211,7 +213,7 @@ function normalizePiModel(value: unknown): Record<string, unknown> | null {
   if (!provider || !model) return null;
   const explicitReasoning = typeof item.reasoning === "boolean";
   const reasoning = explicitReasoning ? item.reasoning === true : undefined;
-  const listedLevels = normalizeThinkingLevels(item.thinkingLevels);
+  const listedLevels = normalizeThinkingLevels(item.thinkingLevels ?? item.thinking_levels);
   const levelMap = item.thinkingLevelMap && typeof item.thinkingLevelMap === "object" ? item.thinkingLevelMap as Record<string, unknown> : {};
   const hasExplicitLevels = Object.keys(levelMap).length > 0;
   // A runtime entry WITHOUT capability metadata (no reasoning flag, no
@@ -250,6 +252,10 @@ function mergeModelCatalog(primary: Array<Record<string, unknown>>, overlay: Arr
   return [...byId.values()];
 }
 async function modelCatalog(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, runtimeCatalog?: Pick<PiOrbitCatalogService, "getCatalog">): Promise<{ available: Array<Record<string, unknown>>; source: "pi" | "fallback" }> {
+  const agentCore = process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core";
+  if (agentCore && !cwdValue) {
+    return { available: (await agentModelCatalog()).map(normalizePiModel).filter((item): item is Record<string, unknown> => Boolean(item)), source: "pi" };
+  }
   const catalog = await readRuntimeCatalog(runtimeCatalog);
   const catalogEntries = catalogModels(catalog);
   if (cwdValue) {
@@ -267,10 +273,11 @@ async function modelCatalog(nodeSessionService: NodeSessionService, config: Sett
         if (!existing.max_output_tokens) existing.max_output_tokens = source.max_output_tokens;
         if (!Array.isArray(existing.input_formats) || existing.input_formats.length === 0) existing.input_formats = source.input_formats;
       }
-      const customOnly = customModels(config).filter((item) => !runtimeById.has(String(item.id)));
+      const customOnly = agentCore ? [] : customModels(config).filter((item) => !runtimeById.has(String(item.id)));
       return { available: [...runtimeById.values(), ...customOnly], source: "pi" };
     }
   }
+  if (agentCore) return { available: [], source: "fallback" };
   const configuredProviders = new Set(catalog.providers.filter((provider) => provider.auth.configured).map((provider) => provider.id));
   const builtinModels = catalogEntries.filter((item) => configuredProviders.has(String(item.provider)));
   const custom = customModels(config);
@@ -294,8 +301,8 @@ type ProviderInventoryEntry = {
 async function providerInventory(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, modelResources?: ModelResourceService, runtimeCatalog?: Pick<PiOrbitCatalogService, "getCatalog">): Promise<ProviderInventoryEntry[]> {
   const catalog = await readRuntimeCatalog(runtimeCatalog);
   let orbitModels: Record<string, string[]> | null = null;
-  if (cwdValue) {
-    const result = await nodeSessionService.availableModels(cwdValue);
+  if (cwdValue || process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core") {
+    const result = cwdValue ? await nodeSessionService.availableModels(cwdValue) : { success: true, data: { models: await agentModelCatalog() } };
     const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
     if (result.success && Array.isArray(data.models)) {
       orbitModels = {};
@@ -321,7 +328,7 @@ async function providerInventory(nodeSessionService: NodeSessionService, config:
     entries.push({
       id: provider.id,
       name: provider.name,
-      models: orbitModels?.[provider.id] ?? provider.models.map((model) => `${provider.id}/${model.id}`),
+      models: orbitModels?.[provider.id] ?? (process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core" ? [] : provider.models.map((model) => `${provider.id}/${model.id}`)),
       auth: {
         kind: provider.auth.apiKey && provider.auth.oauth ? "api_key_or_oauth" : provider.auth.oauth ? "oauth" : provider.auth.apiKey ? "api_key" : "none",
         api_key_supported: provider.auth.apiKey,
@@ -338,7 +345,12 @@ async function providerInventory(nodeSessionService: NodeSessionService, config:
 function publicCustom(item: NonNullable<Settings["custom_providers"]>[number] & { has_key?: boolean }): Record<string, unknown> { return { id: item.id, name: item.name, base_url: item.base_url, api: item.api, models: item.models, has_key: Boolean(item.api_key) || item.has_key === true, reasoning: item.reasoning, context_window: item.context_window, model_hints: item.model_hints }; }
 function slug(value: string): string { return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "custom-api"; }
 function query(request: { query: unknown }, name: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[name]; return typeof value === "string" && value ? value : fallback; }
-function compactionThreshold(config: Settings, available: Array<Record<string, unknown>>, configured: string): number { if (typeof config.compaction_threshold_percent === "number") return config.compaction_threshold_percent; const contextWindow = Number(available.find((item) => item.id === configured)?.context_window ?? config.model_context_window ?? 0); return contextWindow > 16384 ? Math.min(95, Math.max(50, Math.round((1 - 16384 / contextWindow) * 100))) : 85; }
+function compactionThreshold(config: Settings, available: Array<Record<string, unknown>>, configured: string): number {
+  const override = config.model_context_window_override;
+  const contextWindow = override?.model === configured ? override.context_window
+    : Number(available.find((item) => item.id === configured)?.context_window ?? 0);
+  return resolveCompaction(contextWindow || 16384, config).thresholdPercent;
+}
 async function readBoundedJson(response: Response, maxBytes: number): Promise<Record<string, unknown>> { if (Number(response.headers.get("content-length") ?? 0) > maxBytes) throw new Error("Model discovery response is too large"); if (!response.body) return {}; const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0; try { while (true) { const next = await reader.read(); if (next.done) break; size += next.value.byteLength; if (size > maxBytes) throw new Error("Model discovery response is too large"); chunks.push(next.value); } } finally { reader.releaseLock(); } const bytes = new Uint8Array(size); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; } const text = new TextDecoder().decode(bytes); try { return JSON.parse(text) as Record<string, unknown>; } catch { return text ? { message: text } : {}; } }
 
 type ModelHint = { context_window?: number; reasoning?: boolean; thinking_levels?: string[]; source?: string };
@@ -542,6 +554,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       const resourceModels = await modelResources.listModels();
       const projected = resourceModels
         .filter((item) => item.provider_id.startsWith("user-") && item.available)
+        .filter((item) => process.env.PI_SCIENCE_AGENT_RUNTIME !== "agent-core" || catalog.available.some((model) => model.id === item.id))
         .map((item) => ({
           id: item.id,
           provider: item.provider_id,
@@ -557,8 +570,13 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
           availability_reason: item.availability_reason,
         }));
       available = mergeModelCatalog(available, projected);
+      if (process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core") available = available.map((item) => {
+        const actual = catalog.available.find((model) => model.id === item.id);
+        return actual ? { ...item, thinking_levels: actual.thinking_levels, reasoning: actual.reasoning, context_window: actual.context_window } : item;
+      });
     }
     const configured = typeof config.model === "string" && available.some((item) => item.id === config.model) ? config.model : "";
+    const unavailableModel = typeof config.model === "string" && config.model && !configured ? config.model : null;
     let thinking = configured ? String(config.thinking ?? "high") : "off";
     let runtimeLevelsApplied = false;
     if (configured && cwdValue) {
@@ -660,7 +678,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       const resourceState = modelResources.repository.readSync();
       for (const [id, ref] of Object.entries(resourceState.credential_refs)) if (modelResources.credentials.readSync(ref)?.secret) apiKeys[id] = true;
     }
-    return { api_keys: apiKeys, model: configured, thinking, model_context_window: config.model_context_window ?? null, model_max_output_tokens: Number(selected?.max_output_tokens ?? 0) || null, progress_appearance: effectiveProgressAppearance, compaction_enabled: config.compaction_enabled !== false, compaction_threshold_percent: compactionThreshold(config, available, configured), allow_private_providers: config.allow_private_providers !== false, providers, custom_providers: (config.custom_providers ?? []).map(publicCustom), available_models: available, model_catalog_source: catalog.source };
+    return { api_keys: apiKeys, model: configured, unavailable_model: unavailableModel, thinking, model_context_window: config.model_context_window ?? null, model_max_output_tokens: Number(selected?.max_output_tokens ?? 0) || null, progress_appearance: effectiveProgressAppearance, compaction_enabled: config.compaction_enabled !== false, compaction_threshold_percent: compactionThreshold(config, available, configured), allow_private_providers: config.allow_private_providers !== false, providers, custom_providers: (config.custom_providers ?? []).map(publicCustom), available_models: available, model_catalog_source: catalog.source };
   });
   // UI-only state: a dedicated cheap read (no provider inventory or model
   // catalog work) and a write that never reloads runtimes or replaces
@@ -702,7 +720,10 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       const canonicalModel = canonicalState?.aliases[model] ?? model;
       const selected = (await modelResources.listModels({ available: true })).find((item) => item.id === canonicalModel);
       if (model && !selected) return reply.code(422).send({ code: "no_routable_endpoint", error: "Model is not available from a configured provider" });
-      let levels = normalizeThinkingLevels(selected?.capabilities.thinking_levels);
+      const coreModel = process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core"
+        ? (await agentModelCatalog()).map(normalizePiModel).find((item) => item?.id === canonicalModel) : undefined;
+      if (model && process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core" && !coreModel) return reply.code(422).send({ code: "unsupported_runtime_model", error: "Model is unavailable in agent-core" });
+      let levels = normalizeThinkingLevels(coreModel?.thinking_levels ?? selected?.capabilities.thinking_levels);
       let runtimeLevelsVerified = false;
       if (cwdValue && canonicalModel) {
         const actual = await nodeSessionService.availableThinkingLevels(cwdValue, canonicalModel).catch(() => null);

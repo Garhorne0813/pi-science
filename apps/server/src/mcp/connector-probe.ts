@@ -48,7 +48,7 @@ export async function connectAndListMcpTools(connector: StoredMcpConnector, work
   }
 }
 
-class UnixSocketClientTransport implements Transport {
+export class UnixSocketClientTransport implements Transport {
   private socket?: Socket;
   private readonly buffer = new ReadBuffer();
   onclose?: () => void;

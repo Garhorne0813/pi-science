@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import type { PiConfig } from "@pi-science/contracts";
 import type { PiProcessOptions, RuntimeSkillPolicy } from "./pi-process.js";
-import { configRoot } from "../../storage/persistence.js";
+import { configRoot, metadataRoot } from "../../storage/persistence.js";
 import { canonicalRuntimeModelRef, projectedRuntimeModelRef, projectPiRuntime } from "./pi-runtime-projection.js";
 
 // The Pi Orbit host is a singleton per control plane: one port + one auth
@@ -135,7 +135,7 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
   } else {
     command = cliPath;
   }
-  const sessionDir = sessionDirectory ? resolve(sessionDirectory) : join(cwd, ".pi-science", "sessions");
+  const sessionDir = sessionDirectory ? resolve(sessionDirectory) : join(metadataRoot(cwd), "sessions");
   args.push("--mode", useRpcMode ? "rpc" : "web");
   if (useRpcMode) args.push("--session-dir", sessionDir);
   else args.push("--host", "127.0.0.1", "--port", String(reservedWebPort), "--web-app-managed", "--no-session");
@@ -156,7 +156,7 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "EACCES" && code !== "EPERM" && code !== "EROFS") throw error;
-    agentDir = join(resolve(cwd), ".pi-science", "agent", workspaceKey);
+    agentDir = join(metadataRoot(cwd), "agent", workspaceKey);
     mkdirSync(agentDir, { recursive: true });
   }
   const storedKeys = settings.api_keys;
@@ -166,6 +166,7 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
     PI_CODING_AGENT_DIR: agentDir,
     PI_CONFIG_DIR: agentDir,
     PI_WORKSPACE_DIR: resolve(cwd),
+    PI_SCIENCE_STATE_ROOT: dataRoot,
     PI_SCIENCE_MCP_ADAPTER_PATH: findRuntimeExtension("pi-mcp-adapter", cliPath, []) ?? join(PROJECT_ROOT, "runtime", "pi", "node_modules", "pi-mcp-adapter", "index.ts"),
     CONTEXT_MODE_DATA_DIR: agentDir,
     CONTEXT_MODE_DIR: join(agentDir, "context-mode"),
@@ -259,14 +260,14 @@ function globalSkillPolicy(settings: Record<string, any>): RuntimeSkillPolicy {
 
 export function seedWorkspaceAssets(cwd: string): string[] {
   const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
-  // The workspace metadata dirs are managed state. A symlink (or plain file)
-  // left at cwd/.pi or cwd/.pi-science would make every write below (skills
-  // mirror, stale cleanup) land inside — and delete from — the linked
-  // location, so replace foreign entries before any mkdir/cp runs.
-  replaceForeignEntry(join(cwd, ".pi-science"));
+  // Legacy workspaces still keep state under .pi-science. Never follow a
+  // foreign marker there; registered projects use the relocated state root.
+  if (metadataRoot(cwd) === join(cwd, ".pi-science")) {
+    replaceForeignEntry(join(cwd, ".pi-science"));
+    mkdirSync(join(cwd, ".pi-science"), { recursive: true });
+  }
+  // The workspace-local .pi directory contains the skills exposed to Pi.
   replaceForeignEntry(join(cwd, ".pi"));
-  const metadata = join(cwd, ".pi-science");
-  mkdirSync(metadata, { recursive: true });
   const sourceSkills = join(projectRoot, "skills");
   const targetSkills = join(cwd, ".pi", "skills");
   // The .pi/skills tree is managed state: if a previous seed or the runtime
@@ -430,6 +431,9 @@ export function loadDefaultPiConfig(runtimeRoots?: string[]): PiConfig {
     compaction_enabled: settings.compaction_enabled !== false,
     compaction_threshold_percent: validThreshold(settings.compaction_threshold_percent),
     model_context_window: positiveInteger(settings.model_context_window),
+    model_context_window_override: typeof settings.model_context_window_override?.model === "string"
+      && positiveInteger(settings.model_context_window_override.context_window)
+      ? { model: settings.model_context_window_override.model, context_window: positiveInteger(settings.model_context_window_override.context_window)! } : undefined,
     model_max_output_tokens: positiveInteger(settings.model_max_output_tokens),
     provider: null,
     api_key: null,

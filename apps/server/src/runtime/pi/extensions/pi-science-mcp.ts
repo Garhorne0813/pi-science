@@ -1,5 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CredentialStore } from "../../../model-resources/credential-store.js";
 
@@ -34,9 +35,52 @@ export default async function piScienceMcp(pi: unknown): Promise<void> {
   adapter.createMcpAdapter({ configFactory })(pi);
 }
 
-export function loadProjectedServers(workspace: string): Record<string, Record<string, unknown>> {
+export function loadProjectedServers(workspace: string, onBindingError?: (name: string, error: unknown) => void): Record<string, Record<string, unknown>> {
+  const projected = loadProjectedSnapshot(workspace);
+  return Object.fromEntries(Object.entries(projected.mcpServers ?? {}).flatMap(([name, raw]) => {
+    try {
+      const { __piScienceEnvironment, __piScienceHeaders, ...server } = raw;
+      const env = materialize(__piScienceEnvironment);
+      const headers = materialize(__piScienceHeaders);
+      return [[name, {
+        ...server,
+        __piScienceProjectId: projected.project_id,
+        __piScienceRawBindings: true,
+        __piScienceFetchModule: new URL(existsSync(new URL("../../../mcp/runtime-fetch.js", import.meta.url)) ? "../../../mcp/runtime-fetch.js" : "../../../mcp/runtime-fetch.ts", import.meta.url).href,
+        ...(env ? { env } : {}),
+        ...(headers ? { headers } : {}),
+      }]];
+    } catch (error) {
+      if (!onBindingError) throw error;
+      onBindingError(name, error);
+      return [];
+    }
+  }));
+}
+
+/** Environment bindings must be admitted to the child before it materializes MCP. */
+export function projectedEnvironmentNames(workspace: string): string[] {
+  const names = new Set<string>();
+  for (const server of Object.values(loadProjectedSnapshot(workspace).mcpServers)) {
+    for (const bindings of [server.__piScienceEnvironment, server.__piScienceHeaders]) {
+      for (const binding of Object.values(bindings ?? {})) {
+        if (binding.kind === "environment" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(binding.name)) names.add(binding.name);
+      }
+    }
+  }
+  return [...names];
+}
+
+function loadProjectedSnapshot(workspace: string): ProjectedSnapshot {
   let projected: ProjectedSnapshot = { version: 1, project_id: "empty", mcpServers: {} };
-  const snapshotPath = join(workspace, ".pi-science", "mcp-runtime.json");
+  const stateRoot = process.env.PI_SCIENCE_STATE_ROOT;
+  let snapshotPath = join(workspace, ".pi-science", "mcp-runtime.json");
+  if (stateRoot) {
+    const canonical = canonicalPathSync(resolve(workspace));
+    const identity = process.platform === "win32" ? canonical.toLowerCase() : canonical;
+    const relocated = join(stateRoot, "workspaces", createHash("sha256").update(identity).digest("hex"), "mcp-runtime.json");
+    if (existsSync(relocated) || !existsSync(snapshotPath)) snapshotPath = relocated;
+  }
   try {
     const parsed = JSON.parse(readFileSync(snapshotPath, "utf8")) as Partial<ProjectedSnapshot>;
     if (parsed.version !== 1 || typeof parsed.project_id !== "string" || !parsed.project_id || !parsed.mcpServers || typeof parsed.mcpServers !== "object" || Array.isArray(parsed.mcpServers)) {
@@ -46,19 +90,15 @@ export function loadProjectedServers(workspace: string): Record<string, Record<s
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error(`Unable to load MCP runtime snapshot: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return Object.fromEntries(Object.entries(projected.mcpServers ?? {}).map(([name, raw]) => {
-    const { __piScienceEnvironment, __piScienceHeaders, ...server } = raw;
-    const env = materialize(__piScienceEnvironment);
-    const headers = materialize(__piScienceHeaders);
-    return [name, {
-      ...server,
-      __piScienceProjectId: projected.project_id,
-      __piScienceRawBindings: true,
-      __piScienceFetchModule: new URL(existsSync(new URL("../../../mcp/runtime-fetch.js", import.meta.url)) ? "../../../mcp/runtime-fetch.js" : "../../../mcp/runtime-fetch.ts", import.meta.url).href,
-      ...(env ? { env } : {}),
-      ...(headers ? { headers } : {}),
-    }];
-  }));
+  return projected;
+}
+
+function canonicalPathSync(path: string): string {
+  try { return realpathSync.native(path); }
+  catch {
+    const parent = dirname(path);
+    return parent === path ? path : join(canonicalPathSync(parent), basename(path));
+  }
 }
 
 function materialize(bindings?: Record<string, Binding>): Record<string, string> | undefined {

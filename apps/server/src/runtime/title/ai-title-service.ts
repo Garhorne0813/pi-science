@@ -20,6 +20,7 @@ import type { PiResult } from "../pi/pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
 import { sessionRepository } from "../node/session-repository.js";
 import { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
+import { metadataRoot } from "../../storage/persistence.js";
 import { AI_TITLE_PROMPT_INSTRUCTION } from "./title-prompt.js";
 
 /** Minimum runtime surface the title service needs; tests provide a fake. */
@@ -49,7 +50,7 @@ export class PiTitleRuntimeFactory {
     // the host was launched with --no-session. Give title generation its own
     // disposable session directory so those implementation conversations can
     // never enter the user-facing `.pi-science/sessions` index.
-    const temporaryRoot = join(cwd, ".pi-science", "title-runtimes");
+    const temporaryRoot = join(metadataRoot(cwd), "title-runtimes");
     await mkdir(temporaryRoot, { recursive: true });
     const temporarySessionDir = await mkdtemp(join(temporaryRoot, "runtime-"));
     const options = buildPiProcessOptions(cwd, config, undefined, environment, temporarySessionDir);

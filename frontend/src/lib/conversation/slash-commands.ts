@@ -39,13 +39,13 @@ export async function fetchDynamicCommands(sessionId: string, cwd: string): Prom
       staleTime: 0,
     });
     dynamicCommands = (Array.isArray(data.commands) ? data.commands : [])
-      .filter((command: SlashCommand) => command.source === "skill" && command.name.startsWith("skill:"))
+      .filter((command: SlashCommand) => command.source === "prompt" || command.source === "skill" && command.name.startsWith("skill:"))
       .map((command: SlashCommand) => ({
         name: command.name,
         description: command.description || "",
         argumentHint: command.argumentHint,
         source: command.source,
-        group: "skill" as const,
+        group: command.source === "prompt" ? "utility" as const : "skill" as const,
       }));
     notifyDynamicCommands();
   } catch (error) {

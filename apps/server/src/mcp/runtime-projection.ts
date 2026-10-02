@@ -10,7 +10,7 @@ export const MCP_RUNTIME_SNAPSHOT = ".pi-science/mcp-runtime.json";
 // Bump when the managed MCP implementation changes its tool/resource contract.
 // The adapter includes this value in its metadata-cache fingerprint so a
 // previously discovered tool list cannot survive a runtime upgrade.
-export const MCP_RUNTIME_CACHE_VERSION = 3;
+export const MCP_RUNTIME_CACHE_VERSION = 4;
 
 export interface ProjectedMcpServer {
   __piScienceAllowedTools?: string[];
@@ -20,6 +20,7 @@ export interface ProjectedMcpServer {
   __piScienceCacheVersion?: number;
   __piScienceToolCount?: number;
   command?: string;
+  transport?: "stdio" | "socket" | "streamable_http" | "sse";
   args?: string[];
   socket?: string;
   url?: string;
@@ -85,6 +86,7 @@ function projectServer(
     : undefined;
   return {
     __piScienceConnectorId: connector.connector_id,
+    transport: connector.transport,
     __piScienceAllowPrivate: runtime.allow_private,
     __piScienceProjectId: projectId,
     __piScienceCacheVersion: MCP_RUNTIME_CACHE_VERSION,

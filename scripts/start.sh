@@ -19,7 +19,9 @@ if [ -f "$INSTALL_STATE_FILE" ]; then
 fi
 
 PI_CLI="${PI_CLI_PATH:-${PI_SCIENCE_INSTALL_PI_CLI:-}}"
-[ -f "$PI_CLI" ] || { echo "Error: Pi runtime is not installed. Run: bash scripts/install.sh" >&2; exit 1; }
+if [ "${PI_SCIENCE_AGENT_RUNTIME:-}" != "agent-core" ]; then
+  [ -f "$PI_CLI" ] || { echo "Error: Pi runtime is not installed. Run: bash scripts/install.sh" >&2; exit 1; }
+fi
 if ! pi_science_prepare_node 0; then
   pi_science_node_error
   exit 1
@@ -133,7 +135,7 @@ wait_for_health() {
   return 1
 }
 
-export PI_CLI_PATH="$PI_CLI"
+if [ -n "$PI_CLI" ]; then export PI_CLI_PATH="$PI_CLI"; fi
 export PI_NODE_PATH
 export PI_SCIENCE_HOME="${PI_SCIENCE_HOME:-$HOME/.pi-science}"
 export PI_SCIENCE_WORKSPACES="${PI_SCIENCE_WORKSPACES:-$HOME/pi-science-workspaces}"

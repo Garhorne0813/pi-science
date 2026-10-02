@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { EnvironmentRevision } from "../../runtime/workspace/workspace-environment.js";
-import { configPath } from "../persistence.js";
+import { configPath, legacyMetadataRoot } from "../persistence.js";
+import { readProject } from "../../project/project-registry.js";
 import { JobRepository } from "./repositories/job-repository.js";
 import { EnvironmentRepository } from "./repositories/environment-repository.js";
 import { fingerprintPaths, WorkspaceRepository } from "./repositories/workspace-repository.js";
@@ -52,7 +53,12 @@ async function managedWorkspacePaths(root: string): Promise<string[]> {
     for (const name of await readdir(root)) {
       const path = join(root, name);
       try {
-        if ((await stat(path)).isDirectory() && (await stat(join(path, ".pi-science"))).isDirectory()) paths.push(resolve(path));
+        if (!(await stat(path)).isDirectory()) continue;
+        const [project, legacy] = await Promise.all([
+          readProject(path),
+          stat(legacyMetadataRoot(path)).then((value) => value.isDirectory()).catch(() => false),
+        ]);
+        if (project || legacy) paths.push(resolve(path));
       } catch { /* ignore stale or non-workspace entries */ }
     }
   } catch { /* managed root may not exist yet */ }

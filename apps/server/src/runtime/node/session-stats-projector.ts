@@ -1,3 +1,4 @@
+import { productInput } from "../events/legacy-runtime-event.js";
 import type { SessionStats } from "@pi-science/contracts";
 
 /** Wall-clock timing projector for whole-session stats. The Pi runtime's
@@ -166,13 +167,14 @@ export class SessionStatsProjector {
 
   /** Fold one raw Pi event into the tracker. Unknown event types are ignored. */
   track(key: string, event: Record<string, unknown>, now: number): void {
+    event = productInput(event as { type: string });
     const type = String(event.type ?? "");
-    if (type === "agent_start") {
+    if (type === "operation.started") {
       const tracker = this.tracker(key);
       tracker.agentStartedAt = now;
       return;
     }
-    if (type === "message_start") {
+    if (type === "message.started") {
       const message = event.message;
       const record = isRecord(message) ? message : {};
       if (String(record.role ?? "assistant") !== "assistant") return;
@@ -183,8 +185,8 @@ export class SessionStatsProjector {
       tracker.pending.set(messageKey, { startedAt: now, firstDeltaAt: null });
       return;
     }
-    if (type === "message_update") {
-      const assistant = isRecord(event.assistantMessageEvent) ? event.assistantMessageEvent : {};
+    if (type === "message.updated") {
+      const assistant = isRecord(event.content) ? event.content : {};
       const kind = String(assistant.type ?? "");
       if (!["text_delta", "text"].includes(kind)) return;
       const delta = String(assistant.delta ?? assistant.text ?? assistant.content ?? "");
@@ -207,7 +209,7 @@ export class SessionStatsProjector {
       if (pending && pending.firstDeltaAt === null) pending.firstDeltaAt = now;
       return;
     }
-    if (type === "message_end") {
+    if (type === "message.completed") {
       const message = event.message;
       const record = isRecord(message) ? message : {};
       const id = String(record.id ?? event.messageId ?? "");
@@ -227,7 +229,7 @@ export class SessionStatsProjector {
       }
       return;
     }
-    if (type === "tool_execution_start") {
+    if (type === "tool.started") {
       const callId = String(event.toolCallId ?? "");
       if (callId) {
         const tracker = this.tracker(key);
@@ -235,7 +237,7 @@ export class SessionStatsProjector {
       }
       return;
     }
-    if (type === "tool_execution_end") {
+    if (type === "tool.completed") {
       const callId = String(event.toolCallId ?? "");
       if (!callId) return;
       const tracker = this.tracker(key);
@@ -245,7 +247,7 @@ export class SessionStatsProjector {
       tracker.base.toolMs += Math.max(0, now - startedAt);
       return;
     }
-    if (type === "agent_settled") {
+    if (type === "operation.settled") {
       // Cancelled/aborted turns: drop unpaired pending entries so their
       // partial wall time cannot leak into a later turn's statistics.
       const tracker = this.tracker(key);

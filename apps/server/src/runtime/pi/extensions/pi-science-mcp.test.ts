@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadProjectedServers } from "./pi-science-mcp.js";
+import { loadProjectedServers, projectedEnvironmentNames } from "./pi-science-mcp.js";
 import { CredentialStore } from "../../../model-resources/credential-store.js";
 
 const cleanup: string[] = [];
@@ -46,5 +46,15 @@ describe("Pi-Science MCP runtime extension", () => {
     await writeFile(join(workspace, ".pi-science", "mcp-runtime.json"), snapshot, "utf8");
     expect(snapshot).not.toContain("runtime-only-token");
     expect(loadProjectedServers(workspace).remote?.headers).toEqual({ Authorization: "Bearer runtime-only-token" });
+  });
+
+  it("identifies custom environment names in MCP bindings", async () => {
+    const root = join(tmpdir(), `pi-science-mcp-env-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(root);
+    await mkdir(join(root, ".pi-science"), { recursive: true });
+    await writeFile(join(root, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test",
+      mcpServers: { remote: { __piScienceEnvironment: { TOKEN: { kind: "environment", name: "MY_LAB_TOKEN" } },
+        __piScienceHeaders: { Authorization: { kind: "environment", name: "MY_MCP_KEY" } } } } }));
+    expect(projectedEnvironmentNames(root).sort()).toEqual(["MY_LAB_TOKEN", "MY_MCP_KEY"]);
   });
 });

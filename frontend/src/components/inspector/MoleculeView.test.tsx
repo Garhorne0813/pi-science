@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "../../i18n";
 import { INSPECTOR_LAYOUT_CHANGE_EVENT } from "@/lib/ui/inspector-layout";
@@ -34,6 +34,7 @@ describe("MoleculeView", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -123,5 +124,18 @@ describe("MoleculeView", () => {
 
     expect(await screen.findByText(/Failed to start the molecular viewer/)).toBeInTheDocument();
     expect(viewerMocks.load).not.toHaveBeenCalled();
+  });
+
+  it("ends a stalled render and lets the user retry", async () => {
+    vi.useFakeTimers();
+    viewerMocks.load.mockImplementationOnce(() => new Promise(() => undefined));
+    render(<MoleculeView filename="protein.pdb" text="ATOM" />);
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { vi.advanceTimersByTime(45_000); });
+    expect(screen.getByText("Structure rendering timed out")).toBeInTheDocument();
+    expect(viewerMocks.dispose).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText("42 atoms")).toBeInTheDocument();
   });
 });

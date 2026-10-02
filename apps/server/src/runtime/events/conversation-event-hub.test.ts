@@ -9,6 +9,27 @@ import type { PiProcess } from "../pi/pi-process.js";
 
 const workspaces: string[] = [];
 
+it("flush waits for durable observer work before shutdown completes", async () => {
+  const cwd = await workspace();
+  const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
+  const runtime = new EventEmitter();
+  let release!: () => void;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const persistence = new Promise<void>((resolve) => { release = resolve; });
+  hub.bind(cwd, runtime as PiProcess, { activeSessionId: () => "shutdown-session", onBusy: () => undefined, onExit: () => undefined,
+    observe: async () => { entered(); await persistence; } });
+  runtime.emit("event", { type: "agent_settled", status: "completed" });
+  await started;
+  let completed = false;
+  const flushed = hub.flush().then(() => { completed = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(completed).toBe(false);
+  release();
+  await flushed;
+  expect(completed).toBe(true);
+});
+
 afterEach(async () => {
   await Promise.all(workspaces.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });
@@ -856,4 +877,52 @@ describe("central conversation event hub", () => {
     expect(second).toEqual(first);
     expect(new Set(first.map((item) => item.id)).size).toBe(2);
   });
+});
+
+it("projects the same legacy and core text/tool facts into the same public protocol", async () => {
+  const { AgentCoreEventAdapter } = await import("../agent/agent-event-adapter.js");
+  const cwd = await workspace();
+  const legacy = [
+    { type: "agent_start", runId: "r", turnId: "r" },
+    { type: "message_update", runId: "r", message: { role: "assistant", id: "m", content: [{ type: "text", text: "hello" }] }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hello" } },
+    { type: "tool_execution_start", runId: "r", turnId: "t", toolCallId: "c", toolName: "read", args: { path: "a.txt" } },
+    { type: "tool_execution_end", runId: "r", turnId: "t", toolCallId: "c", toolName: "read", args: { path: "a.txt" }, result: { content: [{ type: "text", text: "ok" }] }, isError: false },
+    { type: "agent_settled", runId: "r", status: "completed" },
+  ];
+  const adapter = new AgentCoreEventAdapter();
+  const harness = [
+    { type: "run_start", runId: "r" }, { type: "turn_start", runId: "r", turnId: "t" },
+    { type: "message_update", runId: "r", message: legacy[1]!.message, event: legacy[1]!.assistantMessageEvent },
+    { ...legacy[2], type: "tool_start" }, { ...legacy[3], type: "tool_end" }, { type: "run_end", runId: "r", status: "completed" },
+  ];
+  const core = harness.flatMap((event) => adapter.adapt({ lane: "main", ...event } as unknown as import("@earendil-works/pi-agent-core").HarnessEvent));
+  const project = async (events: Array<{ type: string }>) => {
+    const records: SseEventRecord[] = [];
+    const hub = new ConversationEventHub({ append: async (_cwd, _id, record) => { records.push(record); }, readAfter: async () => [] });
+    const process = new EventEmitter();
+    hub.bind(cwd, process as PiProcess, { activeSessionId: () => "s", onBusy: () => {}, onExit: () => {} });
+    events.forEach((event) => process.emit("event", event));
+    await hub.flush();
+    return records.map((record) => {
+      const { streamEpoch: _epoch, startedAt: _start, endedAt: _end, ...value } = JSON.parse(record.data).payload;
+      return value;
+    });
+  };
+  expect(await project(core)).toEqual(await project(legacy));
+});
+
+it("publishes one error card when core message and run terminal facts describe the same fault", async () => {
+  const cwd = await workspace();
+  const records: SseEventRecord[] = [];
+  const hub = new ConversationEventHub({ append: async (_cwd, _id, record) => { records.push(record); }, readAfter: async () => [] });
+  const process = new EventEmitter();
+  hub.bind(cwd, process as PiProcess, { activeSessionId: () => "s", onBusy: () => {}, onExit: () => {} });
+  process.emit("event", { type: "operation.started", runId: "r", turnId: "r" });
+  process.emit("event", { type: "message.completed", runId: "r", message: { role: "assistant", stopReason: "error", errorMessage: "provider failed" } });
+  process.emit("event", { type: "runtime.error", runId: "r", message: "provider failed" });
+  process.emit("event", { type: "operation.settled", runId: "r", status: "failed" });
+  await hub.flush();
+  const values = records.map((record) => JSON.parse(record.data));
+  expect(values.filter((value) => value.type === "error")).toHaveLength(1);
+  expect(values).toContainEqual(expect.objectContaining({ type: "session.idle", outcome: "with_issues" }));
 });

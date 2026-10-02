@@ -24,7 +24,9 @@ fi
 echo "  Node.js: $("$NODE_PATH" --version)"
 echo "  pnpm:   $(pnpm --version)"
 
-if [ -n "${PI_CLI_PATH:-}" ]; then
+if [ "${PI_SCIENCE_AGENT_RUNTIME:-}" = "agent-core" ]; then
+  PI_CLI=""
+elif [ -n "${PI_CLI_PATH:-}" ]; then
   PI_CLI="$PI_CLI_PATH"
   [ -f "$PI_CLI" ] || { echo "Error: PI_CLI_PATH does not point to a file: $PI_CLI" >&2; exit 1; }
 else
@@ -59,7 +61,7 @@ LAUNCHER="$BIN_DIR/pi-science"
 bash "$SCRIPT_DIR/write-launcher.sh" "$PROJECT_DIR" "$BIN_DIR"
 
 echo "==> Installation complete."
-echo "  Pi CLI:   $PI_CLI"
+if [ -n "$PI_CLI" ]; then echo "  Pi CLI:   $PI_CLI"; fi
 echo "  Launcher: $LAUNCHER"
 case ":$PATH:" in
   *":$BIN_DIR:"*) echo "  Start it with: pi-science" ;;

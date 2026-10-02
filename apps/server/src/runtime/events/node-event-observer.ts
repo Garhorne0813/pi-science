@@ -1,9 +1,10 @@
+import { productInput } from "./legacy-runtime-event.js";
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { extname, relative, resolve } from "node:path";
 import { appendJsonLine, readJsonLines, workspaceFile } from "../../storage/persistence.js";
 import { persistArtifactBytes } from "../artifacts/artifact-content-store.js";
-import type { PiEvent } from "../pi/pi-process.js";
+import type { RuntimeEvent as PiEvent } from "../agent/agent-runtime-types.js";
 import { executionIdFor, executionRepository } from "../executions/execution-repository.js";
 
 type Publish = (payload: Record<string, unknown>) => Promise<void>;
@@ -44,12 +45,13 @@ export async function observeNodePiEvent(
   sessionId: string,
   publish: Publish,
 ): Promise<void> {
-  if (["agent_start", "agent_end", "agent_settled", "error"].includes(event.type)) {
-    void serialized(workspaceFile(cwd, "skill-events.jsonl"), () => appendJsonLine(workspaceFile(cwd, "skill-events.jsonl"), {
-      type: "skill_event", session_id: sessionId, ts: Date.now() / 1000, event: event.type,
+  event = productInput(event);
+  if (["operation.started", "operation.ended", "operation.settled", "runtime.error"].includes(event.type)) {
+    await serialized(workspaceFile(cwd, "skill-events.jsonl"), () => appendJsonLine(workspaceFile(cwd, "skill-events.jsonl"), {
+      type: "skill_event", session_id: sessionId, ts: Date.now() / 1000, event: ({ "operation.started": "agent_start", "operation.ended": "agent_end", "operation.settled": "agent_settled", "runtime.error": "error" } as Record<string, string>)[event.type],
     })).catch(() => undefined);
   }
-  if (event.type === "tool_execution_start") {
+  if (event.type === "tool.started") {
     const toolCallId = String(event.toolCallId ?? "");
     if (toolCallId) {
       const tool = String(event.toolName ?? "unknown");
@@ -65,8 +67,8 @@ export async function observeNodePiEvent(
       }).catch(() => undefined);
     }
   }
-  if (event.type === "tool_execution_end") {
-    void serialized(workspaceFile(cwd, "skill-events.jsonl"), () => appendJsonLine(workspaceFile(cwd, "skill-events.jsonl"), {
+  if (event.type === "tool.completed") {
+    await serialized(workspaceFile(cwd, "skill-events.jsonl"), () => appendJsonLine(workspaceFile(cwd, "skill-events.jsonl"), {
       type: "skill_event", session_id: sessionId, ts: Date.now() / 1000, event: "tool",
       tool: String(event.toolName ?? ""), status: event.isError ? "error" : "ok",
     })).catch(() => undefined);
