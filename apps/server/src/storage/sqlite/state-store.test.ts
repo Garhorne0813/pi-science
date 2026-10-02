@@ -8,7 +8,7 @@ import { fingerprintPaths, WorkspaceRepository } from "./repositories/workspace-
 import { loadMigrations } from "./migrations.js";
 import { InMemorySqliteStateStore, SqliteStateStore } from "./state-store.js";
 
-const stores: InMemorySqliteStateStore[] = [];
+const stores: SqliteStateStore[] = [];
 const directories: string[] = [];
 
 afterEach(async () => {
@@ -173,31 +173,38 @@ describe("SQLite state store", () => {
     const path = join(root, "state.sqlite");
     const migrations = await loadMigrations();
     const legacy = new SqliteStateStore({ path, migrations: migrations.slice(0, 2) });
-    await legacy.start();
-    await legacy.run("INSERT INTO projects (project_id, name, manifest_version, created_at, updated_at, last_seen_at) VALUES ('project-1', 'one', 1, 1, 1, 1)");
-    await legacy.run("INSERT INTO projects (project_id, name, manifest_version, created_at, updated_at, last_seen_at) VALUES ('project-2', 'two', 1, 1, 1, 1)");
-    await legacy.run(
-      `INSERT INTO mcp_connectors (connector_id, name, display_name, description, source, transport, endpoint_url, command, args_json, socket_path, runtime_config_json, credential_ref, revision, created_at, updated_at)
-       VALUES ('mcp-partial', 'partial', 'Partial', '', 'custom', 'stdio', NULL, 'node', '[]', NULL, '{"lifecycle":"lazy","expose_resources":true,"include_tools":[],"exclude_tools":[],"environment":{},"headers":{},"auth":"none","allow_private":false}', NULL, 1, 1, 1)`,
-    );
-    for (const project of ["project-1", "project-2"]) {
-      await legacy.run("INSERT INTO mcp_project_bindings (project_id, connector_id, enabled, include_tools_json, exclude_tools_json, approval_mode, revision, created_at, updated_at) VALUES (?, 'mcp-partial', 1, '[]', '[]', 'custom', 1, 1, 2)", [project]);
-    }
-    await legacy.run("INSERT INTO mcp_tool_grants (project_id, connector_id, tool_name, decision, updated_at) VALUES ('project-1', 'mcp-partial', 'search', 'allow', 3)");
-    await legacy.close();
+    stores.push(legacy);
+    let upgraded: SqliteStateStore | undefined;
+    try {
+      await legacy.start();
+      await legacy.run("INSERT INTO projects (project_id, name, manifest_version, created_at, updated_at, last_seen_at) VALUES ('project-1', 'one', 1, 1, 1, 1)");
+      await legacy.run("INSERT INTO projects (project_id, name, manifest_version, created_at, updated_at, last_seen_at) VALUES ('project-2', 'two', 1, 1, 1, 1)");
+      await legacy.run(
+        `INSERT INTO mcp_connectors (connector_id, name, display_name, description, source, transport, endpoint_url, command, args_json, socket_path, runtime_config_json, credential_ref, revision, created_at, updated_at)
+         VALUES ('mcp-partial', 'partial', 'Partial', '', 'custom', 'stdio', NULL, 'node', '[]', NULL, '{"lifecycle":"lazy","expose_resources":true,"include_tools":[],"exclude_tools":[],"environment":{},"headers":{},"auth":"none","allow_private":false}', NULL, 1, 1, 1)`,
+      );
+      for (const project of ["project-1", "project-2"]) {
+        await legacy.run("INSERT INTO mcp_project_bindings (project_id, connector_id, enabled, include_tools_json, exclude_tools_json, approval_mode, revision, created_at, updated_at) VALUES (?, 'mcp-partial', 1, '[]', '[]', 'custom', 1, 1, 2)", [project]);
+      }
+      await legacy.run("INSERT INTO mcp_tool_grants (project_id, connector_id, tool_name, decision, updated_at) VALUES ('project-1', 'mcp-partial', 'search', 'allow', 3)");
+      await legacy.close();
 
-    const upgraded = new SqliteStateStore({ path });
-    await upgraded.start();
-    expect(await upgraded.get("SELECT decision FROM mcp_global_tool_grants WHERE connector_id = 'mcp-partial' AND tool_name = 'search'"))
-      .toEqual({ decision: "ask" });
-    expect(await upgraded.get("SELECT decision FROM mcp_project_tool_grants WHERE project_id = 'project-1' AND connector_id = 'mcp-partial' AND tool_name = 'search'"))
-      .toEqual({ decision: "allow" });
-    expect(await upgraded.get("SELECT decision FROM mcp_project_tool_grants WHERE project_id = 'project-2' AND connector_id = 'mcp-partial' AND tool_name = 'search'"))
-      .toBeNull();
-    const conflict = await upgraded.get<{ project_ids_json: string }>("SELECT project_ids_json FROM mcp_scope_migration_conflicts WHERE connector_id = 'mcp-partial' AND conflict_kind = 'tool_grant' AND tool_name = 'search'");
-    expect(JSON.parse(conflict!.project_ids_json)).toEqual(expect.arrayContaining(["project-1", "project-2"]));
-    await upgraded.close();
-  });
+      upgraded = new SqliteStateStore({ path });
+      stores.push(upgraded);
+      await upgraded.start();
+      expect(await upgraded.get("SELECT decision FROM mcp_global_tool_grants WHERE connector_id = 'mcp-partial' AND tool_name = 'search'"))
+        .toEqual({ decision: "ask" });
+      expect(await upgraded.get("SELECT decision FROM mcp_project_tool_grants WHERE project_id = 'project-1' AND connector_id = 'mcp-partial' AND tool_name = 'search'"))
+        .toEqual({ decision: "allow" });
+      expect(await upgraded.get("SELECT decision FROM mcp_project_tool_grants WHERE project_id = 'project-2' AND connector_id = 'mcp-partial' AND tool_name = 'search'"))
+        .toBeNull();
+      const conflict = await upgraded.get<{ project_ids_json: string }>("SELECT project_ids_json FROM mcp_scope_migration_conflicts WHERE connector_id = 'mcp-partial' AND conflict_kind = 'tool_grant' AND tool_name = 'search'");
+      expect(JSON.parse(conflict!.project_ids_json)).toEqual(expect.arrayContaining(["project-1", "project-2"]));
+    } finally {
+      await upgraded?.close();
+      await legacy.close();
+    }
+  }, 15_000);
 
   it("keeps job history attached to project identity after a workspace rename", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-science-sqlite-rename-"));
