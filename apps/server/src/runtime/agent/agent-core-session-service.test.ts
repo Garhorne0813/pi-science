@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { readJson, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
 import { AgentCoreSessionService } from "./agent-core-session-service.js";
+import { workspaceIdentity } from "./workspace-session-identity.js";
 import { CredentialStore } from "../../model-resources/credential-store.js";
 import { AgentRuntimeExitedError, AgentRuntimeTimeoutError } from "./agent-runtime-errors.js";
 import { EventEmitter } from "node:events";
@@ -16,7 +17,7 @@ describe("agent-core session configuration", () => {
     const sendCommand = vi.fn();
     const runtime = { cwd, sessionId, isClosed: false, sendCommand };
     const service = new AgentCoreSessionService({} as never, {} as never);
-    (service as unknown as { live: Map<string, unknown> }).live.set(`${cwd}\0${sessionId}`,
+    (service as unknown as { live: Map<string, unknown> }).live.set(`${workspaceIdentity(cwd)}\0${sessionId}`,
       { key: "test", runtime, busy: true, restartPending: false, model: "openai/old", thinking: "low" });
     expect(await service.configure(cwd, sessionId, "openai/new", "high", { skills: [], extensions: [] }))
       .toMatchObject({ success: false, code: "busy" });
@@ -29,7 +30,7 @@ describe("agent-core session configuration", () => {
     const sendCommand = vi.fn().mockResolvedValue({ success: false, code: "busy" });
     const runtime = { cwd, sessionId, isClosed: false, sendCommand };
     const service = new AgentCoreSessionService({} as never, {} as never);
-    (service as unknown as { live: Map<string, unknown> }).live.set(`${cwd}\0${sessionId}`,
+    (service as unknown as { live: Map<string, unknown> }).live.set(`${workspaceIdentity(cwd)}\0${sessionId}`,
       { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low" });
     expect(await service.configure(cwd, sessionId, "openai/new", "high", { skills: [], extensions: [] }))
       .toMatchObject({ success: false, code: "busy" });
@@ -73,7 +74,7 @@ describe("agent-core session configuration", () => {
       const runtime = { cwd, sessionId, isClosed: false, sendCommand };
       const service = new AgentCoreSessionService({} as never, {} as never);
       const live = { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low" };
-      (service as unknown as { live: Map<string, unknown> }).live.set(`${resolve(cwd)}\0${sessionId}`, live);
+      (service as unknown as { live: Map<string, unknown> }).live.set(`${workspaceIdentity(cwd)}\0${sessionId}`, live);
       const config = { skills: [], extensions: [] };
       const first = service.configure(cwd, sessionId, "openai/first", "medium", config);
       const second = service.configure(cwd, sessionId, "openai/second", "high", config);
@@ -100,7 +101,7 @@ describe("agent-core session configuration", () => {
         data: { model: { provider: "openai", modelId: "new" }, thinkingLevel: "high" } }) };
       const service = new AgentCoreSessionService({} as never, {} as never);
       const live = { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low" };
-      (service as unknown as { live: Map<string, unknown> }).live.set(`${resolve(cwd)}\0${sessionId}`, live);
+      (service as unknown as { live: Map<string, unknown> }).live.set(`${workspaceIdentity(cwd)}\0${sessionId}`, live);
       expect(await service.configure(cwd, sessionId, "openai/new", "high", { skills: [], extensions: [] }))
         .toMatchObject({ success: true, model: "openai/new", thinking: "high" });
       expect(live).toMatchObject({ model: "openai/new", thinking: "high" });
@@ -116,7 +117,7 @@ describe("agent-core session configuration", () => {
       const runtime = { cwd, sessionId: "transport", isClosed: false, sendCommand: vi.fn().mockRejectedValue(error) };
       const service = new AgentCoreSessionService({} as never, {} as never);
       const recover = vi.spyOn(service as unknown as { recover(item: unknown): Promise<void> }, "recover").mockResolvedValue();
-      (service as unknown as { live: Map<string, unknown> }).live.set(`${resolve(cwd)}\0transport`,
+      (service as unknown as { live: Map<string, unknown> }).live.set(`${workspaceIdentity(cwd)}\0transport`,
         { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low" });
       expect(await service.command(cwd, "transport", "prompt", { message: "hello" }, { skills: [], extensions: [] }))
         .toMatchObject({ success: false, code });
@@ -159,7 +160,7 @@ describe("agent-core session configuration", () => {
       const lookup = vi.spyOn(internals.registry, "get").mockResolvedValue(undefined);
       let activate!: (value: typeof live) => void;
       const opening = new Promise<typeof live>((resolveOpening) => { activate = resolveOpening; });
-      const key = `${resolve(cwd)}\0${sessionId}`;
+      const key = `${workspaceIdentity(cwd)}\0${sessionId}`;
       internals.live.set(key, live);
       internals.opening.set(key, opening);
       const aborted = service.command(cwd, sessionId, "abort", {}, { skills: [], extensions: [] });
