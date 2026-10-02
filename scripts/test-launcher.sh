@@ -250,6 +250,30 @@ assert_contains "$TEMP_ROOT/invalid-watch.log" 'PI_SCIENCE_SERVER_WATCH must be 
 [ ! -e "$FIXTURE/control.pid" ] || fail "invalid watch value spawned the control plane"
 wait_port_available "$INVALID_WATCH_PORT" || fail "invalid watch value left the control-plane port occupied"
 
+# A PID/start identity may be visible before the child execs the supervisor.
+# Simulate one pre-exec command observation without relying on scheduler timing.
+PRE_EXEC_OBSERVED="$TEMP_ROOT/pre-exec-observed"
+PRE_EXEC_CONTROL_PORT="$(free_port)"; PRE_EXEC_RUNTIME_PORT="$(free_port)"; PRE_EXEC_FRONTEND_PORT="$(free_port)"
+PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_CONTROL_PLANE_PORT="$PRE_EXEC_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$PRE_EXEC_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$PRE_EXEC_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=10 bash -c '
+  observed="$2"
+  PI_SCIENCE_SOURCE_ONLY=1 source "$1"
+  process_command() {
+    if [ "$1" = "$BOOTSTRAP_PID" ] && [ ! -f "$observed" ]; then
+      : > "$observed"
+      printf "%s\n" "bootstrap shell before supervisor exec"
+    else
+      ps -ww -o command= -p "$1" 2>/dev/null | sed "s/^[[:space:]]*//" | head -n 1
+    fi
+  }
+  cmd_start --detach --no-open
+' _ "$FIXTURE/scripts/pi-science.sh" "$PRE_EXEC_OBSERVED" >"$TEMP_ROOT/pre-exec.log" 2>&1 || { cat "$TEMP_ROOT/pre-exec.log" >&2; fail "pre-exec observation caused a false startup failure"; }
+[ -f "$PRE_EXEC_OBSERVED" ] || fail "pre-exec command observation was not exercised"
+PRE_EXEC_PID="$(cat "$FIXTURE/.runtime/pi-science/run.state/pid")"
+PI_SCIENCE_CONTROL_PLANE_PORT="$PRE_EXEC_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$PRE_EXEC_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$PRE_EXEC_FRONTEND_PORT" bash "$FIXTURE/scripts/pi-science.sh" stop >/dev/null
+wait_pid_gone "$PRE_EXEC_PID" || fail "pre-exec supervisor survived stop"
+wait_port_available "$PRE_EXEC_CONTROL_PORT" || fail "pre-exec supervisor left control port occupied"
+wait_port_available "$PRE_EXEC_FRONTEND_PORT" || fail "pre-exec supervisor left frontend port occupied"
+
 # A live checkout-local launch lock refuses a simultaneous detached contender
 # before it can commit supervisor state.
 CONCURRENT_BARRIER="$TEMP_ROOT/concurrent-bootstrap"

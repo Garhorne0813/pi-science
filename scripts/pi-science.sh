@@ -279,13 +279,22 @@ cmd_start() {
   [ -z "$existing" ] || { echo "Error: a verified Pi-Science supervisor is still running but is not healthy; stop it first." >&2; exit 1; }
 
   mkdir -p "$RUN_DIR"
-  local token pid started deadline cleanup_wait
+  local token pid started deadline cleanup_wait supervisor_command
   token="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(18).toString("hex"))')"
   (cd "$PROJECT_DIR" && exec nohup bash "$SCRIPT_DIR/start.sh" --launch-token "$token") >"$LOG_FILE" 2>&1 &
   pid=$!
   BOOTSTRAP_PID="$pid"; BOOTSTRAP_TOKEN="$token"
   started=""
-  for _ in $(seq 1 40); do started="$(process_start_identity "$pid")"; [ -n "$started" ] && break; kill -0 "$pid" 2>/dev/null || break; sleep 0.025; done
+  # The forked shell already has a PID/start identity before exec. Do not
+  # publish that identity until its command carries this launch's token.
+  for _ in $(seq 1 40); do
+    started="$(process_start_identity "$pid")"
+    supervisor_command="$(process_command "$pid")"
+    case "$supervisor_command" in *"$SCRIPT_DIR/start.sh"*"--launch-token $token"*) [ -n "$started" ] && break ;; esac
+    started=""
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.025
+  done
   if [ -z "$started" ]; then echo "Error: unable to establish detached supervisor identity." >&2; exit 1; fi
   BOOTSTRAP_STARTED="$started"
   if [ -n "${PI_SCIENCE_TEST_BOOTSTRAP_BARRIER:-}" ]; then
