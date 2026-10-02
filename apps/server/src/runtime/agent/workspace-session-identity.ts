@@ -5,7 +5,7 @@ import { BACKGROUND_CONTEXT, type JsonlSessionRepo, type JsonlSessionMetadata } 
 /** Use the filesystem's spelling, including Windows casing and directory aliases. */
 export function workspaceIdentity(cwd: string): string {
   const path = resolve(cwd);
-  try { return realpathSync(path); }
+  try { return realpathSync.native(path); }
   catch { return path; }
 }
 
