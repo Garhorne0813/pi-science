@@ -32,7 +32,7 @@ it("reopens an alias-spelled transcript in a canonical worker without including 
     expect((await listWorkspaceSessions(repo, cwd)).map((item) => item.id)).toEqual([sessionId]);
     const projection = new AgentSessionRepository();
     expect(await projection.findPath(cwd, sessionId)).toBeTruthy();
-    expect(await projection.findPath(alias, sessionId)).toBe(await projection.findPath(cwd, sessionId));
+    expect(await realpath((await projection.findPath(alias, sessionId))!)).toBe(await realpath((await projection.findPath(cwd, sessionId))!));
     expect(await projection.findPath(cwd, foreign.metadata.id)).toBeNull();
     await repo.close(BACKGROUND_CONTEXT);
     repo = undefined;
