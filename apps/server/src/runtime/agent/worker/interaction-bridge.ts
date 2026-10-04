@@ -9,6 +9,8 @@ export class InteractionBridge {
 
   constructor(private readonly publish: (event: RuntimeEvent) => void) {}
 
+  get hasPending(): boolean { return this.pending.size > 0; }
+
   request(title: string, prefill: string, signal?: AbortSignal, options: { method?: "input" | "confirm"; kind?: "permission"; message?: string } = {}): Promise<string | null> {
     if (signal?.aborted) return Promise.resolve(null);
     const id = randomUUID();

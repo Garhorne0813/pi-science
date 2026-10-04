@@ -52,7 +52,7 @@ export class SessionRuntime {
   private readonly fatal: (error: unknown) => void;
   private readonly watch: WatchHandle<LaneSnapshot>;
   private readonly interactions: InteractionBridge;
-  private readonly mcp: AgentMcpTools;
+  private readonly mcp: AgentMcpTools | undefined;
   private readonly skillPaths: string[];
   private allSkills: Skill[];
   private promptTemplates: PromptTemplate[] = [];
@@ -78,7 +78,7 @@ export class SessionRuntime {
     session: Session<JsonlSessionMetadata>,
     watch: WatchHandle<LaneSnapshot>,
     interactions: InteractionBridge,
-    mcp: AgentMcpTools,
+    mcp: AgentMcpTools | undefined,
     skillPaths: string[],
     allSkills: Skill[],
     skillPolicy: RuntimeSkillPolicy,
@@ -129,7 +129,11 @@ export class SessionRuntime {
       if (recovering && saved?.model === `${model.provider}/${model.id}`) model.contextWindow = saved.contextWindow;
       const discovered = await loadSkills(executionEnv, skillPaths, context);
       const templates = await loadPromptTemplates(executionEnv, join(options.cwd, ".pi", "prompts"), context);
-      mcp = await AgentMcpTools.open(options.cwd, interactions, options.env ?? {});
+      // Capability checks precede discovery: a tool-free worker must not spawn
+      // connectors, open connections, or materialize their credentials.
+      if (options.allowedTools === undefined || options.allowedTools.some((name) => name.startsWith("mcp__"))) {
+        mcp = await AgentMcpTools.open(options.cwd, interactions, options.env ?? {});
+      }
       const skillPolicy = options.skillPolicy ?? { mode: "inherit" };
       const subagents = new SubagentBridge(emit);
       const { harness, open } = await AgentHarness.create({
@@ -142,7 +146,7 @@ export class SessionRuntime {
           execution.env = environment;
           execution.inheritEnv = false;
         } }), createEditTool(), createWriteTool(),
-          todoHarnessTool(session), subagentHarnessTool(subagents), ...notebookHarnessTools(options.cwd, session.metadata.id), questionnaireHarnessTool(interactions), ...mcp.tools]
+          todoHarnessTool(session), subagentHarnessTool(subagents), ...notebookHarnessTools(options.cwd, session.metadata.id), questionnaireHarnessTool(interactions), ...(mcp?.tools ?? [])]
           .filter((tool) => !options.allowedTools || options.allowedTools.includes(tool.name)),
         toolContext: { env: executionEnv },
         resources: { skills: applySkillPolicy(discovered.skills, skillPolicy), promptTemplates: templates.promptTemplates },
@@ -230,6 +234,7 @@ export class SessionRuntime {
             lastResult: snapshot.lastResult,
             eventSequence: this.eventSequence(),
             runtimeEpoch: this.runtimeEpoch,
+            pendingInteraction: this.interactions.hasPending,
             ...await contextUsage(snapshot.transcript, this.applied.contextWindow),
             compaction: await this.harness.getCompactionSettings(context),
             compaction_threshold_percent: this.applied.thresholdPercent,
@@ -429,7 +434,7 @@ export class SessionRuntime {
     this.watch.unsubscribe();
     await this.mutationTail;
     await this.harness.close(context);
-    await this.mcp.close();
+    await this.mcp?.close();
     await this.repo.close(context);
     await this.executionEnv.cleanup(context);
   }

@@ -9,6 +9,7 @@ export interface AgentRuntimeStartOptions {
   sessionId?: string;
   parentSessionId?: string;
   depth?: number;
+  /** Exact tool capabilities. Without an mcp__ capability, MCP discovery is skipped. */
   allowedTools?: string[];
   sessionsRoot: string;
   model: { provider: string; modelId: string };

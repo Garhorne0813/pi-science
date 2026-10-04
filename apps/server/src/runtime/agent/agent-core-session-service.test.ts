@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readJson, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
 import { AgentCoreSessionService } from "./agent-core-session-service.js";
 import { workspaceIdentity } from "./workspace-session-identity.js";
@@ -172,5 +172,73 @@ describe("agent-core session configuration", () => {
       expect(await aborted).toMatchObject({ success: true });
       expect(runtime.sendCommand).toHaveBeenCalledExactlyOnceWith("abort", {});
     } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+});
+
+describe("agent-core operation progress watchdog", () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+
+  async function supervised() {
+    vi.useFakeTimers();
+    vi.setSystemTime(100_000);
+    vi.stubEnv("PI_SCIENCE_EVENT_WATCHDOG_MS", "100");
+    vi.stubEnv("PI_SCIENCE_OPERATION_NO_PROGRESS_MS", "1000");
+    const snapshot = { busy: true, operation: { id: "run" }, eventSequence: 0, faulted: false, pendingInteraction: false };
+    const runtime = Object.assign(new EventEmitter(), { cwd: process.cwd(), sessionId: "watchdog", isClosed: false,
+      sendCommand: vi.fn(async () => ({ success: true, data: snapshot })) });
+    const service = new AgentCoreSessionService({ bind: () => undefined } as never, {} as never);
+    const internals = service as unknown as {
+      attach(key: string, runtime: unknown, model: string, thinking: string, config: unknown): Promise<{ lastProgressAt: number }>;
+      probe(item: unknown): Promise<void>; recover(item: unknown): Promise<void>;
+    };
+    const recover = vi.spyOn(internals, "recover").mockResolvedValue();
+    const live = await internals.attach("watchdog", runtime, "openai/gpt-4.1-mini", "off", {});
+    return { runtime, snapshot, recover, live, internals };
+  }
+
+  it("does not count successful liveness probes as operation progress", async () => {
+    const { runtime, recover, live } = await supervised();
+    await vi.advanceTimersByTimeAsync(900);
+    expect(runtime.sendCommand.mock.calls.length).toBeGreaterThan(5);
+    expect(live.lastProgressAt).toBe(100_000);
+    expect(recover).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(recover).toHaveBeenCalledOnce();
+  });
+
+  it("extends the deadline only for progress from the current operation", async () => {
+    const { runtime, recover, live } = await supervised();
+    await vi.advanceTimersByTimeAsync(600);
+    runtime.emit("event", { type: "message.updated", runId: "run" });
+    expect(live.lastProgressAt).toBe(100_600);
+    await vi.advanceTimersByTimeAsync(600);
+    runtime.emit("event", { type: "message.updated", runId: "other-run" });
+    runtime.emit("event", { type: "session.stats" });
+    runtime.emit("event", { type: "operation.started", runId: "run" });
+    expect(live.lastProgressAt).toBe(100_600);
+    expect(recover).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(recover).toHaveBeenCalledOnce();
+  });
+
+  it("excludes user interaction waiting and resumes supervision after the response", async () => {
+    const { runtime, snapshot, recover, live, internals } = await supervised();
+    snapshot.pendingInteraction = true;
+    runtime.emit("event", { type: "interaction.requested" });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(recover).not.toHaveBeenCalled();
+    snapshot.pendingInteraction = false;
+    await internals.probe(live);
+    await vi.advanceTimersByTimeAsync(900);
+    expect(recover).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(recover).toHaveBeenCalledOnce();
+  });
+
+  it("cancels supervision when the operation settles", async () => {
+    const { runtime, recover } = await supervised();
+    runtime.emit("event", { type: "operation.settled", runId: "run" });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(recover).not.toHaveBeenCalled();
   });
 });

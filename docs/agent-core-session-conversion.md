@@ -28,3 +28,9 @@ pnpm migrate:sessions /path/to/workspace-a /path/to/workspace-b
 ## 明确退役的旧能力
 
 不再加载任意 Orbit 扩展。Notebook、问卷、todo、对话 subagent、托管 MCP、研究/复查和标题生成使用 Core 或共用领域逻辑。Web 搜索/URL 抓取通过托管 MCP 提供；旧 `pi-web-access` 的媒体提取、浏览器 cookie、curator UI，以及 context-mode、旧子代理 async/workflow/mission 模式不保留兼容入口。OS 级 sandbox 仍未实施，工具继续使用现有工作区和凭据隔离规则。
+
+## 运行监督和工具能力
+
+会话 watchdog 默认每 60 秒检查 Worker。除 IPC 失败、运行故障和事件丢失外，当前 operation 连续 15 分钟没有模型、工具、压缩或重试进展，也会触发强制终止并从持久检查点恢复；成功读取状态不算进展。`PI_SCIENCE_OPERATION_NO_PROGRESS_MS` 可调整无进展期限，长时间静默的合法工具应设置更长期限；等待用户问卷或权限确认的时间不计入。`PI_SCIENCE_EVENT_WATCHDOG_MS` 控制检查间隔，非正值会关闭 watchdog。连续恢复最多三次，再次卡住会停止 Worker、报告终止自动恢复的错误，并保留检查点供显式重新打开会话重试。
+
+Worker 的 `allowedTools` 是精确工具能力列表。显式空列表或仅包含 `read`、`subagent` 等非 MCP 工具时，跳过整个 MCP discovery，不启动 connector、不建立连接，也不读取 connector 凭据。未限制工具或明确允许 `mcp__...` 工具时才初始化 MCP；发现后仍按完整工具名过滤。

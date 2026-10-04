@@ -25,6 +25,7 @@ import { createInterface } from "node:readline";
 
 type Live = { key: string; runtime: AgentCoreRuntimeClient; busy: boolean; restartPending: boolean; model: string; thinking: string | null;
   config: PiConfig; eventSequence: number; expectedOperationId?: string; watchdog?: NodeJS.Timeout; suppressRecovery?: boolean;
+  lastProgressAt: number; interactionWaitStartedAt?: number;
   pendingModel?: { model: string; thinking: string } };
 type ProductHooks = {
   observe?: (cwd: string, sessionId: string, event: Record<string, unknown>) => void;
@@ -33,6 +34,15 @@ type ProductHooks = {
 };
 
 function identity(cwd: string, id: string): string { return `${workspaceIdentity(cwd)}\0${id}`; }
+const OPERATION_PROGRESS_EVENTS = new Set([
+  "model.turn.started", "message.started", "message.updated", "message.completed",
+  "tool.started", "tool.updated", "tool.completed", "compaction.start", "compaction.end",
+  "retry.start", "retry.update", "retry.end",
+]);
+function noProgressTimeoutMs(): number {
+  const value = Number(process.env.PI_SCIENCE_OPERATION_NO_PROGRESS_MS ?? 15 * 60_000);
+  return Number.isFinite(value) && value > 0 ? value : 15 * 60_000;
+}
 function configPath(cwd: string, sessionId: string): string {
   return workspaceFile(cwd, `agent-session-config/${createHash("sha256").update(sessionId).digest("hex")}.json`);
 }
@@ -226,13 +236,23 @@ export class AgentCoreSessionService {
   }
 
   private async attach(key: string, runtime: AgentCoreRuntimeClient, model: string, level: string | null, config: PiConfig): Promise<Live> {
-    const item: Live = { key, runtime, busy: false, restartPending: false, model, thinking: level, config, eventSequence: 0 };
+    const item: Live = { key, runtime, busy: false, restartPending: false, model, thinking: level, config, eventSequence: 0, lastProgressAt: Date.now() };
     this.live.set(identity(runtime.cwd, runtime.sessionId), item);
     runtime.on("event", (event) => {
       if (typeof event.runtime_sequence === "number") item.eventSequence = event.runtime_sequence;
-      if (event.type === "operation.started" && typeof event.runId === "string") item.expectedOperationId = event.runId;
+      if (event.type === "operation.started" && typeof event.runId === "string" && item.expectedOperationId !== event.runId) {
+        item.expectedOperationId = event.runId;
+        item.lastProgressAt = Date.now();
+        item.interactionWaitStartedAt = undefined;
+      }
+      if (event.runId === item.expectedOperationId && OPERATION_PROGRESS_EVENTS.has(event.type)) {
+        item.lastProgressAt = Date.now();
+        if (item.interactionWaitStartedAt !== undefined) item.interactionWaitStartedAt = item.lastProgressAt;
+      }
+      if (event.type === "interaction.requested") item.interactionWaitStartedAt ??= Date.now();
       if (event.type === "operation.settled") {
         item.expectedOperationId = undefined;
+        item.interactionWaitStartedAt = undefined;
         this.recoveryAttempts.delete(identity(runtime.cwd, runtime.sessionId));
       }
       this.scheduleWatchdog(item);
@@ -273,6 +293,8 @@ export class AgentCoreSessionService {
       if (!data) throw new Error("Worker returned no snapshot");
       item.busy = Boolean(data.busy);
       item.expectedOperationId = data.operation?.id;
+      item.lastProgressAt = Date.now(); // The deferred worker has not started driving yet.
+      if (data.pendingInteraction) item.interactionWaitStartedAt = Date.now();
       if (data.model) item.model = `${data.model.provider}/${data.model.modelId}`;
       if (data.thinkingLevel) item.thinking = data.thinkingLevel;
       if (!data.busy && data.lastResult && await this.turns.unfinished(runtime.cwd, runtime.sessionId, data.lastResult.operationId)) {
@@ -281,6 +303,7 @@ export class AgentCoreSessionService {
       }
       const activated = await runtime.sendCommand("activate");
       if (!activated.success) throw new Error(String(activated.error));
+      this.scheduleWatchdog(item);
     } catch (error) {
       item.suppressRecovery = true;
       this.events.expectExit(runtime);
@@ -351,7 +374,11 @@ export class AgentCoreSessionService {
       const operationId = promptOperationId(sessionId, clientMessageId);
       try { await this.turns.prepare(cwd, sessionId, operationId); }
       catch (error) { return { success: false, code: "lifecycle_prepare_failed", error: String(error) }; }
-      opened.expectedOperationId ??= operationId;
+      if (!opened.expectedOperationId) {
+        opened.expectedOperationId = operationId;
+        opened.lastProgressAt = Date.now();
+        opened.interactionWaitStartedAt = undefined;
+      }
       this.scheduleWatchdog(opened);
     }
     try {
@@ -554,11 +581,15 @@ export class AgentCoreSessionService {
   get processCount(): number { return this.manager.processCount; }
 
   private scheduleWatchdog(item: Live): void {
-    if (item.watchdog) clearTimeout(item.watchdog);
-    item.watchdog = undefined;
     const delay = Number(process.env.PI_SCIENCE_EVENT_WATCHDOG_MS ?? 60000);
-    if (this.stopping || item.suppressRecovery || item.runtime.isClosed || !item.expectedOperationId || !Number.isFinite(delay) || delay <= 0) return;
-    item.watchdog = setTimeout(() => { void this.probe(item); }, delay);
+    if (this.stopping || item.suppressRecovery || item.runtime.isClosed || !item.expectedOperationId || !Number.isFinite(delay) || delay <= 0) {
+      if (item.watchdog) clearTimeout(item.watchdog);
+      item.watchdog = undefined;
+      return;
+    }
+    // Keep probes periodic. Non-progress events must not postpone supervision.
+    if (item.watchdog) return;
+    item.watchdog = setTimeout(() => { item.watchdog = undefined; void this.probe(item); }, delay);
     item.watchdog.unref?.();
   }
 
@@ -569,16 +600,27 @@ export class AgentCoreSessionService {
       if (!result.success) throw new Error(String(result.error));
       const data = result.data;
       if (!data) throw new Error("Worker returned no snapshot");
-      // A quiet model/tool is legitimate. A sequence gap proves that worker
-      // events were emitted but lost; a failed probe proves unresponsiveness.
+      if (this.stopping || this.live.get(identity(item.runtime.cwd, item.runtime.sessionId)) !== item || !item.expectedOperationId) return;
       if (data.faulted || Number(data.eventSequence ?? 0) > item.eventSequence) { await this.recover(item); return; }
+      const now = Date.now();
+      if (data.pendingInteraction) item.interactionWaitStartedAt ??= now;
+      else if (item.interactionWaitStartedAt !== undefined) {
+        // Waiting for a person is not an agent-loop stall. Exclude that time
+        // without counting successful IPC probes as operation progress.
+        item.lastProgressAt += now - item.interactionWaitStartedAt;
+        item.interactionWaitStartedAt = undefined;
+      }
+      if (data.busy && !data.pendingInteraction && now - item.lastProgressAt >= noProgressTimeoutMs()) {
+        await this.recover(item, true);
+        return;
+      }
       if (!data.busy && item.expectedOperationId && data.lastResult?.operationId === item.expectedOperationId) {
         item.runtime.emit("event", { type: "operation.settled", runId: data.lastResult.operationId, status: data.lastResult.status, recovery: true });
       } else this.scheduleWatchdog(item);
     } catch { await this.recover(item); }
   }
 
-  private recover(item: Live): Promise<void> {
+  private recover(item: Live, force = false): Promise<void> {
     const cwd = item.runtime.cwd, sessionId = item.runtime.sessionId;
     const key = identity(cwd, sessionId);
     if (this.stopping) return Promise.resolve();
@@ -590,15 +632,24 @@ export class AgentCoreSessionService {
       if (current && current !== item && !current.runtime.isClosed) return;
       const attempt = (this.recoveryAttempts.get(key) ?? 0) + 1;
       this.recoveryAttempts.set(key, attempt);
-      if (attempt > 3) return;
+      const exhausted = attempt > 3;
       item.suppressRecovery = true;
       if (item.watchdog) clearTimeout(item.watchdog);
-      await this.events.publish(cwd, sessionId, { type: "error", sessionId, code: "worker_recovering", recoverable: true,
+      if (!exhausted) await this.events.publish(cwd, sessionId, { type: "error", sessionId, code: "worker_recovering", recoverable: true,
         message: "The agent worker stopped responding; restoring its durable operation." });
       this.events.expectExit(item.runtime);
+      // Graceful Harness.close can cancel/settle an operation. A hung loop must
+      // instead retain its checkpoint so the replacement worker can resume it.
+      if ((force || exhausted) && !item.runtime.isClosed) item.runtime.child.kill("SIGKILL");
       await this.manager.stop(item.key); // Await exit before opening the same durable session.
       if (this.live.get(key) === item) this.live.delete(key);
       if (this.stopping) return;
+      if (exhausted) {
+        await this.events.publish(cwd, sessionId, { type: "error", sessionId, code: "worker_recovery_failed", terminal: true,
+          message: "The agent operation stalled repeatedly; automatic recovery has stopped. Reopen the session to retry." });
+        await this.events.publish(cwd, sessionId, { type: "session.idle", sessionId });
+        return;
+      }
       const opened = await this.open(cwd, sessionId, item.config);
       if ("success" in opened) {
         await this.events.publish(cwd, sessionId, { type: "error", sessionId, code: "worker_recovery_failed", terminal: attempt >= 3, message: String(opened.error) });

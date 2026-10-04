@@ -29,7 +29,7 @@ function response(stream: ServerResponse, tools = false): void {
   stream.end("data: [DONE]\n\n");
 }
 
-async function fixture(mode: "write" | "hold-first" = "write") {
+async function fixture(mode: "write" | "hold-first" | "stall-stream" | "stall-until-released" = "write") {
   const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-turns-"));
   cleanup.push(() => rm(cwd, { recursive: true, force: true }));
   await mkdir(join(cwd, ".pi-science"));
@@ -37,12 +37,19 @@ async function fixture(mode: "write" | "hold-first" = "write") {
   vi.stubEnv("PI_SCIENCE_AGENT_RUNTIME", "agent-core");
   vi.stubEnv("PI_SCIENCE_EVENT_WATCHDOG_MS", "100");
   const requests: Array<{ messages: Array<{ role: string }> }> = [];
+  let streamStallReleased = false;
   const server = createServer(async (request, stream) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const body = JSON.parse(Buffer.concat(chunks).toString()) as typeof requests[number];
     requests.push(body);
     if (mode === "hold-first" && requests.length === 1) return;
+    if ((mode === "stall-stream" && requests.length === 1) || (mode === "stall-until-released" && !streamStallReleased)) {
+      stream.writeHead(200, { "content-type": "text/event-stream" });
+      stream.write(`data: ${JSON.stringify({ id: "stalled-response", object: "chat.completion.chunk", created: 1, model: "lab",
+        choices: [{ index: 0, delta: { role: "assistant", content: "Partial" }, finish_reason: null }] })}\n\n`);
+      return; // The provider iterator never produces another frame or finishes.
+    }
     response(stream, mode === "write" && !body.messages.some((message) => message.role === "tool"));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -66,10 +73,56 @@ async function fixture(mode: "write" | "hold-first" = "write") {
   const created = await service.create({ cwd, config: { model: `${provider.id}/lab`, thinking: "off", skills: [], extensions: [] } });
   if (!("id" in created)) throw new Error(created.error);
   const core = (service as unknown as { agentCore: AgentCoreSessionService }).agentCore;
-  return { cwd, id: created.id, service, core, events, review, requests };
+  return { cwd, id: created.id, service, core, events, review, requests, releaseStreamStall: () => { streamStallReleased = true; } };
 }
 
 describe("agent-core product turns", () => {
+  it("kills an IPC-healthy worker with a stalled provider stream and resumes the durable operation once", async () => {
+    const { cwd, id, service, core, events, requests } = await fixture("stall-stream");
+    vi.stubEnv("PI_SCIENCE_OPERATION_NO_PROGRESS_MS", "1000");
+    const original = core.liveRuntime(cwd)!;
+    const runtimeEvents: Array<{ type: string }> = [];
+    original.on("event", (event) => runtimeEvents.push(event));
+    expect(await service.command(id, cwd, "prompt", { message: "resume a stalled stream", client_message_id: "stall-once" }))
+      .toMatchObject({ success: true });
+    await vi.waitFor(() => expect(runtimeEvents.some((event) => event.type === "message.updated")).toBe(true), { timeout: 15000 });
+    const snapshot = await original.sendCommand("get_state");
+    expect(snapshot).toMatchObject({ success: true, data: { busy: true, faulted: false } });
+    expect(original.isClosed).toBe(false);
+    const operationId = snapshot.data!.operation!.id;
+    await vi.waitFor(() => expect(original.isClosed).toBe(true), { timeout: 15000 });
+    await vi.waitFor(() => expect(requests).toHaveLength(2), { timeout: 15000 });
+    await vi.waitFor(async () => expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }), { timeout: 15000 });
+    expect(core.liveRuntime(cwd)).not.toBe(original);
+    expect(requests).toHaveLength(2);
+    expect(events.some((event) => event.code === "worker_recovering")).toBe(true);
+    const history = await new SessionRepository().messages(cwd, id);
+    expect(history.filter((message) => message.client_message_id === "stall-once")).toHaveLength(1);
+    expect(await core.liveRuntime(cwd)!.sendCommand("get_operation_result", { operationId }))
+      .toMatchObject({ success: true, data: { operationId, status: "completed" } });
+  }, 45000);
+
+  it("stops the worker and reports a terminal error after repeated stalls, leaving the checkpoint available for explicit resume", async () => {
+    const { cwd, id, service, core, events, requests, releaseStreamStall } = await fixture("stall-until-released");
+    vi.stubEnv("PI_SCIENCE_OPERATION_NO_PROGRESS_MS", "1000");
+    expect(await service.command(id, cwd, "prompt", { message: "repeated stall", client_message_id: "repeated-stall" }))
+      .toMatchObject({ success: true });
+    await vi.waitFor(() => expect(events.some((event) => event.code === "worker_recovery_failed" && event.terminal === true)).toBe(true),
+      { timeout: 25000 });
+    expect(requests.length).toBeGreaterThan(0);
+    expect(core.processCount).toBe(0);
+    expect(core.liveRuntime(cwd)).toBeNull();
+    expect(events.filter((event) => event.code === "worker_recovering")).toHaveLength(3);
+    expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false });
+    releaseStreamStall();
+    // Give the SDK's durable retry backoff time to elapse on explicit reopen.
+    vi.stubEnv("PI_SCIENCE_OPERATION_NO_PROGRESS_MS", "15000");
+    expect(await service.resume(id, cwd)).toMatchObject({ success: true });
+    await vi.waitFor(async () => expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }), { timeout: 15000 });
+    expect((await new SessionRepository().messages(cwd, id)).filter((message) => message.client_message_id === "repeated-stall"))
+      .toHaveLength(1);
+  }, 45000);
+
   it("captures a fast tool write and publishes final stats and one automatic review", async () => {
     const { cwd, id, service, core, events, review } = await fixture();
     expect(await service.command(id, cwd, "prompt", { message: "write a result", client_message_id: "write-once" })).toMatchObject({ success: true });

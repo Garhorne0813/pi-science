@@ -28,7 +28,7 @@ export interface RuntimeSnapshot {
   sessionId: string; busy: boolean; model: LaneSnapshot["configuration"]["model"];
   thinkingLevel: LaneSnapshot["configuration"]["thinkingLevel"]; activeTools: string[];
   operation: LaneSnapshot["operation"]; queues: LaneSnapshot["queues"]; faulted: boolean;
-  lastResult?: LaneSnapshot["lastResult"]; eventSequence: number; runtimeEpoch: string; pendingInteraction?: unknown;
+  lastResult?: LaneSnapshot["lastResult"]; eventSequence: number; runtimeEpoch: string; pendingInteraction?: boolean;
   context_tokens: number | null; context_window: number | null; context_percent: number | null;
   compaction: CompactionSettings; compaction_threshold_percent: number;
 }
@@ -83,6 +83,7 @@ export const runtimeSnapshotSchema = z.object({
   operation: z.object({ id: text, kind: z.string(), status: z.string(), startedAt: nonnegative,
     fromTipId: z.string().nullable(), runningTools: z.array(z.unknown()) }).passthrough().nullable(),
   queues: z.array(z.unknown()), faulted: z.boolean(), lastResult: operationResultSchema.optional(), eventSequence: nonnegative.int(), runtimeEpoch: text,
+  pendingInteraction: z.boolean().optional(),
   context_tokens: nonnegative.nullable(), context_window: nonnegative.nullable(), context_percent: nonnegative.nullable(),
   compaction: z.object({ enabled: z.boolean(), reserveTokens: nonnegative, keepRecentTokens: nonnegative }),
   compaction_threshold_percent: z.number().min(50).max(95),
