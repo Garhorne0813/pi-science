@@ -104,12 +104,13 @@ describe("AiTitleService", () => {
   it("disposes the title runtime through manager.stop so the process map does not leak", async () => {
     const stopped: string[] = [];
     let runtimeSessionDir = "";
+    let childId = "";
     const declaredCredentials: string[] = [];
     const manager = {
-      async start(key: string, options: { sessionsRoot: string; credentialEnvNames: string[] }) {
+      async start(key: string, options: { sessionsRoot: string; credentialEnvNames: string[]; sessionId: string }) {
         runtimeSessionDir = options.sessionsRoot;
+        childId = options.sessionId;
         declaredCredentials.push(...options.credentialEnvNames);
-        await writeFile(join(runtimeSessionDir, "background-title.jsonl"), "ghost", "utf8");
         return { sendCommand: async () => ({ success: true, data: null }), shutdown: async () => {} };
       },
       async stop(key: string) {
@@ -122,13 +123,43 @@ describe("AiTitleService", () => {
     const factory = new CoreTitleRuntimeFactory(manager as never, { environment: async () => ({}) } as never);
     const runtime = await factory.start(cwd);
     expect(declaredCredentials).toEqual(["LAB_TITLE_TOKEN"]);
-    expect(runtimeSessionDir).toContain(join(cwd, ".pi-science", "title-runtimes"));
+    expect(runtimeSessionDir).toBe(join(cwd, ".pi-science", "agent-sessions"));
     expect(runtimeSessionDir).not.toBe(join(cwd, ".pi-science", "sessions"));
-    await expect(access(runtimeSessionDir)).resolves.toBeUndefined();
+    const { AgentSessionRepository } = await import("../agent/agent-session-repository.js");
+    const { SessionRepository } = await import("../node/session-repository.js");
+    const target = await new AgentSessionRepository().findPath(cwd, childId);
+    expect(target).toBeTruthy();
+    expect(await new SessionRepository().list(cwd)).toEqual([]);
+    await expect(access(target!)).resolves.toBeUndefined();
     await runtime.dispose();
     expect(stopped).toHaveLength(1);
-    await expect(access(runtimeSessionDir)).rejects.toThrow();
+    await expect(access(target!)).rejects.toThrow();
+    expect(await new SessionRepository().list(cwd)).toEqual([]);
   });
+
+  it("starts a real hidden Core worker and removes its transcript on shutdown", async () => {
+    const { configPath, writeJsonAtomic } = await import("../../storage/persistence.js");
+    const { SessionRepository } = await import("../node/session-repository.js");
+    const { readdir } = await import("node:fs/promises");
+    await writeJsonAtomic(configPath("config.json"), { model: "openai/gpt-4.1-mini" });
+    const factory = new CoreTitleRuntimeFactory(undefined, { environment: async () => ({}) } as never);
+    try {
+      const runtime = await factory.start(cwd);
+      const state = await runtime.sendCommand("get_state");
+      expect(state).toMatchObject({ success: true, data: { activeTools: [], busy: false } });
+      expect(await runtime.sendCommand("get_skills")).toMatchObject({ success: true, data: { skills: [] } });
+      const { AgentSessionRepository } = await import("../agent/agent-session-repository.js");
+      const target = await new AgentSessionRepository().findPath(cwd, String((state.data as { sessionId: string }).sessionId));
+      expect(target).toBeTruthy();
+      expect(await new SessionRepository().list(cwd)).toEqual([]);
+      await factory.shutdownAll();
+      await runtime.dispose();
+      await expect(access(target!)).rejects.toThrow();
+      expect(await new SessionRepository().list(cwd)).toEqual([]);
+      expect(await readdir(join(cwd, ".pi-science", "agent-task-links"))).toEqual([]);
+      await expect(factory.start(cwd)).rejects.toThrow("closing");
+    } finally { await factory.shutdownAll(); }
+  }, 30_000);
 
   it("generates a title from the latest messages and disposes the runtime", async () => {
     await makeSession(cwd, sessionId, [

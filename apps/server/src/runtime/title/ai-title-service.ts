@@ -1,13 +1,14 @@
 import { CredentialStore } from "../../model-resources/credential-store.js";
-import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
 import { AgentRuntimeManager } from "../agent/agent-runtime-manager.js";
 import type { RuntimeResult as PiResult } from "../agent/agent-runtime-types.js";
 import { loadDefaultPiConfig } from "../agent/runtime-config.js";
 import { sessionRepository } from "../node/session-repository.js";
 import { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
-import { metadataRoot } from "../../storage/persistence.js";
+import { readJson, workspaceFile } from "../../storage/persistence.js";
+import { hiddenSessionsRoot, openHiddenTask } from "../agent/hidden-agent-task.js";
+import { AgentSessionRegistry } from "../agent/agent-session-registry.js";
 import { AI_TITLE_PROMPT_INSTRUCTION } from "./title-prompt.js";
 
 /** Minimum runtime surface the title service needs; tests provide a fake. */
@@ -19,6 +20,9 @@ export interface TitleRuntime {
 /** A disposable core worker with no tools or skills. */
 export class CoreTitleRuntimeFactory {
   private readonly environments: WorkspaceEnvironmentService;
+  private readonly pending = new Set<Promise<TitleRuntime>>();
+  private readonly disposers = new Set<() => Promise<void>>();
+  private closing = false;
 
   constructor(
     private readonly manager: AgentRuntimeManager = new AgentRuntimeManager(),
@@ -30,39 +34,58 @@ export class CoreTitleRuntimeFactory {
     this.environments = environments ?? new WorkspaceEnvironmentService();
   }
 
-  shutdownAll(): Promise<void> { return this.manager.shutdownAll(); }
+  async shutdownAll(): Promise<void> {
+    this.closing = true;
+    await Promise.allSettled([...this.pending]);
+    await this.manager.shutdownAll();
+    await Promise.allSettled([...this.disposers].map((dispose) => dispose()));
+  }
 
   async start(cwd: string): Promise<TitleRuntime> {
+    if (this.closing) throw new Error("Title runtime factory is closing");
+    const pending = this.startOnce(cwd);
+    this.pending.add(pending);
+    try { return await pending; }
+    finally { this.pending.delete(pending); }
+  }
+
+  private async startOnce(cwd: string): Promise<TitleRuntime> {
     const config = loadDefaultPiConfig();
     const environment = await this.environments.environment(cwd);
     if (!config.model?.includes("/")) throw new Error("Title generation requires a configured model");
-    const temporaryRoot = join(metadataRoot(cwd), "title-runtimes");
-    await mkdir(temporaryRoot, { recursive: true });
-    const temporarySessionDir = await mkdtemp(join(temporaryRoot, "runtime-"));
     const separator = config.model.indexOf("/");
     const credentials = await new CredentialStore().listMetadata();
     const credentialEnvNames = credentials.flatMap((item) => item.backend === "environment" && item.environment_variable ? [item.environment_variable] : []);
-    const options = { cwd, sessionsRoot: temporarySessionDir,
+    const options = { cwd, sessionsRoot: hiddenSessionsRoot(cwd),
       model: { provider: config.model.slice(0, separator), modelId: config.model.slice(separator + 1) },
       thinking: "off" as const, settings: config, allowedTools: [], skillPaths: [], skillPolicy: { mode: "none" as const }, credentialEnvNames,
       env: environment as Record<string, string> };
     const key = randomUUID();
-    try {
-      const process = await this.manager.start(key, options);
-      return {
-        sendCommand: (type, params = {}) => process.sendCommand(type, params),
-        dispose: async () => {
-          try {
-            await this.manager.stop(key);
-          } finally {
-            await rm(temporarySessionDir, { recursive: true, force: true });
+    const link = workspaceFile(cwd, `agent-task-links/${createHash("sha256").update(key).digest("hex")}.json`);
+    let disposing: Promise<void> | undefined;
+    const dispose = (): Promise<void> => disposing ??= (async () => {
+      try { await this.manager.stop(key); }
+      finally {
+        const saved = await readJson<{ sessionId?: string }>(link, {});
+        if (saved.sessionId) {
+          const registry = new AgentSessionRegistry();
+          const registered = await registry.get(cwd, saved.sessionId);
+          if (registered?.target) {
+            await registry.markDeleted(cwd, saved.sessionId, registered.target);
+            await rm(registered.target, { force: true });
           }
-        },
-      };
-    } catch (error) {
-      await rm(temporarySessionDir, { recursive: true, force: true });
-      throw error;
-    }
+        }
+        await rm(link, { force: true });
+        this.disposers.delete(dispose);
+      }
+    })();
+    this.disposers.add(dispose);
+    try {
+      const process = await openHiddenTask(this.manager, key, options, `title:${key}`);
+      const activated = await process.sendCommand("activate");
+      if (!activated.success) throw new Error(activated.error ?? "Title worker activation failed");
+      return { sendCommand: (type, params = {}) => process.sendCommand(type, params), dispose };
+    } catch (error) { await dispose(); throw error; }
   }
 }
 
