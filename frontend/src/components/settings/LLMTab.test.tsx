@@ -326,7 +326,7 @@ describe("LLMTab dynamic provider inventory", () => {
     // API key input or save button is rendered for an OAuth-only provider.
     expect(await screen.findByText("1 models available")).toBeInTheDocument();
     expect(screen.getByText("Subscription login required")).toBeInTheDocument();
-    expect(screen.getByText(/Sign in through Pi Orbit/)).toBeInTheDocument();
+    expect(screen.getByText(/Subscription sign-in is not supported in settings yet/)).toBeInTheDocument();
     expect(screen.queryByLabelText("OpenAI Codex API key")).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
