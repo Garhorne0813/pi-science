@@ -16,15 +16,19 @@ const tempDirs: string[] = [];
 const originalAgentRuntime = process.env.PI_SCIENCE_AGENT_RUNTIME;
 
 afterEach(async () => {
-  vi.restoreAllMocks();
-  await Promise.all(apps.splice(0).map((app) => app.close()));
-  await Promise.all(tempDirs.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
-  delete process.env.PI_SCIENCE_HOME;
-  delete process.env.PI_SCIENCE_WORKSPACES;
-  delete process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS;
-  delete process.env.DEEPSEEK_API_KEY;
-  if (originalAgentRuntime === undefined) delete process.env.PI_SCIENCE_AGENT_RUNTIME;
-  else process.env.PI_SCIENCE_AGENT_RUNTIME = originalAgentRuntime;
+  try {
+    vi.restoreAllMocks();
+    await Promise.all(apps.splice(0).map((app) => app.close()));
+    await Promise.all(tempDirs.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
+  } finally {
+    // A cleanup failure must not leak the selected runtime into the next case.
+    delete process.env.PI_SCIENCE_HOME;
+    delete process.env.PI_SCIENCE_WORKSPACES;
+    delete process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS;
+    delete process.env.DEEPSEEK_API_KEY;
+    if (originalAgentRuntime === undefined) delete process.env.PI_SCIENCE_AGENT_RUNTIME;
+    else process.env.PI_SCIENCE_AGENT_RUNTIME = originalAgentRuntime;
+  }
 });
 
 function config(): ServerConfig {
@@ -71,7 +75,15 @@ describe("native control-plane business routes", () => {
       expect(orbit).not.toHaveBeenCalled();
       expect(JSON.stringify(listed)).not.toContain("catalog-test-key");
     } finally {
-      vi.unstubAllEnvs();
+      try {
+        // This fixture disables nodePiManager, so app.close() does not own
+        // the worker started directly above. Await its exit before deleting
+        // its working directory (Windows retains a handle until it exits).
+        await modules.sessions.shutdownAll();
+        expect(modules.sessions.processCount).toBe(0);
+      } finally {
+        vi.unstubAllEnvs();
+      }
     }
   }, 30_000);
 
