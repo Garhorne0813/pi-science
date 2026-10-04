@@ -1386,7 +1386,7 @@
   "conversation.stats.tool": "工具调用",
   "conversation.stats.tokUnit": "tok",
   "settings.provider.needsLogin": "需要订阅账户登录",
-  "settings.provider.loginUnavailable": "请通过 Pi Orbit 登录；设置页暂不支持订阅登录。",
+  "settings.provider.loginUnavailable": "设置页暂不支持订阅登录，请使用 API key。",
   "settings.provider.authApiKey": "API 密钥",
   "settings.provider.authOAuth": "OAuth",
   "settings.provider.authBoth": "API 密钥或 OAuth",

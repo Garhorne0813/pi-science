@@ -1386,7 +1386,7 @@
   "conversation.stats.tool": "Tool call",
   "conversation.stats.tokUnit": "tok",
   "settings.provider.needsLogin": "Subscription login required",
-  "settings.provider.loginUnavailable": "Sign in through Pi Orbit; subscription login is not supported in settings yet.",
+  "settings.provider.loginUnavailable": "Subscription sign-in is not supported in settings yet. Use an API key.",
   "settings.provider.authApiKey": "API key",
   "settings.provider.authOAuth": "OAuth",
   "settings.provider.authBoth": "API key or OAuth",

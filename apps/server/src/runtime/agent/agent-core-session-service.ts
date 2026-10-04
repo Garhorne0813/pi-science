@@ -63,7 +63,7 @@ function failed(error: unknown): RuntimeResult<never> {
   return { success: false, code, error: error instanceof Error ? error.message : String(error) };
 }
 
-/** Development rollout path: one AgentHarness worker per v4 session. */
+/** One AgentHarness worker per v4 session. */
 export class AgentCoreSessionService {
   private readonly manager = new AgentRuntimeManager();
   private readonly repository = new AgentSessionRepository();

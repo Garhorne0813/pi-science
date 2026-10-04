@@ -43,7 +43,7 @@ export interface HistoryMessage {
   toolName?: string;
   isError?: boolean;
   timestamp?: string;
-  /** Tool-specific metadata persisted by Pi Orbit (toolResult details). */
+  /** Tool-specific metadata persisted by the agent runtime (toolResult details). */
   details?: unknown;
   presentation?: ToolPresentation;
   presentationRole?: "intermediate" | "final";

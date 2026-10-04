@@ -29,7 +29,7 @@ export interface SessionMessageRecord {
   toolName?: string;
   isError?: boolean;
   timestamp?: string | null;
-  /** Tool-specific metadata persisted by Pi Orbit (e.g. rpiv-todo's task
+  /** Tool-specific metadata persisted by the agent runtime (e.g. rpiv-todo's task
    *  snapshot). Forwarded to the frontend so read-only panels can rebuild
    *  tool state without live events. Capped: oversized details are dropped. */
   details?: unknown;

@@ -18,7 +18,7 @@ import type { SessionStats } from "@pi-science/contracts";
  *  - `agent_settled` clears stale pending entries (cancelled/aborted steps
  *    must not leak time into later turns).
  *
- *  Pi Orbit web events do not always carry a stable message id: the raw
+ *  Legacy event records do not always carry a stable message id: the raw
  *  `message_start/message_update/message_end` events can omit `message.id`
  *  entirely (the normalized stream then uses synthetic `anonymous-N` partIds).
  *  The projector therefore tracks the currently-streaming assistant message
