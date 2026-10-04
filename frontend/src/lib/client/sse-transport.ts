@@ -1,4 +1,4 @@
-import { conversationEventTypes } from "@pi-science/contracts";
+import { conversationEventTypes } from "@pi-science/contracts/conversation-events";
 /** SSE transport: EventSource lifecycle, connection watchdog, resume cursors
  *  and listener fan-out. Owned by PiScienceClient, which delegates its
  *  connection API to this object. */
