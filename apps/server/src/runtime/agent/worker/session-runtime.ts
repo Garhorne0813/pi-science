@@ -132,7 +132,7 @@ export class SessionRuntime {
       // Capability checks precede discovery: a tool-free worker must not spawn
       // connectors, open connections, or materialize their credentials.
       if (options.allowedTools === undefined || options.allowedTools.some((name) => name.startsWith("mcp__"))) {
-        mcp = await AgentMcpTools.open(options.cwd, interactions, options.env ?? {});
+        mcp = await AgentMcpTools.open(options.cwd, interactions, options.env ?? {}, undefined, options.allowedTools);
       }
       const skillPolicy = options.skillPolicy ?? { mode: "inherit" };
       const subagents = new SubagentBridge(emit);

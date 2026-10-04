@@ -68,20 +68,23 @@ export class AgentMcpTools {
   readonly tools: AgentHarnessTool<{ env: NodeExecutionEnv }>[] = [];
   readonly diagnostics: string[] = [];
 
-  static async open(cwd: string, bridge: InteractionBridge, environment: Record<string, string>, budgetMs = DISCOVERY_BUDGET_MS): Promise<AgentMcpTools> {
+  static async open(cwd: string, bridge: InteractionBridge, environment: Record<string, string>, budgetMs = DISCOVERY_BUDGET_MS,
+    allowedTools?: readonly string[]): Promise<AgentMcpTools> {
     const result = new AgentMcpTools();
+    const capabilities = allowedTools === undefined ? undefined : new Set(allowedTools);
     const servers = loadProjectedServers(cwd, (name, error) => {
       result.diagnostics.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
-    }) as Record<string, ServerDefinition>;
+    }, (name) => capabilities === undefined || [...capabilities].some((tool) => tool.startsWith(`mcp__${name}__`))) as Record<string, ServerDefinition>;
     const deadline = Date.now() + budgetMs;
     await Promise.all(Object.entries(servers).map(async ([name, server]) => {
-      try { await result.connect(name, server, cwd, bridge, environment, deadline); }
+      try { await result.connect(name, server, cwd, bridge, environment, deadline, capabilities); }
       catch (error) { result.diagnostics.push(`${name}: ${error instanceof Error ? error.message : String(error)}${typeof (error as { code?: unknown }).code === "number" ? ` (HTTP ${(error as { code: number }).code})` : ""}`); }
     }));
     return result;
   }
 
-  private async connect(name: string, server: ServerDefinition, cwd: string, bridge: InteractionBridge, environment: Record<string, string>, deadline: number): Promise<void> {
+  private async connect(name: string, server: ServerDefinition, cwd: string, bridge: InteractionBridge, environment: Record<string, string>, deadline: number,
+    capabilities?: ReadonlySet<string>): Promise<void> {
     if (server.auth === "oauth" && !Object.keys(server.headers ?? {}).some((key) => key.toLowerCase() === "authorization")) {
       throw new Error("OAuth MCP connector requires an authorized credential binding");
     }
@@ -108,6 +111,7 @@ export class AgentMcpTools {
       const count = listing.tools.length;
       if (count > 500) throw new Error("MCP server advertised too many tools");
       for (const tool of listing.tools) {
+        if (capabilities && !capabilities.has(`mcp__${name}__${tool.name}`)) continue;
         if (!visible(server, tool.name)) continue;
         this.tools.push({
           name: `mcp__${name}__${tool.name}`,

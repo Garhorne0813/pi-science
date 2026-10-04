@@ -97,7 +97,7 @@ describe("SessionStatsProjector", () => {
 
   it("tracks wall time for fully anonymous messages without any message id", () => {
     const projector = new SessionStatsProjector();
-    // Pi Orbit web mode emits raw events whose message object carries no id;
+    // An event stream can contain messages whose objects carry no id;
     // the projector must fall back to a tracker-local key for each message.
     projector.track(KEY, event("agent_start", {}), 1000);
     projector.track(KEY, event("message_start", { message: { role: "assistant" } }), 1100);

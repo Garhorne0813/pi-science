@@ -144,7 +144,6 @@ describe("agent-core fault recovery", () => {
     expect(await repository.messages(cwd, id)).toEqual([]);
     expect(await repository.messagesPage(cwd, id)).toMatchObject({ messages: [] });
     await first.shutdownAll();
-    vi.stubEnv("PI_SCIENCE_AGENT_RUNTIME", "orbit");
     const second = service().instance;
     expect(await second.resume(id, cwd)).toMatchObject({ success: false, code: "not_found" });
     expect(await second.delete(id, cwd)).toMatchObject({ success: true });

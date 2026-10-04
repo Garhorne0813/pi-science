@@ -13,14 +13,7 @@ const cleanup: string[] = [];
 const nodeSessionService = new NodeSessionService(undefined, undefined, {
   async environment(_cwd: string, inherited: NodeJS.ProcessEnv = process.env) { return { ...inherited }; },
 });
-const original = {
-  home: process.env.PI_SCIENCE_HOME,
-  cli: process.env.PI_CLI_PATH,
-  node: process.env.PI_NODE_PATH,
-  log: process.env.FAKE_PI_LOG,
-  mode: process.env.FAKE_PI_MODE,
-  piMode: process.env.PI_SCIENCE_PI_MODE,
-};
+const original = { home: process.env.PI_SCIENCE_HOME };
 
 beforeEach(async () => {
   const root = join(tmpdir(), `pi-science-node-routes-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -29,16 +22,13 @@ beforeEach(async () => {
   process.env.PI_SCIENCE_HOME = join(root, "data");
   await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
   await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), JSON.stringify({ model: "openai/gpt-4.1-mini", thinking: "off" }));
-  process.env.PI_NODE_PATH = process.execPath;
-  process.env.PI_SCIENCE_PI_MODE = "rpc";
-  process.env.FAKE_PI_LOG = join(root, "rpc.jsonl");
 });
 
 afterEach(async () => {
   vi.restoreAllMocks();
   await nodeSessionService.shutdownAll();
   for (const [key, value] of Object.entries(original)) {
-    const environmentKey = key === "home" ? "PI_SCIENCE_HOME" : key === "cli" ? "PI_CLI_PATH" : key === "node" ? "PI_NODE_PATH" : key === "mode" ? "FAKE_PI_MODE" : key === "piMode" ? "PI_SCIENCE_PI_MODE" : "FAKE_PI_LOG";
+    const environmentKey = key === "home" ? "PI_SCIENCE_HOME" : key;
     if (value === undefined) delete process.env[environmentKey];
     else process.env[environmentKey] = value;
   }
@@ -213,7 +203,7 @@ describe("native Node conversation routes", () => {
     await server.close();
   });
 
-  it("maps stable Pi Orbit failures to actionable HTTP responses", async () => {
+  it("maps stable Core runtime failures to actionable HTTP responses", async () => {
     for (const [code, statusCode] of [
       ["project_trust_required", 409],
       ["runtime_workspace_mismatch", 409],
@@ -226,7 +216,7 @@ describe("native Node conversation routes", () => {
       ["runtime_not_found", 404],
     ] as const) {
       const service = {
-        async create() { return { error: "Pi Orbit failure", code, diagnostics: [{ type: "error", message: "detail" }] }; },
+        async create() { return { error: "Core runtime failure", code, diagnostics: [{ type: "error", message: "detail" }] }; },
       } as unknown as NodeSessionService;
       const server = Fastify({ logger: false });
       registerNodeSessionRoutes(server, service, sessionRepository);

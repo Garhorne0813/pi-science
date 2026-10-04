@@ -8,9 +8,12 @@ type Binding = { kind: "literal"; value: string } | { kind: "environment"; name:
 type ProjectedServer = Record<string, unknown> & { __piScienceEnvironment?: Record<string, Binding>; __piScienceHeaders?: Record<string, Binding> };
 type ProjectedSnapshot = { version: 1; project_id: string; mcpServers: Record<string, ProjectedServer> };
 
-export function loadProjectedServers(workspace: string, onBindingError?: (name: string, error: unknown) => void): Record<string, Record<string, unknown>> {
+export function loadProjectedServers(workspace: string, onBindingError?: (name: string, error: unknown) => void,
+  acceptServer: (name: string) => boolean = () => true): Record<string, Record<string, unknown>> {
   const projected = loadProjectedSnapshot(workspace);
   return Object.fromEntries(Object.entries(projected.mcpServers ?? {}).flatMap(([name, raw]) => {
+    // Scope before resolving any environment/header credential bindings.
+    if (!acceptServer(name)) return [];
     try {
       const { __piScienceEnvironment, __piScienceHeaders, ...server } = raw;
       const env = { ...materialize(__piScienceEnvironment), ...(server.__piScienceBuiltin ? builtinNetworkEnvironment() : {}) };

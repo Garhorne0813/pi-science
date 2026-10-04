@@ -85,7 +85,6 @@ describe("AiTitleService", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     process.env.PI_SCIENCE_AI_TITLES = undefined;
-    process.env.PI_SCIENCE_PI_MODE = undefined;
   });
 
   it("returns null when the AI-title env flag disables the feature", () => {
@@ -94,12 +93,6 @@ describe("AiTitleService", () => {
     expect(aiTitlesEnabled()).toBe(false);
   });
 
-  it("ignores the retired RPC mode flag", () => {
-    process.env.PI_SCIENCE_PI_MODE = "rpc";
-    expect(aiTitlesEnabled()).toBe(true);
-    process.env.PI_SCIENCE_PI_MODE = undefined;
-    expect(aiTitlesEnabled()).toBe(true);
-  });
 
   it("disposes the title runtime through manager.stop so the process map does not leak", async () => {
     const stopped: string[] = [];

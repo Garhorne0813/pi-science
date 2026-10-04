@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
@@ -9,8 +9,47 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import { AgentMcpTools } from "./mcp-tools.js";
 import { InteractionBridge } from "./interaction-bridge.js";
+import { CredentialStore } from "../../../model-resources/credential-store.js";
 
 describe("agent-core managed MCP tools", () => {
+  it("scopes discovery and credential materialization to permitted connectors and exposes only permitted tools", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-mcp-scope-"));
+    let mcp: AgentMcpTools | undefined;
+    const credentials = vi.spyOn(CredentialStore.prototype, "readSync");
+    try {
+      await mkdir(join(cwd, ".pi-science"));
+      const marker = join(cwd, "unrelated-started");
+      const server = join(cwd, "scoped.mjs");
+      await writeFile(server, [
+        `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
+        `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
+        `const server = new McpServer({ name: "scoped", version: "1" });`,
+        `for (const name of ["bar", "other", "forbidden"]) server.registerTool(name, { description: name }, async () => ({ content: [{ type: "text", text: name }] }));`,
+        `await server.connect(new StdioServerTransport());`,
+      ].join("\n"));
+      await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test",
+        mcpServers: {
+          foo: { command: process.execPath, args: [server], approveTools: false, excludeTools: ["forbidden"], __piScienceConnectorId: "connector_foo" },
+          unrelated: { command: process.execPath, args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`],
+            __piScienceConnectorId: "connector_unrelated" },
+          protected: { transport: "streamable_http", url: "https://unused.example/mcp", __piScienceConnectorId: "connector_protected",
+            __piScienceHeaders: { Authorization: { kind: "credential", credential_ref: "unrelated-secret" } } },
+        } }));
+      mcp = await AgentMcpTools.open(cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "" }, undefined,
+        ["read", "mcp__foo__bar", "mcp__foo__forbidden"]);
+      expect(mcp.diagnostics).toEqual([]);
+      expect(credentials).not.toHaveBeenCalled();
+      expect(await readFile(marker, "utf8").catch(() => null)).toBeNull();
+      expect(mcp.tools.map((tool) => tool.name)).toEqual(["mcp__foo__bar"]);
+      expect(await mcp.tools[0]!.execute("scoped-call", {}, () => undefined, {} as never, {} as never, {} as never))
+        .toMatchObject({ content: [{ type: "text", text: "bar" }] });
+    } finally {
+      credentials.mockRestore();
+      await mcp?.close();
+      await rm(cwd, { recursive: true, force: true });
+    }
+  }, 20000);
+
   it("projects only each stdio connector's credentials and ordinary system variables", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-mcp-env-"));
     const previousFirst = process.env.PR115_MCP_FIRST;

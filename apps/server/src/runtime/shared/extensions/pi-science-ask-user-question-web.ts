@@ -1,16 +1,8 @@
 /**
- * Browser bridge for @juicesharp/rpiv-ask-user-question.
- *
- * Pi's Web/RPC UI protocol only exposes select/input primitives. The upstream
- * package therefore falls back to one dialog per question and cannot transport
- * its tabbed preview/notes UI. This adapter is loaded before the upstream
- * package (Pi keeps the first tool registration) and uses one namespaced input
- * request as a small JSON envelope. Pi-Science renders that envelope as the
- * full questionnaire in the browser and sends the structured result back.
- *
- * The upstream package remains in the runtime extension list: it is still the
- * canonical package for native Pi hosts and supplies the same public tool
- * contract. This file only owns the browser-compatible implementation.
+ * Browser questionnaire schema and formatting shared by the Core tool adapter.
+ * A namespaced JSON envelope carries the tabbed preview, notes, and answers
+ * through InteractionBridge. Pi Science renders it in the browser and returns
+ * the structured result to the Worker that owns the tool call.
  */
 
 const TOOL_NAME = "ask_user_question";

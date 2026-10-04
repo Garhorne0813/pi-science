@@ -19,7 +19,7 @@ flowchart LR
 
 Agent Core 是唯一执行后端。每个活跃对话由独立 Node Worker 执行，`AgentRuntimeManager` 负责容量、会话排他归属与进程生命周期。研究、复查及对话子代理使用隐藏 v4 会话；标题生成使用无工具、无技能的临时 Worker。
 
-控制面把结构化 Worker 事件转换为浏览器 SSE，负责持久恢复、产物、交互及统计。Worker 重启后继续打开同一 v4 会话，浏览器不加载模型 SDK 或凭据。Orbit Host、外部 CLI、HTTP bearer token 传输和 RPC 回退路径已删除。
+控制面把结构化 Worker 事件转换为浏览器 SSE，负责持久恢复、产物、交互及统计。Worker 重启后继续打开同一 v4 会话，浏览器不加载模型 SDK 或凭据。Worker 命令通过结构化 Node IPC 传递，SDK 在子进程中运行。
 
 v3 会话只作为数据输入：首次使用时完整校验并复制，由官方 SDK 原子升级副本，再登记 Core 归属。离线转换不启动 Worker，也不需要 API key；原文件保持不变。见[会话转换说明](agent-core-session-conversion.md)。
 
@@ -156,7 +156,7 @@ flowchart LR
 
 ## MCP 连接器域和运行时投影
 
-MCP 配置由 Node 控制面托管，不需要手工编辑 Pi runtime 文件。连接器定义、全局启用与
+MCP 配置由 Node 控制面托管，不需要手工编辑 运行时配置文件。连接器定义、全局启用与
 筛选、全局工具决策、项目级工具覆盖和工具发现缓存都是 SQLite 中的规范资源。
 
 ```mermaid

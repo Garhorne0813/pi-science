@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — install project dependencies and the Pi runtime.
+# install.sh — install project dependencies, including Agent Core.
 # Usage: bash scripts/install.sh
 set -euo pipefail
 

@@ -1,6 +1,6 @@
 # Agent Core 会话转换
 
-Pi Science 只使用 Agent Core；Orbit 可执行文件、Host、RPC/Web 传输、runner 和下载安装脚本已删除。`PI_CLI_PATH`、`PI_ORBIT_*`、`PI_SCIENCE_AGENT_RUNTIME` 和 `PI_SCIENCE_AGENT_CORE_MIGRATE_LEGACY` 不再决定运行时。安装和启动方式不变。
+Pi Science 使用 Agent Core SDK 和独立 Worker 进程。会话持久化由官方 `JsonlSessionRepo` 管理，安装和启动方式见 README。
 
 ## 离线批量转换
 
@@ -27,10 +27,10 @@ pnpm migrate:sessions /path/to/workspace-a /path/to/workspace-b
 
 ## 明确退役的旧能力
 
-不再加载任意 Orbit 扩展。Notebook、问卷、todo、对话 subagent、托管 MCP、研究/复查和标题生成使用 Core 或共用领域逻辑。Web 搜索/URL 抓取通过托管 MCP 提供；旧 `pi-web-access` 的媒体提取、浏览器 cookie、curator UI，以及 context-mode、旧子代理 async/workflow/mission 模式不保留兼容入口。OS 级 sandbox 仍未实施，工具继续使用现有工作区和凭据隔离规则。
+工具通过 Core 适配器或共用领域逻辑提供。Notebook、问卷、todo、对话 subagent、托管 MCP、研究/复查和标题生成使用 Core 或共用领域逻辑。Web 搜索/URL 抓取通过托管 MCP 提供；旧 `pi-web-access` 的媒体提取、浏览器 cookie、curator UI，以及 context-mode、旧子代理 async/workflow/mission 模式不保留兼容入口。OS 级 sandbox 仍未实施，工具继续使用现有工作区和凭据隔离规则。
 
 ## 运行监督和工具能力
 
 会话 watchdog 默认每 60 秒检查 Worker。除 IPC 失败、运行故障和事件丢失外，当前 operation 连续 15 分钟没有模型、工具、压缩或重试进展，也会触发强制终止并从持久检查点恢复；成功读取状态不算进展。`PI_SCIENCE_OPERATION_NO_PROGRESS_MS` 可调整无进展期限，长时间静默的合法工具应设置更长期限；等待用户问卷或权限确认的时间不计入。`PI_SCIENCE_EVENT_WATCHDOG_MS` 控制检查间隔，非正值会关闭 watchdog。连续恢复最多三次，再次卡住会停止 Worker、报告终止自动恢复的错误，并保留检查点供显式重新打开会话重试。
 
-Worker 的 `allowedTools` 是精确工具能力列表。显式空列表或仅包含 `read`、`subagent` 等非 MCP 工具时，跳过整个 MCP discovery，不启动 connector、不建立连接，也不读取 connector 凭据。未限制工具或明确允许 `mcp__...` 工具时才初始化 MCP；发现后仍按完整工具名过滤。
+Worker 的 `allowedTools` 是精确工具能力列表。显式空列表或仅包含 `read`、`subagent` 等非 MCP 工具时，跳过整个 MCP discovery，不启动 connector、不建立连接，也不读取 connector 凭据。未限制工具时初始化所有配置的 MCP connector。明确允许 `mcp__foo__bar` 时，只解析并连接匹配的 connector，再按完整工具名与控制面的 include/exclude 策略过滤；其他 connector 的凭据不会被解析。

@@ -50,7 +50,7 @@ it("does not resurrect a deleted imported session from its original", async () =
   expect(await migrateLegacySessions(cwd)).toEqual([{ source, sessionId: "old", status: "deleted" }]);
 });
 it("automatically converts a cold legacy session without a runtime switch or API key", async () => {
-  const { cwd } = await fixture(); vi.stubEnv("PI_SCIENCE_AGENT_RUNTIME", "orbit"); vi.stubEnv("PI_CLI_PATH", "/missing/orbit");
+  const { cwd } = await fixture();
   const service = new NodeSessionService();
   try {
     expect(await service.state("old", cwd)).toMatchObject({ id: "old", model: "openai/gpt-4.1-mini", is_streaming: false });

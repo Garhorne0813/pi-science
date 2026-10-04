@@ -105,7 +105,7 @@ describe("agent-core product tools", () => {
     expect(fixture.requests()).toBe(3);
   }, 20000);
 
-  it("runs core review schema repair and research usage without Orbit", async () => {
+  it("runs Core review schema repair and research usage in independent Workers", async () => {
     const fixture = await modelFixture((body) => body.messages[0]!.content.includes("project reviewer")
       ? body.messages.length > 2 ? "[]" : "invalid-json"
       : '{"kind":"analysis","findings":[{"summary":"Measured improvement"}],"next_strategy":"Repeat"}');

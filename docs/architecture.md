@@ -20,7 +20,7 @@ flowchart LR
 
 Agent Core is the only execution backend. Each active conversation owns a Node Worker. `AgentRuntimeManager` controls process capacity, exclusive session ownership, startup and shutdown. Research, review, and conversation subagents use hidden v4 sessions; title generation uses a disposable worker with no tools or skills.
 
-The control plane projects structured Worker events into the existing browser SSE protocol and owns durable recovery, artifacts, interactions, and statistics. On restart, a worker reopens the same v4 session. The browser does not load model SDKs or credentials. There is no Orbit host, external CLI, bearer-token transport, or RPC fallback.
+The control plane projects structured Worker events into the existing browser SSE protocol and owns durable recovery, artifacts, interactions, and statistics. On restart, a worker reopens the same v4 session. The browser does not load model SDKs or credentials. Worker commands use structured Node IPC; the SDK runs inside the child process.
 
 Old v3 transcripts are data inputs: on first use, the service validates and copies them, lets the official SDK atomically convert the copy, and registers Core ownership. Offline conversion needs no API key or Worker. Original files remain untouched. See [session conversion](agent-core-session-conversion.md).
 
@@ -194,7 +194,7 @@ new writes use the canonical resource services.
 ## MCP connector domain and runtime projection
 
 MCP configuration is managed by the Node control plane rather than edited in
-Pi runtime files. Connector definitions, global enablement and filtering,
+runtime configuration files. Connector definitions, global enablement and filtering,
 global tool decisions, per-project tool overrides, and the tool discovery cache
 are canonical SQLite resources.
 

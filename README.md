@@ -29,7 +29,7 @@ Most AI research tools stop at reading and summarizing papers. Pi-Science is bui
 - **Literature with real, verifiable citations.** Zero-config Crossref/arXiv/PubMed retrieval with inline DOIs rendered as clickable sources — never invented references.
 - **Local-first by architecture.** Workspaces are plain folders on your machine, and project files stay local unless you send content through a configured model or explicitly invoke an external service such as literature search. Fully local endpoints such as Ollama and LM Studio are supported, and connector destinations are recorded in a local egress audit.
 
-Each project keeps its own conversations, files, runs, provenance, and reviewed knowledge. Conversations run in isolated runtimes inside a shared Pi host, so multiple sessions continue concurrently without blocking one another.
+Each project keeps its own conversations, files, runs, provenance, and reviewed knowledge. Each conversation runs in its own Agent Core Worker process, so multiple sessions continue concurrently without blocking one another.
 
 ## Quick Start
 
@@ -67,7 +67,7 @@ powershell -File scripts/install.ps1
 powershell -File scripts/start.ps1
 ```
 
-The Bash launcher is designed for macOS/Linux and is intended to run under WSL; CI validates its lifecycle on Linux. The PowerShell installer downloads and verifies the native Windows Pi runtime ZIP, so Git Bash is not required for a fresh Windows installation. Both launchers deliberately run `tsx watch` and the Vite development server, so they are not production deployment servers. Starting an installed checkout invokes package-local executables directly, so npm and pnpm wrappers are not runtime requirements; pnpm is still required for installation, builds, and dependency updates.
+The Bash launcher supports macOS/Linux and can run under WSL; CI validates its lifecycle on Linux and macOS. The PowerShell installer installs project dependencies for native Windows use, without requiring Git Bash. Both launchers deliberately run `tsx watch` and the Vite development server, so they are not production deployment servers. Starting an installed checkout invokes package-local executables directly, so npm and pnpm wrappers are not runtime requirements; pnpm is still required for installation, builds, and dependency updates.
 
 ### The `pi-science` command
 
@@ -92,13 +92,13 @@ pi-science help         # show command help
 
 The Windows launcher writes `.runtime/pi-science/run.state` after both services are healthy and uses it for precise shutdown, with a local-port fallback when state is unavailable. Without `--detach`, the Bash `pi-science` command holds the terminal and Ctrl+C stops it, exactly like `bash scripts/start.sh`; the PowerShell launcher is also foreground-only. Both launchers use an end-to-end readiness deadline (`PI_SCIENCE_STARTUP_TIMEOUT_SECONDS`, default 90 seconds). The generated launchers refuse to overwrite an unrelated file, directory, symlink, or Windows executable collision; re-running the installer safely updates a launcher owned by the same checkout.
 
-Re-run the platform-appropriate installer (`scripts/install.sh` or `powershell -File scripts/install.ps1`) after moving the checkout or after a `git pull` changes `package.json`, `pnpm-lock.yaml`, Python dependency metadata, or the Pi runtime version. Source-only changes do not require reinstalling. After installation, use `bash scripts/start.sh` on macOS/Linux or `powershell -File scripts/start.ps1` on Windows; to keep using `dev.sh` while skipping installation, run:
+Re-run the platform-appropriate installer (`scripts/install.sh` or `powershell -File scripts/install.ps1`) after moving the checkout or after a `git pull` changes `package.json`, `pnpm-lock.yaml`, Python dependency metadata, or the Agent Core dependency version. Source-only changes do not require reinstalling. After installation, use `bash scripts/start.sh` on macOS/Linux or `powershell -File scripts/start.ps1` on Windows; to keep using `dev.sh` while skipping installation, run:
 
 ```bash
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 ```
 
-Pi Science uses Agent Core directly. Installation needs only the workspace dependencies; no Orbit executable or runtime switch is required. See [session conversion](docs/agent-core-session-conversion.md) for offline v3 → v4 migration.
+Pi Science uses Agent Core directly. Installation installs the workspace dependencies, including the SDK. See [session conversion](docs/agent-core-session-conversion.md) for offline v3 → v4 migration.
 
 Open **Settings → LLM** after startup and configure a provider and default
 model. Installed and workspace-discovered skills can be enabled, disabled, or
@@ -110,7 +110,7 @@ from **Settings → MCP**; only Paper Search is enabled on a fresh installation.
 | Area | What Pi-Science provides |
 |---|---|
 | Agent workspace | Streaming conversations, tool cards, Markdown, LaTeX, slash commands, and interactive extension prompts |
-| Concurrent sessions | Isolated runtimes for active, restored, and forked conversations inside one shared Pi host |
+| Concurrent sessions | Independent Agent Core Worker processes for active, restored, and forked conversations |
 | Scientific files | Native previews for molecular structures, FITS, genomics, phase data, 3D models, tables, office documents, media, and code |
 | Reproducibility | Live session-scoped execution records, artifact hashes, generating code and diffs, environment snapshots, provenance history, and reproduce actions |
 | Project memory | Reviewer proposals, human approval, evidence links, project versions, research loops, and Pareto-frontier tracking |
@@ -233,8 +233,8 @@ export OPENAI_API_KEY=sk-...
 
 When a conversation settles, Pi-Science may generate a concise AI title for it
 (**enabled by default**). The feature runs a short prompt through the same
-configured provider as your sessions — a fresh isolated Pi runtime sends the
-most recent few messages (≤ 6 messages, each trimmed to ≤ 200 characters) and
+configured provider as your sessions. A disposable Agent Core Worker with tools
+and skills disabled sends the most recent few messages (≤ 6 messages, each trimmed to ≤ 200 characters) and
 asks for a title of at most 8 words. This means **the latest conversation
 excerpt is sent to your configured LLM provider** on each settled turn. The
 result is persisted in the workspace at
@@ -248,10 +248,9 @@ restart:
 export PI_SCIENCE_AI_TITLES=0
 ```
 
-Title generation never blocks the conversation and failures are silent (the
-sidebar keeps the derived name). It is also disabled automatically when the Pi
-runtime runs in RPC mode (`PI_SCIENCE_PI_MODE=rpc`), which has no way to run
-an isolated title runtime without persisting a ghost session.
+Title generation never blocks the conversation and failures leave the derived
+sidebar name in place. Its temporary session remains hidden and is removed
+when the Worker is disposed. `PI_SCIENCE_AI_TITLES=0` disables the feature.
 
 ## Development
 
@@ -271,7 +270,7 @@ Additional end-to-end checks:
 ```bash
 pnpm smoke
 pnpm uat:conversation
-pnpm smoke:real-pi
+pnpm smoke:agent-core
 ```
 
 Focused frontend UAT commands:

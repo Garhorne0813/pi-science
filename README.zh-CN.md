@@ -29,7 +29,7 @@
 - **文献引用真实可验证。** 零配置直连 Crossref/arXiv/PubMed 检索，内联 DOI 渲染为可点击的来源——绝不编造参考文献。
 - **架构级 local-first。** 工作区就是你机器上的普通文件夹；除非你通过已配置的模型发送内容，或显式调用文献检索等外部服务，否则项目文件不会离开本机。支持 Ollama、LM Studio 等纯本地端点，连接器的目标域名会记录到本地出站审计中。
 
-每个项目独立保存对话、文件、实验运行、产物谱系和审核后的项目知识；对话在共享 Pi Host 内使用隔离 runtime，因此多个 session 可以并行执行，互不阻塞。
+每个项目独立保存对话、文件、实验运行、产物谱系和审核后的项目知识；每个对话使用独立的 Agent Core Worker 进程，因此多个会话可以并行执行，互不阻塞。
 
 ## 快速开始
 
@@ -67,7 +67,7 @@ powershell -File scripts/install.ps1
 powershell -File scripts/start.ps1
 ```
 
-Shell 启动器面向 macOS/Linux 设计，并计划用于 WSL；CI 当前只在 Linux 上验证其生命周期。PowerShell 安装器会下载并校验原生 Windows Pi runtime ZIP，因此 Windows 全新安装不需要 Git Bash。两种启动器都会运行 `tsx watch` 与 Vite 开发服务器，因此不是生产部署服务器。安装完成后的启动过程直接调用 package-local 可执行文件，因此运行时不需要 npm 或 pnpm wrapper；安装、构建和依赖更新仍然需要 pnpm。
+Shell 启动器支持 macOS/Linux，也可用于 WSL；CI 在 Linux 和 macOS 上验证其生命周期。PowerShell 安装器安装 Windows 原生运行所需的项目依赖，不需要 Git Bash。两种启动器都会运行 `tsx watch` 与 Vite 开发服务器，因此不是生产部署服务器。安装完成后的启动过程直接调用 package-local 可执行文件，因此运行时不需要 npm 或 pnpm wrapper；安装、构建和依赖更新仍然需要 pnpm。
 
 ### `pi-science` 命令
 
@@ -92,13 +92,13 @@ pi-science help         # 查看帮助
 
 Windows 启动器在两个服务健康后写入 `.runtime/pi-science/run.state`，停止时优先按状态文件精确命中进程；状态文件不可用时回退到本机端口探测。不加 `--detach` 时，Bash 版 `pi-science` 会占用当前终端，Ctrl+C 停止；PowerShell 版同样只支持前台运行。两种启动器都使用端到端就绪期限（`PI_SCIENCE_STARTUP_TIMEOUT_SECONDS`，默认 90 秒）。生成的启动器会拒绝覆盖无关文件、目录、symlink 或 Windows 可执行文件冲突；重复运行安装器可以安全更新属于同一 checkout 的启动器。
 
-仓库移动后，或者 `git pull` 修改了 `package.json`、`pnpm-lock.yaml`、Python 依赖元数据或 Pi runtime 版本时，需要重新运行对应平台的安装器（`scripts/install.sh` 或 `powershell -File scripts/install.ps1`）；只有源码变化时不需要重装。安装后，macOS/Linux 可运行 `bash scripts/start.sh`，Windows 可运行 `powershell -File scripts/start.ps1`。如果继续使用 `dev.sh`，但希望跳过安装：
+仓库移动后，或者 `git pull` 修改了 `package.json`、`pnpm-lock.yaml`、Python 依赖元数据或 Agent Core 依赖版本时，需要重新运行对应平台的安装器（`scripts/install.sh` 或 `powershell -File scripts/install.ps1`）；只有源码变化时不需要重装。安装后，macOS/Linux 可运行 `bash scripts/start.sh`，Windows 可运行 `powershell -File scripts/start.ps1`。如果继续使用 `dev.sh`，但希望跳过安装：
 
 ```bash
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 ```
 
-Pi Science 直接使用 Agent Core。安装仅需项目依赖，不再下载 Orbit，也无需运行时开关。旧会话离线转换见[会话转换说明](docs/agent-core-session-conversion.md)。
+Pi Science 直接使用 Agent Core，安装过程安装包含 SDK 在内的项目依赖。旧会话离线转换见[会话转换说明](docs/agent-core-session-conversion.md)。
 
 启动后进入 **设置 → LLM**，配置提供商和默认模型即可开始使用。已安装及从工作区发现的
 skills 可在 **设置 → Skills** 中启用、禁用或重置。内置和自定义 MCP 连接器统一在
@@ -109,7 +109,7 @@ skills 可在 **设置 → Skills** 中启用、禁用或重置。内置和自�
 | 领域 | Pi-Science 提供的能力 |
 |---|---|
 | 智能体工作区 | 流式对话、工具卡片、Markdown、LaTeX、斜杠命令和交互式扩展请求 |
-| 并行会话 | 活跃、恢复和分叉的对话在同一个 Pi Host 内使用相互隔离的 runtime |
+| 并行会话 | 活跃、恢复和分叉的对话使用独立的 Agent Core Worker 进程 |
 | 科学文件 | 原生预览分子结构、FITS、基因组、相图、3D 模型、表格、办公文档、媒体和代码 |
 | 可复现性 | 实时的会话级执行记录、产物哈希、生成代码与差异、环境快照、谱系历史和一键复现 |
 | 项目记忆 | Reviewer 提案、人工审核、证据链接、项目版本、研究循环和 Pareto 前沿 |
@@ -209,7 +209,7 @@ export OPENAI_API_KEY=sk-...
 
 ## AI 会话标题
 
-当一轮对话稳定后，Pi-Science 可以自动生成简短的 AI 标题（**默认启用**）。该功能通过与对话相同的 provider 发起一次简短请求：新建一个隔离的 Pi runtime，发送最近不超过 6 条消息（每条截断到不超过 200 字符），并请求生成不超过 8 个词的标题。这意味着，每次对话轮次稳定后，**最近的对话片段都会发送给你配置的 LLM 提供商**。生成的结果会持久化到工作区的 `.pi-science/session-titles.jsonl`；浏览器存储仅作为即时回退。
+当一轮对话稳定后，Pi-Science 可以自动生成简短的 AI 标题（**默认启用**）。该功能通过与对话相同的 provider 发起一次简短请求：新建一个禁用工具与技能的临时 Agent Core Worker，发送最近不超过 6 条消息（每条截断到不超过 200 字符），并请求生成不超过 8 个词的标题。这意味着，每次对话轮次稳定后，**最近的对话片段都会发送给你配置的 LLM 提供商**。生成的结果会持久化到工作区的 `.pi-science/session-titles.jsonl`；浏览器存储仅作为即时回退。
 
 如需禁用，请在启动服务前设置环境变量并重启：
 
@@ -217,7 +217,7 @@ export OPENAI_API_KEY=sk-...
 export PI_SCIENCE_AI_TITLES=0
 ```
 
-标题生成不会阻塞对话，失败时会保留侧边栏的派生名称。当 Pi runtime 以 RPC 模式（`PI_SCIENCE_PI_MODE=rpc`）运行时，该功能也会自动禁用，因为该模式无法在不持久化幽灵会话的情况下运行隔离的标题 runtime。
+标题生成不会阻塞对话，失败时会保留侧边栏的派生名称。临时会话保持隐藏，并在 Worker 释放时删除；`PI_SCIENCE_AI_TITLES=0` 可禁用该功能。
 
 ## 开发与测试
 
@@ -237,7 +237,7 @@ pnpm build
 ```bash
 pnpm smoke
 pnpm uat:conversation
-pnpm smoke:real-pi
+pnpm smoke:agent-core
 ```
 
 前端专项 UAT：

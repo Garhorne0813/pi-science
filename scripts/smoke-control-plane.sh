@@ -5,14 +5,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 KEEP_TEMP=false
 GATEWAY_ONLY=false
-REAL_PI=false
+AGENT_CORE=false
 NATIVE_READONLY=false
 
 for arg in "$@"; do
     case "$arg" in
         --keep-temp) KEEP_TEMP=true ;;
         --gateway-only) GATEWAY_ONLY=true ;;
-        --real-pi) REAL_PI=true ;;
+        --agent-core) AGENT_CORE=true ;;
         --native-readonly) NATIVE_READONLY=true ;;
         *) echo "unknown option: $arg" >&2; exit 10 ;;
     esac
@@ -62,7 +62,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-if [ "$REAL_PI" = true ]; then
+if [ "$AGENT_CORE" = true ]; then
     printf '{"model":"%s","thinking":"off"}\n' "${PI_SCIENCE_SMOKE_MODEL:-openai/gpt-4.1-mini}" > "$PI_SCIENCE_HOME/config.json"
 fi
 
@@ -81,15 +81,15 @@ wait_http() {
 }
 
 echo "[smoke] starting Node gateway on $NODE_PORT"
-NODE_MIGRATION_FLAGS=(PI_SCIENCE_NODE_SESSIONS=1 PI_SCIENCE_NODE_SSE=1 PI_SCIENCE_NODE_PI_MANAGER=1)
+NODE_ROUTE_FLAGS=(PI_SCIENCE_NODE_SESSIONS=1 PI_SCIENCE_NODE_SSE=1 PI_SCIENCE_NODE_PI_MANAGER=1)
 if [ "$NATIVE_READONLY" = true ]; then
-    NODE_MIGRATION_FLAGS+=(PI_SCIENCE_NODE_FILES=1)
+    NODE_ROUTE_FLAGS+=(PI_SCIENCE_NODE_FILES=1)
 fi
 (
     cd "$ROOT_DIR"
     env PI_SCIENCE_PORT="$NODE_PORT" \
         PI_SCIENCE_CORS="http://127.0.0.1:5173" PI_SCIENCE_INTERNAL_TOKEN="$PI_SCIENCE_INTERNAL_TOKEN" \
-        "${NODE_MIGRATION_FLAGS[@]}" pnpm --filter @pi-science/server start
+        "${NODE_ROUTE_FLAGS[@]}" pnpm --filter @pi-science/server start
 ) >"$NODE_LOG" 2>&1 &
 NODE_PID=$!
 
@@ -271,8 +271,8 @@ if [ "$NATIVE_READONLY" = true ]; then
     assert_body_contains 'notes.txt' "http://127.0.0.1:${NODE_PORT}/api/files?cwd=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$SMOKE_WORKSPACE")"
 fi
 
-if [ "$REAL_PI" = true ]; then
-    echo "[smoke] real Pi uses Node-native sessions, SSE, and Pi manager"
+if [ "$AGENT_CORE" = true ]; then
+    echo "[smoke] Agent Core uses independent Workers, Node sessions, and SSE"
     SESSION_A_HEADERS="$TEMP_DIR/session-a.headers"
     SESSION_JSON="$(curl --fail --silent --show-error --dump-header "$SESSION_A_HEADERS" -X POST \
         -H 'Content-Type: application/json' \
@@ -280,7 +280,7 @@ if [ "$REAL_PI" = true ]; then
         "http://127.0.0.1:${NODE_PORT}/api/sessions")"
     SESSION_A="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["id"])' "$SESSION_JSON")"
     if [ -z "$SESSION_A" ]; then
-        echo "real Pi did not return a session id" >&2
+        echo "Agent Core did not return a session id" >&2
         exit 50
     fi
     assert_header_file_contains "$SESSION_A_HEADERS" 'x-pi-science-runtime: node-control-plane'
@@ -309,7 +309,7 @@ if [ "$REAL_PI" = true ]; then
 
     SESSION_MODEL="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("model") or "")' "$STATE_A_JSON")"
     if [ -n "$SESSION_MODEL" ]; then
-        echo "[smoke] prompt with configured Pi model: $SESSION_MODEL"
+        echo "[smoke] prompt with configured Core model: $SESSION_MODEL"
         PROMPT_HEADERS="$TEMP_DIR/prompt.headers"
         PROMPT_JSON="$(curl --fail --silent --show-error --dump-header "$PROMPT_HEADERS" -X POST \
             -H 'Content-Type: application/json' \
@@ -320,13 +320,13 @@ if [ "$REAL_PI" = true ]; then
             echo "prompt was not accepted: $PROMPT_JSON" >&2
             exit 50
         fi
-        if ! wait_for_file_match "$SSE_BODY" '"type":"(session\.idle|error)"' 1200; then
-            echo "prompt did not produce a terminal Node SSE event" >&2
+        if ! wait_for_file_match "$SSE_BODY" '"type":"session\.idle"' 1200; then
+            echo "prompt did not settle through Node SSE" >&2
             sed -n '1,160p' "$SSE_BODY" >&2 || true
             exit 50
         fi
     else
-        echo "[smoke] no Pi model configured; prompt portion skipped"
+        echo "[smoke] no Core model configured; prompt portion skipped"
     fi
     kill "$SSE_PID" 2>/dev/null || true
     wait "$SSE_PID" 2>/dev/null || true
@@ -345,11 +345,9 @@ if [ "$REAL_PI" = true ]; then
     fi
     assert_body_contains "$SESSION_B" "http://127.0.0.1:${NODE_PORT}/api/sessions/${SESSION_B}/state?cwd=${WORKSPACE_Q}"
 
-    # A brand-new Pi session is intentionally in-memory until it records a
-    # turn. Persist B before exercising B -> A -> B switching; otherwise the
-    # test would incorrectly assume an abandoned blank session has a JSONL.
+    # Core sessions have durable storage at creation. Record a turn in B
+    # before switching to verify its history as well as session ownership.
     FORK_SOURCE="$SESSION_A"
-    DELETE_SESSION_B=false
     if [ -n "$SESSION_MODEL" ]; then
         SSE_B_BODY="$TEMP_DIR/session-b-sse.body"
         (curl --silent --show-error --no-buffer --max-time 130 \
@@ -360,8 +358,8 @@ if [ "$REAL_PI" = true ]; then
         curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
             -d '{"message":"Reply with exactly NODE_NATIVE_SESSION_B_OK"}' \
             "http://127.0.0.1:${NODE_PORT}/api/sessions/${SESSION_B}/prompt?cwd=${WORKSPACE_Q}" >/dev/null
-        if ! wait_for_file_match "$SSE_B_BODY" '"type":"(session\.idle|error)"' 1200; then
-            echo "session B prompt did not produce a terminal Node SSE event" >&2
+        if ! wait_for_file_match "$SSE_B_BODY" '"type":"session\.idle"' 1200; then
+            echo "session B prompt did not settle through Node SSE" >&2
             sed -n '1,160p' "$SSE_B_BODY" >&2 || true
             exit 50
         fi
@@ -371,10 +369,8 @@ if [ "$REAL_PI" = true ]; then
         assert_body_contains "$SESSION_A" "http://127.0.0.1:${NODE_PORT}/api/sessions/${SESSION_A}/state?cwd=${WORKSPACE_Q}"
         assert_body_contains "$SESSION_B" "http://127.0.0.1:${NODE_PORT}/api/sessions/${SESSION_B}/state?cwd=${WORKSPACE_Q}"
         FORK_SOURCE="$SESSION_B"
-        DELETE_SESSION_B=true
     else
-        # Still verify the required A -> B -> A transition. Blank B is
-        # ephemeral by Pi design and disappears once A is resumed.
+        # Verify A -> B -> A even when the prompt portion is skipped.
         assert_body_contains "$SESSION_A" "http://127.0.0.1:${NODE_PORT}/api/sessions/${SESSION_A}/state?cwd=${WORKSPACE_Q}"
     fi
 
@@ -393,9 +389,7 @@ if [ "$REAL_PI" = true ]; then
     python3 -c 'import json,sys; value=json.loads(sys.argv[1])["active_pi_processes"]; assert value >= 1, value' "$HEALTH_ACTIVE_JSON"
 
     echo "[smoke] exact delete and health ownership"
-    DELETE_IDS=("$FORK_ID")
-    if [ "$DELETE_SESSION_B" = true ]; then DELETE_IDS+=("$SESSION_B"); fi
-    DELETE_IDS+=("$SESSION_A")
+    DELETE_IDS=("$FORK_ID" "$SESSION_B" "$SESSION_A")
     for session_id in "${DELETE_IDS[@]}"; do
         DELETE_HEADERS="$TEMP_DIR/delete-${session_id}.headers"
         DELETE_JSON="$(curl --fail --silent --show-error --dump-header "$DELETE_HEADERS" -X DELETE \

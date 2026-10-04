@@ -13,7 +13,7 @@
     "typecheck": "pnpm --filter @pi-science/contracts typecheck && pnpm --filter @pi-science/server typecheck && pnpm --filter frontend typecheck",
     "smoke": "bash scripts/smoke-control-plane.sh",
     "smoke:native-readonly": "bash scripts/smoke-control-plane.sh --native-readonly",
-    "smoke:real-pi": "bash scripts/smoke-control-plane.sh --real-pi",
+    "smoke:agent-core": "bash scripts/smoke-control-plane.sh --agent-core",
     "uat:conversation": "pnpm --filter frontend test:uat:conversation",
     "migrate:sessions": "pnpm --filter @pi-science/server exec tsx src/cli/migrate-sessions.ts"
   }

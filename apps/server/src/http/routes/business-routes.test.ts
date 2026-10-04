@@ -7,7 +7,7 @@ import type { ServerConfig } from "../../config/config.js";
 import { nodeSessionService } from "../../runtime/node/node-session-service.js";
 import { ResearchRepository } from "../../research-loop/repository.js";
 import { createServerModules } from "../../app/server-modules.js";
-// Full runtime-only cases need a configured Pi Orbit catalog. Unit tests inject
+// Full runtime-only cases need a configured pi-ai catalog. Unit tests inject
 // their own catalog fixtures; these integration cases remain opt-in locally.
 const piAiCatalogAvailable = false;
 
@@ -41,7 +41,7 @@ async function workspace(): Promise<string> {
 }
 
 describe("native control-plane business routes", () => {
-  it("connects and selects the official agent-core model without an Orbit installation", async () => {
+  it("connects and selects the official agent-core model using the official SDK catalog", async () => {
     const cwd = await workspace();
     delete process.env.PI_SCIENCE_AGENT_RUNTIME;
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
@@ -512,7 +512,7 @@ describe("native control-plane business routes", () => {
     expect(codex).toMatchObject({ auth: { kind: "oauth" }, has_key: false, credential_status: "needs_login" });
   });
 
-  it("treats an empty Orbit model listing as authoritative (no fallback mixing)", async () => {
+  it("treats an empty runtime model listing as authoritative (no fallback mixing)", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
@@ -520,7 +520,7 @@ describe("native control-plane business routes", () => {
     const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService });
     apps.push(app);
     // A stored OpenAI key would make the pi-ai fallback list OpenAI models;
-    // an empty Orbit listing must still win.
+    // an empty runtime listing must still win.
     await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "openai", api_key: "sk-test" } });
     const settings = (await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` })).json();
     expect(settings.model_catalog_source).toBe("pi");
@@ -529,7 +529,7 @@ describe("native control-plane business routes", () => {
 
   // Requires the real pi-ai catalog (OpenAI Codex auth metadata); skipped
   // when the runtime is not installed (CI).
-  it.skipIf(!piAiCatalogAvailable)("keeps Orbit-listed providers (even unknown to pi-ai) in the inventory and catalog", async () => {
+  it.skipIf(!piAiCatalogAvailable)("keeps runtime-listed providers (even unknown to pi-ai) in the inventory and catalog", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
@@ -540,7 +540,7 @@ describe("native control-plane business routes", () => {
     const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService });
     apps.push(app);
     const settings = (await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` })).json();
-    // OAuth-only + present in the live Orbit listing -> connected, usable.
+    // OAuth-only + present in the live runtime listing -> connected, usable.
     expect(settings.providers.find((provider: { id: string }) => provider.id === "openai-codex")).toMatchObject({
       credential_status: "connected",
       enabled: true,
