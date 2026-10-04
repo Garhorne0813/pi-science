@@ -328,9 +328,9 @@ describe("Node control plane", () => {
     await writeFile(
       join(sessionDir, "session-1.jsonl"),
       [
-        JSON.stringify({ type: "session", id: "session-1", cwd: workspace, timestamp: "2026-07-23T00:00:00.000Z" }),
-        JSON.stringify({ type: "message", id: "m1", timestamp: "2026-07-23T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: "hello" }] } }),
-        JSON.stringify({ type: "message", id: "m2", timestamp: "2026-07-23T00:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } }),
+        JSON.stringify({ type: "session", version: 3, id: "session-1", cwd: workspace, timestamp: "2026-07-23T00:00:00.000Z" }),
+        JSON.stringify({ type: "message", id: "m1", parentId: null, timestamp: "2026-07-23T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: "hello" }] } }),
+        JSON.stringify({ type: "message", id: "m2", parentId: "m1", timestamp: "2026-07-23T00:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } }),
       ].join("\n") + "\n",
       "utf8",
     );
@@ -341,7 +341,7 @@ describe("Node control plane", () => {
     expect(listed.statusCode).toBe(200);
     expect(listed.json()).toMatchObject([{ id: "session-1", cwd: workspace }]);
     const messages = await app.inject({ method: "GET", url: `/api/sessions/session-1/messages?cwd=${encodeURIComponent(workspace)}` });
-    expect(messages.json()).toMatchObject({ messages: [{ id: "m1", role: "user" }, { id: "m2", role: "assistant" }] });
+    expect(messages.json()).toMatchObject({ messages: [{ id: expect.any(String), role: "user", content: [{ type: "text", text: "hello" }] }, { id: expect.any(String), role: "assistant", content: [{ type: "text", text: "hi" }] }] });
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 

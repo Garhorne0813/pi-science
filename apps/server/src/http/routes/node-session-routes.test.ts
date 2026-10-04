@@ -318,39 +318,44 @@ describe("native Node conversation routes", () => {
   it("serves older history pages from an opaque cursor and rejects invalid pagination", async () => {
     const cwd = await workspaceWithSessions("session-page");
     await writeFile(join(cwd, ".pi-science", "sessions", "session-page.jsonl"), [
-      JSON.stringify({ type: "session", id: "session-page", cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
-      ...["m1", "m2", "m3"].map((id) => JSON.stringify({
-        type: "message",
-        id,
-        message: { role: "user", content: [{ type: "text", text: id }] },
+      JSON.stringify({ type: "session", version: 3, id: "session-page", cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
+      ...["m1", "m2", "m3"].map((id, index) => JSON.stringify({
+        type: "message", id, parentId: index ? `m${index}` : null, timestamp: `2026-07-23T00:00:0${index + 1}.000Z`,
+        message: { role: "user", content: id },
       })),
     ].join("\n") + "\n", "utf8");
     const server = app();
 
-    const first = await server.inject({ method: "GET", url: `/api/sessions/session-page/messages?cwd=${encodeURIComponent(cwd)}&limit=2` });
+    const [first, index] = await Promise.all([
+      server.inject({ method: "GET", url: `/api/sessions/session-page/messages?cwd=${encodeURIComponent(cwd)}&limit=2` }),
+      server.inject({ method: "GET", url: `/api/sessions/session-page/messages/index?cwd=${encodeURIComponent(cwd)}` }),
+    ]);
     expect(first.statusCode).toBe(200);
     expect(first.json()).toMatchObject({
-      messages: [{ id: "m2" }, { id: "m3" }],
+      messages: [{ content: [{ type: "text", text: "m2" }] }, { content: [{ type: "text", text: "m3" }] }],
       has_more: true,
       next_cursor: expect.any(String),
       snapshot_version: expect.any(String),
     });
 
+    const { AgentSessionRepository } = await import("../../runtime/agent/agent-session-repository.js");
+    const entryIds = await new AgentSessionRepository().migrationEntryIds(cwd, "session-page");
+    expect(first.json().messages.map((message: { id: string }) => message.id)).toEqual([entryIds.m2, entryIds.m3]);
+    expect(nodeSessionService.processCount).toBe(0);
     const cursor = first.json().next_cursor as string;
     const second = await server.inject({
       method: "GET",
       url: `/api/sessions/session-page/messages?cwd=${encodeURIComponent(cwd)}&before=${encodeURIComponent(cursor)}&limit=2`,
     });
     expect(second.statusCode).toBe(200);
-    expect(second.json()).toMatchObject({ messages: [{ id: "m1" }], has_more: false, next_cursor: null });
+    expect(second.json()).toMatchObject({ messages: [{ id: entryIds.m1 }], has_more: false, next_cursor: null });
 
-    const index = await server.inject({ method: "GET", url: `/api/sessions/session-page/messages/index?cwd=${encodeURIComponent(cwd)}` });
     expect(index.statusCode).toBe(200);
     expect(index.json()).toMatchObject({
       messages: [
-        { id: "m1", text: "m1", before: expect.any(String) },
-        { id: "m2", text: "m2", before: expect.any(String) },
-        { id: "m3", text: "m3", before: expect.any(String) },
+        { id: entryIds.m1, text: "m1", before: expect.any(String) },
+        { id: entryIds.m2, text: "m2", before: expect.any(String) },
+        { id: entryIds.m3, text: "m3", before: expect.any(String) },
       ],
       snapshot_version: expect.any(String),
     });
@@ -363,9 +368,9 @@ describe("native Node conversation routes", () => {
   it("forwards persisted trajectory metadata in history messages", async () => {
     const cwd = await workspaceWithSessions("session-metadata");
     await writeFile(join(cwd, ".pi-science", "sessions", "session-metadata.jsonl"), [
-      JSON.stringify({ type: "session", id: "session-metadata", cwd }),
+      JSON.stringify({ type: "session", version: 3, id: "session-metadata", cwd, timestamp: "2026-09-14T00:00:00.000Z" }),
       JSON.stringify({
-        type: "message", id: "a1", timestamp: "2026-09-14T00:00:00.000Z",
+        type: "message", id: "a1", parentId: null, timestamp: "2026-09-14T00:00:00.000Z",
         message: {
           role: "assistant", content: [{ type: "text", text: "done" }], details: { rows: 3 },
           presentationRole: "final", turnId: "turn-1", runId: "run-1", itemId: "item-1",

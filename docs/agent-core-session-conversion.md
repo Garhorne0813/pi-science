@@ -13,7 +13,7 @@ pnpm migrate:sessions /absolute/path/to/workspace
 pnpm migrate:sessions /path/to/workspace-a /path/to/workspace-b
 ```
 
-命令递归读取工作区元数据根目录下的 `sessions/**/*.jsonl`。已注册项目使用 relocated metadata root；未注册的旧项目使用 `.pi-science`。输入必须是该工作区的 v3 会话。
+命令递归读取工作区元数据根目录下的 `sessions/**/*.jsonl`。已注册项目使用 relocated metadata root；未注册的旧项目使用 `.pi-science`。输入必须是该工作区的 v3 会话；工作区路径别名按文件系统实际路径匹配。
 
 - 不需要大模型 API、key、Python 环境或网络连接；不启动 Worker。
 - 校验完整 JSONL、重复 ID 和父子关系，保留原始文件，不原地覆盖。
@@ -23,7 +23,7 @@ pnpm migrate:sessions /path/to/workspace-a /path/to/workspace-b
 - 单文件失败返回 `failed`，继续处理其余文件；任何失败使进程退出码为 1，用法错误为 2。`--dry-run` 只预检 JSONL、ID 和父子关系，不写会话；正式转换还会进行 SDK 格式校验。
 - 导入后的旧后台标题/子代理会话保持隐藏，避免混入正常对话列表。
 
-正常使用旧会话时也会自动执行同一转换。转换成功后继续对话仍需配置有效模型与凭据；转换操作本身不需要这些信息。重放的浏览器消息缓存或旧消息书签应重新载入历史，或按 `entryIds` 更新。
+正常使用旧会话时也会自动执行同一转换；历史和索引请求等待转换完成，首次打开不需要刷新。转换成功后继续对话仍需配置有效模型与凭据；转换操作本身不需要这些信息。重放的浏览器消息缓存或旧消息书签应重新载入历史，或按 `entryIds` 更新。
 
 ## 明确退役的旧能力
 

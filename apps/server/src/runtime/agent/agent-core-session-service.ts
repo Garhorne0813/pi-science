@@ -106,6 +106,10 @@ export class AgentCoreSessionService {
     ])];
   }
 
+  async waitForMutation(cwd: string, sessionId: string): Promise<void> {
+    await this.mutations.get(identity(cwd, sessionId))?.catch(() => undefined);
+  }
+
   async owns(cwd: string, sessionId: string): Promise<boolean> {
     return Boolean(await this.registry.get(cwd, sessionId))
       || this.live.has(identity(cwd, sessionId)) || (await this.repository.findPath(cwd, sessionId)) !== null;
@@ -129,7 +133,7 @@ export class AgentCoreSessionService {
     let header: { type?: unknown; version?: unknown; id?: unknown; cwd?: unknown };
     try { header = JSON.parse(firstLine) as typeof header; }
     catch { return { success: false, code: "legacy_session_invalid", error: "legacy session header is invalid" }; }
-    if (header.type !== "session" || header.version !== 3 || header.id !== sessionId || header.cwd !== cwd) {
+    if (header.type !== "session" || header.version !== 3 || header.id !== sessionId || typeof header.cwd !== "string" || workspaceIdentity(header.cwd) !== workspaceIdentity(cwd)) {
       return { success: false, code: "legacy_session_unsupported", error: "only workspace-local Pi v3 sessions can be imported" };
     }
     const directory = join(metadataRoot(cwd), "agent-sessions", `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`);

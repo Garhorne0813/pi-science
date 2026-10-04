@@ -91,11 +91,17 @@ export class NodeSessionService {
     catch (error) { return { success: false, error: String(error), code: "workspace_invalid" }; }
     const migration = await this.ensureModelResources();
     if (migration) return { success: false, ...migration };
+    await this.agentCore.waitForMutation(cwd, sessionId);
     if (await this.agentCore.owns(cwd, sessionId)) return { cwd };
     const source = await this.repository.findPath(cwd, sessionId);
     if (!source) return { success: false, code: "not_found", error: "session not found in this workspace" };
     const imported = await this.agentCore.importLegacy(cwd, sessionId, source, effectiveConfig(), { activate: false });
     return imported.success ? { cwd } : imported;
+  }
+
+  async prepareHistory(cwdValue: string, sessionId: string): Promise<RuntimeResult> {
+    const prepared = await this.prepare(cwdValue, sessionId);
+    return "success" in prepared ? prepared : { success: true };
   }
 
   async command(sessionId: string, cwdValue: string, type: string, params: Record<string, unknown> = {}): Promise<RuntimeResult> {

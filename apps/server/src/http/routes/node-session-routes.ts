@@ -13,7 +13,7 @@ function cwd(request: { query: unknown }): string {
   return typeof value === "string" && value ? value : ".";
 }
 
-function status(code: unknown): number {
+export function sessionRuntimeStatus(code: unknown): number {
   switch (String(code ?? "")) {
     case "workspace_invalid": return 403;
     case "not_found":
@@ -45,7 +45,7 @@ function status(code: unknown): number {
 }
 
 function sendFailure(reply: FastifyReply, result: Record<string, unknown>) {
-  return reply.code(status(result.code)).send({ ok: false, ...result });
+  return reply.code(sessionRuntimeStatus(result.code)).send({ ok: false, ...result });
 }
 
 export function registerNodeSessionRoutes(
@@ -60,7 +60,7 @@ export function registerNodeSessionRoutes(
     const parsed = createSessionRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid session request", code: "invalid_request" });
     const result = await nodeSessionService.create(parsed.data);
-    if ("error" in result) return reply.code(status(result.code)).send({ ok: false, ...result });
+    if ("error" in result) return reply.code(sessionRuntimeStatus(result.code)).send({ ok: false, ...result });
     return result;
   });
 
@@ -123,7 +123,7 @@ export function registerNodeSessionRoutes(
       const state = isPromptDeliveryIndeterminate(errorCode) ? "indeterminate" as const : "rejected" as const;
       const delivery = await promptRequests.update(workspace, sessionId, requestId, state, { error_code: errorCode });
       if (state === "rejected") await promptRequests.clearAssociation(workspace, sessionId, requestId);
-      return reply.code(status(result.code)).send({ ok: false, ...result, ...(delivery ?? {}) });
+      return reply.code(sessionRuntimeStatus(result.code)).send({ ok: false, ...result, ...(delivery ?? {}) });
     });
   });
 

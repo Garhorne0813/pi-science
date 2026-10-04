@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
@@ -66,4 +66,46 @@ it("preserves legacy string bodies and custom context messages during offline co
   const result = await migrateLegacySessions(cwd);
   expect(result[0]).toMatchObject({ status: "converted", entryIds: { context: expect.any(String) } });
   expect(await new AgentSessionRepository().messages(cwd, "old")).toContainEqual(expect.objectContaining({ id: result[0]!.entryIds!.context, role: "custom", content: [{ type: "text", text: "retained context" }] }));
+});
+
+it("converts a legacy workspace alias using its filesystem identity", async () => {
+  const { cwd, source, original } = await fixture();
+  const alias = join(cwd, "workspace-alias");
+  await symlink(cwd, alias, process.platform === "win32" ? "junction" : "dir");
+  const rows = original.trim().split("\n").map((row) => JSON.parse(row));
+  rows[0].cwd = alias;
+  const input = rows.map((row) => JSON.stringify(row)).join("\n") + "\n";
+  await writeFile(source, input);
+  expect(await migrateLegacySessions(cwd, true)).toEqual([{ source, sessionId: "old", status: "would-convert" }]);
+  expect((await migrateLegacySessions(cwd))[0]).toMatchObject({ status: "converted" });
+  expect(await new AgentSessionRepository().messages(cwd, "old")).toHaveLength(2);
+  expect(await readFile(source, "utf8")).toBe(input);
+});
+
+it("waits for an in-flight conversion before exposing a history snapshot", async () => {
+  const { cwd } = await fixture();
+  const service = new NodeSessionService();
+  const upgrade = AgentSessionRepository.prototype.upgradeLegacy;
+  let signal!: () => void;
+  const entered = new Promise<void>((resolve) => { signal = resolve; });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const spy = vi.spyOn(AgentSessionRepository.prototype, "upgradeLegacy").mockImplementation(async function (this: AgentSessionRepository, ...args) {
+    signal(); await gate; return upgrade.apply(this, args);
+  });
+  try {
+    const first = service.prepareHistory(cwd, "old");
+    await entered;
+    let done = false;
+    const second = service.prepareHistory(cwd, "old").then((result) => { done = true; return result; });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(done).toBe(false);
+    release();
+    expect(await first).toMatchObject({ success: true });
+    expect(await second).toMatchObject({ success: true });
+    expect(service.processCount).toBe(0);
+    const repository = new AgentSessionRepository();
+    const ids = await repository.migrationEntryIds(cwd, "old");
+    expect((await repository.messages(cwd, "old")).map((message) => message.id)).toEqual([ids.user, ids.tool]);
+  } finally { release(); spy.mockRestore(); await service.shutdownAll(); }
 });

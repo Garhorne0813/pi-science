@@ -26,6 +26,15 @@ function asMessage(entry: Entry): SessionMessageRecord | null {
     ...(typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
     ...(typeof message.isError === "boolean" ? { isError: message.isError } : {}),
     ...(boundedToolDetails(message.details) === undefined ? {} : { details: boundedToolDetails(message.details) }),
+      ...(message.presentation && typeof message.presentation === "object" && !Array.isArray(message.presentation) ? { presentation: message.presentation as Record<string, unknown> } : {}),
+      ...(message.presentationRole === "intermediate" || message.presentationRole === "final" ? { presentationRole: message.presentationRole } : {}),
+      ...(typeof message.turnId === "string" ? { turnId: message.turnId } : {}),
+      ...(typeof message.runId === "string" ? { runId: message.runId } : {}),
+      ...(typeof message.itemId === "string" ? { itemId: message.itemId } : {}),
+      ...(typeof message.parentItemId === "string" ? { parentItemId: message.parentItemId } : {}),
+      ...(typeof message.revision === "number" && Number.isInteger(message.revision) && message.revision >= 0 ? { revision: message.revision } : {}),
+      ...(typeof message.sequence === "number" && Number.isInteger(message.sequence) && message.sequence >= 0 ? { sequence: message.sequence } : {}),
+      ...(message.classificationSource === "explicit" || message.classificationSource === "legacy_inferred" || message.classificationSource === "unknown" ? { classificationSource: message.classificationSource } : {}),
     timestamp: new Date(entry.timestamp).toISOString(),
   };
 }

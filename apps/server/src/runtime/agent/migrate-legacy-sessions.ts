@@ -1,3 +1,4 @@
+import { workspaceIdentity } from "./workspace-session-identity.js";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { metadataRoot } from "../../storage/persistence.js";
@@ -28,7 +29,7 @@ export async function migrateLegacySessions(cwd: string, dryRun = false): Promis
     try {
       const rows = (await readFile(source, "utf8")).split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line) as Record<string, unknown>);
       const header = rows[0];
-      if (header?.type !== "session" || header.version !== 3 || typeof header.id !== "string" || header.cwd !== cwd) throw new Error("Expected a workspace-local v3 session header");
+      if (header?.type !== "session" || header.version !== 3 || typeof header.id !== "string" || typeof header.cwd !== "string" || workspaceIdentity(header.cwd) !== workspaceIdentity(cwd)) throw new Error("Expected a workspace-local v3 session header");
       sessionId = header.id;
       const ids = new Set<string>();
       for (const entry of rows.slice(1)) {
