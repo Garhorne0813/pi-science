@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import { listWorkspaceSessions } from "./workspace-session-identity.js";
 import { boundedToolDetails } from "../node/message-details.js";
 import { join } from "node:path";
-import { BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv, laneConfig, type Entry, type JsonlSessionMetadata, type LaneConfiguration } from "@earendil-works/pi-agent-core/node";
+import { BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv, laneConfig, operationResult, type Session, type OperationResultRecord, type Entry, type JsonlSessionMetadata, type LaneConfiguration } from "@earendil-works/pi-agent-core/node";
 import { AgentSessionRegistry } from "./agent-session-registry.js";
 import { readProject } from "../../project/project-registry.js";
 import { metadataRoot } from "../../storage/persistence.js";
@@ -28,6 +28,35 @@ function asMessage(entry: Entry): SessionMessageRecord | null {
     ...(boundedToolDetails(message.details) === undefined ? {} : { details: boundedToolDetails(message.details) }),
     timestamp: new Date(entry.timestamp).toISOString(),
   };
+}
+
+/** Associate persisted terminal results by entry ancestry, never by timestamps.
+ * Read all ancestors even for a one-message page, so page boundaries do not
+ * discard cancellation or accidentally attach it to an earlier turn. */
+async function projectMessages(session: Session, entries: Entry[]): Promise<SessionMessageRecord[]> {
+  const results = await session.scanValues(operationResult(""), context);
+  const byEntry = new Map<string, OperationResultRecord>();
+  for (const { value: result } of results) {
+    if (result.kind !== "run") continue;
+    let id = result.tipId;
+    const visited = new Set<string>();
+    while (id && id !== result.fromTipId && !visited.has(id)) {
+      visited.add(id);
+      byEntry.set(id, result);
+      id = (await session.getEntry(id, context))?.parentId ?? null;
+    }
+  }
+  return entries.flatMap((entry) => {
+    const message = asMessage(entry);
+    if (!message) return [];
+    const result = byEntry.get(entry.id);
+    return [{ ...message, ...(result ? {
+      turnId: result.operationId, runId: result.operationId,
+      turnStatus: result.status,
+      turnStartedAt: new Date(result.startedAt).toISOString(),
+      turnEndedAt: new Date(result.endedAt).toISOString(),
+    } : {}) }];
+  });
 }
 
 /** Read-only projection of AgentHarness v4 sessions into the existing browser history protocol. */
@@ -100,7 +129,7 @@ export class AgentSessionRepository {
       const metadata = await this.metadata(repo, cwd, sessionId);
       if (!metadata) return [];
       const session = await repo.open(metadata, context);
-      try { return (await session.findEntries({ order: "asc" }, context)).flatMap((entry) => asMessage(entry) ?? []); }
+      try { return await projectMessages(session, await session.findEntries({ order: "asc" }, context)); }
       finally { await session.close(context); }
     });
   }
@@ -148,7 +177,7 @@ export class AgentSessionRepository {
         ]);
         const selected = entries.slice(0, limit).reverse();
         const oldest = selected[0];
-        return { messages: selected.flatMap((entry) => asMessage(entry) ?? []),
+        return { messages: await projectMessages(session, selected),
           next_cursor: entries.length > limit && oldest
             ? Buffer.from(JSON.stringify({ v: 4, s: oldest.seq })).toString("base64url") : null,
           has_more: entries.length > limit,

@@ -1,3 +1,4 @@
+import { builtinNetworkEnvironment } from "../../../mcp/bindings.js";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -40,7 +41,7 @@ export function loadProjectedServers(workspace: string, onBindingError?: (name: 
   return Object.fromEntries(Object.entries(projected.mcpServers ?? {}).flatMap(([name, raw]) => {
     try {
       const { __piScienceEnvironment, __piScienceHeaders, ...server } = raw;
-      const env = materialize(__piScienceEnvironment);
+      const env = { ...materialize(__piScienceEnvironment), ...(server.__piScienceBuiltin ? builtinNetworkEnvironment() : {}) };
       const headers = materialize(__piScienceHeaders);
       return [[name, {
         ...server,

@@ -5,6 +5,7 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { AgentHarnessTool, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import type { TSchema } from "typebox";
 import { loadProjectedServers } from "../../pi/extensions/pi-science-mcp.js";
+import { builtinNetworkEnvironment } from "../../../mcp/bindings.js";
 import { createMcpFetch } from "../../../mcp/runtime-fetch.js";
 import { UnixSocketClientTransport } from "../../../mcp/connector-probe.js";
 import type { InteractionBridge } from "./interaction-bridge.js";
@@ -24,6 +25,7 @@ type ServerDefinition = {
   approveTools?: boolean | string[];
   __piScienceAllowedTools?: string[];
   __piScienceConnectorId?: string;
+  __piScienceBuiltin?: boolean;
   __piScienceProjectId?: string;
   __piScienceAllowPrivate?: boolean;
   requestTimeoutMs?: number;
@@ -89,7 +91,7 @@ export class AgentMcpTools {
       transport = new UnixSocketClientTransport(server.socket);
     } else if ((server.transport === "stdio" || !server.transport) && server.command) {
       transport = new StdioClientTransport({ command: server.command, args: server.args ?? [], cwd: server.cwd ?? cwd,
-        env: { ...toolEnvironment(environment), ...server.env }, stderr: "pipe" });
+        env: { ...toolEnvironment(environment), ...server.env, ...(server.__piScienceBuiltin ? builtinNetworkEnvironment() : {}) }, stderr: "pipe" });
     } else if ((server.transport === "sse" || server.transport === "streamable_http" || !server.transport) && server.url) {
       const connectorId = server.__piScienceConnectorId;
       const checkedFetch = createMcpFetch({ connectorId, projectId: server.__piScienceProjectId,

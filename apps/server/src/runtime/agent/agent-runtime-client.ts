@@ -20,7 +20,11 @@ type WorkerRequest =
   | ({ type: "notification" } & RuntimeNotification);
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const SYSTEM_ENV_KEYS = ["PATH", "HOME", "USER", "TMPDIR", "TEMP", "TMP", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "PI_SCIENCE_HOME", "PI_SCIENCE_STATE_ROOT"] as const;
+const SYSTEM_ENV_KEYS = ["PATH", "HOME", "USER", "TMPDIR", "TEMP", "TMP", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "PI_SCIENCE_HOME", "PI_SCIENCE_STATE_ROOT",
+  // Trusted launch configuration for model networking; never accept workspace overrides.
+  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+  "NODE_USE_ENV_PROXY", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR",
+] as const;
 const WORKSPACE_ENV_KEYS = new Set([
   "PATH", "CONDA_PREFIX", "PI_SCIENCE_ENVIRONMENT_ID", "PI_SCIENCE_ENVIRONMENT_REVISION_ID",
   "PI_SCIENCE_ENVIRONMENT_PREFIX", "PYTHONNOUSERSITE", "PIP_USER", "npm_config_prefix",

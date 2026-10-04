@@ -15,6 +15,7 @@ export const MCP_RUNTIME_CACHE_VERSION = 4;
 export interface ProjectedMcpServer {
   __piScienceAllowedTools?: string[];
   __piScienceConnectorId?: string;
+  __piScienceBuiltin?: boolean;
   __piScienceAllowPrivate?: boolean;
   __piScienceProjectId?: string;
   __piScienceCacheVersion?: number;
@@ -86,6 +87,7 @@ function projectServer(
     : undefined;
   return {
     __piScienceConnectorId: connector.connector_id,
+    ...(connector.source === "builtin" ? { __piScienceBuiltin: true } : {}),
     transport: connector.transport,
     __piScienceAllowPrivate: runtime.allow_private,
     __piScienceProjectId: projectId,

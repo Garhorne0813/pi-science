@@ -139,7 +139,7 @@ export function useModelConfig(cwd: string, sessionId: string | undefined) {
         model?: string;
         thinking?: string;
         session_replacements?: SessionReplacement[];
-      }>(model, nextThinking, cwd);
+      }>(model, nextThinking, cwd, sessionId ?? activeSessionId);
       const replacementId = applySessionReplacements(
         Array.isArray(data.session_replacements) ? data.session_replacements as SessionReplacement[] : [],
       );

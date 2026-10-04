@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
@@ -16,6 +16,8 @@ describe("agent-core managed MCP tools", () => {
     const previousFirst = process.env.PR115_MCP_FIRST;
     const previousSecond = process.env.PR115_MCP_SECOND;
     let mcp: AgentMcpTools | undefined;
+    vi.stubEnv("HTTPS_PROXY", "http://trusted-proxy.test:8080");
+    vi.stubEnv("NODE_EXTRA_CA_CERTS", "/trusted/ca.pem");
     try {
       process.env.PR115_MCP_FIRST = "first-test-token";
       process.env.PR115_MCP_SECOND = "second-test-token";
@@ -25,12 +27,12 @@ describe("agent-core managed MCP tools", () => {
         `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
         `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
         `const server = new McpServer({ name: "environment-test", version: "1" });`,
-        `server.registerTool("inspect", { description: "Inspect allowed environment" }, async () => ({ content: [{ type: "text", text: JSON.stringify({token:process.env.TOKEN,model:!!process.env.OPENAI_API_KEY,internal:!!process.env.PI_SCIENCE_INTERNAL_TOKEN,firstSource:!!process.env.PR115_MCP_FIRST,secondSource:!!process.env.PR115_MCP_SECOND,path:!!process.env.PATH}) }] }));`,
+        `server.registerTool("inspect", { description: "Inspect allowed environment" }, async () => ({ content: [{ type: "text", text: JSON.stringify({token:process.env.TOKEN,model:!!process.env.OPENAI_API_KEY,internal:!!process.env.PI_SCIENCE_INTERNAL_TOKEN,firstSource:!!process.env.PR115_MCP_FIRST,secondSource:!!process.env.PR115_MCP_SECOND,path:!!process.env.PATH,proxy:!!process.env.HTTPS_PROXY,ca:!!process.env.NODE_EXTRA_CA_CERTS}) }] }));`,
         `await server.connect(new StdioServerTransport());`,
       ].join("\n"));
       await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test",
         mcpServers: Object.fromEntries(["first", "second"].map((name) => [name, { command: process.execPath, args: [server],
-          approveTools: false, __piScienceConnectorId: `connector_${name}`,
+          approveTools: false, __piScienceConnectorId: `connector_${name}`, __piScienceBuiltin: name === "first",
           __piScienceEnvironment: { TOKEN: { kind: "environment", name: `PR115_MCP_${name.toUpperCase()}` } } }])) }));
       mcp = await AgentMcpTools.open(cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "",
         OPENAI_API_KEY: "model-test-token", PI_SCIENCE_INTERNAL_TOKEN: "server-test-token",
@@ -42,9 +44,10 @@ describe("agent-core managed MCP tools", () => {
         const text = result.content[0];
         expect(text?.type).toBe("text");
         expect(JSON.parse(text && text.type === "text" ? text.text : "")).toEqual({ token: `${name}-test-token`,
-          model: false, internal: false, firstSource: false, secondSource: false, path: true });
+          model: false, internal: false, firstSource: false, secondSource: false, path: true, proxy: name === "first", ca: name === "first" });
       }
     } finally {
+      vi.unstubAllEnvs();
       if (previousFirst === undefined) delete process.env.PR115_MCP_FIRST; else process.env.PR115_MCP_FIRST = previousFirst;
       if (previousSecond === undefined) delete process.env.PR115_MCP_SECOND; else process.env.PR115_MCP_SECOND = previousSecond;
       await mcp?.close();

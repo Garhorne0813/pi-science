@@ -2,6 +2,7 @@ import { ConversationEventHub } from "../runtime/events/conversation-event-hub.j
 import { NodeSessionService } from "../runtime/node/node-session-service.js";
 import { PiManager } from "../runtime/pi/pi-manager.js";
 import { PiOrbitCatalogService } from "../runtime/pi/pi-orbit-catalog.js";
+import { AgentCoreCatalogService } from "../runtime/agent/agent-core-catalog.js";
 import { SessionRepository } from "../runtime/node/session-repository.js";
 import { SettingsStore } from "../storage/settings-store.js";
 import { ModelResourceService } from "../model-resources/model-resource-service.js";
@@ -30,7 +31,7 @@ export interface ServerModules {
   readonly events: ConversationEventHub;
   readonly sessionRepository: SessionRepository;
   readonly piManager: PiManager;
-  readonly runtimeCatalog: PiOrbitCatalogService;
+  readonly runtimeCatalog: Pick<PiOrbitCatalogService, "getCatalog">;
   readonly settings: SettingsStore;
   readonly modelResources: ModelResourceService;
   readonly jobs: JobCoordinator;
@@ -64,7 +65,8 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
   const events = new ConversationEventHub();
   const sessionRepository = new SessionRepository();
   const piManager = new PiManager();
-  const runtimeCatalog = new PiOrbitCatalogService(piManager);
+  const coreEnabled = process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core";
+  const runtimeCatalog = coreEnabled ? new AgentCoreCatalogService() : new PiOrbitCatalogService(piManager);
   const environments = new WorkspaceEnvironmentService(undefined, config?.micromambaExecutable, sqliteEnabled ? environmentRepository : undefined);
   const kernels = new NodeKernelManager();
   const notebooks = new NotebookService({
@@ -74,7 +76,6 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
   });
   const settings = new SettingsStore();
   const modelResources = new ModelResourceService({ settings, runtimeCatalog });
-  const coreEnabled = process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core";
   const coreServer = { backendUrl: config ? `http://127.0.0.1:${config.port}` : undefined, internalToken: config?.internalToken };
   const projectReview = new ProjectReviewService(coreEnabled ? new CoreReviewSubagentRunner(environments, coreServer) : new PiReviewSubagentRunner(environments, piManager), sessionRepository);
   const sessions = new NodeSessionService(events, piManager, sessionRepository, environments, projectReview, undefined, modelResources, {

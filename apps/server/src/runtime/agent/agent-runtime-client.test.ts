@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentCoreRuntimeClient, workerEnvironment } from "./agent-runtime-client.js";
 import { SessionRuntime } from "./worker/session-runtime.js";
+import { toolEnvironment } from "./agent-runtime-environment.js";
 import { BACKGROUND_CONTEXT, type AgentLane } from "@earendil-works/pi-agent-core/node";
 
 const roots: string[] = [];
@@ -50,6 +51,18 @@ describe("AgentCoreRuntimeClient", () => {
     const input = { MY_LAB_TOKEN: "test-secret", UNRELATED_SECRET: "do-not-forward" };
     expect(workerEnvironment(input, ["MY_LAB_TOKEN"])).toMatchObject({ MY_LAB_TOKEN: "test-secret" });
     expect(workerEnvironment(input, ["MY_LAB_TOKEN"])).not.toHaveProperty("UNRELATED_SECRET");
+  });
+  it("preserves trusted proxy and CA settings without allowing workspace overrides or tool leakage", () => {
+    vi.stubEnv("HTTPS_PROXY", "http://trusted-proxy:8080");
+    vi.stubEnv("NODE_EXTRA_CA_CERTS", "/trusted/ca.pem");
+    vi.stubEnv("NODE_USE_ENV_PROXY", "1");
+    try {
+      const environment = workerEnvironment({ HTTPS_PROXY: "http://workspace-proxy:8080", NODE_EXTRA_CA_CERTS: "/workspace/untrusted.pem", UNRELATED_SECRET: "hidden" });
+      expect(environment).toMatchObject({ HTTPS_PROXY: "http://trusted-proxy:8080", NODE_EXTRA_CA_CERTS: "/trusted/ca.pem", NODE_USE_ENV_PROXY: "1" });
+      expect(environment).not.toHaveProperty("UNRELATED_SECRET");
+      expect(toolEnvironment(environment)).not.toHaveProperty("HTTPS_PROXY");
+      expect(toolEnvironment(environment)).not.toHaveProperty("NODE_EXTRA_CA_CERTS");
+    } finally { vi.unstubAllEnvs(); }
   });
   it("creates a durable session in a child process and reopens it", async () => {
     const start = await options();

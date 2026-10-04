@@ -194,6 +194,9 @@ export const historyMessageSchema = z.object({
   parentItemId: z.string().optional(),
   revision: z.number().int().nonnegative().optional(),
   sequence: z.number().int().nonnegative().optional(),
+  turnStatus: z.enum(["completed", "declined", "aborted", "failed"]).optional(),
+  turnStartedAt: z.string().datetime().optional(),
+  turnEndedAt: z.string().datetime().optional(),
   classificationSource: z.enum(["explicit", "legacy_inferred", "unknown"]).optional(),
 });
 

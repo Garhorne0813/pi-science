@@ -68,7 +68,12 @@ function parseProjectSubagent(content: string): { name: string; description: str
   return { name, description, ...(packageName ? { packageName } : {}) };
 }
 async function respondWithRuntimeReload<T extends Record<string, unknown>>(nodeSessionService: NodeSessionService, reply: FastifyReply, payload: T): Promise<(T & { session_replacements: Array<{ cwd: string; oldId: string; newId: string }> }) | FastifyReply> {
-  try { return { ...payload, session_replacements: await nodeSessionService.reloadConfiguration() }; }
+  try {
+    const replacements = typeof payload.model === "string" && typeof payload.thinking === "string"
+      ? await nodeSessionService.reloadConfiguration({ model: payload.model, thinking: payload.thinking })
+      : await nodeSessionService.reloadConfiguration();
+    return { ...payload, session_replacements: replacements };
+  }
   catch (error) {
     reply.code(502).send({ ok: false, error: `Settings were saved, but Pi runtime reload failed: ${String(error)}` });
     return reply;
@@ -715,7 +720,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       await mutate((config) => { if (String(config.model ?? "").startsWith(`${request.params.provider}/`)) config.model = ""; });
     } else await mutate((config) => { if (config.api_keys) delete config.api_keys[request.params.provider]; if (String(config.model ?? "").startsWith(`${request.params.provider}/`)) config.model = ""; });
     return respondWithReload(nodeSessionService, reply, { ok: true, provider: request.params.provider }); });
-  app.put("/api/settings/model", async (request, reply) => { const body = (request.body ?? {}) as { model?: unknown; thinking?: unknown }; const model = String(body.model ?? ""); const requestedThinking = String(body.thinking ?? "high"); const cwdValue = query(request, "cwd", ""); const current = await load(); const canonicalState = modelResources?.repository.readSync(); const useCanonicalResources = Boolean(modelResources && (canonicalState?.migration || canonicalState?.providers?.length || canonicalState?.models?.length));
+  app.put("/api/settings/model", async (request, reply) => { const body = (request.body ?? {}) as { model?: unknown; thinking?: unknown; session_id?: unknown }; const model = String(body.model ?? ""); const requestedThinking = String(body.thinking ?? "high"); const cwdValue = query(request, "cwd", ""); const current = await load(); const canonicalState = modelResources?.repository.readSync(); const useCanonicalResources = Boolean(modelResources && (canonicalState?.migration || canonicalState?.providers?.length || canonicalState?.models?.length));
     if (useCanonicalResources && modelResources) {
       const canonicalModel = canonicalState?.aliases[model] ?? model;
       const selected = (await modelResources.listModels({ available: true })).find((item) => item.id === canonicalModel);
@@ -737,13 +742,19 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
         }
       }
       const thinking = clampThinking(requestedThinking, levels ?? ["off"]);
+      // A cold session also needs a durable configure commit: its saved model
+      // intentionally wins over defaults when its worker reopens.
+      if (process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core" && typeof body.session_id === "string" && body.session_id) {
+        const configured = await nodeSessionService.configure(body.session_id, cwdValue, canonicalModel, thinking);
+        if (!configured.success) return reply.code(configured.code === "busy" ? 409 : 502).send({ ok: false, ...configured });
+      }
       await mutate((config) => { config.model = canonicalModel; config.thinking = thinking; const contextWindow = Number(selected?.capabilities.context_window ?? 0); if (contextWindow > 0) config.model_context_window = contextWindow; const maxOutputTokens = Number(selected?.capabilities.max_output_tokens ?? 0); if (maxOutputTokens > 0) config.model_max_output_tokens = maxOutputTokens; });
       if (runtimeLevelsVerified && canonicalModel.startsWith("user-") && selected) {
         const separator = canonicalModel.indexOf("/");
         if (separator > 0) await modelResources.applyRuntimeCapabilities(canonicalModel.slice(0, separator), canonicalModel.slice(separator + 1), { reasoning: selected.capabilities.reasoning, thinking_levels: levels ?? selected.capabilities.thinking_levels });
       }
       const reloaded = await respondWithRuntimeReload(nodeSessionService, reply, { ok: true, model: canonicalModel, thinking });
-      if ("send" in reloaded) return reloaded;
+      if (!reloaded || "send" in reloaded) return reloaded;
       if (cwdValue && canonicalModel) {
         const actual = await nodeSessionService.availableThinkingLevels(cwdValue, canonicalModel).catch(() => null);
         if (actual?.success && actual.data && typeof actual.data === "object") {
@@ -773,7 +784,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
     // Reload the Pi runtime so the new model/thinking take effect, keeping the
     // existing 502 + session_replacements semantics.
     const reloaded = await respondWithRuntimeReload(nodeSessionService, reply, { ok: true, model, thinking });
-    if ("send" in reloaded) return reloaded;
+    if (!reloaded || "send" in reloaded) return reloaded;
     // The runtime is the final authority for the active model: once it has
     // reloaded with the new model, correct the persisted level to the
     // runtime's actual supported set (identity must match). Never reload a

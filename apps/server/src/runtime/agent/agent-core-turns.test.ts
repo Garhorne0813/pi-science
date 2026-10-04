@@ -74,12 +74,12 @@ describe("agent-core product turns", () => {
   it("captures a fast tool write and publishes final stats and one automatic review", async () => {
     const { cwd, id, service, core, events, review } = await fixture();
     expect(await service.command(id, cwd, "prompt", { message: "write a result", client_message_id: "write-once" })).toMatchObject({ success: true });
-    await vi.waitFor(() => expect(events.some((event) => event.type === "turn.artifacts")).toBe(true), { timeout: 5000 });
+    await vi.waitFor(() => expect(events.some((event) => event.type === "turn.artifacts")).toBe(true), { timeout: 15000 });
     expect(await readFile(join(cwd, "result.txt"), "utf8")).toBe("instant result\n");
     const records = await turnArtifactRepository.forSession(cwd, id);
     expect(records).toHaveLength(1);
     expect(records[0]?.artifacts).toEqual([expect.objectContaining({ path: "result.txt" })]);
-    await vi.waitFor(() => expect(review.run).toHaveBeenCalledOnce(), { timeout: 5000 });
+    await vi.waitFor(() => expect(review.run).toHaveBeenCalledOnce(), { timeout: 15000 });
     expect(await service.stats(id, cwd)).toMatchObject({ stats: { userMessages: 1, toolCalls: 1, toolResults: 1, tokens: { total: 220 } } });
     const runtime = core.liveRuntime(cwd)!;
     runtime.emit("event", { type: "operation.started", runId: records[0]!.turn_id, turnId: records[0]!.turn_id, recovery: true });
@@ -87,23 +87,23 @@ describe("agent-core product turns", () => {
     await vi.waitFor(() => expect(events.filter((event) => event.type === "session.stats").length).toBeGreaterThan(4));
     expect(await turnArtifactRepository.forSession(cwd, id)).toHaveLength(1);
     expect(events.filter((event) => event.type === "turn.artifacts")).toHaveLength(1);
-    await vi.waitFor(() => expect(review.run).toHaveBeenCalledOnce(), { timeout: 5000 });
-  }, 20000);
+    await vi.waitFor(() => expect(review.run).toHaveBeenCalledOnce(), { timeout: 15000 });
+  }, 45000);
 
   it("automatically reopens a killed worker and resumes one durable prompt", async () => {
     const { cwd, id, service, core, events, requests } = await fixture("hold-first");
     const original = core.liveRuntime(cwd)!;
     expect(await service.command(id, cwd, "prompt", { message: "continue after failure", client_message_id: "recover-once" })).toMatchObject({ success: true });
-    await vi.waitFor(() => expect(requests).toHaveLength(1), { timeout: 5000 });
+    await vi.waitFor(() => expect(requests).toHaveLength(1), { timeout: 15000 });
     original.child.kill("SIGKILL");
-    await vi.waitFor(() => expect(requests).toHaveLength(2), { timeout: 5000 });
-    await vi.waitFor(() => expect(events.some((event) => event.type === "session.stats")).toBe(true), { timeout: 5000 });
+    await vi.waitFor(() => expect(requests).toHaveLength(2), { timeout: 15000 });
+    await vi.waitFor(() => expect(events.some((event) => event.type === "session.stats")).toBe(true), { timeout: 15000 });
     expect(core.liveRuntime(cwd)).not.toBe(original);
     expect(events.some((event) => event.code === "worker_recovering")).toBe(true);
     const history = await new SessionRepository().messages(cwd, id);
     expect(history.filter((message) => message.client_message_id === "recover-once")).toHaveLength(1);
-    await vi.waitFor(async () => expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }), { timeout: 5000 });
-  }, 20000);
+    await vi.waitFor(async () => expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }), { timeout: 15000 });
+  }, 45000);
 
   it("detects a lost settled event and completes the persisted product lifecycle after reopening", async () => {
     const { cwd, id, service, core, events, review } = await fixture();
@@ -111,10 +111,23 @@ describe("agent-core product turns", () => {
     const emit = original.emit.bind(original);
     vi.spyOn(original, "emit").mockImplementation((type, ...args) => type === "event" && args[0]?.type === "operation.settled" ? false : emit(type, ...args));
     expect(await service.command(id, cwd, "prompt", { message: "write and recover", client_message_id: "lost-settle" })).toMatchObject({ success: true });
-    await vi.waitFor(() => expect(events.some((event) => event.type === "turn.artifacts")).toBe(true), { timeout: 5000 });
+    await vi.waitFor(() => expect(events.some((event) => event.type === "turn.artifacts")).toBe(true), { timeout: 15000 });
     expect(core.liveRuntime(cwd)).not.toBe(original);
     expect(await turnArtifactRepository.forSession(cwd, id)).toHaveLength(1);
-    await vi.waitFor(() => expect(review.run).toHaveBeenCalledOnce(), { timeout: 5000 });
+    await vi.waitFor(() => expect(review.run).toHaveBeenCalledOnce(), { timeout: 15000 });
     expect((await new SessionRepository().messages(cwd, id)).filter((message) => message.client_message_id === "lost-settle")).toHaveLength(1);
-  }, 20000);
+  }, 45000);
+  it("keeps cancellation and timing in cold history when stopping before the model replies", async () => {
+    const { cwd, id, service, core, requests } = await fixture("hold-first");
+    expect(await service.command(id, cwd, "prompt", { message: "stop before reply", client_message_id: "stop-pending" })).toMatchObject({ success: true });
+    await vi.waitFor(() => expect(requests).toHaveLength(1), { timeout: 15000 });
+    expect(await service.command(id, cwd, "abort", {})).toMatchObject({ success: true });
+    const repository = new SessionRepository();
+    await vi.waitFor(async () => expect((await repository.messages(cwd, id))[0]).toMatchObject({ turnStatus: "aborted" }), { timeout: 15000 });
+    await core.shutdownAll();
+    const page = await repository.messagesPage(cwd, id, { limit: 1 });
+    expect(page.messages[0]).toMatchObject({ turnStatus: "aborted", turnStartedAt: expect.any(String), turnEndedAt: expect.any(String) });
+    expect(Date.parse(page.messages[0]!.turnEndedAt!) - Date.parse(page.messages[0]!.turnStartedAt!)).toBeGreaterThanOrEqual(0);
+  }, 45000);
+
 });

@@ -35,6 +35,9 @@ export interface SessionMessageRecord {
   details?: unknown;
   presentation?: Record<string, unknown>;
   presentationRole?: "intermediate" | "final";
+  turnStatus?: "completed" | "declined" | "aborted" | "failed";
+  turnStartedAt?: string;
+  turnEndedAt?: string;
   turnId?: string;
   runId?: string;
   itemId?: string;

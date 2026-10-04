@@ -427,3 +427,9 @@ describe("AgentActivity settled display", () => {
     expect(screen.getByText("Stopped")).toBeInTheDocument();
   });
 });
+
+
+it("renders a stopped turn with its durable duration even when it produced no assistant or tool message", () => {
+  render(<AgentActivity blocks={[]} lifecycle="aborted" turnStartedAt="2026-10-03T00:00:00.000Z" turnEndedAt="2026-10-03T00:00:29.000Z" />);
+  expect(screen.getByText("Stopped · 29s")).toBeInTheDocument();
+});

@@ -23,7 +23,8 @@ import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 
 type Live = { key: string; runtime: AgentCoreRuntimeClient; busy: boolean; restartPending: boolean; model: string; thinking: string | null;
-  config: PiConfig; eventSequence: number; expectedOperationId?: string; watchdog?: NodeJS.Timeout; suppressRecovery?: boolean };
+  config: PiConfig; eventSequence: number; expectedOperationId?: string; watchdog?: NodeJS.Timeout; suppressRecovery?: boolean;
+  pendingModel?: { model: string; thinking: string } };
 type ProductHooks = {
   observe?: (cwd: string, sessionId: string, event: Record<string, unknown>) => void;
   settled?: (cwd: string, sessionId: string, turnId: string) => void;
@@ -243,7 +244,8 @@ export class AgentCoreSessionService {
       onBusy: (busy) => {
         item.busy = busy;
         this.scheduleWatchdog(item);
-        if (!busy && item.restartPending) void this.stopForReload(item);
+        if (!busy && item.restartPending) void this.stopForReload(item).catch((error) =>
+          this.events.publish(runtime.cwd, runtime.sessionId, { type: "error", message: `Settings reload failed: ${String(error)}` }));
       },
       onExit: () => {
         if (item.watchdog) clearTimeout(item.watchdog);
@@ -384,9 +386,10 @@ export class AgentCoreSessionService {
   }
 
   /** Rebuilds idle workers with current MCP and environment settings; active turns finish first. */
-  async reloadConfiguration(): Promise<void> {
+  async reloadConfiguration(modelChange?: { model: string; thinking: string }): Promise<void> {
     await Promise.allSettled(this.opening.values());
     for (const item of [...this.live.values()]) {
+      if (modelChange) item.pendingModel = modelChange;
       if (item.busy) item.restartPending = true;
       else await this.stopForReload(item);
     }
@@ -394,6 +397,14 @@ export class AgentCoreSessionService {
 
   private async stopForReload(item: Live): Promise<void> {
     if (this.live.get(identity(item.runtime.cwd, item.runtime.sessionId)) !== item) return;
+    if (item.pendingModel) {
+      const { model, thinking } = item.pendingModel;
+      if (item.model !== model || item.thinking !== thinking) {
+        const result = await this.configure(item.runtime.cwd, item.runtime.sessionId, model, thinking, item.config);
+        if (!result.success) throw new Error(String(result.error ?? result.code ?? "model configuration failed"));
+      }
+      item.pendingModel = undefined;
+    }
     item.restartPending = false;
     item.suppressRecovery = true;
     if (item.watchdog) clearTimeout(item.watchdog);

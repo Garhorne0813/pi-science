@@ -1,6 +1,11 @@
 /** Vitest global setup — registers @testing-library/jest-dom matchers
  *  (toBeInTheDocument, toHaveValue, …) on vitest's expect. */
 import "@testing-library/jest-dom/vitest";
+import { configure } from "@testing-library/react";
+
+// Cold lazy imports and async backend-driven UI updates can exceed the
+// library's one-second default on CI. Keep a bounded, shared deadline.
+configure({ asyncUtilTimeout: 5_000 });
 
 // Some components read matchMedia at render time (e.g. the desktop sidebar
 // breakpoint). jsdom does not implement it, so provide a minimal stub that

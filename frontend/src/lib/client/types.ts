@@ -47,6 +47,9 @@ export interface HistoryMessage {
   details?: unknown;
   presentation?: ToolPresentation;
   presentationRole?: "intermediate" | "final";
+  turnStatus?: "completed" | "declined" | "aborted" | "failed";
+  turnStartedAt?: string;
+  turnEndedAt?: string;
   turnId?: string;
   runId?: string;
   itemId?: string;

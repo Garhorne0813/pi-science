@@ -819,9 +819,9 @@ export class NodeSessionService {
     });
   }
 
-  async reloadConfiguration(): Promise<Array<{ cwd: string; oldId: string; newId: string }>> {
+  async reloadConfiguration(modelChange?: { model: string; thinking: string }): Promise<Array<{ cwd: string; oldId: string; newId: string }>> {
     return this.withLock("\0configuration-reload", async () => {
-      await this.agentCore.reloadConfiguration();
+      await this.agentCore.reloadConfiguration(modelChange);
       const runtimes = [...new Set(this.runtimes.values())];
       if (this.manager.hostProcessCount > 0) this.hostReloadPending = true;
       if (this.hostReloadPending && runtimes.some((runtime) => runtime.busy)) {

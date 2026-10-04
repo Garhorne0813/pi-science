@@ -37,6 +37,44 @@ async function workspace(): Promise<string> {
 }
 
 describe("native control-plane business routes", () => {
+  it("connects and selects the official agent-core model without an Orbit installation", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_AGENT_RUNTIME = "agent-core";
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    vi.stubEnv("PI_CLI_PATH", "");
+    const modules = createServerModules();
+    const orbit = vi.spyOn(modules.piManager, "getCatalog");
+    const app = buildApp(config(), modules);
+    apps.push(app);
+    try {
+      const before = (await app.inject({ method: "GET", url: "/api/settings/providers" })).json();
+      expect(before.providers).toContainEqual(expect.objectContaining({ id: "deepseek", credential_status: "needs_key" }));
+      const connected = await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "deepseek", api_key: "catalog-test-key" } });
+      expect(connected.statusCode).toBe(200);
+      const listed = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
+      expect(listed.available_models).toContainEqual(expect.objectContaining({ id: "deepseek/deepseek-flash" }));
+      const selected = await app.inject({ method: "PUT", url: "/api/settings/model", payload: { model: "deepseek/deepseek-flash", thinking: "off" } });
+      expect(selected.statusCode).toBe(200);
+      expect(selected.json()).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
+      const created = await modules.sessions.create({ cwd, config: { model: "deepseek/deepseek-flash", thinking: "off", skills: [], extensions: [] } });
+      if (!("id" in created)) throw new Error(String(created.error));
+      await modules.sessions.reloadConfiguration();
+      const switched = await app.inject({ method: "PUT", url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
+        payload: { model: "deepseek/deepseek-v4-pro", thinking: "high", session_id: created.id } });
+      expect(switched.statusCode).toBe(200);
+      expect(await modules.sessions.state(created.id, cwd)).toMatchObject({ model: "deepseek/deepseek-v4-pro", thinking: "high" });
+      const switchedAgain = await app.inject({ method: "PUT", url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
+        payload: { model: "deepseek/deepseek-flash", thinking: "off", session_id: created.id } });
+      expect(switchedAgain.statusCode).toBe(200);
+      await modules.sessions.resume(created.id, cwd);
+      expect(await modules.sessions.state(created.id, cwd)).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
+      expect(orbit).not.toHaveBeenCalled();
+      expect(JSON.stringify(listed)).not.toContain("catalog-test-key");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }, 30_000);
+
   it("uses normalized thinking levels from the Pi Orbit catalog", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
