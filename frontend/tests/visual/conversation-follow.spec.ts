@@ -36,14 +36,14 @@ test("follows two consecutive replies and preserves explicit history browsing", 
   await page.route("**/api/sessions/*/artifacts?*", (route) => route.fulfill({ json: { turns: [] } }));
   await page.goto("/workspace/%2Ftmp%2Fvisual-demo/session/visual-session-1");
   await expect(page.locator(".ui-user-message")).toContainText("检查消息自动跟随");
-  await emit(page, "agent_start");
-  await emit(page, "text.updated", { partId: "purpose-1", text: "定位第二轮消息没有自动跟随的原因" });
+  await emit(page, "operation.started");
+  await emit(page, "message.delta", { partId: "purpose-1", text: "定位第二轮消息没有自动跟随的原因" });
   await emit(page, "tool.updated", { callId: "read-1", tool: "read", status: "running", input: { path: "useConversationScroll.ts" } });
   await expect(page.getByText("定位第二轮消息没有自动跟随的原因", { exact: true })).toBeVisible();
   await emit(page, "tool.updated", { callId: "read-1", tool: "read", status: "done" });
-  await emit(page, "text.updated", { partId: "first-answer", text: answer(35) });
+  await emit(page, "message.delta", { partId: "first-answer", text: answer(35) });
   await expect.poll(() => bottomGap(page)).toBeLessThan(8);
-  await emit(page, "session.idle", { handledWithoutTurn: true });
+  await emit(page, "operation.settled", { handledWithoutTurn: true });
   await expect(page.getByRole("region", { name: "执行记录" })).toHaveCount(0);
   await expect.poll(() => bottomGap(page)).toBeLessThan(8);
 
@@ -57,7 +57,7 @@ test("follows two consecutive replies and preserves explicit history browsing", 
   await page.locator("textarea").fill("继续验证第二轮消息，并整理测试结果。");
   await page.getByLabel("Send message", { exact: true }).click();
   await expect(page.locator(".ui-user-message").last()).toContainText("继续验证第二轮");
-  await emit(page, "agent_start");
+  await emit(page, "operation.started");
   await emit(page, "tool.updated", { callId: "read-2", tool: "read", status: "running", input: { path: "scroll.ts", description: "检查第二轮消息追加后的滚动位置" } });
   await expect(page.getByText("检查第二轮消息追加后的滚动位置", { exact: true })).toBeVisible();
   await expect.poll(() => bottomGap(page)).toBeLessThan(8);
@@ -74,19 +74,19 @@ test("follows two consecutive replies and preserves explicit history browsing", 
 
   await emit(page, "tool.updated", { callId: "read-3", tool: "read", status: "done" });
   for (const count of [8, 16, 30]) {
-    await emit(page, "text.updated", { partId: "second-answer", text: answer(count) });
+    await emit(page, "message.delta", { partId: "second-answer", text: answer(count) });
     await expect.poll(() => bottomGap(page)).toBeLessThan(8);
   }
   await scroller.hover();
   await page.mouse.wheel(0, -600);
   await expect.poll(() => bottomGap(page)).toBeGreaterThan(200);
   const browsedTop = await scroller.evaluate((el) => el.scrollTop);
-  await emit(page, "text.updated", { partId: "second-answer", text: answer(40) });
+  await emit(page, "message.delta", { partId: "second-answer", text: answer(40) });
   await expect.poll(() => bottomGap(page)).toBeGreaterThan(600);
   await expect.poll(() => scroller.evaluate((el) => el.scrollTop)).toBeLessThanOrEqual(browsedTop + 8);
   await page.getByLabel("回到最新").click();
   await expect.poll(() => bottomGap(page)).toBeLessThan(8);
-  await emit(page, "session.idle", { handledWithoutTurn: true });
+  await emit(page, "operation.settled", { handledWithoutTurn: true });
   await expect(page.getByRole("region", { name: "执行记录" })).toHaveCount(0);
   await expect.poll(() => bottomGap(page)).toBeLessThan(8);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

@@ -21,15 +21,15 @@ describe("runtime event subscription", () => {
     await useRuntimeStore.getState().connect("/workspace", "session-compaction");
     const source = FakeEventSource.instances[0];
     source.open();
-    source.emit("agent_start", { type: "agent_start", sessionId: "session-compaction", turnId: "t1" });
-    source.emit("compaction.updated", { type: "compaction.updated", sessionId: "session-compaction", status: "start" });
-    source.emit("compaction.updated", { type: "compaction.updated", sessionId: "session-compaction", status: "end" });
+    source.emit("operation.started", { type: "operation.started", sessionId: "session-compaction", turnId: "t1" });
+    source.emit("compaction.progress", { type: "compaction.progress", sessionId: "session-compaction", status: "start" });
+    source.emit("compaction.progress", { type: "compaction.progress", sessionId: "session-compaction", status: "end" });
     expect(useRuntimeStore.getState()).toMatchObject({ working: true, turnLifecycle: "active" });
-    source.emit("session.idle", { type: "session.idle", sessionId: "session-compaction" });
+    source.emit("operation.settled", { type: "operation.settled", status: "completed", sessionId: "session-compaction" });
     expect(useRuntimeStore.getState()).toMatchObject({ working: false, turnLifecycle: "settled" });
   });
 
-  it("renders named thinking.updated events delivered through the SSE transport", async () => {
+  it("renders named message.reasoning.delta events delivered through the SSE transport", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/messages")) return jsonResponse({ messages: [] });
@@ -41,8 +41,8 @@ describe("runtime event subscription", () => {
     await useRuntimeStore.getState().connect("/workspace", "session-thinking");
     const source = FakeEventSource.instances[0];
     source.open();
-    source.emit("thinking.updated", {
-      type: "thinking.updated",
+    source.emit("message.reasoning.delta", {
+      type: "message.reasoning.delta",
       sessionId: "session-thinking",
       turnId: "turn-1",
       partId: "thinking-1",
@@ -55,7 +55,7 @@ describe("runtime event subscription", () => {
       parts: [expect.objectContaining({ text: "Inspecting the evidence" })],
     }));
     expect(useRuntimeStore.getState()).toMatchObject({ working: true, turnLifecycle: "active" });
-    source.emit("session.idle", { type: "session.idle", sessionId: "session-thinking" });
+    source.emit("operation.settled", { type: "operation.settled", status: "completed", sessionId: "session-thinking" });
   });
 
   it("settles a live turn whose event stream goes silent while the runtime is idle", async () => {
@@ -72,7 +72,7 @@ describe("runtime event subscription", () => {
       await useRuntimeStore.getState().connect("/workspace", "session-a");
       const source = FakeEventSource.instances[0];
       source.open();
-      source.emit("agent_start", { type: "agent_start", sessionId: "session-a", turnId: "turn-1", runId: "run-1" });
+      source.emit("operation.started", { type: "operation.started", sessionId: "session-a", turnId: "turn-1", runId: "run-1" });
       expect(useRuntimeStore.getState().turnLifecycle).toBe("active");
 
       // Silence past the watchdog threshold: one cursor-preserving reconnect,
@@ -216,8 +216,8 @@ describe("runtime event subscription", () => {
     const sending = useRuntimeStore.getState().sendPrompt("research this");
     expect(useRuntimeStore.getState().working).toBe(true);
     await sending;
-    source.emit("question.asked", {
-      type: "question.asked",
+    source.emit("interaction.requested", {
+      type: "interaction.requested",
       sessionId: "session-a",
       requestId: "question-1",
       method: "select",
@@ -232,32 +232,32 @@ describe("runtime event subscription", () => {
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/interactions/question-1"))).toHaveLength(1);
     expect(useRuntimeStore.getState().pendingInteraction).toBeNull();
     expect(useRuntimeStore.getState().turnLifecycle).toBe("active");
-    source.emit("session.idle", { type: "session.idle", sessionId: "session-a" });
+    source.emit("operation.settled", { type: "operation.settled", status: "completed", sessionId: "session-a" });
     expect(useRuntimeStore.getState().working).toBe(false);
     expect(useRuntimeStore.getState().status).toBe("ready");
   });
 
-  it("preserves legacy permission semantics when kind is omitted", async () => {
+  it("uses explicit permission semantics from the product protocol", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/messages")) return jsonResponse({ messages: [] });
-      if (url.includes("/state")) return jsonResponse(state("session-legacy-permission"));
+      if (url.includes("/state")) return jsonResponse(state("session-permission"));
       if (url.startsWith("/api/sessions?")) return jsonResponse([]);
       throw new Error(`Unexpected request: ${url}`);
     }));
-    await useRuntimeStore.getState().connect("/workspace", "session-legacy-permission");
+    await useRuntimeStore.getState().connect("/workspace", "session-permission");
     const source = FakeEventSource.instances[0];
     source.open();
-    source.emit("permission.asked", {
-      type: "permission.asked",
-      sessionId: "session-legacy-permission",
+    source.emit("interaction.requested", {
+      type: "interaction.requested",
+      sessionId: "session-permission",
       requestId: "permission-1",
       method: "confirm",
       title: "Install scipy",
       operation: "Install scipy 1.17",
       scope: "Project environment",
       effect: "Creates a new revision",
-      // Legacy events intentionally omit kind.
+      kind: "permission",
     });
 
     expect(useRuntimeStore.getState().pendingInteraction).toMatchObject({
@@ -280,8 +280,8 @@ describe("runtime event subscription", () => {
     await useRuntimeStore.getState().connect("/workspace", "session-mcp-permission");
     const source = FakeEventSource.instances[0];
     source.open();
-    source.emit("permission.asked", {
-      type: "permission.asked",
+    source.emit("interaction.requested", {
+      type: "interaction.requested",
       sessionId: "session-mcp-permission",
       requestId: "mcp-permission-1",
       kind: "permission",
@@ -320,8 +320,8 @@ describe("runtime event subscription", () => {
       tool: "ask_user_question",
       status: "running",
     });
-    source.emit("question.asked", {
-      type: "question.asked",
+    source.emit("interaction.requested", {
+      type: "interaction.requested",
       sessionId: "session-questionnaire",
       requestId: "request-q1",
       method: "input",
@@ -351,19 +351,19 @@ describe("runtime event subscription", () => {
     await useRuntimeStore.getState().connect("/workspace", "session-gap");
     const source = FakeEventSource.instances[0];
     source.open();
-    source.emit("run.started", {
-      schemaVersion: 2,
+    source.emit("operation.started", {
+      schemaVersion: 3,
       sessionId: "session-gap",
       streamEpoch: "epoch-1",
       eventId: "epoch-1:1",
       seq: 1,
       turnId: "turn-1",
       runId: "run-1",
-      type: "run.started",
+      type: "operation.started",
       payload: {},
     }, "epoch-1:1");
-    source.emit("item.text.delta", {
-      schemaVersion: 2,
+    source.emit("message.delta", {
+      schemaVersion: 3,
       sessionId: "session-gap",
       streamEpoch: "epoch-1",
       eventId: "epoch-1:3",
@@ -371,7 +371,7 @@ describe("runtime event subscription", () => {
       turnId: "turn-1",
       runId: "run-1",
       itemId: "answer-1",
-      type: "item.text.delta",
+      type: "message.delta",
       payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "visible" },
     }, "epoch-1:3");
 
@@ -411,8 +411,8 @@ describe("runtime event subscription", () => {
         options: [{ label: "Fast", description: "Low latency", preview: "**fast**" }, { label: "Safe", description: "Conservative" }],
       }],
     });
-    source.emit("question.asked", {
-      type: "question.asked",
+    source.emit("interaction.requested", {
+      type: "interaction.requested",
       sessionId: "session-questionnaire",
       requestId: "request-q1",
       method: "input",
@@ -443,8 +443,8 @@ describe("runtime event subscription", () => {
     }));
     await useRuntimeStore.getState().connect("/workspace", "session-a");
     const source = FakeEventSource.instances[0];
-    source.emit("question.asked", {
-      type: "question.asked",
+    source.emit("interaction.requested", {
+      type: "interaction.requested",
       sessionId: "session-a",
       requestId: "question-1",
       method: "input",
@@ -452,7 +452,7 @@ describe("runtime event subscription", () => {
     });
 
     expect(useRuntimeStore.getState().pendingInteraction?.requestId).toBe("question-1");
-    source.emit("session.idle", { type: "session.idle", sessionId: "session-a" });
+    source.emit("operation.settled", { type: "operation.settled", status: "completed", sessionId: "session-a" });
     expect(useRuntimeStore.getState().pendingInteraction).toBeNull();
   });
 
@@ -469,8 +469,8 @@ describe("runtime event subscription", () => {
     await useRuntimeStore.getState().connect("/workspace", "session-a");
 
     await useRuntimeStore.getState().sendPrompt("/handled-command");
-    FakeEventSource.instances[0].emit("session.idle", {
-      type: "session.idle",
+    FakeEventSource.instances[0].emit("operation.settled", {
+      type: "operation.settled", status: "completed",
       sessionId: "session-a",
       handledWithoutTurn: true,
     });
@@ -492,8 +492,8 @@ describe("runtime event subscription", () => {
     }));
     await useRuntimeStore.getState().connect("/workspace", "session-a");
 
-    FakeEventSource.instances[0].emit("session.idle", {
-      type: "session.idle",
+    FakeEventSource.instances[0].emit("operation.settled", {
+      type: "operation.settled", status: "completed",
       sessionId: "session-a",
     });
 
@@ -523,9 +523,9 @@ describe("runtime event subscription", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     await useRuntimeStore.getState().connect("/workspace", "session-a");
-    FakeEventSource.instances[0].emit("agent_start", { type: "agent_start", sessionId: "session-a" });
-    FakeEventSource.instances[0].emit("session.idle", {
-      type: "session.idle",
+    FakeEventSource.instances[0].emit("operation.started", { type: "operation.started", sessionId: "session-a" });
+    FakeEventSource.instances[0].emit("operation.settled", {
+      type: "operation.settled", status: "completed",
       sessionId: "session-a",
     });
 
@@ -556,9 +556,9 @@ describe("runtime event subscription", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     await useRuntimeStore.getState().connect("/workspace", "session-a");
-    FakeEventSource.instances[0].emit("agent_start", { type: "agent_start", sessionId: "session-a" });
-    FakeEventSource.instances[0].emit("session.idle", {
-      type: "session.idle",
+    FakeEventSource.instances[0].emit("operation.started", { type: "operation.started", sessionId: "session-a" });
+    FakeEventSource.instances[0].emit("operation.settled", {
+      type: "operation.settled", status: "completed",
       sessionId: "session-a",
     });
 
@@ -578,9 +578,9 @@ describe("runtime event subscription", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     await useRuntimeStore.getState().connect("/workspace", "session-a");
-    FakeEventSource.instances[0].emit("agent_start", { type: "agent_start", sessionId: "session-a" });
-    FakeEventSource.instances[0].emit("session.idle", {
-      type: "session.idle",
+    FakeEventSource.instances[0].emit("operation.started", { type: "operation.started", sessionId: "session-a" });
+    FakeEventSource.instances[0].emit("operation.settled", {
+      type: "operation.settled", status: "completed",
       sessionId: "session-a",
     });
 
@@ -604,9 +604,9 @@ describe("runtime event subscription", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     await useRuntimeStore.getState().connect("/workspace", "session-a");
-    FakeEventSource.instances[0].emit("agent_start", { type: "agent_start", sessionId: "session-a" });
-    FakeEventSource.instances[0].emit("session.idle", {
-      type: "session.idle",
+    FakeEventSource.instances[0].emit("operation.started", { type: "operation.started", sessionId: "session-a" });
+    FakeEventSource.instances[0].emit("operation.settled", {
+      type: "operation.settled", status: "completed",
       sessionId: "session-a",
     });
 
@@ -625,9 +625,9 @@ describe("runtime event subscription", () => {
       throw new Error(`Unexpected request: ${url}`);
     }));
     await useRuntimeStore.getState().connect("/workspace", "session-a");
-    FakeEventSource.instances[0].emit("agent_start", { type: "agent_start", sessionId: "session-a" });
-    FakeEventSource.instances[0].emit("session.idle", {
-      type: "session.idle",
+    FakeEventSource.instances[0].emit("operation.started", { type: "operation.started", sessionId: "session-a" });
+    FakeEventSource.instances[0].emit("operation.settled", {
+      type: "operation.settled", status: "completed",
       sessionId: "session-a",
     });
 
@@ -650,10 +650,10 @@ describe("runtime event subscription", () => {
     mark.mockClear();
     const source = FakeEventSource.instances[0];
     source.open();
-    source.emit("agent_start", { type: "agent_start", sessionId: "session-a" });
-    // The backend normalizes agent_settled into session.idle; that single
+    source.emit("operation.started", { type: "operation.started", sessionId: "session-a" });
+    // The backend normalizes operation.settled into operation.settled; that single
     // event must bump the tree revision exactly once.
-    source.emit("session.idle", { type: "session.idle", sessionId: "session-a" });
+    source.emit("operation.settled", { type: "operation.settled", status: "completed", sessionId: "session-a" });
     // The server publishes turn.artifacts from the settled observer; the
     // listener must NOT bump the tree revision a second time.
     source.emit("turn.artifacts", { type: "turn.artifacts", sessionId: "session-a", turnId: "t1", artifacts: [] });

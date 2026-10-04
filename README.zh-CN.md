@@ -262,3 +262,5 @@ pnpm --filter frontend test:uat:office
 ## 许可证
 
 MIT
+
+实时会话 SSE 使用 v3 协议：`operation.started` / `operation.settled`、`message.*`、`tool.*`、`compaction.*` 和 `interaction.requested`。Worker 事件只接受 Harness 事实；`runtime.paused` 表示监督进程停止，不代表持久 operation 已结束。旧展示事件仅在持久历史读取边界解码，保留原游标与序号。`/api/health` 使用 `active_agent_workers` 字段。

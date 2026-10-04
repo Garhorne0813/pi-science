@@ -35,7 +35,7 @@ describe("Pi-Science MCP runtime extension", () => {
     expect(loadProjectedServers(join(root, "empty-workspace"))).toEqual({});
   });
 
-  it("materializes credential references only inside the Pi process", async () => {
+  it("materializes credential references only inside the agent worker", async () => {
     const root = join(tmpdir(), `pi-science-mcp-credential-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(root);
     process.env.PI_SCIENCE_HOME = join(root, "control-home");

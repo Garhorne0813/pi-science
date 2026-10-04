@@ -179,6 +179,8 @@ Pi-Science renders common research formats directly in the browser.
 ## Architecture
 
 Pi-Science uses a local-first Node control plane, isolated Agent Core Worker processes, and on-demand native Python/R kernel processes.
+
+The live conversation SSE protocol is v3: `operation.started` / `operation.settled`, `message.*`, `tool.*`, `compaction.*`, and `interaction.requested`. Harness facts are the only worker event input. `runtime.paused` reports a supervision stop without claiming the durable operation has settled. Earlier presentation records are decoded only when reading persisted history, preserving their original cursors and sequence numbers. `/api/health` reports `active_agent_workers`.
 Global workspace, environment, and job state is coordinated through SQLite;
 project files and reproducibility records remain inside each workspace. Managed
 MCP definitions and global policies also live in SQLite; each workspace receives

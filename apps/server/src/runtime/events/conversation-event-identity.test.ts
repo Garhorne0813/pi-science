@@ -13,10 +13,10 @@ describe("conversation event identities", () => {
     });
     const source = new EventEmitter() as RuntimeEventSource;
     hub.bind("/tmp/pi-science-harness-identity", source, { activeSessionId: () => "session-1", onBusy: () => undefined, onExit: () => undefined });
-    source.emit("event", { type: "agent_start", runId: "durable-run", turnId: "durable-turn" });
-    source.emit("event", { type: "agent_settled", runId: "durable-run" });
+    source.emit("event", { type: "operation.started", runId: "durable-run", turnId: "durable-turn" });
+    source.emit("event", { type: "operation.settled", runId: "durable-run" });
     await hub.flush();
-    const start = records.map((record) => JSON.parse(record.data) as Record<string, unknown>).find((record) => record.type === "agent_start");
+    const start = records.map((record) => JSON.parse(record.data) as Record<string, unknown>).find((record) => record.type === "operation.started");
     expect(start).toMatchObject({ runId: "durable-run", turnId: "durable-turn" });
   });
 
@@ -33,23 +33,23 @@ describe("conversation event identities", () => {
     const firstHub = new ConversationEventHub(store);
     const firstProcess = new EventEmitter() as RuntimeEventSource;
     firstHub.bind(cwd, firstProcess, { activeSessionId: () => sessionId, onBusy: () => undefined, onExit: () => undefined });
-    firstProcess.emit("event", { type: "agent_start" });
-    firstProcess.emit("event", { type: "agent_settled" });
+    firstProcess.emit("event", { type: "operation.started" });
+    firstProcess.emit("event", { type: "operation.settled" });
     await firstHub.flush();
 
-    const firstStart = records.map((record) => JSON.parse(record.data) as Record<string, unknown>).find((event) => event.type === "agent_start");
+    const firstStart = records.map((record) => JSON.parse(record.data) as Record<string, unknown>).find((event) => event.type === "operation.started");
     expect(firstStart?.runId).toEqual(expect.any(String));
     expect(firstStart?.turnId).toEqual(expect.any(String));
 
     const secondHub = new ConversationEventHub(store);
     const secondProcess = new EventEmitter() as RuntimeEventSource;
     secondHub.bind(cwd, secondProcess, { activeSessionId: () => sessionId, onBusy: () => undefined, onExit: () => undefined });
-    secondProcess.emit("event", { type: "agent_start" });
+    secondProcess.emit("event", { type: "operation.started" });
     await secondHub.flush();
 
     const starts = records
       .map((record) => JSON.parse(record.data) as Record<string, unknown>)
-      .filter((event) => event.type === "agent_start");
+      .filter((event) => event.type === "operation.started");
     expect(starts).toHaveLength(2);
     expect(starts[1]?.runId).not.toBe(firstStart?.runId);
     expect(starts[1]?.turnId).not.toBe(firstStart?.turnId);

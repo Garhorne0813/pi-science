@@ -5,7 +5,7 @@ import { copyFile, mkdir, open, readFile, rename, unlink } from "node:fs/promise
 import { dirname, join, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ConversationEventHub } from "../events/conversation-event-hub.js";
-import { observeNodePiEvent } from "../events/node-event-observer.js";
+import { observeAgentEvent } from "../events/agent-event-observer.js";
 import { configPath as globalConfigPath, metadataRoot, readJson, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
 import { AgentRuntimeManager } from "./agent-runtime-manager.js";
 import { AgentSessionRepository } from "./agent-session-repository.js";
@@ -261,7 +261,7 @@ export class AgentCoreSessionService {
       activeSessionId: () => runtime.sessionId,
       observe: async (event, sessionId, turn) => {
         this.hooks.observe?.(runtime.cwd, sessionId, event);
-        await observeNodePiEvent(runtime.cwd, item.model, event, sessionId,
+        await observeAgentEvent(runtime.cwd, item.model, event, sessionId,
           (payload) => this.events.publish(runtime.cwd, sessionId, payload));
         if (await this.turns.observe(runtime.cwd, sessionId, event, turn)) {
           this.hooks.settled?.(runtime.cwd, sessionId, String(event.runId));
@@ -647,7 +647,7 @@ export class AgentCoreSessionService {
       if (exhausted) {
         await this.events.publish(cwd, sessionId, { type: "error", sessionId, code: "worker_recovery_failed", terminal: true,
           message: "The agent operation stalled repeatedly; automatic recovery has stopped. Reopen the session to retry." });
-        await this.events.publish(cwd, sessionId, { type: "session.idle", sessionId });
+        await this.events.publish(cwd, sessionId, { type: "runtime.paused", sessionId });
         return;
       }
       const opened = await this.open(cwd, sessionId, item.config);
@@ -658,7 +658,17 @@ export class AgentCoreSessionService {
           timer.unref?.();
           this.recoveryTimers.set(key, timer);
         }
-      } else if (!opened.busy) await this.events.publish(cwd, sessionId, { type: "session.idle", sessionId });
+      } else if (!opened.busy) {
+        // A replacement can be idle because Core already persisted the result
+        // before the previous worker lost its terminal event. Reconcile from
+        // that authoritative result; process liveness alone cannot settle it.
+        const operationId = item.expectedOperationId;
+        const result = operationId ? await opened.runtime.sendCommand("get_operation_result", { operationId }) : undefined;
+        if (result?.success && result.data) opened.runtime.emit("event", {
+          type: "operation.settled", runId: result.data.operationId, status: result.data.status, recovery: true,
+        });
+        else await this.events.publish(cwd, sessionId, { type: "runtime.paused", sessionId });
+      }
     }).catch(async (error) => {
       try { await this.events.publish(cwd, sessionId, { type: "error", sessionId, code: "worker_recovery_failed", terminal: true, message: String(error) }); } catch { /* The event store may itself be unavailable. */ }
     }).finally(() => { if (this.recovering.get(key) === work) this.recovering.delete(key); });

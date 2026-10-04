@@ -241,7 +241,7 @@ export const tokenUsageSchema = z.object({
 }).passthrough();
 
 const textUpdatedEventSchema = z.object({
-  type: z.literal("text.updated"),
+  type: z.literal("message.delta"),
   sessionId: z.string(),
   partId: z.string(),
   text: z.string(),
@@ -266,7 +266,18 @@ const toolUpdatedEventSchema = z.object({
   childSessionId: z.string().optional(),
 });
 
-const sessionIdleEventSchema = z.object({ type: z.literal("session.idle"), sessionId: z.string() });
+const operationSettledEventSchema = z.object({
+  type: z.literal("operation.settled"), sessionId: z.string(),
+  status: z.enum(["completed", "declined", "aborted", "failed"]),
+});
+const operationStartedEventSchema = z.object({ type: z.literal("operation.started"), sessionId: z.string(), runId: z.string() });
+const runtimePausedEventSchema = z.object({ type: z.literal("runtime.paused"), sessionId: z.string() });
+const messageStartedEventSchema = z.object({ type: z.literal("message.started"), sessionId: z.string(), itemId: z.string() });
+const messageCompletedEventSchema = z.object({ type: z.literal("message.completed"), sessionId: z.string(), itemId: z.string() });
+const reasoningDeltaEventSchema = textUpdatedEventSchema.extend({ type: z.literal("message.reasoning.delta") });
+const toolStartedEventSchema = toolUpdatedEventSchema.extend({ type: z.literal("tool.started") });
+const toolCompletedEventSchema = toolUpdatedEventSchema.extend({ type: z.literal("tool.completed") });
+const interactionRequestedEventSchema = z.object({ type: z.literal("interaction.requested"), sessionId: z.string(), requestId: z.string(), kind: z.enum(["permission", "confirmation", "question"]), method: z.string() });
 const sessionErrorEventSchema = z.object({
   type: z.literal("error"),
   sessionId: z.string().optional(),
@@ -296,7 +307,7 @@ export const sessionStatsSchema = z.object({
   cost: z.number().nonnegative().optional(),
   /** Accumulated assistant-message wall time: message start → message end. */
   llmMs: z.number().nonnegative().optional(),
-  /** Accumulated tool wall time: tool_execution_start → tool_execution_end. */
+  /** Accumulated tool wall time: tool.started → tool.completed. */
   toolMs: z.number().nonnegative().optional(),
   /** Time-to-first-token total and step count (message start → first non-empty
    *  text delta). decodeMs is first delta → message end; token/s is derived
@@ -315,18 +326,15 @@ const sessionStatsEventSchema = z.object({
 export const sessionEventSchema = z.discriminatedUnion("type", [
   textUpdatedEventSchema,
   toolUpdatedEventSchema,
-  sessionIdleEventSchema,
+  operationSettledEventSchema,
+  operationStartedEventSchema, runtimePausedEventSchema, messageStartedEventSchema, messageCompletedEventSchema,
+  reasoningDeltaEventSchema, toolStartedEventSchema, toolCompletedEventSchema, interactionRequestedEventSchema,
   sessionErrorEventSchema,
   sessionStatsEventSchema,
 ]).and(z.looseObject({}));
 
-/** ── Conversation presentation protocol v2 ──
- *
- * The legacy session events above remain the wire-compatible read path. V2
- * adds durable identity and version metadata so a client can replay a stream
- * without guessing message boundaries from arrival order or text contents.
- * Payloads stay `unknown` at the envelope level and are validated by the
- * event-specific schemas below. */
+/** Version 3 uses Core-aligned operation/message/tool lifecycle names.
+ * Durable identity and revisions support replay without arrival-order guesses. */
 
 export const conversationRunStateSchema = z.enum([
   "queued",
@@ -348,22 +356,32 @@ export type ConversationEventPhase = z.infer<typeof conversationEventPhaseSchema
 const eventIdSchema = z.string().min(1);
 const occurredAtSchema = z.string().min(1);
 
-export const conversationEventV2Schema = z.looseObject({
-  schemaVersion: z.literal(2),
+export const conversationEventTypes = [
+  "operation.started", "operation.settled", "runtime.paused", "runtime.progress", "error",
+  "message.started", "message.delta", "message.reasoning.delta", "message.completed", "message.snapshot",
+  "tool.started", "tool.updated", "tool.completed",
+  "interaction.requested", "interaction.resolved", "questionnaire.asked", "questionnaire.finished",
+  "compaction.started", "compaction.progress", "compaction.completed", "compaction.failed",
+  "artifact.published", "artifact.updated", "turn.artifacts", "plan.updated",
+  "status.updated", "session.replaced", "stream.gap", "session.stats",
+] as const;
+
+export const conversationEventV3Schema = z.looseObject({
+  schemaVersion: z.literal(3),
   workspaceId: z.string().min(1),
   sessionId: z.string().min(1),
   streamEpoch: z.string().min(1),
   eventId: eventIdSchema,
   seq: z.number().int().nonnegative(),
-  turnId: z.string().min(1),
-  runId: z.string().min(1),
+  turnId: z.string().min(1).optional(),
+  runId: z.string().min(1).optional(),
   itemId: z.string().min(1).optional(),
   parentItemId: z.string().min(1).optional(),
   occurredAt: occurredAtSchema,
-  type: z.string().min(1),
-  payload: z.unknown(),
+  type: z.enum(conversationEventTypes),
+  payload: z.unknown().optional(),
 });
-export type ConversationEventV2 = z.infer<typeof conversationEventV2Schema>;
+export type ConversationEventV3 = z.infer<typeof conversationEventV3Schema>;
 
 export const textDeltaPayloadSchema = z.object({
   partId: z.string().min(1),
@@ -439,20 +457,6 @@ export const conversationSnapshotSchema = z.looseObject({
   sessionState: sessionStateSchema.optional(),
 });
 export type ConversationSnapshot = z.infer<typeof conversationSnapshotSchema>;
-
-export const piRpcCommandSchema = z.object({
-  id: z.string().min(1),
-  type: z.string().min(1),
-}).passthrough();
-
-export const piRpcResponseSchema = z.object({
-  id: z.string().min(1),
-  success: z.boolean().optional(),
-}).passthrough();
-
-export const piRuntimeEventSchema = z.object({
-  type: z.string().min(1),
-}).passthrough();
 
 export const jobRecordSchema = z.object({
   id: z.string().min(1),
@@ -634,7 +638,7 @@ export const provenanceVersionsResponseSchema = z.object({
 
 export const scientificRuntimeHealthSchema = z.object({
   status: z.literal("ok"),
-  active_pi_processes: z.number().int().nonnegative(),
+  active_agent_workers: z.number().int().nonnegative(),
   active_kernels: z.number().int().nonnegative(),
 });
 
@@ -656,9 +660,6 @@ export type WorkspaceInfo = z.infer<typeof workspaceInfoSchema>;
 export type FileListEntry = z.infer<typeof fileListEntrySchema>;
 export type SessionEvent = z.infer<typeof sessionEventSchema>;
 export type SessionStats = z.infer<typeof sessionStatsSchema>;
-export type PiRpcCommand = z.infer<typeof piRpcCommandSchema>;
-export type PiRpcResponse = z.infer<typeof piRpcResponseSchema>;
-export type PiRuntimeEvent = z.infer<typeof piRuntimeEventSchema>;
 export type JobRecord = z.infer<typeof jobRecordSchema>;
 export type ExecutionKind = z.infer<typeof executionKindSchema>;
 export type ExecutionSurface = z.infer<typeof executionSurfaceSchema>;

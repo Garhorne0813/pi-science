@@ -5,12 +5,12 @@ import { z } from "zod";
 const identity = { runId: z.string().min(1), turnId: z.string().optional() };
 const message = z.object({ role: z.string() }).passthrough();
 const content = z.object({
-  source: z.enum(["core", "legacy"]), kind: z.enum(["text", "thinking"]),
+  kind: z.enum(["text", "thinking"]),
   type: z.string(), text: z.string(), snapshot: z.string().optional(), messageId: z.string(), contentIndex: z.string(),
   presentationRole: z.enum(["intermediate", "final"]).optional(),
 });
 const tool = { ...identity, toolCallId: z.string().min(1), toolName: z.string().min(1) };
-/** Worker facts, separate from the public SSE contract and legacy RPC names. */
+/** Harness facts accepted by the worker/control-plane boundary. */
 export const productInputSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("operation.started"), ...identity }).passthrough(),
   z.object({ type: z.literal("operation.settled"), ...identity, status: z.enum(["completed", "declined", "aborted", "failed"]) }).passthrough(),

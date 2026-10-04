@@ -1,3 +1,4 @@
+import { conversationEventTypes } from "@pi-science/contracts";
 /** SSE transport: EventSource lifecycle, connection watchdog, resume cursors
  *  and listener fan-out. Owned by PiScienceClient, which delegates its
  *  connection API to this object. */
@@ -51,19 +52,7 @@ export class SseTransport {
   private gapFencedKey: string | null = null;
 
   // Known event types from the backend (named SSE events)
-  private static SSE_EVENTS = [
-    "text.updated", "thinking.updated", "tool.updated", "session.idle", "error",
-    "question.asked", "permission.asked", "compaction.updated", "artifact.published",
-    "questionnaire.asked", "questionnaire.finished",
-    "agent_start", "agent_end", "status.updated", "session.replaced", "stream.gap",
-    "turn.artifacts", "session.stats",
-    // Presentation protocol v2 events use the same SSE transport. Keeping
-    // these names explicit is important because EventSource only dispatches
-    // named events to registered listeners.
-    "run.started", "run.completed", "run.failed", "run.cancelled",
-    "item.started", "item.text.delta", "item.snapshot", "item.completed",
-    "plan.updated", "interaction.requested", "interaction.resolved", "artifact.updated",
-  ];
+  private static SSE_EVENTS = conversationEventTypes;
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl;
@@ -178,7 +167,7 @@ export class SseTransport {
       }
     };
 
-    // Backend sends NAMED events (event: text.updated, event: session.idle, etc.)
+    // Backend sends NAMED events (event: message.delta, event: operation.settled, etc.)
     // EventSource.onmessage only fires for unnamed events, so we use addEventListener
     for (const evt of SseTransport.SSE_EVENTS) {
       source.addEventListener(evt, (event: Event) => {

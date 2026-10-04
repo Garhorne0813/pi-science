@@ -110,6 +110,8 @@ describe("agent-core product turns", () => {
     await vi.waitFor(() => expect(events.some((event) => event.code === "worker_recovery_failed" && event.terminal === true)).toBe(true),
       { timeout: 25000 });
     expect(requests.length).toBeGreaterThan(0);
+    expect(events.some((event) => event.type === "runtime.paused")).toBe(true);
+    expect(events.filter((event) => event.type === "operation.settled")).toHaveLength(0);
     expect(core.processCount).toBe(0);
     expect(core.liveRuntime(cwd)).toBeNull();
     expect(events.filter((event) => event.code === "worker_recovering")).toHaveLength(3);

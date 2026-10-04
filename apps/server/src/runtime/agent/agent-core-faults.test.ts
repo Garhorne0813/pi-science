@@ -88,7 +88,7 @@ describe("agent-core fault recovery", () => {
       expect(retry.statusCode).toBe(202);
       expect(retry.json()).toMatchObject({ status: "persisted" });
       expect(admissions).toBe(1);
-      await vi.waitFor(() => expect(events.some((event) => event.type === "session.idle")).toBe(true), { timeout: 5_000 });
+      await vi.waitFor(() => expect(events.some((event) => event.type === "operation.settled")).toBe(true), { timeout: 5_000 });
       await instance.shutdownAll();
     } finally { await app.close(); }
 

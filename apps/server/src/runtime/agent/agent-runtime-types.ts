@@ -12,14 +12,8 @@ export type RuntimeSkillPolicy =
   | { mode: "allowlist"; skills: string[] }
   | { mode: "denylist"; skills: string[] };
 
-export interface RuntimeEvent {
-  type: string;
-  [key: string]: unknown;
-}
+export type RuntimeEvent = import("../events/product-input.js").ProductInput;
 
-export type RuntimeExit = { code: number | null; signal: NodeJS.Signals | null };
-
-/** The browser event hub and session service depend on this boundary only. */
 export interface AgentRuntime {
   readonly sessionId: string;
   readonly cwd: string;

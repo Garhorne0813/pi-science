@@ -320,7 +320,7 @@ if [ "$AGENT_CORE" = true ]; then
             echo "prompt was not accepted: $PROMPT_JSON" >&2
             exit 50
         fi
-        if ! wait_for_file_match "$SSE_BODY" '"type":"session\.idle"' 1200; then
+        if ! wait_for_file_match "$SSE_BODY" '"type":"operation\.settled"' 1200; then
             echo "prompt did not settle through Node SSE" >&2
             sed -n '1,160p' "$SSE_BODY" >&2 || true
             exit 50
@@ -358,7 +358,7 @@ if [ "$AGENT_CORE" = true ]; then
         curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
             -d '{"message":"Reply with exactly NODE_NATIVE_SESSION_B_OK"}' \
             "http://127.0.0.1:${NODE_PORT}/api/sessions/${SESSION_B}/prompt?cwd=${WORKSPACE_Q}" >/dev/null
-        if ! wait_for_file_match "$SSE_B_BODY" '"type":"session\.idle"' 1200; then
+        if ! wait_for_file_match "$SSE_B_BODY" '"type":"operation\.settled"' 1200; then
             echo "session B prompt did not settle through Node SSE" >&2
             sed -n '1,160p' "$SSE_B_BODY" >&2 || true
             exit 50
@@ -386,7 +386,7 @@ if [ "$AGENT_CORE" = true ]; then
     fi
 
     HEALTH_ACTIVE_JSON="$(curl --fail --silent --show-error "http://127.0.0.1:${NODE_PORT}/api/health")"
-    python3 -c 'import json,sys; value=json.loads(sys.argv[1])["active_pi_processes"]; assert value >= 1, value' "$HEALTH_ACTIVE_JSON"
+    python3 -c 'import json,sys; value=json.loads(sys.argv[1])["active_agent_workers"]; assert value >= 1, value' "$HEALTH_ACTIVE_JSON"
 
     echo "[smoke] exact delete and health ownership"
     DELETE_IDS=("$FORK_ID" "$SESSION_B" "$SESSION_A")
@@ -406,7 +406,7 @@ if [ "$AGENT_CORE" = true ]; then
         "http://127.0.0.1:${NODE_PORT}/api/health")"
     assert_header_file_contains "$HEALTH_FINAL_HEADERS" 'x-pi-science-runtime: node-control-plane'
     EXPECTED_FINAL_PROCESSES=0
-    python3 -c 'import json,sys; value=json.loads(sys.argv[1])["active_pi_processes"]; expected=int(sys.argv[2]); assert value == expected, value' "$HEALTH_FINAL_JSON" "$EXPECTED_FINAL_PROCESSES"
+    python3 -c 'import json,sys; value=json.loads(sys.argv[1])["active_agent_workers"]; expected=int(sys.argv[2]); assert value == expected, value' "$HEALTH_FINAL_JSON" "$EXPECTED_FINAL_PROCESSES"
 fi
 
 echo "[smoke] passed"

@@ -151,7 +151,7 @@ describe("transport event folding", () => {
   it("collapses narration that a later message repeats verbatim", () => {
     let thread = emptyThread();
     const emitText = (partId: string, text: string) => {
-      thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId, text, revision: 1 });
+      thread = foldEvent(thread, { sessionId: "s", type: "message.delta", turnId: "t1", partId, text, revision: 1 });
     };
     emitText("m1", "Todo 列表已创建。在开始之前，说说主题。");
     emitText("m2", "好的。Todo 列表已创建。在开始之前，说说主题。");
@@ -169,8 +169,8 @@ describe("transport event folding", () => {
 
   it("keeps the union when a streamed answer is echoed by later text", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId: "m1", text: "这是经过完整验证的最终回答正文。", revision: 1 });
-    thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId: "m2", text: "这是经过完整验证的最终回答正文。附注。", revision: 1 });
+    thread = foldEvent(thread, { sessionId: "s", type: "message.delta", turnId: "t1", partId: "m1", text: "这是经过完整验证的最终回答正文。", revision: 1 });
+    thread = foldEvent(thread, { sessionId: "s", type: "message.delta", turnId: "t1", partId: "m2", text: "这是经过完整验证的最终回答正文。附注。", revision: 1 });
     const agents = thread.blocks.filter((block) => block.kind === "agent");
     expect(agents).toHaveLength(1);
     expect(agents[0]?.kind === "agent" && agents[0].parts[0]?.text).toBe("这是经过完整验证的最终回答正文。附注。");
@@ -178,8 +178,8 @@ describe("transport event folding", () => {
 
   it("does not delete short narration merely because later prose contains it", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId: "m1", text: "Done", revision: 1 });
-    thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId: "m2", text: "Done with discovery; starting verification.", revision: 1 });
+    thread = foldEvent(thread, { sessionId: "s", type: "message.delta", turnId: "t1", partId: "m1", text: "Done", revision: 1 });
+    thread = foldEvent(thread, { sessionId: "s", type: "message.delta", turnId: "t1", partId: "m2", text: "Done with discovery; starting verification.", revision: 1 });
     expect(thread.blocks.filter((block) => block.kind === "agent")).toHaveLength(2);
   });
 
@@ -208,16 +208,16 @@ describe("transport event folding", () => {
   });
 
   it("folds thinking deltas into a reasoning block ahead of the narration", () => {    let thread = emptyThread();
-    const emit = (payload: Record<string, unknown>) => { thread = foldEvent(thread, { sessionId: "s", type: "agent_start", ...payload, turnId: "t1" }); };
+    const emit = (payload: Record<string, unknown>) => { thread = foldEvent(thread, { sessionId: "s", type: "operation.started", ...payload, turnId: "t1" }); };
     emit({});
     for (const delta of ["Check the ", "imports."]) {
-      thread = foldEvent(thread, { sessionId: "s", type: "thinking.updated", turnId: "t1", partId: "m1", text: delta, revision: 1 });
+      thread = foldEvent(thread, { sessionId: "s", type: "message.reasoning.delta", turnId: "t1", partId: "m1", text: delta, revision: 1 });
     }
     const thinking = thread.blocks.find((block) => block.kind === "thinking");
     expect(thinking && "parts" in thinking && thinking.parts[0]?.text).toBe("Check the imports.");
     // Narration arriving after thinking must not disturb the reasoning block.
-    thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId: "m1", text: "Answer", revision: 2 });
-    thread = foldEvent(thread, { sessionId: "s", type: "thinking.updated", turnId: "t1", partId: "m1", text: " more.", revision: 3 });
+    thread = foldEvent(thread, { sessionId: "s", type: "message.delta", turnId: "t1", partId: "m1", text: "Answer", revision: 2 });
+    thread = foldEvent(thread, { sessionId: "s", type: "message.reasoning.delta", turnId: "t1", partId: "m1", text: " more.", revision: 3 });
     const stillOne = thread.blocks.filter((block) => block.kind === "thinking");
     expect(stillOne).toHaveLength(1);
     expect(stillOne[0]?.kind === "thinking" && stillOne[0].parts[0]?.text).toBe("Check the imports. more.");
@@ -225,15 +225,15 @@ describe("transport event folding", () => {
 
   it("stamps the reasoning phase clock and closes it when the model moves on", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, { sessionId: "s", type: "agent_start", turnId: "t1" });
-    thread = foldEvent(thread, { sessionId: "s", type: "thinking.updated", turnId: "t1", partId: "m1", text: "Weigh it.", revision: 1 });
+    thread = foldEvent(thread, { sessionId: "s", type: "operation.started", turnId: "t1" });
+    thread = foldEvent(thread, { sessionId: "s", type: "message.reasoning.delta", turnId: "t1", partId: "m1", text: "Weigh it.", revision: 1 });
     const open = thread.blocks.find((block) => block.kind === "thinking");
     expect(open?.kind === "thinking" && open.partial).toBe(true);
     expect(open?.kind === "thinking" && typeof open.startedAt).toBe("string");
     expect(open?.kind === "thinking" && open.endedAt).toBeUndefined();
 
     // Narration supersedes the phase: it closes even though the run continues.
-    thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId: "m1", text: "Answer", revision: 2 });
+    thread = foldEvent(thread, { sessionId: "s", type: "message.delta", turnId: "t1", partId: "m1", text: "Answer", revision: 2 });
     const closed = thread.blocks.find((block) => block.kind === "thinking");
     expect(closed?.kind === "thinking" && closed.partial).toBe(false);
     expect(closed?.kind === "thinking" && typeof closed.endedAt).toBe("string");
@@ -241,8 +241,8 @@ describe("transport event folding", () => {
 
   it("closes a running reasoning phase on a tool call and on idle", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, { sessionId: "s", type: "agent_start", turnId: "t1", runId: "r1" });
-    thread = foldEvent(thread, { sessionId: "s", type: "thinking.updated", turnId: "t1", runId: "r1", partId: "m1", text: "Weigh it.", revision: 1 });
+    thread = foldEvent(thread, { sessionId: "s", type: "operation.started", turnId: "t1", runId: "r1" });
+    thread = foldEvent(thread, { sessionId: "s", type: "message.reasoning.delta", turnId: "t1", runId: "r1", partId: "m1", text: "Weigh it.", revision: 1 });
     thread = foldEvent(thread, { sessionId: "s", type: "tool.updated", turnId: "t1", runId: "r1", callId: "c1", tool: "read", status: "running" });
     const afterTool = thread.blocks.find((block) => block.kind === "thinking");
     expect(afterTool?.kind === "thinking" && afterTool.partial).toBe(false);
@@ -250,9 +250,9 @@ describe("transport event folding", () => {
 
     // A phase that is still open when the run settles also gets an end stamp.
     let idle = emptyThread();
-    idle = foldEvent(idle, { sessionId: "s", type: "agent_start", turnId: "t2", runId: "r2" });
-    idle = foldEvent(idle, { sessionId: "s", type: "thinking.updated", turnId: "t2", runId: "r2", partId: "m2", text: "Still reasoning.", revision: 1 });
-    idle = foldEvent(idle, { sessionId: "s", type: "session.idle", runId: "r2" });
+    idle = foldEvent(idle, { sessionId: "s", type: "operation.started", turnId: "t2", runId: "r2" });
+    idle = foldEvent(idle, { sessionId: "s", type: "message.reasoning.delta", turnId: "t2", runId: "r2", partId: "m2", text: "Still reasoning.", revision: 1 });
+    idle = foldEvent(idle, { sessionId: "s", type: "operation.settled", status: "completed", runId: "r2" });
     const settled = idle.blocks.find((block) => block.kind === "thinking");
     expect(settled?.kind === "thinking" && settled.partial).toBe(false);
     expect(settled?.kind === "thinking" && typeof settled.endedAt).toBe("string");
@@ -285,8 +285,8 @@ describe("transport event folding", () => {
 
     const connecting = useRuntimeStore.getState().connect("/workspace", "session-a");
     await Promise.resolve();
-    FakeEventSource.instances[0].emit("text.updated", {
-      type: "text.updated",
+    FakeEventSource.instances[0].emit("message.delta", {
+      type: "message.delta",
       sessionId: "session-a",
       partId: "assistant-live",
       text: "live answer",
@@ -317,12 +317,12 @@ describe("transport event folding", () => {
       throw new Error(`Unexpected request: ${url}`);
     }));
     await useRuntimeStore.getState().connect("/workspace", "session-a");
-    FakeEventSource.instances[0].emit("agent_start", { type: "agent_start", sessionId: "session-a" });
-    FakeEventSource.instances[0].emit("text.updated", {
-      type: "text.updated", sessionId: "session-a", partId: "assistant-live", text: "helo",
+    FakeEventSource.instances[0].emit("operation.started", { type: "operation.started", sessionId: "session-a" });
+    FakeEventSource.instances[0].emit("message.delta", {
+      type: "message.delta", sessionId: "session-a", partId: "assistant-live", text: "helo",
     });
-    FakeEventSource.instances[0].emit("text.updated", {
-      type: "text.updated", sessionId: "session-a", partId: "assistant-live", text: "hello", replace: true,
+    FakeEventSource.instances[0].emit("message.delta", {
+      type: "message.delta", sessionId: "session-a", partId: "assistant-live", text: "hello", replace: true,
     });
 
     expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
@@ -396,8 +396,8 @@ describe("transport event folding", () => {
     source.emit("tool.updated", { type: "tool.updated", sessionId: "session-a", callId: "call-1", tool: "bash", status: "running", presentation });
     source.emit("tool.updated", { type: "tool.updated", sessionId: "session-a", callId: "call-1", tool: "bash", status: "done" });
     expect(useRuntimeStore.getState().thread.blocks).toContainEqual(expect.objectContaining({ presentation }));
-    source.emit("text.updated", {
-      type: "text.updated",
+    source.emit("message.delta", {
+      type: "message.delta",
       sessionId: "session-a",
       partId: "assistant-final",
       text: "final",
@@ -416,15 +416,15 @@ describe("transport event folding", () => {
       throw new Error(`Unexpected request: ${url}`);
     }));
     await useRuntimeStore.getState().connect("/workspace", "session-1");
-    FakeEventSource.instances[0].emit("compaction.updated", { type: "compaction.updated", sessionId: "session-1", status: "start" });
+    FakeEventSource.instances[0].emit("compaction.progress", { type: "compaction.progress", sessionId: "session-1", status: "start" });
     expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
       expect.objectContaining({ id: "compaction-status", level: "info", text: expect.stringContaining("Compacting") }),
     );
-    FakeEventSource.instances[0].emit("compaction.updated", { type: "compaction.updated", sessionId: "session-1", status: "end" });
+    FakeEventSource.instances[0].emit("compaction.progress", { type: "compaction.progress", sessionId: "session-1", status: "end" });
     expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
       expect.objectContaining({ id: "compaction-status", level: "done", text: "Conversation context compacted" }),
     );
-    FakeEventSource.instances[0].emit("compaction.updated", { type: "compaction.updated", sessionId: "session-1", status: "error", message: "context overflow" });
+    FakeEventSource.instances[0].emit("compaction.progress", { type: "compaction.progress", sessionId: "session-1", status: "error", message: "context overflow" });
     expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
       expect.objectContaining({ id: "compaction-status", level: "error", text: expect.stringContaining("context overflow") }),
     );
@@ -533,7 +533,7 @@ describe("conversation history conversion", () => {
 
 describe("conversation presentation protocol v2", () => {
   const envelope = (overrides: Record<string, unknown>): PiScienceEvent => ({
-    schemaVersion: 2,
+    schemaVersion: 3,
     workspaceId: "/workspace",
     sessionId: "session-v2",
     streamEpoch: "epoch-1",
@@ -542,43 +542,43 @@ describe("conversation presentation protocol v2", () => {
     turnId: "turn-1",
     runId: "run-1",
     occurredAt: "2026-09-08T00:00:00.000Z",
-    type: "run.started",
+    type: "operation.started",
     payload: {},
     ...overrides,
   });
 
   it("keeps item completion separate from run completion and deduplicates replay", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({ seq: 1, type: "operation.started", payload: {} }));
     thread = foldEvent(thread, envelope({
       seq: 2,
-      type: "item.text.delta",
+      type: "message.delta",
       itemId: "answer-1",
       payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "answer" },
     }));
-    thread = foldEvent(thread, envelope({ seq: 3, type: "item.completed", itemId: "answer-1", payload: { revision: 1 } }));
+    thread = foldEvent(thread, envelope({ seq: 3, type: "message.completed", itemId: "answer-1", payload: { revision: 1 } }));
     const beforeRunCompletion = thread.blocks.find((block) => block.kind === "agent");
     expect(beforeRunCompletion).toMatchObject({ itemId: "answer-1", revision: 1, sequence: 3, partial: false, presentationRole: "final" });
     expect(thread.foldState?.terminalRunIds).not.toContain("run-1");
 
     const duplicate = foldEvent(thread, envelope({
       seq: 2,
-      type: "item.text.delta",
+      type: "message.delta",
       itemId: "answer-1",
       payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "answer" },
     }));
     expect(duplicate.blocks).toEqual(thread.blocks);
 
-    thread = foldEvent(thread, envelope({ seq: 4, type: "run.completed", payload: { outcome: "ok" } }));
+    thread = foldEvent(thread, envelope({ seq: 4, type: "operation.settled", status: "completed", payload: { outcome: "ok" } }));
     expect(thread.foldState?.terminalRunIds).toContain("run-1");
   });
 
   it("folds V2 thinking deltas with flat wire fields into reasoning blocks", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({ seq: 1, type: "operation.started", payload: {} }));
     thread = foldEvent(thread, envelope({
       seq: 2,
-      type: "thinking.updated",
+      type: "message.reasoning.delta",
       partId: "anonymous-1",
       text: "Weigh it.",
       baseRevision: 0,
@@ -592,7 +592,7 @@ describe("conversation presentation protocol v2", () => {
 
   it("carries V2 identity and revision metadata onto tool blocks", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({ seq: 1, type: "operation.started", payload: {} }));
     thread = foldEvent(thread, envelope({
       seq: 2,
       type: "tool.updated",
@@ -610,13 +610,13 @@ describe("conversation presentation protocol v2", () => {
 
   it("reorders speculative V2 thinking revisions when a missing predecessor arrives", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({ seq: 1, type: "operation.started", payload: {} }));
     thread = foldEvent(thread, envelope({
-      seq: 3, type: "thinking.updated", itemId: "reasoning-1",
+      seq: 3, type: "message.reasoning.delta", itemId: "reasoning-1",
       payload: { partId: "reasoning-1:0", baseRevision: 1, revision: 2, text: "B" },
     }));
     thread = foldEvent(thread, envelope({
-      seq: 2, type: "thinking.updated", itemId: "reasoning-1",
+      seq: 2, type: "message.reasoning.delta", itemId: "reasoning-1",
       payload: { partId: "reasoning-1:0", baseRevision: 0, revision: 1, text: "A" },
     }));
     const thinking = thread.blocks.find((block) => block.kind === "thinking");
@@ -625,24 +625,24 @@ describe("conversation presentation protocol v2", () => {
 
   it("settles a reasoning block when its item completes", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({ seq: 1, type: "operation.started", payload: {} }));
     thread = foldEvent(thread, envelope({
-      seq: 2, type: "thinking.updated", itemId: "reasoning-1",
+      seq: 2, type: "message.reasoning.delta", itemId: "reasoning-1",
       payload: { partId: "reasoning-1:0", baseRevision: 0, revision: 1, text: "A" },
     }));
-    thread = foldEvent(thread, envelope({ seq: 3, type: "item.completed", itemId: "reasoning-1", payload: { revision: 1 } }));
+    thread = foldEvent(thread, envelope({ seq: 3, type: "message.completed", itemId: "reasoning-1", payload: { revision: 1 } }));
     expect(thread.blocks.find((block) => block.kind === "thinking")).toMatchObject({ partial: false });
   });
 
   it("maps commentary and final answer to separate stable items", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({ seq: 1, type: "operation.started", payload: {} }));
     thread = foldEvent(thread, envelope({
-      seq: 2, type: "item.text.delta", itemId: "commentary-1",
+      seq: 2, type: "message.delta", itemId: "commentary-1",
       payload: { partId: "commentary-1", phase: "commentary", baseRevision: 0, revision: 1, text: "Reading files" },
     }));
     thread = foldEvent(thread, envelope({
-      seq: 3, type: "item.text.delta", itemId: "answer-1",
+      seq: 3, type: "message.delta", itemId: "answer-1",
       payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "The answer" },
     }));
     expect(thread.blocks.filter((block) => block.kind === "agent")).toEqual([
@@ -653,9 +653,9 @@ describe("conversation presentation protocol v2", () => {
 
   it("holds a sequence gap and drains it after the missing event arrives", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({ seq: 1, type: "operation.started", payload: {} }));
     thread = foldEvent(thread, envelope({
-      seq: 3, type: "item.text.delta", itemId: "answer-1",
+      seq: 3, type: "message.delta", itemId: "answer-1",
       payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "answer" },
     }));
     expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "agent", itemId: "answer-1", parts: [{ id: "answer-1", text: "answer" }] }));
@@ -663,7 +663,7 @@ describe("conversation presentation protocol v2", () => {
     expect(thread.foldState?.lastSequence).toBe(1);
     expect(thread.foldState?.pendingEvents).toHaveLength(1);
     expect(thread.foldState?.speculativeEventIds).toEqual(["epoch-1:3"]);
-    thread = foldEvent(thread, envelope({ seq: 2, type: "item.started", itemId: "answer-1", payload: { itemType: "assistant" } }));
+    thread = foldEvent(thread, envelope({ seq: 2, type: "message.started", itemId: "answer-1", payload: { itemType: "assistant" } }));
     expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "agent", itemId: "answer-1" }));
     expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "agent", parts: [{ id: "answer-1", text: "answer" }] }));
     expect(thread.foldState?.pendingEvents).toHaveLength(0);
@@ -673,10 +673,10 @@ describe("conversation presentation protocol v2", () => {
 
   it("keeps projecting text when a sequence gap never fills", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({ seq: 1, type: "operation.started", payload: {} }));
     thread = foldEvent(thread, envelope({
       seq: 3,
-      type: "text.updated",
+      type: "message.delta",
       itemId: "commentary-1",
       payload: {
         partId: "commentary-1", phase: "commentary", baseRevision: 0, revision: 1, text: "Reading files",
@@ -684,7 +684,7 @@ describe("conversation presentation protocol v2", () => {
     }));
     thread = foldEvent(thread, envelope({
       seq: 5,
-      type: "text.updated",
+      type: "message.delta",
       itemId: "commentary-1",
       payload: {
         partId: "commentary-1", phase: "commentary", baseRevision: 1, revision: 2, text: " …done",
@@ -702,10 +702,10 @@ describe("conversation presentation protocol v2", () => {
 
   it("treats an epoch change as a recovery boundary instead of dropping the event silently", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({ seq: 1, type: "operation.started", payload: {} }));
     thread = foldEvent(thread, envelope({
       seq: 2,
-      type: "text.updated",
+      type: "message.delta",
       itemId: "old-item",
       payload: { partId: "old-item", phase: "final_answer", baseRevision: 0, revision: 1, text: "old projection" },
     }));
@@ -714,7 +714,7 @@ describe("conversation presentation protocol v2", () => {
       streamEpoch: "epoch-2",
       eventId: "epoch-2:1",
       seq: 1,
-      type: "run.started",
+      type: "operation.started",
       turnId: "turn-2",
       runId: "run-2",
       payload: {},
@@ -731,10 +731,10 @@ describe("conversation presentation protocol v2", () => {
 
   it("reassembles replacement text split into ordered wire chunks", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({ seq: 1, type: "operation.started", payload: {} }));
     thread = foldEvent(thread, envelope({
       seq: 2,
-      type: "text.updated",
+      type: "message.delta",
       itemId: "answer-1",
       payload: {
         partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1,
@@ -743,7 +743,7 @@ describe("conversation presentation protocol v2", () => {
     }));
     thread = foldEvent(thread, envelope({
       seq: 3,
-      type: "text.updated",
+      type: "message.delta",
       itemId: "answer-1",
       payload: {
         partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1,
@@ -761,10 +761,10 @@ describe("conversation presentation protocol v2", () => {
 
   it("clears fold projection state when an authoritative history window is rebased", () => {
     let current = emptyThread();
-    current = foldEvent(current, envelope({ seq: 1, type: "run.started", payload: {} }));
+    current = foldEvent(current, envelope({ seq: 1, type: "operation.started", payload: {} }));
     current = foldEvent(current, envelope({
       seq: 2,
-      type: "text.updated",
+      type: "message.delta",
       itemId: "answer-1",
       payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "speculative" },
     }));
@@ -779,10 +779,10 @@ describe("conversation presentation protocol v2", () => {
 
   it("reorders speculative text without replaying it as a burst", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({ seq: 1, type: "operation.started", payload: {} }));
     thread = foldEvent(thread, envelope({
       seq: 3,
-      type: "item.text.delta",
+      type: "message.delta",
       itemId: "answer-1",
       payload: { partId: "answer-1", phase: "final_answer", baseRevision: 1, revision: 2, text: " world" },
     }));
@@ -794,7 +794,7 @@ describe("conversation presentation protocol v2", () => {
 
     thread = foldEvent(thread, envelope({
       seq: 2,
-      type: "item.text.delta",
+      type: "message.delta",
       itemId: "answer-1",
       payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "hello" },
     }));
@@ -809,33 +809,33 @@ describe("conversation presentation protocol v2", () => {
 
   it("does not let a late callback from another session mutate the thread", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
-    const foreign = envelope({ sessionId: "session-other", seq: 2, type: "item.text.delta", itemId: "foreign", payload: { partId: "foreign", phase: "final_answer", baseRevision: 0, revision: 1, text: "foreign" } });
+    thread = foldEvent(thread, envelope({ seq: 1, type: "operation.started", payload: {} }));
+    const foreign = envelope({ sessionId: "session-other", seq: 2, type: "message.delta", itemId: "foreign", payload: { partId: "foreign", phase: "final_answer", baseRevision: 0, revision: 1, text: "foreign" } });
     const next = foldEvent(thread, foreign);
     expect(next).toEqual(thread);
   });
 
   it("refuses to append a delta when its base revision is stale", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
-    thread = foldEvent(thread, envelope({ seq: 2, type: "item.text.delta", itemId: "answer-1", payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "correct" } }));
-    const next = foldEvent(thread, envelope({ seq: 3, type: "item.text.delta", itemId: "answer-1", payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 2, text: " stale" } }));
+    thread = foldEvent(thread, envelope({ seq: 1, type: "operation.started", payload: {} }));
+    thread = foldEvent(thread, envelope({ seq: 2, type: "message.delta", itemId: "answer-1", payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "correct" } }));
+    const next = foldEvent(thread, envelope({ seq: 3, type: "message.delta", itemId: "answer-1", payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 2, text: " stale" } }));
     expect(next.blocks).toContainEqual(expect.objectContaining({ itemId: "answer-1", parts: [{ id: "answer-1", text: "correct" }] }));
     expect(next.foldState?.reconciliationRequired).toBe(true);
   });
 
   it("tracks revisions per part while projecting multiple parts into one item", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({ seq: 1, type: "operation.started", payload: {} }));
     thread = foldEvent(thread, envelope({
       seq: 2,
-      type: "item.text.delta",
+      type: "message.delta",
       itemId: "answer-1",
       payload: { partId: "answer-1:0", phase: "final_answer", baseRevision: 0, revision: 1, text: "first" },
     }));
     thread = foldEvent(thread, envelope({
       seq: 3,
-      type: "item.text.delta",
+      type: "message.delta",
       itemId: "answer-1",
       payload: { partId: "answer-1:2", phase: "final_answer", baseRevision: 0, revision: 1, text: "second" },
     }));
@@ -856,17 +856,17 @@ describe("conversation presentation protocol v2", () => {
 
   it("keeps a failed run readable while consuming late events for later artifacts", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({ seq: 1, type: "operation.started", payload: {} }));
     thread = foldEvent(thread, envelope({
       seq: 2,
-      type: "item.text.delta",
+      type: "message.delta",
       itemId: "answer-1",
       payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "partial" },
     }));
-    thread = foldEvent(thread, envelope({ seq: 3, type: "run.failed", payload: { message: "stream failed" } }));
+    thread = foldEvent(thread, envelope({ seq: 3, type: "error", payload: { message: "stream failed" } }));
     thread = foldEvent(thread, envelope({
       seq: 4,
-      type: "item.text.delta",
+      type: "message.delta",
       itemId: "answer-1",
       payload: { partId: "answer-1", phase: "final_answer", baseRevision: 1, revision: 2, text: " late" },
     }));
@@ -975,4 +975,13 @@ describe("mergeHistoryWithLive", () => {
     const live = threadOf([optimisticUser("user-new", "status", "2026-09-23T00:49:00.000Z", "send-new")]);
     expect(mergeHistoryWithLive(history, live).blocks.map((block) => block.id)).toEqual(["older", "user-new"]);
   });
+});
+
+it("does not make a paused durable operation terminal, so the same run can resume", () => {
+  let thread = foldEvent(emptyThread(), { type: "operation.started", sessionId: "s", runId: "r", turnId: "r" });
+  thread = foldEvent(thread, { type: "runtime.paused", sessionId: "s", runId: "r", turnId: "r" });
+  expect(thread.foldState?.terminalRunIds).not.toContain("r");
+  thread = foldEvent(thread, { type: "operation.started", sessionId: "s", runId: "r", turnId: "r", recovery: true });
+  thread = foldEvent(thread, { type: "message.delta", sessionId: "s", runId: "r", turnId: "r", partId: "m:0", text: "resumed" });
+  expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "agent", runId: "r", parts: [expect.objectContaining({ text: "resumed" })] }));
 });

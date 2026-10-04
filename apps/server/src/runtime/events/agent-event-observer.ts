@@ -1,10 +1,9 @@
-import { productInput } from "./legacy-runtime-event.js";
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { extname, relative, resolve } from "node:path";
 import { appendJsonLine, readJsonLines, workspaceFile } from "../../storage/persistence.js";
 import { persistArtifactBytes } from "../artifacts/artifact-content-store.js";
-import type { RuntimeEvent as PiEvent } from "../agent/agent-runtime-types.js";
+import type { ProductInput } from "./product-input.js";
 import { executionIdFor, executionRepository } from "../executions/execution-repository.js";
 
 type Publish = (payload: Record<string, unknown>) => Promise<void>;
@@ -38,17 +37,16 @@ function kind(path: string, contentType: string): string {
   return "file";
 }
 
-export async function observeNodePiEvent(
+export async function observeAgentEvent(
   cwd: string,
   model: string | null,
-  event: PiEvent,
+  event: ProductInput,
   sessionId: string,
   publish: Publish,
 ): Promise<void> {
-  event = productInput(event);
-  if (["operation.started", "operation.ended", "operation.settled", "runtime.error"].includes(event.type)) {
+  if (["operation.started", "operation.settled", "runtime.error"].includes(event.type)) {
     await serialized(workspaceFile(cwd, "skill-events.jsonl"), () => appendJsonLine(workspaceFile(cwd, "skill-events.jsonl"), {
-      type: "skill_event", session_id: sessionId, ts: Date.now() / 1000, event: ({ "operation.started": "agent_start", "operation.ended": "agent_end", "operation.settled": "agent_settled", "runtime.error": "error" } as Record<string, string>)[event.type],
+      type: "skill_event", session_id: sessionId, ts: Date.now() / 1000, event: event.type,
     })).catch(() => undefined);
   }
   if (event.type === "tool.started") {
@@ -56,10 +54,10 @@ export async function observeNodePiEvent(
     if (toolCallId) {
       const tool = String(event.toolName ?? "unknown");
       await executionRepository.start(cwd, {
-        execution_id: executionIdFor("pi-tool", sessionId, toolCallId),
+        execution_id: executionIdFor("agent-tool", sessionId, toolCallId),
         kind: "tool",
         surface: "pi",
-        producer: "node-pi-event-observer",
+        producer: "agent-event-observer",
         correlation: { session_id: sessionId, tool_call_id: toolCallId },
         request: { tool, input: redactValue(event.args ?? {}) },
         runtime: model ? { model } : {},
@@ -75,9 +73,9 @@ export async function observeNodePiEvent(
     const artifact = event.isError ? null : await observeWrittenArtifact(cwd, model, event, sessionId, publish);
     const toolCallId = String(event.toolCallId ?? "");
     if (toolCallId) {
-      await executionRepository.finish(cwd, executionIdFor("pi-tool", sessionId, toolCallId), {
+      await executionRepository.finish(cwd, executionIdFor("agent-tool", sessionId, toolCallId), {
         status: event.isError ? "failed" : "succeeded",
-        producer: "node-pi-event-observer",
+        producer: "agent-event-observer",
         result: event.isError
           ? { error: cappedText(event.result ?? event.error ?? "Tool execution failed") }
           : { output_preview: cappedText(redactValue(event.result ?? "")) },
@@ -92,7 +90,7 @@ export async function observeNodePiEvent(
 
 interface ObservedArtifact { path: string; sha256: string; artifactId: string; version: number }
 
-async function observeWrittenArtifact(cwd: string, model: string | null, event: PiEvent, sessionId: string, publish: Publish): Promise<ObservedArtifact | null> {
+async function observeWrittenArtifact(cwd: string, model: string | null, event: ProductInput, sessionId: string, publish: Publish): Promise<ObservedArtifact | null> {
   const tool = String(event.toolName ?? "");
   if (tool !== "write" && tool !== "edit") return null;
   const args = event.args && typeof event.args === "object" ? event.args as Record<string, unknown> : {};
@@ -138,7 +136,7 @@ async function observeWrittenArtifact(cwd: string, model: string | null, event: 
   return observed;
 }
 
-async function appendProvenance(cwd: string, path: string, tool: string, sessionId: string, model: string | null, event: PiEvent, sha256: string, artifactId: string, artifactVersion: number): Promise<void> {
+async function appendProvenance(cwd: string, path: string, tool: string, sessionId: string, model: string | null, event: ProductInput, sha256: string, artifactId: string, artifactVersion: number): Promise<void> {
   const records = await readJsonLines<Record<string, unknown>>(workspaceFile(cwd, "provenance.jsonl"));
   const version = records.filter((record) => record.path === path).reduce((max, record) => Math.max(max, Number(record.version ?? 0)), 0) + 1;
   const args = event.args && typeof event.args === "object" ? event.args as Record<string, unknown> : {};
@@ -146,7 +144,7 @@ async function appendProvenance(cwd: string, path: string, tool: string, session
   const content = tool === "write" ? String(args.content ?? args.text ?? "").slice(0, 100_000) : undefined;
   await appendJsonLine(workspaceFile(cwd, "provenance.jsonl"), {
     path, version, ts: Date.now() / 1000, tool, toolCallId: String(event.toolCallId ?? ""), sessionId,
-    executionId: executionIdFor("pi-tool", sessionId, String(event.toolCallId ?? "")),
+    executionId: executionIdFor("agent-tool", sessionId, String(event.toolCallId ?? "")),
     ...(model ? { model } : {}), ...(content ? { content, contentHash: createHash("sha256").update(content).digest("hex").slice(0, 16) } : {}),
     ...(tool === "edit" && result.diff ? { diff: String(result.diff).slice(0, 100_000) } : {}),
     artifactId, artifactVersion, artifactHash: sha256,

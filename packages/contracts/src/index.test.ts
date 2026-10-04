@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { artifactManifestSchema, conversationEventV2Schema, conversationSnapshotSchema, conversationToolUpdatedPayloadSchema, createResearchLoopSchema, createSessionRequestSchema, defaultProgressAppearance, executionEventSchema, executionRecordSchema, gatewayHealthSchema, jobRecordSchema, piRpcCommandSchema, progressAppearanceInputSchema, progressAppearanceSchema, researchLoopSchema, sessionEventSchema, sessionMessagePageSchema, sessionStatsSchema, sessionUserMessageIndexSchema, skillContentSchema, textDeltaPayloadSchema } from "./index.js";
+import { artifactManifestSchema, conversationEventV3Schema, conversationSnapshotSchema, conversationToolUpdatedPayloadSchema, createResearchLoopSchema, createSessionRequestSchema, defaultProgressAppearance, executionEventSchema, executionRecordSchema, gatewayHealthSchema, jobRecordSchema, progressAppearanceInputSchema, progressAppearanceSchema, researchLoopSchema, sessionEventSchema, sessionMessagePageSchema, sessionStatsSchema, sessionUserMessageIndexSchema, skillContentSchema, textDeltaPayloadSchema } from "./index.js";
 
 describe("gateway contracts", () => {
   it("accepts a healthy Node gateway response", () => {
     expect(
       gatewayHealthSchema.parse({
         status: "ok",
-        active_pi_processes: 1,
+        active_agent_workers: 1,
         active_kernels: 2,
         service: "pi-science-server",
         control_plane: "node",
@@ -41,9 +41,8 @@ describe("gateway contracts", () => {
 
   it("validates session requests and preserves event extensions", () => {
     expect(createSessionRequestSchema.parse({ cwd: "/tmp/project" })).toMatchObject({ cwd: "/tmp/project" });
-    expect(sessionEventSchema.parse({ type: "session.idle", sessionId: "s1", cursor: 4 })).toMatchObject({ cursor: 4 });
+    expect(sessionEventSchema.parse({ type: "operation.settled", sessionId: "s1", status: "completed", cursor: 4 })).toMatchObject({ cursor: 4 });
     expect(() => createSessionRequestSchema.parse({ cwd: "" })).toThrow();
-    expect(piRpcCommandSchema.parse({ id: "r1", type: "get_state", extra: true })).toMatchObject({ id: "r1", extra: true });
     expect(jobRecordSchema.parse({ id: "j1", status: "queued", created_at: "now" })).toMatchObject({ status: "queued" });
     expect(artifactManifestSchema.parse({ artifact_id: "a1", version: 1, path: "out.txt", kind: "text", mime: "text/plain", size: 1, sha256: "1234567890abcdef", published_at: "now" })).toMatchObject({ artifact_id: "a1" });
   });
@@ -140,8 +139,8 @@ describe("progress appearance schemas", () => {
 
 describe("conversation presentation protocol v2", () => {
   it("validates the durable envelope and revisioned text payload", () => {
-    const event = conversationEventV2Schema.parse({
-      schemaVersion: 2,
+    const event = conversationEventV3Schema.parse({
+      schemaVersion: 3,
       workspaceId: "/tmp/project",
       sessionId: "session-1",
       streamEpoch: "epoch-1",
@@ -151,7 +150,7 @@ describe("conversation presentation protocol v2", () => {
       runId: "run-1",
       itemId: "answer-1",
       occurredAt: "2026-09-08T00:00:00.000Z",
-      type: "item.text.delta",
+      type: "message.delta",
       payload: textDeltaPayloadSchema.parse({
         partId: "answer-1",
         phase: "final_answer",
@@ -160,7 +159,7 @@ describe("conversation presentation protocol v2", () => {
         text: "answer",
       }),
     });
-    expect(event).toMatchObject({ type: "item.text.delta", turnId: "turn-1", seq: 12 });
+    expect(event).toMatchObject({ type: "message.delta", turnId: "turn-1", seq: 12 });
   });
 
   it("keeps tool status validation separate from the generic envelope", () => {

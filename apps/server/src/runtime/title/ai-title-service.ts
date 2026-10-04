@@ -2,7 +2,7 @@ import { CredentialStore } from "../../model-resources/credential-store.js";
 import { createHash, randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { AgentRuntimeManager } from "../agent/agent-runtime-manager.js";
-import type { RuntimeResult as PiResult } from "../agent/agent-runtime-types.js";
+import type { RuntimeResult } from "../agent/agent-runtime-types.js";
 import { loadDefaultPiConfig } from "../agent/runtime-config.js";
 import { sessionRepository } from "../node/session-repository.js";
 import { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
@@ -13,7 +13,7 @@ import { AI_TITLE_PROMPT_INSTRUCTION } from "./title-prompt.js";
 
 /** Minimum runtime surface the title service needs; tests provide a fake. */
 export interface TitleRuntime {
-  sendCommand(type: string, params?: Record<string, unknown>): Promise<PiResult>;
+  sendCommand(type: string, params?: Record<string, unknown>): Promise<RuntimeResult>;
   dispose(): Promise<void>;
 }
 
@@ -151,7 +151,7 @@ export function cleanTitle(raw: string): string | null {
 
 /** Extract the reply text from a get_last_assistant_text result (tolerant of
  *  `{ data: { text } }`, `{ data: "<text>" }` and `{ data: null }` shapes). */
-function replyText(result: PiResult): string {
+function replyText(result: RuntimeResult): string {
   if (!result.success) return "";
   const data = result.data as Record<string, unknown> | string | null | undefined;
   if (typeof data === "string") return data;

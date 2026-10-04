@@ -38,7 +38,7 @@ interface TextFoldState {
   /** True while the logical text item is omitted from Thread.blocks because
    * its narration is already represented by a neighboring same-turn block. */
   suppressed?: boolean;
-  /** V2 deltas are kept as a small replayable log while a sequence gap is
+  /** Versioned deltas are kept as a small replayable log while a sequence gap is
    *  open. This lets a late lower revision be inserted before an already
    *  visible speculative delta without appending the text a second time. */
   segments?: TextSegment[];
@@ -163,8 +163,8 @@ function eventHasIdentity(event: PiScienceEvent): boolean {
   return typeof event.itemId === "string" || typeof event.turnId === "string" || typeof event.runId === "string";
 }
 
-function isV2Event(event: PiScienceEvent): boolean {
-  return event.schemaVersion === 2 && typeof event.eventId === "string" && typeof event.seq === "number";
+function isVersionedEvent(event: PiScienceEvent): boolean {
+  return event.schemaVersion === 3 && typeof event.eventId === "string" && typeof event.seq === "number";
 }
 
 function eventItemKey(event: PiScienceEvent, state: EventFoldState): string {
@@ -189,7 +189,7 @@ function updatedAgentParts(block: ThreadBlock, partId: string, text: string): Ag
 }
 
 function turnIdentity(event: PiScienceEvent, state: EventFoldState): string {
-  return stringValue(event.turnId) ?? state.activeTurnId ?? `legacy-turn-${Math.max(1, state.turnOrdinal)}`;
+  return stringValue(event.turnId) ?? state.activeTurnId ?? `turn-${Math.max(1, state.turnOrdinal)}`;
 }
 
 function runIdentity(event: PiScienceEvent, state: EventFoldState): string | undefined {
@@ -211,9 +211,9 @@ function contentOwnerOf(event: PiScienceEvent, state?: EventFoldState): string {
   const runId = stringValue(event.runId) ?? state?.activeRunId;
   if (runId) return `run:${runId}`;
   // A brand-new thread has no turn yet, and the fold about to run will name
-  // this event's turn `legacy-turn-1`: resolve the same name here.
+  // this event's turn `turn-1`: resolve the same name here.
   const turnOrdinal = state?.turnOrdinal ?? 0;
-  const turnId = stringValue(event.turnId) ?? state?.activeTurnId ?? `legacy-turn-${Math.max(1, turnOrdinal)}`;
+  const turnId = stringValue(event.turnId) ?? state?.activeTurnId ?? `turn-${Math.max(1, turnOrdinal)}`;
   return `turn:${turnId}`;
 }
 
@@ -428,11 +428,11 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
   // id cannot inherit another run's revision waterline, replayed segments,
   // suppression or materialized block.
   const scoped = activateContentOwner(state, contentOwnerOf(event, state.foldState));
-  if (isV2Event(event)) return foldV2Event(scoped, event);
-  return foldLegacyEvent(scoped, event);
+  if (isVersionedEvent(event)) return foldVersionedEvent(scoped, event);
+  return foldProductEvent(scoped, event);
 }
 
-function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
+function foldProductEvent(state: Thread, event: PiScienceEvent): Thread {
   const foldState = cloneFoldState(state, event);
   if (foldState.sessionId && event.sessionId && foldState.sessionId !== event.sessionId) return state;
   if (event.sessionId) foldState.sessionId = event.sessionId;
@@ -441,23 +441,23 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
   const index = { ...state.index };
 
   switch (event.type) {
-    case "agent_start": {
+    case "operation.started": {
       foldState.turnOrdinal = Math.max(foldState.turnOrdinal, Number(event.turnOrdinal) || foldState.turnOrdinal + 1);
-      foldState.activeTurnId = stringValue(event.turnId) ?? `legacy-turn-${foldState.turnOrdinal}`;
+      foldState.activeTurnId = stringValue(event.turnId) ?? `turn-${foldState.turnOrdinal}`;
       foldState.activeRunId = stringValue(event.runId);
       foldState.activeItemKey = undefined;
       stampCurrentUser(blocks, foldState.activeTurnId, foldState.activeRunId);
       break;
     }
 
-    case "item.started": {
+    case "message.started": {
       if (event.turnId) foldState.activeTurnId = String(event.turnId);
       if (event.runId) foldState.activeRunId = String(event.runId);
       if (event.itemId) foldState.activeItemKey = String(event.itemId);
       break;
     }
 
-    case "item.completed": {
+    case "message.completed": {
       const itemId = stringValue(event.itemId) ?? stringValue(event.partId);
       const completedRevision = numberValue(event.revision);
       const completedSequence = numberValue(event.seq);
@@ -481,7 +481,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       break;
     }
 
-    case "text.updated": {
+    case "message.delta": {
       closeOpenThinking(blocks, new Date().toISOString());
       const explicit = eventHasIdentity(event);
       const eventPartId = stringValue(event.partId) ?? (explicit ? stringValue(event.itemId) : undefined);
@@ -502,7 +502,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       const previousText = foldState.textByKey[key];
       let nextText = event.replace === true ? incomingText : (previousText?.text ?? "") + incomingText;
       // Skip initial empty text events that create placeholder agent blocks
-      // (DeepSeek sends empty text.updated between tool calls before real text)
+      // (DeepSeek sends empty message.delta between tool calls before real text)
       const hasText = nextText.trim().length > 0;
       const turnId = turnIdentity(event, foldState);
       const runId = runIdentity(event, foldState);
@@ -537,8 +537,8 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
           }
           nextText = incomingText;
           blockId = `${blockId}-post`;
-          // A legacy runtime can reuse a part id after a tool. Keep the
-          // compatibility split deterministic while leaving V2 item ids
+          // A stream can reuse a part id after a tool. Keep the
+          // compatibility split deterministic while leaving Versioned item ids
           // single-writer and stable.
           let postId = blockId;
           let suffix = 2;
@@ -612,7 +612,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       break;
     }
 
-    case "thinking.updated": {
+    case "message.reasoning.delta": {
       // The reasoning stream stays out of the text state machine: thinking and
       // narration interleave freely, and neither should finalize the other.
       const nowIso = new Date().toISOString();
@@ -676,6 +676,8 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       break;
     }
 
+    case "tool.started":
+    case "tool.completed":
     case "tool.updated": {
       // A tool call supersedes reasoning: the phase is over even though the
       // run continues.
@@ -732,7 +734,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       if (existingIdx !== undefined) {
         blocks[existingIdx] = block;
       } else {
-        // Push to end — the agent block moves to end on each text.updated,
+        // Push to end — the agent block moves to end on each message.delta,
         // so tools naturally appear before the current agent text.
         index[blockId] = blocks.length;
         blocks.push(block);
@@ -749,6 +751,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       break;
     }
 
+    case "artifact.updated":
     case "turn.artifacts": {
       const turnId = String(event.turnId || "");
       const items = Array.isArray(event.artifacts) ? event.artifacts as TurnArtifactItem[] : [];
@@ -815,9 +818,9 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
         insertAt = liveAnchor + 1;
       }
       if (insertAt < 0) {
-        // Pi's agent_settled does not carry a message id, so summaries are
+        // Pi's operation.settled does not carry a message id, so summaries are
         // anchored by turn order: the n-th strip goes right after the n-th
-        // agent block (live agent blocks are keyed by text.updated partId).
+        // agent block (live agent blocks are keyed by message.delta partId).
         const insertedBefore = blocks.filter((b) => b.kind === "artifact-summary").length;
         insertAt = afterAgentBlock(blocks, insertedBefore + 1);
       }
@@ -830,7 +833,10 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       break;
     }
 
-    case "compaction.updated": {
+    case "compaction.started":
+    case "compaction.completed":
+    case "compaction.failed":
+    case "compaction.progress": {
       const status = String(event.status || "running");
       const blockId = "compaction-status";
       const block: ThreadBlock = {
@@ -853,6 +859,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       break;
     }
 
+    case "plan.updated":
     case "status.updated": {
       const blockId = `runtime-status-${String(event.status || "status")}`;
       const block: ThreadBlock = {
@@ -871,7 +878,13 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       break;
     }
 
-    case "session.idle": {
+    case "runtime.paused": {
+      foldState.activeItemKey = undefined;
+      foldState.activeRunId = undefined;
+      break;
+    }
+
+    case "operation.settled": {
       const completedRunId = runIdentity(event, foldState);
       markTerminalRun(foldState, completedRunId, numberValue(event.seq));
       foldState.activeItemKey = undefined;
@@ -958,149 +971,35 @@ function recordValue(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function v2Base(event: PiScienceEvent, payload: Record<string, unknown>): PiScienceEvent {
-  return {
-    ...payload,
-    type: event.type,
-    sessionId: event.sessionId,
-    streamEpoch: event.streamEpoch,
-    eventId: event.eventId,
-    seq: event.seq,
-    schemaVersion: 2,
-    turnId: event.turnId,
-    runId: event.runId,
-    ...(event.itemId ? { itemId: event.itemId } : {}),
-    ...(event.parentItemId ? { parentItemId: event.parentItemId } : {}),
-  };
-}
-
-function adaptV2Event(event: PiScienceEvent): PiScienceEvent[] {
+function projectEventBody(event: PiScienceEvent): PiScienceEvent[] {
   const payload = recordValue(event.payload);
-  const base = v2Base(event, payload);
-  const phase = payload.phase;
-  const role = phase === "commentary" ? "intermediate" : phase === "final_answer" ? "final" : undefined;
-
-  switch (event.type) {
-    case "run.started":
-      return [{ ...base, type: "agent_start", turnOrdinal: payload.turnOrdinal }];
-    case "item.started":
-      return [{ ...base, type: "item.started" }];
-    case "text.updated": {
-      const text = typeof payload.text === "string"
-        ? payload.text
-        : typeof event.text === "string" ? event.text : "";
-      const partId = stringValue(payload.partId) ?? stringValue(event.partId) ?? stringValue(event.itemId);
-      const textPhase = stringValue(payload.phase) ?? stringValue(event.phase);
-      const textRole = textPhase === "commentary" ? "intermediate" : textPhase === "final_answer" ? "final" : undefined;
-      const revision = numberValue(payload.revision) ?? numberValue(event.revision);
-      const baseRevision = numberValue(payload.baseRevision) ?? numberValue(event.baseRevision);
-      return [{
-        ...base,
-        type: "text.updated",
-        ...(partId ? { partId } : {}),
-        text,
-        ...(textPhase ? { phase: textPhase } : {}),
-        ...(revision !== undefined ? { revision } : {}),
-        ...(baseRevision !== undefined ? { baseRevision } : {}),
-        ...(payload.replace === true || event.replace === true ? { replace: true } : {}),
-        ...(textRole ? { presentationRole: textRole } : {}),
-      }];
-    }
-    case "thinking.updated": {
-      // Same wire shape as text.updated; the reasoning stream just targets
-      // thinking blocks instead of narration.
-      const text = typeof payload.text === "string"
-        ? payload.text
-        : typeof event.text === "string" ? event.text : "";
-      const partId = stringValue(payload.partId) ?? stringValue(event.partId) ?? stringValue(event.itemId);
-      const revision = numberValue(payload.revision) ?? numberValue(event.revision);
-      const baseRevision = numberValue(payload.baseRevision) ?? numberValue(event.baseRevision);
-      return [{
-        ...base,
-        type: "thinking.updated",
-        ...(partId ? { partId } : {}),
-        text,
-        ...(revision !== undefined ? { revision } : {}),
-        ...(baseRevision !== undefined ? { baseRevision } : {}),
-        ...(payload.replace === true || event.replace === true ? { replace: true } : {}),
-      }];
-    }
-    case "item.text.delta":
-      return [{
-        ...base,
-        type: "text.updated",
-        partId: stringValue(payload.partId) ?? stringValue(event.partId) ?? stringValue(event.itemId),
-        text: typeof payload.text === "string" ? payload.text : typeof event.text === "string" ? event.text : "",
-        phase: stringValue(payload.phase) ?? phase,
-        revision: numberValue(payload.revision) ?? numberValue(event.revision),
-        baseRevision: numberValue(payload.baseRevision) ?? numberValue(event.baseRevision),
-        ...(role ? { presentationRole: role } : {}),
-      }];
-    case "item.snapshot": {
-      const parts = Array.isArray(payload.parts) ? payload.parts : [];
-      const text = parts
-        .map((part) => recordValue(part).text)
-        .filter((part): part is string => typeof part === "string")
-        .join("");
-      return [{
-        ...base,
-        type: "text.updated",
-        partId: stringValue(event.itemId) ?? stringValue(recordValue(parts[0]).partId),
-        text,
-        replace: true,
-        phase,
-        revision: payload.revision,
-        ...(role ? { presentationRole: role } : {}),
-      }];
-    }
-    case "item.completed":
-      return [{ ...base, type: "item.completed", revision: payload.revision }];
-    case "tool.updated":
-      return [{ ...base, type: "tool.updated" }];
-    case "run.completed":
-      return [{ ...base, type: "session.idle", runCompleted: true }];
-    case "run.failed": {
-      const issues = Array.isArray(payload.issues) ? payload.issues : [];
-      const message = stringValue(payload.message) ?? (issues.length > 0 ? `Run failed (${issues.length} issue${issues.length === 1 ? "" : "s"})` : "Run failed");
-      return [{ ...base, type: "error", message, runFailed: true }];
-    }
-    case "run.cancelled":
-      return [{ ...base, type: "session.idle", cancelled: true }];
-    case "artifact.updated": {
-      const revision = numberValue(payload.revision) ?? numberValue(event.revision);
-      return [{
-        ...base,
-        type: "turn.artifacts",
-        artifacts: payload.artifacts ?? payload.items ?? [],
-        ...(revision !== undefined ? { revision } : {}),
-      }];
-    }
-    case "plan.updated":
-      return [{ ...base, type: "status.updated", status: "plan", message: stringValue(payload.summary) ?? stringValue(payload.message) ?? "Plan updated" }];
-    default:
-      // A V2 producer may carry a legacy event name while progressively
-      // adding the envelope. Preserve it as an extension point.
-      return [{ ...base, type: event.type }];
+  const body = { ...event, ...payload, type: event.type };
+  if (event.type === "message.snapshot") {
+    const parts = Array.isArray(payload.parts) ? payload.parts : [];
+    return [{ ...body, type: "message.delta", replace: true,
+      partId: stringValue(payload.partId) ?? stringValue(event.itemId),
+      text: parts.map((part) => recordValue(part).text).filter((part) => typeof part === "string").join("") }];
   }
+  return [body];
 }
 
 function markSeen(foldState: EventFoldState, eventId: string): void {
   if (!foldState.seenEventIds.includes(eventId)) foldState.seenEventIds = [...foldState.seenEventIds, eventId].slice(-4096);
 }
 
-function skipV2InOrder(state: Thread, event: PiScienceEvent, foldState: EventFoldState, reconciliationRequired = false): Thread {
+function skipVersionedInOrder(state: Thread, event: PiScienceEvent, foldState: EventFoldState, reconciliationRequired = false): Thread {
   if (reconciliationRequired) foldState.reconciliationRequired = true;
   foldState.lastSequence = Number(event.seq);
   markSeen(foldState, String(event.eventId));
   return withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState);
 }
 
-function isV2ContentEvent(event: PiScienceEvent): boolean {
-  return event.type === "item.text.delta" || event.type === "item.snapshot" || event.type === "text.updated" || event.type === "thinking.updated";
+function isVersionedContentEvent(event: PiScienceEvent): boolean {
+  return event.type === "message.delta" || event.type === "message.snapshot" || event.type === "message.reasoning.delta";
 }
 
 function isContinuationChunk(event: PiScienceEvent): boolean {
-  if (!isV2ContentEvent(event)) return false;
+  if (!isVersionedContentEvent(event)) return false;
   const payload = recordValue(event.payload);
   const chunkIndex = numberValue(payload.chunkIndex) ?? numberValue(event.chunkIndex);
   const chunkCount = numberValue(payload.chunkCount) ?? numberValue(event.chunkCount);
@@ -1108,11 +1007,11 @@ function isContinuationChunk(event: PiScienceEvent): boolean {
 }
 
 function staleContentDelta(foldState: EventFoldState, event: PiScienceEvent): boolean {
-  if (!isV2ContentEvent(event)) return false;
+  if (!isVersionedContentEvent(event)) return false;
   const payload = recordValue(event.payload);
   const itemId = stringValue(event.itemId);
   const partId = stringValue(payload.partId) ?? stringValue(event.partId) ?? itemId;
-  const current = partId ? (event.type === "thinking.updated" ? foldState.thinkingByKey[`thinking:${partId}`] : foldState.textByKey[partId]) : undefined;
+  const current = partId ? (event.type === "message.reasoning.delta" ? foldState.thinkingByKey[`thinking:${partId}`] : foldState.textByKey[partId]) : undefined;
   if (!current) return false;
   const baseRevision = numberValue(payload.baseRevision) ?? numberValue(event.baseRevision);
   const revision = numberValue(payload.revision) ?? numberValue(event.revision);
@@ -1133,11 +1032,11 @@ function staleContentDelta(foldState: EventFoldState, event: PiScienceEvent): bo
 }
 
 function staleSpeculativeContent(foldState: EventFoldState, event: PiScienceEvent): boolean {
-  if (!isV2ContentEvent(event)) return false;
+  if (!isVersionedContentEvent(event)) return false;
   const payload = recordValue(event.payload);
   const itemId = stringValue(event.itemId);
   const partId = stringValue(payload.partId) ?? stringValue(event.partId) ?? itemId;
-  const current = partId ? (event.type === "thinking.updated" ? foldState.thinkingByKey[`thinking:${partId}`] : foldState.textByKey[partId]) : undefined;
+  const current = partId ? (event.type === "message.reasoning.delta" ? foldState.thinkingByKey[`thinking:${partId}`] : foldState.textByKey[partId]) : undefined;
   const revision = numberValue(payload.revision) ?? numberValue(event.revision);
   if (!current || revision === undefined) return false;
   return revision <= current.revision
@@ -1167,9 +1066,9 @@ function composeTextSegments(segments: TextSegment[]): { text: string; revision:
   return { text, revision };
 }
 
-function applyV2Content(state: Thread, event: PiScienceEvent, adapted: PiScienceEvent): Thread {
+function applyVersionedContent(state: Thread, event: PiScienceEvent, adapted: PiScienceEvent): Thread {
   const initialFoldState = cloneFoldState(state, event);
-  const thinking = adapted.type === "thinking.updated";
+  const thinking = adapted.type === "message.reasoning.delta";
   const contentKey = eventTextKey(adapted, initialFoldState);
   const key = thinking ? `thinking:${contentKey}` : contentKey;
   const previous = thinking ? initialFoldState.thinkingByKey[key] : initialFoldState.textByKey[key];
@@ -1197,7 +1096,7 @@ function applyV2Content(state: Thread, event: PiScienceEvent, adapted: PiScience
   }
   segments.sort(compareTextSegments);
   const composed = composeTextSegments(segments);
-  const rendered = foldLegacyEvent(state, {
+  const rendered = foldProductEvent(state, {
     ...adapted,
     text: composed.text,
     replace: true,
@@ -1218,30 +1117,30 @@ function applyV2Content(state: Thread, event: PiScienceEvent, adapted: PiScience
   return withFoldState({ blocks: rendered.blocks, index: rendered.index, loaded: true }, foldState);
 }
 
-function applyV2AdaptedEvent(state: Thread, event: PiScienceEvent, adapted: PiScienceEvent): Thread {
-  return isV2ContentEvent(event) && (adapted.type === "text.updated" || adapted.type === "thinking.updated")
-    ? applyV2Content(state, event, adapted)
-    : foldLegacyEvent(state, adapted);
+function applyVersionedAdaptedEvent(state: Thread, event: PiScienceEvent, adapted: PiScienceEvent): Thread {
+  return isVersionedContentEvent(event) && (adapted.type === "message.delta" || adapted.type === "message.reasoning.delta")
+    ? applyVersionedContent(state, event, adapted)
+    : foldProductEvent(state, adapted);
 }
 
-function applyV2InOrder(state: Thread, event: PiScienceEvent): Thread {
+function applyVersionedInOrder(state: Thread, event: PiScienceEvent): Thread {
   const initialFoldState = cloneFoldState(state, event);
   const sequence = numberValue(event.seq);
   if (isTerminalRun(initialFoldState, stringValue(event.runId), sequence) && event.type !== "artifact.updated") {
-    return skipV2InOrder(state, event, initialFoldState);
+    return skipVersionedInOrder(state, event, initialFoldState);
   }
   if (staleContentDelta(initialFoldState, event)) {
-    return skipV2InOrder(state, event, initialFoldState, true);
+    return skipVersionedInOrder(state, event, initialFoldState, true);
   }
   let next = state;
-  for (const adapted of adaptV2Event(event)) next = applyV2AdaptedEvent(next, event, adapted);
+  for (const adapted of projectEventBody(event)) next = applyVersionedAdaptedEvent(next, event, adapted);
   const foldState = cloneFoldState(next, event);
   foldState.lastSequence = Number(event.seq);
   markSeen(foldState, String(event.eventId));
   return withFoldState({ blocks: next.blocks, index: next.index, loaded: true }, foldState);
 }
 
-function applyV2Speculative(state: Thread, event: PiScienceEvent): Thread {
+function applyVersionedSpeculative(state: Thread, event: PiScienceEvent): Thread {
   const initialFoldState = cloneFoldState(state, event);
   const sequence = numberValue(event.seq);
   const terminal = isTerminalRun(initialFoldState, stringValue(event.runId), sequence);
@@ -1252,7 +1151,7 @@ function applyV2Speculative(state: Thread, event: PiScienceEvent): Thread {
   // of progress until its missing predecessor is replayed. Only suppress a
   // speculative delta when it is unambiguously an older duplicate.
   if ((!terminal || event.type === "artifact.updated") && !(stale && staleSpeculativeContent(initialFoldState, event))) {
-    for (const adapted of adaptV2Event(event)) next = applyV2AdaptedEvent(next, event, adapted);
+    for (const adapted of projectEventBody(event)) next = applyVersionedAdaptedEvent(next, event, adapted);
   }
   const foldState = cloneFoldState(next, event);
   foldState.reconciliationRequired = true;
@@ -1266,7 +1165,7 @@ function applyV2Speculative(state: Thread, event: PiScienceEvent): Thread {
   return withFoldState({ blocks: next.blocks, index: next.index, loaded: true }, foldState);
 }
 
-function queueV2Pending(foldState: EventFoldState, event: PiScienceEvent): void {
+function queueVersionedPending(foldState: EventFoldState, event: PiScienceEvent): void {
   const pending = [...foldState.pendingEvents, event]
     .sort((left, right) => Number(left.seq) - Number(right.seq))
     .slice(-2000);
@@ -1285,7 +1184,7 @@ function consumeSpeculativePending(state: Thread, event: PiScienceEvent): Thread
   return withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState);
 }
 
-function drainV2Pending(state: Thread): Thread {
+function drainVersionedPending(state: Thread): Thread {
   let next = state;
   while (next.foldState?.lastSequence !== undefined) {
     const expected = next.foldState.lastSequence + 1;
@@ -1301,12 +1200,12 @@ function drainV2Pending(state: Thread): Thread {
     const owned = activateContentOwner(next, contentOwnerOf(pending, next.foldState));
     const pendingState = cloneFoldState(owned, pending);
     pendingState.pendingEvents = (owned.foldState?.pendingEvents ?? []).filter((candidate) => candidate.eventId !== pending.eventId);
-    next = applyV2InOrder(withFoldState({ blocks: owned.blocks, index: owned.index, loaded: true }, pendingState), pending);
+    next = applyVersionedInOrder(withFoldState({ blocks: owned.blocks, index: owned.index, loaded: true }, pendingState), pending);
   }
   return next;
 }
 
-function foldV2Event(state: Thread, event: PiScienceEvent): Thread {
+function foldVersionedEvent(state: Thread, event: PiScienceEvent): Thread {
   const foldState = cloneFoldState(state, event);
   const sessionId = stringValue(event.sessionId);
   const streamEpoch = stringValue(event.streamEpoch);
@@ -1352,11 +1251,11 @@ function foldV2Event(state: Thread, event: PiScienceEvent): Thread {
     return withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState);
   }
   if (lastSequence !== undefined && sequence > lastSequence + 1) {
-    if (!foldState.pendingEvents.some((pending) => pending.eventId === eventId)) queueV2Pending(foldState, event);
-    return applyV2Speculative(withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState), event);
+    if (!foldState.pendingEvents.some((pending) => pending.eventId === eventId)) queueVersionedPending(foldState, event);
+    return applyVersionedSpeculative(withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState), event);
   }
 
-  return drainV2Pending(applyV2InOrder(withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState), event));
+  return drainVersionedPending(applyVersionedInOrder(withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState), event));
 }
 
 export function threadFromMessages(messages: HistoryMessage[]): Thread {

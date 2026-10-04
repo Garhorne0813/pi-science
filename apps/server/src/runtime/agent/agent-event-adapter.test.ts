@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AgentCoreEventAdapter } from "./agent-event-adapter.js";
-import { observeNodePiEvent } from "../events/node-event-observer.js";
+import { observeAgentEvent } from "../events/agent-event-observer.js";
 
 function event(value: Record<string, unknown>): HarnessEvent {
   return { lane: "main", ...value } as unknown as HarnessEvent;
@@ -74,7 +74,7 @@ describe("AgentCoreEventAdapter", () => {
       frame: { type: "text_delta", contentIndex: 0, delta: "a" },
     }));
     expect(mapped).toEqual([expect.objectContaining({ type: "message.updated", content: {
-      source: "core", kind: "text", type: "text_delta", text: "a", messageId: "", contentIndex: "0",
+      kind: "text", type: "text_delta", text: "a", messageId: "", contentIndex: "0",
     } })]);
     expect(mapped[0]).not.toHaveProperty("assistantMessageEvent");
     expect(mapped[0]!.message).toEqual({ role: "assistant" });
@@ -90,7 +90,7 @@ describe("AgentCoreEventAdapter", () => {
       const end = adapter.adapt(event({ type: "tool_end", runId: "run", turnId: "turn",
         toolCallId: "call", toolName: "write", result: { content: [{ type: "text", text: "ok" }] }, isError: false }));
       const published: Record<string, unknown>[] = [];
-      for (const item of [...start, ...end]) await observeNodePiEvent(cwd, "openai/gpt-4.1-mini", item, "session",
+      for (const item of [...start, ...end]) await observeAgentEvent(cwd, "openai/gpt-4.1-mini", item, "session",
         async (payload) => { published.push(payload); });
       expect(published).toEqual([expect.objectContaining({ type: "artifact.published", path: "result.txt" })]);
       const manifests = await readFile(join(cwd, ".pi-science", "artifacts.jsonl"), "utf8");

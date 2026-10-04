@@ -105,7 +105,7 @@ describe("Node control plane", () => {
     openApps.push(app);
     const response = await app.inject({ method: "GET", url: "/api/health" });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ status: "ok", service: "pi-science-server", control_plane: "node", active_pi_processes: 0, active_kernels: 0 });
+    expect(response.json()).toEqual({ status: "ok", service: "pi-science-server", control_plane: "node", active_agent_workers: 0, active_kernels: 0 });
   });
 
   it("protects the control-plane API when a per-launch token is configured", async () => {

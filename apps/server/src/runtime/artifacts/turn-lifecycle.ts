@@ -1,4 +1,3 @@
-import { productInput } from "../events/legacy-runtime-event.js";
 import { createHash } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { readJson, readJsonLines, withFileWriteLock, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
@@ -57,7 +56,6 @@ export class DurableTurnLifecycle {
   }
 
   async observe(cwd: string, sessionId: string, event: Record<string, unknown>, identity?: { turnId: string; turnOrdinal: number }): Promise<boolean> {
-    event = productInput(event as { type: string });
     const operationId = typeof event.runId === "string" ? event.runId : "";
     if (!operationId) return false;
     const file = this.file(cwd, sessionId, operationId);
@@ -126,7 +124,7 @@ export async function finishTurnArtifacts(events: ConversationEventHub, runtime:
       artifacts: items,
     };
     // Defensive idempotency: a reconciliation-recovered turn and a late
-    // (replayed) agent_settled could both carry the same turn id; never append
+    // (replayed) operation.settled could both carry the same turn id; never append
     // a duplicate record for one turn.
     const existing = await turnArtifactRepository.forSession(runtime.cwd, sessionId).catch(() => []);
     if (existing.some((r) => r.turn_id === turnId)) return;

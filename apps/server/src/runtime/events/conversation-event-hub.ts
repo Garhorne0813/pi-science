@@ -1,10 +1,10 @@
+import type { ProductInput } from "./product-input.js";
 import type { AssistantContentKind } from "./assistant-content.js";
-import { productInput } from "./legacy-runtime-event.js";
 import { randomUUID } from "node:crypto";
 import { boundedToolDetails } from "../node/message-details.js";
 import { resolve } from "node:path";
 import { durableEventStore, type EventPublishGuard, type SseEventRecord } from "./event-store.js";
-import type { RuntimeEvent as PiEvent, RuntimeEventSource } from "../agent/agent-runtime-types.js";
+import type { RuntimeEventSource } from "../agent/agent-runtime-types.js";
 import { toolActivityPresentation, toolActivityTitle } from "../presentation/tool-activity-presenters.js";
 
 type Subscriber = {
@@ -36,7 +36,7 @@ type BindingOptions = {
   activeSessionId: () => string | null;
   onBusy: (busy: boolean) => void;
   onExit: () => void;
-  observe?: (event: PiEvent, sessionId: string, identity: { turnId: string; turnOrdinal: number } | undefined) => Promise<void> | void;
+  observe?: (event: ProductInput, sessionId: string, identity: { turnId: string; turnOrdinal: number } | undefined) => Promise<void> | void;
 };
 
 type TurnState = {
@@ -48,9 +48,6 @@ type TurnState = {
    *  Text and thinking parts share the map: the content index is unique per part. */
   contentByKey: Map<string, string>;
   revisionByKey: Map<string, number>;
-  /** Live bash output tails keyed by call id, throttled to keep a chatty
-   *  install log from flooding the SSE stream. */
-  bashTails: Map<string, { text: string; emittedAt: number }>;
   anonymousSerial: number;
   activeAnonymousKey: string | null;
   turnOrdinal: number;
@@ -77,11 +74,6 @@ const MAX_TOOL_EVENT_OUTPUT_BYTES = 64 * 1024;
 const MAX_SUBSCRIBER_REPLAY_PENDING = 2_000;
 const STDERR_WINDOW_MS = 30_000;
 const TEXT_BATCH_MS = 50;
-/** Minimum spacing between live bash-output emissions, and how much of the
- *  output tail each emission carries. The final tool_execution_end record
- *  always carries the complete output, so throttle loss is transient. */
-const BASH_EMIT_INTERVAL_MS = 250;
-const BASH_TAIL_BYTES = 4_000;
 const BROWSER_QUESTIONNAIRE_REQUEST_PREFIX = "pi-science-questionnaire-v1:";
 
 function streamKey(cwd: string, sessionId: string): string {
@@ -233,7 +225,7 @@ function browserQuestionnaireRequestId(title: unknown): string | null {
 type InteractionKind = "permission" | "confirmation" | "question";
 
 /**
- * Pi's extension_ui_request protocol does not carry a semantic kind. The
+ * Pi's interaction.requested protocol does not carry a semantic kind. The
  * managed MCP approval producer adds this private marker to its select title;
  * the server consumes it here and removes it before the UI sees the title.
  */
@@ -248,7 +240,7 @@ function interactionKind(value: unknown): InteractionKind | undefined {
   return value === "permission" || value === "confirmation" || value === "question" ? value : undefined;
 }
 
-function eventField(event: PiEvent, key: string): unknown {
+function eventField(event: ProductInput, key: string): unknown {
   const direct = (event as Record<string, unknown>)[key];
   if (direct !== undefined) return direct;
   const payload = (event as Record<string, unknown>).payload;
@@ -300,14 +292,8 @@ function eventPhase(role: "intermediate" | "final" | undefined): "commentary" | 
   return role === "intermediate" ? "commentary" : role === "final" ? "final_answer" : "unknown";
 }
 
-/** Build the versioned wire envelope for events that belong to a known run.
- *
- * The original flat fields are intentionally retained at the top level as a
- * compatibility view for older clients. `payload` is the authoritative V2
- * body; both views are written in one record so replaying a mixed-version
- * session cannot produce a second logical event. Events without a trustworthy
- * turn/run identity stay on the legacy path instead of receiving a fabricated
- * timestamp-based identity. */
+/** Versioned product envelope. Body fields carry presentation data;
+ * durable run identity, cursor and content revisions govern replay. */
 function versionedPayload(
   cwd: string,
   sessionId: string,
@@ -328,7 +314,7 @@ function versionedPayload(
   // each one as a hole in the sequence and answers with a full authoritative
   // rebase of a healthy stream.
   const envelope = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     workspaceId: resolve(cwd),
     sessionId,
     streamEpoch,
@@ -349,7 +335,7 @@ function versionedPayload(
 
 function chunkTextPayload(payload: Record<string, unknown>): Record<string, unknown>[] {
   const type = String(payload.type ?? "");
-  if (type !== "text.updated" && type !== "thinking.updated" && type !== "item.text.delta") return [payload];
+  if (type !== "message.delta" && type !== "message.reasoning.delta") return [payload];
   if (typeof payload.text !== "string") return [payload];
   const chunks = splitUtf8(payload.text, MAX_TEXT_CHUNK_BYTES);
   if (chunks.length === 1) return [payload];
@@ -362,7 +348,7 @@ function chunkTextPayload(payload: Record<string, unknown>): Record<string, unkn
   });
 }
 
-function modelError(event: PiEvent): string | null {
+function modelError(event: ProductInput): string | null {
   if (event.type !== "message.completed") return null;
   const message = (event.message && typeof event.message === "object" ? event.message : event) as Record<string, unknown>;
   const stopReason = String(message.stopReason ?? event.stopReason ?? "");
@@ -439,7 +425,7 @@ export class ConversationEventHub {
     const request = pending
       .map((record) => recordPayload(record))
       .find((payload) => (
-        (payload?.type === "question.asked" || payload?.type === "permission.asked")
+        (payload?.type === "interaction.requested")
         && payload.requestId === requestId
       ));
     const toolCallId = request?.questionnaire === true && typeof request.toolCallId === "string"
@@ -449,7 +435,7 @@ export class ConversationEventHub {
       const payload = recordPayload(record);
       if (!payload) return true;
       if (
-        (payload.type === "question.asked" || payload.type === "permission.asked")
+        (payload.type === "interaction.requested")
         && payload.requestId === requestId
       ) return false;
       if (toolCallId !== null && payload.type === "questionnaire.asked" && payload.toolCallId === toolCallId) return false;
@@ -477,15 +463,15 @@ export class ConversationEventHub {
       const last = this.stderrLogAt.get(process) ?? 0;
       if (now - last >= 2_000) {
         this.stderrLogAt.set(process, now);
-        this.log("warn", `Pi runtime stderr: ${cap(chunk, 500).trimEnd()}`);
+        this.log("warn", `Agent worker stderr: ${cap(chunk, 500).trimEnd()}`);
       }
     });
     process.on("malformed", (line: string) => {
       const sessionId = options.activeSessionId();
-      if (sessionId) void this.publish(cwd, sessionId, { type: "error", sessionId, message: `Malformed Pi RPC output: ${cap(line, 500)}`, recoverable: true });
+      if (sessionId) void this.publish(cwd, sessionId, { type: "error", sessionId, message: `Malformed agent worker output: ${cap(line, 500)}`, recoverable: true });
     });
-    process.on("event", (input: PiEvent) => {
-      const event = productInput(input);
+    process.on("event", (input: ProductInput) => {
+      const event = input;
       const sessionId = this.eventSessionId(event) ?? options.activeSessionId();
       if (!sessionId) return;
       if (event.type === "operation.started") {
@@ -500,8 +486,8 @@ export class ConversationEventHub {
         const owner = normalizedEvents.find((item) => typeof item.turnId === "string");
         const identity = owner ? { turnId: String(owner.turnId), turnOrdinal: Number(owner.turnOrdinal) } : undefined;
         for (const normalized of normalizedEvents) {
-          if (normalized.type === "text.updated" || normalized.type === "thinking.updated") {
-            await this.queueText(cwd, sessionId, normalized, normalized.type === "thinking.updated" ? "thinking" : "text");
+          if ((normalized.type === "message.delta" || normalized.type === "message.reasoning.delta")) {
+            await this.queueText(cwd, sessionId, normalized, normalized.kind === "thinking" ? "thinking" : "text");
           } else {
             await this.flushPendingText(cwd, sessionId);
             await this.publish(cwd, sessionId, normalized);
@@ -527,10 +513,10 @@ export class ConversationEventHub {
         await this.publish(cwd, sessionId, {
           type: "error",
           sessionId,
-          message: `Pi process exited with code ${code ?? "null"}${signal ? ` (${signal})` : ""}.${suffix}`,
+          message: `Agent worker exited with code ${code ?? "null"}${signal ? ` (${signal})` : ""}.${suffix}`,
           terminal: true,
         });
-        await this.publish(cwd, sessionId, { type: "session.idle", sessionId });
+        await this.publish(cwd, sessionId, { type: "runtime.paused", sessionId });
       });
       this.trackObservation(terminal);
     });
@@ -658,7 +644,7 @@ export class ConversationEventHub {
     const type = String(payload.type ?? "");
     if (type === "questionnaire.asked") {
       this.pendingInteractions.set(key, [record]);
-    } else if (type === "question.asked" && payload.questionnaire === true) {
+    } else if (type === "interaction.requested" && payload.questionnaire === true) {
       const pending = this.pendingInteractions.get(key) ?? [];
       const questionnaire = pending.find((candidate) => {
         const candidatePayload = recordPayload(candidate);
@@ -666,9 +652,9 @@ export class ConversationEventHub {
           && candidatePayload.toolCallId === payload.toolCallId;
       });
       this.pendingInteractions.set(key, questionnaire ? [questionnaire, record] : [record]);
-    } else if (type === "question.asked" || type === "permission.asked") {
+    } else if (type === "interaction.requested") {
       this.pendingInteractions.set(key, [record]);
-    } else if (type === "questionnaire.finished" || type === "agent_settled" || type === "session.idle") {
+    } else if (type === "questionnaire.finished" || type === "operation.settled") {
       this.pendingInteractions.delete(key);
     }
     for (const subscriber of this.subscribers.get(key) ?? []) {
@@ -746,15 +732,15 @@ export class ConversationEventHub {
     }
   }
 
-  private eventSessionId(event: PiEvent): string | null {
-    for (const value of [event._piSessionId, event.sessionId, event.session_id]) {
+  private eventSessionId(event: ProductInput): string | null {
+    for (const value of [event.sessionId]) {
       if (typeof value === "string" && value) return value;
     }
     return null;
   }
 
-  private normalize(cwd: string, sessionId: string, input: PiEvent): Record<string, unknown>[] {
-    const event = productInput(input);
+  private normalize(cwd: string, sessionId: string, input: ProductInput): Record<string, unknown>[] {
+    const event = input;
     const key = streamKey(cwd, sessionId);
     let turn = this.turns.get(key);
     if (!turn) {
@@ -763,7 +749,6 @@ export class ConversationEventHub {
         hadError: false,
         hadActivity: false,
         contentByKey: new Map(),
-        bashTails: new Map(),
         revisionByKey: new Map(),
         anonymousSerial: 0,
         activeAnonymousKey: null,
@@ -783,10 +768,9 @@ export class ConversationEventHub {
       turn.lastRuntimeError = undefined;
       turn.hadActivity = false;
       turn.contentByKey.clear();
-      turn.bashTails.clear();
       turn.revisionByKey.clear();
       turn.activeAnonymousKey = null;
-      return [{ type: "agent_start", sessionId, ...turnFields(turn) }];
+      return [{ type: "operation.started", sessionId, ...turnFields(turn) }];
     }
     if (!turn.turnId) {
       turn.turnOrdinal = Math.max(1, turn.turnOrdinal);
@@ -822,15 +806,7 @@ export class ConversationEventHub {
         turn.contentByKey.set(key, content.text);
         if (!content.messageId) turn.activeAnonymousKey = null;
       } else {
-        // Pi may emit the complete accumulated text in delta events.
-        // Treat that form as a replacement and only emit the new suffix;
-        // genuine deltas continue to be appended.
-        if (content.source === "legacy" && accumulated && content.text.startsWith(accumulated)) {
-          emitted = content.text.slice(accumulated.length);
-          turn.contentByKey.set(key, content.text);
-        } else {
-          turn.contentByKey.set(key, accumulated + content.text);
-        }
+        turn.contentByKey.set(key, accumulated + content.text);
       }
       const previousRevision = turn.revisionByKey.get(key) ?? 0;
       const revision = previousRevision + (emitted || replace ? 1 : 0);
@@ -842,7 +818,8 @@ export class ConversationEventHub {
       // partId identifies the independently revised content part within it.
       const partId = `${messageKey}:${content.contentIndex}`;
       return [{
-        type: content.kind === "thinking" ? "thinking.updated" : "text.updated",
+        type: content.kind === "thinking" ? "message.reasoning.delta" : "message.delta",
+        kind: content.kind,
         sessionId,
         partId,
         itemId: messageKey,
@@ -873,7 +850,14 @@ export class ConversationEventHub {
           : `anonymous-${++turn.anonymousSerial}`;
         turn.activeAnonymousKey = typeof message.id === "string" && message.id ? null : partId;
         const presentationRole = message?.presentationRole === "final" || message?.presentationRole === "intermediate" ? message.presentationRole : undefined;
-        return [{ type: "text.updated", sessionId, partId, itemId: partId, ...turnFields(turn), phase: eventPhase(presentationRole), baseRevision: 0, revision: 0, text: "", ...(presentationRole ? { presentationRole } : {}) }];
+        return [{ type: "message.started", sessionId, partId, itemId: partId, ...turnFields(turn), phase: eventPhase(presentationRole), baseRevision: 0, revision: 0, text: "", ...(presentationRole ? { presentationRole } : {}) }];
+      }
+      case "message.completed": {
+        const message = event.message;
+        if (message.role !== "assistant") return [];
+        return [{ type: "message.completed", sessionId, ...turnFields(turn),
+          itemId: "id" in message ? message.id : turn.activeAnonymousKey,
+          stopReason: message.stopReason }];
       }
       case "tool.started": {
         turn.hadActivity = true;
@@ -886,7 +870,7 @@ export class ConversationEventHub {
         }
         const title = toolActivityTitle(tool, event.args);
         const presentation = event.presentation && typeof event.presentation === "object" ? event.presentation : toolActivityPresentation(tool, event.args);
-        records.push({ type: "tool.updated", sessionId, callId, itemId: callId, ...turnFields(turn), ...(title ? { title } : {}), ...(presentation ? { presentation: safeValue(presentation) } : {}), tool, status: "running", input: safeValue(event.args ?? {}), startedAt: new Date().toISOString() });
+        records.push({ type: "tool.started", sessionId, callId, itemId: callId, ...turnFields(turn), ...(title ? { title } : {}), ...(presentation ? { presentation: safeValue(presentation) } : {}), tool, status: "running", input: safeValue(event.args ?? {}), startedAt: new Date().toISOString() });
         return records;
       }
       case "tool.updated": {
@@ -907,26 +891,6 @@ export class ConversationEventHub {
         }
         return [record];
       }
-      case "legacy.bash.update": {
-        // Some runtimes stream bash stdout through these updates instead of
-        // tool_execution_update. Unwrap the text, keep a bounded tail, and
-        // throttle emissions so a chatty install cannot flood the stream; the
-        // end record still carries the complete output.
-        turn.hadActivity = true;
-        const callId = String(event.id ?? "");
-        if (!callId || event.delta === undefined) return [];
-        const text = snapshotText(event.delta) ?? (typeof event.delta === "string" ? event.delta : stringify(event.delta));
-        const tail = turn.bashTails.get(callId) ?? { text: "", emittedAt: 0 };
-        if (text) tail.text = capUtf8(text, BASH_TAIL_BYTES, "tail").text;
-        const now = Date.now();
-        if (now - tail.emittedAt < BASH_EMIT_INTERVAL_MS) {
-          turn.bashTails.set(callId, tail);
-          return [];
-        }
-        tail.emittedAt = now;
-        turn.bashTails.set(callId, tail);
-        return [{ type: "tool.updated", sessionId, callId, itemId: callId, ...turnFields(turn), tool: "bash", status: "running", partialOutput: tail.text }];
-      }
       case "tool.completed": {
         turn.hadActivity = true;
         const callId = String(event.toolCallId ?? "");
@@ -936,7 +900,7 @@ export class ConversationEventHub {
         const presentation = event.presentation && typeof event.presentation === "object" ? event.presentation : toolActivityPresentation(tool, event.args);
         const output = capUtf8(event.result, MAX_TOOL_EVENT_OUTPUT_BYTES, "tail");
         records.push({
-          type: "tool.updated",
+          type: "tool.completed",
           sessionId,
           callId,
           itemId: callId,
@@ -959,7 +923,7 @@ export class ConversationEventHub {
         const explicitKind = interactionKind(eventField(event, "kind"));
         const kind = explicitKind
           ?? (markedPermissionTitle ? "permission" : method === "confirm" ? "confirmation" : "question");
-        const type = kind === "permission" ? "permission.asked" : "question.asked";
+        const type = "interaction.requested";
         const requestId = String(eventField(event, "id") ?? eventField(event, "requestId") ?? "");
         const questionnaireId = method !== "confirm" ? browserQuestionnaireRequestId(rawTitle) : null;
         const common = {
@@ -990,20 +954,13 @@ export class ConversationEventHub {
         }
         return [];
       }
-      case "artifact.published":
-        turn.hadActivity = true;
-        return [{ type: "artifact.published", sessionId, ...turnFields(turn), artifactId: String(event.artifactId ?? ""), path: String(event.path ?? ""), version: event.version, mime: String(event.mime ?? ""), verification: safeValue(event.verification ?? {}) }];
       case "compaction.start":
-      case "compaction.update":
       case "compaction.end":
       case "compaction.error":
-        return [{ type: "compaction.updated", sessionId, ...turnFields(turn), status: event.type.replace("compaction.", ""), message: cap(event.message ?? event.error ?? ""), progress: event.progress }];
-      case "runtime.extension_error":
-        turn.hadError = true;
-        return [{ type: "error", sessionId, ...turnFields(turn), message: cap(event.message ?? event.error ?? "Extension failed") }];
+        return [{ type: event.type === "compaction.start" ? "compaction.started" : event.type === "compaction.end" ? "compaction.completed" : event.type === "compaction.error" ? "compaction.failed" : "compaction.progress", sessionId, ...turnFields(turn), status: event.type.replace("compaction.", ""), message: cap(event.message ?? event.error ?? ""), progress: event.progress }];
       case "runtime.error": {
         turn.hadError = true;
-        const message = String(event.message ?? event.error ?? "Pi runtime error");
+        const message = String(event.message ?? event.error ?? "Agent runtime error");
         if (turn.lastRuntimeError === message) return [];
         turn.lastRuntimeError = message;
         return [{ type: "error", sessionId, ...turnFields(turn), message: cap(message) }];
@@ -1011,13 +968,10 @@ export class ConversationEventHub {
       case "retry.start":
       case "retry.update":
       case "retry.end":
-      case "runtime.status":
-        return [{ type: "status.updated", sessionId, ...turnFields(turn), status: ({ "retry.start": "retry_start", "retry.update": "retry_update", "retry.end": "retry_end", "runtime.status": "status" } as Record<string, string>)[event.type], message: cap(event.message ?? ""), attempt: event.attempt }];
-      case "operation.ended":
-        return [{ type: "agent_end", sessionId, ...turnFields(turn) }];
+        return [{ type: "status.updated", sessionId, ...turnFields(turn), status: event.type, message: cap(event.message ?? ""), attempt: event.attempt }];
       case "operation.settled": {
         const records: Record<string, unknown>[] = [];
-        if (!turn.hadText && !turn.hadError && !turn.hadActivity && !event.handledWithoutTurn) {
+        if (event.status === "completed" && !turn.hadText && !turn.hadError && !turn.hadActivity && !event.handledWithoutTurn) {
           records.push({
             type: "error",
             sessionId,
@@ -1026,9 +980,10 @@ export class ConversationEventHub {
           });
         }
         records.push({
-          type: "session.idle",
+          type: "operation.settled",
           sessionId,
           ...turnFields(turn),
+          status: event.status,
           outcome: turn.hadError ? "with_issues" : turn.hadText ? "ok" : "no_answer",
           ...(event.handledWithoutTurn ? { handledWithoutTurn: true } : {}),
         });
@@ -1037,7 +992,6 @@ export class ConversationEventHub {
         turn.lastRuntimeError = undefined;
         turn.hadActivity = false;
         turn.contentByKey.clear();
-      turn.bashTails.clear();
         turn.revisionByKey.clear();
         turn.activeAnonymousKey = null;
         turn.turnId = null;

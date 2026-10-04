@@ -19,7 +19,7 @@ describe("worker contract validation", () => {
     expect(workerRequestSchema.safeParse({ type: "command", command: "abort", params: {} }).success).toBe(false);
   });
   it("rejects unknown events and malformed authoritative snapshots", () => {
-    expect(workerEventSchema.safeParse({ type: "runtime_event", event: { type: "agent_settled" } }).success).toBe(false);
+    expect(workerEventSchema.safeParse({ type: "runtime_event", event: { type: "agent_settled", runId: "r", status: "completed", runtime_epoch: "e", runtime_sequence: 1 } }).success).toBe(false);
     expect(workerEventSchema.safeParse({ type: "runtime_event", event: { type: "operation.settled", runId: "r", status: "possibly" } }).success).toBe(false);
     expect(validResultData("get_state", { success: true, data: { busy: false } })).toBe(false);
     expect(validResultData("get_state", { success: false, code: "busy" })).toBe(true);

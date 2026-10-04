@@ -1,4 +1,3 @@
-import { productInput } from "../events/legacy-runtime-event.js";
 import type { SessionStats } from "@pi-science/contracts";
 
 /** Wall-clock timing projector for whole-session stats. The Pi runtime's
@@ -8,24 +7,24 @@ import type { SessionStats } from "@pi-science/contracts";
  *  derived from the control-plane event stream.
  *
  *  Semantics (mirroring the upstream DeepSeek harness whole-log projection):
- *  - llmMs: assistant `message_start` → `message_end`.
- *  - ttftMs: `message_start` → first non-empty text delta; ttftSteps counts
+ *  - llmMs: assistant `message.started` → `message.completed`.
+ *  - ttftMs: `message.started` → first non-empty text delta; ttftSteps counts
  *    one per message that produced a first token.
- *  - decodeMs: first non-empty text delta → `message_end`. Token/s is derived
+ *  - decodeMs: first non-empty text delta → `message.completed`. Token/s is derived
  *    client-side as total output tokens / (decodeMs / 1000).
- *  - toolMs: `tool_execution_start` → `tool_execution_end`, paired by callId
+ *  - toolMs: `tool.started` → `tool.completed`, paired by callId
  *    and removed on first end so a repeated end can never double-count.
- *  - `agent_settled` clears stale pending entries (cancelled/aborted steps
+ *  - `operation.settled` clears stale pending entries (cancelled/aborted steps
  *    must not leak time into later turns).
  *
  *  Legacy event records do not always carry a stable message id: the raw
- *  `message_start/message_update/message_end` events can omit `message.id`
+ *  `message.started/message.updated/message.completed` events can omit `message.id`
  *  entirely (the normalized stream then uses synthetic `anonymous-N` partIds).
  *  The projector therefore tracks the currently-streaming assistant message
  *  per tracker and falls back to a tracker-local synthetic key when the raw
  *  events omit the id, so wall time is attributed even for fully anonymous
- *  streams. When the first text delta arrives before any `message_start`, the
- *  pending message is anchored at the most recent `agent_start` so TTFT stays
+ *  streams. When the first text delta arrives before any `message.started`, the
+ *  pending message is anchored at the most recent `operation.started` so TTFT stays
  *  meaningful.
  *
  *  Timing is persisted as part of the stats checkpoint, so refresh recovers it
@@ -57,8 +56,8 @@ interface Tracker {
   activeKey: string | null;
   /** Monotonic per-tracker counter for synthetic message keys. */
   fallbackCounter: number;
-  /** Wall time of the most recent `agent_start`; anchors a pending message
-   *  when the first text delta arrives before any `message_start`. */
+  /** Wall time of the most recent `operation.started`; anchors a pending message
+   *  when the first text delta arrives before any `message.started`. */
   agentStartedAt: number | null;
 }
 
@@ -167,7 +166,6 @@ export class SessionStatsProjector {
 
   /** Fold one raw Pi event into the tracker. Unknown event types are ignored. */
   track(key: string, event: Record<string, unknown>, now: number): void {
-    event = productInput(event as { type: string });
     const type = String(event.type ?? "");
     if (type === "operation.started") {
       const tracker = this.tracker(key);
@@ -197,8 +195,8 @@ export class SessionStatsProjector {
       const tracker = this.tracker(key);
       let messageKey = id || tracker.activeKey;
       if (!messageKey) {
-        // No message_start and no active message yet: anchor the pending entry
-        // at the most recent agent_start so TTFT stays meaningful for fully
+        // No message.started and no active message yet: anchor the pending entry
+        // at the most recent operation.started so TTFT stays meaningful for fully
         // anonymous streams.
         if (tracker.agentStartedAt === null) return;
         messageKey = this.fallbackKey(tracker);
@@ -303,14 +301,14 @@ export interface SseEventLike {
 }
 
 /** Fold persisted normalized SSE records into whole-session wall-clock timing.
- *  The event store retains the control-plane's normalized stream (`agent_start`,
- *  `text.updated`, `tool.updated`, `agent_end`/`session.idle`) with
+ *  The event store retains the control-plane's normalized stream (`operation.started`,
+ *  `message.delta`, `tool.updated`, `operation.settled`/`operation.settled`) with
  *  `created_at` timestamps, so sessions whose raw Pi events lacked message ids
  *  — or that ran before the raw-event projector existed — can still recover
  *  timing without touching the live runtime.
  *
- *  Per turn: start = `agent_start`; first token = first non-empty
- *  `text.updated`; end = `agent_end` (falling back to `session.idle`). Tool
+ *  Per turn: start = `operation.started`; first token = first non-empty
+ *  `message.delta`; end = `operation.settled`. Tool
  *  time is paired per callId (`running` → `done`/`error`) and never
  *  double-counted. `llmMs` = turn elapsed − tool time; `ttft` = start → first
  *  token; `decode` = first token → end − tool time after the first token.
@@ -351,7 +349,7 @@ export function foldEventRecordsTiming(records: readonly SseEventLike[]): Sessio
     }
     if (!payload) continue;
     const type = String(payload.type ?? "");
-    if (type === "agent_start") {
+    if (type === "operation.started") {
       // A new turn without a recorded end must not merge into the next one:
       // discard the stale turn instead of counting it.
       turn = null;
@@ -360,12 +358,12 @@ export function foldEventRecordsTiming(records: readonly SseEventLike[]): Sessio
       continue;
     }
     if (!turn) continue;
-    if (type === "text.updated") {
+    if (type === "message.delta") {
       const text = String(payload.text ?? "");
       if (turn.firstTokenAt === null && text.trim().length > 0) turn.firstTokenAt = at;
       continue;
     }
-    if (type === "tool.updated") {
+    if (type === "tool.started" || type === "tool.updated" || type === "tool.completed") {
       const callId = String(payload.callId ?? "");
       const status = String(payload.status ?? "");
       if (!callId) continue;
@@ -382,7 +380,7 @@ export function foldEventRecordsTiming(records: readonly SseEventLike[]): Sessio
       }
       continue;
     }
-    if (type === "agent_end" || type === "session.idle") {
+    if (type === "operation.settled") {
       closeTurn(at);
     }
   }

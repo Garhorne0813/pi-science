@@ -1,3 +1,4 @@
+import { decodeHistoricalProductEvent } from "./historical-product-event.js";
 import { appendFile, mkdir, readFile, rename, stat, truncate, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
@@ -103,7 +104,7 @@ function parseRecords(text: string): SseEventRecord[] {
     if (!line.trim()) return [];
     try {
       const parsed = JSON.parse(line) as SseEventRecord;
-      return parsed && typeof parsed.data === "string" ? [parsed] : [];
+      return parsed && typeof parsed.data === "string" ? [decodeHistoricalProductEvent(parsed)] : [];
     } catch {
       return [];
     }

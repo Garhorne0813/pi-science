@@ -21,15 +21,15 @@ describe("PiScienceClient conversation transport", () => {
     const second = FakeEventSource.instances[1];
     second.open();
 
-    first.emit("text.updated", { type: "text.updated", sessionId: "session-a", text: "stale" });
-    second.emit("text.updated", { type: "text.updated", sessionId: "session-a", text: "wrong" });
-    second.emit("text.updated", { type: "text.updated", sessionId: "session-b", text: "current" });
+    first.emit("message.delta", { type: "message.delta", sessionId: "session-a", text: "stale" });
+    second.emit("message.delta", { type: "message.delta", sessionId: "session-a", text: "wrong" });
+    second.emit("message.delta", { type: "message.delta", sessionId: "session-b", text: "current" });
     second.onerror?.({ data: "application error event" } as unknown as Event);
 
     expect(events).toContain("connection.open:session-a");
     expect(events).toContain("connection.open:session-b");
-    expect(events.filter((entry) => entry === "text.updated:session-b")).toHaveLength(1);
-    expect(events).not.toContain("text.updated:session-a");
+    expect(events.filter((entry) => entry === "message.delta:session-b")).toHaveLength(1);
+    expect(events).not.toContain("message.delta:session-a");
     expect(events).not.toContain("connection.reconnecting:session-b");
     expect(client.connectedSessionId).toBe("session-b");
   });
@@ -123,7 +123,7 @@ describe("PiScienceClient SSE cursor resumption", () => {
     client.connect("session-a", "/workspace");
     const first = FakeEventSource.instances[0];
     first.open();
-    first.emit("text.updated", { type: "text.updated", sessionId: "session-a", text: "hello" }, "epoch:42");
+    first.emit("message.delta", { type: "message.delta", sessionId: "session-a", text: "hello" }, "epoch:42");
 
     client.reconnect("session-a", "/workspace");
 
@@ -139,7 +139,7 @@ describe("PiScienceClient SSE cursor resumption", () => {
     source.open();
 
     // Simulate the backend sending an event with an id.
-    source.emit("text.updated", { type: "text.updated", sessionId: "session-a", text: "hello" }, "epoch:42");
+    source.emit("message.delta", { type: "message.delta", sessionId: "session-a", text: "hello" }, "epoch:42");
 
     // Disconnect and reconnect to the same session.
     client.disconnect();
@@ -165,7 +165,7 @@ describe("PiScienceClient SSE cursor resumption", () => {
     client.connect("session-del", "/workspace");
     const source = FakeEventSource.instances[0];
     source.open();
-    source.emit("text.updated", { type: "text.updated", sessionId: "session-del", text: "data" }, "epoch:5");
+    source.emit("message.delta", { type: "message.delta", sessionId: "session-del", text: "data" }, "epoch:5");
 
     await client.deleteSession("session-del", "/workspace");
 
@@ -183,7 +183,7 @@ describe("PiScienceClient SSE cursor resumption", () => {
     client.connect("same-id", "/workspace-A");
     const sourceA = FakeEventSource.instances[0];
     sourceA.open();
-    sourceA.emit("text.updated", { type: "text.updated", sessionId: "same-id", text: "A" }, "epochA:9");
+    sourceA.emit("message.delta", { type: "message.delta", sessionId: "same-id", text: "A" }, "epochA:9");
 
     // Connect to same-id in workspace-B
     client.disconnect();
@@ -205,7 +205,7 @@ describe("PiScienceClient SSE cursor resumption", () => {
     source.open();
 
     // Simulate a foreign event arriving on session-b's stream
-    source.emit("text.updated", { type: "text.updated", sessionId: "session-a", text: "foreign" }, "foreign:99");
+    source.emit("message.delta", { type: "message.delta", sessionId: "session-a", text: "foreign" }, "foreign:99");
 
     // Disconnect and reconnect — must NOT carry the foreign cursor
     client.disconnect();
@@ -223,7 +223,7 @@ describe("PiScienceClient SSE cursor resumption", () => {
 
     // This is the last event that the reducer definitely applied before the
     // server reports that the requested replay can no longer be satisfied.
-    first.emit("text.updated", { type: "text.updated", sessionId: "session-gap", text: "ok" }, "epoch:10");
+    first.emit("message.delta", { type: "message.delta", sessionId: "session-gap", text: "ok" }, "epoch:10");
     first.emit("stream.gap", { type: "stream.gap", sessionId: "session-gap" }, undefined);
 
     // The server registers the subscriber before generating stream.gap, so
@@ -239,7 +239,7 @@ describe("PiScienceClient SSE cursor resumption", () => {
 
     // Once a post-gap event is successfully applied, its id becomes the safe
     // replay point and normal reconnect behavior resumes.
-    first.emit("text.updated", { type: "text.updated", sessionId: "session-gap", text: "after gap" }, "epoch-new:11");
+    first.emit("message.delta", { type: "message.delta", sessionId: "session-gap", text: "after gap" }, "epoch-new:11");
     client.reconnect("session-gap", "/workspace");
 
     expect(first.readyState).toBe(FakeEventSource.CLOSED);
@@ -249,14 +249,14 @@ describe("PiScienceClient SSE cursor resumption", () => {
 
   it("uses the last applied cursor for recovery instead of the newest received cursor", async () => {
     const client = new PiScienceClient();
-    client.onEvent((event) => event.type === "text.updated" ? false : undefined);
+    client.onEvent((event) => event.type === "message.delta" ? false : undefined);
     client.connect("session-rejected", "/workspace");
     const source = FakeEventSource.instances[0];
     source.open();
 
     // The transport receives an id, but the reducer rejects the event. That id
     // must never become a resume cursor because doing so could skip the event.
-    source.emit("text.updated", { type: "text.updated", sessionId: "session-rejected", text: "not applied" }, "epoch:9");
+    source.emit("message.delta", { type: "message.delta", sessionId: "session-rejected", text: "not applied" }, "epoch:9");
 
     await expect(client.getConversationResumeCursor("session-rejected", "/workspace"))
       .resolves.toBe("pi-recovery-sentinel:0");

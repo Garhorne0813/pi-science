@@ -1,9 +1,9 @@
 import type { HarnessEvent } from "@earendil-works/pi-agent-core";
 import type { AssistantContent } from "../events/assistant-content.js";
-import type { ProductInput as RuntimeEvent } from "../events/product-input.js";
+import type { ProductInput } from "../events/product-input.js";
 
 /** Converts durable Harness facts directly to product input events. */
-export function adaptHarnessEvent(event: HarnessEvent): RuntimeEvent[] {
+export function adaptHarnessEvent(event: HarnessEvent): ProductInput[] {
   switch (event.type) {
     case "compaction_start":
       return [{ type: "compaction.start", runId: event.runId, reason: event.reason }];
@@ -36,7 +36,7 @@ export function adaptHarnessEvent(event: HarnessEvent): RuntimeEvent[] {
       const snapshot = part?.type === "text" ? part.text : part?.type === "thinking" ? part.thinking : undefined;
       const text = "delta" in update ? update.delta : "content" in update ? update.content : "";
       const content: AssistantContent = {
-        source: "core", kind, type: update.type, text: typeof text === "string" ? text : "",
+        kind, type: update.type, text: typeof text === "string" ? text : "",
         messageId: "id" in event.message && typeof event.message.id === "string" ? event.message.id : "",
         contentIndex: String("contentIndex" in update ? update.contentIndex : 0),
         ...(event.frame || snapshot === undefined ? {} : { snapshot }),
@@ -66,10 +66,10 @@ export function adaptHarnessEvent(event: HarnessEvent): RuntimeEvent[] {
 export class AgentCoreEventAdapter {
   private pendingRunId: string | null = null;
   private started = false;
-  private earlyEvents: RuntimeEvent[] = [];
+  private earlyEvents: ProductInput[] = [];
   private readonly toolArgs = new Map<string, unknown>();
 
-  beginRecovery(runId: string): RuntimeEvent {
+  beginRecovery(runId: string): ProductInput {
     this.pendingRunId = runId;
     this.started = true;
     this.earlyEvents = [];
@@ -77,9 +77,9 @@ export class AgentCoreEventAdapter {
     return { type: "operation.started", runId, turnId: runId, recovery: true };
   }
 
-  adapt(event: HarnessEvent): RuntimeEvent[] {
+  adapt(event: HarnessEvent): ProductInput[] {
     if (event.type === "tool_start") this.toolArgs.set(event.toolCallId, event.args);
-    let toolEnd: RuntimeEvent[] | undefined;
+    let toolEnd: ProductInput[] | undefined;
     if (event.type === "tool_end") {
       const args = this.toolArgs.get(event.toolCallId);
       this.toolArgs.delete(event.toolCallId);
@@ -107,7 +107,7 @@ export class AgentCoreEventAdapter {
     const mapped = toolEnd ?? adaptHarnessEvent(event);
     if (event.type === "run_end" && this.pendingRunId === event.runId) {
       const early = this.earlyEvents;
-      const start: RuntimeEvent[] = this.started ? [] : [{ type: "operation.started", runId: event.runId, turnId: event.runId }];
+      const start: ProductInput[] = this.started ? [] : [{ type: "operation.started", runId: event.runId, turnId: event.runId }];
       this.pendingRunId = null;
       this.started = false;
       this.earlyEvents = [];
