@@ -77,6 +77,33 @@ export class AgentSessionRepository {
     return (await listWorkspaceSessions(repo, cwd)).find((item) => item.id === sessionId);
   }
 
+  async upgradeLegacy(cwd: string, sessionId: string, source: string, messageIds: string[]): Promise<void> {
+    return this.withRepo(cwd, async (repo) => {
+      const metadata = await this.metadata(repo, cwd, sessionId);
+      if (!metadata) throw new Error("imported session not found");
+      const session = await repo.open(metadata, context);
+      try {
+        const entries = await session.findEntries({ type: "message", order: "asc" }, context);
+        if (entries.length !== messageIds.length) throw new Error("Legacy message count changed during conversion");
+        const entryIds = Object.fromEntries(messageIds.map((id, index) => [id, entries[index]!.id]));
+        // Legacy UUID allocation belongs to this open session. Store the map in
+        // the same transaction that upgrades it; reopening v3 would allocate different IDs.
+        await session.setValue({ kind: "value", namespace: "pi-science", key: "legacy-import" }, { source, entryIds, importedAt: new Date().toISOString() }, context);
+      }
+      finally { await session.close(context); }
+    });
+  }
+
+  async migrationEntryIds(cwd: string, sessionId: string): Promise<Record<string, string>> {
+    return this.withRepo(cwd, async (repo) => {
+      const metadata = await this.metadata(repo, cwd, sessionId);
+      if (!metadata) return {};
+      const session = await repo.open(metadata, context);
+      try { return (await session.getValue<{ entryIds: Record<string, string> }>({ kind: "value", namespace: "pi-science", key: "legacy-import" }, context))?.value.entryIds ?? {}; }
+      finally { await session.close(context); }
+    });
+  }
+
   async configuration(cwd: string, sessionId: string): Promise<LaneConfiguration | null> {
     return this.withRepo(cwd, async (repo) => {
       const metadata = await this.metadata(repo, cwd, sessionId);

@@ -5,102 +5,23 @@
 本文描述 Pi-Science 当前的运行时架构，是进程归属、runtime 隔离、服务边界、
 工作区状态和生命周期行为的规范参考。
 
-## 系统概览
+## Agent Core 运行时
 
 ```mermaid
 flowchart LR
-    UI[React Web 应用] -->|HTTP 和 SSE| CP[Node / TypeScript 控制面]
-    CP -->|带认证的本机 HTTP 和 SSE| PH[单个 Pi Orbit Web Host]
-    PH --> R1[对话 runtime A]
-    PH --> R2[对话 runtime B]
-    PH --> RN[后台 agent runtime]
-    PH -->|按需启动| MCP[已启用的 MCP 连接器]
-    CP -->|按需 spawn| K[原生 Python 和 R 内核]
-    CP --> DB[(全局 state.sqlite)]
-    CP --> WS[(工作区文件和 .pi-science 元数据)]
-    CP -->|有界的模型与探测 HTTP| EXT[已配置的模型与科学数据服务]
-    MCP -->|有界的科学 API HTTP| EXT
-    PH --> WS
-    K --> WS
+    UI[浏览器] -->|REST 和 SSE| CP[Node 控制面]
+    CP -->|结构化 IPC| W[Agent Core Workers]
+    W --> SDK[AgentHarness 和 pi-ai]
+    W --> MCP[托管 MCP]
+    CP --> K[Python 和 R Kernel]
+    CP --> DB[(SQLite 和项目元数据)]
 ```
 
-React 应用是 Node 控制面的客户端。控制面拥有应用 API、协调其他 runtime，
-也是浏览器直接调用的唯一后端服务。
+Agent Core 是唯一执行后端。每个活跃对话由独立 Node Worker 执行，`AgentRuntimeManager` 负责容量、会话排他归属与进程生命周期。研究、复查及对话子代理使用隐藏 v4 会话；标题生成使用无工具、无技能的临时 Worker。
 
-| 组件 | 职责 |
-|---|---|
-| React Web 应用 | 对话、项目知识、文件、Notebook、实验运行、技能、设置和科学文件查看器 |
-| Node 控制面 | Session、事件流、文件、任务、谱系、项目状态、设置、托管 MCP 连接器、SQLite 协调、runtime 生命周期和路由鉴权 |
-| Pi Orbit Web Host | Agent session，以及面向对话和有界后台 agent 的隔离 runtime |
-| MCP 连接器进程 | 延迟启动的本地工具服务，以及通往公共科学服务的受保护 transport |
-| Node 原生科学运行时 | 绑定 Workspace 的 Python/R 内核，以及可选 JupyterLab 工具环境 |
-| 全局 SQLite 状态 | Workspace 位置、环境 revision、MCP 定义与策略、持久任务、租约和旧状态导入标记 |
-| 工作区 | 用户文件，以及项目级指令、技能、环境、session、产物和谱系 |
+控制面把结构化 Worker 事件转换为浏览器 SSE，负责持久恢复、产物、交互及统计。Worker 重启后继续打开同一 v4 会话，浏览器不加载模型 SDK 或凭据。Orbit Host、外部 CLI、HTTP bearer token 传输和 RPC 回退路径已删除。
 
-## Pi Orbit 运行时模型
-
-Pi-Science 为每个 Node 控制面进程启动**一个 Pi Orbit Web Host**，而不是为每个
-对话启动一个操作系统进程。第一个 agent runtime 会触发 Host 启动，之后的对话和
-后台 agent 复用该 Host。
-
-隔离发生在 Host 内部：
-
-- 每个活跃对话都有独立的 Pi Orbit runtime identity。
-- 每个 runtime 绑定到一个规范化工作区和一个 Pi session 文件。
-- 恢复、切换、分叉和克隆对话时，会更新或创建对应的 runtime/session 绑定，
-  不会再启动一个 Host 进程。
-- 项目审查与 research loop subagent 使用由同一控制面 Host 管理的有界 runtime。
-- 停止一个对话只会释放对应 runtime；关闭 Node 控制面时会先释放全部 runtime，
-  再停止共享 Host。
-
-`PiManager` 负责该生命周期。针对同一 runtime 的并发启动请求会去重；共享 Host 的
-并发启动请求也会等待同一个启动操作。
-
-### Host 启动与兼容性检查
-
-安装器默认下载当前平台对应的 Pi Orbit release，并使用发布的 `SHA256SUMS` 校验。
-运行时，`PI_CLI_PATH` 指向该原生可执行文件，或兼容的 JavaScript/TypeScript CLI。
-设置 `PI_ORBIT_REPO` 可以在安装阶段改用本地 Pi Orbit 源码 checkout，而不是 release
-产物。
-
-控制面在随机本机端口上以 Web mode 启动 Pi Orbit，并启用：
-
-- 由应用管理的生命周期；
-- 不隐式创建初始 session；
-- 随机生成的 bearer token；
-- 创建任何 runtime 前的 capability handshake。
-
-Handshake 要求协议版本 1、`single-user-shared-process` 隔离模型、runtime API、
-事件重放 API、浏览器 session 认证、workspace binding、项目 trust，以及旧 session
-兼容 API。缺少任何必需能力时，启动会以安全失败方式终止。
-
-`PI_SCIENCE_PI_MODE=rpc` 保留旧的逐进程 RPC adapter，作为临时回退路径；Web mode
-是受支持的默认架构。
-
-## 命令与事件流
-
-```mermaid
-sequenceDiagram
-    participant Browser as 浏览器
-    participant Control as Node 控制面
-    participant Host as Pi Orbit Web Host
-    participant Runtime as 隔离 runtime
-
-    Browser->>Control: 创建或恢复对话
-    Control->>Host: 为工作区/session 创建 runtime
-    Host-->>Control: runtimeId 和 piSessionId
-    Control->>Host: 打开可重放的 runtime 事件流
-    Browser->>Control: Prompt 或命令
-    Control->>Host: 发送带认证的 runtime 请求
-    Host->>Runtime: 执行 agent turn
-    Runtime-->>Host: 当前 runtime 的事件
-    Host-->>Control: 带序号的 SSE 事件
-    Control-->>Browser: 对话 SSE
-```
-
-浏览器不会获得 Pi Orbit bearer token，也不会直接调用 Host。`PiProcess` 是 Web API
-上的 adapter：它把现有 session command interface 转换为 runtime 与旧 session API，
-并在重连后从最后一个事件序号继续重放当前 runtime 的事件。
+v3 会话只作为数据输入：首次使用时完整校验并复制，由官方 SDK 原子升级副本，再登记 Core 归属。离线转换不启动 Worker，也不需要 API key；原文件保持不变。见[会话转换说明](agent-core-session-conversion.md)。
 
 ## Node 原生科学运行时边界
 
@@ -117,7 +38,7 @@ JupyterLab 仍是可选能力，使用独立的应用级工具环境；项目 ke
 |---|---|---|
 | React 开发应用 | `http://127.0.0.1:5173` | 面向浏览器 |
 | Node 控制面 | `http://127.0.0.1:8787` | 面向浏览器的应用 API |
-| Pi Orbit Web Host | 随机本机端口 | 内部服务，使用 bearer token 认证 |
+| Agent Core Worker | 父子进程 IPC | 内部执行 |
 
 控制面通过 `/internal/live`、`/internal/ready` 和 `/internal/diagnostics`
 提供启动器健康检查与本地诊断信息。
@@ -264,14 +185,14 @@ flowchart LR
   保存字面量密钥绑定。
 - MCP 凭据保存在独立、权限为 0600 的 `CredentialStore` 中，并记录
   `owner_kind=mcp` 和所属连接器。通用模型凭据 API 不列出也不能修改这些凭据。运行时
-  快照只包含凭据引用，由 Pi 扩展在进程内解析；内置定义升级会保留已有绑定。
+  快照只包含凭据引用，由 SDK MCP 工具加载器在进程内解析；内置定义升级会保留已有绑定。
 - 启用状态、include/exclude 筛选和审批模式全局生效。工具的精确名称 `允许`、`询问`、
   `拒绝` 决策既可以全局设置，也可以按项目覆盖；优先级依次是 `拒绝`、项目决策、全局
   决策、连接器审批模式。除非连接器显式允许全部工具，未知工具仍需要审批。
 - 影响 runtime 的定义或策略变更会为所有已知 workspace 生成权限为 0600、原子替换的
   `.pi-science/mcp-runtime.json`，并重载活跃 runtime。快照只保存启用的定义和策略，不
-  保存解析后的密钥。多个项目共享一个 Pi Orbit Host，因此 Pi 扩展会从每个 Session
-  自己的 workspace 加载快照。
+  保存解析后的密钥。每个 Agent Core Worker 通过 SDK MCP 工具加载器从自己的 Session
+  workspace 加载快照。
 - 探测流程执行 MCP handshake 和 `tools/list`，合并并发探测，并按连接器 revision 与
   fingerprint 缓存结果。内置工具元数据使用启动时写入的长期缓存，在线探测可以刷新它。
 - 远程 transport 和内置上游客户端都经过受保护的 MCP fetch 路径：连接前校验 URL，
@@ -283,13 +204,12 @@ flowchart LR
 
 ## 信任与安全边界
 
-- Pi Orbit Host 只监听本机地址，控制面的每个请求都需要随机生成的 bearer token。
+- Agent Core Worker 仅通过父子进程 IPC 接收控制面命令，浏览器不能直接调用 Worker。
 - Token 只保留在后端；不会向浏览器 origin 开放 Host 的直接 CORS 访问。
 - 创建 runtime 前会规范化并校验 workspace 路径。
 - 每个已注册 workspace 在 `.pi-science/project.json` 中拥有稳定的项目身份；
   session 列表通过该清单解析 `project_id`。
-- 注册后的 workspace 位于应用信任边界内。控制面会在创建 runtime 前记录 Pi Orbit
-  项目 trust，因此只应注册你信任其中项目指令与技能的 workspace。
+- 注册后的 workspace 位于应用信任边界内。只应注册你信任其中项目指令与技能的 workspace。
 - Runtime identity 同时包含 workspace 和 session identity，防止通过另一个 workspace
   的 runtime 恢复 session。
 - 多个 writer 可能更新同一记录时，项目本地元数据使用经过校验的路径、原子写入和
@@ -304,12 +224,9 @@ flowchart LR
 
 ## 生命周期与恢复
 
-- 对话 runtime 默认在空闲 30 分钟后回收。设置 `PI_SCIENCE_IDLE_RUNTIME_MS=0`
-  可以关闭控制面清理；Pi Orbit Host 自身会按 `PI_ORBIT_IDLE_TIMEOUT_MS` 回收空闲
-  runtime，默认期限为 24 小时。
-- 删除繁忙 runtime 时，最多等待 `PI_SCIENCE_DISPOSE_TIMEOUT_MS`（默认 60 秒）让其
-  稳定；控制面关闭时会跳过等待并直接停止 Host。
-- 只要 Node 控制面仍在运行，共享 Pi Orbit Host 就保持存活，即使当前没有对话 runtime。
+
+
+- Agent Worker 使用有界 IPC 请求、持久操作结果及恢复探测。繁忙会话不允许删除；控制面退出会关闭 Worker 和工具进程。
 - Kernel 子进程在 Session 首次执行 cell 时按需启动，并在 Session 关闭、workspace
   关闭、崩溃恢复或超时清理时停止。
 - Runtime 命令使用有界请求超时。超时操作会与 runtime 状态进行 reconciliation，
@@ -320,7 +237,7 @@ flowchart LR
 
 ## 研究循环
 
-Research loop 由 Node 控制面协调。它使用有界 Pi Orbit subagent runtime 生成与分析
+Research loop 由 Node 控制面协调。它使用有界 Agent Core subagent Worker 生成与分析
 candidate，使用任务系统执行和确定性评估，使用不可变 candidate snapshot，并通过
 append-only 记录支持恢复与谱系追踪。
 

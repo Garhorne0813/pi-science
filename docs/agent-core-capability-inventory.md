@@ -1,6 +1,6 @@
 # Agent-core 能力与验收范围
 
-PR #115 的 agent-core 路径保留显式开关。默认仍使用 Orbit，不移除既有运行时。
+PR #115 现在只使用 Agent Core，已删除 Orbit 主机、传输、安装与 runner 路径。旧会话可自动转换或离线批量转换，参见[转换说明](agent-core-session-conversion.md)。
 
 | 能力 | agent-core 实现 | 验证/范围 |
 | --- | --- | --- |
@@ -16,14 +16,14 @@ PR #115 的 agent-core 路径保留显式开关。默认仍使用 Orbit，不移
 | Notebook | 现有 Notebook 扩展 API 的 Harness 适配 | 保留现有工具与内部服务鉴权 |
 | Questionnaire | 现有验证/格式化 + Worker InteractionBridge | 浏览器请求、响应、取消仍由会话 Worker 拥有 |
 | Managed MCP | 官方 SDK + 现有 connector 投影 | stdio/HTTP/SSE/socket、允许工具列表、确认和每 connector 凭据；现有测试覆盖 |
-| Web access | 通过配置的 managed MCP 工具提供 | agent-core 不装载 Orbit 的 `pi-web-access` 扩展，也不自动读取/迁移该扩展的独立搜索配置；媒体提取、浏览器 cookie、curator UI 尚无等价适配 |
+| Web access | 通过配置的 managed MCP 工具提供 | agent-core 不装载 Orbit 的 `pi-web-access` 扩展，也不自动读取/迁移该扩展的独立搜索配置；旧媒体提取、浏览器 cookie、curator UI 随旧运行时退役，不再提供 |
 | subagent 扩展额外模式 | 本轮不提供 | async、workflow、missions/schedules 以及其他执行后端不在现有迁移合同内；不对模型宣称这些能力 |
 | 子代理交互工具 | 本轮不提供 | 隐藏子会话不开放 questionnaire/MCP 确认，避免向不可见会话发送浏览器问题；由父会话处理交互 |
-| v3 迁移 | 复制、完整校验、登记归属、启动 | 独立 `PI_SCIENCE_AGENT_CORE_MIGRATE_LEGACY=1` 开关；未开启时既有 v3 会话继续走 Orbit；原文件保留 |
+| v3 迁移 | 复制、完整校验、SDK 原子升级、登记归属 | 首次使用自动转换；`pnpm migrate:sessions` 提供无 Worker、无模型调用的批量转换；原文件保留并记录消息 ID 映射 |
 | v4 兼容 | 0.87.1 → 0.99.2 | 实际旧 API 生成的 admission fixture；新格式降级读取尚未验收 |
-| context-mode | 继续默认关闭 | 仍需独立适配，不属于核心压缩实现 |
+| context-mode | 未提供 | 仍需独立适配，不属于核心压缩实现 |
 | 图片 prompt | 本轮不提供新入口 | 后续另做端到端验收 |
-| OS sandbox | 暂缓 | 不满足新会话默认切换及 Orbit 退役的发布条件 |
+| OS sandbox | 暂缓 | 按用户要求不阻塞 Orbit 移除；当前仍无 OS 级隔离保证 |
 
 Todo 采用 `@juicesharp/rpiv-todo` 2.12.0 的纯领域模块，保留 MIT 声明；与原安装版本 2.4.0 的 reducer、参数 schema 和状态转换对照仅有注释差异。未引入 coding-agent/TUI 运行时依赖。
 

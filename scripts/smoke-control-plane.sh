@@ -62,9 +62,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-if [ "$REAL_PI" = true ] && [ -z "${PI_CLI_PATH:-}" ]; then
-    echo "--real-pi requires PI_CLI_PATH" >&2
-    exit 10
+if [ "$REAL_PI" = true ]; then
+    printf '{"model":"%s","thinking":"off"}\n' "${PI_SCIENCE_SMOKE_MODEL:-openai/gpt-4.1-mini}" > "$PI_SCIENCE_HOME/config.json"
 fi
 
 echo "[smoke] building Node server"
@@ -90,7 +89,6 @@ fi
     cd "$ROOT_DIR"
     env PI_SCIENCE_PORT="$NODE_PORT" \
         PI_SCIENCE_CORS="http://127.0.0.1:5173" PI_SCIENCE_INTERNAL_TOKEN="$PI_SCIENCE_INTERNAL_TOKEN" \
-        PI_CLI_PATH="${PI_CLI_PATH:-}" PI_NODE_PATH="${PI_NODE_PATH:-$(command -v node)}" \
         "${NODE_MIGRATION_FLAGS[@]}" pnpm --filter @pi-science/server start
 ) >"$NODE_LOG" 2>&1 &
 NODE_PID=$!
@@ -194,7 +192,7 @@ if echo "$CUSTOM_PROVIDER_JSON" | grep -q 'custom-secret'; then
     echo "custom provider API key leaked" >&2
     exit 40
 fi
-assert_body_contains 'custom-smoke-provider/smoke-model' "http://127.0.0.1:${NODE_PORT}/api/settings/config"
+assert_body_contains 'user-smoke-provider/smoke-model' "http://127.0.0.1:${NODE_PORT}/api/settings/config"
 
 KEYLESS_PROVIDER_JSON="$(curl --fail --silent --show-error -X PUT \
     -H 'Content-Type: application/json' \
@@ -204,7 +202,7 @@ if ! echo "$KEYLESS_PROVIDER_JSON" | grep -q '"ok":true'; then
     echo "keyless custom provider write failed" >&2
     exit 40
 fi
-assert_body_contains 'custom-local-no-key/local-model' "http://127.0.0.1:${NODE_PORT}/api/settings/config"
+assert_body_contains 'user-local-no-key/local-model' "http://127.0.0.1:${NODE_PORT}/api/settings/config"
 curl --fail --silent --show-error -X DELETE \
     "http://127.0.0.1:${NODE_PORT}/api/settings/custom-providers/smoke-provider" >/dev/null
 curl --fail --silent --show-error -X DELETE \
@@ -413,10 +411,7 @@ if [ "$REAL_PI" = true ]; then
     HEALTH_FINAL_JSON="$(curl --fail --silent --show-error --dump-header "$HEALTH_FINAL_HEADERS" \
         "http://127.0.0.1:${NODE_PORT}/api/health")"
     assert_header_file_contains "$HEALTH_FINAL_HEADERS" 'x-pi-science-runtime: node-control-plane'
-    # Web mode deliberately keeps its single shared Pi Orbit host alive for
-    # the control-plane lifetime after all dynamic runtimes are deleted.
-    EXPECTED_FINAL_PROCESSES=1
-    if [ "${PI_SCIENCE_PI_MODE:-}" = "rpc" ]; then EXPECTED_FINAL_PROCESSES=0; fi
+    EXPECTED_FINAL_PROCESSES=0
     python3 -c 'import json,sys; value=json.loads(sys.argv[1])["active_pi_processes"]; expected=int(sys.argv[2]); assert value == expected, value' "$HEALTH_FINAL_JSON" "$EXPECTED_FINAL_PROCESSES"
 fi
 

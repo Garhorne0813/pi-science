@@ -4,7 +4,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { AgentHarnessTool, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import type { TSchema } from "typebox";
-import { loadProjectedServers } from "../../pi/extensions/pi-science-mcp.js";
+import { loadProjectedServers } from "../../shared/extensions/pi-science-mcp.js";
 import { builtinNetworkEnvironment } from "../../../mcp/bindings.js";
 import { createMcpFetch } from "../../../mcp/runtime-fetch.js";
 import { UnixSocketClientTransport } from "../../../mcp/connector-probe.js";

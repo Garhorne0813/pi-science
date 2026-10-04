@@ -9,7 +9,6 @@ import { workspaceFile } from "../../storage/persistence.js";
 import { ConversationEventHub } from "../events/conversation-event-hub.js";
 import { NodeSessionService } from "../node/node-session-service.js";
 import { SessionRepository } from "../node/session-repository.js";
-import { PiManager } from "../pi/pi-manager.js";
 import { AgentCoreSessionService } from "./agent-core-session-service.js";
 import { AgentRuntimeTimeoutError } from "./agent-runtime-errors.js";
 import { AgentSessionRegistry } from "./agent-session-registry.js";
@@ -34,7 +33,7 @@ function service() {
   const events: Array<Record<string, unknown>> = [];
   const hub = new ConversationEventHub({ append: async (_cwd, _id, event) => { events.push(JSON.parse(event.data) as Record<string, unknown>); },
     readAfter: async () => [] });
-  const instance = new NodeSessionService(hub, new PiManager(), new SessionRepository(), { environment: async () => ({}) });
+  const instance = new NodeSessionService(hub, new SessionRepository(), { environment: async () => ({}) });
   services.push(instance);
   return { instance, events };
 }

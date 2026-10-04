@@ -1,6 +1,6 @@
 import { CredentialStore } from "../../model-resources/credential-store.js";
-import { projectedEnvironmentNames } from "../pi/extensions/pi-science-mcp.js";
-import { loadDefaultPiConfig, seedWorkspaceAssets } from "../pi/pi-runtime-launch.js";
+import { projectedEnvironmentNames } from "../shared/extensions/pi-science-mcp.js";
+import { loadDefaultPiConfig, seedWorkspaceAssets } from "../agent/runtime-config.js";
 import { configPath, readJson } from "../../storage/persistence.js";
 import { openHiddenTask, hiddenSessionsRoot, runHiddenPrompt } from "./hidden-agent-task.js";
 import type { AgentRuntimeManager } from "./agent-runtime-manager.js";
@@ -10,7 +10,7 @@ import type { WorkspaceEnvironmentService } from "../workspace/workspace-environ
 import type { TaskRuntime, TaskPrompt } from "./runner-transport.js";
 import { ModelResourceService } from "../../model-resources/model-resource-service.js";
 
-/** Uses the durable child result directly; no synthetic Orbit stream. */
+/** Uses the durable child result directly; no synthetic event stream. */
 class CoreTaskRuntime implements TaskRuntime {
   private tokens = 0;
   private cost = 0;

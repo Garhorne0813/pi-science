@@ -6,108 +6,23 @@ This document describes the current Pi-Science runtime architecture. It is the
 canonical reference for process ownership, runtime isolation, service
 boundaries, workspace state, and lifecycle behavior.
 
-## System overview
+## Agent Core runtime
 
 ```mermaid
 flowchart LR
-    UI[React web app] -->|HTTP and SSE| CP[Node / TypeScript control plane]
-    CP -->|authenticated loopback HTTP and SSE| PH[Single Pi Orbit Web host]
-    PH --> R1[Conversation runtime A]
-    PH --> R2[Conversation runtime B]
-    PH --> RN[Background agent runtime]
-    PH -->|spawn lazily| MCP[Enabled MCP connectors]
-    CP -->|spawn on demand| K[Native Python and R kernels]
-    CP --> DB[(Global state.sqlite)]
-    CP --> WS[(Workspace files and .pi-science metadata)]
-    CP -->|bounded provider and probe HTTP| EXT[Configured model and scientific data services]
-    MCP -->|bounded scientific API HTTP| EXT
-    PH --> WS
-    K --> WS
+    UI[Browser] -->|REST and SSE| CP[Node control plane]
+    CP -->|Typed IPC| W[Agent Core Workers]
+    W --> SDK[AgentHarness and pi-ai]
+    W --> MCP[Managed MCP]
+    CP --> K[Python and R kernels]
+    CP --> DB[(SQLite and workspace metadata)]
 ```
 
-The React application is a client of the Node control plane. The control plane
-owns application APIs, coordinates the other runtimes, and is the only backend
-service the browser calls directly.
+Agent Core is the only execution backend. Each active conversation owns a Node Worker. `AgentRuntimeManager` controls process capacity, exclusive session ownership, startup and shutdown. Research, review, and conversation subagents use hidden v4 sessions; title generation uses a disposable worker with no tools or skills.
 
-| Component | Responsibility |
-|---|---|
-| React web app | Conversations, project knowledge, files, notebooks, runs, skills, settings, and scientific viewers |
-| Node control plane | Sessions, event streaming, files, jobs, provenance, project state, settings, managed MCP connectors, SQLite coordination, runtime lifecycle, and route authorization |
-| Pi Orbit Web host | Agent sessions and isolated runtimes for conversations and bounded background agents |
-| MCP connector processes | Lazy local tool servers and guarded transports to public scientific services |
-| Node-native scientific runtime | Workspace-bound Python/R kernels and optional JupyterLab tooling |
-| Global SQLite state | Workspace locations, environment revisions, MCP definitions and policy, durable jobs, leases, and legacy-import markers |
-| Workspace | User files plus project-local instructions, skills, environments, sessions, artifacts, and provenance |
+The control plane projects structured Worker events into the existing browser SSE protocol and owns durable recovery, artifacts, interactions, and statistics. On restart, a worker reopens the same v4 session. The browser does not load model SDKs or credentials. There is no Orbit host, external CLI, bearer-token transport, or RPC fallback.
 
-## Pi Orbit runtime model
-
-Pi-Science starts **one Pi Orbit Web host per Node control-plane process**, not
-one operating-system process per conversation. The first agent runtime starts
-the host; later conversations and background agents reuse it.
-
-Isolation happens inside the host:
-
-- Each active conversation is represented by its own Pi Orbit runtime identity.
-- A runtime is bound to a canonical workspace and a Pi session file.
-- Restoring, switching, forking, and cloning a conversation update or create the
-  corresponding runtime/session binding without starting another host process.
-- Project review and research-loop subagents use bounded runtimes managed by the
-  same control-plane-owned host.
-- Stopping one conversation disposes only its runtime. Shutting down the Node
-  control plane disposes all runtimes and then stops the shared host.
-
-`PiManager` owns this lifecycle. Concurrent requests for the same runtime are
-deduplicated, and concurrent attempts to start the shared host await the same
-startup operation.
-
-### Host startup and compatibility checks
-
-The installer normally downloads the platform-specific Pi Orbit release and
-verifies it against the published `SHA256SUMS`. At runtime, `PI_CLI_PATH` points
-to either that native executable or a compatible JavaScript/TypeScript CLI.
-`PI_ORBIT_REPO` opts installation into a local Pi Orbit source checkout instead
-of a release artifact.
-
-The control plane starts Pi Orbit in Web mode on a random loopback port with:
-
-- an application-managed lifecycle;
-- no implicit initial session;
-- a generated bearer token;
-- a capability handshake before any runtime is created.
-
-The handshake requires protocol version 1, the
-`single-user-shared-process` isolation model, runtime and event-replay APIs,
-browser-session authentication, workspace binding, project trust, and legacy
-session compatibility. Startup fails closed when these capabilities are absent.
-
-`PI_SCIENCE_PI_MODE=rpc` retains the previous per-process RPC adapter as a
-temporary rollback path. Web mode is the supported default architecture.
-
-## Commands and event flow
-
-```mermaid
-sequenceDiagram
-    participant Browser
-    participant Control as Node control plane
-    participant Host as Pi Orbit Web host
-    participant Runtime as Isolated runtime
-
-    Browser->>Control: Create or resume conversation
-    Control->>Host: Create runtime for workspace/session
-    Host-->>Control: runtimeId and piSessionId
-    Control->>Host: Open replayable runtime event stream
-    Browser->>Control: Prompt or command
-    Control->>Host: Authenticated runtime request
-    Host->>Runtime: Execute agent turn
-    Runtime-->>Host: Scoped runtime events
-    Host-->>Control: SSE events with sequence numbers
-    Control-->>Browser: Conversation SSE
-```
-
-The browser never receives the Pi Orbit bearer token and does not call the host
-directly. `PiProcess` is an adapter over the Web API: it translates the existing
-session command interface into runtime and legacy-session endpoints, and it
-replays scoped events after reconnecting by sequence number.
+Old v3 transcripts are data inputs: on first use, the service validates and copies them, lets the official SDK atomically convert the copy, and registers Core ownership. Offline conversion needs no API key or Worker. Original files remain untouched. See [session conversion](agent-core-session-conversion.md).
 
 ## Node-native scientific runtime boundary
 
@@ -140,7 +55,7 @@ The default local topology is:
 |---|---|---|
 | React development app | `http://127.0.0.1:5173` | Browser-facing |
 | Node control plane | `http://127.0.0.1:8787` | Browser-facing application API |
-| Pi Orbit Web host | Random loopback port | Internal and bearer-authenticated |
+| Agent Core Workers | Typed parent/child IPC | Internal |
 
 The control plane exposes `/internal/live`, `/internal/ready`, and
 `/internal/diagnostics` for launcher health checks and local diagnostics.
@@ -324,8 +239,8 @@ flowchart LR
   atomically replaced
   `.pi-science/mcp-runtime.json` for each known workspace and reloads active
   runtimes. The snapshot contains enabled definitions and policy, not resolved
-  secret values. The Pi extension loads the snapshot from each session's own
-  workspace because multiple projects share one Pi Orbit host.
+  secret values. Each Agent Core Worker loads the snapshot from its own
+  session's workspace through the SDK MCP tool loader.
 - Probes perform the MCP handshake and `tools/list`, coalesce concurrent probes,
   and cache the result against a connector revision and fingerprint. Built-in
   tool metadata has a non-expiring seeded cache; a live probe can refresh it.
@@ -339,16 +254,13 @@ The detailed API, schema, migration, and UI contract is documented in
 
 ## Trust and security boundaries
 
-- The Pi Orbit host listens only on loopback and requires a generated bearer
-  token for every control-plane request.
-- The token remains in the backend; browser origins are not granted direct CORS
-  access to the host.
+- Agent Core Workers use parent/child IPC; browser origins cannot call Workers directly. API authentication remains at the control-plane boundary.
 - Workspace paths are canonicalized and validated before runtime creation.
 - Each registered workspace owns a stable project identity in
   `.pi-science/project.json`; session listings resolve their `project_id` from
   that manifest.
 - A registered workspace is inside the application trust boundary. The control
-  plane records Pi Orbit project trust before creating a runtime, so users should
+  plane records workspace validation before creating a runtime, so users should
   register only workspaces whose instructions and skills they trust.
 - Runtime identity includes both workspace and session identity to prevent one
   workspace from being resumed through another runtime.
@@ -368,13 +280,7 @@ The detailed API, schema, migration, and UI contract is documented in
 
 ## Lifecycle and recovery
 
-- Conversation runtimes are reclaimed after 30 minutes of inactivity by
-  default. `PI_SCIENCE_IDLE_RUNTIME_MS=0` disables that control-plane cleanup;
-  the Pi Orbit host evicts idle runtimes after `PI_ORBIT_IDLE_TIMEOUT_MS` (default 24h).
-- Deleting a busy runtime waits up to `PI_SCIENCE_DISPOSE_TIMEOUT_MS` (default 60s) for
-  it to settle before giving up; control-plane shutdown skips this and kills the host directly.
-- The shared Pi Orbit host remains alive while the Node control plane is alive,
-  even when it currently contains no conversation runtimes.
+- Agent Worker commands use bounded IPC requests, durable operation results, and recovery probes. Busy session deletion is rejected; shutdown disposes Workers and their tools.
 - Kernel child processes are started lazily for the first cell in a Session and
   are stopped on Session shutdown, workspace shutdown, crash recovery, or
   timeout cleanup.
@@ -390,7 +296,7 @@ The detailed API, schema, migration, and UI contract is documented in
 ## Research loops
 
 Research loops are coordinated by the Node control plane. A loop uses bounded
-Pi Orbit subagent runtimes for candidate generation and analysis, the job system
+Agent Core subagent Workers for candidate generation and analysis, the job system
 for execution and deterministic evaluation, immutable candidate snapshots, and
 append-only records for recovery and provenance.
 

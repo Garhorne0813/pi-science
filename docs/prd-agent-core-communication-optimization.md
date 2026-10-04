@@ -1,5 +1,7 @@
 # Agent-core 通信与前端协议收敛方案
 
+> 更新：当前已移除 Orbit 运行时，统一使用 Agent Core；以下阶段性记录中的 opt-in/兼容计划属于历史状态。现行会话处理见[转换说明](agent-core-session-conversion.md)。
+
 日期：2026-10-02。状态：实施中；第一批内部契约、产品输入和结构化 runner 已接入，完整完成边界及验证见 [实施记录](agent-core-communication-implementation.md)。
 
 基线：PR #115，`59be3309e29334750ddfe307a1ae4aa89b17c304`。该提交的 Linux、Windows、macOS launcher 与 CodeQL 检查均通过。本文承接 [运行时优化方案](prd-agent-core-runtime-optimization.md)，讨论通信和适配层的收敛；完整能力边界仍以 [能力清单](agent-core-capability-inventory.md) 为准。

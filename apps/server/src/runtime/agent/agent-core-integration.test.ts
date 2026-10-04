@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ConversationEventHub } from "../events/conversation-event-hub.js";
 import { NodeSessionService } from "../node/node-session-service.js";
 import { SessionRepository } from "../node/session-repository.js";
-import { PiManager } from "../pi/pi-manager.js";
 import Fastify from "fastify";
 import { registerNodeSessionRoutes } from "../../http/routes/node-session-routes.js";
 import { registerSessionReadRoutes } from "../../http/routes/session-routes.js";
@@ -29,7 +28,7 @@ afterEach(async () => {
 
 function service(): NodeSessionService {
   const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
-  const instance = new NodeSessionService(hub, new PiManager(), new SessionRepository(), { environment: async () => ({}) });
+  const instance = new NodeSessionService(hub, new SessionRepository(), { environment: async () => ({}) });
   services.push(instance);
   return instance;
 }

@@ -1,5 +1,7 @@
 # PR #115 实施记录
 
+> 更新：当前已移除 Orbit 运行时，统一使用 Agent Core；以下阶段性记录中的 opt-in/兼容计划属于历史状态。现行会话处理见[转换说明](agent-core-session-conversion.md)。
+
 按 [优化方案](prd-agent-core-runtime-optimization.md) 分阶段实施。Sandbox 暂缓，默认运行时仍为 Orbit，agent-core 保持显式开关。
 
 ## 已完成

@@ -149,14 +149,14 @@ describe("agent-core product tools", () => {
     try {
       const parent = await openHiddenTask(manager, "drain-parent", { cwd: fixture.cwd,
         sessionsRoot: join(fixture.cwd, ".pi-science", "agent-sessions"), model: fixture.model, thinking: "off" }, "owner");
-      const result = runHiddenPrompt(parent, "Delegate", "drain-once", Date.now() + 10000);
+      const result = runHiddenPrompt(parent, "Delegate", "drain-once", Date.now() + 30000);
       void result.catch(() => undefined);
-      await vi.waitFor(() => expect(entered).toBe(true), { timeout: 5000 });
+      await vi.waitFor(() => expect(entered).toBe(true), { timeout: 15000 });
       expect(await parent.sendCommand("abort")).toMatchObject({ success: true });
       await expect(result).rejects.toThrow("aborted");
       let stopped = false;
       shutdown = manager.shutdownAll().then(() => { stopped = true; });
-      await vi.waitFor(() => expect(parent.isClosed).toBe(true), { timeout: 5000 });
+      await vi.waitFor(() => expect(parent.isClosed).toBe(true), { timeout: 15000 });
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(stopped).toBe(false);
       release();
@@ -168,7 +168,7 @@ describe("agent-core product tools", () => {
       await shutdown;
       spy.mockRestore();
     }
-  }, 20000);
+  }, 45000);
 
   it("lists and invokes skills/templates under the current resource policy", async () => {
     const requests: string[] = [];

@@ -7,7 +7,6 @@ import { ModelResourceService } from "../../model-resources/model-resource-servi
 import { ConversationEventHub } from "../events/conversation-event-hub.js";
 import { NodeSessionService } from "../node/node-session-service.js";
 import { SessionRepository } from "../node/session-repository.js";
-import { PiManager } from "../pi/pi-manager.js";
 import type { AgentCoreSessionService } from "./agent-core-session-service.js";
 import { turnArtifactRepository } from "../artifacts/turn-artifact-repository.js";
 
@@ -62,7 +61,7 @@ async function fixture(mode: "write" | "hold-first" = "write") {
   const publish = hub.publish.bind(hub);
   vi.spyOn(hub, "publish").mockImplementation(async (...args) => { events.push(args[2]); await publish(...args); });
   const review = { run: vi.fn().mockResolvedValue({}) };
-  const service = new NodeSessionService(hub, new PiManager(), new SessionRepository(), { environment: async () => ({}) }, review);
+  const service = new NodeSessionService(hub, new SessionRepository(), { environment: async () => ({}) }, review);
   cleanup.push(() => service.shutdownAll());
   const created = await service.create({ cwd, config: { model: `${provider.id}/lab`, thinking: "off", skills: [], extensions: [] } });
   if (!("id" in created)) throw new Error(created.error);

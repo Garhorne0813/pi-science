@@ -12,6 +12,7 @@ const openApps: Array<{ close(): Promise<unknown> }> = [];
 
 afterEach(async () => {
   await Promise.all(openApps.splice(0).map((app) => app.close()));
+  vi.unstubAllEnvs();
 });
 
 function config(_pythonOrigin: string, overrides: Partial<ServerConfig> = {}): ServerConfig {
@@ -298,31 +299,26 @@ describe("Node control plane", () => {
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }, 30_000);
 
-  it("tears down the shared Pi runtime manager on close even when nodePiManager is off", async () => {
+  it("shuts down core sessions on close even when session routes are off", async () => {
     const modules = createServerModules(config("http://127.0.0.1:1", { nodePiManager: false }));
-    const shutdownSpy = vi.spyOn(modules.piManager, "shutdownAll").mockResolvedValue(undefined);
+    const shutdownSpy = vi.spyOn(modules.sessions, "shutdownAll").mockResolvedValue(undefined);
     const app = buildApp(config("http://127.0.0.1:1", { nodePiManager: false }), modules);
     openApps.push(app);
 
     await app.close();
 
-    // The node session service hook is gated on nodePiManager, but the shared
-    // manager also owns research/review subagent runtimes, so its onClose hook
-    // must run unconditionally exactly once.
     expect(shutdownSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("calls the shared Pi runtime manager teardown exactly twice when nodePiManager is on (idempotent no-ops)", async () => {
+  it("shuts down core sessions once when session routes are enabled", async () => {
     const modules = createServerModules(config("http://127.0.0.1:1", { nodePiManager: true }));
-    const shutdownSpy = vi.spyOn(modules.piManager, "shutdownAll").mockResolvedValue(undefined);
+    const shutdownSpy = vi.spyOn(modules.sessions, "shutdownAll").mockResolvedValue(undefined);
     const app = buildApp(config("http://127.0.0.1:1", { nodePiManager: true }), modules);
     openApps.push(app);
 
     await app.close();
 
-    // One call from the session service (nodePiManager on) and one from the
-    // unconditional hook; the second is a no-op because the maps were cleared.
-    expect(shutdownSpy).toHaveBeenCalledTimes(2);
+    expect(shutdownSpy).toHaveBeenCalledTimes(1);
   });
 
   it("can serve read-only session data from the existing JSONL format", async () => {
@@ -383,14 +379,15 @@ describe("Node control plane", () => {
     await rm(outside, { force: true });
   });
 
-  it("fails closed when Node Pi management has no runtime configured", async () => {
+  it("requires a model before creating a core session", async () => {
     const workspace = join(tmpdir(), `pi-science-pi-route-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    vi.stubEnv("PI_SCIENCE_HOME", join(workspace, "empty-home"));
     const app = buildApp(config("http://127.0.0.1:1", { nodePiManager: true }));
     openApps.push(app);
     const response = await app.inject({ method: "POST", url: "/api/sessions", payload: { cwd: workspace } });
-    expect(response.statusCode).toBe(503);
-    expect(response.json()).toMatchObject({ code: "spawn_failed" });
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({ code: "invalid_model" });
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 

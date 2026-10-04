@@ -1,6 +1,6 @@
 import { configPath, readJson, writeJsonAtomic } from "./persistence.js";
 import { defaultProgressAppearance, progressAppearanceInputSchema, progressAppearanceSchema, type ProgressAppearance } from "@pi-science/contracts";
-import type { RuntimeSkillPolicy } from "../runtime/pi/pi-process.js";
+import type { RuntimeSkillPolicy } from "../runtime/agent/agent-runtime-types.js";
 
 export type SettingsData = {
   api_keys?: Record<string, string>;

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConversationEventHub } from "./conversation-event-hub.js";
 import { DurableEventStore, type SseEventRecord } from "./event-store.js";
-import type { PiProcess } from "../pi/pi-process.js";
+type RuntimeEventSource = EventEmitter;
 
 const workspaces: string[] = [];
 
@@ -17,7 +17,7 @@ it("flush waits for durable observer work before shutdown completes", async () =
   let entered!: () => void;
   const started = new Promise<void>((resolve) => { entered = resolve; });
   const persistence = new Promise<void>((resolve) => { release = resolve; });
-  hub.bind(cwd, runtime as PiProcess, { activeSessionId: () => "shutdown-session", onBusy: () => undefined, onExit: () => undefined,
+  hub.bind(cwd, runtime as RuntimeEventSource, { activeSessionId: () => "shutdown-session", onBusy: () => undefined, onExit: () => undefined,
     observe: async () => { entered(); await persistence; } });
   runtime.emit("event", { type: "agent_settled", status: "completed" });
   await started;
@@ -61,7 +61,7 @@ describe("central conversation event hub", () => {
     const run = async (count: number) => {
       const hub = new ConversationEventHub(store);
       const process = new EventEmitter();
-      hub.bind(cwd, process as PiProcess, {
+      hub.bind(cwd, process as RuntimeEventSource, {
         activeSessionId: () => "identity-test",
         onBusy: () => {}, onExit: () => {},
         observe: (event, _sessionId, identity) => {
@@ -401,7 +401,7 @@ describe("central conversation event hub", () => {
   it("preserves exact message_end errors and emits one durable event per Pi event", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
-    const process = new EventEmitter() as PiProcess;
+    const process = new EventEmitter() as RuntimeEventSource;
     const first: Array<{ id: string | null; data: Record<string, unknown> }> = [];
     const second: Array<{ id: string | null; data: Record<string, unknown> }> = [];
     hub.bind(cwd, process, { activeSessionId: () => "session-1", onBusy: () => undefined, onExit: () => undefined });
@@ -425,7 +425,7 @@ describe("central conversation event hub", () => {
   it("deduplicates final text after deltas and surfaces process exits", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
-    const process = new EventEmitter() as PiProcess;
+    const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
     hub.bind(cwd, process, { activeSessionId: () => "session-2", onBusy: () => undefined, onExit: () => undefined });
     await hub.subscribe(cwd, "session-2", undefined, (record) => received.push(JSON.parse(record.data)));
@@ -443,7 +443,7 @@ describe("central conversation event hub", () => {
   it("emits only the missing final-text suffix and isolates anonymous messages", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
-    const process = new EventEmitter() as PiProcess;
+    const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
     hub.bind(cwd, process, { activeSessionId: () => "session-text", onBusy: () => undefined, onExit: () => undefined });
     await hub.subscribe(cwd, "session-text", undefined, (record) => received.push(JSON.parse(record.data)));
@@ -468,7 +468,7 @@ describe("central conversation event hub", () => {
   it("streams thinking deltas as thinking.updated without touching the text stream", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
-    const process = new EventEmitter() as PiProcess;
+    const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
     hub.bind(cwd, process, { activeSessionId: () => "session-thinking", onBusy: () => undefined, onExit: () => undefined });
     await hub.subscribe(cwd, "session-thinking", undefined, (record) => received.push(JSON.parse(record.data)));
@@ -494,7 +494,7 @@ describe("central conversation event hub", () => {
   it("gives independently revised text content parts distinct wire identities", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
-    const process = new EventEmitter() as PiProcess;
+    const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
     hub.bind(cwd, process, { activeSessionId: () => "session-parts", onBusy: () => undefined, onExit: () => undefined });
     await hub.subscribe(cwd, "session-parts", undefined, (record) => received.push(JSON.parse(record.data)));
@@ -514,7 +514,7 @@ describe("central conversation event hub", () => {
   it("streams bash output tails as throttled tool updates", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
-    const process = new EventEmitter() as PiProcess;
+    const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
     hub.bind(cwd, process, { activeSessionId: () => "session-bash-tail", onBusy: () => undefined, onExit: () => undefined });
     await hub.subscribe(cwd, "session-bash-tail", undefined, (record) => received.push(JSON.parse(record.data)));
@@ -540,7 +540,7 @@ describe("central conversation event hub", () => {
   it("preview-truncates oversized tool output with byte metadata", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
-    const process = new EventEmitter() as PiProcess;
+    const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
     hub.bind(cwd, process, { activeSessionId: () => "session-tool-output", onBusy: () => undefined, onExit: () => undefined });
     await hub.subscribe(cwd, "session-tool-output", undefined, (record) => received.push(JSON.parse(record.data)));
@@ -557,7 +557,7 @@ describe("central conversation event hub", () => {
   it("uses partial snapshots to discard repeated and overlapping streaming deltas", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
-    const process = new EventEmitter() as PiProcess;
+    const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
     hub.bind(cwd, process, { activeSessionId: () => "session-overlap", onBusy: () => undefined, onExit: () => undefined });
     await hub.subscribe(cwd, "session-overlap", undefined, (record) => received.push(JSON.parse(record.data)));
@@ -609,7 +609,7 @@ describe("central conversation event hub", () => {
   it("does not classify tool, interaction, or artifact-only turns as empty", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
-    const process = new EventEmitter() as PiProcess;
+    const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
     hub.bind(cwd, process, { activeSessionId: () => "session-activity", onBusy: () => undefined, onExit: () => undefined });
     await hub.subscribe(cwd, "session-activity", undefined, (record) => received.push(JSON.parse(record.data)));
@@ -630,7 +630,7 @@ describe("central conversation event hub", () => {
   it("keeps generic confirmations out of the permission channel", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
-    const process = new EventEmitter() as PiProcess;
+    const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
     hub.bind(cwd, process, { activeSessionId: () => "session-interactions", onBusy: () => undefined, onExit: () => undefined });
     await hub.subscribe(cwd, "session-interactions", undefined, (record) => received.push(JSON.parse(record.data)));
@@ -707,7 +707,7 @@ describe("central conversation event hub", () => {
   it("caps interaction metadata that the producer omitted to an empty string", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
-    const process = new EventEmitter() as PiProcess;
+    const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
     hub.bind(cwd, process, { activeSessionId: () => "session-metadata", onBusy: () => undefined, onExit: () => undefined });
     await hub.subscribe(cwd, "session-metadata", undefined, (record) => received.push(JSON.parse(record.data)));
@@ -743,7 +743,7 @@ describe("central conversation event hub", () => {
   it("publishes activity titles and preserves tool result details", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
-    const process = new EventEmitter() as PiProcess;
+    const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
     hub.bind(cwd, process, { activeSessionId: () => "session-presentation", onBusy: () => undefined, onExit: () => undefined });
     await hub.subscribe(cwd, "session-presentation", undefined, (record) => received.push(JSON.parse(record.data)));
@@ -759,7 +759,7 @@ describe("central conversation event hub", () => {
   it("does not generate an activity title for todo", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
-    const process = new EventEmitter() as PiProcess;
+    const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
     hub.bind(cwd, process, { activeSessionId: () => "session-todo-title", onBusy: () => undefined, onExit: () => undefined });
     await hub.subscribe(cwd, "session-todo-title", undefined, (record) => received.push(JSON.parse(record.data)));
@@ -772,7 +772,7 @@ describe("central conversation event hub", () => {
   it("publishes a structured questionnaire and marks its browser response request", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
-    const process = new EventEmitter() as PiProcess;
+    const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
     hub.bind(cwd, process, { activeSessionId: () => "session-questionnaire", onBusy: () => undefined, onExit: () => undefined });
     await hub.subscribe(cwd, "session-questionnaire", undefined, (record) => received.push(JSON.parse(record.data)));
@@ -822,7 +822,7 @@ describe("central conversation event hub", () => {
   it("finishes derived artifact publication before session idle", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
-    const process = new EventEmitter() as PiProcess;
+    const process = new EventEmitter() as RuntimeEventSource;
     const received: string[] = [];
     let releaseArtifact!: () => void;
     const artifactReady = new Promise<void>((resolve) => { releaseArtifact = resolve; });
@@ -850,7 +850,7 @@ describe("central conversation event hub", () => {
   it("does not attach startup stderr from before the active turn to a later crash", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
-    const process = new EventEmitter() as PiProcess;
+    const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
     hub.bind(cwd, process, { activeSessionId: () => "session-stderr", onBusy: () => undefined, onExit: () => undefined });
     await hub.subscribe(cwd, "session-stderr", undefined, (record) => received.push(JSON.parse(record.data)));
@@ -900,7 +900,7 @@ it("projects the same legacy and core text/tool facts into the same public proto
     const records: SseEventRecord[] = [];
     const hub = new ConversationEventHub({ append: async (_cwd, _id, record) => { records.push(record); }, readAfter: async () => [] });
     const process = new EventEmitter();
-    hub.bind(cwd, process as PiProcess, { activeSessionId: () => "s", onBusy: () => {}, onExit: () => {} });
+    hub.bind(cwd, process as RuntimeEventSource, { activeSessionId: () => "s", onBusy: () => {}, onExit: () => {} });
     events.forEach((event) => process.emit("event", event));
     await hub.flush();
     return records.map((record) => {
@@ -916,7 +916,7 @@ it("publishes one error card when core message and run terminal facts describe t
   const records: SseEventRecord[] = [];
   const hub = new ConversationEventHub({ append: async (_cwd, _id, record) => { records.push(record); }, readAfter: async () => [] });
   const process = new EventEmitter();
-  hub.bind(cwd, process as PiProcess, { activeSessionId: () => "s", onBusy: () => {}, onExit: () => {} });
+  hub.bind(cwd, process as RuntimeEventSource, { activeSessionId: () => "s", onBusy: () => {}, onExit: () => {} });
   process.emit("event", { type: "operation.started", runId: "r", turnId: "r" });
   process.emit("event", { type: "message.completed", runId: "r", message: { role: "assistant", stopReason: "error", errorMessage: "provider failed" } });
   process.emit("event", { type: "runtime.error", runId: "r", message: "provider failed" });

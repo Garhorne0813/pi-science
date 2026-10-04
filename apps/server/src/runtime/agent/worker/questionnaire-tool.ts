@@ -1,6 +1,6 @@
 import type { AgentHarnessTool, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import type { TSchema } from "typebox";
-import registerQuestionnaire from "../../pi/extensions/pi-science-ask-user-question-web.js";
+import registerQuestionnaire from "../../shared/extensions/pi-science-ask-user-question-web.js";
 import type { InteractionBridge } from "./interaction-bridge.js";
 
 type LegacyQuestionnaireTool = {

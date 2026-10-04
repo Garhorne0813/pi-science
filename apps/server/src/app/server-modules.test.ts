@@ -9,7 +9,7 @@ describe("server module graph", () => {
     expect(first.sessions).not.toBe(second.sessions);
     expect(first.events).not.toBe(second.events);
     expect(first.sessionRepository).not.toBe(second.sessionRepository);
-    expect(first.piManager).not.toBe(second.piManager);
+    expect(first.runtimeCatalog).not.toBe(second.runtimeCatalog);
     expect(first.settings).not.toBe(second.settings);
     expect(first.jobs).not.toBe(second.jobs);
     expect(first.sqliteEnabled).toBe(false);

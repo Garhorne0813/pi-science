@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 import { ConversationEventHub } from "./conversation-event-hub.js";
 import type { SseEventRecord } from "./event-store.js";
-import type { PiProcess } from "../pi/pi-process.js";
+type RuntimeEventSource = EventEmitter;
 
 describe("conversation event identities", () => {
   it("preserves durable identities supplied by AgentHarness", async () => {
@@ -11,7 +11,7 @@ describe("conversation event identities", () => {
       append: async (_cwd, _sessionId, record) => { records.push(record); },
       readAfter: async () => [],
     });
-    const source = new EventEmitter() as PiProcess;
+    const source = new EventEmitter() as RuntimeEventSource;
     hub.bind("/tmp/pi-science-harness-identity", source, { activeSessionId: () => "session-1", onBusy: () => undefined, onExit: () => undefined });
     source.emit("event", { type: "agent_start", runId: "durable-run", turnId: "durable-turn" });
     source.emit("event", { type: "agent_settled", runId: "durable-run" });
@@ -31,7 +31,7 @@ describe("conversation event identities", () => {
     const sessionId = "session-restart";
 
     const firstHub = new ConversationEventHub(store);
-    const firstProcess = new EventEmitter() as PiProcess;
+    const firstProcess = new EventEmitter() as RuntimeEventSource;
     firstHub.bind(cwd, firstProcess, { activeSessionId: () => sessionId, onBusy: () => undefined, onExit: () => undefined });
     firstProcess.emit("event", { type: "agent_start" });
     firstProcess.emit("event", { type: "agent_settled" });
@@ -42,7 +42,7 @@ describe("conversation event identities", () => {
     expect(firstStart?.turnId).toEqual(expect.any(String));
 
     const secondHub = new ConversationEventHub(store);
-    const secondProcess = new EventEmitter() as PiProcess;
+    const secondProcess = new EventEmitter() as RuntimeEventSource;
     secondHub.bind(cwd, secondProcess, { activeSessionId: () => sessionId, onBusy: () => undefined, onExit: () => undefined });
     secondProcess.emit("event", { type: "agent_start" });
     await secondHub.flush();

@@ -1,16 +1,17 @@
 import { readFile } from "node:fs/promises";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { defaultProgressAppearance, progressAppearanceInputSchema, progressAppearanceSchema } from "@pi-science/contracts";
+import { canonicalRuntimeModelRef } from "../../runtime/agent/model-ref.js";
 import { configPath } from "../../storage/persistence.js";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import { agentModelCatalog } from "../../runtime/agent/worker/agent-models.js";
 import { resolveCompaction } from "../../runtime/agent/agent-runtime-settings.js";
-import { runtimeExtensionStatus } from "../../runtime/pi/pi-runtime-launch.js";
+import { runtimeExtensionStatus } from "../../runtime/agent/runtime-config.js";
 import { safeConnectorFetch, validateOutboundHttpUrl } from "../../security/outbound-security.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { SettingsStore, type SettingsData as Settings } from "../../storage/settings-store.js";
 import { catalog as skillCatalog } from "../../catalog/skill-catalog.js";
-import type { PiOrbitCatalog, PiOrbitCatalogProvider, PiOrbitCatalogModel } from "../../runtime/pi/pi-orbit-catalog.js";
+import type { RuntimeCatalog, RuntimeCatalogProvider, RuntimeCatalogModel } from "../../runtime/agent/runtime-catalog.js";
 import {
   createProjectSkill,
   deleteProjectSkill,
@@ -22,9 +23,9 @@ import {
   updateProjectSkill,
 } from "../../catalog/project-skill-service.js";
 import { knownWorkspacePaths } from "./catalog-routes.js";
-import type { RuntimeSkillPolicy } from "../../runtime/pi/pi-process.js";
+import type { RuntimeSkillPolicy } from "../../runtime/agent/agent-runtime-types.js";
 import type { ModelResourceService } from "../../model-resources/model-resource-service.js";
-import type { PiOrbitCatalogService } from "../../runtime/pi/pi-orbit-catalog.js";
+import type { RuntimeCatalogService } from "../../runtime/agent/runtime-catalog.js";
 import { resolveMcpConfig } from "../../catalog/mcp-config.js";
 import type { McpConnectorService } from "../../mcp/connector-service.js";
 const BUILTIN_SUBAGENTS = [
@@ -117,11 +118,11 @@ async function unifiedSkillCatalog() {
   for (const catalog of catalogs) for (const skill of catalog) if (!byName.has(skill.name)) byName.set(skill.name, skill);
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
-function catalogModels(catalog: PiOrbitCatalog): Array<Record<string, unknown>> {
-  return catalog.providers.flatMap((provider) => provider.models.map((model) => orbitModel(provider, model)));
+function catalogModels(catalog: RuntimeCatalog): Array<Record<string, unknown>> {
+  return catalog.providers.flatMap((provider) => provider.models.map((model) => runtimeModel(provider, model)));
 }
 
-function orbitModel(provider: PiOrbitCatalogProvider, model: PiOrbitCatalogModel): Record<string, unknown> {
+function runtimeModel(provider: RuntimeCatalogProvider, model: RuntimeCatalogModel): Record<string, unknown> {
   const thinkingLevels = normalizeThinkingLevels(model.thinkingLevels);
   return {
     id: `${provider.id}/${model.id}`,
@@ -134,15 +135,15 @@ function orbitModel(provider: PiOrbitCatalogProvider, model: PiOrbitCatalogModel
     context_window: model.contextWindow || null,
     max_output_tokens: model.maxTokens || null,
     input_formats: model.input,
-    capability_source: "orbit-catalog",
+    capability_source: "agent-core-catalog",
   };
 }
 
-async function readRuntimeCatalog(source?: Pick<PiOrbitCatalogService, "getCatalog">): Promise<PiOrbitCatalog> {
+async function readRuntimeCatalog(source?: Pick<RuntimeCatalogService, "getCatalog">): Promise<RuntimeCatalog> {
   if (!source) return { schemaVersion: 1, providers: [] };
   try { return await source.getCatalog(); }
   catch (error) {
-    if (process.env.NODE_ENV !== "test" && process.env.PI_CLI_PATH) throw error;
+    if (process.env.NODE_ENV !== "test") throw error;
     return { schemaVersion: 1, providers: [] };
   }
 }
@@ -152,7 +153,7 @@ function fallbackModel(provider: string, model: string, label: string, custom: b
 
 
 /** Custom-provider fallback models only. Builtin providers come exclusively
- *  from the pi-ai runtime catalog (Pi Orbit's companion); the static builtin
+ *  from the pi-ai runtime catalog (the Agent Core model SDK); the static builtin
  *  list was removed so new providers like OpenCode Go appear automatically. */
 function customModels(config: Settings): Array<Record<string, unknown>> {
   const result: Array<Record<string, unknown>> = [];
@@ -224,7 +225,7 @@ function normalizePiModel(value: unknown): Record<string, unknown> | null {
   // A runtime entry WITHOUT capability metadata (no reasoning flag, no
   // thinkingLevels/thinkingLevelMap) must not invent levels or erase the
   // authoritative pi-ai/custom-hint values: leave both fields undefined for
-  // the merge to keep the previous entry's values. Prefer Orbit's normalized
+  // the merge to keep the previous entry's values. Prefer the runtime's normalized
   // list; retain thinkingLevelMap support for older runtime projections.
   const thinkingLevels = reasoning === true
     ? listedLevels ?? (hasExplicitLevels
@@ -256,9 +257,8 @@ function mergeModelCatalog(primary: Array<Record<string, unknown>>, overlay: Arr
   }
   return [...byId.values()];
 }
-async function modelCatalog(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, runtimeCatalog?: Pick<PiOrbitCatalogService, "getCatalog">): Promise<{ available: Array<Record<string, unknown>>; source: "pi" | "fallback" }> {
-  const agentCore = process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core";
-  if (agentCore && !cwdValue) {
+async function modelCatalog(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">): Promise<{ available: Array<Record<string, unknown>>; source: "pi" | "fallback" }> {
+  if (!cwdValue) {
     return { available: (await agentModelCatalog()).map(normalizePiModel).filter((item): item is Record<string, unknown> => Boolean(item)), source: "pi" };
   }
   const catalog = await readRuntimeCatalog(runtimeCatalog);
@@ -269,7 +269,8 @@ async function modelCatalog(nodeSessionService: NodeSessionService, config: Sett
     if (result.success && Array.isArray(data.models)) {
       const runtimeModels = data.models.map(normalizePiModel).filter((item): item is Record<string, unknown> => Boolean(item));
       const runtimeById = new Map(runtimeModels.map((item) => [String(item.id), item]));
-      for (const source of [...catalogEntries, ...customModels(config)]) {
+      for (const raw of [...catalogEntries, ...customModels(config)]) {
+        const source: Record<string, unknown> = { ...raw, id: canonicalRuntimeModelRef(String(raw.id)) };
         const existing = runtimeById.get(String(source.id));
         if (!existing) continue;
         if (existing.reasoning === undefined) existing.reasoning = source.reasoning ?? false;
@@ -278,16 +279,10 @@ async function modelCatalog(nodeSessionService: NodeSessionService, config: Sett
         if (!existing.max_output_tokens) existing.max_output_tokens = source.max_output_tokens;
         if (!Array.isArray(existing.input_formats) || existing.input_formats.length === 0) existing.input_formats = source.input_formats;
       }
-      const customOnly = agentCore ? [] : customModels(config).filter((item) => !runtimeById.has(String(item.id)));
-      return { available: [...runtimeById.values(), ...customOnly], source: "pi" };
+      return { available: [...runtimeById.values()], source: "pi" };
     }
   }
-  if (agentCore) return { available: [], source: "fallback" };
-  const configuredProviders = new Set(catalog.providers.filter((provider) => provider.auth.configured).map((provider) => provider.id));
-  const builtinModels = catalogEntries.filter((item) => configuredProviders.has(String(item.provider)));
-  const custom = customModels(config);
-  if (builtinModels.length > 0) return { available: mergeModelCatalog(builtinModels, custom), source: "pi" };
-  return { available: custom, source: "fallback" };
+  return { available: [], source: "fallback" };
 }
 
 type ProviderInventoryEntry = {
@@ -301,22 +296,22 @@ type ProviderInventoryEntry = {
   custom?: boolean;
 };
 
-/** Builtin provider inventory from the Orbit runtime catalog. Workspace model
+/** Builtin provider inventory from the Agent Core catalog. Workspace model
  *  availability still comes from the live session's `/api/models` command. */
-async function providerInventory(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, modelResources?: ModelResourceService, runtimeCatalog?: Pick<PiOrbitCatalogService, "getCatalog">): Promise<ProviderInventoryEntry[]> {
+async function providerInventory(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, modelResources?: ModelResourceService, runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">): Promise<ProviderInventoryEntry[]> {
   const catalog = await readRuntimeCatalog(runtimeCatalog);
-  let orbitModels: Record<string, string[]> | null = null;
-  if (cwdValue || process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core") {
+  let runtimeModels: Record<string, string[]> | null = null;
+  {
     const result = cwdValue ? await nodeSessionService.availableModels(cwdValue) : { success: true, data: { models: await agentModelCatalog() } };
     const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
     if (result.success && Array.isArray(data.models)) {
-      orbitModels = {};
+      runtimeModels = {};
       for (const raw of data.models) {
         if (!raw || typeof raw !== "object") continue;
         const entry = raw as Record<string, unknown>;
         const provider = typeof entry.provider === "string" ? entry.provider : "";
         const model = typeof entry.id === "string" ? entry.id : "";
-        if (provider && model) (orbitModels[provider] ??= []).push(model);
+        if (provider && model) (runtimeModels[provider] ??= []).push(model);
       }
     }
   }
@@ -333,7 +328,7 @@ async function providerInventory(nodeSessionService: NodeSessionService, config:
     entries.push({
       id: provider.id,
       name: provider.name,
-      models: orbitModels?.[provider.id] ?? (process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core" ? [] : provider.models.map((model) => `${provider.id}/${model.id}`)),
+      models: runtimeModels?.[provider.id] ?? [],
       auth: {
         kind: provider.auth.apiKey && provider.auth.oauth ? "api_key_or_oauth" : provider.auth.oauth ? "oauth" : provider.auth.apiKey ? "api_key" : "none",
         api_key_supported: provider.auth.apiKey,
@@ -516,7 +511,7 @@ async function discoverProvider(baseUrl: string, apiKey: string, api: string, al
   return { safeUrl, models, modelHints };
 }
 
-export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService: NodeSessionService, settingsStore: SettingsStore, modelResources?: ModelResourceService, runtimeCatalog?: Pick<PiOrbitCatalogService, "getCatalog">, mcp?: McpConnectorService): void {
+export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService: NodeSessionService, settingsStore: SettingsStore, modelResources?: ModelResourceService, runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">, mcp?: McpConnectorService): void {
   const load = () => settingsStore.read();
   const mutate = <T>(operation: (config: Settings) => T | Promise<T>) => settingsStore.update(operation);
   // Direct API clients may save without calling the discovery endpoint first.
@@ -549,6 +544,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
   }
   app.get("/api/settings/providers", async () => { const config = await load(); return { providers: await providerInventory(nodeSessionService, config, "", modelResources, runtimeCatalog) }; });
   app.get("/api/settings/config", async (request) => {
+    await modelResources?.ensureMigrated();
     const config = await load();
     const cwdValue = query(request, "cwd", "");
     const catalog = await modelCatalog(nodeSessionService, config, cwdValue, runtimeCatalog);
@@ -559,7 +555,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       const resourceModels = await modelResources.listModels();
       const projected = resourceModels
         .filter((item) => item.provider_id.startsWith("user-") && item.available)
-        .filter((item) => process.env.PI_SCIENCE_AGENT_RUNTIME !== "agent-core" || catalog.available.some((model) => model.id === item.id))
+        .filter((item) => catalog.available.some((model) => model.id === item.id))
         .map((item) => ({
           id: item.id,
           provider: item.provider_id,
@@ -575,9 +571,9 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
           availability_reason: item.availability_reason,
         }));
       available = mergeModelCatalog(available, projected);
-      if (process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core") available = available.map((item) => {
+      available = available.map((item) => {
         const actual = catalog.available.find((model) => model.id === item.id);
-        return actual ? { ...item, thinking_levels: actual.thinking_levels, reasoning: actual.reasoning, context_window: actual.context_window } : item;
+        return actual ? { ...item, thinking_levels: actual.thinking_levels ?? item.thinking_levels, reasoning: actual.reasoning ?? item.reasoning, context_window: actual.context_window ?? item.context_window, capability_source: actual.capability_source } : item;
       });
     }
     const configured = typeof config.model === "string" && available.some((item) => item.id === config.model) ? config.model : "";
@@ -619,6 +615,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
             ...(Number.isInteger(runtimeContextWindow) && runtimeContextWindow >= 4096 ? { context_window: runtimeContextWindow } : {}),
             ...(runtimeLevelsApplied ? { reasoning: selected.reasoning === true, thinking_levels: Array.isArray(selected.thinking_levels) ? [...selected.thinking_levels] : [] } : {}),
           });
+          await mutate((current) => { if (current.model === configured) current.model_context_window = runtimeContextWindow; });
           config.model_context_window = runtimeContextWindow;
         } else {
           const providerId = provider.startsWith("custom-") ? provider.slice("custom-".length) : "";
@@ -725,9 +722,8 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       const canonicalModel = canonicalState?.aliases[model] ?? model;
       const selected = (await modelResources.listModels({ available: true })).find((item) => item.id === canonicalModel);
       if (model && !selected) return reply.code(422).send({ code: "no_routable_endpoint", error: "Model is not available from a configured provider" });
-      const coreModel = process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core"
-        ? (await agentModelCatalog()).map(normalizePiModel).find((item) => item?.id === canonicalModel) : undefined;
-      if (model && process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core" && !coreModel) return reply.code(422).send({ code: "unsupported_runtime_model", error: "Model is unavailable in agent-core" });
+      const coreModel = (await modelCatalog(nodeSessionService, current, cwdValue, runtimeCatalog)).available.find((item) => item.id === canonicalModel);
+      if (model && !coreModel) return reply.code(422).send({ code: "unsupported_runtime_model", error: "Model is unavailable in agent-core" });
       let levels = normalizeThinkingLevels(coreModel?.thinking_levels ?? selected?.capabilities.thinking_levels);
       let runtimeLevelsVerified = false;
       if (cwdValue && canonicalModel) {
@@ -744,7 +740,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       const thinking = clampThinking(requestedThinking, levels ?? ["off"]);
       // A cold session also needs a durable configure commit: its saved model
       // intentionally wins over defaults when its worker reopens.
-      if (process.env.PI_SCIENCE_AGENT_RUNTIME === "agent-core" && typeof body.session_id === "string" && body.session_id) {
+      if (typeof body.session_id === "string" && body.session_id) {
         const configured = await nodeSessionService.configure(body.session_id, cwdValue, canonicalModel, thinking);
         if (!configured.success) return reply.code(configured.code === "busy" ? 409 : 502).send({ ok: false, ...configured });
       }

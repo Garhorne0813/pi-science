@@ -98,7 +98,7 @@ Windows 启动器在两个服务健康后写入 `.runtime/pi-science/run.state`�
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 ```
 
-安装器默认下载 Pi Orbit 0.4.0。Pi Orbit Web Mode 提供 `GET /api/catalog`，用于读取完整的 Provider / Model 运行时目录；现有 `GET /api/models` 仍只表示当前可用模型。可通过 `PI_ORBIT_VERSION` 选择其他兼容版本，或通过 `PI_ORBIT_REPO` 使用本地 Pi Orbit 源码仓库。
+Pi Science 直接使用 Agent Core。安装仅需项目依赖，不再下载 Orbit，也无需运行时开关。旧会话离线转换见[会话转换说明](docs/agent-core-session-conversion.md)。
 
 启动后进入 **设置 → LLM**，配置提供商和默认模型即可开始使用。已安装及从工作区发现的
 skills 可在 **设置 → Skills** 中启用、禁用或重置。内置和自定义 MCP 连接器统一在
@@ -166,8 +166,7 @@ Pi-Science 可以直接在浏览器中渲染常见科研格式。
 
 ## 系统架构
 
-Pi-Science 使用 local-first Node 控制面、一个承载隔离 agent runtime 的共享 Pi Orbit
-Web Host，以及按需启动的原生 Python/R Kernel 进程。全局 workspace、环境和任务状态
+Pi-Science 使用 local-first Node 控制面、独立的 Agent Core Worker 进程，以及按需启动的原生 Python/R Kernel 进程。全局 workspace、环境和任务状态
 由 SQLite 协调，项目文件和可复现性记录仍保存在各自 workspace 内。托管 MCP 定义
 和全局策略也保存在 SQLite 中；每个 workspace 会收到一份原子 runtime 投影，其中只
 包含已启用的连接器及该项目的有效工具决策。进程归属、服务
@@ -238,7 +237,7 @@ pnpm build
 ```bash
 pnpm smoke
 pnpm uat:conversation
-PI_CLI_PATH=/absolute/path/to/pi-orbit pnpm smoke:real-pi
+pnpm smoke:real-pi
 ```
 
 前端专项 UAT：

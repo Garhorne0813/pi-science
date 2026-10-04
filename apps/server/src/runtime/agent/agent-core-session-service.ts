@@ -2,7 +2,7 @@ import type { PiConfig, SessionState, SessionStats } from "@pi-science/contracts
 import { createHash, randomUUID } from "node:crypto";
 import { workspaceIdentity } from "./workspace-session-identity.js";
 import { copyFile, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ConversationEventHub } from "../events/conversation-event-hub.js";
 import { observeNodePiEvent } from "../events/node-event-observer.js";
@@ -12,13 +12,14 @@ import { AgentSessionRepository } from "./agent-session-repository.js";
 import type { AgentCoreRuntimeClient } from "./agent-runtime-client.js";
 import type { RuntimeResult, RuntimeSkillPolicy } from "./agent-runtime-types.js";
 import type { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
-import { seedWorkspaceAssets } from "../pi/pi-runtime-launch.js";
+import { seedWorkspaceAssets } from "../agent/runtime-config.js";
 import { CredentialStore } from "../../model-resources/credential-store.js";
-import { projectedEnvironmentNames } from "../pi/extensions/pi-science-mcp.js";
+import { projectedEnvironmentNames } from "../shared/extensions/pi-science-mcp.js";
 import { AgentRuntimeExitedError, AgentRuntimeTimeoutError } from "./agent-runtime-errors.js";
 import { AgentSessionRegistry } from "./agent-session-registry.js";
 import { DurableTurnLifecycle } from "../artifacts/turn-lifecycle.js";
 import { promptOperationId } from "./agent-message.js";
+import { isAiTitlePrompt } from "../title/title-prompt.js";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 
@@ -111,11 +112,11 @@ export class AgentCoreSessionService {
   }
 
   /** Copies a Pi v3 transcript, then lets JsonlSessionRepo upgrade the copy on its first write. */
-  async importLegacy(cwd: string, sessionId: string, source: string, config: PiConfig): Promise<RuntimeResult> {
-    return this.withMutation(cwd, sessionId, () => this.importLegacyOnce(cwd, sessionId, source, config));
+  async importLegacy(cwd: string, sessionId: string, source: string, config: PiConfig, options: { activate?: boolean } = {}): Promise<RuntimeResult> {
+    return this.withMutation(cwd, sessionId, () => this.importLegacyOnce(cwd, sessionId, source, config, options)).catch(failed);
   }
 
-  private async importLegacyOnce(cwd: string, sessionId: string, source: string, config: PiConfig): Promise<RuntimeResult> {
+  private async importLegacyOnce(cwd: string, sessionId: string, source: string, config: PiConfig, options: { activate?: boolean }): Promise<RuntimeResult> {
     if ((await this.registry.get(cwd, sessionId))?.state === "deleted") return { success: false, code: "not_found", error: "session was deleted" };
     if (await this.owns(cwd, sessionId)) return { success: true };
     const handle = await open(source, "r");
@@ -140,26 +141,31 @@ export class AgentCoreSessionService {
       // Validate the complete copied file before granting durable ownership.
       // Core tolerates damaged JSONL tails during ordinary crash recovery; an
       // explicit migration must reject corruption rather than silently drop it.
+      const messageIds: string[] = [];
       let expectedMessages = 0;
+      let hidden = relative(join(metadataRoot(cwd), "sessions"), source).split(/[/\\]/).slice(0, -1).some((part) => part.endsWith(".jsonl") || /^run-\d+$/.test(part) || /^(parallel|dynamic|async)-/.test(part));
       const ids = new Set<string>();
       const lines = createInterface({ input: createReadStream(temporary), crlfDelay: Infinity });
       try {
         for await (const line of lines) {
           if (!line.trim()) continue;
-          const entry = JSON.parse(line) as { type?: string; id?: string; parentId?: string | null };
+          const entry = JSON.parse(line) as { type?: string; id?: string; parentId?: string | null; name?: string; message?: { role?: string; content?: string | Array<{ type?: string; text?: string }> } };
           if (entry.type === "session") continue;
           if (typeof entry.id !== "string" || ids.has(entry.id)) throw new Error("Legacy transcript has missing or duplicate entry IDs");
           if (entry.parentId && !ids.has(entry.parentId)) throw new Error("Legacy transcript has a missing parent entry");
           ids.add(entry.id);
-          if (entry.type === "message") expectedMessages++;
+          if (entry.type === "session_info" && entry.name?.startsWith("subagent-")) hidden = true;
+          if (entry.message?.role === "user" && isAiTitlePrompt(typeof entry.message.content === "string" ? entry.message.content : (entry.message.content ?? []).filter((part) => part.type === "text").map((part) => part.text ?? "").join(""))) hidden = true;
+          if (entry.type === "message" || entry.type === "custom_message") { expectedMessages++; messageIds.push(entry.id); }
         }
       } finally { lines.close(); }
       await rename(temporary, destination);
       const imported = await this.repository.messages(cwd, sessionId);
       if (imported.length !== expectedMessages) throw new Error("Legacy import did not preserve every message");
+      await this.repository.upgradeLegacy(cwd, sessionId, source, messageIds);
       await this.repository.runtimeState(cwd, sessionId);
       await writeJsonAtomic(configPath(cwd, sessionId), { skills: config.skills, model_context_window_override: config.model_context_window_override });
-      await this.registry.register(cwd, sessionId, destination, source);
+      await this.registry.register(cwd, sessionId, destination, source, hidden ? { purpose: "subagent" } : undefined);
     } catch (error) {
       await unlink(temporary).catch(() => undefined);
       await unlink(destination).catch(() => undefined);
@@ -168,6 +174,7 @@ export class AgentCoreSessionService {
     }
     // Copy/ownership are committed before starting a worker. An unavailable
     // model must not discard a completed migration or rediscover its backup.
+    if (options.activate === false) return { success: true };
     const opened = await this.open(cwd, sessionId, config);
     return "success" in opened ? opened : { success: true };
   }

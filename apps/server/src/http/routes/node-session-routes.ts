@@ -27,6 +27,10 @@ function status(code: unknown): number {
     case "busy":
     case "cancelled": return 409;
     case "runtime_evicted": return 410;
+    case "invalid_model":
+    case "legacy_session_invalid":
+    case "legacy_session_unsupported":
+    case "legacy_import_failed":
     case "runtime_initialization_failed": return 422;
     case "runtime_capacity_exceeded":
     case "agent_turn_capacity_exceeded": return 429;

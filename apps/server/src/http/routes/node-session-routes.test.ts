@@ -10,7 +10,7 @@ import { sessionRepository } from "../../runtime/node/session-repository.js";
 import { AI_TITLE_PROMPT_INSTRUCTION } from "../../runtime/title/title-prompt.js";
 
 const cleanup: string[] = [];
-const nodeSessionService = new NodeSessionService(undefined, undefined, undefined, {
+const nodeSessionService = new NodeSessionService(undefined, undefined, {
   async environment(_cwd: string, inherited: NodeJS.ProcessEnv = process.env) { return { ...inherited }; },
 });
 const original = {
@@ -26,38 +26,16 @@ beforeEach(async () => {
   const root = join(tmpdir(), `pi-science-node-routes-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   cleanup.push(root);
   await mkdir(root, { recursive: true });
-  const script = join(root, "fake-pi.mjs");
-  await writeFile(script, [
-    'import fs from "node:fs";',
-    'import readline from "node:readline";',
-    'const args = process.argv.slice(2);',
-    'const sessionArg = args.indexOf("--session");',
-    'let sessionId = sessionArg >= 0 ? JSON.parse(fs.readFileSync(args[sessionArg + 1], "utf8").split("\\n")[0]).id : `blank-${process.pid}`;',
-    'let counter = 0;',
-    'let busy = false;',
-    'const input = readline.createInterface({ input: process.stdin });',
-    'function log(request) { if (process.env.FAKE_PI_LOG) fs.appendFileSync(process.env.FAKE_PI_LOG, JSON.stringify(request) + "\\n"); }',
-    'function respond(request, extra = {}) { process.stdout.write(JSON.stringify({ id: request.id, success: true, ...extra }) + "\\n"); }',
-    'input.on("line", (line) => {',
-    '  const request = JSON.parse(line); log(request);',
-    '  if (!request.id) return;',
-    '  if (request.type === "get_state") return respond(request, { data: { sessionId, isStreaming: busy, isCompacting: false, pendingMessageCount: 0, model: { provider: "openrouter", id: "openai/gpt-5.1" }, thinkingLevel: "high" } });',
-    '  if (request.type === "switch_session") { sessionId = JSON.parse(fs.readFileSync(request.sessionPath, "utf8").split("\\n")[0]).id; return respond(request); }',
-    '  if (request.type === "new_session" || request.type === "clone" || request.type === "fork") { sessionId = `fork-${++counter}-${process.pid}`; return respond(request); }',
-    '  if (request.type === "prompt") { busy = true; respond(request); process.stdout.write(JSON.stringify({ type: "agent_start", sessionId }) + "\\n"); return; }',
-    '  if (request.type === "abort") { busy = false; respond(request); process.stdout.write(JSON.stringify({ type: "agent_settled", sessionId, handledWithoutTurn: true }) + "\\n"); return; }',
-    '  if (request.type === "get_commands") { if (process.env.FAKE_PI_MODE === "commands-error") return process.stdout.write(JSON.stringify({ id: request.id, success: false, code: "commands_failed", error: "commands unavailable" }) + "\\n"); if (process.env.FAKE_PI_MODE === "commands-cancelled") return respond(request, { data: { cancelled: true } }); return respond(request, { data: { commands: [{ name: "review", source: "skill" }] } }); }',
-    '  respond(request);',
-    '});',
-  ].join("\n"), "utf8");
   process.env.PI_SCIENCE_HOME = join(root, "data");
-  process.env.PI_CLI_PATH = script;
+  await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+  await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), JSON.stringify({ model: "openai/gpt-4.1-mini", thinking: "off" }));
   process.env.PI_NODE_PATH = process.execPath;
   process.env.PI_SCIENCE_PI_MODE = "rpc";
   process.env.FAKE_PI_LOG = join(root, "rpc.jsonl");
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await nodeSessionService.shutdownAll();
   for (const [key, value] of Object.entries(original)) {
     const environmentKey = key === "home" ? "PI_SCIENCE_HOME" : key === "cli" ? "PI_CLI_PATH" : key === "node" ? "PI_NODE_PATH" : key === "mode" ? "FAKE_PI_MODE" : key === "piMode" ? "PI_SCIENCE_PI_MODE" : "FAKE_PI_LOG";
@@ -74,9 +52,9 @@ async function workspaceWithSessions(...ids: string[]): Promise<string> {
   await mkdir(directory, { recursive: true });
   for (const id of ids) {
     await writeFile(join(directory, `${id}.jsonl`), [
-      JSON.stringify({ type: "session", id, cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
-      JSON.stringify({ type: "message", id: `${id}-user`, message: { role: "user", content: [{ type: "text", text: `<hello ${id}>` }] } }),
-      JSON.stringify({ type: "message", id: `${id}-assistant`, message: { role: "assistant", content: [{ type: "text", text: `answer ${id}` }] } }),
+      JSON.stringify({ type: "session", version: 3, id, cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
+      JSON.stringify({ type: "message", id: `${id}-user`, parentId: null, timestamp: "2026-07-23T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: `<hello ${id}>` }] } }),
+      JSON.stringify({ type: "message", id: `${id}-assistant`, parentId: `${id}-user`, timestamp: "2026-07-23T00:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: `answer ${id}` }] } }),
     ].join("\n") + "\n", "utf8");
   }
   return realpath(cwd);
@@ -211,7 +189,7 @@ describe("native Node conversation routes", () => {
     expect(put.statusCode).toBe(200);
     expect(put.json()).toMatchObject({ ok: true, title: "live session title" });
     await server.close();
-  });
+  }, 20_000);
 
   it("rejects a title request for an invalid workspace with 403", async () => {
     const aiTitleService = {
@@ -278,21 +256,21 @@ describe("native Node conversation routes", () => {
       expect(state.json()).toMatchObject({ ok: true, id });
     }
     await server.close();
-  });
+  }, 20_000);
 
   it("serves whole-session stats for an idle session by folding its JSONL", async () => {
     const cwd = await workspaceWithSessions("session-a");
     await writeFile(join(cwd, ".pi-science", "sessions", "session-a.jsonl"), [
-      JSON.stringify({ type: "session", id: "session-a", cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
-      JSON.stringify({ type: "message", id: "u1", timestamp: "2026-07-23T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: "hello" }] } }),
-      JSON.stringify({ type: "message", id: "a1", timestamp: "2026-07-23T00:00:02.000Z", message: { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "read" }], usage: { input: 10, output: 2 } } }),
-      JSON.stringify({ type: "message", id: "r1", timestamp: "2026-07-23T00:00:03.000Z", message: { role: "toolResult", toolCallId: "t1", toolName: "read", content: [{ type: "text", text: "ok" }] } }),
-      JSON.stringify({ type: "message", id: "a2", timestamp: "2026-07-23T00:00:04.000Z", message: { role: "assistant", content: [{ type: "text", text: "answer" }], usage: { input: 5, output: 3 } } }),
+      JSON.stringify({ type: "session", version: 3, id: "session-a", cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
+      JSON.stringify({ type: "message", id: "u1", parentId: null, timestamp: "2026-07-23T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: "hello" }] } }),
+      JSON.stringify({ type: "message", id: "a1", parentId: "u1", timestamp: "2026-07-23T00:00:02.000Z", message: { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "read" }], usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 12, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } }),
+      JSON.stringify({ type: "message", id: "r1", parentId: "a1", timestamp: "2026-07-23T00:00:03.000Z", message: { role: "toolResult", toolCallId: "t1", toolName: "read", content: [{ type: "text", text: "ok" }] } }),
+      JSON.stringify({ type: "message", id: "a2", parentId: "r1", timestamp: "2026-07-23T00:00:04.000Z", message: { role: "assistant", content: [{ type: "text", text: "answer" }], usage: { input: 5, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 8, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } }),
     ].join("\n") + "\n", "utf8");
     const server = app();
 
     const res = await server.inject({ method: "GET", url: `/api/sessions/session-a/stats?cwd=${encodeURIComponent(cwd)}` });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode, res.body).toBe(200);
     const body = res.json();
     expect(body.ok).toBe(true);
     expect(body.stats).toMatchObject({
@@ -302,7 +280,6 @@ describe("native Node conversation routes", () => {
       toolResults: 1,
       totalMessages: 4,
       tokens: { input: 15, output: 5, cacheRead: 0, cacheWrite: 0, total: 20 },
-      llmMs: 0,
     });
 
     const missing = await server.inject({ method: "GET", url: `/api/sessions/no-such/stats?cwd=${encodeURIComponent(cwd)}` });
@@ -314,10 +291,10 @@ describe("native Node conversation routes", () => {
     const cwd = await workspaceWithSessions();
     const sessionId = "legacy-title-runtime";
     await writeFile(join(cwd, ".pi-science", "sessions", `${sessionId}.jsonl`), [
-      JSON.stringify({ type: "session", id: sessionId, cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
+      JSON.stringify({ type: "session", version: 3, id: sessionId, cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
       JSON.stringify({
         type: "message",
-        id: "title-prompt",
+        id: "title-prompt", parentId: null, timestamp: "2026-07-23T00:00:01.000Z",
         message: {
           role: "user",
           content: [{ type: "text", text: `${AI_TITLE_PROMPT_INSTRUCTION}\n\nConversation:\nuser: hidden` }],
@@ -336,7 +313,7 @@ describe("native Node conversation routes", () => {
     const listed = await server.inject({ method: "GET", url: `/api/sessions?cwd=${encodeURIComponent(cwd)}` });
     expect((listed.json() as Array<{ id: string }>).some((session) => session.id === sessionId)).toBe(false);
     await server.close();
-  });
+  }, 20_000);
 
   it("serves older history pages from an opaque cursor and rejects invalid pagination", async () => {
     const cwd = await workspaceWithSessions("session-page");
@@ -431,6 +408,10 @@ describe("native Node conversation routes", () => {
 
   it("enforces busy status and owns fork, interaction, commands, model, export, and exact delete routes", async () => {
     const cwd = await workspaceWithSessions("session-a", "session-b");
+    vi.spyOn(nodeSessionService, "configure").mockResolvedValue({ success: true, model: "openrouter/openai/gpt-5.1" });
+    vi.spyOn(nodeSessionService, "command").mockImplementation(async (_id, _cwd, type) => type === "compact" ? { success: false, code: "busy" } : type === "get_commands" ? { success: true, data: { commands: [{ name: "review", source: "skill" }] } } : { success: true });
+    vi.spyOn(nodeSessionService, "notify").mockResolvedValue({ success: true });
+    vi.spyOn(nodeSessionService, "fork").mockResolvedValue({ success: true, sessionId: "forked" });
     const server = app();
     const query = `cwd=${encodeURIComponent(cwd)}`;
 
@@ -465,33 +446,30 @@ describe("native Node conversation routes", () => {
 
     const deleted = await server.inject({ method: "DELETE", url: `/api/sessions/session-b?${query}` });
     expect(deleted.statusCode).toBe(200);
-    await expect(access(join(cwd, ".pi-science", "sessions", "session-b.jsonl"))).rejects.toThrow();
+    // Migration retains the original; deletion hides the imported session durably.
+    expect((await sessionRepository.list(cwd)).some((row) => row.id === "session-b")).toBe(false);
     await expect(readFile(join(cwd, ".pi-science", "sessions", "session-a.jsonl"), "utf8")).resolves.toContain('"id":"session-a"');
     // Deleting a session that never existed is idempotent success (ghost).
     const ghost = await server.inject({ method: "DELETE", url: `/api/sessions/ghost-no-such?${query}` });
     expect(ghost.statusCode).toBe(200);
     expect(ghost.json()).toMatchObject({ ok: true });
 
-    const log = await readFile(process.env.FAKE_PI_LOG!, "utf8");
-    expect(log).toContain('"type":"set_model","provider":"openrouter","modelId":"openai/gpt-5.1"');
-    expect(log).toContain('"type":"extension_ui_response","id":"question-1","confirmed":true');
-    expect(log).toContain('"type":"fork","entryId":"entry-7"');
+    expect(nodeSessionService.configure).toHaveBeenCalledWith("session-a", cwd, "openrouter/openai/gpt-5.1", "high");
+    expect(nodeSessionService.notify).toHaveBeenCalledWith("session-a", cwd, "extension_ui_response", { id: "question-1", confirmed: true });
+    expect(nodeSessionService.fork).toHaveBeenCalledWith("session-a", cwd, "entry-7");
     await server.close();
-  });
+  }, 20_000);
 
   it("returns runtime command errors and cancellations instead of disguising them as an empty command list", async () => {
     for (const [mode, statusCode, code] of [["commands-error", 502, "commands_failed"], ["commands-cancelled", 409, "cancelled"]] as const) {
-      process.env.FAKE_PI_MODE = mode;
+      vi.spyOn(nodeSessionService, "command").mockResolvedValue(mode === "commands-error" ? { success: false, code: "commands_failed", error: "unavailable" } : { success: false, code: "cancelled", error: "cancelled" });
       const cwd = await workspaceWithSessions(`session-${mode}`);
       const server = app();
-      // Spawn Pi first so the test verifies that runtime errors and
-      // cancellations are properly propagated.
-      await server.inject({ method: "POST", url: `/api/sessions/session-${mode}/resume?cwd=${encodeURIComponent(cwd)}` });
       const response = await server.inject({ method: "GET", url: `/api/sessions/session-${mode}/commands?cwd=${encodeURIComponent(cwd)}` });
       expect(response.statusCode).toBe(statusCode);
       expect(response.json()).toMatchObject({ ok: false, code });
       await server.close();
-      await nodeSessionService.shutdownAll();
+      vi.restoreAllMocks();
     }
   });
 

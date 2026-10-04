@@ -43,11 +43,10 @@ async function workspace(): Promise<string> {
 describe("native control-plane business routes", () => {
   it("connects and selects the official agent-core model without an Orbit installation", async () => {
     const cwd = await workspace();
-    process.env.PI_SCIENCE_AGENT_RUNTIME = "agent-core";
+    delete process.env.PI_SCIENCE_AGENT_RUNTIME;
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     vi.stubEnv("PI_CLI_PATH", "");
     const modules = createServerModules();
-    const orbit = vi.spyOn(modules.piManager, "getCatalog");
     const app = buildApp(config(), modules);
     apps.push(app);
     try {
@@ -72,7 +71,6 @@ describe("native control-plane business routes", () => {
       expect(switchedAgain.statusCode).toBe(200);
       await modules.sessions.resume(created.id, cwd);
       expect(await modules.sessions.state(created.id, cwd)).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
-      expect(orbit).not.toHaveBeenCalled();
       expect(JSON.stringify(listed)).not.toContain("catalog-test-key");
     } finally {
       try {
@@ -87,10 +85,11 @@ describe("native control-plane business routes", () => {
     }
   }, 30_000);
 
-  it("uses normalized thinking levels from the Pi Orbit catalog", async () => {
+  it("uses normalized thinking levels from the configured core catalog", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     const modules = createServerModules();
+    vi.spyOn(modules.sessions, "availableModels").mockResolvedValue({ success: true, data: { models: [{ provider: "openai", id: "gpt-5.5", reasoning: true, thinking_levels: ["off", "high", "max"] }] } });
     const runtimeCatalog = {
       getCatalog: vi.fn(async () => ({
         schemaVersion: 1 as const,
@@ -106,7 +105,7 @@ describe("native control-plane business routes", () => {
     const app = buildApp(config(), { ...modules, runtimeCatalog: runtimeCatalog as unknown as typeof modules.runtimeCatalog });
     apps.push(app);
 
-    const settings = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
+    const settings = (await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` })).json();
 
     expect(settings.available_models).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "openai/gpt-5.5", thinking_levels: ["off", "high", "max"] }),
@@ -204,7 +203,7 @@ describe("native control-plane business routes", () => {
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
     await writeFile(join(process.env.PI_SCIENCE_HOME, "config.json"), JSON.stringify({ model: "openrouter/openai/gpt-5.1", thinking: "xhigh" }), "utf8");
-    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValueOnce({
+    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
       success: true,
       data: {
         models: [
@@ -213,6 +212,7 @@ describe("native control-plane business routes", () => {
         ],
       },
     });
+    vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({ success: false, code: "not_found" });
     const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
     const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
     expect(settings.statusCode).toBe(200);
@@ -368,7 +368,7 @@ describe("native control-plane business routes", () => {
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
     await writeFile(join(process.env.PI_SCIENCE_HOME, "config.json"), JSON.stringify({
-      model: "custom-local-provider/local-model",
+      model: "user-local-provider/local-model",
       thinking: "off",
       model_context_window: 64000,
       custom_providers: [{ id: "local-provider", name: "Local Provider", base_url: "http://127.0.0.1:11434/v1", api: "openai-completions", models: ["local-model"], reasoning: true, context_window: 64000, model_hints: { "local-model": { reasoning: false, context_window: 64000, source: "manual" } } }],
@@ -377,20 +377,22 @@ describe("native control-plane business routes", () => {
     // actual thinking levels for the running model.
     vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
       success: true,
-      data: { models: [{ provider: "custom-local-provider", id: "local-model", name: "Local Model", reasoning: true, contextWindow: 262144, thinkingLevelMap: { off: "off", high: "high" } }] },
+      data: { models: [{ provider: "user-local-provider", id: "local-model", name: "Local Model", reasoning: true, contextWindow: 262144, thinkingLevelMap: { off: "off", high: "high" } }] },
     });
-    vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({ success: true, data: { levels: ["off", "high"], model: "custom-local-provider/local-model" } });
+    vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({ success: true, data: { levels: ["off", "high"], model: "user-local-provider/local-model" } });
     const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
     const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
     expect(settings.statusCode).toBe(200);
-    expect(settings.json()).toMatchObject({ model: "custom-local-provider/local-model", model_context_window: 262144 });
-    const model = settings.json().available_models.find((item: { id: string }) => item.id === "custom-local-provider/local-model");
+    expect(settings.json()).toMatchObject({ model: "user-local-provider/local-model", model_context_window: 262144 });
+    const model = settings.json().available_models.find((item: { id: string }) => item.id === "user-local-provider/local-model");
     expect(model).toMatchObject({ context_window: 262144, reasoning: true, thinking_levels: ["off", "high"] });
     // The per-model hint is corrected in place: window always, reasoning and
     // levels only when the runtime verified the configured model identity.
     const stored = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"));
     expect(stored).toMatchObject({ model: "user-local-provider/local-model", model_context_window: 262144 });
-    expect(stored.custom_providers[0].model_hints["local-model"]).toMatchObject({ context_window: 262144, reasoning: true, thinking_levels: ["off", "high"], source: "pi-runtime" });
+    const resources = new (await import("../../model-resources/model-resource-service.js")).ModelResourceService();
+    const canonical = (await resources.listModels()).find((item) => item.id === "user-local-provider/local-model");
+    expect(canonical?.capabilities).toMatchObject({ context_window: 262144, reasoning: true, thinking_levels: ["off", "high"] });
   });
 
   it("corrects the persisted thinking level to the runtime's actual levels after model PUT", async () => {
@@ -438,18 +440,19 @@ describe("native control-plane business routes", () => {
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
     // Custom provider with an explicit per-model hint (the authoritative set).
     await writeFile(join(process.env.PI_SCIENCE_HOME, "config.json"), JSON.stringify({
-      model: "custom-local-provider/local-model",
+      model: "user-local-provider/local-model",
       custom_providers: [{ id: "local-provider", name: "Local Provider", base_url: "http://127.0.0.1:11434/v1", api: "openai-completions", models: ["local-model"], reasoning: true, context_window: 64000, model_hints: { "local-model": { reasoning: true, thinking_levels: ["off", "high", "xhigh"] } } }],
     }), "utf8");
     // The runtime lists the model with reasoning but WITHOUT a thinkingLevelMap
     // (no capability metadata): it must not invent levels or erase the hint.
     vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
       success: true,
-      data: { models: [{ provider: "custom-local-provider", id: "local-model", name: "Local Model", reasoning: true }] },
+      data: { models: [{ provider: "user-local-provider", id: "local-model", name: "Local Model", reasoning: true }] },
     });
+    vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({ success: false, code: "not_found" });
     const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
     const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
-    const model = settings.json().available_models.find((item: { id: string }) => item.id === "custom-local-provider/local-model");
+    const model = settings.json().available_models.find((item: { id: string }) => item.id === "user-local-provider/local-model");
     expect(model).toMatchObject({ reasoning: true, thinking_levels: ["off", "high", "xhigh"] });
   });
 
@@ -458,6 +461,7 @@ describe("native control-plane business routes", () => {
   it.skipIf(!piAiCatalogAvailable)("lists OpenCode Go from the pi-ai catalog: needs_key without credentials, configured after saving a key", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({ success: false, code: "not_found" });
     const app = buildApp(config());
     apps.push(app);
 
@@ -489,6 +493,7 @@ describe("native control-plane business routes", () => {
   it.skipIf(!piAiCatalogAvailable)("rejects API keys for OAuth-only and unknown providers", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({ success: false, code: "not_found" });
     const app = buildApp(config());
     apps.push(app);
 
@@ -1110,10 +1115,10 @@ describe("native control-plane business routes", () => {
     expect((await app.inject({ method: "PUT", url: "/api/settings/custom-providers/local-provider", payload })).statusCode).toBe(200);
     const settings = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
     expect(settings.available_models).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "custom-local-provider/local-model", reasoning: true, context_window: 64000, thinking_levels: ["off", "minimal", "low", "medium", "high"] }),
+      expect.objectContaining({ id: "user-local-provider/local-model", reasoning: true, context_window: 64000, thinking_levels: ["off"] }),
     ]));
     // Without explicit hints the fallback must never invent xhigh/max.
-    const fallbackLevels = settings.available_models.find((item: { id: string }) => item.id === "custom-local-provider/local-model").thinking_levels;
+    const fallbackLevels = settings.available_models.find((item: { id: string }) => item.id === "user-local-provider/local-model").thinking_levels;
     expect(fallbackLevels).not.toContain("xhigh");
     expect(fallbackLevels).not.toContain("max");
     const compaction = await app.inject({ method: "PUT", url: "/api/settings/compaction", payload: { enabled: true, threshold_percent: 82 } });
@@ -1160,8 +1165,8 @@ describe("native control-plane business routes", () => {
     expect(requests).toHaveLength(2);
     const settings = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
     expect(settings.available_models).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "custom-metadata-api/inline-model", context_window: 800_000, reasoning: true }),
-      expect.objectContaining({ id: "custom-metadata-api/detail-model", context_window: 262_144, reasoning: false }),
+      expect.objectContaining({ id: "user-metadata-api/inline-model", context_window: 800_000, reasoning: true }),
+      expect.objectContaining({ id: "user-metadata-api/detail-model", context_window: 262_144, reasoning: false }),
     ]));
   });
 
@@ -1270,7 +1275,7 @@ describe("native control-plane business routes", () => {
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
     await writeFile(join(process.env.PI_SCIENCE_HOME, "config.json"), JSON.stringify({ model: "google/gemini-2.5-pro" }), "utf8");
-    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValueOnce({
+    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
       success: true,
       data: { models: [{ provider: "google", id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", reasoning: true, contextWindow: 1_000_000, thinkingLevelMap: {} }] },
     });

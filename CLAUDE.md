@@ -3,7 +3,7 @@
 Pi-Science is a local-first scientific AI workbench built around a **React SPA** (`frontend/`) and
 a **Node control plane** (`apps/server/`) that is the sole state authority for sessions, jobs,
 research loops, settings, workspace security, kernels, and notebooks. Each conversation runs its
-own **Pi agent process** (`runtime/pi/`, fetched). Shared DTOs live in `packages/contracts/`;
+own **Agent Core Worker** (installed with server dependencies). Shared DTOs live in `packages/contracts/`;
 builtin agent skills in `skills/`. Compute environments are managed through Micromamba revisions
 and kernels are spawned directly by Node.
 

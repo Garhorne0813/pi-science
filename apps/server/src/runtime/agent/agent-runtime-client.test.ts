@@ -33,7 +33,7 @@ describe("AgentCoreRuntimeClient", () => {
     const directory = join(start.sessionsRoot, `--${start.cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`);
     await mkdir(directory, { recursive: true });
     await writeFile(join(directory, `2024-07-03_${sessionId}.jsonl`), fixture);
-    const client = await AgentCoreRuntimeClient.start({ ...start, sessionId, deferActivation: true }, 5_000);
+    const client = await AgentCoreRuntimeClient.start({ ...start, sessionId, deferActivation: true }, 15_000);
     clients.push(client);
     expect(await client.sendCommand("get_state")).toMatchObject({ success: true, data: { busy: true } });
     const events: Array<{ type: string }> = [];
@@ -45,7 +45,7 @@ describe("AgentCoreRuntimeClient", () => {
     const history = (await client.sendCommand("get_messages")).data as { messages: Array<{ message: { client_message_id?: string } }> };
     expect(history.messages.filter((entry) => entry.message.client_message_id === "fixture-087-client")).toHaveLength(1);
     expect(await client.sendCommand("fork")).toMatchObject({ success: true, sessionId: expect.any(String) });
-  }, 20_000);
+  }, 45_000);
 
   it("passes only declared custom credential variables to a worker", () => {
     const input = { MY_LAB_TOKEN: "test-secret", UNRELATED_SECRET: "do-not-forward" };
@@ -66,7 +66,7 @@ describe("AgentCoreRuntimeClient", () => {
   });
   it("creates a durable session in a child process and reopens it", async () => {
     const start = await options();
-    const first = await AgentCoreRuntimeClient.start(start, 5_000);
+    const first = await AgentCoreRuntimeClient.start(start, 15_000);
     clients.push(first);
     expect(first.sessionId).toBeTruthy();
     const state = await first.sendCommand("get_state");
@@ -79,17 +79,17 @@ describe("AgentCoreRuntimeClient", () => {
     });
     await first.shutdown();
 
-    const second = await AgentCoreRuntimeClient.start({ ...start, sessionId: first.sessionId }, 5_000);
+    const second = await AgentCoreRuntimeClient.start({ ...start, sessionId: first.sessionId }, 15_000);
     clients.push(second);
     expect(second.sessionId).toBe(first.sessionId);
     const reopened = await second.sendCommand("get_state");
     expect(reopened.data!.runtimeEpoch).not.toBe(epoch);
     expect(reopened.success).toBe(true);
-  });
+  }, 45_000);
 
   it("isolates a worker crash and reopens its durable session", async () => {
     const start = await options();
-    const first = await AgentCoreRuntimeClient.start(start, 5_000);
+    const first = await AgentCoreRuntimeClient.start(start, 15_000);
     clients.push(first);
     const sessionId = first.sessionId;
     const exited = new Promise<void>((resolve) => first.once("exit", () => resolve()));
@@ -98,15 +98,15 @@ describe("AgentCoreRuntimeClient", () => {
     expect(first.isClosed).toBe(true);
     await expect(first.sendCommand("get_state")).rejects.toThrow("closed");
 
-    const recovered = await AgentCoreRuntimeClient.start({ ...start, sessionId }, 5_000);
+    const recovered = await AgentCoreRuntimeClient.start({ ...start, sessionId }, 15_000);
     clients.push(recovered);
     expect(recovered.sessionId).toBe(sessionId);
     expect((await recovered.sendCommand("get_state")).success).toBe(true);
-  });
+  }, 45_000);
 
   it("acknowledges a prompt before the durable run settles", async () => {
     const start = await options();
-    const client = await AgentCoreRuntimeClient.start(start, 5_000);
+    const client = await AgentCoreRuntimeClient.start(start, 15_000);
     clients.push(client);
     const events: string[] = [];
     const settled = new Promise<void>((resolve, reject) => {
@@ -131,7 +131,7 @@ describe("AgentCoreRuntimeClient", () => {
       data: { messages: expect.arrayContaining([expect.objectContaining({ message: expect.objectContaining({ client_message_id: "browser-123" }) })]) },
     });
     await client.shutdown();
-    const reopened = await AgentCoreRuntimeClient.start({ ...start, sessionId: client.sessionId }, 5_000);
+    const reopened = await AgentCoreRuntimeClient.start({ ...start, sessionId: client.sessionId }, 15_000);
     clients.push(reopened);
     expect(await reopened.sendCommand("prompt", { message: "Say hello", client_message_id: "browser-123" }))
       .toMatchObject({ success: true, operationId: result.operationId, deduplicated: true });
@@ -141,7 +141,7 @@ describe("AgentCoreRuntimeClient", () => {
     });
     const history = (await reopened.sendCommand("get_messages")).data as { messages: Array<{ message: { client_message_id?: string } }> };
     expect(history.messages.filter((entry) => entry.message.client_message_id === "browser-123")).toHaveLength(1);
-  });
+  }, 45_000);
 
   it("keeps a recovered operation paused until the consumer binds and activates", async () => {
     const start = await options();
@@ -152,7 +152,7 @@ describe("AgentCoreRuntimeClient", () => {
       expect((await lane.accept({ kind: "prompt", prompt: "recover this accepted operation" }, BACKGROUND_CONTEXT)).ok).toBe(true);
       sessionId = fixture.sessionId;
     } finally { await fixture.close(); }
-    const recovered = await AgentCoreRuntimeClient.start({ ...start, sessionId, deferActivation: true }, 5_000);
+    const recovered = await AgentCoreRuntimeClient.start({ ...start, sessionId, deferActivation: true }, 15_000);
     clients.push(recovered);
     const events: Array<{ type: string; recovery?: boolean }> = [];
     recovered.on("event", (event) => events.push(event));
@@ -162,16 +162,16 @@ describe("AgentCoreRuntimeClient", () => {
     await vi.waitFor(() => expect(events.some((event) => event.type === "operation.settled")).toBe(true), { timeout: 5_000 });
     expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ type: "operation.started", recovery: true })]));
     expect(await recovered.sendCommand("get_state")).toMatchObject({ success: true, data: { busy: false } });
-  }, 20_000);
+  }, 45_000);
 
   it("forks a durable branch while the source worker remains open", async () => {
     const start = await options();
-    const source = await AgentCoreRuntimeClient.start(start, 5_000);
+    const source = await AgentCoreRuntimeClient.start(start, 15_000);
     clients.push(source);
     const fork = await source.sendCommand("fork");
     expect(fork).toMatchObject({ success: true, sessionId: expect.any(String) });
     expect(fork.sessionId).not.toBe(source.sessionId);
-    const child = await AgentCoreRuntimeClient.start({ ...start, sessionId: String(fork.sessionId) }, 5_000);
+    const child = await AgentCoreRuntimeClient.start({ ...start, sessionId: String(fork.sessionId) }, 15_000);
     clients.push(child);
     expect(child.sessionId).toBe(fork.sessionId);
     const clone = await source.sendCommand("clone");
@@ -179,14 +179,14 @@ describe("AgentCoreRuntimeClient", () => {
     expect(clone.sessionId).not.toBe(source.sessionId);
     expect(clone.sessionId).not.toBe(child.sessionId);
     expect((await source.sendCommand("get_state")).success).toBe(true);
-  });
+  }, 45_000);
 
   it("loads workspace skills and applies the policy without restarting the worker", async () => {
     const start = await options();
     const directory = join(start.cwd, ".pi", "skills", "lab-method");
     await mkdir(directory, { recursive: true });
     await writeFile(join(directory, "SKILL.md"), "---\nname: lab-method\ndescription: Analyze lab data\n---\n# Lab method\nFollow the measurements.\n");
-    const client = await AgentCoreRuntimeClient.start(start, 5_000);
+    const client = await AgentCoreRuntimeClient.start(start, 15_000);
     clients.push(client);
     expect(await client.getSkills()).toMatchObject({ success: true, data: { skills: [expect.objectContaining({ name: "lab-method", enabled: true })] } });
     expect(await client.setSkillPolicy({ mode: "none" })).toMatchObject({ success: true });

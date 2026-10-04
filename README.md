@@ -98,11 +98,7 @@ Re-run the platform-appropriate installer (`scripts/install.sh` or `powershell -
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 ```
 
-The installers download Pi Orbit 0.4.0 by default. Pi Orbit Web Mode exposes
-`GET /api/catalog` for the complete provider/model runtime catalog while the
-existing `GET /api/models` endpoint keeps its available-models meaning. Set
-`PI_ORBIT_VERSION` to select another compatible release, or set `PI_ORBIT_REPO`
-to use a local Pi Orbit source checkout.
+Pi Science uses Agent Core directly. Installation needs only the workspace dependencies; no Orbit executable or runtime switch is required. See [session conversion](docs/agent-core-session-conversion.md) for offline v3 → v4 migration.
 
 Open **Settings → LLM** after startup and configure a provider and default
 model. Installed and workspace-discovered skills can be enabled, disabled, or
@@ -182,8 +178,7 @@ Pi-Science renders common research formats directly in the browser.
 
 ## Architecture
 
-Pi-Science uses a local-first Node control plane, one shared Pi Orbit Web host
-with isolated agent runtimes, and on-demand native Python/R kernel processes.
+Pi-Science uses a local-first Node control plane, isolated Agent Core Worker processes, and on-demand native Python/R kernel processes.
 Global workspace, environment, and job state is coordinated through SQLite;
 project files and reproducibility records remain inside each workspace. Managed
 MCP definitions and global policies also live in SQLite; each workspace receives
@@ -276,7 +271,7 @@ Additional end-to-end checks:
 ```bash
 pnpm smoke
 pnpm uat:conversation
-PI_CLI_PATH=/absolute/path/to/pi-orbit pnpm smoke:real-pi
+pnpm smoke:real-pi
 ```
 
 Focused frontend UAT commands:

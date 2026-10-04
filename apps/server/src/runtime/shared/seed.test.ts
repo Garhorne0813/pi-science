@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { seedWorkspaceAssets } from "./pi-runtime-launch.js";
+import { seedWorkspaceAssets } from "../agent/runtime-config.js";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
 const sourceSkills = join(projectRoot, "skills");
@@ -230,7 +230,7 @@ describe("seedWorkspaceAssets", () => {
     // reset the registry so the dynamic import re-executes against the mock.
     vi.resetModules();
     try {
-      const { seedWorkspaceAssets: seedMissingSkills } = await import("./pi-runtime-launch.js");
+      const { seedWorkspaceAssets: seedMissingSkills } = await import("../agent/runtime-config.js");
       // Assert the observation point that distinguishes guarded vs unguarded
       // code: with the source skills/ mocked away, the guarded implementation
       // mirrors nothing ([]), while a guard-less readdirSync would still read

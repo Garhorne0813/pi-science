@@ -27,12 +27,12 @@ import { registerEnvironmentRoutes } from "../http/routes/environment-routes.js"
 import { serveFrontend } from "../http/frontend-static.js";
 import { validateWorkspaceCwd } from "../security/workspace-security.js";
 import { isArtifactSurfaceablePath } from "../runtime/artifacts/artifact-surface-policy.js";
-import { AiTitleService, PiTitleRuntimeFactory } from "../runtime/title/ai-title-service.js";
+import { AiTitleService, CoreTitleRuntimeFactory } from "../runtime/title/ai-title-service.js";
 import { importLegacyState } from "../storage/sqlite/legacy-state.js";
 import { internalAuthCookie, requestInternalToken, tokensMatch } from "../security/internal-auth.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, piManager, runtimeCatalog, settings, modelResources, mcp, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
+  const { sessions: nodeSessionService, events, sessionRepository, runtimeCatalog, settings, modelResources, mcp, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
   let stateReady = !sqliteEnabled;
   let stateError: unknown;
   const app = Fastify({
@@ -151,7 +151,8 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeSessions || config.nodePiManager) registerSessionReadRoutes(app, sessionRepository, nodeSessionService);
   if (config.nodeSse || config.nodePiManager) registerSseRoutes(app, nodeSessionService, events);
   if (config.nodeFiles) registerFileReadRoutes(app);
-  if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository, new AiTitleService(new PiTitleRuntimeFactory(piManager)));
+  const titleRuntimes = new CoreTitleRuntimeFactory(undefined, environments);
+  if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository, new AiTitleService(titleRuntimes));
   if (config.nodeJobs !== false) {
     // Keep command execution rate-limited without throttling read-only control
     // plane routes. The child scope ensures the plugin's onRoute hook sees the
@@ -193,11 +194,8 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     const results = await Promise.allSettled((await knownWorkspacePaths(recoveryRepository)).map((cwd) => research.reconcile(cwd)));
     for (const result of results) if (result.status === "rejected") app.log.error({ err: result.reason }, "research loop recovery failed");
   });
-  if (config.nodePiManager) app.addHook("onClose", async () => nodeSessionService.shutdownAll());
-  // Unconditional: research/review subagent runtimes use the same shared
-  // manager, so the host must be torn down even when nodePiManager is off.
-  // The second call is a no-op when the first already ran (maps are cleared).
-  app.addHook("onClose", async () => piManager.shutdownAll());
+  app.addHook("onClose", async () => nodeSessionService.shutdownAll());
+  app.addHook("onClose", async () => titleRuntimes.shutdownAll());
   app.addHook("onClose", async () => research.shutdown());
   app.addHook("onClose", async () => projectReview.shutdown());
   app.addHook("onClose", async () => kernels.shutdownAll());

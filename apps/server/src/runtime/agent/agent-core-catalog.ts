@@ -1,10 +1,10 @@
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import type { PiOrbitCatalog } from "../pi/pi-orbit-catalog.js";
+import type { RuntimeCatalog } from "../agent/runtime-catalog.js";
 import { agentModels } from "./worker/agent-models.js";
 
 /** Provider inventory and model validation must use the active runtime's catalog. */
 export class AgentCoreCatalogService {
-  async getCatalog(): Promise<PiOrbitCatalog> {
+  async getCatalog(): Promise<RuntimeCatalog> {
     const models = agentModels();
     const configured = new Set((await models.getAvailable()).map((model) => model.provider));
     return {

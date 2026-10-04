@@ -1,5 +1,7 @@
 # Agent-core 通信收敛实施记录
 
+> 更新：当前已移除 Orbit 运行时，统一使用 Agent Core；以下阶段性记录中的 opt-in/兼容计划属于历史状态。现行会话处理见[转换说明](agent-core-session-conversion.md)。
+
 日期：2026-10-02。基线：PR #115 的 `59be3309e29334750ddfe307a1ae4aa89b17c304`。
 
 本记录对应 [通信优化方案](prd-agent-core-communication-optimization.md) 的第一批改造。默认 Orbit、core opt-in、现有 REST/SSE、持久化文件和 Sandbox 暂缓的约定继续适用。不能把这一批交付解释为整份方案完成或 Orbit 可以退役。
