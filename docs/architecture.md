@@ -1,304 +1,286 @@
 # Pi-Science Architecture
 
-[简体中文](architecture.zh-CN.md)
+[简体中文](architecture.zh-CN.md) · [README](../README.md)
 
-This document describes the current Pi-Science runtime architecture. It is the
-canonical reference for process ownership, runtime isolation, service
-boundaries, workspace state, and lifecycle behavior.
+This is the reference for the current production architecture. It describes who
+owns execution and persistent state, how events reach the browser, and how the
+system recovers. Implementation notes and capability limits are linked below.
 
-## Agent Core runtime
+## System boundaries
+
+```mermaid
+flowchart TB
+    UI["Browser · React"] -->|REST commands and SSE v3| CP["Node control plane · Fastify"]
+    CP -->|Validated parent/child IPC| W["Isolated Node child processes"]
+    W --> H["AgentHarness · main lane"]
+    H --> AI["pi-ai · model providers"]
+    H --> T["Core and product tools"]
+    T --> MCP["Capability-scoped MCP connectors"]
+    T -->|Notebook service API| CP
+    H --> S[("Core v4 sessions · JsonlSessionRepo")]
+    CP -->|JSONL| K["Python / R kernel processes"]
+    CP --> DB[("SQLite · application coordination")]
+    CP --> P[("Project metadata · events and provenance")]
+```
+
+Agent Core is the only agent execution backend. Conversations, subagents,
+research, reviews and AI titles all use `AgentRuntimeManager` and AgentHarness.
+“Worker” here means a Node **child process**, not a browser Worker or a shared
+agent host. The SQLite service uses a separate **worker thread**.
+
+| Component | Owns | Does not own |
+| --- | --- | --- |
+| Browser | Presentation, composer, local interaction state and applied SSE cursor | Model credentials or the agent loop |
+| `AgentRuntimeManager` | Child-process capacity, exclusive session ownership, startup, idle cleanup and shutdown | Durable agent state |
+| `AgentCoreSessionService` | Prompt admission reconciliation, configuration synchronization and runtime supervision | A second agent loop or session format |
+| `SessionRuntime` / AgentHarness | Lane execution, tools, model configuration, compaction and durable operation results | Browser presentation |
+| `AgentSessionRepository` | Read-only projection of Core sessions into product history | A parallel transcript authority |
+| `ConversationEventHub` | Product event identity, persistence, delivery and product side effects | Invented Core completion results |
+| Scientific services | Kernel, notebook, execution, artifact and research orchestration state | Model reasoning |
+
+The default development endpoints are `http://127.0.0.1:5173` for the frontend
+and `http://127.0.0.1:8787` for the control plane. Workers have no public HTTP
+endpoint. The repository launchers run development servers; building packages
+does not turn those launchers into production deployment servers.
+
+## Agent execution and configuration
+
+`SessionRuntime` creates a `NodeExecutionEnv`, opens `JsonlSessionRepo`, creates
+AgentHarness, obtains the `main` lane and watches its events. Prompt execution
+uses `lane.accept()` and `lane.drive()`; steering, follow-ups and cancellation
+use `lane.steer()`, `lane.followUp()` and `lane.abort()`.
+
+Harness session data, `laneState` and `operationResult` are authoritative.
+Configuration changes are serialized and synchronized with the durable lane
+configuration. Compaction settings use the Harness APIs. Skills and prompt
+templates use Core loaders for configured skill paths, `.pi/skills/` and
+`.pi/prompts/`; product policy determines which resources can be invoked.
+
+The tool set combines Core `read`, `bash`, `edit` and `write` with product tools
+for notebooks, todo, subagents and browser questionnaires. Notebook tools call
+the Node notebook/kernel services. There is no general-purpose extension runtime
+implied by this integration; supported tools and limits are listed in the
+[capability inventory](agent-core-capability-inventory.md).
+
+Hidden tasks share the same manager capacity and session repository:
+
+| Task | Capabilities / lifecycle |
+| --- | --- |
+| Conversation | Configured tools and skills; durable visible session |
+| Conversation subagent | Parent-scoped tools and model policy; hidden child session |
+| Research supervisor | `read` and `subagent`; hidden session |
+| Project review | No tools; hidden session |
+| AI title | No tools or skills, thinking off; disposable hidden session, using the configured default model |
+
+Hidden ownership is registered before activation. Task links allow resumed work
+to reopen the same child session. Title disposal removes its temporary
+transcript and task link. Hidden sessions are excluded from conversation lists.
+
+## Prompt admission, lifecycle and recovery
+
+Startup and restart use the same ordering:
+
+1. Open a Worker with activation deferred.
+2. Bind the control-plane event consumer.
+3. Read and apply the durable snapshot.
+4. Activate the Worker and drive or resume the operation.
+
+Prompts have stable operation IDs and browser `client_message_id` values. An IPC
+request timeout is an uncertain admission result: the service reconciles durable
+state before declaring failure or admitting the prompt again. Configuration
+mutations are serialized; aborts and interaction responses remain available
+while normal mutations are pending.
+
+The supervisor distinguishes process liveness from operation progress. A healthy
+IPC response alone does not reset the progress deadline. IPC failure, runtime
+faults, missing event delivery or a busy operation without real progress can
+trigger Worker replacement and durable operation resume. Waiting for a browser
+questionnaire or approval is excluded from the no-progress deadline.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `PI_SCIENCE_AGENT_MAX_WORKERS` | 16 | Process-wide capacity shared by app-owned managers, including pending starts and hidden tasks |
+| `PI_SCIENCE_IDLE_RUNTIME_MS` | 1,800,000 ms | Idle Worker cleanup; non-positive values disable idle cleanup |
+| `PI_SCIENCE_EVENT_WATCHDOG_MS` | 60,000 ms | Probe interval; non-positive values disable the watchdog |
+| `PI_SCIENCE_OPERATION_NO_PROGRESS_MS` | 900,000 ms | Busy-operation progress deadline; increase for legitimately silent long-running tools |
+
+After three consecutive automatic recoveries, another stall stops automatic
+recovery and preserves the checkpoint for explicit reopening. `runtime.paused`
+reports a supervision stop; it does **not** settle the durable operation.
+`operation.settled` comes from a Core lifecycle fact or an authoritative durable
+operation result. Busy session deletion is rejected. Shutdown drains owned work
+and disposes Workers and their tools.
+
+## Product events and browser state
 
 ```mermaid
 flowchart LR
-    UI[Browser] -->|REST and SSE| CP[Node control plane]
-    CP -->|Typed IPC| W[Agent Core Workers]
-    W --> SDK[AgentHarness and pi-ai]
-    W --> MCP[Managed MCP]
-    CP --> K[Python and R kernels]
-    CP --> DB[(SQLite and workspace metadata)]
+    H["Harness events"] --> A["AgentCoreEventAdapter"]
+    A --> I["ProductInput · sole live input"]
+    I --> C["ConversationEventHub"]
+    C --> E["Persisted product events"]
+    C --> S["SSE v3"]
+    E -->|Historical decoding on read| S
+    S --> R["Frontend reducer"]
 ```
 
-Agent Core is the only execution backend. Each active conversation owns a Node Worker. `AgentRuntimeManager` controls process capacity, exclusive session ownership, startup and shutdown. Research, review, and conversation subagents use hidden v4 sessions; title generation uses a disposable worker with no tools or skills.
+The browser consumes a versioned product protocol and does not import Agent Core.
+The server projects execution facts into product events rather than forwarding
+SDK objects or translating live events through an earlier protocol.
 
-The control plane projects structured Worker events into the existing browser SSE protocol and owns durable recovery, artifacts, interactions, and statistics. On restart, a worker reopens the same v4 session. The browser does not load model SDKs or credentials. Worker commands use structured Node IPC; the SDK runs inside the child process.
+| Event family | Meaning |
+| --- | --- |
+| `operation.started`, `operation.settled` | Durable operation lifecycle; settlement status is `completed`, `declined`, `aborted` or `failed` |
+| `message.started`, `message.delta`, `message.reasoning.delta`, `message.completed` | Message lifecycle and content progress |
+| `tool.started`, `tool.updated`, `tool.completed` | Tool call lifecycle |
+| `compaction.started`, `compaction.progress`, `compaction.completed`, `compaction.failed` | Context compaction lifecycle |
+| `interaction.requested`, `interaction.resolved` | Browser interaction with an explicit interaction kind |
+| `runtime.paused` | Supervision paused while durable work may remain resumable |
 
-Old v3 transcripts are data inputs: on first use, the service validates and copies them, lets the official SDK atomically convert the copy, and registers Core ownership. Offline conversion needs no API key or Worker. Original files remain untouched. See [session conversion](agent-core-session-conversion.md).
+The complete event names are shared in
+[`packages/contracts/src/conversation-events.ts`](../packages/contracts/src/conversation-events.ts).
+Envelopes carry `schemaVersion: 3`, workspace/session identity, stream epoch,
+event ID, sequence and timestamp, plus operation/item identity when applicable.
+Text revisions and ordered chunks protect content from duplication and stale
+updates. Reconnection uses SSE cursors; epoch and gap checks protect replay and
+history recovery. The frontend retains the distinction between working,
+waiting, recovering and terminal states.
 
-## Node-native scientific runtime boundary
+Earlier persisted presentation events are decoded only in the event-store read
+path. Their original bytes, timestamps, cursors and sequence numbers remain
+unchanged. This is separate from **Core session v3 → v4 conversion**: session
+format versions and SSE protocol versions are independent.
 
-The Node control plane owns the public application API. Most routes—including
-sessions, workspaces, files, settings, jobs, project knowledge, artifacts,
-provenance, citations, environments, and research loops—are implemented there.
+## Persistence and data ownership
 
-Scientific routes for kernels and notebooks are implemented directly by the Node
-control plane. Kernel sessions are child processes started from the selected
-Micromamba revision, with JSONL communication and bounded lifecycle control.
-JupyterLab remains optional and uses a separate application-managed tooling
-environment; project kernelspecs point at the selected project revision.
+Research files remain ordinary workspace files. Product metadata is resolved
+through `metadataRoot(workspace)`: an existing application-managed
+`<config-root>/workspaces/<canonical-path-hash>/` takes precedence; otherwise the
+workspace's `.pi-science/` is used. Code must use the resolver rather than assume
+all project state lives beside research files.
 
-Managed Pi sessions also load the built-in `pi-science-notebook` extension. Its
-`notebook_read`, `notebook_edit`, and `notebook_run` tools call the Node notebook
-and kernel routes rather than reading files or spawning kernels themselves.
-Notebook edits use the file SHA-256 returned by `notebook_read` as the strict
-optimistic revision check. The response also includes per-cell revisions, so a
-caller can use `expected_cell_revisions` to protect only the cells it edits and
-allow unrelated concurrent cell changes. Source edits clear stale outputs, and
-each `notebook_run` cell atomically writes bounded execution outputs back to the
-`.ipynb` while retaining the existing execution/artifact provenance chain. A
-failed artifact publication is surfaced as execution evidence rather than
-silently discarded. Legacy cells without an `id` use a deterministic
-path-and-position identity until a normal notebook write materializes the id.
-
-The default local topology is:
-
-| Service | Address | Exposure |
-|---|---|---|
-| React development app | `http://127.0.0.1:5173` | Browser-facing |
-| Node control plane | `http://127.0.0.1:8787` | Browser-facing application API |
-| Agent Core Workers | Typed parent/child IPC | Internal |
-
-The control plane exposes `/internal/live`, `/internal/ready`, and
-`/internal/diagnostics` for launcher health checks and local diagnostics.
-
-## Workspace and persistent state
-
-Pi-Science is local-first: a workspace remains a normal directory, and portable
-project state is stored beside it. Application-wide coordination state is kept
-separately in the control-plane configuration root.
+The metadata root contains these stores, created as needed:
 
 ```text
-project/
-├── AGENTS.md                 # project instructions
-├── node_modules/             # workspace-local JavaScript packages
-├── .pi/
-│   ├── skills/
-│   └── agents/
-├── .pi-science/
-│   ├── project.json           # stable project identity and display metadata
-│   ├── environment.json       # binding to a shared Micromamba revision
-│   ├── memory/
-│   │   └── ledger.json       # canonical memory ledger (records, proposals, decisions)
-│   ├── sessions/             # persisted Pi session JSONL files
-│   ├── agent/                # project-local fallback runtime config
-│   ├── mcp-runtime.json      # generated enabled connectors and effective tool policy
-│   ├── runs/                 # execution workspaces and outputs
-│   ├── solutions/            # immutable research candidates
-│   ├── session-titles.jsonl
-│   ├── turn-artifacts.jsonl
-│   ├── artifacts.jsonl
-│   ├── provenance.jsonl
-│   └── research-records-v2.jsonl
-└── research files
+<metadata-root>/
+├── project.json                 # project identity
+├── environment.json             # selected environment revision
+├── agent-sessions/              # authoritative Core v4 JSONL
+├── agent-session-registry.json   # ownership, conversion mappings, deletion tombstones
+├── agent-task-links/             # hidden-task session ownership
+├── agent-task-results/           # child-task results
+├── sessions/                    # earlier v3 transcripts: conversion input only
+├── events/                      # bounded product-event replay logs
+├── memory/ledger.json            # reviewed knowledge, proposals and decisions
+├── mcp-runtime.json              # generated connector policy, credential references only
+├── runs/                        # execution workspaces and outputs
+├── solutions/                   # immutable research candidates
+├── session-titles.jsonl
+├── turn-artifacts.jsonl
+├── artifacts.jsonl
+├── provenance.jsonl
+└── research-records-v2.jsonl
 ```
 
-The global configuration root is `PI_SCIENCE_HOME` when set, otherwise
-`~/.pi-science`; a checkout-local `.runtime/pi-science` directory is used as a
-fallback when the preferred location is not writable. Production starts a
-dedicated worker thread for `state.sqlite` and enables SQLite by default. The
-database uses WAL journaling and stores:
+The global config root is `PI_SCIENCE_HOME`, or `~/.pi-science` by default, with a
+checkout-local `.runtime/pi-science` fallback when the preferred root is not
+writable. SQLite `state.sqlite` owns workspace registration, environment
+revisions, durable jobs/leases, MCP resources and import/schema migration state.
+It uses WAL and a dedicated worker thread. Startup migrations complete before
+readiness; store failure keeps `/internal/ready` at HTTP 503. File-backed
+projections and historical imports are not additional canonical stores.
 
-- stable project identities and canonical workspace locations, including
-  managed, pinned, recently opened, and missing-location state;
-- immutable Micromamba environment revisions and their lifecycle status;
-- durable job records, output, ownership generations, and recovery leases; and
-- migration history and fingerprints for legacy imports.
+Core sessions use `JsonlSessionRepo`. Earlier v3 transcripts are validated,
+copied and upgraded by the official SDK; originals remain intact. The registry
+records ownership and entry-ID mappings; tombstones prevent deleted sessions
+from being reimported. Conversion can run offline without a Worker, model key
+or network. See [session conversion](agent-core-session-conversion.md).
 
-SQLite schema migrations run before the server reports ready. A failed store or
-migration keeps `/internal/ready` at HTTP 503, while `/internal/diagnostics`
-reports the store status, schema version, journal mode, and pending requests.
-The worker checkpoints the database during graceful shutdown. Setting
-`PI_SCIENCE_SQLITE_STATE=0` disables this state layer for diagnostics or
-rollback; file-backed compatibility paths then remain available where
-implemented.
+The memory ledger owns formal project knowledge and review decisions. Agent
+findings become accepted knowledge only after user approval. Earlier
+`project-state.json` data is imported and retained as a compatibility projection.
 
-Reviewed project memory is created lazily. Agent findings do not become formal
-project knowledge until the user accepts them.
+## Models, credentials and MCP
 
-The memory ledger is the canonical project-memory store. It keeps the existing
-project knowledge records and review proposals together with evidence references,
-approval state, and decision audit events. Existing `.pi-science/project-state.json`
-files are migrated on first read and retained as a compatibility projection for
-older clients and local tooling.
+Model resources separate `Provider`, `Model`, `Endpoint` and
+`ProviderEndpointBinding`, with credentials stored separately. The canonical
+model reference is `<provider_id>/<model_id>`. `RuntimeModelResolver` selects
+available routes according to enablement, capabilities, endpoint policy,
+priority and authentication.
 
-External workspaces are explicitly registered through the workspace-open API.
-Their canonical paths and pin state are persisted in SQLite so they can be
-rediscovered after a restart. On startup, legacy `registered-workspaces.json`,
-`pinned.json`, environment-registry files, and workspace job records are
-imported idempotently; they are compatibility inputs rather than the canonical
-production stores.
+The Worker [`agentModels()` adapter](../apps/server/src/runtime/agent/worker/agent-models.ts)
+combines pi-ai's official providers with managed routes and resolves credentials
+in backend memory. It constructs model/provider objects directly; it does not
+generate a `models.json` runtime catalog. Browser APIs return credential metadata,
+not keys. Environment-backed credentials require an explicit variable reference.
 
-### Package isolation
+MCP definitions, enablement, discovered metadata and global/project tool policy
+are managed by the control plane. `McpRuntimeProjection` writes an atomic,
+mode-0600 `mcp-runtime.json` containing effective policy and credential references.
+`AgentMcpTools` uses the Core MCP APIs to load permitted connectors in the Worker.
 
-The Node control plane owns a SQLite-backed global registry of versioned
-Micromamba environments. Projects store only an `environment.json` binding and can reuse
-the same ready revision without downloading packages again. Changing a managed
-environment creates a new revision instead of mutating one used by other
-projects. Environment selection lives under Settings → Environments.
+Capability checks precede discovery and credential materialization. An empty or
+non-MCP `allowedTools` list skips MCP entirely. Exact MCP capabilities restrict
+which connectors are initialized; discovered tools are then intersected with
+capabilities and managed include/exclude policy. `Deny` takes precedence over
+project decisions, global decisions and connector approval defaults. Browser
+approval is handled through the Worker interaction bridge.
 
-Each conversation Session and language receives an independent kernel process
-started from the bound Micromamba revision. Ready revisions are immutable;
-package changes create and bind a new revision, so one Session cannot mutate a
-revision used by another project. Existing workspace `.venv` directories remain
-a legacy migration fallback and malformed ones are never overwritten
-automatically.
-JavaScript packages remain workspace-local; attempted global npm/pnpm installs
-are redirected below `.pi-science/`.
+There are 18 built-in scientific connector definitions and 85 tools; only Paper
+Search is enabled initially. Built-ins are read-only, and custom connectors can
+use stdio, Streamable HTTP, SSE or socket transports. Probes perform handshake
+and tool discovery with revision-based caching. Connector credentials use the
+separate `CredentialStore` and are not copied into policy snapshots. See
+[MCP management](mcp-management-implementation.md) for its resource/API design.
 
-Session Notebook is opened from the active conversation and renders the shared
-execution history for Agent and user cells. Disk `.ipynb` files are opened from
-Files and persist only when saved. JupyterLab uses one app-managed tooling
-environment and registers the project's bound revision as a kernelspec.
+## Scientific execution and research
 
-## Model resource domain and runtime projection
+Each conversation and language receives a separate Python/R kernel process from
+the project's selected immutable Micromamba revision. Kernels start lazily and
+communicate with Node through JSONL. Package changes create a new revision;
+existing workspace `.venv` directories remain a migration fallback. JavaScript
+packages remain workspace-local. JupyterLab is optional, with its own app-managed
+tooling environment and project kernelspecs.
 
-Model configuration is split into five canonical resources:
+Session Notebook displays agent/user execution history. File-backed `.ipynb`
+notebooks use `notebook_read`, `notebook_edit` and `notebook_run`. Edits validate
+file SHA-256 or selected cell revisions; source changes clear stale outputs.
+Execution writes bounded outputs atomically and records execution/artifact
+provenance. Artifact-publication failures remain visible as execution evidence.
 
-```mermaid
-flowchart LR
-    P[Provider] --> M[Model]
-    P --> B[ProviderEndpointBinding]
-    B --> E[Endpoint]
-    E --> C[Credential reference]
-    S[Model preferences] --> R[RuntimeModelResolver]
-    P --> R
-    M --> R
-    B --> R
-    E --> R
-    C --> R
-    R --> X[PiRuntimeProjection]
-    X --> J[Generated models.json / runtime env]
-```
-
-- `Provider` describes who owns a model catalog. System providers are read-only;
-  user providers are stored in `model-resources.json`.
-- `Model` stores the canonical `<provider_id>/<model_id>` and capability
-  provenance. Runtime verification has higher priority than manual, discovery,
-  provider metadata, and fallback values.
-- `Endpoint` owns URL, protocol, health, egress policy, and `credential_ref`.
-  It does not store model capability or a raw key.
-- `ProviderEndpointBinding` connects one provider to one endpoint and controls
-  priority, allowlists, aliases, and non-secret headers.
-- `CredentialStore` stores managed values in a separate mode-0600 file. The
-  normal API returns metadata only. Environment credentials work only when a
-  resource explicitly names the variable.
-- `RuntimeModelResolver` removes disabled, blocked, unhealthy, filtered, and
-  unauthenticated routes. It returns deterministic priority-ordered routes.
-- `PiRuntimeProjection` is the only adapter that writes Pi's generated
-  `models.json`. Managed secrets are injected under opaque, temporary runtime
-  variable names and are not copied into the runtime descriptor or browser API.
-
-Legacy `custom_providers`, provider-specific API-key fields, and
-`model-endpoints.json` are migration inputs or compatibility projections only;
-new writes use the canonical resource services.
-
-## MCP connector domain and runtime projection
-
-MCP configuration is managed by the Node control plane rather than edited in
-runtime configuration files. Connector definitions, global enablement and filtering,
-global tool decisions, per-project tool overrides, and the tool discovery cache
-are canonical SQLite resources.
-
-```mermaid
-flowchart LR
-    UI[Settings / MCP API] --> S[McpConnectorService]
-    S --> DB[(MCP SQLite repositories)]
-    S --> P[Probe and tools/list]
-    DB --> RP[McpRuntimeProjection]
-    RP --> F[workspace/.pi-science/mcp-runtime.json]
-    F --> A[Pi MCP adapter]
-    A --> L[Local stdio or socket server]
-    A --> H[Remote HTTP or SSE server]
-    L --> D[Scientific data APIs]
-    H --> D
-```
-
-- Startup idempotently seeds 18 built-in definitions and their known tool
-  metadata. Definition upgrades preserve the user's enablement and approval
-  settings. Paper Search is enabled by default; the other 17 domain connectors
-  are opt-in. Built-in definitions cannot be edited or deleted.
-- The built-ins expose 85 read-only tools. Paper Search has a dedicated MCP
-  process; the other domains share one implementation entry point but are
-  launched with separate domain arguments, so each connector advertises only
-  its own tools. Processes use lazy lifecycle management.
-- Custom and legacy-imported connectors use the same resource model and may use
-  `stdio`, Streamable HTTP, SSE, or socket transport. Import preview rejects
-  sensitive legacy fields. Connector authentication can use a managed secret or
-  an environment-variable reference and deliver it as a process variable, an
-  HTTP header, or a Bearer token. Literal secret bindings remain rejected.
-- MCP credentials live in the separate mode-0600 `CredentialStore` and carry an
-  `owner_kind=mcp` / connector owner. General model-credential routes neither
-  list nor mutate them. Runtime snapshots contain only credential references;
-  the Pi extension resolves values in process memory. Built-in definition
-  upgrades preserve these bindings.
-- Enablement, include/exclude filters, and approval mode are global. Exact-name
-  `Allow`, `Ask`, and `Deny` tool decisions can be global or project-specific;
-  `Deny` wins, then the project decision, then the global decision, then the
-  connector's approval mode. Unknown tools remain approval-gated unless the
-  connector explicitly allows all tools.
-- Runtime-affecting definition or policy changes materialize a mode-0600,
-  atomically replaced
-  `.pi-science/mcp-runtime.json` for each known workspace and reloads active
-  runtimes. The snapshot contains enabled definitions and policy, not resolved
-  secret values. Each Agent Core Worker loads the snapshot from its own
-  session's workspace through the SDK MCP tool loader.
-- Probes perform the MCP handshake and `tools/list`, coalesce concurrent probes,
-  and cache the result against a connector revision and fingerprint. Built-in
-  tool metadata has a non-expiring seeded cache; a live probe can refresh it.
-- Remote transports and built-in upstream clients use the guarded MCP fetch
-  path: URLs are validated before connection, public endpoints receive DNS
-  rebinding protection, cross-origin requests and HTTP redirects are rejected,
-  requests are bounded, and outcomes are recorded in the egress audit.
-
-The detailed API, schema, migration, and UI contract is documented in
-[MCP management implementation](mcp-management-implementation.md).
-
-## Trust and security boundaries
-
-- Agent Core Workers use parent/child IPC; browser origins cannot call Workers directly. API authentication remains at the control-plane boundary.
-- Workspace paths are canonicalized and validated before runtime creation.
-- Each registered workspace owns a stable project identity in
-  `.pi-science/project.json`; session listings resolve their `project_id` from
-  that manifest.
-- A registered workspace is inside the application trust boundary. The control
-  plane records workspace validation before creating a runtime, so users should
-  register only workspaces whose instructions and skills they trust.
-- Runtime identity includes both workspace and session identity to prevent one
-  workspace from being resumed through another runtime.
-- Project-local metadata uses validated paths, atomic writes, and advisory locks
-  where multiple writers may update the same record. Global state mutations are
-  serialized through repository operations in the SQLite worker.
-- Model providers and explicit literature/connector actions may send requests
-  outside the machine. Endpoint URLs reject embedded credentials; health probes
-  have redirect, response-size, and timeout limits, and cross-origin redirects
-  cannot retain sensitive headers. Private endpoints are allowed by default for
-  local model servers and can be rejected with
-  `PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=0`.
-- Outbound connector destinations are recorded locally in
-  `egress-audit.jsonl` by default. Set `egress_audit: false` in `config.json` to
-  disable that audit. The audit records the connector identity, target domain,
-  timestamp, and approval state—not request bodies or credentials.
-
-## Lifecycle and recovery
-
-- Agent Worker commands use bounded IPC requests, durable operation results, and recovery probes. Busy session deletion is rejected; shutdown disposes Workers and their tools.
-- Kernel child processes are started lazily for the first cell in a Session and
-  are stopped on Session shutdown, workspace shutdown, crash recovery, or
-  timeout cleanup.
-- Runtime commands use bounded request timeouts. Operations that time out are
-  reconciled against runtime state so an accepted prompt is not silently treated
-  as a failed turn.
-- Event streams reconnect with the last observed sequence number so transient
-  transport interruptions do not require a new agent runtime.
-- Durable jobs use owner generations and expiring leases in SQLite. Startup
-  recovery reconciles interrupted work without allowing an older process to
-  overwrite a newer terminal result.
-
-## Research loops
-
-Research loops are coordinated by the Node control plane. A loop uses bounded
-Agent Core subagent Workers for candidate generation and analysis, the job system
-for execution and deterministic evaluation, immutable candidate snapshots, and
-append-only records for recovery and provenance.
-
-For the research-loop state machine and persistence contract, see the
+Node owns research-loop state, revisions, budgets, deterministic evaluation and
+stop decisions. Hidden Core Workers generate candidates and analyze results;
+`JobCoordinator` executes candidate/evaluator commands. Immutable snapshots and
+append-only records support recovery. See the
 [research-loop ADR](adr-research-loop-subagents.md).
+
+## Trust, diagnostics and implementation references
+
+Worker processes provide fault isolation, **not an OS sandbox**. Workspace
+paths and runtime identity are validated, and ordinary bash/MCP subprocesses
+receive an allowlisted tool environment rather than the Worker's credential
+environment. Registered project instructions and skills remain trusted inputs.
+Browser commands authenticate at the control plane; only internal IPC reaches
+Workers. Metadata updates use atomic writes and locks; SQLite mutations run
+through serialized repositories.
+
+Configured model requests and external connector tools can transmit data outside
+the machine. Provider/connector network paths validate destinations and apply
+request bounds; MCP remote fetch also guards redirects and DNS rebinding.
+Private model endpoints are allowed by default for local services and can be
+restricted with `PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=0`. Connector destinations
+are logged in `egress-audit.jsonl` unless disabled in `config.json`.
+
+| Endpoint / document | Purpose |
+| --- | --- |
+| `/api/health` | Public health, including `active_agent_workers` |
+| `/internal/live`, `/internal/ready` | Launcher liveness and readiness |
+| `/internal/diagnostics` | Store, migration and local runtime diagnostics |
+| [Runtime implementation](agent-core-runtime-implementation.md) | Runtime entry points and supervision |
+| [Communication implementation](agent-core-communication-implementation.md) | IPC, event projection and recovery boundaries |
+| [Capability inventory](agent-core-capability-inventory.md) | Supported tools, explicit limits and acceptance scope |
+| [Session conversion](agent-core-session-conversion.md) | Offline command, automatic conversion and tombstones |
+
+CI results establish the checks run on that commit. They do not imply all
+external providers, complex user transcripts or every platform UI path were
+manually tested.

@@ -21,100 +21,94 @@
 
 ---
 
-大多数 AI 科研工具止步于阅读和总结论文。Pi-Science 围绕「一个聊天窗口做不到的事」构建：
+Pi-Science 将 AI 对话、科学计算、数据预览和项目知识整合到一个本地工作台。
 
-- **执行，而不只是解释。** 回答里的 Python 代码块一键在真实的工作区内核上运行——状态跨代码块保持，一场对话同时就是一次可交互的分析会话。
-- **可复现是副作用，不是美德。** 每次运行进入事件日志、产物带 sha256 摘要、项目绑定到带版本的 Micromamba 环境，结论可以追溯到产生它的代码与数据——不需要你改变工作方式。
-- **自主研究循环，人保持掌控。** 描述目标和确定性指标；受监督的智能体提出候选方案、在不可变快照中执行、评估、分析并迭代——带预算控制、暂停恢复和崩溃自愈。
-- **文献引用真实可验证。** 零配置直连 Crossref/arXiv/PubMed 检索，内联 DOI 渲染为可点击的来源——绝不编造参考文献。
-- **架构级 local-first。** 工作区就是你机器上的普通文件夹；除非你通过已配置的模型发送内容，或显式调用文献检索等外部服务，否则项目文件不会离开本机。支持 Ollama、LM Studio 等纯本地端点，连接器的目标域名会记录到本地出站审计中。
+- **在上下文中运行分析。** 在会话内核执行 Python/R 代码，与对话一起查看表格、图像和生成文件。
+- **保留执行证据。** 运行记录保存代码、环境版本、产物哈希和谱系，便于检查与复现结果。
+- **通过研究循环探索。** 智能体提出并分析候选方案，控制面负责确定性评估、预算和暂停恢复。
+- **检索科学来源。** 内置连接器获取论文和科学数据，提供可以核对的引用元数据。
+- **使用普通项目目录。** 科研文件保存在工作区，模型请求和外部检索使用你配置的服务。
 
-每个项目独立保存对话、文件、实验运行、产物谱系和审核后的项目知识；每个对话使用独立的 Agent Core Worker 进程，因此多个会话可以并行执行，互不阻塞。
+多个对话通过独立 Agent Core Worker 进程并发执行。AgentHarness 管理执行和持久会话，Pi-Science 提供科学工作区与产品界面。
 
 ## 快速开始
 
 ### 环境要求
 
-- Node.js 24.16 或更高版本
-- Python 3.11 或更高版本
-- pnpm
-- 一个 LLM 提供商 API Key，或可信的 OpenAI / Anthropic 兼容本地端点
-- Windows：PowerShell 5.1 或更高版本
+- Node.js **24.16+**、Python **3.11+**、pnpm **11.7.0**（仓库锁定的包管理器版本）
+- 一个 LLM API Key，或已配置的 Ollama、LM Studio 等本地端点
+- Windows 需要 PowerShell **5.1+**
 
-### 一键安装并启动
+先克隆仓库：
 
 ```bash
 git clone https://github.com/Garhorne0813/pi-science.git
 cd pi-science
+```
+
+macOS/Linux 可一键安装并启动：
+
+```bash
 bash scripts/dev.sh
 ```
 
-`dev.sh` 会安装缺失依赖并启动完整的本地服务。
-
-### 分开安装和启动
-
-为本地 checkout 安装一次依赖，然后可独立启动开发服务：
+也可以安装一次，再独立启动：
 
 ```bash
 bash scripts/install.sh
 bash scripts/start.sh
 ```
 
-Windows 使用原生 PowerShell 等价脚本：
+原生 Windows 使用 PowerShell：
 
 ```powershell
 powershell -File scripts/install.ps1
 powershell -File scripts/start.ps1
 ```
 
-Shell 启动器支持 macOS/Linux，也可用于 WSL；CI 在 Linux 和 macOS 上验证其生命周期。PowerShell 安装器安装 Windows 原生运行所需的项目依赖，不需要 Git Bash。两种启动器都会运行 `tsx watch` 与 Vite 开发服务器，因此不是生产部署服务器。安装完成后的启动过程直接调用 package-local 可执行文件，因此运行时不需要 npm 或 pnpm wrapper；安装、构建和依赖更新仍然需要 pnpm。
+打开 **http://127.0.0.1:5173**，在 **设置 → LLM** 配置提供商和默认模型，再打开工作区开始对话。**设置 → Skills** 管理技能，**设置 → MCP** 启用科学连接器；初始仅启用 Paper Search。控制面 API 位于 `127.0.0.1:8787`。
 
-### `pi-science` 命令
+启动器运行 Vite 和 `tsx watch` **开发服务**。Bash 支持 macOS/Linux 与 WSL，原生 Windows 不需要 Git Bash；Agent Core SDK 随项目依赖安装。
 
-`scripts/install.sh` 会在 `~/.local/bin` 生成 `pi-science` 启动器（可用 `PI_SCIENCE_BIN_DIR` 指定其它目录）。只要该目录在 `PATH` 中：
+### 启动、停止与更新
 
-```bash
-pi-science                  # 启动全部服务并打开浏览器
-pi-science start --detach   # 改为后台常驻
-pi-science status           # 查看当前运行状态
-pi-science stop             # 停止本仓库启动的服务
+安装器提供 `pi-science` 命令。macOS/Linux 需要将 `~/.local/bin` 加入 `PATH`（可用 `PI_SCIENCE_BIN_DIR` 修改安装目录）；Windows 安装更新 `PATH` 后请打开新终端。
+
+```text
+pi-science                 启动服务
+pi-science status          查看服务状态
+pi-science stop            停止当前 checkout 的服务
+pi-science help            查看命令帮助
 ```
 
-Windows 安装完成并打开新终端后，可直接使用：
+前台启动占用当前终端，按 **Ctrl+C** 停止服务。Bash 还支持 `pi-science start --detach`；Windows 启动器仅支持前台运行。
 
-```powershell
-pi-science              # 启动全部服务
-pi-science start        # 启动全部服务
-pi-science status       # 查看当前状态
-pi-science stop         # 停止服务
-pi-science help         # 查看帮助
-```
-
-Windows 启动器在两个服务健康后写入 `.runtime/pi-science/run.state`，停止时优先按状态文件精确命中进程；状态文件不可用时回退到本机端口探测。不加 `--detach` 时，Bash 版 `pi-science` 会占用当前终端，Ctrl+C 停止；PowerShell 版同样只支持前台运行。两种启动器都使用端到端就绪期限（`PI_SCIENCE_STARTUP_TIMEOUT_SECONDS`，默认 90 秒）。生成的启动器会拒绝覆盖无关文件、目录、symlink 或 Windows 可执行文件冲突；重复运行安装器可以安全更新属于同一 checkout 的启动器。
-
-仓库移动后，或者 `git pull` 修改了 `package.json`、`pnpm-lock.yaml`、Python 依赖元数据或 Agent Core 依赖版本时，需要重新运行对应平台的安装器（`scripts/install.sh` 或 `powershell -File scripts/install.ps1`）；只有源码变化时不需要重装。安装后，macOS/Linux 可运行 `bash scripts/start.sh`，Windows 可运行 `powershell -File scripts/start.ps1`。如果继续使用 `dev.sh`，但希望跳过安装：
+移动仓库或更新 Node/Python 依赖元数据、锁文件、SDK 依赖后，应重新运行对应平台安装器。仅修改源代码不需要重装。组合 Bash 启动器可跳过安装：
 
 ```bash
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 ```
 
-Pi Science 直接使用 Agent Core，安装过程安装包含 SDK 在内的项目依赖。旧会话离线转换见[会话转换说明](docs/agent-core-session-conversion.md)。
+<details>
+<summary>启动器行为与持久状态</summary>
 
-启动后进入 **设置 → LLM**，配置提供商和默认模型即可开始使用。已安装及从工作区发现的
-skills 可在 **设置 → Skills** 中启用、禁用或重置。内置和自定义 MCP 连接器统一在
-**设置 → MCP** 中管理；全新安装默认只启用 Paper Search。
+安装后的启动器直接调用包内可执行文件，启动不依赖 npm/pnpm 包装器；安装、构建和依赖更新仍需要 pnpm。默认就绪期限为 90 秒，可用 `PI_SCIENCE_STARTUP_TIMEOUT_SECONDS` 调整。启动器记录自己启动的服务以准确停止，并拒绝覆盖无关的启动器路径。
+
+应用状态使用 `PI_SCIENCE_HOME` 或 `~/.pi-science`，必要时回退到 checkout 内。项目元数据可位于工作区或应用托管目录，移动或备份前请参阅[数据归属](docs/architecture.zh-CN.md#持久化与数据归属)。旧 v3 会话支持自动转换或[离线转换](docs/agent-core-session-conversion.md)。
+
+</details>
 
 ## 核心能力
 
 | 领域 | Pi-Science 提供的能力 |
 |---|---|
-| 智能体工作区 | 流式对话、工具卡片、Markdown、LaTeX、斜杠命令和交互式扩展请求 |
+| 智能体工作区 | 流式对话、工具卡片、Markdown、LaTeX、斜杠命令和浏览器问卷与审批 |
 | 并行会话 | 活跃、恢复和分叉的对话使用独立的 Agent Core Worker 进程 |
 | 科学文件 | 原生预览分子结构、FITS、基因组、相图、3D 模型、表格、办公文档、媒体和代码 |
 | 可复现性 | 实时的会话级执行记录、产物哈希、生成代码与差异、环境快照、谱系历史和一键复现 |
 | 项目记忆 | Reviewer 提案、人工审核、证据链接、项目版本、研究循环和 Pareto 前沿 |
 | 科学计算 | 可复用的 Micromamba 环境、隔离的 Python/R Session 内核、可执行 `.ipynb` 文件、与对话关联的运行记录和应用级 Jupyter Lab |
-| 扩展能力 | Pi skills、扩展、MCP、subagents、自定义模型提供商和托管端点 |
+| 扩展能力 | Pi skills、提示模板、MCP、subagents、自定义模型提供商和托管端点 |
 | 工作区安全 | 项目级元数据、路径校验、会话状态隔离和受控的模型端点发现 |
 
 ## 科学 MCP 连接器
@@ -149,6 +143,8 @@ Pi-Science 内置 18 个由公共科学数据服务驱动的 MCP 连接器。它
 设置全局生效，单个项目可以覆盖工具决策。配置变更会自动投影到活跃 Agent runtime，
 无需手工编辑 Pi 配置文件。
 
+连接器认证可引用托管密钥/令牌或具名环境变量，作为进程变量、HTTP Header 或 Bearer Token 传递。策略快照只含凭据引用，获准使用的凭据在 Worker 内存中解析。目前不支持 OAuth 登录与刷新。
+
 ## 科学文件查看器
 
 Pi-Science 可以直接在浏览器中渲染常见科研格式。
@@ -166,11 +162,20 @@ Pi-Science 可以直接在浏览器中渲染常见科研格式。
 
 ## 系统架构
 
-Pi-Science 使用 local-first Node 控制面、独立的 Agent Core Worker 进程，以及按需启动的原生 Python/R Kernel 进程。全局 workspace、环境和任务状态
-由 SQLite 协调，项目文件和可复现性记录仍保存在各自 workspace 内。托管 MCP 定义
-和全局策略也保存在 SQLite 中；每个 workspace 会收到一份原子 runtime 投影，其中只
-包含已启用的连接器及该项目的有效工具决策。进程归属、服务
-边界、工作区状态、生命周期和安全设计详见[架构文档](docs/architecture.zh-CN.md)。
+```mermaid
+flowchart LR
+    UI[浏览器] -->|REST / SSE v3| CP[Node 控制面]
+    CP -->|IPC| W[Agent Core Workers]
+    W --> H[AgentHarness / pi-ai]
+    H --> S[(Core v4 会话)]
+    CP --> K[Python / R 内核]
+```
+
+AgentHarness 管理智能体执行和持久操作状态。Node 控制面监督独立 Worker，将 Core 事实投影为有版本的浏览器协议，并协调科学计算服务。对话、标题、研究、复查和子代理共用这套执行链路。
+
+Core 会话格式 **v4** 与产品 SSE 协议 **v3** 是独立版本。历史是 Core 会话的投影；旧格式只在数据读取/转换边界处理。SQLite 协调工作区、环境、任务和 MCP 策略，科研文件与产品元数据分别管理存储位置。
+
+进程边界、事件交付、状态目录、恢复机制与能力隔离详见[架构文档](docs/architecture.zh-CN.md)。
 
 ## 斜杠命令
 
@@ -182,13 +187,13 @@ Pi-Science 使用 local-first Node 控制面、独立的 Agent Core Worker 进�
 | `/export <html\|jsonl>` | 导出对话历史 |
 | `/skill:<name>` | 调用动态发现的工作区技能 |
 
-Pi-Science 托管的工作区默认信任 `.pi/skills/`；其中的项目内置 skills 会参与 Pi 的命令发现。可在 **Settings → Skills** 中查看和控制已发现的 skills。原有的独立 `/skills` 路由已移除。
+Pi-Science 托管的工作区默认信任 `.pi/skills/`；其中的项目内置 skills 会参与 Pi 的命令发现。可在 **设置 → Skills** 中查看和控制已发现的 skills。
 
 ## 执行证据
 
 内核、Notebook 和智能体工具的执行都会记录在产生它们的对话会话中。执行状态会实时更新；在 Runs 视图中，可将执行定位到来源对话，也可打开该次执行生成的文件和产物。
 
-托管 Pi 会话为文件型 `.ipynb` 提供 `notebook_read`、`notebook_edit` 和
+对话 Worker 为文件型 `.ipynb` 提供 `notebook_read`、`notebook_edit` 和
 `notebook_run`。`notebook_read` 会返回每个 cell 的 revision；默认编辑使用
 Notebook 文件 SHA-256 做严格并发保护，也可用 `expected_cell_revisions`
 只保护本次修改的 cell，使无关 cell 的并发修改不会阻塞操作。运行选定的
@@ -198,26 +203,23 @@ Python/R 代码块后，会把受限的执行次数、标准输出/错误、MIME
 
 ## 模型配置
 
-可以在 **Settings → LLM** 中配置提供商。Pi-Science 支持内置厂商、OpenAI-compatible、Anthropic-compatible，以及 Ollama、LM Studio 等可信的无 Key 本地服务。还可以在同一页面注册、启停并检查托管模型端点。健康检查是带超时和响应大小限制的出站请求；为支持本地模型服务，默认允许私网端点，可通过 `PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=0` 禁用。
+可以在 **设置 → LLM** 中配置提供商。Pi-Science 支持内置厂商、OpenAI-compatible、Anthropic-compatible，以及 Ollama、LM Studio 等可信的无 Key 本地服务。还可以在同一页面注册、启停并检查托管模型端点。健康检查是带超时和响应大小限制的出站请求；为支持本地模型服务，默认允许私网端点，可通过 `PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=0` 禁用。
 
-也可以通过环境变量提供 API Key：
-
-```bash
-export OPENAI_API_KEY=sk-...
-# 也可以使用 ANTHROPIC_API_KEY、DEEPSEEK_API_KEY 等受支持的厂商变量
-```
+API Key 通过 **设置 → LLM** 管理。环境凭据需要在模型资源配置中明确引用变量名，仅导出厂商环境变量不会建立凭据绑定。
 
 ## AI 会话标题
 
-当一轮对话稳定后，Pi-Science 可以自动生成简短的 AI 标题（**默认启用**）。该功能通过与对话相同的 provider 发起一次简短请求：新建一个禁用工具与技能的临时 Agent Core Worker，发送最近不超过 6 条消息（每条截断到不超过 200 字符），并请求生成不超过 8 个词的标题。这意味着，每次对话轮次稳定后，**最近的对话片段都会发送给你配置的 LLM 提供商**。生成的结果会持久化到工作区的 `.pi-science/session-titles.jsonl`；浏览器存储仅作为即时回退。
+成功完成一轮对话后，Pi-Science 可以生成 AI 标题（**默认启用**）。标题使用配置的**默认模型**，可能与当前对话模型不同。禁用工具与技能的临时 Worker 发送最近不超过 6 条消息，每条截断到 200 字符，并请求不超过 8 个词的标题。
 
-如需禁用，请在启动服务前设置环境变量并重启：
+这是一次额外的模型请求，会包含最近的对话片段。标题保存到项目实际元数据目录中的 `session-titles.jsonl`，浏览器存储作为即时回退。
+
+如需禁用，请在启动前设置并重启服务：
 
 ```bash
 export PI_SCIENCE_AI_TITLES=0
 ```
 
-标题生成不会阻塞对话，失败时会保留侧边栏的派生名称。临时会话保持隐藏，并在 Worker 释放时删除；`PI_SCIENCE_AI_TITLES=0` 可禁用该功能。
+标题生成不阻塞对话，失败时保留侧边栏的派生名称。临时会话保持隐藏，在 Worker 释放时删除。
 
 ## 开发与测试
 
@@ -250,10 +252,16 @@ pnpm --filter frontend test:uat:office
 
 ## 文档
 
-- [架构文档](docs/architecture.zh-CN.md)
-- [MCP 管理实现](docs/mcp-management-implementation.md)
-- [研究循环架构（ADR）](docs/adr-research-loop-subagents.md)
-- 控制面的内部端点提供运行状态和 SQLite 诊断信息
+| 内容 | 参考 |
+| --- | --- |
+| 进程边界、状态归属、事件与恢复 | [架构文档](docs/architecture.zh-CN.md) |
+| 支持的工具与已知限制 | [Agent Core 能力清单](docs/agent-core-capability-inventory.md) |
+| 旧会话与离线转换 | [会话转换](docs/agent-core-session-conversion.md) |
+| 科学连接器、凭据与工具策略 | [MCP 管理](docs/mcp-management-implementation.md) |
+| 研究编排与确定性评估 | [研究循环 ADR](docs/adr-research-loop-subagents.md) |
+| 编写项目技能 | [技能编写](docs/skill-authoring.md) |
+
+架构文档提供对应的实现记录链接，未提供双语版本的文档保留原语言。
 
 ## 参与贡献
 
@@ -262,5 +270,3 @@ pnpm --filter frontend test:uat:office
 ## 许可证
 
 MIT
-
-实时会话 SSE 使用 v3 协议：`operation.started` / `operation.settled`、`message.*`、`tool.*`、`compaction.*` 和 `interaction.requested`。Worker 事件只接受 Harness 事实；`runtime.paused` 表示监督进程停止，不代表持久 operation 已结束。旧展示事件仅在持久历史读取边界解码，保留原游标与序号。`/api/health` 使用 `active_agent_workers` 字段。

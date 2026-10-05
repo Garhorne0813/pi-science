@@ -12,6 +12,8 @@
 | 产品事件 | `ConversationEventHub`：观察者持久化、SSE cursor/去重、关闭 drain 和交互恢复 |
 | 后台任务 | Core 研究、复查和标题 Worker：结构化结果、隐藏会话、取消及清理 |
 
+实时 Worker 事件以 `ProductInput` 为唯一输入。`ConversationEventHub` 持久化并发布 SSE v3，前端使用同名的 operation/message/tool 生命周期，不在实时链路中解码旧事件。历史展示格式只在 event store 读取时转换；Core 会话格式 v4 与 SSE 协议 v3 是独立版本。事件族、状态归属和诊断入口以[架构说明](architecture.zh-CN.md#产品事件与浏览器状态)为准。
+
 真实本地 provider stream 永久停住时，Worker IPC 仍能返回 busy snapshot。watchdog 的进展期限会强制终止旧 Worker，从同一 durable operation 恢复，并保持浏览器消息 ID 去重。连续卡死达到恢复上限会停机报错，保留显式重试路径。
 
 空工具列表或非 MCP 能力不启动 MCP discovery；允许单个 MCP 工具时，只解析匹配 connector 的凭据并连接它，再过滤工具。managed include/exclude 与确认策略继续生效。
