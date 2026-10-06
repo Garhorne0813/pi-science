@@ -135,6 +135,7 @@ function runtimeModel(provider: RuntimeCatalogProvider, model: RuntimeCatalogMod
     context_window: model.contextWindow || null,
     max_output_tokens: model.maxTokens || null,
     input_formats: model.input,
+    vision: model.input.includes("image"),
     capability_source: "agent-core-catalog",
   };
 }
@@ -234,7 +235,10 @@ function normalizePiModel(value: unknown): Record<string, unknown> | null {
     : reasoning === false ? ["off"] : undefined;
   const name = typeof item.name === "string" && item.name ? item.name : model;
   const contextWindow = Number(item.contextWindow ?? 0);
-  return { id: `${provider}/${model}`, provider, model, label: `${provider} · ${name}`, custom: provider.startsWith("custom-"), reasoning, thinking_levels: thinkingLevels, context_window: contextWindow > 0 ? contextWindow : null, capability_source: "Pi runtime" };
+  const maxTokens = Number(item.maxTokens ?? item.max_output_tokens ?? 0);
+  const inputFormats = Array.isArray(item.input) ? item.input.filter((format): format is string => typeof format === "string") : undefined;
+  return { id: `${provider}/${model}`, provider, model, label: `${provider} · ${name}`, custom: provider.startsWith("custom-"), reasoning, thinking_levels: thinkingLevels, context_window: contextWindow > 0 ? contextWindow : null,
+    max_output_tokens: maxTokens > 0 ? maxTokens : undefined, input_formats: inputFormats, vision: inputFormats ? inputFormats.includes("image") : undefined, capability_source: "Pi runtime" };
 }
 function mergeModelCatalog(primary: Array<Record<string, unknown>>, overlay: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
   const byId = new Map(primary.map((item) => [String(item.id), item]));
@@ -278,6 +282,7 @@ async function modelCatalog(nodeSessionService: NodeSessionService, config: Sett
         if (!existing.context_window) existing.context_window = source.context_window;
         if (!existing.max_output_tokens) existing.max_output_tokens = source.max_output_tokens;
         if (!Array.isArray(existing.input_formats) || existing.input_formats.length === 0) existing.input_formats = source.input_formats;
+        if (existing.vision === undefined && Array.isArray(existing.input_formats)) existing.vision = existing.input_formats.includes("image");
       }
       return { available: [...runtimeById.values()], source: "pi" };
     }

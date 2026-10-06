@@ -55,7 +55,7 @@ describe("native control-plane business routes", () => {
       const connected = await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "deepseek", api_key: "catalog-test-key" } });
       expect(connected.statusCode).toBe(200);
       const listed = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
-      expect(listed.available_models).toContainEqual(expect.objectContaining({ id: "deepseek/deepseek-flash" }));
+      expect(listed.available_models).toContainEqual(expect.objectContaining({ id: "deepseek/deepseek-flash", context_window: 1000000, max_output_tokens: 384000, input_formats: ["text", "image"], vision: true }));
       const selected = await app.inject({ method: "PUT", url: "/api/settings/model", payload: { model: "deepseek/deepseek-flash", thinking: "off" } });
       expect(selected.statusCode).toBe(200);
       expect(selected.json()).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });

@@ -67,3 +67,28 @@ server, all six viewport/theme projects and no real credentials. It checks
 General, AI Models and Agent for horizontal overflow and serious/critical axe
 violations, exercises search and save/reload, and writes review screenshots as
 test artifacts. It does not replace existing screenshot baselines.
+
+## Live Settings acceptance (2026-10-06)
+
+Tested the production server and built frontend with Chromium at 1440×1000
+and 375×812, using screenshots and coordinate mouse/keyboard input. No API
+responses or model requests were mocked. An isolated home and workspace were
+used; credentials were entered into a password field and excluded from Git.
+
+Passed: builtin DeepSeek connection, model filtering and empty search, dark
+theme and Chinese language persistence, all Settings tabs opening, model
+selection in the composer, and a real `deepseek-flash` request through
+`https://api.deepseek.com` returning `SETTINGS_OK` in approximately 1.6 seconds.
+The Agent page showed 1,000,000 tokens and image input. Saving a 50% threshold
+survived reload; saving 95% showed a 950,000-token trigger and 50,000-token
+reserve. Automatic compaction could be disabled, saved, re-enabled and saved.
+Mobile model cards, Agent preview and scrolling remained usable. No browser
+JavaScript errors were recorded.
+
+Two defects found by the live test were fixed: a missing NodeNext import shim
+prevented the production server from starting, and normalization of Pi models
+dropped maximum output and input-format metadata. Native Node import coverage
+and builtin DeepSeek catalog assertions now guard those cases. Focused server
+regressions passed (51 tests, 7 skipped), and workspace typechecking passed.
+MCP external connectivity, SSH credentials, environment installation and
+actual context compaction were outside this UI acceptance run.
