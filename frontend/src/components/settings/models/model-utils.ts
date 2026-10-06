@@ -25,11 +25,10 @@ export type Service = {
   provider?: Pick<SettingsProvider, "id" | "name">;
 };
 
-export function isConnected(provider: { credential_status?: string; has_key: boolean; enabled?: boolean }) {
-  return provider.credential_status === "configured"
-    || provider.credential_status === "connected"
-    || (provider.credential_status === undefined && provider.has_key)
-    || provider.enabled === true && provider.has_key;
+export function isConnected(provider: { credential_status?: string; has_key: boolean; enabled?: boolean; auth?: { api_key_supported: boolean; kind?: string } }) {
+  if (provider.auth?.api_key_supported === false && provider.auth.kind !== "none") return false;
+  if (provider.credential_status !== undefined) return provider.credential_status === "configured" || provider.credential_status === "connected";
+  return provider.has_key || provider.auth?.kind === "none" && provider.enabled === true;
 }
 
 export function buildServices(config: SettingsConfig): Service[] {

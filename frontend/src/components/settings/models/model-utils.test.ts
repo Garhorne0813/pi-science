@@ -23,4 +23,11 @@ describe("buildServices", () => {
     expect(services[0]).toMatchObject({ id: "user-lab", name: "Lab", custom: true });
     expect(services[0].models.map((model) => model.id)).toEqual(["user-lab/model-a"]);
   });
+  it("does not label invalid or OAuth-only credentials as connected", () => {
+    expect(buildServices(config([
+      { id: "bad", name: "Bad", models: [], has_key: true, credential_status: "invalid", enabled: true },
+      { id: "subscription", name: "Subscription", models: [], has_key: true, credential_status: "connected", auth: { kind: "oauth", api_key_supported: false, oauth_supported: true, login_supported: false } },
+    ]))).toEqual([]);
+  });
+
 });

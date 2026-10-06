@@ -318,3 +318,23 @@ intent. Scrolling upward pauses, scrolling down to the bottom resumes, and
 Back to latest explicitly resumes. A pending follow frame is cancelled when
 the user pauses. This avoids stale scroll events from the first answer trapping
 the second turn above the viewport.
+
+## Settings redesign (Pi-Science proposal)
+
+The Agent Core settings refresh keeps the frozen 188px desktop / 56px mobile
+rail, 40px / 36px navigation cells, semantic colors and 920px existing dialog.
+It takes grouped navigation and explicit resource scope from ZCode
+(`packages/ui/src/SettingsPage.tsx`, `settings/SettingsResourceGroup.tsx`),
+and quiet resource rows from DeepSeek Harness SettingsRoot. No upstream code
+or branding is copied.
+
+- Navigation has three groups, 16px between groups, 12px horizontal section
+  labels, and a scope footer with a wrapping workspace path.
+- Content uses a 24px rhythm, 16px padded cards with 12px radii, and a 16px
+  radius theme selector with a 56px abstract preview.
+- Model service cards use a 40px initial tile; inventory wraps into two
+  columns below 640px. Search has 40px height and a clear button.
+- Context capacity is a 8px horizontal bar; it previews the configured
+  compaction point, never measured session usage. Labels wrap on mobile.
+- Switch geometry retains 36×20px with a 16px thumb; focus uses the existing
+  2px accent ring. Muted surfaces use semantic colors without extra opacity.

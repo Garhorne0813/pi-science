@@ -175,7 +175,7 @@ describe("SettingsContent", () => {
     fireEvent.keyDown(nav, { key: "End" });
     await waitFor(() => expect(screen.getByRole("tab", { name: "Compute" })).toHaveAttribute("aria-selected", "true"));
     fireEvent.keyDown(nav, { key: "ArrowUp" });
-    await waitFor(() => expect(screen.getByRole("tab", { name: "MCP" })).toHaveAttribute("aria-selected", "true"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Environments" })).toHaveAttribute("aria-selected", "true"));
     fireEvent.keyDown(nav, { key: "Home" });
     await waitFor(() => expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true"));
   });
@@ -195,4 +195,17 @@ describe("SettingsContent", () => {
     expect(await screen.findByText("Control how Pi manages long-running work.")).toBeInTheDocument();
     expect(screen.getByText("Context Management")).toBeInTheDocument();
   });
+  it("uses a single keyboard tab stop in the navigation and links Agent to model connections", async () => {
+    renderContent("/lab/project");
+    const nav = await screen.findByRole("tablist", { name: "Settings" });
+    expect(nav.querySelectorAll('button[tabindex="0"]')).toHaveLength(1);
+    fireEvent.click(screen.getByRole("tab", { name: "Agent" }));
+    expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("tab", { name: "Agent" })).toHaveAttribute("tabindex", "0");
+    fireEvent.click(await screen.findByRole("button", { name: "Manage models" }));
+    expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(screen.getByRole("tab", { name: "AI Models" })).toHaveFocus());
+    expect(screen.getByText("/lab/project")).toBeInTheDocument();
+  });
+
 });

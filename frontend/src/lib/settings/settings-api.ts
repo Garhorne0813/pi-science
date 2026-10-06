@@ -143,7 +143,7 @@ export const settingsApi = {
   async saveCompaction<T>(enabled: boolean, thresholdPercent: number, cwd?: string | null): Promise<T> {
     const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
     const result = unwrapSettings(await apiRequest<T & SettingsEnvelope>(`/api/settings/compaction${query}`, json("PUT", { enabled, threshold_percent: thresholdPercent })), "Unable to save context management settings");
-    invalidateSettings();
+    await invalidateSettings();
     return result;
   },
 

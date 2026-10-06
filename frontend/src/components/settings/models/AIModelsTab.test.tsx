@@ -92,4 +92,25 @@ describe("AIModelsTab", () => {
     expect(screen.getByText("OpenAI-compatible service")).toBeInTheDocument();
     expect(screen.queryByText("API key configured")).not.toBeInTheDocument();
   });
+  it("filters models by name and clears an empty search", () => {
+    renderTab();
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "missing" } });
+    expect(screen.queryByText("Claude Sonnet 4.6")).not.toBeInTheDocument();
+    expect(screen.getByText("No services or models match your search.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(screen.getByText("Claude Sonnet 4.6")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "sonnet" } });
+    expect(screen.getByText("Claude Sonnet 4.6")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Anthropic.*Connected/ }));
+    expect(screen.queryByText("Claude Sonnet 4.6")).not.toBeInTheDocument();
+  });
+
+  it("marks subscription providers unavailable even when a credential exists", () => {
+    renderTab({ config: { ...config, providers: [...config.providers, { id: "subscription", name: "Subscription provider", models: [], has_key: true, credential_status: "connected", auth: { kind: "oauth", api_key_supported: false, oauth_supported: true, login_supported: false } }] } });
+    expect(screen.getByRole("heading", { name: "Unavailable services" })).toBeInTheDocument();
+    expect(screen.getByText("Subscription provider")).toBeInTheDocument();
+    expect(screen.getByText("Login required")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Subscription provider/ })).not.toBeInTheDocument();
+  });
+
 });

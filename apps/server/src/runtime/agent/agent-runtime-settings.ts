@@ -1,4 +1,4 @@
-import type { PiConfig } from "@pi-science/contracts";
+import { resolveAgentCompaction, type PiConfig } from "@pi-science/contracts";
 import { createBranchSummaryMessage, createCompactionSummaryMessage, estimateContextTokens, getLastAssistantUsage, type AgentMessage, type CompactionSettings, type Entry, type Value } from "@earendil-works/pi-agent-core";
 
 export type RuntimeSettings = Pick<PiConfig, "compaction_enabled" | "compaction_threshold_percent" | "model_context_window_override">;
@@ -19,16 +19,8 @@ export function resolveContextWindow(model: string, window: number, settings: Ru
 
 /** Shared with Settings: the default shown by the UI is also applied to Harness. */
 export function resolveCompaction(window: number, settings: RuntimeSettings = {}): { compaction: CompactionSettings; thresholdPercent: number } {
-  const thresholdPercent = settings.compaction_threshold_percent
-    ?? (window > 16384 ? Math.min(95, Math.max(50, Math.round((1 - 16384 / window) * 100))) : 85);
-  if (!Number.isSafeInteger(window) || window <= 0 || !Number.isFinite(thresholdPercent) || thresholdPercent < 50 || thresholdPercent > 95) {
-    throw new Error("invalid model window or compaction threshold");
-  }
-  return { thresholdPercent, compaction: {
-    enabled: settings.compaction_enabled !== false,
-    reserveTokens: Math.ceil(window * (100 - thresholdPercent) / 100),
-    keepRecentTokens: 20000,
-  } };
+  const { thresholdPercent, compaction } = resolveAgentCompaction(window, settings);
+  return { thresholdPercent, compaction };
 }
 
 export async function contextUsage(entries: Entry[], window: number | null) {

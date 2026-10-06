@@ -61,6 +61,7 @@ export interface SettingsConfig {
   api_keys: Record<string, boolean>;
   model: string;
   thinking: string;
+  unavailable_model?: string | null;
   providers: Provider[];
   /** @deprecated Compatibility projection only. */
   custom_providers: CustomProvider[];
@@ -69,6 +70,7 @@ export interface SettingsConfig {
   compaction_enabled: boolean;
   compaction_threshold_percent: number;
   model_context_window?: number | null;
+  model_context_window_override?: { model: string; context_window: number } | null;
   progress_appearance?: ProgressAppearance;
   model_max_output_tokens?: number | null;
 }

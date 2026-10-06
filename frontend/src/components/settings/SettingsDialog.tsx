@@ -42,7 +42,7 @@ export function SettingsDialog() {
   const handlePanelKeyDown = (event: React.KeyboardEvent) => {
     if (event.key !== "Tab") return;
     const focusables = panelRef.current?.querySelectorAll<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]):not([tabindex="-1"]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])',
     );
     if (!focusables || focusables.length === 0) return;
     const first = focusables[0];
@@ -102,7 +102,7 @@ export function SettingsDialog() {
             </div>
           </div>
         )}>
-          <SettingsContent scope={settingsScope} onClose={closeSettings} />
+          <SettingsContent key={settingsScope === null ? "global" : `workspace:${settingsScope}`} scope={settingsScope} onClose={closeSettings} />
         </Suspense>
       </div>
     </div>
