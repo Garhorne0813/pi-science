@@ -41,7 +41,7 @@ async function workspace(): Promise<string> {
 }
 
 describe("native control-plane business routes", () => {
-  it("connects and selects the official agent-core model using the official SDK catalog", async () => {
+  it("connects official models and characterizes shared legacy selection ownership (v2 migration pending)", async () => {
     const cwd = await workspace();
     delete process.env.PI_SCIENCE_AGENT_RUNTIME;
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
@@ -66,11 +66,24 @@ describe("native control-plane business routes", () => {
         payload: { model: "deepseek/deepseek-v4-pro", thinking: "high", session_id: created.id } });
       expect(switched.statusCode).toBe(200);
       expect(await modules.sessions.state(created.id, cwd)).toMatchObject({ model: "deepseek/deepseek-v4-pro", thinking: "high" });
+      // Transitional contract: the session composer also updates shared
+      // settings. Default/session separation must deliberately replace this
+      // regression when the ModelSelection v2 endpoints are introduced.
+      const shared = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
+      expect(shared).toMatchObject({ model: "deepseek/deepseek-v4-pro", thinking: "high" });
+      const nextSession = await modules.sessions.create({ cwd, config: { skills: [], extensions: [] } });
+      if (!("id" in nextSession)) throw new Error(String(nextSession.error));
+      expect(await modules.sessions.state(nextSession.id, cwd)).toMatchObject({ model: "deepseek/deepseek-v4-pro", thinking: "high" });
+      await modules.sessions.resume(nextSession.id, cwd);
       const switchedAgain = await app.inject({ method: "PUT", url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
         payload: { model: "deepseek/deepseek-flash", thinking: "off", session_id: created.id } });
       expect(switchedAgain.statusCode).toBe(200);
       await modules.sessions.resume(created.id, cwd);
       expect(await modules.sessions.state(created.id, cwd)).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
+      expect((await app.inject({ method: "GET", url: "/api/settings/config" })).json()).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
+      // Legacy model reload also applies the shared selection to other loaded
+      // sessions; this is intentionally not independent session ownership.
+      expect(await modules.sessions.state(nextSession.id, cwd)).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
       expect(JSON.stringify(listed)).not.toContain("catalog-test-key");
     } finally {
       try {

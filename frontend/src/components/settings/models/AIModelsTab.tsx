@@ -6,6 +6,7 @@ import { cn } from "../../../lib/ui";
 import { Modal as AccessibleModal } from "../../ui/Modal";
 import { modelResourceKeys, modelResourcesApi } from "../../../lib/model-resources";
 import type { SettingsConfig } from "../../../lib/settings";
+import { invalidateSettings } from "../../../lib/settings";
 import { buildServices, formatContext, isConnected, type ModelView, type Service } from "./model-utils";
 import { SettingsSelectMenu } from "../SettingsSelectMenu";
 
@@ -46,7 +47,7 @@ export function AIModelsTab({ config, apiKeyInput, setApiKeyInput, showKey, setS
     const models = service.models.filter((model) => `${model.name} ${model.id}`.toLowerCase().includes(normalizedQuery));
     return models.length ? [{ ...service, models }] : [];
   });
-  const loginProviders = config?.providers.filter((provider) => provider.auth?.api_key_supported === false && provider.auth.kind !== "none" || provider.credential_status === "needs_login") ?? [];
+  const loginProviders = config?.providers.filter((provider) => !provider.custom && (provider.auth?.api_key_supported === false && provider.auth.kind !== "none" || provider.credential_status === "needs_login")) ?? [];
 
   useEffect(() => {
     if (services.length > 0 && Object.keys(expanded).length === 0) setExpanded({ [services[0].id]: true });
@@ -57,15 +58,16 @@ export function AIModelsTab({ config, apiKeyInput, setApiKeyInput, showKey, setS
   const openConnect = () => { setConnectTarget(null); setConnectOpen(true); };
   const closeConnect = () => { setConnectOpen(false); setConnectTarget(null); };
   const toggleService = (id: string) => setExpanded((current) => ({ ...current, [id]: !current[id] }));
+  const reloadModelConfig = async () => { await invalidateSettings(); await onConfigReload(); };
   const runServiceAction = async (service: Service, action: () => Promise<void>) => {
     setActionBusy(service.id);
     setActionError(null);
-    try { await action(); await onConfigReload(); }
+    try { await action(); await reloadModelConfig(); }
     catch (cause) { setActionError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setActionBusy(null); }
   };
   const refreshService = (service: Service) => void runServiceAction(service, () => service.custom ? modelResourcesApi.refreshCustomProviderModels(service.id).then(() => undefined) : Promise.resolve());
-  const disableService = (service: Service) => void runServiceAction(service, () => modelResourcesApi.setCustomProviderEnabled(service.id, false).then(() => undefined));
+  const disableService = (service: Service) => void runServiceAction(service, () => modelResourcesApi.setCustomProviderEnabled(service.id, service.status === "disabled").then(() => undefined));
   const disconnect = async () => {
     if (!disconnectService) return;
     const service = disconnectService;
@@ -113,10 +115,10 @@ export function AIModelsTab({ config, apiKeyInput, setApiKeyInput, showKey, setS
         <ul className="mt-3 divide-y divide-faint">{loginProviders.map((provider) => <li key={provider.id} className="flex flex-wrap items-center justify-between gap-2 py-3 text-ui-label"><span className="text-text">{provider.name}</span><span className="text-ui-caption text-warn-text">{t("settings.redesign.needsLogin")}</span></li>)}</ul>
       </section>}
       {actionError && <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-ui-meta text-error-text">{actionError}</p>}
-      {connectOpen && <ConnectDialog config={config} target={connectTarget} availableTargets={availableTargets} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} onClose={closeConnect} onSelect={setConnectTarget} onConfigReload={onConfigReload} />}
+      {connectOpen && <ConnectDialog config={config} target={connectTarget} availableTargets={availableTargets} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} onClose={closeConnect} onSelect={setConnectTarget} onConfigReload={reloadModelConfig} />}
       {replaceService && <ReplaceKeyDialog service={replaceService} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} onClose={() => setReplaceService(null)} />}
       {disconnectService && <DisconnectDialog busy={actionBusy === disconnectService.id} onCancel={() => setDisconnectService(null)} onConfirm={() => void disconnect()} />}
-      {manageService && <ManageConnectionDrawer service={manageService} onClose={() => setManageService(null)} onConfigReload={onConfigReload} />}
+      {manageService && <ManageConnectionDrawer service={manageService} onClose={() => setManageService(null)} onConfigReload={reloadModelConfig} />}
     </div>
   );
 }
@@ -125,14 +127,14 @@ function ProviderSection({ service, expanded, onToggle, onManage, onReplace, onR
   const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
   const panelId = `models-for-${service.id}`;
-  const statusText = service.status === "connected" ? t("settings.models.status.connected", { defaultValue: "Connected" }) : service.status === "needs_key" ? t("settings.models.status.needsAuth", { defaultValue: "Needs authentication" }) : service.status === "disabled" ? t("settings.models.status.disabled", { defaultValue: "Disabled" }) : t("settings.models.status.unreachable", { defaultValue: "Unreachable" });
-  const statusTone = service.status === "connected" ? "text-ok-text" : service.status === "needs_key" ? "text-warn-text" : "text-error-text";
+  const statusText = service.status === "connected" ? t("settings.models.status.connected", { defaultValue: "Connected" }) : service.status === "needs_key" ? t("settings.models.status.needsAuth", { defaultValue: "Needs authentication" }) : service.status === "needs_login" ? t("settings.redesign.needsLogin") : service.status === "disabled" ? t("settings.models.status.disabled", { defaultValue: "Disabled" }) : t("settings.models.status.unreachable", { defaultValue: "Unreachable" });
+  const statusTone = service.status === "connected" ? "text-ok-text" : service.status === "needs_key" || service.status === "needs_login" ? "text-warn-text" : service.status === "disabled" ? "text-muted" : "text-error-text";
   return (
     <div className="rounded-card border border-border px-4">
       <div className="flex min-h-16 items-center gap-3 py-3">
         <button type="button" aria-expanded={expanded} aria-controls={panelId} onClick={onToggle} className="flex min-w-0 flex-1 flex-wrap items-center gap-3 rounded-input text-left outline-none focus-visible:ring-2 focus-visible:ring-accent">
           <span aria-hidden="true" className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-card bg-surface-2 text-ui-body font-medium text-muted sm:flex">{service.name.slice(0, 1).toUpperCase()}</span><span className="min-w-0 flex-1"><span className="block truncate text-ui-label font-medium text-text">{service.name}</span><span className="mt-0.5 block text-ui-meta text-muted">{service.models.length ? `${service.models.length} ${t("settings.models.models", { defaultValue: "models" })}` : t("settings.models.noModels", { defaultValue: "No models discovered" })}</span></span>
-          <span className={cn("flex shrink-0 items-center gap-1.5 text-ui-meta font-medium", statusTone)}><span aria-hidden="true" className={cn("size-1.5 rounded-full", service.status === "connected" ? "bg-ok" : service.status === "needs_key" ? "bg-warn" : "bg-error")} />{statusText}</span>
+          <span className={cn("flex shrink-0 items-center gap-1.5 text-ui-meta font-medium", statusTone)}><span aria-hidden="true" className={cn("size-1.5 rounded-full", service.status === "connected" ? "bg-ok" : service.status === "needs_key" || service.status === "needs_login" ? "bg-warn" : service.status === "disabled" ? "bg-muted" : "bg-error")} />{statusText}</span>
           {expanded ? <ChevronDown size={16} className="shrink-0 text-muted" /> : <ChevronRight size={16} className="shrink-0 text-muted" />}
         </button>
         <div className="relative shrink-0">
@@ -141,11 +143,13 @@ function ProviderSection({ service, expanded, onToggle, onManage, onReplace, onR
             {service.custom && <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onManage(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-text hover:bg-surface-hover">{t("settings.models.editConnection", { defaultValue: "Edit connection" })}</button>}
             {!service.custom && <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onReplace(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-text hover:bg-surface-hover">{t("settings.models.replace", { defaultValue: "Replace API key" })}</button>}
             <button type="button" role="menuitem" disabled={busy} onClick={() => { setMenuOpen(false); onRefresh(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-text hover:bg-surface-hover disabled:opacity-40">{t("settings.models.refresh", { defaultValue: "Refresh models" })}</button>
-            {service.custom && <button type="button" role="menuitem" disabled={busy} onClick={() => { setMenuOpen(false); onDisable(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-text hover:bg-surface-hover disabled:opacity-40">{t("settings.models.disable", { defaultValue: "Disable service" })}</button>}
+            {service.custom && <button type="button" role="menuitem" disabled={busy} onClick={() => { setMenuOpen(false); onDisable(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-text hover:bg-surface-hover disabled:opacity-40">{service.status === "disabled" ? t("settings.redesign.enableService") : t("settings.models.disable", { defaultValue: "Disable service" })}</button>}
             <button type="button" role="menuitem" disabled={busy} onClick={() => { setMenuOpen(false); onDisconnect(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-error-text hover:bg-error/10 disabled:opacity-40">{t("settings.models.disconnect", { defaultValue: "Disconnect" })}</button>
           </div>}
         </div>
       </div>
+      {service.custom && service.status === "needs_key" && <div className="pb-3"><button type="button" disabled={busy} onClick={onManage} className="min-h-9 rounded-input border border-border px-3 text-ui-caption text-link hover:bg-surface-hover disabled:opacity-40">{t("settings.redesign.configureConnection")}</button></div>}
+      {service.custom && service.status === "needs_login" && <p className="pb-3 text-ui-caption text-muted">{t("settings.redesign.oauthUnavailable")}</p>}
       {expanded && <div id={panelId} className="border-t border-faint pb-2 pl-3" role="region" aria-label={`${service.name} ${t("settings.models.models", { defaultValue: "models" })}`}>
         {service.models.length === 0 ? <p className="py-4 text-ui-caption text-muted">{t("settings.models.noModelsHelp", { defaultValue: "Check the endpoint or refresh the model list." })}</p> : <><div className="hidden grid-cols-2 gap-2 sm:grid sm:grid-cols-[minmax(0,1fr)_7rem_7rem_5rem] sm:gap-3 border-b border-faint py-2 pr-2 text-ui-meta font-medium text-muted"><span>{t("settings.models.modelName", { defaultValue: "Model" })}</span><span className="text-right">{t("settings.models.inputFormats", { defaultValue: "Input format" })}</span><span className="text-right">{t("settings.models.contextWindow", { defaultValue: "Context" })}</span><span className="text-right">{t("settings.models.maxOutputTokens", { defaultValue: "Max output" })}</span></div>{service.models.map((model) => <ModelRow key={model.id} model={model} />)}</>}
       </div>}
@@ -156,8 +160,8 @@ function ProviderSection({ service, expanded, onToggle, onManage, onReplace, onR
 function ModelRow({ model }: { model: ModelView }) {
   const { t } = useTranslation();
   return <div className="grid min-h-12 grid-cols-2 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_7rem_7rem_5rem] sm:gap-3 border-b border-faint py-2 pr-2 last:border-0">
-    <span className="col-span-2 min-w-0 break-words text-ui-label text-text sm:col-span-1">{model.name}{model.thinkingLevels.length > 0 && <span className="mt-1 block text-ui-meta text-muted">{t("settings.redesign.supportedThinking")}: {model.thinkingLevels.map((level) => t(`settings.thinking.${level}`, { defaultValue: level })).join(" · ")}</span>}</span>
-    <span className="col-span-2 text-ui-meta text-muted sm:col-span-1 sm:text-right">{model.inputFormats.map((format) => t(`settings.models.input.${format}`, { defaultValue: format })).join(" · ")}</span>
+    <span className="col-span-2 min-w-0 break-words text-ui-label text-text sm:col-span-1">{model.name}{model.thinkingLevels.length > 0 && <span className="mt-1 block text-ui-meta text-muted">{t("settings.redesign.supportedThinking")}: {model.thinkingLevels.map((level) => t(`settings.thinking.${level}`, { defaultValue: level })).join(" · ")}</span>}{model.available === false && <span className="mt-1 block text-ui-meta text-muted">{t("settings.redesign.modelNotAvailable")}</span>}</span>
+    <span className="col-span-2 text-ui-meta text-muted sm:col-span-1 sm:text-right">{model.inputFormats.length ? model.inputFormats.map((format) => t(`settings.models.input.${format}`, { defaultValue: format })).join(" · ") : "—"}</span>
     <span className="font-mono text-ui-meta text-muted sm:text-right"><span className="font-sans sm:hidden">{t("settings.models.contextWindow")}: </span>{formatContext(model.contextWindow)}</span>
     <span className="text-right font-mono text-ui-meta text-muted"><span className="font-sans sm:hidden">{t("settings.models.maxOutputTokens")}: </span>{formatContext(model.maxOutputTokens)}</span>
   </div>;
@@ -203,6 +207,11 @@ function ManageConnectionDrawer({ service, onClose, onConfigReload }: { service:
   const { t } = useTranslation();
   const [name, setName] = useState(service.name);
   const [baseUrl, setBaseUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
+  const initialAuth = service.auth?.kind === "none" ? "none" : "api_key";
+  const [authKind, setAuthKind] = useState(initialAuth);
+  const canEditAuth = service.auth?.api_key_supported !== false || service.auth.kind === "none";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const endpointRead = useQuery({ queryKey: modelResourceKeys.endpoints, queryFn: modelResourcesApi.endpoints, enabled: service.custom, staleTime: 0 });
@@ -214,12 +223,12 @@ function ManageConnectionDrawer({ service, onClose, onConfigReload }: { service:
     if (!name.trim() || !baseUrl.trim()) return;
     setBusy(true);
     setError(null);
-    try { await modelResourcesApi.updateCustomProvider(service.id, { name: name.trim(), base_url: baseUrl.trim() }); await onConfigReload(); onClose(); }
+    try { await modelResourcesApi.updateCustomProvider(service.id, { name: name.trim(), base_url: baseUrl.trim(), ...(canEditAuth && (apiKey.trim() || authKind !== initialAuth) ? { auth: authKind === "none" ? { kind: "none" } : { kind: "api_key", secret: apiKey.trim() } } : {}) }); await onConfigReload(); onClose(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(false); }
   };
   return <Modal title={t("settings.models.editConnection", { defaultValue: "Edit connection" })} onClose={onClose}>
-    <div className="space-y-4"><Field label={t("settings.resources.name", { defaultValue: "Name" })}><input value={name} onChange={(event) => setName(event.target.value)} className={inputClass} /></Field><Field label={t("settings.models.baseUrl", { defaultValue: "Base URL" })}><input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} className={cn(inputClass, "font-mono")} /></Field>{endpoint && <DetailGroup title={t("settings.models.advanced", { defaultValue: "Advanced" })}><DetailRow label={t("settings.models.protocol", { defaultValue: "Protocol" })} value={endpoint.protocol} /><DetailRow label={t("settings.models.health", { defaultValue: "Health check" })} value={endpoint.health} /></DetailGroup>}{error && <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-ui-meta text-error-text">{error}</p>}<div className="flex justify-end gap-2"><button type="button" onClick={onClose} className="min-h-9 rounded-input px-3 text-ui-meta text-muted hover:text-text">{t("common.cancel", { defaultValue: "Cancel" })}</button><button type="button" disabled={busy || !name.trim() || !baseUrl.trim()} onClick={() => void save()} className="min-h-9 rounded-input bg-accent-fill px-3 text-ui-meta font-medium text-accent-fg disabled:opacity-40">{t("common.save", { defaultValue: "Save" })}</button></div></div>
+    <div className="space-y-4"><Field label={t("settings.resources.name", { defaultValue: "Name" })}><input value={name} onChange={(event) => setName(event.target.value)} className={inputClass} /></Field><Field label={t("settings.models.baseUrl", { defaultValue: "Base URL" })}><input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} className={cn(inputClass, "font-mono")} /></Field>{canEditAuth && <Field label={t("settings.resources.auth")}><SettingsSelectMenu variant="field" ariaLabel={t("settings.resources.auth")} value={authKind} options={[{ value: "api_key", label: t("settings.resources.managedKey") }, { value: "none", label: t("settings.resources.noAuth") }]} onSelect={setAuthKind} /></Field>}{canEditAuth && authKind === "api_key" && <><Field label={t("settings.resources.apiKey")}><SecretInput value={apiKey} visible={showApiKey} onChange={setApiKey} onToggle={() => setShowApiKey((value) => !value)} /></Field><p className="text-ui-caption text-muted">{t("settings.redesign.keepCredential")}</p></>}{!canEditAuth && <p className="text-ui-caption text-muted">{t("settings.redesign.oauthUnavailable")}</p>}{endpoint && <DetailGroup title={t("settings.models.advanced", { defaultValue: "Advanced" })}><DetailRow label={t("settings.models.protocol", { defaultValue: "Protocol" })} value={endpoint.protocol} /><DetailRow label={t("settings.models.health", { defaultValue: "Health check" })} value={endpoint.health} /></DetailGroup>}{error && <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-ui-meta text-error-text">{error}</p>}<div className="flex justify-end gap-2"><button type="button" onClick={onClose} className="min-h-9 rounded-input px-3 text-ui-meta text-muted hover:text-text">{t("common.cancel", { defaultValue: "Cancel" })}</button><button type="button" disabled={busy || !name.trim() || !baseUrl.trim() || canEditAuth && authKind === "api_key" && authKind !== initialAuth && !apiKey.trim()} onClick={() => void save()} className="min-h-9 rounded-input bg-accent-fill px-3 text-ui-meta font-medium text-accent-fg disabled:opacity-40">{t("common.save", { defaultValue: "Save" })}</button></div></div>
   </Modal>;
 }
 

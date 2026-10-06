@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { AIModelsTab } from "./AIModelsTab";
 import { queryClient } from "../../../lib/client/query-client";
@@ -41,18 +41,39 @@ function renderTab(overrides: Partial<React.ComponentProps<typeof AIModelsTab>> 
   );
 }
 
+function labConfig(status: "needs_key" | "invalid" | "needs_login" | "configured" = "needs_key", enabled = true): SettingsConfig {
+  return { ...config, providers: [{ id: "user-lab", name: "Lab", models: ["model-a"], has_key: status === "configured", credential_status: status, enabled, custom: true,
+    auth: { kind: status === "needs_login" ? "oauth" : "api_key", api_key_supported: status !== "needs_login", oauth_supported: status === "needs_login", login_supported: false } }], custom_providers: [], available_models: [] };
+}
+
+function connectionApi(failFirstSave = false) {
+  let saves = 0;
+  const calls: { url: string; method: string; body?: unknown }[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit = {}) => {
+    const method = init.method ?? "GET";
+    calls.push({ url, method, body: init.body ? JSON.parse(String(init.body)) : undefined });
+    let body: unknown = { ok: true };
+    let status = 200;
+    if (url === "/api/endpoints") body = { endpoints: [{ id: "endpoint-lab", name: "Lab", base_url: "https://lab.example/v1", protocol: "openai", health: "unknown", credential_ref: null }] };
+    else if (url === "/api/provider-endpoint-bindings") body = { bindings: [{ id: "binding-lab", provider_id: "user-lab", endpoint_id: "endpoint-lab" }] };
+    else if (method === "PUT" && url === "/api/custom-providers/user-lab" && failFirstSave && ++saves === 1) { status = 500; body = { error: "Repair failed" }; }
+    return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  }));
+  return calls;
+}
+
 beforeAll(async () => {
   await i18n.changeLanguage("en");
 });
 
 beforeEach(() => queryClient.clear());
-afterEach(() => queryClient.clear());
+afterEach(() => { queryClient.clear(); vi.unstubAllGlobals(); });
 
 describe("AIModelsTab", () => {
   it("shows connected services and model capabilities without runtime controls", () => {
     renderTab();
     expect(screen.getByText("Models available to Pi")).toBeInTheDocument();
-    expect(screen.getByText("Connected services")).toBeInTheDocument();
+    expect(screen.getByText("Configured services")).toBeInTheDocument();
     expect(screen.getAllByText("Anthropic").length).toBeGreaterThan(0);
     expect(screen.getByText("Claude Sonnet 4.6")).toBeInTheDocument();
     expect(screen.getByText("Input format")).toBeInTheDocument();
@@ -111,6 +132,83 @@ describe("AIModelsTab", () => {
     expect(screen.getByText("Subscription provider")).toBeInTheDocument();
     expect(screen.getByText("Login required")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Subscription provider/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps a custom provider with missing credentials visible and repairs it through the canonical API", async () => {
+    const calls = connectionApi();
+    const reload = vi.fn(async () => undefined);
+    renderTab({ config: labConfig(), onConfigReload: reload });
+    expect(screen.getByText("Lab")).toBeInTheDocument();
+    expect(screen.getByText("Needs authentication")).toBeInTheDocument();
+    expect(screen.getByText("model-a")).toBeInTheDocument();
+    expect(screen.getByText("Not currently available")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Configure connection" }));
+    const editor = screen.getByRole("dialog", { name: "Edit connection" });
+    const url = within(editor).getByLabelText("Base URL");
+    await waitFor(() => expect(url).toHaveValue("https://lab.example/v1"));
+    fireEvent.change(url, { target: { value: "https://repaired.example/v1" } });
+    const key = within(editor).getByLabelText("API key");
+    expect(key).toHaveAttribute("type", "password");
+    fireEvent.change(key, { target: { value: "test-repair-key" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit connection" })).not.toBeInTheDocument());
+    expect(calls).toContainEqual({ url: "/api/custom-providers/user-lab", method: "PUT", body: { name: "Lab", base_url: "https://repaired.example/v1", auth: { kind: "api_key", secret: "test-repair-key" } } });
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("retains a failed credential repair for retry without clearing the draft", async () => {
+    const calls = connectionApi(true);
+    renderTab({ config: labConfig("invalid") });
+    fireEvent.click(screen.getByRole("button", { name: "Configure connection" }));
+    const editor = screen.getByRole("dialog", { name: "Edit connection" });
+    await waitFor(() => expect(within(editor).getByLabelText("Base URL")).toHaveValue("https://lab.example/v1"));
+    const key = within(editor).getByLabelText("API key");
+    fireEvent.change(key, { target: { value: "test-repair-key" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
+    expect(await within(editor).findByRole("alert")).toHaveTextContent("Repair failed");
+    expect(key).toHaveValue("test-repair-key");
+    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit connection" })).not.toBeInTheDocument());
+    expect(calls.filter(call => call.method === "PUT")).toHaveLength(2);
+  });
+
+  it("keeps the existing credential when editing only the endpoint", async () => {
+    const calls = connectionApi();
+    renderTab({ config: labConfig("configured") });
+    fireEvent.click(screen.getByRole("button", { name: "Connection settings" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit connection" }));
+    const editor = screen.getByRole("dialog", { name: "Edit connection" });
+    await waitFor(() => expect(within(editor).getByLabelText("Base URL")).toHaveValue("https://lab.example/v1"));
+    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit connection" })).not.toBeInTheDocument());
+    expect(calls).toContainEqual({ url: "/api/custom-providers/user-lab", method: "PUT", body: { name: "Lab", base_url: "https://lab.example/v1" } });
+  });
+
+  it.each([true, false])("keeps enable/disable and delete actions available (enabled=%s)", async enabled => {
+    const calls = connectionApi();
+    const reload = vi.fn(async () => undefined);
+    renderTab({ config: labConfig("configured", enabled), onConfigReload: reload });
+    fireEvent.click(screen.getByRole("button", { name: "Connection settings" }));
+    expect(screen.getByRole("menuitem", { name: "Edit connection" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: enabled ? "Disable service" : "Enable service" }));
+    await waitFor(() => expect(reload).toHaveBeenCalledOnce());
+    expect(calls).toContainEqual({ url: `/api/custom-providers/user-lab/enabled?enabled=${!enabled}`, method: "PUT", body: undefined });
+    fireEvent.click(screen.getByRole("button", { name: "Connection settings" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Disconnect" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Disconnect service" })).getByRole("button", { name: "Disconnect" }));
+    await waitFor(() => expect(calls).toContainEqual({ url: "/api/custom-providers/user-lab", method: "DELETE", body: undefined }));
+  });
+
+  it("keeps an unsupported-login custom provider visible and editable", async () => {
+    connectionApi();
+    renderTab({ config: labConfig("needs_login") });
+    expect(screen.getByText("Lab")).toBeInTheDocument();
+    expect(screen.getByText("Login required")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Connection settings" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit connection" }));
+    const editor = screen.getByRole("dialog", { name: "Edit connection" });
+    await waitFor(() => expect(within(editor).getByLabelText("Base URL")).toHaveValue("https://lab.example/v1"));
+    expect(within(editor).queryByLabelText("API key")).not.toBeInTheDocument();
   });
 
 });

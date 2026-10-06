@@ -57,6 +57,7 @@ beforeAll(async () => {
 beforeEach(() => {
   cleanup();
   fetchMock.mockClear();
+  fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => defaultFetch(String(input), init));
   putCalls.length = 0;
   vi.stubGlobal("fetch", fetchMock);
   queryClient.clear();
@@ -146,7 +147,7 @@ describe("SettingsContent", () => {
     expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("tabpanel", { name: "AI Models" })).toHaveAttribute("aria-labelledby", "settings-tab-models");
-    expect(await screen.findByText("Connected services")).toBeInTheDocument();
+    expect(await screen.findByText("Configured services")).toBeInTheDocument();
   });
 
   it("shows separate Built-in and User Skills tables inside Settings", async () => {
@@ -183,7 +184,7 @@ describe("SettingsContent", () => {
   it("keeps runtime model controls out of Settings", async () => {
     renderContent(null);
     fireEvent.click(await screen.findByRole("tab", { name: "AI Models" }));
-    expect(await screen.findByText("Connected services")).toBeInTheDocument();
+    expect(await screen.findByText("Configured services")).toBeInTheDocument();
     expect(screen.queryByText("Default model")).not.toBeInTheDocument();
     expect(screen.queryByText("Thinking Level")).not.toBeInTheDocument();
     expect(screen.queryByText("Context Management")).not.toBeInTheDocument();
@@ -194,6 +195,9 @@ describe("SettingsContent", () => {
     fireEvent.click(await screen.findByRole("tab", { name: "Agent" }));
     expect(await screen.findByText("Control how Pi manages long-running work.")).toBeInTheDocument();
     expect(screen.getByText("Context Management")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Configured model" })).toBeInTheDocument();
+    expect(screen.getByText(/They affect new conversations and are also applied to other open conversations/)).toBeInTheDocument();
+    expect(screen.queryByText(/Configured model defaults/)).not.toBeInTheDocument();
   });
   it("uses a single keyboard tab stop in the navigation and links Agent to model connections", async () => {
     renderContent("/lab/project");
@@ -206,6 +210,28 @@ describe("SettingsContent", () => {
     expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true");
     await waitFor(() => expect(screen.getByRole("tab", { name: "AI Models" })).toHaveFocus());
     expect(screen.getByText("/lab/project")).toBeInTheDocument();
+  });
+
+  it("reloads a repaired custom provider before the settings cache TTL expires", async () => {
+    let repaired = false;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      if (url.startsWith("/api/settings/config")) return jsonResponse({ model: "", thinking: "off", api_keys: {}, custom_providers: [], available_models: [], compaction_enabled: true, compaction_threshold_percent: 85,
+        providers: [{ id: "user-lab", name: "Lab", custom: true, enabled: true, models: ["model-a"], has_key: repaired, credential_status: repaired ? "configured" : "needs_key" }] });
+      if (url === "/api/endpoints") return jsonResponse({ endpoints: [{ id: "lab-endpoint", base_url: "https://lab.example/v1", protocol: "openai", health: "unknown" }] });
+      if (url === "/api/provider-endpoint-bindings") return jsonResponse({ bindings: [{ provider_id: "user-lab", endpoint_id: "lab-endpoint" }] });
+      if (url === "/api/custom-providers/user-lab" && init.method === "PUT") { repaired = true; return jsonResponse({ ok: true }); }
+      return defaultFetch(url, init);
+    });
+    renderContent(null);
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Models" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Configure connection" }));
+    await waitFor(() => expect(screen.getByLabelText("Base URL")).toHaveValue("https://lab.example/v1"));
+    fireEvent.change(screen.getByLabelText("API key"), { target: { value: "test-repair-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("button", { name: /Lab.*Connected/ })).toBeInTheDocument();
+    expect(screen.queryByText("Needs authentication")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Edit connection" })).not.toBeInTheDocument();
   });
 
 });

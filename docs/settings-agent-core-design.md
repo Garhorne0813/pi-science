@@ -16,26 +16,51 @@ source and branding are not copied.
 | Group | Pages | Purpose |
 | --- | --- | --- |
 | Workbench | General, AI Models, Agent, Progress | Device preferences, model connections, context policy and activity presentation |
-| Agent capabilities | Skills, Extensions, MCP | Preserve the existing skill, subagent, web access and managed connector controls |
-| Scientific compute | Environments, Compute | Environment revisions and scientific execution resources |
+| Capabilities | Skills, Extensions, MCP | Preserve the existing skill, subagent, web access and managed connector controls |
+| Compute | Environments, Compute | Environment revisions and scientific execution resources |
 
 The desktop sidebar identifies the workspace path or global scope. The content
-explains that model credentials and agent defaults are shared; workspace skill,
+explains that model credentials and configured model settings are shared; workspace skill,
 MCP and compute resources use the workspace captured when Settings opened.
 Changing scope remounts the content so drafts cannot cross workspaces.
 
 General has three theme choices plus language and panel-order preferences.
 AI Models retains canonical model-resource mutations, API key connection,
-custom service discovery, credential replacement and disconnection. Connected
-service cards are searchable by service/model name and ID; mobile model rows
+custom service discovery, credential replacement and disconnection. Configured custom providers stay visible regardless of credential or enabled
+state, with connection repair, enable/disable and deletion actions. Service cards are searchable by service/model name and ID; mobile model rows
 wrap and retain context/output labels. Model rows expose only the supported
 thinking levels received from the catalog. OAuth-only services show Login
 required and explain that subscription login is unavailable here.
 
 Agent shows the configured model and its supported capabilities, with a link
-to model connections. Conversation-specific model and thinking selectors stay
-in the composer. A missing model stays unavailable; Settings does not replace it
+to model connections. Model and thinking selectors stay in the composer. In this transitional PR,
+composer changes configure the targeted durable session **and** update the shared
+model/thinking settings used by new sessions. This is not independent default
+and session ownership; the Agent page describes the shared configured model. A missing model stays unavailable; Settings does not replace it
 or infer capacity from a cached value for another model.
+
+## Compatibility and follow-up scope
+
+This PR intentionally keeps `/api/settings/config` as a compatibility projection.
+It does not establish that DTO as the long-term model configuration API. This is
+Phase 0.5: Settings UX and runtime-fact consistency, not Model Configuration v2.
+
+Model selection remains backed by the shared legacy settings contract in this
+PR. `PUT /api/settings/model` with `session_id` commits that session's selection
+and also writes the shared model/thinking config; without `session_id`, it writes
+the shared config. Runtime configuration reloads also apply model changes to other loaded sessions
+(after active turns settle); cold sessions without a saved selection read the
+shared config. These existing behaviors are retained, not made session-local.
+Separating default selection from per-session selection, dedicated model-selection
+endpoints, backend-owned ProviderView availability and a ModelCatalog API are
+follow-up work. The ownership regression explicitly characterizes today's shared
+behavior so the future migration must change that expectation deliberately.
+
+The current compatibility UI still interprets credential metadata and the lack of
+subscription-login support. That policy is transitional; a backend ProviderView
+should eventually return availability and permitted actions directly. Provider
+existence is independent of this policy: missing/invalid credentials, disabled
+state and unsupported login never hide a configured custom provider.
 
 ## Context policy
 
@@ -92,3 +117,25 @@ and builtin DeepSeek catalog assertions now guard those cases. Focused server
 regressions passed (51 tests, 7 skipped), and workspace typechecking passed.
 MCP external connectivity, SSH credentials, environment installation and
 actual context compaction were outside this UI acceptance run.
+
+## Review regressions
+
+The ownership regression now verifies the transitional API explicitly: selecting
+a model in session A changes both A and shared settings; session B initially
+uses that shared choice; a subsequent model reload also updates loaded B. The
+Agent UI describes these effects in English and Chinese rather than promising
+independent defaults. Separating those writes and reload effects is future
+ModelSelection work.
+
+Provider regressions cover missing/invalid credentials, unsupported custom login,
+disabled resources, canonical/legacy ID deduplication, credential and endpoint
+repair, preservation of an existing credential, failed-save retry, enable/disable
+and deletion. Custom resource mutations await Settings cache invalidation before
+reloading, so repairs are visible before the 3-second cache TTL expires.
+
+Verification after these review fixes: 47 frontend tests passed; 47 backend
+business-route tests passed (7 skipped); 6 viewport/theme browser checks passed,
+including overflow and serious/critical accessibility checks. Workspace typecheck,
+frontend lint, production build and bundle budget passed. Screenshot-guided
+coordinate input additionally exercised repair, disable, mobile enable and delete
+against isolated provider fixtures; this run used no live provider credentials.

@@ -30,4 +30,21 @@ describe("buildServices", () => {
     ]))).toEqual([]);
   });
 
+  it.each([
+    ["needs_key", true, "needs_key"],
+    ["invalid", true, "needs_key"],
+    ["needs_login", true, "needs_login"],
+    ["configured", false, "disabled"],
+  ] as const)("keeps a %s custom provider in the inventory", (credentialStatus, enabled, status) => {
+    const services = buildServices({ ...config([{ id: "user-lab", name: "Lab", models: ["model-a"], has_key: credentialStatus === "configured", credential_status: credentialStatus, enabled, custom: true }]), available_models: [] });
+    expect(services).toHaveLength(1);
+    expect(services[0]).toMatchObject({ id: "user-lab", name: "Lab", status, custom: true });
+    expect(services[0].models).toEqual([expect.objectContaining({ id: "user-lab/model-a", available: false, contextWindow: null, maxOutputTokens: null, inputFormats: [] })]);
+  });
+
+  it("keeps a legacy custom provider with no key manageable using its canonical ID", () => {
+    const services = buildServices(config([], [{ id: "lab", name: "Legacy Lab", base_url: "https://lab.example/v1", api: "openai-completions", models: ["model-a"], has_key: false }]));
+    expect(services[0]).toMatchObject({ id: "user-lab", name: "Legacy Lab", status: "needs_key", custom: true });
+  });
+
 });
