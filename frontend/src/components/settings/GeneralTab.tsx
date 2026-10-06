@@ -1,13 +1,26 @@
+import { useSyncExternalStore } from "react";
 import { Check, Monitor, Moon, Sun } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { shippedLocales } from "../../i18n/config";
-import { cn, useUiStore } from "../../lib/ui";
+import { cn, resolveSystemTheme, useUiStore } from "../../lib/ui";
 import { SettingsSelectMenu } from "./SettingsSelectMenu";
 
 const THEMES = [{ value: "system", icon: Monitor }, { value: "light", icon: Sun }, { value: "dark", icon: Moon }] as const;
 
+function subscribeSystemTheme(onChange: () => void) {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => {};
+  const media = window.matchMedia("(prefers-color-scheme: dark)");
+  if (typeof media.addEventListener === "function") {
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }
+  media.addListener(onChange);
+  return () => media.removeListener(onChange);
+}
+
 export function GeneralTab() {
   const { t } = useTranslation();
+  const systemTheme = useSyncExternalStore(subscribeSystemTheme, resolveSystemTheme, () => "light");
   const theme = useUiStore((state) => state.theme);
   const setTheme = useUiStore((state) => state.setTheme);
   const locale = useUiStore((state) => state.locale);
@@ -21,8 +34,8 @@ export function GeneralTab() {
         <h3 id="settings-appearance-title" className="text-ui-body font-medium text-text">{t("settings.appearance.label")}</h3>
         <p className="mt-1 text-ui-caption text-muted">{t("settings.redesign.appearanceHelp")}</p>
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          {THEMES.map(({ value, icon: ThemeIcon }) => <button key={value} type="button" aria-pressed={theme === value} onClick={() => setTheme(value)} className={cn("rounded-large border p-4 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent", theme === value ? "border-strong bg-surface-2" : "border-border bg-bg hover:bg-surface-hover")}>
-            <div aria-hidden="true" className="flex h-14 overflow-hidden rounded-input border border-border bg-bg"><div className="w-9 border-r border-border bg-sidebar p-2"><div className="h-1 rounded-full bg-muted" /><div className="mt-2 h-1 rounded-full bg-surface-selected" /></div><div className="flex flex-1 items-center justify-center gap-2 bg-surface-2"><ThemeIcon size={18} className="text-muted" /></div></div>
+          {THEMES.map(({ value, icon: ThemeIcon }) => <button key={value} type="button" aria-pressed={theme === value} onClick={() => setTheme(value)} className={cn("rounded-large border p-4 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent", theme === value ? "border-accent bg-surface-2" : "border-border bg-bg hover:bg-surface-hover")}>
+            <div aria-hidden="true" data-theme={value === "system" ? systemTheme : value} className="flex h-14 overflow-hidden rounded-input border border-border bg-bg"><div className="w-9 border-r border-border bg-sidebar p-2"><div className="h-1 rounded-full bg-muted" /><div className="mt-2 h-1 rounded-full bg-surface-selected" /></div><div className="flex flex-1 items-center justify-center gap-2 bg-surface-2"><ThemeIcon size={18} className="text-muted" /></div></div>
             <span className="mt-3 flex items-center justify-between gap-2 text-ui-label text-text">{t(`settings.appearance.${value}`)}{theme === value && <Check size={14} className="text-accent" />}</span>
           </button>)}
         </div>
