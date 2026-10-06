@@ -15,7 +15,7 @@ import type { WorkspaceEnvironmentService } from "../workspace/workspace-environ
 import { seedWorkspaceAssets } from "../agent/runtime-config.js";
 import { CredentialStore } from "../../model-resources/credential-store.js";
 import { projectedEnvironmentNames } from "../shared/extensions/pi-science-mcp.js";
-import { AgentRuntimeExitedError, AgentRuntimeTimeoutError } from "./agent-runtime-errors.js";
+import { AgentRuntimeCapacityError, AgentRuntimeExitedError, AgentRuntimeTimeoutError } from "./agent-runtime-errors.js";
 import { AgentSessionRegistry } from "./agent-session-registry.js";
 import { DurableTurnLifecycle } from "../artifacts/turn-lifecycle.js";
 import { promptOperationId } from "./agent-message.js";
@@ -69,7 +69,9 @@ function thinking(value: string | null | undefined): "off" | "minimal" | "low" |
 }
 function failed(error: unknown): RuntimeResult<never> {
   const code = error instanceof AgentRuntimeTimeoutError ? "timeout"
-    : error instanceof AgentRuntimeExitedError ? "process_exit" : "runtime_command_failed";
+    : error instanceof AgentRuntimeExitedError ? "process_exit"
+    : error instanceof AgentRuntimeCapacityError ? "runtime_capacity_exceeded"
+    : "runtime_command_failed";
   return { success: false, code, error: error instanceof Error ? error.message : String(error) };
 }
 
@@ -84,6 +86,7 @@ export class AgentCoreSessionService {
   private beforeStart: ((cwd: string) => Promise<void>) | null = null;
   private readonly turns: DurableTurnLifecycle;
   private hooks: ProductHooks = {};
+  private readonly migrating = new Set<string>();
   private readonly recovering = new Map<string, Promise<void>>();
   private readonly recoveryAttempts = new Map<string, number>();
   private readonly recoveryTimers = new Map<string, NodeJS.Timeout>();
@@ -125,9 +128,20 @@ export class AgentCoreSessionService {
       || this.live.has(identity(cwd, sessionId)) || (await this.repository.findPath(cwd, sessionId)) !== null;
   }
 
+  /** Ownership is durable and no conversion is still running. A conversion
+   *  registers ownership before it finishes, so owns() alone is not readiness:
+   *  a reader that trusted it could observe a half-converted session. */
+  async ready(cwd: string, sessionId: string): Promise<boolean> {
+    return !this.migrating.has(identity(cwd, sessionId)) && await this.owns(cwd, sessionId);
+  }
+
   /** Copies a Pi v3 transcript, then lets JsonlSessionRepo upgrade the copy on its first write. */
   async importLegacy(cwd: string, sessionId: string, source: string, config: PiConfig, options: { activate?: boolean } = {}): Promise<RuntimeResult> {
-    return this.withMutation(cwd, sessionId, () => this.importLegacyOnce(cwd, sessionId, source, config, options)).catch(failed);
+    const key = identity(cwd, sessionId);
+    this.migrating.add(key);
+    try {
+      return await this.withMutation(cwd, sessionId, () => this.importLegacyOnce(cwd, sessionId, source, config, options)).catch(failed);
+    } finally { this.migrating.delete(key); }
   }
 
   private async importLegacyOnce(cwd: string, sessionId: string, source: string, config: PiConfig, options: { activate?: boolean }): Promise<RuntimeResult> {
@@ -314,28 +328,36 @@ export class AgentCoreSessionService {
     return item;
   }
 
-  private async open(cwd: string, sessionId: string, config: PiConfig): Promise<Live | RuntimeResult> {
+  private async open(cwd: string, sessionId: string, config: PiConfig, model?: { provider: string; modelId: string }): Promise<Live | RuntimeResult> {
     if ((await this.registry.get(cwd, sessionId))?.state === "deleted") return { success: false, code: "not_found", error: "session was deleted" };
     const key = identity(cwd, sessionId);
     // attach() exposes the live record while binding. Even abort must wait for
     // activation before it can change a recovered operation's lifecycle.
     const pending = this.opening.get(key);
-    if (pending) return pending;
+    if (pending) {
+      const opened = await pending;
+      // A start that already failed on the persisted model fails again for the
+      // same reason, so retry with the requested model instead of giving up.
+      if (!model || !("success" in opened)) return opened;
+    }
     const current = this.live.get(key);
     if (current && !current.runtime.isClosed) return current;
-    const started = this.openOnce(cwd, sessionId, config);
+    const started = this.openOnce(cwd, sessionId, config, model);
     this.opening.set(key, started);
     try { return await started; }
     finally { if (this.opening.get(key) === started) this.opening.delete(key); }
   }
 
-  private async openOnce(cwd: string, sessionId: string, config: PiConfig): Promise<Live | RuntimeResult> {
+  private async openOnce(cwd: string, sessionId: string, config: PiConfig, modelOverride?: { provider: string; modelId: string }): Promise<Live | RuntimeResult> {
     const key = identity(cwd, sessionId);
     const path = await this.repository.findPath(cwd, sessionId);
     if (!path) return { success: false, code: "not_found", error: "session not found in this workspace" };
     const saved = await readJson<Pick<PiConfig, "skills" | "model_context_window_override"> | null>(configPath(cwd, sessionId), null);
     const persisted = await this.repository.configuration(cwd, sessionId);
-    const model = persisted?.model ?? splitModel(config.model);
+    // An explicit model change must not need the model it replaces. Disabling a
+    // provider removes its model from the catalog, so resolving the persisted
+    // model first would leave that session permanently unconfigurable.
+    const model = modelOverride ?? persisted?.model ?? splitModel(config.model);
     if (!model) return { success: false, code: "invalid_model", error: "An agent-core session requires a provider/model setting" };
     try {
       await this.beforeStart?.(cwd);
@@ -435,13 +457,16 @@ export class AgentCoreSessionService {
 
   private async stopForReload(item: Live): Promise<void> {
     if (this.live.get(identity(item.runtime.cwd, item.runtime.sessionId)) !== item) return;
-    if (item.pendingModel) {
-      const { model, thinking } = item.pendingModel;
-      if (item.model !== model || item.thinking !== thinking) {
-        const result = await this.configure(item.runtime.cwd, item.runtime.sessionId, model, thinking, item.config);
-        if (!result.success) throw new Error(String(result.error ?? result.code ?? "model configuration failed"));
-      }
-      item.pendingModel = undefined;
+    // Take the pending model before awaiting configure. A re-entrant call would
+    // otherwise see it still set and chain a second mutation behind the one this
+    // call is waiting on, which is a deadlock. restartPending clears only after
+    // the configure succeeds, so a failure retries instead of silently keeping
+    // the old model.
+    const pending = item.pendingModel;
+    item.pendingModel = undefined;
+    if (pending && (item.model !== pending.model || item.thinking !== pending.thinking)) {
+      const result = await this.configure(item.runtime.cwd, item.runtime.sessionId, pending.model, pending.thinking, item.config);
+      if (!result.success) throw new Error(String(result.error ?? result.code ?? "model configuration failed"));
     }
     item.restartPending = false;
     item.suppressRecovery = true;
@@ -494,7 +519,7 @@ export class AgentCoreSessionService {
     if (level !== undefined && !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(level)) {
       return { success: false, code: "invalid_thinking", error: "invalid thinking level" };
     }
-    const opened = await this.open(cwd, sessionId, config);
+    const opened = await this.open(cwd, sessionId, config, ref);
     if ("success" in opened) return opened;
     if (opened.busy) return { success: false, code: "busy", error: "agent is busy; wait for the current task to finish or stop it" };
     const result = await opened.runtime.sendCommand("configure", { ...ref, ...(level ? { level } : {}) }).catch(failed);
@@ -651,6 +676,13 @@ export class AgentCoreSessionService {
         return;
       }
       const opened = await this.open(cwd, sessionId, item.config);
+      if (!("success" in opened)) {
+        // The reload intent lives on the Live record that recovery replaces.
+        // Carry it over so a settings change that arrived while the worker was
+        // stuck still lands instead of dying with the old record.
+        opened.restartPending = opened.restartPending || item.restartPending;
+        opened.pendingModel ??= item.pendingModel;
+      }
       if ("success" in opened) {
         await this.events.publish(cwd, sessionId, { type: "error", sessionId, code: "worker_recovery_failed", terminal: attempt >= 3, message: String(opened.error) });
         if (attempt < 3) {
@@ -668,6 +700,11 @@ export class AgentCoreSessionService {
           type: "operation.settled", runId: result.data.operationId, status: result.data.status, recovery: true,
         });
         else await this.events.publish(cwd, sessionId, { type: "runtime.paused", sessionId });
+      }
+      if (!("success" in opened) && opened.restartPending && !opened.busy) {
+        // configure() takes the mutation queue, so it cannot run inside this one.
+        const timer = setTimeout(() => { void this.stopForReload(opened).catch(() => undefined); }, 0);
+        timer.unref?.();
       }
     }).catch(async (error) => {
       try { await this.events.publish(cwd, sessionId, { type: "error", sessionId, code: "worker_recovery_failed", terminal: true, message: String(error) }); } catch { /* The event store may itself be unavailable. */ }

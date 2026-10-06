@@ -122,7 +122,6 @@ export function registerNodeSessionRoutes(
       const errorCode = typeof result.code === "string" ? result.code : "runtime_command_failed";
       const state = isPromptDeliveryIndeterminate(errorCode) ? "indeterminate" as const : "rejected" as const;
       const delivery = await promptRequests.update(workspace, sessionId, requestId, state, { error_code: errorCode });
-      if (state === "rejected") await promptRequests.clearAssociation(workspace, sessionId, requestId);
       return reply.code(sessionRuntimeStatus(result.code)).send({ ok: false, ...result, ...(delivery ?? {}) });
     });
   });

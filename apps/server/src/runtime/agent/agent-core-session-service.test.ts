@@ -7,7 +7,8 @@ import { readJson, workspaceFile, writeJsonAtomic } from "../../storage/persiste
 import { AgentCoreSessionService } from "./agent-core-session-service.js";
 import { workspaceIdentity } from "./workspace-session-identity.js";
 import { CredentialStore } from "../../model-resources/credential-store.js";
-import { AgentRuntimeExitedError, AgentRuntimeTimeoutError } from "./agent-runtime-errors.js";
+import { AgentRuntimeCapacityError, AgentRuntimeExitedError, AgentRuntimeTimeoutError } from "./agent-runtime-errors.js";
+import { isPromptDeliveryIndeterminate } from "../node/prompt-request-repository.js";
 import { EventEmitter } from "node:events";
 
 describe("agent-core session configuration", () => {
@@ -22,6 +23,32 @@ describe("agent-core session configuration", () => {
     expect(await service.configure(cwd, sessionId, "openai/new", "high", { skills: [], extensions: [] }))
       .toMatchObject({ success: false, code: "busy" });
     expect(sendCommand).not.toHaveBeenCalled();
+  });
+
+  it("reports readiness only once a conversion has finished", async () => {
+    const cwd = resolve(join(tmpdir(), "pi-science-core-ready-test"));
+    const sessionId = "ready-session";
+    const service = new AgentCoreSessionService({} as never, {} as never);
+    const internals = service as unknown as { migrating: Set<string>; owns: () => Promise<boolean> };
+    internals.owns = async () => true;
+    expect(await service.ready(cwd, sessionId)).toBe(true);
+    internals.migrating.add(`${workspaceIdentity(cwd)}\0${sessionId}`);
+    expect(await service.ready(cwd, sessionId)).toBe(false);
+  });
+
+  it("classifies a capacity rejection as definite so the prompt ledger can retry", async () => {
+    const cwd = resolve(join(tmpdir(), "pi-science-core-capacity-test"));
+    const sessionId = "capacity-session";
+    const sendCommand = vi.fn().mockRejectedValue(new AgentRuntimeCapacityError("Agent worker capacity limit reached"));
+    const runtime = { cwd, sessionId, isClosed: false, sendCommand };
+    const service = new AgentCoreSessionService({} as never, {} as never);
+    (service as unknown as { live: Map<string, unknown> }).live.set(`${workspaceIdentity(cwd)}\0${sessionId}`,
+      { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low" });
+    const result = await service.command(cwd, sessionId, "abort", {}, { skills: [], extensions: [] });
+    // Nothing was dispatched, so the request must stay retryable rather than
+    // being recorded as an ambiguous delivery.
+    expect(result).toMatchObject({ success: false, code: "runtime_capacity_exceeded" });
+    expect(isPromptDeliveryIndeterminate("runtime_capacity_exceeded")).toBe(false);
   });
 
   it("preserves a worker's authoritative busy rejection", async () => {

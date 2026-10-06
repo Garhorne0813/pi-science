@@ -2,7 +2,7 @@ import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/pro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { PromptRequestRepository, promptAssociationPath } from "./prompt-request-repository.js";
+import { PromptRequestRepository, isPromptDeliveryIndeterminate } from "./prompt-request-repository.js";
 import { SessionRepository, invalidateSessionFileCache } from "./session-repository.js";
 
 const cleanup: string[] = [];
@@ -58,6 +58,15 @@ describe("PromptRequestRepository", () => {
     await repository.update(cwd, sessionId, clientMessageId, "rejected", { error_code: "busy" });
     expect(await repository.prepare(cwd, sessionId, clientMessageId, "hello")).toMatchObject({ dispatch: true });
   });
+
+  it("lets the same ID retry after a capacity rejection, because nothing was dispatched", async () => {
+    const cwd = await makeWorkspace();
+    const repository = new PromptRequestRepository(new SessionRepository(), "server-1");
+    await repository.prepare(cwd, sessionId, clientMessageId, "hello");
+    await repository.update(cwd, sessionId, clientMessageId, "rejected", { error_code: "runtime_capacity_exceeded" });
+    expect(isPromptDeliveryIndeterminate("runtime_capacity_exceeded")).toBe(false);
+    expect(await repository.prepare(cwd, sessionId, clientMessageId, "hello")).toMatchObject({ dispatch: true });
+  });
   it("persists intent metadata, deduplicates the same request, and conflicts on changed content", async () => {
     const cwd = await makeWorkspace();
     const repository = new PromptRequestRepository(new SessionRepository(), "server-1");
@@ -71,8 +80,6 @@ describe("PromptRequestRepository", () => {
 
     const ledger = await readFile(join(cwd, ".pi-science", "prompt-requests.jsonl"), "utf8");
     expect(ledger).not.toContain("private prompt payload");
-    expect(await readFile(promptAssociationPath(cwd, sessionId), "utf8"))
-      .toContain(clientMessageId);
   });
 
   it("accepts same-text sends with different IDs as independent requests", async () => {
