@@ -113,6 +113,11 @@ export class SessionRuntime {
     const repo = new JsonlSessionRepo({ fileSystem: executionEnv, sessionsRoot: requiredRoot });
     const interactions = new InteractionBridge(emit);
     let mcp: AgentMcpTools | undefined;
+    let openedLane: AgentLane | undefined;
+    // Set when startup adopts the requested model because the durable one left the catalog. Every
+    // step after that point is part of the same change, so the outer catch puts the lane back if
+    // any of them fails and a failed open cannot leave a model nothing recorded.
+    let adopted: { model: { provider: string; modelId: string }; thinking: string } | null = null;
     const skillPaths = [join(options.cwd, ".pi", "skills"), ...(options.skillPaths ?? [])];
     try {
       const session = options.sessionId
@@ -166,6 +171,7 @@ export class SessionRuntime {
         followUpMode: "one-at-a-time",
       }, context);
       const lane = await harness.lane("main", context);
+      openedLane = lane;
       const watch = await lane.watch(context);
       const runtime = new SessionRuntime(session.metadata.id, lane, harness, repo, executionEnv, session.metadata, session, watch, interactions, mcp, skillPaths, discovered.skills, skillPolicy, fatal);
       runtime.settings = options.settings ?? {};
@@ -186,16 +192,11 @@ export class SessionRuntime {
       const currentModel = resolved ?? model;
       if (!resolved) {
         // The restored model is gone from the catalog, so the session cannot run on it, not even
-        // to resume an admitted operation. Commit the requested selection, and put the lane back
-        // if any write fails, so a failed open cannot leave a half-applied configuration.
-        try {
-          await lane.setModel({ provider: currentModel.provider, modelId: currentModel.id }, context);
-          await lane.setThinkingLevel(clampThinkingLevel(currentModel, options.thinking ?? snapshot.configuration.thinkingLevel), context);
-        } catch (error) {
-          await lane.setModel({ provider: restored.provider, modelId: restored.modelId }, context).catch(() => undefined);
-          await lane.setThinkingLevel(snapshot.configuration.thinkingLevel, context).catch(() => undefined);
-          throw error;
-        }
+        // to resume an admitted operation. Commit the requested selection; the outer catch puts
+        // the lane back if any later startup step fails.
+        adopted = { model: { provider: restored.provider, modelId: restored.modelId }, thinking: snapshot.configuration.thinkingLevel };
+        await lane.setModel({ provider: currentModel.provider, modelId: currentModel.id }, context);
+        await lane.setThinkingLevel(clampThinkingLevel(currentModel, options.thinking ?? snapshot.configuration.thinkingLevel), context);
       } else if (!snapshot.operation) {
         // Normalise the level only when the durable model was kept. After adopting the requested
         // model the level is already the requested one, and clamping it against the replaced
@@ -212,6 +213,8 @@ export class SessionRuntime {
       };
       await harness.setCompactionSettings(runtime.applied.compaction, context);
       await session.setValue(appliedRuntimeSettings, runtime.applied, context);
+      // Everything this startup committed has landed, so there is nothing left to undo.
+      adopted = null;
       const adapter = new AgentCoreEventAdapter();
       runtime.activateWatch = () => {
         watch.start((event) => {
@@ -227,6 +230,13 @@ export class SessionRuntime {
       };
       return runtime;
     } catch (error) {
+      // Put the durable lane back when startup had already adopted the requested model. The
+      // change is only real once the whole startup committed, and the caller is being told the
+      // open failed, so it must not be left behind.
+      if (adopted && openedLane) {
+        await openedLane.setModel(adopted.model, context).catch(() => undefined);
+        await openedLane.setThinkingLevel(adopted.thinking as AgentRuntimeStartOptions["thinking"] & string, context).catch(() => undefined);
+      }
       interactions.close();
       await mcp?.close().catch(() => undefined);
       await repo.close(context).catch(() => undefined);

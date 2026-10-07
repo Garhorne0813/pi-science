@@ -609,13 +609,17 @@ export class AgentCoreSessionService {
     if (!intent) return opened;
     // configureOnce runs inside this mutation, so nothing can race it, and it persists
     // the choice, so a later start resolves the same model.
+    // Read the generation before configuring. A reload that lands while this runs may have made
+    // the model available, and a refusal stamped with the newer generation would hide the intent
+    // under resources that were never tried.
+    const generation = this.reloadGeneration;
     const applied = await this.configureOnce(cwd, sessionId, intent.model, intent.thinking, config);
     if (applied.success) return opened;
     // The worker refused this intent outright, so re-applying it would fail every later command.
     // Mark the entry rather than recording a new one: a revision allocated here would be minted
     // at completion and would outrank a change that landed while this ran, which is the ordering
     // this design exists to keep.
-    if (applied.code === "invalid_model" || applied.code === "invalid_thinking") intent.refusedAt = this.reloadGeneration;
+    if (applied.code === "invalid_model" || applied.code === "invalid_thinking") intent.refusedAt = generation;
     return applied;
   }
 

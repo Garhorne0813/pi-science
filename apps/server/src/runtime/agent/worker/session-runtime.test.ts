@@ -146,6 +146,29 @@ describe("agent-core worker mutations", () => {
       success: true, data: { model: { provider: "openai", modelId: "gpt-4.1-mini" } } });
   }, 20_000);
 
+  it("adopts the requested model when the durable one is no longer in the catalog", async () => {
+    const cwd = resolve(await mkdtemp(join(tmpdir(), "pi-science-worker-model-adopt-")));
+    roots.push(cwd);
+    const options = { cwd, sessionsRoot: join(cwd, ".pi-science", "agent-sessions"),
+      model: { provider: "openai", modelId: "gpt-4.1-mini" }, thinking: "low" as const,
+      env: { PATH: process.env.PATH ?? "", OPENAI_API_KEY: "model-test-secret", PI_SCIENCE_INTERNAL_TOKEN: "server-test-secret" } };
+    const first = await SessionRuntime.open(options, () => undefined, (error) => { throw error; });
+    runtimes.push(first);
+    await first.command("activate", {});
+    // Leave the session on a model the catalog does not contain, which is what disabling a
+    // provider does. The session has to stay openable instead of failing before it can be
+    // reconfigured, so the requested model is adopted and becomes the durable one.
+    await (first as unknown as { lane: AgentLane }).lane.setModel({ provider: "openai", modelId: "gone" }, context);
+
+    const second = await SessionRuntime.open({ ...options, sessionId: first.sessionId,
+      model: { provider: "deepseek", modelId: "deepseek-v4-pro" } }, () => undefined, (error) => { throw error; });
+    runtimes.push(second);
+    await second.command("activate", {});
+
+    expect(await second.command("get_state", {})).toMatchObject({
+      success: true, data: { model: { provider: "deepseek", modelId: "deepseek-v4-pro" } } });
+  }, 20_000);
+
   it("does not give ordinary bash processes model, server, or inherited credentials", async () => {
     vi.stubEnv("PR115_PARENT_SECRET", "parent-test-secret");
     const { parts } = await runtime();
