@@ -125,6 +125,27 @@ describe("agent-core worker mutations", () => {
     expect(await configure).toMatchObject({ success: true });
   });
 
+  it("keeps the durable model at start so only a verified configure can change it", async () => {
+    const cwd = resolve(await mkdtemp(join(tmpdir(), "pi-science-worker-model-request-")));
+    roots.push(cwd);
+    const options = { cwd, sessionsRoot: join(cwd, ".pi-science", "agent-sessions"),
+      model: { provider: "openai", modelId: "gpt-4.1-mini" }, thinking: "low" as const,
+      env: { PATH: process.env.PATH ?? "", OPENAI_API_KEY: "model-test-secret", PI_SCIENCE_INTERNAL_TOKEN: "server-test-secret" } };
+    const first = await SessionRuntime.open(options, () => undefined, (error) => { throw error; });
+    runtimes.push(first);
+    await first.command("activate", {});
+
+    // A start must not commit the model it was asked for: the request may still be rejected by
+    // the configure that follows, and then the session would run on a model it refused.
+    const second = await SessionRuntime.open({ ...options, sessionId: first.sessionId,
+      model: { provider: "deepseek", modelId: "deepseek-v4-pro" } }, () => undefined, (error) => { throw error; });
+    runtimes.push(second);
+    await second.command("activate", {});
+
+    expect(await second.command("get_state", {})).toMatchObject({
+      success: true, data: { model: { provider: "openai", modelId: "gpt-4.1-mini" } } });
+  }, 20_000);
+
   it("does not give ordinary bash processes model, server, or inherited credentials", async () => {
     vi.stubEnv("PR115_PARENT_SECRET", "parent-test-secret");
     const { parts } = await runtime();

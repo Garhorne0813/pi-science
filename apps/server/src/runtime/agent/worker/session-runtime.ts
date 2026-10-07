@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { decodeCommand, decodeNotification } from "./command-contract.js";
 import { isAbsolute, join, resolve } from "node:path";
 import { listWorkspaceSessions } from "../workspace-session-identity.js";
-import { AgentHarness, BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv, createBashTool, createEditTool, createReadTool, createWriteTool, laneState, loadSkills, type AgentHarness as Harness, type AgentLane, type JsonlSessionMetadata, type Session, type WatchHandle, type LaneSnapshot, type Skill } from "@earendil-works/pi-agent-core/node";
+import { AgentHarness, BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv, createBashTool, createEditTool, createReadTool, createWriteTool, laneConfig, laneState, loadSkills, type AgentHarness as Harness, type AgentLane, type JsonlSessionMetadata, type Session, type WatchHandle, type LaneSnapshot, type Skill } from "@earendil-works/pi-agent-core/node";
 import { agentModelCatalog, agentModels } from "./agent-models.js";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { appliedRuntimeSettings, contextUsage, resolveCompaction, type AppliedRuntimeSettings, type RuntimeSettings } from "../agent-runtime-settings.js";
@@ -108,8 +108,6 @@ export class SessionRuntime {
     const requiredRoot = join(metadataRoot(options.cwd), "agent-sessions");
     if (resolve(options.sessionsRoot) !== resolve(requiredRoot)) throw new Error("agent sessions root must be workspace-local");
     const models = agentModels(options.settings);
-    const model = models.getModel(options.model.provider, options.model.modelId);
-    if (!model) throw new Error(`model not found: ${options.model.provider}/${options.model.modelId}`);
     const environment = toolEnvironment(options.env ?? {});
     const executionEnv = new NodeExecutionEnv({ cwd: options.cwd, shellEnv: environment });
     const repo = new JsonlSessionRepo({ fileSystem: executionEnv, sessionsRoot: requiredRoot });
@@ -126,6 +124,19 @@ export class SessionRuntime {
         : await repo.create({ cwd: options.cwd, ...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {}) }, context);
       const saved = (await session.getValue(appliedRuntimeSettings, context))?.value;
       const recovering = (await session.getValue(laneState("main"), context))?.value.currentOperationId;
+      // A requested model can be gone from the catalog while the session still has a usable
+      // durable one, and the session has to stay openable: without this it fails before the
+      // durable configuration can even be read, and nothing can repair it. The lane is the
+      // authority, not the product-settings record, because an imported session can have a
+      // lane and no applied settings. The service reports the mismatch on the next configure
+      // instead of the session being unreachable.
+      const laneModel = (await session.getValue(laneConfig("main"), context))?.value?.model;
+      const durable = laneModel ?? (saved?.model && saved.model.includes("/")
+        ? { provider: saved.model.slice(0, saved.model.indexOf("/")), modelId: saved.model.slice(saved.model.indexOf("/") + 1) }
+        : null);
+      const model = models.getModel(options.model.provider, options.model.modelId)
+        ?? (durable ? models.getModel(durable.provider, durable.modelId) : undefined);
+      if (!model) throw new Error(`model not found: ${options.model.provider}/${options.model.modelId}`);
       if (recovering && saved?.model === `${model.provider}/${model.id}`) model.contextWindow = saved.contextWindow;
       const discovered = await loadSkills(executionEnv, skillPaths, context);
       const templates = await loadPromptTemplates(executionEnv, join(options.cwd, ".pi", "prompts"), context);
@@ -164,11 +175,38 @@ export class SessionRuntime {
       runtime.runtimeEpoch = runtimeEpoch;
       runtime.eventSequence = () => eventSequence;
       const snapshot = await watch.resnapshot(context);
-      const currentModel = models.getModel(snapshot.configuration.model.provider, snapshot.configuration.model.modelId);
-      if (!currentModel) throw new Error("persisted model is unavailable");
-      const normalizedThinking = clampThinkingLevel(currentModel, snapshot.configuration.thinkingLevel);
-      if (!snapshot.operation && normalizedThinking !== snapshot.configuration.thinkingLevel) await lane.setThinkingLevel(normalizedThinking, context);
-      runtime.applied = open.length && saved ? saved : {
+      // A restored lane keeps its durable model, and the seed only applies to a lane that has
+      // none. That is deliberate: an explicit configure owns the durable model, so a request
+      // the worker will reject must not have committed it already. When the restored model is
+      // no longer in the catalog the session cannot start on it at all, so adopt the requested
+      // selection instead of failing before the worker can be reconfigured. An operation being
+      // resumed keeps the configuration it was admitted with.
+      const restored = snapshot.configuration.model;
+      const resolved = models.getModel(restored.provider, restored.modelId);
+      const currentModel = resolved ?? model;
+      if (!resolved) {
+        // The restored model is gone from the catalog, so the session cannot run on it, not even
+        // to resume an admitted operation. Commit the requested selection, and put the lane back
+        // if any write fails, so a failed open cannot leave a half-applied configuration.
+        try {
+          await lane.setModel({ provider: currentModel.provider, modelId: currentModel.id }, context);
+          await lane.setThinkingLevel(clampThinkingLevel(currentModel, options.thinking ?? snapshot.configuration.thinkingLevel), context);
+        } catch (error) {
+          await lane.setModel({ provider: restored.provider, modelId: restored.modelId }, context).catch(() => undefined);
+          await lane.setThinkingLevel(snapshot.configuration.thinkingLevel, context).catch(() => undefined);
+          throw error;
+        }
+      } else if (!snapshot.operation) {
+        // Normalise the level only when the durable model was kept. After adopting the requested
+        // model the level is already the requested one, and clamping it against the replaced
+        // model's level would overwrite that choice.
+        const normalizedThinking = clampThinkingLevel(currentModel, snapshot.configuration.thinkingLevel);
+        if (normalizedThinking !== snapshot.configuration.thinkingLevel) await lane.setThinkingLevel(normalizedThinking, context);
+      }
+      // Saved settings describe the model that was durable before startup. They are reusable only
+      // when that model is the one this worker runs, or the worker would report another model's
+      // context window and compaction budget.
+      runtime.applied = open.length && saved && resolved ? saved : {
         model: `${currentModel.provider}/${currentModel.id}`, contextWindow: currentModel.contextWindow,
         ...resolveCompaction(currentModel.contextWindow, runtime.settings),
       };
@@ -388,7 +426,13 @@ export class SessionRuntime {
         ...resolveCompaction(selected.contextWindow, this.settings) };
       await this.harness.setCompactionSettings(applied.compaction, context);
       await this.session.setValue(appliedRuntimeSettings, applied, context);
+      // Read the committed configuration inside the transaction, so a snapshot that fails
+      // rolls the change back instead of leaving the worker on a model nothing recorded.
+      // this.applied is assigned only after that read, so the rollback restores the settings
+      // that were in force before this call rather than the ones being rolled back.
+      const snapshot = await this.watch.resnapshot(context);
       this.applied = applied;
+      return { success: true, data: { model: snapshot.configuration.model, thinkingLevel: snapshot.configuration.thinkingLevel } };
     } catch (error) {
       try {
         await this.lane.setModel(before.configuration.model, context);
@@ -404,8 +448,6 @@ export class SessionRuntime {
       }
       return failure(error);
     }
-    const snapshot = await this.watch.resnapshot(context);
-    return { success: true, data: { model: snapshot.configuration.model, thinkingLevel: snapshot.configuration.thinkingLevel } };
   }
 
   notify(type: string, params: Record<string, unknown>): RuntimeResult {

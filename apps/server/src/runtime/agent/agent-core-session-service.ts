@@ -23,10 +23,13 @@ import { isAiTitlePrompt } from "../title/title-prompt.js";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 
-type Live = { key: string; runtime: AgentCoreRuntimeClient; busy: boolean; restartPending: boolean; model: string; thinking: string | null;
-  config: PiConfig; eventSequence: number; expectedOperationId?: string; watchdog?: NodeJS.Timeout; suppressRecovery?: boolean;
-  lastProgressAt: number; interactionWaitStartedAt?: number;
-  reload?: Promise<void> };
+type Live = { key: string; runtime: AgentCoreRuntimeClient; busy: boolean; model: string; thinking: string | null;
+  config: PiConfig; eventSequence: number; openedGeneration: number; expectedOperationId?: string; watchdog?: NodeJS.Timeout;
+  suppressRecovery?: boolean; lastProgressAt: number; interactionWaitStartedAt?: number };
+/** The model a session must start on. A revision orders the writers: a global settings
+ *  change and a per-session choice both reserve one at their entry point, so the newest
+ *  intent wins whichever of them finishes first. */
+type ModelIntent = { revision: number; model: string; thinking: string; refusedAt?: number };
 type ProductHooks = {
   observe?: (cwd: string, sessionId: string, event: Record<string, unknown>) => void;
   settled?: (cwd: string, sessionId: string, turnId: string) => void;
@@ -34,6 +37,8 @@ type ProductHooks = {
 };
 
 function identity(cwd: string, id: string): string { return `${workspaceIdentity(cwd)}\0${id}`; }
+/** Key of the settings-wide model choice in the intent ledger. */
+const GLOBAL_INTENT = "*";
 const OPERATION_PROGRESS_EVENTS = new Set([
   "model.turn.started", "message.started", "message.updated", "message.completed",
   "tool.started", "tool.updated", "tool.completed", "compaction.start", "compaction.end",
@@ -75,22 +80,6 @@ function failed(error: unknown): RuntimeResult<never> {
   return { success: false, code, error: error instanceof Error ? error.message : String(error) };
 }
 
-/** The live-map key of a record. item.key is the runtime manager's key, which is a
- *  generated id for a created session rather than the identity, so it cannot address
- *  the live map or anything keyed like it. */
-function liveKey(item: Live): string {
-  return identity(item.runtime.cwd, item.runtime.sessionId);
-}
-
-/** A deferred model change that could not be applied. The code is the worker's
- *  own failure code where it has one, so the caller answers the real condition. */
-class ReloadFailedError extends Error {
-  constructor(readonly code: string, message: string) {
-    super(message);
-    this.name = "ReloadFailedError";
-  }
-}
-
 /** Re-publishes the terminal fact of an operation whose event was lost. A
  *  compaction produces no turn, so its settle must say so, or the hub reports
  *  the recovery as an empty model response. */
@@ -107,11 +96,16 @@ export class AgentCoreSessionService {
   private readonly registry = new AgentSessionRegistry();
   private readonly live = new Map<string, Live>();
   private readonly opening = new Map<string, Promise<Live | RuntimeResult>>();
-  /** The model each session must move to, keyed by workspace identity. It lives
-   *  here rather than on the Live record because the worker can exit, be replaced by
-   *  recovery, or be reopened before the change lands, and the change has to outlive
-   *  all of that. openOnce resolves it, so every reopen picks it up. */
-  private readonly modelTargets = new Map<string, { model: string; thinking: string }>();
+  /** Model intent per session, plus GLOBAL_INTENT for the settings default. It is
+   *  desired state rather than outstanding work, so nothing has to clear it once a
+   *  worker catches up, and it outlives every worker lifecycle event. openOnce
+   *  resolves it, so every start picks it up. */
+  private readonly modelIntents = new Map<string, ModelIntent>();
+  private intentRevision = 0;
+  /** Bumped by every reload. A worker built under an older generation is stale and is
+   *  replaced rather than reconfigured, because a replacement starts on current intent
+   *  while reconfiguring a live worker is a second writer of the same state. */
+  private reloadGeneration = 0;
   private readonly mutations = new Map<string, Promise<unknown>>();
   private beforeStart: ((cwd: string) => Promise<void>) | null = null;
   private readonly turns: DurableTurnLifecycle;
@@ -250,6 +244,11 @@ export class AgentCoreSessionService {
   async create(cwd: string, config: PiConfig): Promise<{ id: string } | { error: string; code: string }> {
     const model = splitModel(config.model);
     if (!model) return { error: "An agent-core session requires a provider/model setting", code: "invalid_model" };
+    // Capture the generation and reserve the intent revision before the first await, so a reload
+    // that lands anywhere in creation outranks this session's own model and the first turn
+    // replaces this worker.
+    const generation = this.reloadGeneration;
+    const revision = ++this.intentRevision;
     try {
       await this.beforeStart?.(cwd);
       seedWorkspaceAssets(cwd);
@@ -274,7 +273,18 @@ export class AgentCoreSessionService {
         await this.registry.register(cwd, runtime.sessionId, path);
       }
       catch (error) { await this.manager.stop(key); throw error; }
-      await this.attach(key, runtime, config.model!, config.thinking ?? null, config);
+      // Hold the session mutation while the worker attaches. A reload that retires an
+      // idle worker must not catch a record that is still being bound, or the create
+      // fails after its transcript is already registered.
+      const created = await this.withMutation(cwd, runtime.sessionId,
+        () => this.attach(key, runtime, config.model!, config.thinking ?? null, config, generation));
+      // A session created with its own model keeps it. Without recording that as this session's
+      // intent, the settings-wide choice outranks the durable model on the first turn and
+      // silently replaces the model the session was created with.
+      if (created.thinking) {
+        this.modelIntents.set(identity(cwd, runtime.sessionId),
+          { revision, model: created.model, thinking: created.thinking });
+      }
       return { id: runtime.sessionId };
     } catch (error) {
       // Keep the typed classification: one capacity condition must not answer 429
@@ -283,8 +293,10 @@ export class AgentCoreSessionService {
     }
   }
 
-  private async attach(key: string, runtime: AgentCoreRuntimeClient, model: string, level: string | null, config: PiConfig): Promise<Live> {
-    const item: Live = { key, runtime, busy: false, restartPending: false, model, thinking: level, config, eventSequence: 0, lastProgressAt: Date.now() };
+  private async attach(key: string, runtime: AgentCoreRuntimeClient, model: string, level: string | null, config: PiConfig,
+    generation: number): Promise<Live> {
+    const item: Live = { key, runtime, busy: false, model, thinking: level, config, eventSequence: 0, openedGeneration: generation,
+      lastProgressAt: Date.now() };
     this.live.set(identity(runtime.cwd, runtime.sessionId), item);
     runtime.on("event", (event) => {
       if (typeof event.runtime_sequence === "number") item.eventSequence = event.runtime_sequence;
@@ -323,12 +335,15 @@ export class AgentCoreSessionService {
       onBusy: (busy) => {
         item.busy = busy;
         this.scheduleWatchdog(item);
-        if (!busy && item.restartPending) void this.stopForReload(item).catch((error) =>
+        // The turn has settled, so this is the boundary where a stale worker can be
+        // replaced. Through the mutation queue, so an admitted turn cannot have its
+        // worker stopped underneath it.
+        if (!busy) void this.withMutation(runtime.cwd, runtime.sessionId, () => this.retireStaleOnce(item)).catch((error) =>
           this.events.publish(runtime.cwd, runtime.sessionId, { type: "error", message: `Settings reload failed: ${String(error)}` }));
       },
       onExit: () => {
         if (item.watchdog) clearTimeout(item.watchdog);
-        this.dropIfSettled(item);
+        if (this.live.get(identity(runtime.cwd, runtime.sessionId)) === item) this.live.delete(identity(runtime.cwd, runtime.sessionId));
         if (item.expectedOperationId && !item.suppressRecovery && !this.stopping) queueMicrotask(() => { void this.recover(item); });
       },
     });
@@ -362,7 +377,8 @@ export class AgentCoreSessionService {
     return item;
   }
 
-  private async open(cwd: string, sessionId: string, config: PiConfig, model?: { provider: string; modelId: string }): Promise<Live | RuntimeResult> {
+  private async open(cwd: string, sessionId: string, config: PiConfig, model?: { provider: string; modelId: string },
+    generation = this.reloadGeneration): Promise<Live | RuntimeResult> {
     if ((await this.registry.get(cwd, sessionId))?.state === "deleted") return { success: false, code: "not_found", error: "session was deleted" };
     const key = identity(cwd, sessionId);
     // attach() exposes the live record while binding. Even abort must wait for
@@ -376,13 +392,14 @@ export class AgentCoreSessionService {
     }
     const current = this.live.get(key);
     if (current && !current.runtime.isClosed) return current;
-    const started = this.openOnce(cwd, sessionId, config, model);
+    const started = this.openOnce(cwd, sessionId, config, model, generation);
     this.opening.set(key, started);
     try { return await started; }
     finally { if (this.opening.get(key) === started) this.opening.delete(key); }
   }
 
-  private async openOnce(cwd: string, sessionId: string, config: PiConfig, modelOverride?: { provider: string; modelId: string }): Promise<Live | RuntimeResult> {
+  private async openOnce(cwd: string, sessionId: string, config: PiConfig, modelOverride?: { provider: string; modelId: string },
+    generation = this.reloadGeneration): Promise<Live | RuntimeResult> {
     const key = identity(cwd, sessionId);
     const path = await this.repository.findPath(cwd, sessionId);
     if (!path) return { success: false, code: "not_found", error: "session not found in this workspace" };
@@ -391,9 +408,15 @@ export class AgentCoreSessionService {
     // An explicit model change must not need the model it replaces. Disabling a
     // provider removes its model from the catalog, so resolving the persisted
     // model first would leave that session permanently unconfigurable.
-    const target = this.modelTargets.get(key);
-    const model = modelOverride ?? (target ? splitModel(target.model) : null) ?? persisted?.model ?? splitModel(config.model);
-    if (!model) return { success: false, code: "invalid_model", error: "An agent-core session requires a provider/model setting" };
+    const selection = this.desiredModel(key, persisted, config);
+    const chosen = modelOverride ?? selection;
+    if (!chosen) return { success: false, code: "invalid_model", error: "An agent-core session requires a provider/model setting" };
+    const model = { provider: chosen.provider, modelId: chosen.modelId };
+    // A restored lane keeps its durable model and level, so this only decides what a new lane
+    // starts on. The worker adopts the selection when the durable model is gone, and
+    // ensureCurrent configures it afterwards for every other case. An explicit override
+    // reconciles its own level instead.
+    const level = modelOverride ? (persisted?.thinkingLevel ?? config.thinking ?? null) : selection?.thinking ?? null;
     try {
       await this.beforeStart?.(cwd);
       seedWorkspaceAssets(cwd);
@@ -403,7 +426,7 @@ export class AgentCoreSessionService {
         sessionId,
         sessionsRoot: join(metadataRoot(cwd), "agent-sessions"),
         model,
-        thinking: thinking(persisted?.thinkingLevel ?? config.thinking),
+        thinking: thinking(level ?? undefined),
         settings: { ...config, model_context_window_override: config.model_context_window_override?.model === `${model.provider}/${model.modelId}`
           ? config.model_context_window_override : saved?.model_context_window_override },
         systemPrompt: await systemPrompt(),
@@ -413,67 +436,47 @@ export class AgentCoreSessionService {
         credentialEnvNames: await this.credentialEnvNames(cwd),
         deferActivation: true,
       });
-      const attached = await this.attach(key, runtime, `${model.provider}/${model.modelId}`, persisted?.thinkingLevel ?? config.thinking ?? null, config);
-      // A reopened worker still owes the outstanding change, so arm its boundary.
-      // Read the target again: one can arrive while the worker is starting.
-      if (this.modelTargets.has(key)) attached.restartPending = true;
-      return attached;
+      return await this.attach(key, runtime, `${model.provider}/${model.modelId}`, level, config, generation);
     } catch (error) { return failed(error); }
   }
 
   async command(cwd: string, sessionId: string, type: string, params: Record<string, unknown>, config: PiConfig): Promise<RuntimeResult> {
+    // abort and steer must reach a turn that is already running, so they stay outside
+    // the queue. Everything else can start or queue a turn, so it is serialized.
     if (["abort", "steer"].includes(type)) return this.commandOnce(cwd, sessionId, type, params, config);
-    if (type === "prompt" || type === "follow_up") {
-      const blocked = await this.awaitPendingReload(cwd, sessionId, type === "follow_up");
-      if (blocked) return blocked;
-    }
     return this.withMutation(cwd, sessionId, () => this.commandOnce(cwd, sessionId, type, params, config));
   }
 
-  /** A turn must not start on a model the user replaced, so the command waits for a
-   *  deferred reload and fails if it cannot land. Outside withMutation on purpose,
-   *  because the reload calls configure, which takes the mutation queue itself.
-   *  A follow-up is exempt while a turn is running: that turn finishes first and the
-   *  reload lands on its boundary, so blocking the follow-up would only break the
-   *  exchange that is already in flight. */
-  private async awaitPendingReload(cwd: string, sessionId: string, allowBusy: boolean): Promise<RuntimeResult | null> {
-    const key = identity(cwd, sessionId);
-    const current = this.live.get(key);
-    if (!current || (allowBusy && current.busy)) return null;
-    if (!current.restartPending && !this.modelTargets.has(key)) return null;
-    try { await this.stopForReload(current); }
-    catch (error) {
-      return { success: false, code: error instanceof ReloadFailedError ? error.code : "configuration_reload_failed",
-        error: error instanceof Error ? error.message : String(error) };
-    }
-    const settled = this.live.get(key);
-    // The pass deferred because the turn is still running, which is not a reload
-    // failure and must not be reported as one.
-    if (settled?.busy) return { success: false, code: "busy", error: "agent is busy; wait for the current task to finish or stop it" };
-    // A target that arrives while the worker is being stopped is left for the next
-    // boundary, so dispatching now would run the turn on the model in between.
-    if (settled?.restartPending || this.modelTargets.has(key)) {
-      return { success: false, code: "configuration_reload_failed", error: "the model change has not landed yet" };
-    }
-    return null;
-  }
-
   private async commandOnce(cwd: string, sessionId: string, type: string, params: Record<string, unknown>, config: PiConfig): Promise<RuntimeResult> {
-    const opened = await this.open(cwd, sessionId, config);
+    // abort and steer act on the turn that is already running, so they must reach it
+    // whatever model it holds. Everything else can start a turn and is held to the
+    // current intent.
+    const passing = type === "abort" || type === "steer";
+    const opened = passing ? await this.open(cwd, sessionId, config) : await this.ensureCurrent(cwd, sessionId, config);
     if ("success" in opened) return opened;
+    // A command that starts an operation must not use a worker the settings outdate,
+    // whether the model moved or the resources did. This holds at dispatch: a follow-up
+    // queued before the change still belongs to the turn that was already running, and the
+    // worker it runs on is replaced once that turn settles. Only these commands are held
+    // back, so abort and steer still reach the turn that is already there.
+    if ((type === "prompt" || type === "follow_up" || type === "compact") && this.isStale(opened)) {
+      return { success: false, code: "configuration_reload_failed", error: "the settings change has not landed yet" };
+    }
+    // A prompt only owns the record's operation id when it is the one that armed it. A retry of a
+    // request that is already running carries the same id, and clearing it would cancel that
+    // operation's supervision while it is still going.
+    const ownsOperation = type === "prompt" && !opened.expectedOperationId;
     if (type === "prompt") {
       const clientMessageId = typeof params.client_message_id === "string" ? params.client_message_id : randomUUID();
       params = { ...params, client_message_id: clientMessageId };
       const operationId = promptOperationId(sessionId, clientMessageId);
       try { await this.turns.prepare(cwd, sessionId, operationId); }
       catch (error) { return { success: false, code: "lifecycle_prepare_failed", error: String(error) }; }
-      // The reload guard ran before this mutation, so a settings change can land
-      // while preparation awaits. Dispatching now would reach the model the user
-      // just replaced, and the reload's configure is queued behind this very
-      // mutation, so it cannot have landed yet.
-      if (this.modelTargets.has(identity(cwd, sessionId))) {
+      // The settings can change while preparation awaits. This runs inside the session
+      // mutation, so nothing can replace the worker between this check and dispatch.
+      if (this.isStale(opened)) {
         await this.turns.discardRejected(cwd, sessionId, operationId).catch(() => undefined);
-        return { success: false, code: "configuration_reload_failed", error: "the model change has not landed yet" };
+        return { success: false, code: "configuration_reload_failed", error: "the settings change has not landed yet" };
       }
       if (!opened.expectedOperationId) {
         opened.expectedOperationId = operationId;
@@ -481,24 +484,33 @@ export class AgentCoreSessionService {
         opened.interactionWaitStartedAt = undefined;
       }
       this.scheduleWatchdog(opened);
-    } else if (type === "follow_up" && !opened.busy && this.modelTargets.has(identity(cwd, sessionId))) {
-      // The guard ran before this mutation, so a settings change can land while the
-      // worker is being opened. While a turn is running the follow-up belongs to it,
-      // but once it is idle, starting a turn now would use the replaced model.
-      return { success: false, code: "configuration_reload_failed", error: "the model change has not landed yet" };
     }
     try {
       const result = await opened.runtime.sendCommand(type, params);
       if (type === "prompt" && result.code === "busy" && typeof params.client_message_id === "string") {
         await this.turns.discardRejected(cwd, sessionId, promptOperationId(sessionId, params.client_message_id)).catch(() => undefined);
       }
-      if (type === "prompt" && !opened.busy && (!result.success || result.deduplicated)) {
+      if (ownsOperation && !opened.busy && (!result.success || result.deduplicated)) {
         opened.expectedOperationId = undefined;
+        this.scheduleWatchdog(opened);
+      }
+      // A compaction is an admitted operation too. Without recording it the record looks idle
+      // until the event that marks the worker busy arrives, and a reload landing in that window
+      // would stop the worker and drop the operation.
+      const compacted = (result as { operationId?: unknown }).operationId;
+      if (type === "compact" && result.success && typeof compacted === "string") {
+        opened.expectedOperationId = compacted;
+        opened.lastProgressAt = Date.now();
         this.scheduleWatchdog(opened);
       }
       return result;
     } catch (error) {
-      if (error instanceof AgentRuntimeTimeoutError || error instanceof AgentRuntimeExitedError) void this.recover(opened);
+      // A deliberate stop is not a worker that stopped responding, so it must not raise a
+      // recovery card or spend an attempt. A scheduled recovery retry still gets through,
+      // because it is the only thing that can bring a failed replacement back.
+      if ((error instanceof AgentRuntimeTimeoutError || error instanceof AgentRuntimeExitedError) && !opened.suppressRecovery) {
+        void this.recover(opened);
+      }
       return failed(error);
     }
   }
@@ -530,113 +542,149 @@ export class AgentCoreSessionService {
   }
 
   /** Rebuilds workers with current MCP and environment settings; active turns finish first. */
-  /** Records the change on every live session so it survives whatever happens to
-   *  their workers, and arms each boundary. Idempotent, so it can run either side of
-   *  the barrier that waits for in-flight opens. */
-  private stampReload(modelChange?: { model: string; thinking: string }): void {
-    for (const item of [...this.live.values()]) {
-      if (modelChange) this.modelTargets.set(liveKey(item), { ...modelChange });
-      item.restartPending = true;
+  /** The model a worker for this session must start on, and the level it should hold. The
+   *  newest intent wins: a per-session choice against the global one, then the durable
+   *  configuration, then the configured default. This is what the worker is started with,
+   *  and an explicit configure reconciles the worker itself after startup.
+   *  The intent is not durable. After a restart a session with a durable model of its own
+   *  starts on that model rather than on the settings default, which is the same behaviour a
+   *  session has when it was never live during the change. A model that is no longer in the
+   *  catalog is only replaced once the settings publish an intent for it. */
+  private desiredModel(key: string, persisted: { model?: { provider: string; modelId: string } | null; thinkingLevel?: string | null } | null,
+    config: PiConfig): { provider: string; modelId: string; thinking: string | null } | null {
+    const intent = this.newestIntent(key);
+    const model = (intent ? splitModel(intent.model) : null) ?? persisted?.model ?? splitModel(config.model);
+    if (!model) return null;
+    return { ...model, thinking: intent?.thinking ?? persisted?.thinkingLevel ?? config.thinking ?? null };
+  }
+
+  /** The newest model intent for a session, whether the user chose it for that session
+   *  or for every session in settings. */
+  private newestIntent(key: string): ModelIntent | undefined {
+    const session = this.modelIntents.get(key);
+    const global = this.modelIntents.get(GLOBAL_INTENT);
+    const intent = session && (!global || session.revision > global.revision) ? session : global;
+    // A refusal only holds until the next reload, because the resources that made the intent
+    // unreachable may be back. Both readers take this same answer, so the start path and the
+    // staleness check cannot disagree about what this session should run.
+    return intent?.refusedAt === this.reloadGeneration ? undefined : intent;
+  }
+
+  /** The intent a worker does not match, or null when it is current. Its model and level
+   *  are what it actually started on, so no separate bookkeeping is needed. */
+  private staleIntent(item: Live): ModelIntent | null {
+    const intent = this.newestIntent(identity(item.runtime.cwd, item.runtime.sessionId));
+    if (!intent) return null;
+    return item.model === intent.model && item.thinking === intent.thinking ? null : intent;
+  }
+
+  /** A worker the settings outdate: built under an older reload, or running on another
+   *  model or level. A command that starts an operation must not use one. */
+  private isStale(item: Live): boolean {
+    return item.openedGeneration !== this.reloadGeneration || this.staleIntent(item) !== null;
+  }
+
+  /** Brings a worker onto the current intent before a turn starts. Runs inside the
+   *  session mutation, so nothing can race it. A worker built under an older reload is
+   *  replaced, because only a fresh process picks up changed resources; a worker that is
+   *  merely on another model is configured, which persists the choice for later starts.
+   *  One replacement attempt only: a stream of settings changes fails the command
+   *  instead of looping. */
+  private async ensureCurrent(cwd: string, sessionId: string, config: PiConfig): Promise<Live | RuntimeResult> {
+    let opened = await this.open(cwd, sessionId, config);
+    // A worker with a turn in flight keeps it. The caller decides how to report that,
+    // because abort and steer must still reach it.
+    let state = "success" in opened ? null : await this.workerState(opened);
+    if ("success" in opened || state === true) return opened;
+    if (opened.openedGeneration !== this.reloadGeneration) {
+      await this.retire(opened, state === null);
+      opened = await this.open(cwd, sessionId, config);
+      state = "success" in opened ? null : await this.workerState(opened);
+      if ("success" in opened || state === true) return opened;
+      if (opened.openedGeneration !== this.reloadGeneration) {
+        return { success: false, code: "configuration_reload_failed", error: "the settings change has not landed yet" };
+      }
     }
+    const intent = this.staleIntent(opened);
+    if (!intent) return opened;
+    // configureOnce runs inside this mutation, so nothing can race it, and it persists
+    // the choice, so a later start resolves the same model.
+    const applied = await this.configureOnce(cwd, sessionId, intent.model, intent.thinking, config);
+    if (applied.success) return opened;
+    // The worker refused this intent outright, so re-applying it would fail every later command.
+    // Mark the entry rather than recording a new one: a revision allocated here would be minted
+    // at completion and would outrank a change that landed while this ran, which is the ordering
+    // this design exists to keep.
+    if (applied.code === "invalid_model" || applied.code === "invalid_thinking") intent.refusedAt = this.reloadGeneration;
+    return applied;
+  }
+
+  /** Stops a worker and drops its record, so the next open starts a replacement on the
+   *  current intent. The caller must already hold the session mutation. */
+  private async retire(item: Live, force = false): Promise<void> {
+    const key = identity(item.runtime.cwd, item.runtime.sessionId);
+    if (this.live.get(key) !== item) return;
+    item.suppressRecovery = true;
+    if (item.watchdog) clearTimeout(item.watchdog);
+    // A worker whose state could not be observed must not be closed gracefully: that seals its
+    // lane and discards an admitted operation's checkpoint. Killing it keeps the checkpoint for
+    // the replacement, which is what recovery does for the same reason.
+    if (force && !item.runtime.isClosed) item.runtime.child.kill("SIGKILL");
+    this.events.expectExit(item.runtime);
+    await this.manager.stop(item.key);
+    if (this.live.get(key) === item) this.live.delete(key);
+  }
+
+  /** True when the worker has work in flight. The event that marks a worker busy is
+   *  emitted at the first model turn, which is after the command that durably admitted the
+   *  operation, so an idle-looking record is not enough evidence to stop it. The caller
+   *  must hold the session mutation. A snapshot the worker cannot answer counts as work,
+   *  because the alternative is stopping a worker whose state is unknown. */
+  private async workerState(item: Live): Promise<boolean | null> {
+    if (item.busy || item.expectedOperationId) return true;
+    const snapshot = await item.runtime.sendCommand("get_state").catch(failed);
+    // null means the worker could not be observed. That is not evidence of work, because
+    // treating it as work would leave a session with an unresponsive worker unable to migrate
+    // and unable to run a turn, but it does change how the worker has to be stopped.
+    if (!snapshot.success) return null;
+    // Queued inbox items do not count. They are durable, so a replacement lane restores them
+    // and the next accepted turn delivers them, while treating them as work would leave a
+    // session with an idle queue unable to reconcile: every command would be held back as stale
+    // and nothing would ever drain it.
+    return Boolean(snapshot.data?.busy);
+  }
+
+  /** Replaces an idle worker that a reload outdates, and leaves a working one alone. The
+   *  caller must already hold the session mutation. Every reload outdates the workers that
+   *  predate it, because a settings save can change the resources a worker was built with. */
+  private async retireStaleOnce(item: Live): Promise<void> {
+    const key = identity(item.runtime.cwd, item.runtime.sessionId);
+    if (this.live.get(key) !== item) return;
+    // A session that is opening is not bound yet. Abort and steer open outside the session
+    // mutation, so this is the only thing that keeps a reload off a record mid-attach.
+    if (this.opening.has(key)) return;
+    if (item.openedGeneration === this.reloadGeneration) return;
+    const state = await this.workerState(item);
+    if (state === true) return;
+    await this.retire(item, state === null);
   }
 
   async reloadConfiguration(modelChange?: { model: string; thinking: string }): Promise<void> {
-    // Stamp either side of the barrier. A session that stops while the barrier
-    // awaits is gone from the live map by the second pass, so stamping only after it
-    // would leave that session on the replaced model with nothing recorded. Stamping
-    // every session before applying any of them also stops the first failure from
-    // stranding the rest with no intent recorded and nothing left to retry.
-    this.stampReload(modelChange);
-    await Promise.allSettled(this.opening.values());
-    this.stampReload(modelChange);
+    // Publishing the intent is the whole change: the model a worker starts on is
+    // resolved when it starts, so nothing has to be pushed onto a live worker. Doing it
+    // before awaiting anything means a session that opens, recovers or is created while
+    // this runs still sees it, and nothing can overwrite it afterwards.
+    this.reloadGeneration += 1;
+    if (modelChange) this.modelIntents.set(GLOBAL_INTENT, { ...modelChange, revision: ++this.intentRevision });
+    // Replace the idle workers this reload outdates, serialized with the session
+    // mutation. Every reload outdates them, because a settings save can change the
+    // resources a worker was built with, so an idle one is replaced rather than kept
+    // running on the old resources. A busy one finishes its turn first.
     const items = [...this.live.values()];
-    // A busy session finishes its turn first, so only the idle ones apply now.
-    const settled = await Promise.allSettled(items.filter((item) => !item.busy).map((item) => this.stopForReload(item)));
+    const settled = await Promise.allSettled(items.map((item) => this.withMutation(item.runtime.cwd, item.runtime.sessionId,
+      () => this.retireStaleOnce(item))));
     const failure = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
     if (failure) throw failure.reason;
-  }
-
-  /** Applies the outstanding model change, then stops the worker so the next open()
-   *  reopens with it. Concurrent callers share the one in-flight reload instead of
-   *  racing past it, and a failure reaches every one of them. */
-  private stopForReload(item: Live): Promise<void> {
-    if (this.live.get(liveKey(item)) !== item) return Promise.resolve();
-    if (item.reload) return item.reload;
-    // Publish the shared promise before the pass starts. A pass that returns before
-    // its first await would otherwise clear the field and then be stored here as an
-    // already-settled promise, and every later caller would skip the work.
-    const reload = Promise.resolve().then(() => this.applyReload(item));
-    item.reload = reload;
-    return reload;
-  }
-
-  private async applyReload(item: Live): Promise<void> {
-    try {
-      // Mark the boundary pending before anything can fail, so a session that was
-      // idle when the change arrived is still guarded if this attempt throws.
-      item.restartPending = true;
-      // Drain every outstanding target. A newer one can arrive while configure
-      // awaits, and leaving it behind would let this boundary's caller run a turn
-      // on the model in between. Each pass applies a distinct target, so the loop
-      // runs once per settings change made while it is working.
-      // A turn that is still running finishes first and the reload lands on its
-      // boundary. Configuring it fails on busy and stopping it kills the turn, so
-      // leave the boundary armed for the next pass.
-      if (item.busy) return;
-      while (true) {
-        // Re-read the record every pass. configure() reopens through open(), which
-        // replaces the record in the live map, so the record this pass started with
-        // can be a different one by now.
-        const current = this.live.get(liveKey(item));
-        if (current !== item) {
-          // open() started the replacement on the target and armed it. Once the
-          // target is clear nothing is outstanding, so disarm it, or the next prompt
-          // fails against a change that has already landed.
-          if (current && !this.modelTargets.has(liveKey(item))) current.restartPending = false;
-          return;
-        }
-        const pending = this.modelTargets.get(liveKey(item));
-        if (!pending) break;
-        // A closed runtime cannot prove it runs the target. Its cached model is the
-        // one it had before a failed reconcile, so reopen and reconcile instead.
-        if (!item.runtime.isClosed && item.model === pending.model && item.thinking === pending.thinking) {
-          // The worker already runs the target, so the change has landed. Keeping it
-          // would leave every later boundary believing it is still outstanding.
-          this.modelTargets.delete(liveKey(item));
-          break;
-        }
-        const result = await this.configure(item.runtime.cwd, item.runtime.sessionId, pending.model, pending.thinking, item.config, true);
-        // A failure keeps the target, so the next boundary retries instead of
-        // reopening the model the user replaced.
-        if (!result.success) throw new ReloadFailedError(String(result.code ?? "configuration_reload_failed"),
-          String(result.error ?? result.code ?? "model configuration failed"));
-        if (this.modelTargets.get(liveKey(item)) === pending) this.modelTargets.delete(liveKey(item));
-      }
-      item.suppressRecovery = true;
-      if (item.watchdog) clearTimeout(item.watchdog);
-      this.events.expectExit(item.runtime);
-      await this.manager.stop(item.key);
-      // Only a stop that finished applies the change, so the boundary is cleared
-      // here. A stop that throws leaves it armed and the next boundary retries.
-      item.restartPending = false;
-    } finally {
-      // The reload stops owning the record before the drop, so an exit that lands
-      // after this point is free to remove it.
-      item.reload = undefined;
-    }
-    this.dropIfSettled(item);
-  }
-
-  /** Settles the record of a worker that stopped. A model change still outstanding
-   *  keeps it, armed, because the guard reads restartPending and the apply reads the
-   *  target. The exit arrives in the middle of the stop, before a target that
-   *  lands during it, so the record has to outlive the worker that was stopping when
-   *  the change was made. open() reopens a closed runtime. */
-  private dropIfSettled(item: Live): void {
-    if (this.modelTargets.has(liveKey(item))) { item.restartPending = true; return; }
-    if (item.reload) return;
-    const key = liveKey(item);
-    if (this.live.get(key) === item) this.live.delete(key);
   }
 
   async resume(cwd: string, sessionId: string, config: PiConfig): Promise<RuntimeResult> {
@@ -650,9 +698,12 @@ export class AgentCoreSessionService {
       if (!(await this.repository.findPath(cwd, sessionId))) return { error: "session not found in this workspace", code: "not_found" };
       const saved = await this.repository.configuration(cwd, sessionId);
       const facts = await this.repository.runtimeState(cwd, sessionId);
+      // A session with no worker reports the model it would start on, which is the
+      // intent when one is recorded rather than whatever it last ran.
+      const selected = this.desiredModel(identity(cwd, sessionId), saved, config);
       return { id: sessionId, cwd, is_streaming: false, is_compacting: false, pending_message_count: 0,
-        model: saved?.model ? `${saved.model.provider}/${saved.model.modelId}` : config.model ?? null,
-        thinking: saved?.thinkingLevel ?? config.thinking ?? null,
+        model: selected ? `${selected.provider}/${selected.modelId}` : null,
+        thinking: selected?.thinking ?? null,
         ...facts };
     }
     const result = await current.runtime.sendCommand("get_state").catch(failed);
@@ -672,14 +723,33 @@ export class AgentCoreSessionService {
       compaction_threshold_percent: typeof data.compaction_threshold_percent === "number" ? data.compaction_threshold_percent : null };
   }
 
-  /** Sets the model for one session. deferred marks the apply of a target recorded
-   *  earlier, which must not supersede a target that arrived while it ran. */
-  async configure(cwd: string, sessionId: string, model: string, level: string | undefined, config: PiConfig, deferred = false): Promise<RuntimeResult> {
+  /** Sets the model for one session. The revision is reserved at entry, before the
+   *  queue, so invocation order decides and a global change that lands while this waits
+   *  is not erased by it. */
+  async configure(cwd: string, sessionId: string, model: string, level: string | undefined, config: PiConfig): Promise<RuntimeResult> {
+    const key = identity(cwd, sessionId);
+    const revision = ++this.intentRevision;
     const result = await this.withMutation(cwd, sessionId, () => this.configureOnce(cwd, sessionId, model, level, config));
-    // Choosing a model for one session is newer intent than a target stamped
-    // earlier, so a deferred change must not be applied over it at the next boundary.
-    if (result.success && !deferred) this.modelTargets.delete(identity(cwd, sessionId));
+    // Publish only a verified choice, and only while nothing newer has been recorded.
+    // The level is the one the worker reported: an omitted level means "keep the current
+    // one", and recording the omission would leave the intent unsatisfiable.
+    if (result.success && (this.modelIntents.get(key)?.revision ?? -1) < revision) {
+      // configureOnce reports success only when the worker returned a string level.
+      const verified = (result as { thinking?: string | null }).thinking;
+      if (typeof verified === "string") this.modelIntents.set(key, { revision, model, thinking: verified });
+    }
     return result;
+  }
+
+  /** Stops a worker whose configuration cannot be trusted, and drops its record so the next
+   *  start resolves the current intent. The caller must already hold the session mutation. */
+  private async quarantine(item: Live): Promise<void> {
+    item.suppressRecovery = true;
+    if (item.watchdog) clearTimeout(item.watchdog);
+    this.events.expectExit(item.runtime);
+    await this.manager.stop(item.key).catch(() => undefined);
+    const key = identity(item.runtime.cwd, item.runtime.sessionId);
+    if (this.live.get(key) === item) this.live.delete(key);
   }
 
   private async configureOnce(cwd: string, sessionId: string, model: string, level: string | undefined, config: PiConfig): Promise<RuntimeResult> {
@@ -691,18 +761,22 @@ export class AgentCoreSessionService {
     const opened = await this.open(cwd, sessionId, config, ref);
     if ("success" in opened) return opened;
     if (opened.busy) return { success: false, code: "busy", error: "agent is busy; wait for the current task to finish or stop it" };
-    const result = await opened.runtime.sendCommand("configure", { ...ref, ...(level ? { level } : {}) }).catch(failed);
+    let result: Awaited<ReturnType<AgentCoreRuntimeClient["sendCommand"]>>;
+    try { result = await opened.runtime.sendCommand("configure", { ...ref, ...(level ? { level } : {}) }); }
+    catch (error) {
+      // The worker writes the change before it answers, so a dropped reply leaves the
+      // service unable to tell which side of that write it failed on. Stop the worker, so
+      // the next start resolves the intent again rather than running on a configuration
+      // nothing recorded. A worker that answered is a different case and keeps running.
+      await this.quarantine(opened);
+      return failed(error);
+    }
     if (!result.success) return result;
     const state = result.data as { model?: { provider?: string; modelId?: string }; thinkingLevel?: string } | undefined;
     if (state?.model?.provider !== ref.provider || state.model.modelId !== ref.modelId
       || typeof state.thinkingLevel !== "string" || (level !== undefined && state.thinkingLevel !== level)) {
-      // This runs inside the session mutation, so it must not call stopForReload:
-      // that would take the mutation queue again and wait on itself. Stopping the
-      // worker is enough; the exit handler decides whether the record survives.
-      opened.suppressRecovery = true;
-      if (opened.watchdog) clearTimeout(opened.watchdog);
-      this.events.expectExit(opened.runtime);
-      await this.manager.stop(opened.key).catch(() => undefined);
+      // A worker that cannot prove its configuration is not worth keeping.
+      await this.quarantine(opened);
       return { success: false, code: "reconcile_failed", error: "agent runtime returned an inconsistent configuration" };
     }
     opened.model = `${state.model.provider}/${state.model.modelId}`;
@@ -750,8 +824,8 @@ export class AgentCoreSessionService {
       // rediscover an imported transcript through its retained legacy source.
       await this.registry.markDeleted(cwd, sessionId, path);
       if (live) { live.suppressRecovery = true; this.events.expectExit(live.runtime); await this.manager.stop(live.key); this.live.delete(key); }
-      // The session is gone, so a target for it can never land.
-      this.modelTargets.delete(key);
+      // The session is gone, so an intent for it can never be applied.
+      this.modelIntents.delete(key);
       const remove = async (file: string) => { await unlink(file).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; }); };
       await remove(path);
       await remove(configPath(cwd, sessionId));
@@ -819,7 +893,8 @@ export class AgentCoreSessionService {
       if (!data.busy && item.expectedOperationId && data.lastResult?.operationId === item.expectedOperationId) {
         emitRecoveredSettle(item.runtime, data.lastResult.operationId, data.lastResult.kind, data.lastResult.status);
       } else this.scheduleWatchdog(item);
-    } catch { await this.recover(item); }
+    // A deliberate stop is not a lost worker, and its replacement is already on its way.
+    } catch { if (!item.suppressRecovery) await this.recover(item); }
   }
 
   private recover(item: Live, force = false): Promise<void> {
@@ -852,10 +927,14 @@ export class AgentCoreSessionService {
         await this.events.publish(cwd, sessionId, { type: "runtime.paused", sessionId });
         return;
       }
-      // open() resolves the outstanding model change itself, so recovery starts on
-      // the model the user selected rather than the one being replaced, and a start
-      // that fails leaves the change in place for the retry.
-      const opened = await this.open(cwd, sessionId, item.config);
+      // open() resolves the current intent itself, so a replacement is seeded with the
+      // model the user selected rather than the one being replaced, and a start that
+      // fails leaves the intent in place for the retry. An operation that was already
+      // admitted resumes on the model its durable lane records, which is the turn that
+      // was running when the worker was lost.
+      // A replacement is built from this record's older configuration, so it keeps that
+      // record's generation and the next command replaces it from the current settings.
+      const opened = await this.open(cwd, sessionId, item.config, undefined, item.openedGeneration);
       if ("success" in opened) {
         await this.events.publish(cwd, sessionId, { type: "error", sessionId, code: "worker_recovery_failed", terminal: attempt >= 3, message: String(opened.error) });
         if (attempt < 3) {
@@ -871,11 +950,6 @@ export class AgentCoreSessionService {
         const result = operationId ? await opened.runtime.sendCommand("get_operation_result", { operationId }) : undefined;
         if (result?.success && result.data) emitRecoveredSettle(opened.runtime, result.data.operationId, result.data.kind, result.data.status);
         else await this.events.publish(cwd, sessionId, { type: "runtime.paused", sessionId });
-      }
-      if (!("success" in opened) && opened.restartPending && !opened.busy) {
-        // configure() takes the mutation queue, so it cannot run inside this one.
-        const timer = setTimeout(() => { void this.stopForReload(opened).catch(() => undefined); }, 0);
-        timer.unref?.();
       }
     }).catch(async (error) => {
       try { await this.events.publish(cwd, sessionId, { type: "error", sessionId, code: "worker_recovery_failed", terminal: true, message: String(error) }); } catch { /* The event store may itself be unavailable. */ }

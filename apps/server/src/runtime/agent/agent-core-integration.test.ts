@@ -131,6 +131,23 @@ describe("agent-core main service integration", () => {
     expect(await instance.state(created.id, cwd)).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
   }, 30_000);
 
+  it("keeps the model a session was created with when settings already chose another", async () => {
+    const cwd = await realpath(await mkdtemp(join(tmpdir(), "pi-science-core-create-model-")));
+    roots.push(cwd);
+    await mkdir(join(cwd, ".pi-science"));
+    process.env.PI_SCIENCE_AGENT_RUNTIME = "agent-core";
+    const instance = service();
+    await instance.reloadConfiguration({ model: "deepseek/deepseek-v4-pro", thinking: "high" });
+
+    const created = await instance.create({ cwd, config: { model: "openai/gpt-4.1-mini", thinking: "low", skills: [], extensions: [] } });
+    if (!("id" in created)) throw new Error(String(created.error));
+
+    // The session was created with its own model, so the settings-wide choice must not replace
+    // it on the first turn.
+    expect(await instance.resume(created.id, cwd)).toMatchObject({ success: true });
+    expect(await instance.state(created.id, cwd)).toMatchObject({ model: "openai/gpt-4.1-mini" });
+  }, 30_000);
+
   it("serves existing HTTP create, prompt, history, and idempotency routes", async () => {
     const cwd = await realpath(await mkdtemp(join(tmpdir(), "pi-science-core-http-")));
     roots.push(cwd);
