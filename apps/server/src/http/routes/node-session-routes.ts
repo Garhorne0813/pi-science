@@ -37,6 +37,7 @@ export function sessionRuntimeStatus(code: unknown): number {
     case "invalid_request": return 400;
     case "environment_failed": return 500;
     case "spawn_failed":
+    case "configuration_reload_failed":
     case "process_closed":
     case "process_exit": return 503;
     case "timeout": return 504;

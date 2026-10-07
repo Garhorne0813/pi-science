@@ -398,11 +398,17 @@ export class AgentCoreSessionService {
   async command(cwd: string, sessionId: string, type: string, params: Record<string, unknown>, config: PiConfig): Promise<RuntimeResult> {
     if (["abort", "steer", "follow_up"].includes(type)) return this.commandOnce(cwd, sessionId, type, params, config);
     if (type === "prompt") {
-      // Land a deferred reload before the turn starts, or the turn runs on the
-      // provider the user just replaced. Outside withMutation on purpose:
-      // stopForReload calls configure, which takes the mutation queue itself.
+      // Land a deferred reload before the turn starts. If it cannot land, fail the
+      // prompt: running it would send the turn to the provider the user just
+      // replaced. Outside withMutation on purpose, because stopForReload calls
+      // configure, which takes the mutation queue itself.
       const current = this.live.get(identity(cwd, sessionId));
-      if (current?.restartPending) await this.stopForReload(current).catch(() => undefined);
+      if (current?.restartPending) {
+        try { await this.stopForReload(current); }
+        catch (error) {
+          return { success: false, code: "configuration_reload_failed", error: error instanceof Error ? error.message : String(error) };
+        }
+      }
     }
     return this.withMutation(cwd, sessionId, () => this.commandOnce(cwd, sessionId, type, params, config));
   }
@@ -494,6 +500,10 @@ export class AgentCoreSessionService {
       // Clear only what this call applied. A newer change that arrived during the
       // await is still outstanding and must not be cleared with it.
       if (item.pendingModel === pending) item.pendingModel = undefined;
+      // Stopping here would discard that newer target along with this record, and
+      // openOnce would reopen the persisted configuration instead. Keep the worker
+      // and the record so the next boundary applies the newest target.
+      if (item.pendingModel) { item.restartPending = true; return; }
       item.restartPending = false;
       item.suppressRecovery = true;
       if (item.watchdog) clearTimeout(item.watchdog);
