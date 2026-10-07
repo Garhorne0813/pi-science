@@ -51,6 +51,85 @@ describe("agent-core session configuration", () => {
     expect(isPromptDeliveryIndeterminate("runtime_capacity_exceeded")).toBe(false);
   });
 
+  it("keeps the capacity classification when creating a session", async () => {
+    const cwd = resolve(join(tmpdir(), "pi-science-core-create-capacity-test"));
+    const service = new AgentCoreSessionService({} as never, {} as never);
+    service.configureBeforeStart(async () => { throw new AgentRuntimeCapacityError("Agent worker capacity limit reached"); });
+    // One capacity condition must not answer 429 when reopening a session and
+    // 503 when creating one.
+    await expect(service.create(cwd, { model: "openai/gpt-4.1-mini", skills: [], extensions: [] }))
+      .resolves.toMatchObject({ code: "runtime_capacity_exceeded" });
+  });
+
+  it("keeps the deferred model when a reload's configure fails", async () => {
+    const cwd = resolve(join(tmpdir(), "pi-science-core-reload-test"));
+    const sessionId = "reload-session";
+    const key = `${workspaceIdentity(cwd)}\0${sessionId}`;
+    const sendCommand = vi.fn();
+    const runtime = { cwd, sessionId, isClosed: false, sendCommand };
+    const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
+    const internals = service as unknown as { live: Map<string, unknown>; stopForReload: (item: unknown) => Promise<void> };
+    const item = { key: "test", runtime, busy: true, restartPending: false, model: "openai/old", thinking: "low",
+      config: { skills: [], extensions: [] }, pendingModel: undefined as { model: string; thinking: string } | undefined };
+    internals.live.set(key, item);
+    await service.reloadConfiguration({ model: "openai/new", thinking: "high" });
+    expect(item).toMatchObject({ restartPending: true, pendingModel: { model: "openai/new", thinking: "high" } });
+
+    item.busy = false;
+    sendCommand.mockResolvedValue({ success: false, code: "reconcile_failed", error: "inconsistent configuration" });
+    await expect(internals.stopForReload(item)).rejects.toThrow("inconsistent configuration");
+    expect(item).toMatchObject({ restartPending: true, pendingModel: { model: "openai/new", thinking: "high" } });
+    expect(internals.live.has(key)).toBe(true);
+
+    // A worker that answers with a different configuration must not tear itself
+    // down from inside its own configure, and must not clear the target either.
+    sendCommand.mockResolvedValue({ success: true, data: { model: { provider: "openai", modelId: "other" }, thinkingLevel: "low" } });
+    await expect(internals.stopForReload(item)).rejects.toThrow("inconsistent configuration");
+    expect(item).toMatchObject({ restartPending: true, pendingModel: { model: "openai/new", thinking: "high" } });
+    expect(internals.live.has(key)).toBe(true);
+
+    sendCommand.mockResolvedValue({ success: true, data: { model: { provider: "openai", modelId: "new" }, thinkingLevel: "high" } });
+    await internals.stopForReload(item);
+    expect(item.restartPending).toBe(false);
+    expect(item.pendingModel).toBeUndefined();
+    expect(internals.live.has(key)).toBe(false);
+  });
+
+  it("marks a recovered compaction as handled so it is not reported as an empty reply", async () => {
+    const cwd = resolve(join(tmpdir(), "pi-science-core-recovered-compaction-test"));
+    const sessionId = "recovered-compaction-session";
+    const emitted: Array<Record<string, unknown>> = [];
+    const sendCommand = vi.fn().mockResolvedValue({ success: true, data: { busy: false, eventSequence: 0,
+      lastResult: { operationId: "compact-1", kind: "compaction", status: "completed" } } });
+    const runtime = { cwd, sessionId, isClosed: false, sendCommand,
+      emit: (_name: string, value: Record<string, unknown>) => { emitted.push(value); } };
+    const service = new AgentCoreSessionService({} as never, {} as never);
+    const internals = service as unknown as { live: Map<string, unknown>; probe: (item: unknown) => Promise<void> };
+    const item = { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low",
+      eventSequence: 0, expectedOperationId: "compact-1", lastProgressAt: Date.now() };
+    internals.live.set(`${workspaceIdentity(cwd)}\0${sessionId}`, item);
+    await internals.probe(item);
+    expect(emitted).toContainEqual({ type: "compaction.end", runId: "compact-1", message: "" });
+    expect(emitted).toContainEqual({ type: "operation.settled", runId: "compact-1", status: "completed", recovery: true, handledWithoutTurn: true });
+  });
+
+  it("leaves an ordinary recovered turn unmarked so a real empty reply still reports", async () => {
+    const cwd = resolve(join(tmpdir(), "pi-science-core-recovered-turn-test"));
+    const sessionId = "recovered-turn-session";
+    const emitted: Array<Record<string, unknown>> = [];
+    const sendCommand = vi.fn().mockResolvedValue({ success: true, data: { busy: false, eventSequence: 0,
+      lastResult: { operationId: "prompt-1", kind: "prompt", status: "completed" } } });
+    const runtime = { cwd, sessionId, isClosed: false, sendCommand,
+      emit: (_name: string, value: Record<string, unknown>) => { emitted.push(value); } };
+    const service = new AgentCoreSessionService({} as never, {} as never);
+    const internals = service as unknown as { live: Map<string, unknown>; probe: (item: unknown) => Promise<void> };
+    const item = { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low",
+      eventSequence: 0, expectedOperationId: "prompt-1", lastProgressAt: Date.now() };
+    internals.live.set(`${workspaceIdentity(cwd)}\0${sessionId}`, item);
+    await internals.probe(item);
+    expect(emitted).toEqual([{ type: "operation.settled", runId: "prompt-1", status: "completed", recovery: true }]);
+  });
+
   it("preserves a worker's authoritative busy rejection", async () => {
     const cwd = resolve(join(tmpdir(), "pi-science-core-busy-snapshot-test"));
     const sessionId = "busy-snapshot-session";

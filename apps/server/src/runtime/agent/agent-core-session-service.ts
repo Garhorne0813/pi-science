@@ -26,7 +26,7 @@ import { createInterface } from "node:readline";
 type Live = { key: string; runtime: AgentCoreRuntimeClient; busy: boolean; restartPending: boolean; model: string; thinking: string | null;
   config: PiConfig; eventSequence: number; expectedOperationId?: string; watchdog?: NodeJS.Timeout; suppressRecovery?: boolean;
   lastProgressAt: number; interactionWaitStartedAt?: number;
-  pendingModel?: { model: string; thinking: string } };
+  pendingModel?: { model: string; thinking: string }; reloading?: boolean };
 type ProductHooks = {
   observe?: (cwd: string, sessionId: string, event: Record<string, unknown>) => void;
   settled?: (cwd: string, sessionId: string, turnId: string) => void;
@@ -73,6 +73,15 @@ function failed(error: unknown): RuntimeResult<never> {
     : error instanceof AgentRuntimeCapacityError ? "runtime_capacity_exceeded"
     : "runtime_command_failed";
   return { success: false, code, error: error instanceof Error ? error.message : String(error) };
+}
+
+/** Re-publishes the terminal fact of an operation whose event was lost. A
+ *  compaction produces no turn, so its settle must say so, or the hub reports
+ *  the recovery as an empty model response. */
+function emitRecoveredSettle(runtime: AgentCoreRuntimeClient, runId: string, kind: string | undefined, status: string): void {
+  if (kind === "compaction") runtime.emit("event", { type: status === "failed" ? "compaction.error" : "compaction.end", runId, message: "" });
+  runtime.emit("event", { type: "operation.settled", runId, status, recovery: true,
+    ...(kind === "compaction" ? { handledWithoutTurn: true } : {}) });
 }
 
 /** One AgentHarness worker per v4 session. */
@@ -246,7 +255,11 @@ export class AgentCoreSessionService {
       catch (error) { await this.manager.stop(key); throw error; }
       await this.attach(key, runtime, config.model!, config.thinking ?? null, config);
       return { id: runtime.sessionId };
-    } catch (error) { return { error: String(error), code: "spawn_failed" }; }
+    } catch (error) {
+      // Keep the typed classification: one capacity condition must not answer 429
+      // when reopening a session and 503 when creating one.
+      return { error: String(error), code: error instanceof AgentRuntimeCapacityError ? "runtime_capacity_exceeded" : "spawn_failed" };
+    }
   }
 
   private async attach(key: string, runtime: AgentCoreRuntimeClient, model: string, level: string | null, config: PiConfig): Promise<Live> {
@@ -313,7 +326,7 @@ export class AgentCoreSessionService {
       if (data.thinkingLevel) item.thinking = data.thinkingLevel;
       if (!data.busy && data.lastResult && await this.turns.unfinished(runtime.cwd, runtime.sessionId, data.lastResult.operationId)) {
         runtime.emit("event", { type: "operation.started", runId: data.lastResult.operationId, turnId: data.lastResult.operationId, recovery: true });
-        runtime.emit("event", { type: "operation.settled", runId: data.lastResult.operationId, status: data.lastResult.status, recovery: true });
+        emitRecoveredSettle(runtime, data.lastResult.operationId, data.lastResult.kind, data.lastResult.status);
       }
       const activated = await runtime.sendCommand("activate");
       if (!activated.success) throw new Error(String(activated.error));
@@ -384,6 +397,13 @@ export class AgentCoreSessionService {
 
   async command(cwd: string, sessionId: string, type: string, params: Record<string, unknown>, config: PiConfig): Promise<RuntimeResult> {
     if (["abort", "steer", "follow_up"].includes(type)) return this.commandOnce(cwd, sessionId, type, params, config);
+    if (type === "prompt") {
+      // Land a deferred reload before the turn starts, or the turn runs on the
+      // provider the user just replaced. Outside withMutation on purpose:
+      // stopForReload calls configure, which takes the mutation queue itself.
+      const current = this.live.get(identity(cwd, sessionId));
+      if (current?.restartPending) await this.stopForReload(current).catch(() => undefined);
+    }
     return this.withMutation(cwd, sessionId, () => this.commandOnce(cwd, sessionId, type, params, config));
   }
 
@@ -457,23 +477,30 @@ export class AgentCoreSessionService {
 
   private async stopForReload(item: Live): Promise<void> {
     if (this.live.get(identity(item.runtime.cwd, item.runtime.sessionId)) !== item) return;
-    // Take the pending model before awaiting configure. A re-entrant call would
-    // otherwise see it still set and chain a second mutation behind the one this
-    // call is waiting on, which is a deadlock. restartPending clears only after
-    // the configure succeeds, so a failure retries instead of silently keeping
-    // the old model.
-    const pending = item.pendingModel;
-    item.pendingModel = undefined;
-    if (pending && (item.model !== pending.model || item.thinking !== pending.thinking)) {
-      const result = await this.configure(item.runtime.cwd, item.runtime.sessionId, pending.model, pending.thinking, item.config);
-      if (!result.success) throw new Error(String(result.error ?? result.code ?? "model configuration failed"));
-    }
-    item.restartPending = false;
-    item.suppressRecovery = true;
-    if (item.watchdog) clearTimeout(item.watchdog);
-    this.events.expectExit(item.runtime);
-    await this.manager.stop(item.key);
-    this.live.delete(identity(item.runtime.cwd, item.runtime.sessionId));
+    // A configure that reconciles to an inconsistent state calls back into here.
+    // Returning early keeps this call the only owner of the reload, so a
+    // re-entrant one cannot stop the worker mid-configure or chain a second
+    // mutation behind the one this call is waiting on.
+    if (item.reloading) return;
+    item.reloading = true;
+    try {
+      const pending = item.pendingModel;
+      if (pending && (item.model !== pending.model || item.thinking !== pending.thinking)) {
+        const result = await this.configure(item.runtime.cwd, item.runtime.sessionId, pending.model, pending.thinking, item.config);
+        // A failure keeps the target. Clearing it up front would drop the change
+        // with nothing left to apply, and openOnce would reopen the old model.
+        if (!result.success) throw new Error(String(result.error ?? result.code ?? "model configuration failed"));
+      }
+      // Clear only what this call applied. A newer change that arrived during the
+      // await is still outstanding and must not be cleared with it.
+      if (item.pendingModel === pending) item.pendingModel = undefined;
+      item.restartPending = false;
+      item.suppressRecovery = true;
+      if (item.watchdog) clearTimeout(item.watchdog);
+      this.events.expectExit(item.runtime);
+      await this.manager.stop(item.key);
+      this.live.delete(identity(item.runtime.cwd, item.runtime.sessionId));
+    } finally { item.reloading = false; }
   }
 
   async resume(cwd: string, sessionId: string, config: PiConfig): Promise<RuntimeResult> {
@@ -640,7 +667,7 @@ export class AgentCoreSessionService {
         return;
       }
       if (!data.busy && item.expectedOperationId && data.lastResult?.operationId === item.expectedOperationId) {
-        item.runtime.emit("event", { type: "operation.settled", runId: data.lastResult.operationId, status: data.lastResult.status, recovery: true });
+        emitRecoveredSettle(item.runtime, data.lastResult.operationId, data.lastResult.kind, data.lastResult.status);
       } else this.scheduleWatchdog(item);
     } catch { await this.recover(item); }
   }
@@ -696,9 +723,7 @@ export class AgentCoreSessionService {
         // that authoritative result; process liveness alone cannot settle it.
         const operationId = item.expectedOperationId;
         const result = operationId ? await opened.runtime.sendCommand("get_operation_result", { operationId }) : undefined;
-        if (result?.success && result.data) opened.runtime.emit("event", {
-          type: "operation.settled", runId: result.data.operationId, status: result.data.status, recovery: true,
-        });
+        if (result?.success && result.data) emitRecoveredSettle(opened.runtime, result.data.operationId, result.data.kind, result.data.status);
         else await this.events.publish(cwd, sessionId, { type: "runtime.paused", sessionId });
       }
       if (!("success" in opened) && opened.restartPending && !opened.busy) {
