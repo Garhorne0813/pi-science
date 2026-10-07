@@ -233,6 +233,10 @@ export class SessionRuntime {
       // Put the durable lane back when startup had already adopted the requested model. The
       // change is only real once the whole startup committed, and the caller is being told the
       // open failed, so it must not be left behind.
+      // Known limitation: a model change is a sequence of durable lane writes, because Core's
+      // Lane.setConfiguration commits one property per call. A failure inside Core storage seals
+      // the lane, and these compensating writes then cannot run, so the lane keeps the model the
+      // caller was told had failed. Making this atomic needs a single-commit mutation in Core.
       if (adopted && openedLane) {
         await openedLane.setModel(adopted.model, context).catch(() => undefined);
         await openedLane.setThinkingLevel(adopted.thinking as AgentRuntimeStartOptions["thinking"] & string, context).catch(() => undefined);
