@@ -26,7 +26,7 @@ import { createInterface } from "node:readline";
 type Live = { key: string; runtime: AgentCoreRuntimeClient; busy: boolean; restartPending: boolean; model: string; thinking: string | null;
   config: PiConfig; eventSequence: number; expectedOperationId?: string; watchdog?: NodeJS.Timeout; suppressRecovery?: boolean;
   lastProgressAt: number; interactionWaitStartedAt?: number;
-  pendingModel?: { model: string; thinking: string }; reload?: Promise<void> };
+  reload?: Promise<void> };
 type ProductHooks = {
   observe?: (cwd: string, sessionId: string, event: Record<string, unknown>) => void;
   settled?: (cwd: string, sessionId: string, turnId: string) => void;
@@ -75,6 +75,13 @@ function failed(error: unknown): RuntimeResult<never> {
   return { success: false, code, error: error instanceof Error ? error.message : String(error) };
 }
 
+/** The live-map key of a record. item.key is the runtime manager's key, which is a
+ *  generated id for a created session rather than the identity, so it cannot address
+ *  the live map or anything keyed like it. */
+function liveKey(item: Live): string {
+  return identity(item.runtime.cwd, item.runtime.sessionId);
+}
+
 /** A deferred model change that could not be applied. The code is the worker's
  *  own failure code where it has one, so the caller answers the real condition. */
 class ReloadFailedError extends Error {
@@ -100,6 +107,11 @@ export class AgentCoreSessionService {
   private readonly registry = new AgentSessionRegistry();
   private readonly live = new Map<string, Live>();
   private readonly opening = new Map<string, Promise<Live | RuntimeResult>>();
+  /** The model each session must move to, keyed by workspace identity. It lives
+   *  here rather than on the Live record because the worker can exit, be replaced by
+   *  recovery, or be reopened before the change lands, and the change has to outlive
+   *  all of that. openOnce resolves it, so every reopen picks it up. */
+  private readonly modelTargets = new Map<string, { model: string; thinking: string }>();
   private readonly mutations = new Map<string, Promise<unknown>>();
   private beforeStart: ((cwd: string) => Promise<void>) | null = null;
   private readonly turns: DurableTurnLifecycle;
@@ -372,7 +384,6 @@ export class AgentCoreSessionService {
 
   private async openOnce(cwd: string, sessionId: string, config: PiConfig, modelOverride?: { provider: string; modelId: string }): Promise<Live | RuntimeResult> {
     const key = identity(cwd, sessionId);
-    const previous = this.live.get(key);
     const path = await this.repository.findPath(cwd, sessionId);
     if (!path) return { success: false, code: "not_found", error: "session not found in this workspace" };
     const saved = await readJson<Pick<PiConfig, "skills" | "model_context_window_override"> | null>(configPath(cwd, sessionId), null);
@@ -380,7 +391,8 @@ export class AgentCoreSessionService {
     // An explicit model change must not need the model it replaces. Disabling a
     // provider removes its model from the catalog, so resolving the persisted
     // model first would leave that session permanently unconfigurable.
-    const model = modelOverride ?? persisted?.model ?? splitModel(config.model);
+    const target = this.modelTargets.get(key);
+    const model = modelOverride ?? (target ? splitModel(target.model) : null) ?? persisted?.model ?? splitModel(config.model);
     if (!model) return { success: false, code: "invalid_model", error: "An agent-core session requires a provider/model setting" };
     try {
       await this.beforeStart?.(cwd);
@@ -402,18 +414,14 @@ export class AgentCoreSessionService {
         deferActivation: true,
       });
       const attached = await this.attach(key, runtime, `${model.provider}/${model.modelId}`, persisted?.thinkingLevel ?? config.thinking ?? null, config);
-      // Reopening replaces the record. A model change that outlived the worker it
-      // was waiting for belongs to the replacement, not to the record it replaces.
-      if (!("success" in attached)) {
-        attached.pendingModel ??= previous?.pendingModel;
-        attached.restartPending = attached.restartPending || previous?.restartPending === true;
-      }
+      // A reopened worker still owes the outstanding change, so arm its boundary.
+      if (target) attached.restartPending = true;
       return attached;
     } catch (error) { return failed(error); }
   }
 
   async command(cwd: string, sessionId: string, type: string, params: Record<string, unknown>, config: PiConfig): Promise<RuntimeResult> {
-    if (["abort", "steer", "follow_up"].includes(type)) return this.commandOnce(cwd, sessionId, type, params, config);
+    if (["abort", "steer"].includes(type)) return this.commandOnce(cwd, sessionId, type, params, config);
     if (type === "prompt" || type === "follow_up") {
       const blocked = await this.awaitPendingReload(cwd, sessionId, type === "follow_up");
       if (blocked) return blocked;
@@ -428,8 +436,10 @@ export class AgentCoreSessionService {
    *  reload lands on its boundary, so blocking the follow-up would only break the
    *  exchange that is already in flight. */
   private async awaitPendingReload(cwd: string, sessionId: string, allowBusy: boolean): Promise<RuntimeResult | null> {
-    const current = this.live.get(identity(cwd, sessionId));
-    if (!current?.restartPending || (allowBusy && current.busy)) return null;
+    const key = identity(cwd, sessionId);
+    const current = this.live.get(key);
+    if (!current || (allowBusy && current.busy)) return null;
+    if (!current.restartPending && !this.modelTargets.has(key)) return null;
     try { await this.stopForReload(current); }
     catch (error) {
       return { success: false, code: error instanceof ReloadFailedError ? error.code : "configuration_reload_failed",
@@ -437,7 +447,7 @@ export class AgentCoreSessionService {
     }
     // A target that arrives while the worker is being stopped is left for the next
     // boundary, so dispatching now would run the turn on the model in between.
-    if (this.live.get(identity(cwd, sessionId))?.restartPending) {
+    if (this.live.get(key)?.restartPending || this.modelTargets.has(key)) {
       return { success: false, code: "configuration_reload_failed", error: "the model change has not landed yet" };
     }
     return null;
@@ -456,7 +466,7 @@ export class AgentCoreSessionService {
       // while preparation awaits. Dispatching now would reach the model the user
       // just replaced, and the reload's configure is queued behind this very
       // mutation, so it cannot have landed yet.
-      if (opened.pendingModel) {
+      if (this.modelTargets.has(identity(cwd, sessionId))) {
         await this.turns.discardRejected(cwd, sessionId, operationId).catch(() => undefined);
         return { success: false, code: "configuration_reload_failed", error: "the model change has not landed yet" };
       }
@@ -517,7 +527,7 @@ export class AgentCoreSessionService {
     // would let the first failure strand the rest on the replaced model with no
     // intent recorded, and nothing left to retry.
     for (const item of items) {
-      if (modelChange) item.pendingModel = modelChange;
+      if (modelChange) this.modelTargets.set(liveKey(item), { ...modelChange });
       item.restartPending = true;
     }
     // A busy session finishes its turn first, so only the idle ones apply now.
@@ -546,21 +556,30 @@ export class AgentCoreSessionService {
       // awaits, and leaving it behind would let this boundary's caller run a turn
       // on the model in between. Each pass applies a distinct target, so the loop
       // runs once per settings change made while it is working.
-      while (item.pendingModel && (item.model !== item.pendingModel.model || item.thinking !== item.pendingModel.thinking)) {
-        const pending = item.pendingModel;
+      while (true) {
+        const pending = this.modelTargets.get(liveKey(item));
+        if (!pending || (item.model === pending.model && item.thinking === pending.thinking)) break;
         const result = await this.configure(item.runtime.cwd, item.runtime.sessionId, pending.model, pending.thinking, item.config);
         // A failure keeps the target, so the next boundary retries instead of
         // reopening the model the user replaced.
         if (!result.success) throw new ReloadFailedError(String(result.code ?? "configuration_reload_failed"),
           String(result.error ?? result.code ?? "model configuration failed"));
-        if (item.pendingModel === pending) item.pendingModel = undefined;
+        if (this.modelTargets.get(liveKey(item)) === pending) this.modelTargets.delete(liveKey(item));
       }
-      item.pendingModel = undefined;
-      item.restartPending = false;
+      // A turn that is still running finishes first and the reload lands on its
+      // boundary. Stopping here would kill the turn instead.
+      if (item.busy) return;
+      // The worker this pass started with may have been replaced while configure
+      // awaited, and the manager key is shared, so stopping by key would kill its
+      // successor.
+      if (this.live.get(liveKey(item)) !== item) return;
       item.suppressRecovery = true;
       if (item.watchdog) clearTimeout(item.watchdog);
       this.events.expectExit(item.runtime);
       await this.manager.stop(item.key);
+      // Only a stop that finished applies the change, so the boundary is cleared
+      // here. A stop that throws leaves it armed and the next boundary retries.
+      item.restartPending = false;
     } finally {
       // The reload stops owning the record before the drop, so an exit that lands
       // after this point is free to remove it.
@@ -575,9 +594,9 @@ export class AgentCoreSessionService {
    *  lands during it, so the record has to outlive the worker that was stopping when
    *  the change was made. open() reopens a closed runtime. */
   private dropIfSettled(item: Live): void {
-    if (item.pendingModel) { item.restartPending = true; return; }
+    if (this.modelTargets.has(liveKey(item))) { item.restartPending = true; return; }
     if (item.reload) return;
-    const key = identity(item.runtime.cwd, item.runtime.sessionId);
+    const key = liveKey(item);
     if (this.live.get(key) === item) this.live.delete(key);
   }
 
@@ -786,19 +805,10 @@ export class AgentCoreSessionService {
         await this.events.publish(cwd, sessionId, { type: "runtime.paused", sessionId });
         return;
       }
-      // Start on the model the user selected rather than the one being replaced.
-      // Disabling a provider removes its model from the catalog, so retrying the
-      // persisted model would keep the session unconfigurable and the change would
-      // never land. The pending target stays set, so the next boundary persists it.
-      const target = item.pendingModel ? splitModel(item.pendingModel.model) : null;
-      const opened = await this.open(cwd, sessionId, item.config, target ?? undefined);
-      if (!("success" in opened)) {
-        // The reload intent lives on the Live record that recovery replaces.
-        // Carry it over so a settings change that arrived while the worker was
-        // stuck still lands instead of dying with the old record.
-        opened.restartPending = opened.restartPending || item.restartPending;
-        opened.pendingModel ??= item.pendingModel;
-      }
+      // open() resolves the outstanding model change itself, so recovery starts on
+      // the model the user selected rather than the one being replaced, and a start
+      // that fails leaves the change in place for the retry.
+      const opened = await this.open(cwd, sessionId, item.config);
       if ("success" in opened) {
         await this.events.publish(cwd, sessionId, { type: "error", sessionId, code: "worker_recovery_failed", terminal: attempt >= 3, message: String(opened.error) });
         if (attempt < 3) {

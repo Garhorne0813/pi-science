@@ -68,30 +68,34 @@ describe("agent-core session configuration", () => {
     const sendCommand = vi.fn();
     const runtime = { cwd, sessionId, isClosed: false, sendCommand };
     const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
-    const internals = service as unknown as { live: Map<string, unknown>; stopForReload: (item: unknown) => Promise<void> };
-    const item = { key: "test", runtime, busy: true, restartPending: false, model: "openai/old", thinking: "low",
-      config: { skills: [], extensions: [] }, pendingModel: undefined as { model: string; thinking: string } | undefined };
+    const internals = service as unknown as { live: Map<string, unknown>; modelTargets: Map<string, unknown>;
+      stopForReload: (item: unknown) => Promise<void> };
+    const item = { key, runtime, busy: true, restartPending: false, model: "openai/old", thinking: "low",
+      config: { skills: [], extensions: [] } };
     internals.live.set(key, item);
     await service.reloadConfiguration({ model: "openai/new", thinking: "high" });
-    expect(item).toMatchObject({ restartPending: true, pendingModel: { model: "openai/new", thinking: "high" } });
+    expect(item.restartPending).toBe(true);
+    expect(internals.modelTargets.get(key)).toEqual({ model: "openai/new", thinking: "high" });
 
     item.busy = false;
     sendCommand.mockResolvedValue({ success: false, code: "reconcile_failed", error: "inconsistent configuration" });
     await expect(internals.stopForReload(item)).rejects.toThrow("inconsistent configuration");
-    expect(item).toMatchObject({ restartPending: true, pendingModel: { model: "openai/new", thinking: "high" } });
+    expect(item.restartPending).toBe(true);
+    expect(internals.modelTargets.get(key)).toEqual({ model: "openai/new", thinking: "high" });
     expect(internals.live.has(key)).toBe(true);
 
     // A worker that answers with a different configuration must not tear itself
     // down from inside its own configure, and must not clear the target either.
     sendCommand.mockResolvedValue({ success: true, data: { model: { provider: "openai", modelId: "other" }, thinkingLevel: "low" } });
     await expect(internals.stopForReload(item)).rejects.toThrow("inconsistent configuration");
-    expect(item).toMatchObject({ restartPending: true, pendingModel: { model: "openai/new", thinking: "high" } });
+    expect(item.restartPending).toBe(true);
+    expect(internals.modelTargets.get(key)).toEqual({ model: "openai/new", thinking: "high" });
     expect(internals.live.has(key)).toBe(true);
 
     sendCommand.mockResolvedValue({ success: true, data: { model: { provider: "openai", modelId: "new" }, thinkingLevel: "high" } });
     await internals.stopForReload(item);
     expect(item.restartPending).toBe(false);
-    expect(item.pendingModel).toBeUndefined();
+    expect(internals.modelTargets.has(key)).toBe(false);
     expect(internals.live.has(key)).toBe(false);
   });
 
@@ -105,15 +109,17 @@ describe("agent-core session configuration", () => {
       : { success: true, data: {} });
     const runtime = { cwd, sessionId, isClosed: false, sendCommand };
     const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
-    const internals = service as unknown as { live: Map<string, unknown> };
-    const item = { key: "test", runtime, busy: false, restartPending: true, model: "openai/old", thinking: "low",
-      config: { skills: [], extensions: [] }, pendingModel: { model: "openai/new", thinking: "high" } as { model: string; thinking: string } | undefined };
+    const internals = service as unknown as { live: Map<string, unknown>; modelTargets: Map<string, unknown> };
+    const item = { key, runtime, busy: false, restartPending: true, model: "openai/old", thinking: "low",
+      config: { skills: [], extensions: [] } };
     internals.live.set(key, item);
+    internals.modelTargets.set(key, { model: "openai/new", thinking: "high" });
     const result = await service.command(cwd, sessionId, "prompt", { message: "hello" }, { skills: [], extensions: [] });
     // The caller answers the worker's own failure code, not a blanket reload code.
     expect(result).toMatchObject({ success: false, code: "reconcile_failed" });
     expect(sendCommand).not.toHaveBeenCalledWith("prompt", expect.anything());
-    expect(item).toMatchObject({ restartPending: true, pendingModel: { model: "openai/new", thinking: "high" } });
+    expect(item.restartPending).toBe(true);
+    expect(internals.modelTargets.get(key)).toEqual({ model: "openai/new", thinking: "high" });
     await rm(cwd, { recursive: true, force: true });
   });
 
@@ -127,15 +133,16 @@ describe("agent-core session configuration", () => {
       : { success: true, data: {} });
     const runtime = { cwd, sessionId, isClosed: false, sendCommand };
     const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
-    const internals = service as unknown as { live: Map<string, unknown> };
-    const item = { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low",
-      config: { skills: [], extensions: [] }, pendingModel: undefined as { model: string; thinking: string } | undefined };
+    const internals = service as unknown as { live: Map<string, unknown>; modelTargets: Map<string, unknown> };
+    const item = { key, runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low",
+      config: { skills: [], extensions: [] } };
     internals.live.set(key, item);
 
     await expect(service.reloadConfiguration({ model: "openai/new", thinking: "high" })).rejects.toThrow("inconsistent configuration");
     // An idle session never had restartPending set by the reload itself, so the
     // guard has to come from the attempt, or the next prompt bypasses it entirely.
-    expect(item).toMatchObject({ restartPending: true, pendingModel: { model: "openai/new", thinking: "high" } });
+    expect(item.restartPending).toBe(true);
+    expect(internals.modelTargets.get(key)).toEqual({ model: "openai/new", thinking: "high" });
 
     const result = await service.command(cwd, sessionId, "prompt", { message: "hello" }, { skills: [], extensions: [] });
     expect(result).toMatchObject({ success: false, code: "reconcile_failed" });
@@ -157,10 +164,12 @@ describe("agent-core session configuration", () => {
     });
     const runtime = { cwd, sessionId, isClosed: false, sendCommand };
     const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
-    const internals = service as unknown as { live: Map<string, unknown>; stopForReload: (item: unknown) => Promise<void> };
-    const item = { key: "test", runtime, busy: false, restartPending: true, model: "openai/old", thinking: "low",
-      config: { skills: [], extensions: [] }, pendingModel: { model: "openai/new", thinking: "high" } as { model: string; thinking: string } | undefined };
+    const internals = service as unknown as { live: Map<string, unknown>; modelTargets: Map<string, unknown>;
+      stopForReload: (item: unknown) => Promise<void> };
+    const item = { key, runtime, busy: false, restartPending: true, model: "openai/old", thinking: "low",
+      config: { skills: [], extensions: [] } };
     internals.live.set(key, item);
+    internals.modelTargets.set(key, { model: "openai/new", thinking: "high" });
 
     const reload = internals.stopForReload(item).catch(() => undefined);
     await vi.waitFor(() => { expect(sendCommand).toHaveBeenCalledWith("configure", expect.anything()); });
@@ -174,6 +183,28 @@ describe("agent-core session configuration", () => {
     await rm(cwd, { recursive: true, force: true });
   });
 
+  it("holds a follow-up until a failed reload's target is applied", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-followup-reload-"));
+    await mkdir(workspaceFile(cwd, "turn-lifecycle"), { recursive: true });
+    const sessionId = "followup-reload-session";
+    const key = `${workspaceIdentity(cwd)}\0${sessionId}`;
+    const sendCommand = vi.fn().mockImplementation(async (type: string) => type === "configure"
+      ? { success: false, code: "reconcile_failed", error: "inconsistent configuration" }
+      : { success: true, data: {} });
+    const runtime = { cwd, sessionId, isClosed: false, sendCommand };
+    const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
+    const internals = service as unknown as { live: Map<string, unknown>; modelTargets: Map<string, unknown> };
+    const item = { key, runtime, busy: false, restartPending: true, model: "openai/old", thinking: "low",
+      config: { skills: [], extensions: [] } };
+    internals.live.set(key, item);
+    internals.modelTargets.set(key, { model: "openai/new", thinking: "high" });
+
+    const result = await service.command(cwd, sessionId, "follow_up", { message: "hello" }, { skills: [], extensions: [] });
+    expect(result).toMatchObject({ success: false, code: "reconcile_failed" });
+    expect(sendCommand).not.toHaveBeenCalledWith("follow_up", expect.anything());
+    await rm(cwd, { recursive: true, force: true });
+  });
+
   it("re-checks the model change after preparing a prompt and before dispatching it", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-dispatch-reload-"));
     await mkdir(workspaceFile(cwd, "turn-lifecycle"), { recursive: true });
@@ -182,13 +213,13 @@ describe("agent-core session configuration", () => {
     const sendCommand = vi.fn().mockResolvedValue({ success: true, data: {} });
     const runtime = { cwd, sessionId, isClosed: false, sendCommand };
     const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
-    const internals = service as unknown as { live: Map<string, unknown>; turns: unknown };
-    const item = { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low",
-      config: { skills: [], extensions: [] }, pendingModel: undefined as { model: string; thinking: string } | undefined };
+    const internals = service as unknown as { live: Map<string, unknown>; modelTargets: Map<string, unknown>; turns: unknown };
+    const item = { key, runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low",
+      config: { skills: [], extensions: [] } };
     internals.live.set(key, item);
     // A settings save lands while preparation is awaiting, which is after the
     // guard has already run and before the prompt is dispatched.
-    internals.turns = { prepare: async () => { item.pendingModel = { model: "openai/new", thinking: "high" }; },
+    internals.turns = { prepare: async () => { internals.modelTargets.set(key, { model: "openai/new", thinking: "high" }); },
       discardRejected: async () => undefined };
 
     const result = await service.command(cwd, sessionId, "prompt", { message: "hello" }, { skills: [], extensions: [] });
@@ -207,20 +238,26 @@ describe("agent-core session configuration", () => {
         : { success: true, data: {} });
     const runtime = { cwd, sessionId, isClosed: false, sendCommand };
     const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
-    const internals = service as unknown as { live: Map<string, unknown>; manager: { stop: (key: string) => Promise<void> };
-      dropIfSettled: (item: unknown) => void; stopForReload: (item: unknown) => Promise<void> };
-    const item = { key: "test", runtime, busy: false, restartPending: true, model: "openai/old", thinking: "low",
-      config: { skills: [], extensions: [] }, pendingModel: { model: "openai/b", thinking: "high" } as { model: string; thinking: string } | undefined };
+    const internals = service as unknown as { live: Map<string, unknown>; modelTargets: Map<string, unknown>;
+      manager: { stop: (key: string) => Promise<void> }; dropIfSettled: (item: unknown) => void;
+      stopForReload: (item: unknown) => Promise<void> };
+    const item = { key, runtime, busy: false, restartPending: true, model: "openai/old", thinking: "low",
+      config: { skills: [], extensions: [] } };
     internals.live.set(key, item);
+    internals.modelTargets.set(key, { model: "openai/b", thinking: "high" });
     // The exit handler runs in the middle of the stop, before the change that
     // lands during the same stop. Dropping the record there takes the change with
     // it, so the handler defers to the same rule the reload uses.
-    internals.manager = { stop: async () => { internals.dropIfSettled(item); item.pendingModel = { model: "openai/c", thinking: "high" }; } };
+    internals.manager = { stop: async () => {
+      internals.dropIfSettled(item);
+      internals.modelTargets.set(key, { model: "openai/c", thinking: "high" });
+    } };
 
     await internals.stopForReload(item);
 
     expect(internals.live.has(key)).toBe(true);
-    expect(item).toMatchObject({ restartPending: true, pendingModel: { model: "openai/c", thinking: "high" } });
+    expect(item.restartPending).toBe(true);
+    expect(internals.modelTargets.get(key)).toEqual({ model: "openai/c", thinking: "high" });
   });
 
   it("drains to the newest model change when one arrives during an awaiting configure", async () => {
@@ -236,15 +273,17 @@ describe("agent-core session configuration", () => {
     });
     const runtime = { cwd, sessionId, isClosed: false, sendCommand };
     const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
-    const internals = service as unknown as { live: Map<string, unknown>; stopForReload: (item: unknown) => Promise<void> };
-    const item = { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low",
-      config: { skills: [], extensions: [] }, pendingModel: { model: "openai/b", thinking: "high" } as { model: string; thinking: string } | undefined };
+    const internals = service as unknown as { live: Map<string, unknown>; modelTargets: Map<string, unknown>;
+      stopForReload: (item: unknown) => Promise<void> };
+    const item = { key, runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low",
+      config: { skills: [], extensions: [] } };
     internals.live.set(key, item);
+    internals.modelTargets.set(key, { model: "openai/b", thinking: "high" });
 
     const first = internals.stopForReload(item);
     await vi.waitFor(() => { expect(sendCommand).toHaveBeenCalledWith("configure", expect.anything()); });
     const second = service.reloadConfiguration({ model: "openai/c", thinking: "high" });
-    await vi.waitFor(() => { expect(item.pendingModel).toMatchObject({ model: "openai/c" }); });
+    await vi.waitFor(() => { expect(internals.modelTargets.get(key)).toMatchObject({ model: "openai/c" }); });
     release();
     await first;
     await second;
@@ -252,7 +291,7 @@ describe("agent-core session configuration", () => {
     // The newest target is applied, not merely retained, and the boundary the
     // prompt waits on is clear by the time the reload resolves.
     expect(item).toMatchObject({ model: "openai/c", restartPending: false });
-    expect(item.pendingModel).toBeUndefined();
+    expect(internals.modelTargets.has(key)).toBe(false);
     expect(internals.live.has(key)).toBe(false);
   });
 
