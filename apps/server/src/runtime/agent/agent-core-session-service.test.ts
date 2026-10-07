@@ -110,13 +110,71 @@ describe("agent-core session configuration", () => {
       config: { skills: [], extensions: [] }, pendingModel: { model: "openai/new", thinking: "high" } as { model: string; thinking: string } | undefined };
     internals.live.set(key, item);
     const result = await service.command(cwd, sessionId, "prompt", { message: "hello" }, { skills: [], extensions: [] });
-    expect(result).toMatchObject({ success: false, code: "configuration_reload_failed" });
+    // The caller answers the worker's own failure code, not a blanket reload code.
+    expect(result).toMatchObject({ success: false, code: "reconcile_failed" });
     expect(sendCommand).not.toHaveBeenCalledWith("prompt", expect.anything());
     expect(item).toMatchObject({ restartPending: true, pendingModel: { model: "openai/new", thinking: "high" } });
     await rm(cwd, { recursive: true, force: true });
   });
 
-  it("applies the newest model change when it arrives during an awaiting configure", async () => {
+  it("keeps the prompt guard armed when an idle session's reload fails", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-idle-reload-"));
+    await mkdir(workspaceFile(cwd, "turn-lifecycle"), { recursive: true });
+    const sessionId = "idle-reload-session";
+    const key = `${workspaceIdentity(cwd)}\0${sessionId}`;
+    const sendCommand = vi.fn().mockImplementation(async (type: string) => type === "configure"
+      ? { success: false, code: "reconcile_failed", error: "inconsistent configuration" }
+      : { success: true, data: {} });
+    const runtime = { cwd, sessionId, isClosed: false, sendCommand };
+    const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
+    const internals = service as unknown as { live: Map<string, unknown> };
+    const item = { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low",
+      config: { skills: [], extensions: [] }, pendingModel: undefined as { model: string; thinking: string } | undefined };
+    internals.live.set(key, item);
+
+    await expect(service.reloadConfiguration({ model: "openai/new", thinking: "high" })).rejects.toThrow("inconsistent configuration");
+    // An idle session never had restartPending set by the reload itself, so the
+    // guard has to come from the attempt, or the next prompt bypasses it entirely.
+    expect(item).toMatchObject({ restartPending: true, pendingModel: { model: "openai/new", thinking: "high" } });
+
+    const result = await service.command(cwd, sessionId, "prompt", { message: "hello" }, { skills: [], extensions: [] });
+    expect(result).toMatchObject({ success: false, code: "reconcile_failed" });
+    expect(sendCommand).not.toHaveBeenCalledWith("prompt", expect.anything());
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  it("makes a prompt wait for an in-flight reload and inherit its failure", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-inflight-reload-"));
+    await mkdir(workspaceFile(cwd, "turn-lifecycle"), { recursive: true });
+    const sessionId = "inflight-reload-session";
+    const key = `${workspaceIdentity(cwd)}\0${sessionId}`;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const sendCommand = vi.fn().mockImplementation(async (type: string) => {
+      if (type !== "configure") return { success: true, data: {} };
+      await gate;
+      return { success: false, code: "reconcile_failed", error: "inconsistent configuration" };
+    });
+    const runtime = { cwd, sessionId, isClosed: false, sendCommand };
+    const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
+    const internals = service as unknown as { live: Map<string, unknown>; stopForReload: (item: unknown) => Promise<void> };
+    const item = { key: "test", runtime, busy: false, restartPending: true, model: "openai/old", thinking: "low",
+      config: { skills: [], extensions: [] }, pendingModel: { model: "openai/new", thinking: "high" } as { model: string; thinking: string } | undefined };
+    internals.live.set(key, item);
+
+    const reload = internals.stopForReload(item).catch(() => undefined);
+    await vi.waitFor(() => { expect(sendCommand).toHaveBeenCalledWith("configure", expect.anything()); });
+    // The prompt arrives while configure is still awaiting. It must not race past
+    // the reload and reach the worker that still holds the replaced model.
+    const prompt = service.command(cwd, sessionId, "prompt", { message: "hello" }, { skills: [], extensions: [] });
+    release();
+    await reload;
+    expect(await prompt).toMatchObject({ success: false, code: "reconcile_failed" });
+    expect(sendCommand).not.toHaveBeenCalledWith("prompt", expect.anything());
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  it("drains to the newest model change when one arrives during an awaiting configure", async () => {
     const cwd = resolve(join(tmpdir(), "pi-science-core-reload-race-test"));
     const sessionId = "reload-race-session";
     const key = `${workspaceIdentity(cwd)}\0${sessionId}`;
@@ -136,12 +194,17 @@ describe("agent-core session configuration", () => {
 
     const first = internals.stopForReload(item);
     await vi.waitFor(() => { expect(sendCommand).toHaveBeenCalledWith("configure", expect.anything()); });
-    await service.reloadConfiguration({ model: "openai/c", thinking: "high" });
+    const second = service.reloadConfiguration({ model: "openai/c", thinking: "high" });
+    await vi.waitFor(() => { expect(item.pendingModel).toMatchObject({ model: "openai/c" }); });
     release();
     await first;
+    await second;
 
-    expect(item).toMatchObject({ model: "openai/b", restartPending: true, pendingModel: { model: "openai/c", thinking: "high" } });
-    expect(internals.live.has(key)).toBe(true);
+    // The newest target is applied, not merely retained, and the boundary the
+    // prompt waits on is clear by the time the reload resolves.
+    expect(item).toMatchObject({ model: "openai/c", restartPending: false });
+    expect(item.pendingModel).toBeUndefined();
+    expect(internals.live.has(key)).toBe(false);
   });
 
   it("marks a recovered compaction as handled so it is not reported as an empty reply", async () => {

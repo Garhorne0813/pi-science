@@ -26,7 +26,7 @@ import { createInterface } from "node:readline";
 type Live = { key: string; runtime: AgentCoreRuntimeClient; busy: boolean; restartPending: boolean; model: string; thinking: string | null;
   config: PiConfig; eventSequence: number; expectedOperationId?: string; watchdog?: NodeJS.Timeout; suppressRecovery?: boolean;
   lastProgressAt: number; interactionWaitStartedAt?: number;
-  pendingModel?: { model: string; thinking: string }; reloading?: boolean };
+  pendingModel?: { model: string; thinking: string }; reload?: Promise<void> };
 type ProductHooks = {
   observe?: (cwd: string, sessionId: string, event: Record<string, unknown>) => void;
   settled?: (cwd: string, sessionId: string, turnId: string) => void;
@@ -73,6 +73,15 @@ function failed(error: unknown): RuntimeResult<never> {
     : error instanceof AgentRuntimeCapacityError ? "runtime_capacity_exceeded"
     : "runtime_command_failed";
   return { success: false, code, error: error instanceof Error ? error.message : String(error) };
+}
+
+/** A deferred model change that could not be applied. The code is the worker's
+ *  own failure code where it has one, so the caller answers the real condition. */
+class ReloadFailedError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = "ReloadFailedError";
+  }
 }
 
 /** Re-publishes the terminal fact of an operation whose event was lost. A
@@ -400,13 +409,20 @@ export class AgentCoreSessionService {
     if (type === "prompt") {
       // Land a deferred reload before the turn starts. If it cannot land, fail the
       // prompt: running it would send the turn to the provider the user just
-      // replaced. Outside withMutation on purpose, because stopForReload calls
+      // replaced. Outside withMutation on purpose, because the reload calls
       // configure, which takes the mutation queue itself.
       const current = this.live.get(identity(cwd, sessionId));
       if (current?.restartPending) {
         try { await this.stopForReload(current); }
         catch (error) {
-          return { success: false, code: "configuration_reload_failed", error: error instanceof Error ? error.message : String(error) };
+          return { success: false, code: error instanceof ReloadFailedError ? error.code : "configuration_reload_failed",
+            error: error instanceof Error ? error.message : String(error) };
+        }
+        // A target that arrives while the worker is being stopped is left for the
+        // next boundary, so dispatching now would run the turn on the model in
+        // between. The caller retries once it has landed.
+        if (this.live.get(identity(cwd, sessionId))?.restartPending) {
+          return { success: false, code: "configuration_reload_failed", error: "the model change has not landed yet" };
         }
       }
     }
@@ -471,46 +487,64 @@ export class AgentCoreSessionService {
     }
   }
 
-  /** Rebuilds idle workers with current MCP and environment settings; active turns finish first. */
+  /** Rebuilds workers with current MCP and environment settings; active turns finish first. */
   async reloadConfiguration(modelChange?: { model: string; thinking: string }): Promise<void> {
     await Promise.allSettled(this.opening.values());
-    for (const item of [...this.live.values()]) {
+    const items = [...this.live.values()];
+    // Stamp every session before applying any of them. Applying in the same pass
+    // would let the first failure strand the rest on the replaced model with no
+    // intent recorded, and nothing left to retry.
+    for (const item of items) {
       if (modelChange) item.pendingModel = modelChange;
-      if (item.busy) item.restartPending = true;
-      else await this.stopForReload(item);
+      item.restartPending = true;
     }
+    // A busy session finishes its turn first, so only the idle ones apply now.
+    const settled = await Promise.allSettled(items.filter((item) => !item.busy).map((item) => this.stopForReload(item)));
+    const failure = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failure) throw failure.reason;
   }
 
-  private async stopForReload(item: Live): Promise<void> {
-    if (this.live.get(identity(item.runtime.cwd, item.runtime.sessionId)) !== item) return;
-    // A configure that reconciles to an inconsistent state calls back into here.
-    // Returning early keeps this call the only owner of the reload, so a
-    // re-entrant one cannot stop the worker mid-configure or chain a second
-    // mutation behind the one this call is waiting on.
-    if (item.reloading) return;
-    item.reloading = true;
+  /** Applies the outstanding model change, then stops the worker so the next open()
+   *  reopens with it. Concurrent callers share the one in-flight reload instead of
+   *  racing past it, and a failure reaches every one of them. */
+  private stopForReload(item: Live): Promise<void> {
+    if (this.live.get(identity(item.runtime.cwd, item.runtime.sessionId)) !== item) return Promise.resolve();
+    if (item.reload) return item.reload;
+    const reload = this.applyReload(item);
+    item.reload = reload;
+    return reload;
+  }
+
+  private async applyReload(item: Live): Promise<void> {
     try {
-      const pending = item.pendingModel;
-      if (pending && (item.model !== pending.model || item.thinking !== pending.thinking)) {
+      // Mark the boundary pending before anything can fail, so a session that was
+      // idle when the change arrived is still guarded if this attempt throws.
+      item.restartPending = true;
+      // Drain every outstanding target. A newer one can arrive while configure
+      // awaits, and leaving it behind would let this boundary's caller run a turn
+      // on the model in between. Each pass applies a distinct target, so the loop
+      // runs once per settings change made while it is working.
+      while (item.pendingModel && (item.model !== item.pendingModel.model || item.thinking !== item.pendingModel.thinking)) {
+        const pending = item.pendingModel;
         const result = await this.configure(item.runtime.cwd, item.runtime.sessionId, pending.model, pending.thinking, item.config);
-        // A failure keeps the target. Clearing it up front would drop the change
-        // with nothing left to apply, and openOnce would reopen the old model.
-        if (!result.success) throw new Error(String(result.error ?? result.code ?? "model configuration failed"));
+        // A failure keeps the target, so the next boundary retries instead of
+        // reopening the model the user replaced.
+        if (!result.success) throw new ReloadFailedError(String(result.code ?? "configuration_reload_failed"),
+          String(result.error ?? result.code ?? "model configuration failed"));
+        if (item.pendingModel === pending) item.pendingModel = undefined;
       }
-      // Clear only what this call applied. A newer change that arrived during the
-      // await is still outstanding and must not be cleared with it.
-      if (item.pendingModel === pending) item.pendingModel = undefined;
-      // Stopping here would discard that newer target along with this record, and
-      // openOnce would reopen the persisted configuration instead. Keep the worker
-      // and the record so the next boundary applies the newest target.
-      if (item.pendingModel) { item.restartPending = true; return; }
+      item.pendingModel = undefined;
       item.restartPending = false;
       item.suppressRecovery = true;
       if (item.watchdog) clearTimeout(item.watchdog);
       this.events.expectExit(item.runtime);
       await this.manager.stop(item.key);
+      // A target that arrived while the worker was stopping is still outstanding.
+      // Keep the record, closed runtime and all: open() reopens it, and deleting it
+      // here would discard the target along with it.
+      if (item.pendingModel) { item.restartPending = true; return; }
       this.live.delete(identity(item.runtime.cwd, item.runtime.sessionId));
-    } finally { item.reloading = false; }
+    } finally { item.reload = undefined; }
   }
 
   async resume(cwd: string, sessionId: string, config: PiConfig): Promise<RuntimeResult> {
@@ -564,7 +598,14 @@ export class AgentCoreSessionService {
     const state = result.data as { model?: { provider?: string; modelId?: string }; thinkingLevel?: string } | undefined;
     if (state?.model?.provider !== ref.provider || state.model.modelId !== ref.modelId
       || typeof state.thinkingLevel !== "string" || (level !== undefined && state.thinkingLevel !== level)) {
-      await this.stopForReload(opened).catch(() => undefined);
+      // This runs inside the session mutation, so it must not call stopForReload:
+      // that would take the mutation queue again and wait on itself. Stopping the
+      // worker is enough, and the record stays so an outstanding target survives.
+      opened.restartPending = true;
+      opened.suppressRecovery = true;
+      if (opened.watchdog) clearTimeout(opened.watchdog);
+      this.events.expectExit(opened.runtime);
+      await this.manager.stop(opened.key).catch(() => undefined);
       return { success: false, code: "reconcile_failed", error: "agent runtime returned an inconsistent configuration" };
     }
     opened.model = `${state.model.provider}/${state.model.modelId}`;
