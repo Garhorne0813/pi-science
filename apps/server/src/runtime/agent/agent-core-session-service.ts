@@ -446,9 +446,13 @@ export class AgentCoreSessionService {
       return { success: false, code: error instanceof ReloadFailedError ? error.code : "configuration_reload_failed",
         error: error instanceof Error ? error.message : String(error) };
     }
+    const settled = this.live.get(key);
+    // The pass deferred because the turn is still running, which is not a reload
+    // failure and must not be reported as one.
+    if (settled?.busy) return { success: false, code: "busy", error: "agent is busy; wait for the current task to finish or stop it" };
     // A target that arrives while the worker is being stopped is left for the next
     // boundary, so dispatching now would run the turn on the model in between.
-    if (this.live.get(key)?.restartPending || this.modelTargets.has(key)) {
+    if (settled?.restartPending || this.modelTargets.has(key)) {
       return { success: false, code: "configuration_reload_failed", error: "the model change has not landed yet" };
     }
     return null;
@@ -526,16 +530,26 @@ export class AgentCoreSessionService {
   }
 
   /** Rebuilds workers with current MCP and environment settings; active turns finish first. */
-  async reloadConfiguration(modelChange?: { model: string; thinking: string }): Promise<void> {
-    await Promise.allSettled(this.opening.values());
-    const items = [...this.live.values()];
-    // Stamp every session before applying any of them. Applying in the same pass
-    // would let the first failure strand the rest on the replaced model with no
-    // intent recorded, and nothing left to retry.
-    for (const item of items) {
+  /** Records the change on every live session so it survives whatever happens to
+   *  their workers, and arms each boundary. Idempotent, so it can run either side of
+   *  the barrier that waits for in-flight opens. */
+  private stampReload(modelChange?: { model: string; thinking: string }): void {
+    for (const item of [...this.live.values()]) {
       if (modelChange) this.modelTargets.set(liveKey(item), { ...modelChange });
       item.restartPending = true;
     }
+  }
+
+  async reloadConfiguration(modelChange?: { model: string; thinking: string }): Promise<void> {
+    // Stamp either side of the barrier. A session that stops while the barrier
+    // awaits is gone from the live map by the second pass, so stamping only after it
+    // would leave that session on the replaced model with nothing recorded. Stamping
+    // every session before applying any of them also stops the first failure from
+    // stranding the rest with no intent recorded and nothing left to retry.
+    this.stampReload(modelChange);
+    await Promise.allSettled(this.opening.values());
+    this.stampReload(modelChange);
+    const items = [...this.live.values()];
     // A busy session finishes its turn first, so only the idle ones apply now.
     const settled = await Promise.allSettled(items.filter((item) => !item.busy).map((item) => this.stopForReload(item)));
     const failure = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
@@ -565,29 +579,39 @@ export class AgentCoreSessionService {
       // awaits, and leaving it behind would let this boundary's caller run a turn
       // on the model in between. Each pass applies a distinct target, so the loop
       // runs once per settings change made while it is working.
+      // A turn that is still running finishes first and the reload lands on its
+      // boundary. Configuring it fails on busy and stopping it kills the turn, so
+      // leave the boundary armed for the next pass.
+      if (item.busy) return;
       while (true) {
+        // Re-read the record every pass. configure() reopens through open(), which
+        // replaces the record in the live map, so the record this pass started with
+        // can be a different one by now.
+        const current = this.live.get(liveKey(item));
+        if (current !== item) {
+          // open() started the replacement on the target and armed it. Once the
+          // target is clear nothing is outstanding, so disarm it, or the next prompt
+          // fails against a change that has already landed.
+          if (current && !this.modelTargets.has(liveKey(item))) current.restartPending = false;
+          return;
+        }
         const pending = this.modelTargets.get(liveKey(item));
         if (!pending) break;
-        if (item.model === pending.model && item.thinking === pending.thinking) {
+        // A closed runtime cannot prove it runs the target. Its cached model is the
+        // one it had before a failed reconcile, so reopen and reconcile instead.
+        if (!item.runtime.isClosed && item.model === pending.model && item.thinking === pending.thinking) {
           // The worker already runs the target, so the change has landed. Keeping it
           // would leave every later boundary believing it is still outstanding.
           this.modelTargets.delete(liveKey(item));
           break;
         }
-        const result = await this.configure(item.runtime.cwd, item.runtime.sessionId, pending.model, pending.thinking, item.config);
+        const result = await this.configure(item.runtime.cwd, item.runtime.sessionId, pending.model, pending.thinking, item.config, true);
         // A failure keeps the target, so the next boundary retries instead of
         // reopening the model the user replaced.
         if (!result.success) throw new ReloadFailedError(String(result.code ?? "configuration_reload_failed"),
           String(result.error ?? result.code ?? "model configuration failed"));
         if (this.modelTargets.get(liveKey(item)) === pending) this.modelTargets.delete(liveKey(item));
       }
-      // A turn that is still running finishes first and the reload lands on its
-      // boundary. Stopping here would kill the turn instead.
-      if (item.busy) return;
-      // The worker this pass started with may have been replaced while configure
-      // awaited, and the manager key is shared, so stopping by key would kill its
-      // successor.
-      if (this.live.get(liveKey(item)) !== item) return;
       item.suppressRecovery = true;
       if (item.watchdog) clearTimeout(item.watchdog);
       this.events.expectExit(item.runtime);
@@ -648,8 +672,14 @@ export class AgentCoreSessionService {
       compaction_threshold_percent: typeof data.compaction_threshold_percent === "number" ? data.compaction_threshold_percent : null };
   }
 
-  async configure(cwd: string, sessionId: string, model: string, level: string | undefined, config: PiConfig): Promise<RuntimeResult> {
-    return this.withMutation(cwd, sessionId, () => this.configureOnce(cwd, sessionId, model, level, config));
+  /** Sets the model for one session. deferred marks the apply of a target recorded
+   *  earlier, which must not supersede a target that arrived while it ran. */
+  async configure(cwd: string, sessionId: string, model: string, level: string | undefined, config: PiConfig, deferred = false): Promise<RuntimeResult> {
+    const result = await this.withMutation(cwd, sessionId, () => this.configureOnce(cwd, sessionId, model, level, config));
+    // Choosing a model for one session is newer intent than a target stamped
+    // earlier, so a deferred change must not be applied over it at the next boundary.
+    if (result.success && !deferred) this.modelTargets.delete(identity(cwd, sessionId));
+    return result;
   }
 
   private async configureOnce(cwd: string, sessionId: string, model: string, level: string | undefined, config: PiConfig): Promise<RuntimeResult> {

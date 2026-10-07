@@ -278,6 +278,98 @@ describe("agent-core session configuration", () => {
     expect(item.restartPending).toBe(false);
   });
 
+  it("stamps a session that stops while the reload barrier is still awaiting", async () => {
+    const cwd = resolve(join(tmpdir(), "pi-science-core-barrier-reload-test"));
+    const sessionId = "barrier-reload-session";
+    const key = `${workspaceIdentity(cwd)}\0${sessionId}`;
+    const sendCommand = vi.fn().mockResolvedValue({ success: true, data: {} });
+    const runtime = { cwd, sessionId, isClosed: false, sendCommand };
+    const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
+    const internals = service as unknown as { live: Map<string, unknown>; modelTargets: Map<string, unknown>;
+      opening: Map<string, Promise<unknown>> };
+    const item = { key, runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low",
+      config: { skills: [], extensions: [] } };
+    internals.live.set(key, item);
+    let release!: () => void;
+    internals.opening.set("another-session", new Promise<void>((resolveGate) => { release = resolveGate; }));
+
+    const reload = service.reloadConfiguration({ model: "openai/new", thinking: "high" });
+    // The session stops while the barrier awaits, so it is gone from the live map by
+    // the time the post-barrier pass runs.
+    internals.live.delete(key);
+    release();
+    await reload;
+
+    // The target has to outlive the record, or the next open runs the old model.
+    expect(internals.modelTargets.get(key)).toEqual({ model: "openai/new", thinking: "high" });
+  });
+
+  it("disarms the successor record that a reopen put in its place", async () => {
+    const cwd = resolve(join(tmpdir(), "pi-science-core-successor-reload-test"));
+    const sessionId = "successor-reload-session";
+    const key = `${workspaceIdentity(cwd)}\0${sessionId}`;
+    const sendCommand = vi.fn().mockResolvedValue({ success: true, data: {} });
+    const runtime = { cwd, sessionId, isClosed: false, sendCommand };
+    const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
+    const internals = service as unknown as { live: Map<string, unknown>; modelTargets: Map<string, unknown>;
+      configure: (...args: unknown[]) => Promise<unknown>; stopForReload: (item: unknown) => Promise<void> };
+    const item = { key, runtime, busy: false, restartPending: true, model: "openai/old", thinking: "low",
+      config: { skills: [], extensions: [] } };
+    internals.live.set(key, item);
+    internals.modelTargets.set(key, { model: "openai/new", thinking: "high" });
+    // configure() reopens through open(), which replaces the record and arms it.
+    const successor = { key, runtime, busy: false, restartPending: true, model: "openai/new", thinking: "high",
+      config: { skills: [], extensions: [] } };
+    internals.configure = async () => { internals.live.set(key, successor); return { success: true }; };
+
+    await internals.stopForReload(item);
+
+    // The change landed, so the replacement must not keep claiming it is outstanding.
+    expect(internals.live.get(key)).toBe(successor);
+    expect(successor.restartPending).toBe(false);
+  });
+
+  it("reopens a closed worker instead of trusting the model it had cached", async () => {
+    const cwd = resolve(join(tmpdir(), "pi-science-core-closed-reload-test"));
+    const sessionId = "closed-reload-session";
+    const key = `${workspaceIdentity(cwd)}\0${sessionId}`;
+    const sendCommand = vi.fn().mockResolvedValue({ success: true, data: {} });
+    // A closed runtime cannot prove which model it holds, so its cached model is not
+    // evidence that the target has landed.
+    const runtime = { cwd, sessionId, isClosed: true, sendCommand };
+    const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
+    const internals = service as unknown as { live: Map<string, unknown>; modelTargets: Map<string, unknown>;
+      configure: (...args: unknown[]) => Promise<unknown>; stopForReload: (item: unknown) => Promise<void> };
+    const item = { key, runtime, busy: false, restartPending: true, model: "openai/same", thinking: "high",
+      config: { skills: [], extensions: [] } };
+    internals.live.set(key, item);
+    internals.modelTargets.set(key, { model: "openai/same", thinking: "high" });
+    const configured: unknown[] = [];
+    internals.configure = async (...args: unknown[]) => { configured.push(args[2]); return { success: false, code: "busy", error: "stop" }; };
+
+    await internals.stopForReload(item).catch(() => undefined);
+
+    expect(configured).toEqual(["openai/same"]);
+    expect(internals.modelTargets.has(key)).toBe(true);
+  });
+
+  it("reports a reload that deferred to a running turn as busy", async () => {
+    const cwd = resolve(join(tmpdir(), "pi-science-core-deferred-reload-test"));
+    const sessionId = "deferred-reload-session";
+    const key = `${workspaceIdentity(cwd)}\0${sessionId}`;
+    const sendCommand = vi.fn().mockResolvedValue({ success: true, data: {} });
+    const runtime = { cwd, sessionId, isClosed: false, sendCommand };
+    const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
+    const internals = service as unknown as { live: Map<string, unknown>;
+      awaitPendingReload: (cwd: string, sessionId: string, allowBusy: boolean) => Promise<unknown> };
+    const item = { key, runtime, busy: true, restartPending: true, model: "openai/old", thinking: "low",
+      config: { skills: [], extensions: [] } };
+    internals.live.set(key, item);
+
+    // Deferring to the turn is not a reload failure and must not be reported as one.
+    expect(await internals.awaitPendingReload(cwd, sessionId, false)).toMatchObject({ success: false, code: "busy" });
+  });
+
   it("keeps the record when the worker exits while a model change is outstanding", async () => {
     const cwd = resolve(join(tmpdir(), "pi-science-core-exit-reload-test"));
     const sessionId = "exit-reload-session";
