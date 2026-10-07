@@ -163,7 +163,7 @@ describe("conversation connection status", () => {
     await useRuntimeStore.getState().connect("/workspace", "session-a");
     const source = FakeEventSource.instances[0];
     source.open();
-    source.emit("text.updated", { type: "text.updated", sessionId: "session-a", partId: "p-1", text: "hi" }, "epoch-1:7");
+    source.emit("message.delta", { type: "message.delta", sessionId: "session-a", partId: "p-1", text: "hi" }, "epoch-1:7");
 
     getClient().reconnect("session-a", "/workspace", "late_stream_probe");
     const reconnected = FakeEventSource.instances.at(-1)!;
@@ -199,11 +199,11 @@ describe("stream envelope completeness", () => {
     await useRuntimeStore.getState().connect("/workspace", "session-a");
     const source = FakeEventSource.instances[0];
     source.open();
-    source.emit("text.updated", { type: "text.updated", sessionId: "session-a", partId: "p-1", text: "hello", schemaVersion: 2, seq: 1, eventId: "epoch-1:1", streamEpoch: "epoch-1" }, "epoch-1:1");
+    source.emit("message.delta", { type: "message.delta", sessionId: "session-a", partId: "p-1", text: "hello", schemaVersion: 3, seq: 1, eventId: "epoch-1:1", streamEpoch: "epoch-1" }, "epoch-1:1");
     expect(useRuntimeStore.getState().thread.foldState?.reconciliationRequired).toBe(false);
 
-    source.emit("session.stats", { type: "session.stats", sessionId: "session-a", schemaVersion: 2, seq: 2, eventId: "epoch-1:2", streamEpoch: "epoch-1", stats: { turns: 1 } }, "epoch-1:2");
-    source.emit("text.updated", { type: "text.updated", sessionId: "session-a", partId: "p-1", text: " world", schemaVersion: 2, seq: 3, eventId: "epoch-1:3", streamEpoch: "epoch-1" }, "epoch-1:3");
+    source.emit("session.stats", { type: "session.stats", sessionId: "session-a", schemaVersion: 3, seq: 2, eventId: "epoch-1:2", streamEpoch: "epoch-1", stats: { turns: 1 } }, "epoch-1:2");
+    source.emit("message.delta", { type: "message.delta", sessionId: "session-a", partId: "p-1", text: " world", schemaVersion: 3, seq: 3, eventId: "epoch-1:3", streamEpoch: "epoch-1" }, "epoch-1:3");
 
     expect(useRuntimeStore.getState().thread.foldState?.reconciliationRequired).toBe(false);
     expect(transportDiagnostics().counters.byReason.stream_gap).toBeUndefined();
@@ -216,9 +216,9 @@ describe("stream envelope completeness", () => {
     await useRuntimeStore.getState().connect("/workspace", "session-a");
     const source = FakeEventSource.instances[0];
     source.open();
-    source.emit("text.updated", { type: "text.updated", sessionId: "session-a", partId: "p-1", text: "a", schemaVersion: 2, seq: 1, eventId: "epoch-1:1", streamEpoch: "epoch-1" }, "epoch-1:1");
+    source.emit("message.delta", { type: "message.delta", sessionId: "session-a", partId: "p-1", text: "a", schemaVersion: 3, seq: 1, eventId: "epoch-1:1", streamEpoch: "epoch-1" }, "epoch-1:1");
     // Sequence 2 never arrives on this stream: the projection is provisional.
-    source.emit("text.updated", { type: "text.updated", sessionId: "session-a", partId: "p-1", text: "c", schemaVersion: 2, seq: 3, eventId: "epoch-1:3", streamEpoch: "epoch-1" }, "epoch-1:3");
+    source.emit("message.delta", { type: "message.delta", sessionId: "session-a", partId: "p-1", text: "c", schemaVersion: 3, seq: 3, eventId: "epoch-1:3", streamEpoch: "epoch-1" }, "epoch-1:3");
 
     expect(useRuntimeStore.getState().thread.foldState?.reconciliationRequired).toBe(true);
     expect(transportDiagnostics().log.some((entry) => entry.reason === "stream_gap" && entry.detail?.includes("discontinuity"))).toBe(true);
@@ -237,9 +237,9 @@ describe("stream position consumption", () => {
     await useRuntimeStore.getState().connect("/workspace", "session-a");
     const source = FakeEventSource.instances[0];
     source.open();
-    source.emit("text.updated", { type: "text.updated", sessionId: "session-a", schemaVersion: 2, seq: 1, eventId: "epoch-1:1", streamEpoch: "epoch-1", partId: "p-1", text: "hello" }, "epoch-1:1");
-    source.emit(String(record.type), { sessionId: "session-a", schemaVersion: 2, seq: 2, eventId: "epoch-1:2", streamEpoch: "epoch-1", ...record }, "epoch-1:2");
-    source.emit("text.updated", { type: "text.updated", sessionId: "session-a", schemaVersion: 2, seq: 3, eventId: "epoch-1:3", streamEpoch: "epoch-1", partId: "p-1", text: " world" }, "epoch-1:3");
+    source.emit("message.delta", { type: "message.delta", sessionId: "session-a", schemaVersion: 3, seq: 1, eventId: "epoch-1:1", streamEpoch: "epoch-1", partId: "p-1", text: "hello" }, "epoch-1:1");
+    source.emit(String(record.type), { sessionId: "session-a", schemaVersion: 3, seq: 2, eventId: "epoch-1:2", streamEpoch: "epoch-1", ...record }, "epoch-1:2");
+    source.emit("message.delta", { type: "message.delta", sessionId: "session-a", schemaVersion: 3, seq: 3, eventId: "epoch-1:3", streamEpoch: "epoch-1", partId: "p-1", text: " world" }, "epoch-1:3");
 
     const foldState = useRuntimeStore.getState().thread.foldState;
     getClient().reconnect("session-a", "/workspace", "manual");
@@ -264,8 +264,8 @@ describe("stream position consumption", () => {
     }],
     ["questionnaire.asked without questions", { type: "questionnaire.asked", toolCallId: "call-1", questions: [] }],
     ["questionnaire.finished", { type: "questionnaire.finished", toolCallId: "call-1" }],
-    ["question.asked", { type: "question.asked", requestId: "req-1", title: "Which?", method: "input" }],
-    ["permission.asked", { type: "permission.asked", requestId: "req-1", title: "Allow?", method: "confirm" }],
+    ["interaction.requested", { type: "interaction.requested", requestId: "req-1", title: "Which?", method: "input" }],
+    ["interaction.requested", { type: "interaction.requested", requestId: "req-1", title: "Allow?", method: "confirm" }],
     ["interaction.requested without an id", { type: "interaction.requested" }],
   ];
 
@@ -288,7 +288,7 @@ describe("stream position consumption", () => {
     const source = FakeEventSource.instances[0];
     source.open();
     source.emit("questionnaire.asked", {
-      type: "questionnaire.asked", sessionId: "session-a", schemaVersion: 2, seq: 2, eventId: "epoch-1:2", streamEpoch: "epoch-1",
+      type: "questionnaire.asked", sessionId: "session-a", schemaVersion: 3, seq: 2, eventId: "epoch-1:2", streamEpoch: "epoch-1",
       toolCallId: "call-1",
       questions: [{ question: "Which?", header: "Choice", options: [{ label: "A", description: "" }] }],
     }, "epoch-1:2");
@@ -306,12 +306,12 @@ describe("stream position consumption", () => {
     await useRuntimeStore.getState().connect("/workspace", "session-a");
     const source = FakeEventSource.instances[0];
     source.open();
-    source.emit("text.updated", { type: "text.updated", sessionId: "session-a", schemaVersion: 2, seq: 1, eventId: "epoch-1:1", streamEpoch: "epoch-1", partId: "p-1", text: "hello" }, "epoch-1:1");
+    source.emit("message.delta", { type: "message.delta", sessionId: "session-a", schemaVersion: 3, seq: 1, eventId: "epoch-1:1", streamEpoch: "epoch-1", partId: "p-1", text: "hello" }, "epoch-1:1");
     source.emit("session.replaced", {
-      type: "session.replaced", sessionId: "session-a", schemaVersion: 2, seq: 2, eventId: "epoch-1:2", streamEpoch: "epoch-1",
+      type: "session.replaced", sessionId: "session-a", schemaVersion: 3, seq: 2, eventId: "epoch-1:2", streamEpoch: "epoch-1",
       replacementSessionId: "session-a",
     }, "epoch-1:2");
-    source.emit("text.updated", { type: "text.updated", sessionId: "session-a", schemaVersion: 2, seq: 3, eventId: "epoch-1:3", streamEpoch: "epoch-1", partId: "p-1", text: " world" }, "epoch-1:3");
+    source.emit("message.delta", { type: "message.delta", sessionId: "session-a", schemaVersion: 3, seq: 3, eventId: "epoch-1:3", streamEpoch: "epoch-1", partId: "p-1", text: " world" }, "epoch-1:3");
 
     const foldState = useRuntimeStore.getState().thread.foldState;
     expect(foldState?.lastSequence).toBe(3);
@@ -325,7 +325,7 @@ describe("stream position consumption", () => {
     const source = FakeEventSource.instances[0];
     source.open();
     source.emit("session.replaced", {
-      type: "session.replaced", sessionId: "session-a", schemaVersion: 2, seq: 1, eventId: "epoch-1:1", streamEpoch: "epoch-1",
+      type: "session.replaced", sessionId: "session-a", schemaVersion: 3, seq: 1, eventId: "epoch-1:1", streamEpoch: "epoch-1",
       replacementSessionId: "session-b",
     }, "epoch-1:1");
 

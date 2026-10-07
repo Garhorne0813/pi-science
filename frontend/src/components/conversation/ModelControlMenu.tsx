@@ -36,6 +36,7 @@ const GROUP_HEADER_CLASS = "sticky top-0 z-10 bg-surface-raised px-2.5 pb-1 pt-2
 export function ModelControlMenu({
   models,
   selectedModel,
+  needsModelSwitch = false,
   thinking,
   thinkingLevels,
   contextTokens,
@@ -49,6 +50,7 @@ export function ModelControlMenu({
 }: {
   models: AvailableModel[];
   selectedModel: string;
+  needsModelSwitch?: boolean;
   thinking: string;
   thinkingLevels: string[];
   contextTokens?: number | null;
@@ -60,11 +62,11 @@ export function ModelControlMenu({
   onModelChange: (model: string) => void;
   onThinkingChange: (level: string) => void;
 }) {
-  const { i18n } = useTranslation();
+  const { i18n, t } = useTranslation();
   const isChinese = i18n.resolvedLanguage?.startsWith("zh") ?? false;
   const [modelQuery, setModelQuery] = useState("");
   const selectedModelInfo = models.find((model) => model.id === selectedModel);
-  const modelLabel = selectedModelInfo?.model || selectedModel || (isChinese ? "选择模型" : "Select model");
+  const modelLabel = selectedModelInfo?.model || (needsModelSwitch ? t("conversation.switchModel") : selectedModel || (isChinese ? "选择模型" : "Select model"));
   const thinkingLabel = formatThinkingLabel(thinking, isChinese);
   const effectiveWindow = contextWindow || selectedModelInfo?.context_window || null;
   const contextSummary = `${formatTokens(contextTokens)} / ${formatTokens(effectiveWindow)}`;

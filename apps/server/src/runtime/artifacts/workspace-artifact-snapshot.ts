@@ -4,7 +4,7 @@ import { isArtifactSurfaceablePath } from "./artifact-surface-policy.js";
 
 /** Bounded workspace snapshot for turn-level artifact detection.
  *
- *  At `agent_start` the service records a baseline; at `agent_settled` it
+ *  At `operation.started` the service records a baseline; at `operation.settled` it
  *  re-scans and diffs the two snapshots so files created/modified by the turn
  *  (bash/Python runs, scripts, downloads) become preview cards even when no
  *  explicit artifact publication happened. The scan is deliberately bounded:
@@ -66,7 +66,7 @@ export function isPreviewableFile(path: string): boolean {
   return previewable.has(ext);
 }
 
-/** Coarse artifact kind for a snapshot file (mirrors node-event-observer). */
+/** Coarse artifact kind for a snapshot file (mirrors agent-event-observer). */
 export function previewKind(path: string): string {
   const ext = extname(path).toLowerCase();
   if ([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".tif", ".tiff"].includes(ext)) return "image";

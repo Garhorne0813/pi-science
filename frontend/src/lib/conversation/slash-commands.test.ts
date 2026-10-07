@@ -33,7 +33,7 @@ describe("slash commands", () => {
     await fetchDynamicCommands("session-a", "/workspace");
     expect(allCommands().map((command) => command.name)).toContain("skill:review");
     expect(allCommands().map((command) => command.name)).not.toContain("deploy");
-    expect(allCommands().map((command) => command.name)).not.toContain("summarize");
+    expect(allCommands()).toContainEqual(expect.objectContaining({ name: "summarize", group: "utility", source: "prompt" }));
     expect(allCommands().filter((command) => command.name === "compact")).toHaveLength(1);
   });
 });

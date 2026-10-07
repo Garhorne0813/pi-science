@@ -30,7 +30,7 @@ async function workspace(): Promise<string> {
 }
 
 function record(id: string, createdAt: string, text: string): SseEventRecord {
-  return { event: "text.updated", id, data: JSON.stringify({ text }), created_at: createdAt };
+  return { event: "message.delta", id, data: JSON.stringify({ text }), created_at: createdAt };
 }
 
 function paths(cwd: string, sessionId: string): { primary: string; fallback: string } {
@@ -44,9 +44,9 @@ function paths(cwd: string, sessionId: string): { primary: string; fallback: str
 
 describe("durable conversation event replay", () => {
   it("parses CRLF framed SSE without retaining carriage returns", () => {
-    expect(parseSseBlock("id: epoch:1\r\nevent: text.updated\r\ndata: first\r\ndata: second\r\n")).toMatchObject({
+    expect(parseSseBlock("id: epoch:1\r\nevent: message.delta\r\ndata: first\r\ndata: second\r\n")).toMatchObject({
       id: "epoch:1",
-      event: "text.updated",
+      event: "message.delta",
       data: "first\nsecond",
     });
   });
@@ -241,4 +241,22 @@ describe("durable conversation event replay", () => {
 
     expect(second[0]!.data).toContain("original");
   });
+});
+
+it("decodes old persisted lifecycle only on read, preserving cursor and source bytes", async () => {
+  const cwd = await workspace();
+  const sessionId = "historical-wire";
+  const path = paths(cwd, sessionId).primary;
+  const raw: SseEventRecord[] = [
+    { event: "agent_start", id: "old:1", created_at: "2026-01-01T00:00:00Z", data: JSON.stringify({ type: "agent_start", schemaVersion: 2, seq: 1, runId: "r", turnId: "r" }) },
+    { event: "session.idle", id: "old:2", created_at: "2026-01-01T00:00:01Z", data: JSON.stringify({ type: "session.idle", schemaVersion: 2, seq: 2, runId: "r", turnId: "r", payload: { type: "session.idle", outcome: "ok" } }) },
+  ];
+  const bytes = raw.map((record) => JSON.stringify(record)).join("\n") + "\n";
+  await writeFile(path, bytes);
+  const replay = await new DurableEventStore().readAfter(cwd, sessionId);
+  expect(replay.map((record) => record.event)).toEqual(["operation.started", "operation.settled"]);
+  expect(replay.map((record) => record.id)).toEqual(["old:1", "old:2"]);
+  expect(replay.map((record) => record.created_at)).toEqual(raw.map((record) => record.created_at));
+  expect(JSON.parse(replay[1]!.data)).toMatchObject({ schemaVersion: 3, seq: 2, status: "completed", payload: { type: "operation.settled", status: "completed" } });
+  expect(await readFile(path, "utf8")).toBe(bytes);
 });

@@ -3,7 +3,7 @@
 type RequestOptions = RequestInit & { timeoutMs?: number };
 
 export const REQUEST_TIMEOUT_MS = 45_000;
-/** Runtime startup can include a cold Pi Orbit host launch. Keep that wait
+/** Runtime startup can include a cold Agent Core worker launch. Keep that wait
  * longer than normal REST calls so the first conversation is not abandoned. */
 export const RUNTIME_START_TIMEOUT_MS = 180_000;
 

@@ -1,4 +1,4 @@
-import { bindingError, resolveBindings as bindings, mcpBaseEnvironment } from "./bindings.js";
+import { bindingError, resolveBindings as bindings, mcpBaseEnvironment, builtinNetworkEnvironment } from "./bindings.js";
 import { createMcpFetch } from "./runtime-fetch.js";
 import { resolve } from "node:path";
 import { createConnection, type Socket } from "node:net";
@@ -25,7 +25,7 @@ export async function connectAndListMcpTools(connector: StoredMcpConnector, work
     transport = new StdioClientTransport({
       command: connector.command!, args: connector.args,
       cwd: resolve(workspace, connector.runtime_config.cwd ?? "."),
-      env: { ...mcpBaseEnvironment(), ...bindings(connector.runtime_config.environment) }, stderr: "pipe",
+      env: { ...mcpBaseEnvironment(), ...bindings(connector.runtime_config.environment), ...(connector.source === "builtin" ? builtinNetworkEnvironment() : {}) }, stderr: "pipe",
     });
   } else if (connector.transport === "sse") {
     transport = new SSEClientTransport(new URL(connector.endpoint_url!), { requestInit: { headers }, fetch: guardedFetch });
@@ -48,7 +48,7 @@ export async function connectAndListMcpTools(connector: StoredMcpConnector, work
   }
 }
 
-class UnixSocketClientTransport implements Transport {
+export class UnixSocketClientTransport implements Transport {
   private socket?: Socket;
   private readonly buffer = new ReadBuffer();
   onclose?: () => void;

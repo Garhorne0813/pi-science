@@ -2,6 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { metadataRoot } from "../../storage/persistence.js";
 import { DEFAULT_PACKAGES, DEFAULT_R_PACKAGES, defaultPythonExecutable, environmentPythonExecutable, micromambaDownloadUrl, WorkspaceEnvironmentService, workspaceEnvironmentVariables, type EnvironmentRevision } from "./workspace-environment.js";
 
 describe("workspace environment platform defaults", () => {
@@ -78,11 +79,11 @@ describe("workspace environment platform defaults", () => {
     expect(environment.npm_config_prefix).toBe(join(workspace, ".pi-science", "node-tools", "npm"));
     expect(environment.NPM_CONFIG_PREFIX).toBe(join(workspace, ".pi-science", "node-tools", "npm"));
     expect(environment.npm_config_cache).toBe(join(workspace, ".pi-science", "cache", "npm"));
-    expect(environment.PNPM_HOME).toBe(join(workspace, ".pi-science", "node-tools", "pnpm"));
-    expect(environment.COREPACK_HOME).toBe(join(workspace, ".pi-science", "cache", "corepack"));
+    expect(environment.PNPM_HOME).toBe(join(metadataRoot(workspace), "node-tools", "pnpm"));
+    expect(environment.COREPACK_HOME).toBe(join(metadataRoot(workspace), "cache", "corepack"));
     expect(environment.NODE_PATH).toBeUndefined();
     expect(environment.PATH).toContain(join(workspace, ".pi-science", "node-tools", "npm", "bin"));
-    expect(environment.PATH).toContain(join(workspace, ".pi-science", "node-tools", "pnpm"));
+    expect(environment.PATH).toContain(join(metadataRoot(workspace), "node-tools", "pnpm"));
   });
 });
 

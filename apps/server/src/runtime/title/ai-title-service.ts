@@ -1,39 +1,31 @@
-/** AI session-title generation (batch F, plan 1: Pi background agent).
- *
- *  Node orchestrates an isolated Pi Orbit runtime: it seeds the runtime with
- *  the latest conversation excerpt, sends one prompt asking for a short
- *  title, polls the runtime for its assistant reply, cleans the text and
- *  disposes the runtime. The real LLM call is performed by the Pi runtime
- *  with the user's configured provider — Node never speaks provider
- *  protocols, matching the architecture boundary.
- *
- *  The runtime is a fresh, empty Pi session, so the first assistant text
- *  produced by the title prompt is the reply we want (nothing else can
- *  appear before it).
- */
-
-import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
-import type { PiManager } from "../pi/pi-manager.js";
-import type { PiResult } from "../pi/pi-process.js";
-import { buildPiProcessOptions, loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
+import { CredentialStore } from "../../model-resources/credential-store.js";
+import { createHash, randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
+import { AgentRuntimeManager } from "../agent/agent-runtime-manager.js";
+import type { RuntimeResult } from "../agent/agent-runtime-types.js";
+import { loadDefaultPiConfig } from "../agent/runtime-config.js";
 import { sessionRepository } from "../node/session-repository.js";
 import { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
+import { readJson, workspaceFile } from "../../storage/persistence.js";
+import { hiddenSessionsRoot, openHiddenTask } from "../agent/hidden-agent-task.js";
+import { AgentSessionRegistry } from "../agent/agent-session-registry.js";
 import { AI_TITLE_PROMPT_INSTRUCTION } from "./title-prompt.js";
 
 /** Minimum runtime surface the title service needs; tests provide a fake. */
 export interface TitleRuntime {
-  sendCommand(type: string, params?: Record<string, unknown>): Promise<PiResult>;
+  sendCommand(type: string, params?: Record<string, unknown>): Promise<RuntimeResult>;
   dispose(): Promise<void>;
 }
 
-/** Production factory: a real Pi Orbit runtime via PiManager. */
-export class PiTitleRuntimeFactory {
+/** A disposable core worker with no tools or skills. */
+export class CoreTitleRuntimeFactory {
   private readonly environments: WorkspaceEnvironmentService;
+  private readonly pending = new Set<Promise<TitleRuntime>>();
+  private readonly disposers = new Set<() => Promise<void>>();
+  private closing = false;
 
   constructor(
-    private readonly manager: PiManager,
+    private readonly manager: AgentRuntimeManager = new AgentRuntimeManager(),
     environments?: WorkspaceEnvironmentService,
   ) {
     // Injectable for tests: the real service provisions a python venv in the
@@ -42,42 +34,58 @@ export class PiTitleRuntimeFactory {
     this.environments = environments ?? new WorkspaceEnvironmentService();
   }
 
+  async shutdownAll(): Promise<void> {
+    this.closing = true;
+    await Promise.allSettled([...this.pending]);
+    await this.manager.shutdownAll();
+    await Promise.allSettled([...this.disposers].map((dispose) => dispose()));
+  }
+
   async start(cwd: string): Promise<TitleRuntime> {
+    if (this.closing) throw new Error("Title runtime factory is closing");
+    const pending = this.startOnce(cwd);
+    this.pending.add(pending);
+    try { return await pending; }
+    finally { this.pending.delete(pending); }
+  }
+
+  private async startOnce(cwd: string): Promise<TitleRuntime> {
     const config = loadDefaultPiConfig();
     const environment = await this.environments.environment(cwd);
-    // Pi Orbit can persist dynamically-created web runtimes even when
-    // the host was launched with --no-session. Give title generation its own
-    // disposable session directory so those implementation conversations can
-    // never enter the user-facing `.pi-science/sessions` index.
-    const temporaryRoot = join(cwd, ".pi-science", "title-runtimes");
-    await mkdir(temporaryRoot, { recursive: true });
-    const temporarySessionDir = await mkdtemp(join(temporaryRoot, "runtime-"));
-    const options = buildPiProcessOptions(cwd, config, undefined, environment, temporarySessionDir);
-    if (!options) {
-      await rm(temporarySessionDir, { recursive: true, force: true });
-      throw new Error("PI_CLI_PATH is not configured");
-    }
-    // Keep the manager key so dispose can go through manager.stop(key): a raw
-    // process.shutdown() would leave the entry in the manager's processes map
-    // forever (web runtimes are detached, so no exit event fires) and the map
-    // would grow without bound across title generations.
+    if (!config.model?.includes("/")) throw new Error("Title generation requires a configured model");
+    const separator = config.model.indexOf("/");
+    const credentials = await new CredentialStore().listMetadata();
+    const credentialEnvNames = credentials.flatMap((item) => item.backend === "environment" && item.environment_variable ? [item.environment_variable] : []);
+    const options = { cwd, sessionsRoot: hiddenSessionsRoot(cwd),
+      model: { provider: config.model.slice(0, separator), modelId: config.model.slice(separator + 1) },
+      thinking: "off" as const, settings: config, allowedTools: [], skillPaths: [], skillPolicy: { mode: "none" as const }, credentialEnvNames,
+      env: environment as Record<string, string> };
     const key = randomUUID();
-    try {
-      const process = await this.manager.start(key, options);
-      return {
-        sendCommand: (type, params = {}) => process.sendCommand(type, params),
-        dispose: async () => {
-          try {
-            await this.manager.stop(key);
-          } finally {
-            await rm(temporarySessionDir, { recursive: true, force: true });
+    const link = workspaceFile(cwd, `agent-task-links/${createHash("sha256").update(key).digest("hex")}.json`);
+    let disposing: Promise<void> | undefined;
+    const dispose = (): Promise<void> => disposing ??= (async () => {
+      try { await this.manager.stop(key); }
+      finally {
+        const saved = await readJson<{ sessionId?: string }>(link, {});
+        if (saved.sessionId) {
+          const registry = new AgentSessionRegistry();
+          const registered = await registry.get(cwd, saved.sessionId);
+          if (registered?.target) {
+            await registry.markDeleted(cwd, saved.sessionId, registered.target);
+            await rm(registered.target, { force: true });
           }
-        },
-      };
-    } catch (error) {
-      await rm(temporarySessionDir, { recursive: true, force: true });
-      throw error;
-    }
+        }
+        await rm(link, { force: true });
+        this.disposers.delete(dispose);
+      }
+    })();
+    this.disposers.add(dispose);
+    try {
+      const process = await openHiddenTask(this.manager, key, options, `title:${key}`);
+      const activated = await process.sendCommand("activate");
+      if (!activated.success) throw new Error(activated.error ?? "Title worker activation failed");
+      return { sendCommand: (type, params = {}) => process.sendCommand(type, params), dispose };
+    } catch (error) { await dispose(); throw error; }
   }
 }
 
@@ -91,11 +99,6 @@ const MAX_HISTORY_PAGE = 40;
 const MAX_MESSAGE_CHARS = 200;
 
 export function aiTitlesEnabled(): boolean {
-  // RPC-mode runtimes cannot be spawned with --no-session (the flag only
-  // exists on the web branch), so a title runtime would persist a ghost
-  // session JSONL in the workspace. The feature needs Pi Orbit, disable it
-  // under PI_SCIENCE_PI_MODE=rpc rather than polluting session storage.
-  if (process.env.PI_SCIENCE_PI_MODE === "rpc") return false;
   return process.env.PI_SCIENCE_AI_TITLES !== "0";
 }
 
@@ -148,7 +151,7 @@ export function cleanTitle(raw: string): string | null {
 
 /** Extract the reply text from a get_last_assistant_text result (tolerant of
  *  `{ data: { text } }`, `{ data: "<text>" }` and `{ data: null }` shapes). */
-function replyText(result: PiResult): string {
+function replyText(result: RuntimeResult): string {
   if (!result.success) return "";
   const data = result.data as Record<string, unknown> | string | null | undefined;
   if (typeof data === "string") return data;

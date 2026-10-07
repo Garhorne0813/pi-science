@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { readProject } from "../project/project-registry.js";
 import { sessionRepository, type SessionMessageRecord, type SessionRepository } from "../runtime/node/session-repository.js";
@@ -14,7 +14,7 @@ export class ProjectReviewBusyError extends Error {
   constructor() { super("A project review is already running for this workspace"); this.name = "ProjectReviewBusyError"; }
 }
 
-export interface ProjectReviewOptions { sessionId?: string | null; forceFullSession?: boolean; trigger?: "manual" | "auto" }
+export interface ProjectReviewOptions { sessionId?: string | null; forceFullSession?: boolean; trigger?: "manual" | "auto"; turnId?: string }
 /** Response contract consumed verbatim by the frontend ✨ Review button. */
 export interface ProjectReviewSummary { run_id: string; created: number; skipped: number; proposal_ids: string[]; message: string }
 
@@ -37,13 +37,23 @@ export class ProjectReviewService {
   async shutdown(): Promise<void> { await this.runner.shutdown(); }
 
   private async execute(cwd: string, options: ProjectReviewOptions): Promise<ProjectReviewSummary> {
-    const runId = `review-${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+    const runId = options.trigger === "auto" && options.turnId
+      ? `review-${createHash("sha256").update(`${options.sessionId}\0${options.turnId}`).digest("hex").slice(0, 24)}`
+      : `review-${randomUUID().replaceAll("-", "").slice(0, 16)}`;
     const nothing = (message: string): ProjectReviewSummary => ({ run_id: runId, created: 0, skipped: 0, proposal_ids: [], message });
     const sessionId = typeof options.sessionId === "string" ? options.sessionId : "";
     if (options.trigger === "auto" && !(await readProjectState(cwd)).policy.auto_review) return nothing("Automatic project review is disabled for this workspace");
     if (!sessionId) return nothing("Open a conversation before running a project review");
     const excerpt = buildExcerpt(sessionId, await this.repository.messages(cwd, sessionId), options.forceFullSession === true);
     if (!excerpt.messages.length) return nothing("There is no conversation history to review yet");
+    if (options.trigger === "auto" && options.turnId) {
+      const reserved = await mutateProjectState(cwd, (current) => {
+        if (current.history.some((record) => record.id === runId && record.type === "automatic_review")) return false;
+        current.history.push({ id: runId, type: "automatic_review", session_id: sessionId, turn_id: options.turnId, status: "requested", created_at: timestamp() });
+        return true;
+      });
+      if (!reserved) return nothing("This turn has already requested an automatic review");
+    }
     const result = await this.runner.run({ run_id: runId, cwd, session_id: sessionId, excerpt });
     const proposed = result.output.proposals.slice(0, MAX_PROPOSALS);
     if (!proposed.length) return nothing("No durable project knowledge was found in this conversation");

@@ -9,7 +9,7 @@ describe("narration subsumption safety", () => {
     let thread = emptyThread();
     thread = foldEvent(thread, {
       sessionId: "s",
-      type: "text.updated",
+      type: "message.delta",
       turnId: "t1",
       partId: "m1",
       text: narration,
@@ -18,7 +18,7 @@ describe("narration subsumption safety", () => {
     });
     thread = foldEvent(thread, {
       sessionId: "s",
-      type: "text.updated",
+      type: "message.delta",
       turnId: "t1",
       partId: "m2",
       text: narration,
@@ -36,7 +36,7 @@ describe("narration subsumption safety", () => {
     let thread = emptyThread();
     thread = foldEvent(thread, {
       sessionId: "s",
-      type: "text.updated",
+      type: "message.delta",
       turnId: "t1",
       partId: "m1",
       text: narration,
@@ -45,7 +45,7 @@ describe("narration subsumption safety", () => {
     });
     thread = foldEvent(thread, {
       sessionId: "s",
-      type: "text.updated",
+      type: "message.delta",
       turnId: "t1",
       partId: "m2",
       text: narration,
@@ -60,7 +60,7 @@ describe("narration subsumption safety", () => {
 
     thread = foldEvent(thread, {
       sessionId: "s",
-      type: "text.updated",
+      type: "message.delta",
       turnId: "t1",
       partId: "m2",
       text: narration,

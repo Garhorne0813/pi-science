@@ -26,6 +26,8 @@ export interface TurnPresentation {
   artifacts: TurnArtifactSummaryBlock[];
   /** Explicit terminal state prevents abort/failure text from becoming final. */
   lifecycle: TurnLifecycle;
+  startedAt?: string;
+  endedAt?: string;
   /** True while the agent is still working inside this turn. */
   active: boolean;
   completed: boolean;
@@ -36,15 +38,19 @@ export function buildTurnPresentations(blocks: ThreadBlock[], opts: { lastTurnLi
   const turns: Array<{ key: string; blocks: ThreadBlock[] }> = [];
   const byKey = new Map<string, { key: string; blocks: ThreadBlock[] }>();
   const ownerByTurnId = new Map<string, string>();
+  const ownerByRunId = new Map<string, string>();
   let currentKey: string | null = null;
   for (const block of blocks) {
     const identity = "turnId" in block ? block.turnId : undefined;
+    const runId = "runId" in block ? block.runId : undefined;
     // Runtime turn IDs can change during one response (for example after a
     // resumed run). A new user message, rather than a new runtime ID, is the
     // boundary of a conversation turn. Artifact summaries may arrive late,
     // so route those back to the group that owns their runtime ID.
     const key: string = block.kind === "user"
       ? `user:${block.id}`
+      : runId && ownerByRunId.has(runId)
+        ? ownerByRunId.get(runId)!
       : block.kind === "artifact-summary" && identity
         ? ownerByTurnId.get(identity) ?? currentKey ?? `turn:${identity}`
         : currentKey && byKey.get(currentKey)?.blocks.some((entry) => entry.kind === "user")
@@ -58,6 +64,7 @@ export function buildTurnPresentations(blocks: ThreadBlock[], opts: { lastTurnLi
     }
     turn.blocks.push(block);
     if (identity && block.kind !== "artifact-summary") ownerByTurnId.set(identity, key);
+    if (runId) ownerByRunId.set(runId, key);
     if (block.kind !== "artifact-summary") currentKey = key;
   }
   // Unmatched legacy/history identities retain the position established by
@@ -74,7 +81,13 @@ export function buildTurnPresentations(blocks: ThreadBlock[], opts: { lastTurnLi
   // "Completed" until the next stream event re-keys it.
   const activeKey = identified && turns.some((turn) => turn.key === identified) ? identified : lastContentKey;
   return turns.map((turn) => {
-    const lifecycle = turn.key === activeKey ? opts.lastTurnLifecycle ?? "settled" : "settled";
+    const terminal = turn.blocks.find((block) => block.kind === "user" && block.turnStatus) ?? turn.blocks.findLast((block) => "turnStatus" in block && block.turnStatus);
+    const status = terminal && "turnStatus" in terminal ? terminal.turnStatus : undefined;
+    const persisted: TurnLifecycle = status === "aborted" || status === "declined" ? "aborted" : status === "failed" ? "failed" : "settled";
+    // Idle snapshots describe streaming, not the outcome of an earlier run.
+    // Only a live lifecycle may override its persisted terminal result.
+    const live = turn.key === activeKey && opts.lastTurnLifecycle && isLiveLifecycle(opts.lastTurnLifecycle);
+    const lifecycle = live ? opts.lastTurnLifecycle! : status ? persisted : turn.key === activeKey ? opts.lastTurnLifecycle ?? "settled" : "settled";
     return buildTurnPresentation(turn.blocks, lifecycle);
   });
 }
@@ -91,6 +104,7 @@ function invalidatesExplicitFinal(block: ThreadBlock): boolean {
 }
 
 function buildTurnPresentation(blocks: ThreadBlock[], lifecycle: TurnLifecycle): TurnPresentation {
+  const terminal = blocks.find((block) => block.kind === "user" && block.turnStatus) ?? blocks.findLast((block) => "turnStatus" in block && block.turnStatus);
   const active = lifecycle === "queued" || lifecycle === "active" || lifecycle === "waiting" || lifecycle === "recovering" || lifecycle === "stopping";
   const user = blocks.find((block): block is UserMessageBlock => block.kind === "user") ?? null;
   const tools = blocks.filter((block): block is ToolCallBlock => block.kind === "tool");
@@ -136,6 +150,7 @@ function buildTurnPresentation(blocks: ThreadBlock[], lifecycle: TurnLifecycle):
     finalAgent,
     artifacts,
     lifecycle,
+    ...(terminal && "turnStartedAt" in terminal ? { startedAt: terminal.turnStartedAt, endedAt: terminal.turnEndedAt } : {}),
     active,
     completed: lifecycle === "settled" && (finalAgent !== null || settled),
   };

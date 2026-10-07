@@ -88,7 +88,7 @@ const toolExecution: ExecutionRecord = {
   workspace_id: "/workspace",
   created_at: "2026-08-15T03:00:00.000Z",
   started_at: "2026-08-15T03:00:00.000Z",
-  producer: "node-pi-event-observer",
+  producer: "agent-event-observer",
   correlation: { session_id: "session-1", tool_call_id: "call-1" },
   request: { tool: "write", input: { path: "report.md" } },
   runtime: { model: "test-model" },
@@ -176,7 +176,7 @@ describe("RunsPage execution ledger", () => {
     await waitFor(() => expect(screen.getByLabelText("location")).toHaveTextContent("execution=exec_tool"));
     expect(screen.getByTestId("runs-workbench")).toHaveAttribute("data-compact-detail", "false");
     expect(screen.getByTestId("runs-workbench").parentElement).toHaveClass("runs-workbench-container");
-    expect(screen.getByText("node-pi-event-observer")).toBeInTheDocument();
+    expect(screen.getByText("agent-event-observer")).toBeInTheDocument();
     expect(screen.getAllByText("Running", { selector: "dd" }).length).toBeGreaterThan(0);
   });
 
@@ -246,7 +246,7 @@ describe("RunsPage execution ledger", () => {
 
   it("copies execution evidence and drafts a reproduction in the originating session", async () => {
     renderPage("/workspace/project/runs?execution=exec_tool");
-    await screen.findByText("node-pi-event-observer");
+    await screen.findByText("agent-event-observer");
 
     fireEvent.click(screen.getByRole("button", { name: "Copy ID" }));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith("exec_tool"));
@@ -260,7 +260,7 @@ describe("RunsPage execution ledger", () => {
 
   it("locates correlated tool executions instead of offering a redundant session link", async () => {
     renderSessionPage();
-    await screen.findByText("node-pi-event-observer");
+    await screen.findByText("agent-event-observer");
 
     expect(screen.queryByRole("button", { name: "Open session" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Locate in conversation" }));

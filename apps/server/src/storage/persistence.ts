@@ -1,7 +1,7 @@
-import { appendFile, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
-import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
-import { dirname, join, resolve } from "node:path";
+import { appendFile, mkdir, open, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { lstatSync, mkdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { basename, dirname, join, resolve } from "node:path";
 import { userHome } from "../support/platform-utils.js";
 
 const writeQueues = new Map<string, Promise<void>>();
@@ -31,7 +31,54 @@ function waitForWriteQueue(operation: Promise<void>, timeoutMs: number, path: st
 }
 
 export function metadataRoot(workspace: string): string {
+  const relocated = workspaceStateRoot(workspace);
+  try {
+    const info = lstatSync(relocated);
+    if (info.isSymbolicLink() || !info.isDirectory()) throw new Error(`Workspace state path is not a real directory: ${relocated}`);
+    return relocated;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+  }
+  return legacyMetadataRoot(workspace);
+}
+
+/** State location used by PR #104. Keep resolving it when running code from
+ *  an older checkout so migrated sessions and artifacts remain visible. */
+export function workspaceStateRoot(workspace: string): string {
+  const canonical = canonicalWorkspacePath(resolve(workspace));
+  const identity = process.platform === "win32" ? canonical.toLowerCase() : canonical;
+  const key = createHash("sha256").update(identity).digest("hex");
+  return configPath(join("workspaces", key));
+}
+
+/** Pre-PR #104 state location, retained for workspaces that have not moved. */
+export function legacyMetadataRoot(workspace: string): string {
   return join(resolve(workspace), ".pi-science");
+}
+
+export async function moveWorkspaceMetadata(sourceWorkspace: string, destinationWorkspace: string): Promise<void> {
+  const source = workspaceStateRoot(sourceWorkspace);
+  const destination = workspaceStateRoot(destinationWorkspace);
+  if (source === destination) return;
+  await mkdir(dirname(destination), { recursive: true });
+  try { await rename(source, destination); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+}
+
+export async function removeWorkspaceMetadata(workspace: string): Promise<void> {
+  await Promise.all([
+    rm(workspaceStateRoot(workspace), { recursive: true, force: true }),
+    rm(legacyMetadataRoot(workspace), { recursive: true, force: true }),
+  ]);
+}
+
+function canonicalWorkspacePath(path: string): string {
+  try { return realpathSync.native(path); }
+  catch {
+    const parent = dirname(path);
+    return parent === path ? path : join(canonicalWorkspacePath(parent), basename(path));
+  }
 }
 
 /** Serializes writers for a workspace's metadata under a single workspace-level lock. */

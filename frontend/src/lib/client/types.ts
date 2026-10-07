@@ -43,10 +43,13 @@ export interface HistoryMessage {
   toolName?: string;
   isError?: boolean;
   timestamp?: string;
-  /** Tool-specific metadata persisted by Pi Orbit (toolResult details). */
+  /** Tool-specific metadata persisted by the agent runtime (toolResult details). */
   details?: unknown;
   presentation?: ToolPresentation;
   presentationRole?: "intermediate" | "final";
+  turnStatus?: "completed" | "declined" | "aborted" | "failed";
+  turnStartedAt?: string;
+  turnEndedAt?: string;
   turnId?: string;
   runId?: string;
   itemId?: string;
@@ -104,7 +107,7 @@ export interface TurnArtifactTurn {
   turn_id: string;
   session_id: string;
   assistant_message_id: string | null;
-  /** 1-based turn ordinal (agent_start count); null for records persisted
+  /** 1-based turn ordinal (operation.started count); null for records persisted
    *  before this field existed. Used to anchor the strip to the n-th agent
    *  block on history restore when no assistant message id is available. */
   turn_ordinal: number | null;

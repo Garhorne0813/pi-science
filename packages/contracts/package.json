@@ -7,6 +7,10 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./conversation-events": {
+      "types": "./src/conversation-events.ts",
+      "default": "./src/conversation-events.ts"
     }
   },
   "scripts": {

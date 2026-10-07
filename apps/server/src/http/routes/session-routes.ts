@@ -1,3 +1,4 @@
+import { sessionRuntimeStatus } from "./node-session-routes.js";
 import type { FastifyInstance } from "fastify";
 import type { SessionRepository } from "../../runtime/node/session-repository.js";
 import type { SessionTitleRepository } from "../../runtime/node/session-titles.js";
@@ -97,8 +98,11 @@ export function registerSessionReadRoutes(app: FastifyInstance, sessionRepositor
       ) {
         return reply.code(400).send({ error: "invalid history pagination parameters" });
       }
+      const cwd = await validateWorkspaceCwd(queryCwd(request));
+      const prepared = await nodeSessionService.prepareHistory(cwd, request.params.session_id);
+      if (!prepared.success) return reply.code(sessionRuntimeStatus(prepared.code)).send({ ok: false, ...prepared });
       return await sessionRepository.messagesPage(
-        await validateWorkspaceCwd(queryCwd(request)),
+        cwd,
         request.params.session_id,
         { before, limit },
       );
@@ -113,6 +117,8 @@ export function registerSessionReadRoutes(app: FastifyInstance, sessionRepositor
   app.get<{ Params: { session_id: string } }>("/api/sessions/:session_id/messages/index", async (request, reply) => {
     try {
       const cwd = await validateWorkspaceCwd(queryCwd(request));
+      const prepared = await nodeSessionService.prepareHistory(cwd, request.params.session_id);
+      if (!prepared.success) return reply.code(sessionRuntimeStatus(prepared.code)).send({ ok: false, ...prepared });
       return await sessionRepository.userMessageIndex(cwd, request.params.session_id);
     } catch (error) {
       return reply.code(403).send({ error: String(error) });

@@ -233,7 +233,7 @@ async function run() {
       console.log(`PASS new conversation changed ID ${firstSession} -> ${secondSession}`);
     } else {
       console.log("PASS composer clearly disabled sending because no provider/model is configured");
-      console.log("SKIP browser prompt: configure a model to run the streamed-text branch (covered by smoke:real-pi)");
+      console.log("SKIP browser prompt: configure a model to run the streamed-text branch (covered by smoke:agent-core)");
     }
     console.log(`SCREENSHOT ${screenshot}`);
   } finally {

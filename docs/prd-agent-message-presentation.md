@@ -314,7 +314,7 @@ intermediate narration 与 tool/thinking 同样属于 process history，terminal
 3. Tests
    - 单元测试覆盖 intermediate narration 默认折叠、展开后恢复；
    - 单元测试覆盖 explicit final 不进入 AgentActivity trace；
-   - E2E 覆盖 live narration 可见、session idle 后折叠、final answer 唯一显示；
+   - E2E 覆盖 live narration 可见、operation settled 后折叠、final answer 唯一显示；
    - history recovery 与 live path 保持一致。
 
 4. 文档
@@ -419,7 +419,7 @@ ConversationTurn
 ## 10. 验收标准
 
 1. 一个包含 2 条 commentary + 3 个 tools + 1 条 final answer 的 turn，在运行过程中 commentary/tool 均可见。
-2. 同一个 turn 在 `session.idle` / settled 后：
+2. 同一个 turn 在 `operation.settled` / settled 后：
    - commentary 默认不可见；
    - tools/thinking 默认不可见；
    - final answer 可见且只出现一次；
