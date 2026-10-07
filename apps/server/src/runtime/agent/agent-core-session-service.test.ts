@@ -228,6 +228,56 @@ describe("agent-core session configuration", () => {
     await rm(cwd, { recursive: true, force: true });
   });
 
+  it("clears a target the worker already runs instead of blocking every prompt", async () => {
+    const cwd = resolve(join(tmpdir(), "pi-science-core-satisfied-reload-test"));
+    const sessionId = "satisfied-reload-session";
+    const key = `${workspaceIdentity(cwd)}\0${sessionId}`;
+    const sendCommand = vi.fn().mockResolvedValue({ success: true, data: {} });
+    const runtime = { cwd, sessionId, isClosed: false, sendCommand };
+    const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
+    const internals = service as unknown as { live: Map<string, unknown>; modelTargets: Map<string, unknown>;
+      manager: { stop: (key: string) => Promise<void> }; awaitPendingReload: (cwd: string, sessionId: string, allowBusy: boolean) => Promise<unknown> };
+    const item = { key, runtime, busy: false, restartPending: false, model: "openai/same", thinking: "high",
+      config: { skills: [], extensions: [] } };
+    internals.live.set(key, item);
+    internals.manager = { stop: async () => undefined };
+
+    // A settings save that does not change this session's model still stamps it.
+    await service.reloadConfiguration({ model: "openai/same", thinking: "high" });
+
+    // The change has landed, so nothing may keep claiming it is outstanding. A
+    // target left behind here fails every later prompt on this session forever.
+    expect(internals.modelTargets.has(key)).toBe(false);
+    expect(item.restartPending).toBe(false);
+    expect(await internals.awaitPendingReload(cwd, sessionId, false)).toBeNull();
+  });
+
+  it("applies a settings reload after a pass that returned before its first await", async () => {
+    const cwd = resolve(join(tmpdir(), "pi-science-core-settings-reload-test"));
+    const sessionId = "settings-reload-session";
+    const key = `${workspaceIdentity(cwd)}\0${sessionId}`;
+    const sendCommand = vi.fn().mockResolvedValue({ success: true, data: {} });
+    const runtime = { cwd, sessionId, isClosed: false, sendCommand };
+    const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
+    const internals = service as unknown as { live: Map<string, unknown>;
+      manager: { stop: (key: string) => Promise<void> }; stopForReload: (item: unknown) => Promise<void> };
+    const item = { key, runtime, busy: true, restartPending: true, model: "openai/old", thinking: "low",
+      config: { skills: [], extensions: [] } };
+    internals.live.set(key, item);
+    const stopped: string[] = [];
+    internals.manager = { stop: async (stoppedKey: string) => { stopped.push(stoppedKey); } };
+
+    // A prompt during the turn reaches the pass, which returns before its first
+    // await because the turn has to finish first.
+    await internals.stopForReload(item);
+    item.busy = false;
+    // The turn ended, so the reload has to run rather than reuse a settled promise.
+    await internals.stopForReload(item);
+
+    expect(stopped).toEqual([key]);
+    expect(item.restartPending).toBe(false);
+  });
+
   it("keeps the record when the worker exits while a model change is outstanding", async () => {
     const cwd = resolve(join(tmpdir(), "pi-science-core-exit-reload-test"));
     const sessionId = "exit-reload-session";

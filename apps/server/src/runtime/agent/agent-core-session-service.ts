@@ -415,7 +415,8 @@ export class AgentCoreSessionService {
       });
       const attached = await this.attach(key, runtime, `${model.provider}/${model.modelId}`, persisted?.thinkingLevel ?? config.thinking ?? null, config);
       // A reopened worker still owes the outstanding change, so arm its boundary.
-      if (target) attached.restartPending = true;
+      // Read the target again: one can arrive while the worker is starting.
+      if (this.modelTargets.has(key)) attached.restartPending = true;
       return attached;
     } catch (error) { return failed(error); }
   }
@@ -476,6 +477,11 @@ export class AgentCoreSessionService {
         opened.interactionWaitStartedAt = undefined;
       }
       this.scheduleWatchdog(opened);
+    } else if (type === "follow_up" && !opened.busy && this.modelTargets.has(identity(cwd, sessionId))) {
+      // The guard ran before this mutation, so a settings change can land while the
+      // worker is being opened. While a turn is running the follow-up belongs to it,
+      // but once it is idle, starting a turn now would use the replaced model.
+      return { success: false, code: "configuration_reload_failed", error: "the model change has not landed yet" };
     }
     try {
       const result = await opened.runtime.sendCommand(type, params);
@@ -540,9 +546,12 @@ export class AgentCoreSessionService {
    *  reopens with it. Concurrent callers share the one in-flight reload instead of
    *  racing past it, and a failure reaches every one of them. */
   private stopForReload(item: Live): Promise<void> {
-    if (this.live.get(identity(item.runtime.cwd, item.runtime.sessionId)) !== item) return Promise.resolve();
+    if (this.live.get(liveKey(item)) !== item) return Promise.resolve();
     if (item.reload) return item.reload;
-    const reload = this.applyReload(item);
+    // Publish the shared promise before the pass starts. A pass that returns before
+    // its first await would otherwise clear the field and then be stored here as an
+    // already-settled promise, and every later caller would skip the work.
+    const reload = Promise.resolve().then(() => this.applyReload(item));
     item.reload = reload;
     return reload;
   }
@@ -558,7 +567,13 @@ export class AgentCoreSessionService {
       // runs once per settings change made while it is working.
       while (true) {
         const pending = this.modelTargets.get(liveKey(item));
-        if (!pending || (item.model === pending.model && item.thinking === pending.thinking)) break;
+        if (!pending) break;
+        if (item.model === pending.model && item.thinking === pending.thinking) {
+          // The worker already runs the target, so the change has landed. Keeping it
+          // would leave every later boundary believing it is still outstanding.
+          this.modelTargets.delete(liveKey(item));
+          break;
+        }
         const result = await this.configure(item.runtime.cwd, item.runtime.sessionId, pending.model, pending.thinking, item.config);
         // A failure keeps the target, so the next boundary retries instead of
         // reopening the model the user replaced.
@@ -589,8 +604,8 @@ export class AgentCoreSessionService {
   }
 
   /** Settles the record of a worker that stopped. A model change still outstanding
-   *  keeps it, armed, because the guard reads restartPending and the apply reads
-   *  pendingModel. The exit arrives in the middle of the stop, before a target that
+   *  keeps it, armed, because the guard reads restartPending and the apply reads the
+   *  target. The exit arrives in the middle of the stop, before a target that
    *  lands during it, so the record has to outlive the worker that was stopping when
    *  the change was made. open() reopens a closed runtime. */
   private dropIfSettled(item: Live): void {
@@ -705,6 +720,8 @@ export class AgentCoreSessionService {
       // rediscover an imported transcript through its retained legacy source.
       await this.registry.markDeleted(cwd, sessionId, path);
       if (live) { live.suppressRecovery = true; this.events.expectExit(live.runtime); await this.manager.stop(live.key); this.live.delete(key); }
+      // The session is gone, so a target for it can never land.
+      this.modelTargets.delete(key);
       const remove = async (file: string) => { await unlink(file).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; }); };
       await remove(path);
       await remove(configPath(cwd, sessionId));
