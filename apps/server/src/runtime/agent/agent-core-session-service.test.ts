@@ -174,6 +174,55 @@ describe("agent-core session configuration", () => {
     await rm(cwd, { recursive: true, force: true });
   });
 
+  it("re-checks the model change after preparing a prompt and before dispatching it", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-dispatch-reload-"));
+    await mkdir(workspaceFile(cwd, "turn-lifecycle"), { recursive: true });
+    const sessionId = "dispatch-reload-session";
+    const key = `${workspaceIdentity(cwd)}\0${sessionId}`;
+    const sendCommand = vi.fn().mockResolvedValue({ success: true, data: {} });
+    const runtime = { cwd, sessionId, isClosed: false, sendCommand };
+    const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
+    const internals = service as unknown as { live: Map<string, unknown>; turns: unknown };
+    const item = { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low",
+      config: { skills: [], extensions: [] }, pendingModel: undefined as { model: string; thinking: string } | undefined };
+    internals.live.set(key, item);
+    // A settings save lands while preparation is awaiting, which is after the
+    // guard has already run and before the prompt is dispatched.
+    internals.turns = { prepare: async () => { item.pendingModel = { model: "openai/new", thinking: "high" }; },
+      discardRejected: async () => undefined };
+
+    const result = await service.command(cwd, sessionId, "prompt", { message: "hello" }, { skills: [], extensions: [] });
+    expect(result).toMatchObject({ success: false, code: "configuration_reload_failed" });
+    expect(sendCommand).not.toHaveBeenCalledWith("prompt", expect.anything());
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  it("keeps the record when the worker exits while a model change is outstanding", async () => {
+    const cwd = resolve(join(tmpdir(), "pi-science-core-exit-reload-test"));
+    const sessionId = "exit-reload-session";
+    const key = `${workspaceIdentity(cwd)}\0${sessionId}`;
+    const sendCommand = vi.fn().mockImplementation(async (type: string, params: Record<string, unknown>) =>
+      type === "configure"
+        ? { success: true, data: { model: { provider: params.provider, modelId: params.modelId }, thinkingLevel: params.level } }
+        : { success: true, data: {} });
+    const runtime = { cwd, sessionId, isClosed: false, sendCommand };
+    const service = new AgentCoreSessionService({ expectExit: () => undefined } as never, {} as never);
+    const internals = service as unknown as { live: Map<string, unknown>; manager: { stop: (key: string) => Promise<void> };
+      dropIfSettled: (item: unknown) => void; stopForReload: (item: unknown) => Promise<void> };
+    const item = { key: "test", runtime, busy: false, restartPending: true, model: "openai/old", thinking: "low",
+      config: { skills: [], extensions: [] }, pendingModel: { model: "openai/b", thinking: "high" } as { model: string; thinking: string } | undefined };
+    internals.live.set(key, item);
+    // The exit handler runs in the middle of the stop, before the change that
+    // lands during the same stop. Dropping the record there takes the change with
+    // it, so the handler defers to the same rule the reload uses.
+    internals.manager = { stop: async () => { internals.dropIfSettled(item); item.pendingModel = { model: "openai/c", thinking: "high" }; } };
+
+    await internals.stopForReload(item);
+
+    expect(internals.live.has(key)).toBe(true);
+    expect(item).toMatchObject({ restartPending: true, pendingModel: { model: "openai/c", thinking: "high" } });
+  });
+
   it("drains to the newest model change when one arrives during an awaiting configure", async () => {
     const cwd = resolve(join(tmpdir(), "pi-science-core-reload-race-test"));
     const sessionId = "reload-race-session";
