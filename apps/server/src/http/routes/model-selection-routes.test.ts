@@ -194,6 +194,25 @@ describe("ModelSelection v2", () => {
     expect((await resources.repository.read()).endpoints.filter((item) => item.owner_provider_id === created.provider.id)).toHaveLength(1);
   }, 30000);
 
+  it("validates a global default against the same workspace-enriched catalog as its picker", async () => {
+    const model = "user-hinted/hinted-model";
+    await modules.modelResources.upsertLegacyProvider({ id: "hinted", name: "Hinted", base_url: "http://127.0.0.1:9/v1", api: "openai-completions", models: ["hinted-model"], api_key: "synthetic-hint-key", model_hints: { "hinted-model": { reasoning: true, thinking_levels: ["off", "high"] } } });
+    await modules.modelResources.repository.update((state) => { state.aliases["custom-hinted/hinted-model"] = model; });
+    await modules.settings.update((settings) => { settings.custom_providers = [{ id: "hinted", name: "Hinted", base_url: "http://127.0.0.1:9/v1", api: "openai-completions", models: ["hinted-model"], model_hints: { "hinted-model": { reasoning: true, thinking_levels: ["off", "high"] } } }]; });
+    vi.spyOn(modules.sessions, "availableModels").mockResolvedValue({ success: true, data: { models: [{ provider: "user-hinted", id: "hinted-model", name: "Hinted model" }] } });
+    vi.spyOn(modules.sessions, "availableThinkingLevels").mockResolvedValue({ success: false, code: "not_found", error: "No additional runtime capability" });
+    const configure = vi.spyOn(modules.sessions, "configure");
+    const selection = { model, thinking: "high" };
+    const picker = await app.inject({ method: "GET", url: `/api/model-selection/catalog?cwd=${encodeURIComponent(cwd)}` });
+    expect(picker.json().available_models).toContainEqual(expect.objectContaining({ id: model, thinking_levels: ["off", "high"] }));
+    const saved = await app.inject({ method: "PUT", url: `/api/model-selection/default?cwd=${encodeURIComponent(cwd)}`, payload: selection });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toEqual({ scope: "default", selection });
+    expect((await app.inject({ method: "GET", url: "/api/model-selection/default" })).json().selection).toEqual(selection);
+    expect(configure).not.toHaveBeenCalled();
+    expect((await modules.settings.read()).model).toBe(model);
+  }, 30000);
+
   it("rejects a builtin model after its managed credential is deleted", async () => {
     const a = await create();
     const ref = (await modules.modelResources.repository.read()).credential_refs.deepseek;

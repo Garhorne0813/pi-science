@@ -39,7 +39,7 @@ export function DefaultModelSelection({ scope = null, onCommitted, onOpenModels 
     if (!draft || saving) return;
     setSaving(true); setError(null); setSyncWarning(null);
     try {
-      await modelSelectionApi.saveDefault(draft);
+      await modelSelectionApi.saveDefault(draft, scope);
       setDraft(null); setSaved(true);
       // The PUT acknowledgement commits the selection. Context refresh is a
       // separate best-effort operation and cannot turn success into failure.

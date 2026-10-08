@@ -36,9 +36,21 @@ describe("default model selection", () => {
     expect(screen.getByRole("button", { name: "Default model: pro" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
-    expect(onSave).toHaveBeenLastCalledWith({ model: "deepseek/pro", thinking: "high" });
+    expect(onSave).toHaveBeenLastCalledWith({ model: "deepseek/pro", thinking: "high" }, null);
     await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeDisabled());
   });
+  it("uses the picker workspace only for save validation while committing the global default", async () => {
+    const scope = "/lab/workspace";
+    queryClient.setQueryData(modelSelectionKeys.catalog(scope), { available_models: models });
+    render(<DefaultModelSelection scope={scope} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Default model:/ })).toBeEnabled());
+    await select("Default model", "pro");
+    await select("Thinking Level", "High");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(modelSelectionApi.saveDefault).toHaveBeenCalledWith({ model: "deepseek/pro", thinking: "high" }, scope));
+    expect(queryClient.getQueryData(modelSelectionKeys.default)).toEqual({ scope: "default", selection: { model: "deepseek/pro", thinking: "high" } });
+  });
+
   it("clears the default only after Save", async () => {
     const onSave = vi.mocked(modelSelectionApi.saveDefault);
     render(<DefaultModelSelection />);
@@ -47,7 +59,7 @@ describe("default model selection", () => {
     fireEvent.click(clear);
     expect(onSave).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(onSave).toHaveBeenCalledWith({ model: null, thinking: "off" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({ model: null, thinking: "off" }, null));
   });
   it("bounds a large default-model menu while keeping searched models reachable", async () => {
     const catalog = Array.from({ length: 10000 }, (_, index) => ({ ...models[0]!, id: `lab/model-${index}`, label: `Model ${index}` }));

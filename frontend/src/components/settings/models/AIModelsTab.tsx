@@ -68,8 +68,8 @@ export function AIModelsTab({ scope = null, apiKeyInput, setApiKeyInput, showKey
   const runServiceAction = async (service: Service, action: () => Promise<void>) => {
     setActionBusy(service.id);
     setActionError(null);
-    try { await action(); await reloadModelConfig(); }
-    catch (cause) { setActionError(cause instanceof Error ? cause.message : String(cause)); }
+    try { await action(); await reloadModelConfig(); return true; }
+    catch (cause) { setActionError(cause instanceof Error ? cause.message : String(cause)); return false; }
     finally { setActionBusy(null); }
   };
   const refreshService = (service: Service) => void runServiceAction(service, () => service.custom ? modelResourcesApi.refreshCustomProviderModels(service.id).then(() => undefined) : Promise.resolve());
@@ -77,8 +77,7 @@ export function AIModelsTab({ scope = null, apiKeyInput, setApiKeyInput, showKey
   const disconnect = async () => {
     if (!disconnectService) return;
     const service = disconnectService;
-    await runServiceAction(service, () => service.custom ? modelResourcesApi.deleteCustomProvider(service.id).then(() => undefined) : deleteKey(service.id));
-    setDisconnectService(null);
+    if (await runServiceAction(service, () => service.custom ? modelResourcesApi.deleteCustomProvider(service.id).then(() => undefined) : deleteKey(service.id))) setDisconnectService(null);
   };
 
   return (
@@ -122,7 +121,7 @@ export function AIModelsTab({ scope = null, apiKeyInput, setApiKeyInput, showKey
       {actionError && <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-ui-meta text-error-text">{actionError}</p>}
       {connectOpen && <ConnectDialog providers={inventory.data?.providers ?? []} target={connectTarget} availableTargets={availableTargets} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} onClose={closeConnect} onSelect={setConnectTarget} onConfigReload={reloadModelConfig} />}
       {replaceService && <ReplaceKeyDialog service={replaceService} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={async (id) => { await saveKey(id); await reloadModelConfig(); }} onClose={() => setReplaceService(null)} />}
-      {disconnectService && <DisconnectDialog busy={actionBusy === disconnectService.id} onCancel={() => setDisconnectService(null)} onConfirm={() => void disconnect()} />}
+      {disconnectService && <DisconnectDialog busy={actionBusy === disconnectService.id} error={actionError} onCancel={() => setDisconnectService(null)} onConfirm={() => void disconnect()} />}
       {manageService && <ManageConnectionDrawer service={manageService} onClose={() => setManageService(null)} onConfigReload={reloadModelConfig} />}
     </div>
   );
@@ -218,10 +217,11 @@ function ReplaceKeyDialog({ service, apiKeyInput, setApiKeyInput, showKey, setSh
   </Modal>;
 }
 
-function DisconnectDialog({ busy, onCancel, onConfirm }: { busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+function DisconnectDialog({ busy, error, onCancel, onConfirm }: { busy: boolean; error?: string | null; onCancel: () => void; onConfirm: () => void }) {
   const { t } = useTranslation();
   return <Modal title={t("settings.models.disconnectTitle", { defaultValue: "Disconnect service" })} onClose={onCancel}>
     <p className="text-ui-caption text-text">{t("settings.models.disconnectConfirm", { defaultValue: "This removes the connection and its models. Historical conversations are not deleted." })}</p>
+    {error && <p role="alert" className="text-ui-caption text-error-text">{error}</p>}
     <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={onCancel} className="min-h-9 rounded-input px-3 text-ui-meta text-muted hover:text-text">{t("common.cancel", { defaultValue: "Cancel" })}</button><button type="button" disabled={busy} onClick={onConfirm} className="min-h-9 rounded-input bg-error/10 px-3 text-ui-meta font-medium text-error-text disabled:opacity-40">{t("settings.models.disconnect", { defaultValue: "Disconnect" })}</button></div>
   </Modal>;
 }

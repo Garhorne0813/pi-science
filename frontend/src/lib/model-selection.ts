@@ -11,8 +11,8 @@ export const modelSelectionKeys = {
 };
 const sessionPath = (cwd: string, id: string) => `/api/sessions/${encodeURIComponent(id)}/model-selection?cwd=${encodeURIComponent(cwd)}`;
 const json = (selection: ModelSelection) => ({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(selection) });
-async function readDefault(init?: RequestInit): Promise<DefaultModelSelection> {
-  const response = await apiRequest("/api/model-selection/default", init);
+async function readDefault(init?: RequestInit, cwd: string | null = null): Promise<DefaultModelSelection> {
+  const response = await apiRequest(`/api/model-selection/default${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`, init);
   const { defaultModelSelectionSchema } = await import("@pi-science/contracts");
   return parseWirePayload(response, defaultModelSelectionSchema, "Unable to load default model");
 }
@@ -26,9 +26,9 @@ async function readSession(cwd: string, id: string, init?: RequestInit): Promise
 export const modelSelectionApi = {
   readDefault, readSession,
   catalogQuery: (cwd: string | null) => ({ queryKey: modelSelectionKeys.catalog(cwd), queryFn: ({ signal }: { signal: AbortSignal }) => apiRequest<{ available_models: AvailableModel[] }>(`/api/model-selection/catalog${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`, { signal }) }),
-  async saveDefault(selection: ModelSelection) {
+  async saveDefault(selection: ModelSelection, cwd: string | null = null) {
     await queryClient.cancelQueries({ queryKey: modelSelectionKeys.default });
-    const result = await readDefault(json(selection));
+    const result = await readDefault(json(selection), cwd);
     queryClient.setQueryData(modelSelectionKeys.default, result);
     void queryClient.invalidateQueries({ queryKey: ["settings", "config"] }).catch(() => undefined);
     return result;

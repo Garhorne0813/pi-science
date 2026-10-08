@@ -91,6 +91,59 @@ describe("AIModelsTab", () => {
     expect(screen.queryByText("Context Management")).not.toBeInTheDocument();
   });
 
+  it("keeps keyless builtin inventory visible without offering key maintenance", () => {
+    const view = providerViewsFixture({ ...config, providers: [{ id: "local", name: "Local", models: [], has_key: false, enabled: false, auth: { kind: "none", api_key_supported: false, oauth_supported: false, login_supported: false } }] }).providers[0];
+    view.credential = { state: "ready", configured: true };
+    view.allowed_actions = [];
+    renderTab({ views: [view] });
+    expect(screen.getByText("Local")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Connection settings" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Replace" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Disconnect" })).not.toBeInTheDocument();
+  });
+
+  it("keeps a rejected builtin key replacement open for retry", async () => {
+    const saveKey = vi.fn().mockRejectedValueOnce(new Error("Key save failed")).mockResolvedValue(undefined);
+    renderTab({ apiKeyInput: { anthropic: "replacement-key" }, saveKey });
+    fireEvent.click(screen.getAllByRole("button", { name: "Connection settings" })[0]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Replace" }));
+    const dialog = screen.getByRole("dialog", { name: "Replace API key" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Key save failed");
+    expect(within(dialog).getByLabelText(/Anthropic API key/)).toHaveValue("replacement-key");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Replace API key" })).not.toBeInTheDocument());
+    expect(saveKey).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a rejected builtin connection open for retry", async () => {
+    const saveKey = vi.fn().mockRejectedValueOnce(new Error("Connect failed")).mockResolvedValue(undefined);
+    renderTab({ apiKeyInput: { openai: "new-key" }, saveKey });
+    fireEvent.click(screen.getByRole("button", { name: "+ Connect" }));
+    fireEvent.click(screen.getByRole("button", { name: "OpenAI" }));
+    const dialog = screen.getByRole("dialog", { name: "+ Connect OpenAI" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Connect" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Connect failed");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Connect" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "+ Connect OpenAI" })).not.toBeInTheDocument());
+    expect(saveKey).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps rejected builtin deletion open for retry", async () => {
+    const deleteKey = vi.fn().mockRejectedValueOnce(new Error("Delete failed")).mockResolvedValue(undefined);
+    const view = providerViewsFixture(config).providers[0];
+    view.allowed_actions.push("remove_credential");
+    renderTab({ views: [view], deleteKey });
+    fireEvent.click(screen.getAllByRole("button", { name: "Connection settings" })[0]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Disconnect" }));
+    const dialog = screen.getByRole("dialog", { name: "Disconnect service" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Disconnect" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Delete failed");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Disconnect" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Disconnect service" })).not.toBeInTheDocument());
+    expect(deleteKey).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps model rows as readable, non-clickable inventory rows", () => {
     renderTab();
     expect(screen.getByText("Claude Sonnet 4.6")).toBeInTheDocument();
