@@ -118,4 +118,35 @@ describe("openJsonEventStream visibility recovery", () => {
     cleanup();
     expect(FakeEventSource.instances[2]!.closed).toBe(true);
   });
+
+  it("reports paused and retrying sources as disconnected until their real OPEN", () => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    const onConnectionChange = vi.fn();
+    const cleanup = openJsonEventStream("/events", { onMessage: vi.fn(), onConnectionChange, pauseWhenHidden: true, closeOnError: false });
+    const first = FakeEventSource.instances[0]!;
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    first.open();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(true);
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    first.open(); // A closed source cannot revive its connection state.
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    const resumed = FakeEventSource.instances[1]!;
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    resumed.open();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(true);
+    resumed.onerror?.({} as Event);
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    expect(resumed.closed).toBe(false);
+    resumed.open();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(true);
+    cleanup();
+    resumed.open();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+  });
+
 });
