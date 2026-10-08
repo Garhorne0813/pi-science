@@ -1,7 +1,7 @@
 /** Recovery paths: authoritative REST re-reads after a stream gap, a late
  *  stream attach or a transport failure, and the missing-session reset. */
 
-import { clearCachedMessages, clearAiTitle, clearSessionName, getClient, type PiScienceClient, type SessionState } from "../client/pi-science-client";
+import { clearCachedMessages, clearAiTitle, clearSessionName, getClient, type PiScienceClient, type SessionMessagePage, type SessionState, type TurnArtifactTurn } from "../client/pi-science-client";
 import { isMissingSessionError } from "./errors";
 import { attachTurnArtifacts, emptyThread, resetTurnBuffer, type Thread } from "./event-fold";
 import { markWorkspaceFilesChanged } from "./file-revision";
@@ -24,7 +24,20 @@ const MAX_GAP_RECOVERY_ROUNDS = 3;
 const GAP_RECOVERY_BACKOFF_MS = [0, 100, 250] as const;
 
 type KnownRuntimeState = { busy: boolean; activityGeneration: number };
-type ConnectionRecoveryRun = { connectionGeneration: number; activityGeneration: number; localMutationGeneration: number; promise: Promise<void> };
+/** What a recovery run has been asked to do. A transport loss is verified at
+ *  once, while a restore keeps watching an authoritative busy snapshot until
+ *  the composer is free. Both can be outstanding at once, because a loss does
+ *  not retire the restore's duty, and the run ends only when the set empties. */
+type RecoveryKind = "restore" | "connection-loss";
+type ConnectionRecoveryRun = {
+  connectionGeneration: number;
+  activityGeneration: number;
+  localMutationGeneration: number;
+  demands: Set<RecoveryKind>;
+  /** Set while the worker sleeps, so a demand joining mid-run cuts the wait. */
+  wake: (() => void) | null;
+  promise: Promise<void>;
+};
 type GapRecoveryResult = "completed" | "superseded" | "aborted" | "retryable-failure";
 interface GapRecoveryRun {
   promise: Promise<void>;
@@ -113,8 +126,13 @@ function applyRuntimeState(runtimeState: SessionState, current = useRuntimeStore
   });
 }
 
-function waitForRecovery(ms: number): Promise<void> {
-  return ms > 0 ? new Promise((resolve) => globalThis.setTimeout(resolve, ms)) : Promise.resolve();
+function waitForRecovery(ms: number, run?: ConnectionRecoveryRun): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  if (!run) return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    const timer = globalThis.setTimeout(() => { run.wake = null; resolve(); }, ms);
+    run.wake = () => { globalThis.clearTimeout(timer); run.wake = null; resolve(); };
+  });
 }
 
 export async function resyncCompletedHistory(sessionId: string, cwd: string): Promise<void> {
@@ -311,46 +329,73 @@ export async function reconcileWorkingState(
   }
 }
 
-/** Recover the authoritative conversation snapshot after a connection loss.
- *  Each bounded round reads messages and runtime state together. The history
- *  read repairs a missed terminal event while the state read is the sole
- *  authority for the composer guard; failures back off instead of treating an
- *  unavailable endpoint as idle. */
+/** Recover the authoritative conversation snapshot. The state read is the sole
+ *  authority for the composer guard and the history read repairs a terminal
+ *  event no live event carried; failures back off instead of treating an
+ *  unavailable endpoint as idle. Each round serves the most urgent demand
+ *  still outstanding, and the run ends only when none is left. */
 async function runConnectionRecovery(
   client: PiScienceClient,
   sessionId: string,
   cwd: string,
-  connectionGeneration: number,
-  activityGeneration: number,
-  localMutationGeneration: number,
-  restore: boolean,
+  run: ConnectionRecoveryRun,
 ): Promise<void> {
+  const { connectionGeneration, activityGeneration, localMutationGeneration, demands } = run;
   let lastState: SessionState | undefined;
-  let historySucceeded = false;
   let stateSucceeded = false;
+  /** A restore round that saw an authoritative busy snapshot with its history
+   *  applied. Later busy rounds watch the runtime state alone, because from
+   *  then on the live stream owns history and only the settle round reads it. */
+  let busySnapshotReady = false;
 
-  const ownsRecovery = () => {
+  const ownsFence = () => {
     const current = useRuntimeStore.getState();
     return connectionGeneration === generations.connection
       && activityGeneration === generations.activity
       && localMutationGeneration === generations.localMutation
-      && getClient() === client && current.activeSessionId === sessionId && current.cwd === cwd
-      && (!restore || current.working);
+      && getClient() === client && current.activeSessionId === sessionId && current.cwd === cwd;
   };
+  const ownsRecovery = (kind: RecoveryKind) => ownsFence() && (kind === "connection-loss" || useRuntimeStore.getState().working);
+  // A loss is verified even when the composer looks free, because a stale idle
+  // is exactly what it is there to disprove.
+  const urgentDemand = (): RecoveryKind => demands.has("connection-loss") ? "connection-loss" : "restore";
   for (let attempt = 0; attempt < CONNECTION_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
-    if (!ownsRecovery()) return;
-    // Restore has one retry budget, shared with connection recovery. Jitter
-    // spreads probes from tabs that were restored at the same time.
-    const delay = restore
+    if (demands.size === 0) return;
+    // One retry budget for both kinds. A loss probes at once; jitter spreads
+    // the slower restore probes from tabs that were restored at the same time.
+    const scheduled = urgentDemand();
+    if (!ownsRecovery(scheduled)) return;
+    const delay = scheduled === "restore"
       ? RESTORE_RECOVERY_BACKOFF_MS[attempt]! * (0.8 + Math.random() * 0.4)
       : CONNECTION_RECOVERY_BACKOFF_MS[attempt]!;
-    if (delay > 0) await waitForRecovery(delay);
-    if (!ownsRecovery()) return;
-    const [historyResult, stateResult, artifactsResult] = await Promise.allSettled([
-      client.getMessagesPage(sessionId, cwd),
-      client.getSessionState(sessionId, cwd),
-      fetchPersistedTurnArtifacts(sessionId, cwd),
-    ]);
+    if (delay > 0) await waitForRecovery(delay, run);
+    // A demand that joined during the wait takes this round when it is more
+    // urgent, and a restore whose gate closed while waiting must not run it.
+    const kind = urgentDemand();
+    if (!ownsRecovery(kind)) return;
+    // A loss and the first restore round rebuild the whole snapshot, because
+    // the connect-time read may have failed. A later busy restore round reads
+    // the state first, since that read alone decides whether history is due.
+    let stateResult: PromiseSettledResult<SessionState>;
+    let historyResult: PromiseSettledResult<SessionMessagePage> | null = null;
+    let artifactsResult: PromiseSettledResult<TurnArtifactTurn[]> | null = null;
+    if (kind === "connection-loss" || !busySnapshotReady) {
+      [historyResult, stateResult, artifactsResult] = await Promise.allSettled([
+        client.getMessagesPage(sessionId, cwd),
+        client.getSessionState(sessionId, cwd),
+        fetchPersistedTurnArtifacts(sessionId, cwd),
+      ]);
+    } else {
+      [stateResult] = await Promise.allSettled([client.getSessionState(sessionId, cwd)]);
+      // The snapshot turned idle: this is when a terminal outcome that no live
+      // event carried becomes visible, so read the history one last time.
+      if (stateResult.status === "fulfilled" && !runtimeBusy(stateResult.value)) {
+        [historyResult, artifactsResult] = await Promise.allSettled([
+          client.getMessagesPage(sessionId, cwd),
+          fetchPersistedTurnArtifacts(sessionId, cwd),
+        ]);
+      }
+    }
     const current = useRuntimeStore.getState();
     if (
       connectionGeneration !== generations.connection
@@ -361,7 +406,6 @@ async function runConnectionRecovery(
       || current.cwd !== cwd
     ) return;
 
-    historySucceeded = historyResult.status === "fulfilled";
     stateSucceeded = stateResult.status === "fulfilled";
     if (stateResult.status === "fulfilled") {
       const runtimeState = stateResult.value;
@@ -369,9 +413,9 @@ async function runConnectionRecovery(
       rememberRuntimeState(client, sessionId, cwd, runtimeState, activityGeneration);
       applyRuntimeState(runtimeState, useRuntimeStore.getState());
     }
-    if (historyResult.status === "fulfilled") {
+    if (historyResult?.status === "fulfilled") {
       const history = historyResult.value;
-      const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
+      const turns = artifactsResult?.status === "fulfilled" ? artifactsResult.value : [];
       const historyWindowGeneration = generations.historyWindow;
       const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, useRuntimeStore.getState().thread, history, { keepLiveExtras: true });
       const latest = useRuntimeStore.getState();
@@ -395,7 +439,10 @@ async function runConnectionRecovery(
       });
       backfillSessionName(cwd, sessionId, useRuntimeStore.getState().thread);
     }
-    if (historySucceeded && stateSucceeded) {
+    // A watch round needs no history: the state read alone decides whether the
+    // demand this round serves is answered.
+    const roundAnswered = stateSucceeded && (historyResult === null || historyResult.status === "fulfilled");
+    if (roundAnswered) {
       // History may carry an explicit failed/aborted result absent before merge.
       if (lastState) applyRuntimeState(lastState, useRuntimeStore.getState());
       // Authoritative recovery succeeded: the session is usable again, so the
@@ -405,7 +452,11 @@ async function runConnectionRecovery(
       // while the stream was down and no terminal event reached the tree.
       markWorkspaceFilesChanged();
       void loadSessionsInternal();
-      if (!restore || !useRuntimeStore.getState().working || attempt + 1 === CONNECTION_RECOVERY_MAX_ATTEMPTS) return;
+      if (kind === "restore" && lastState && runtimeBusy(lastState)) busySnapshotReady = true;
+      // A busy restore keeps its demand: only an authoritatively free composer
+      // retires it. Every other round answers the demand that ordered it.
+      if (kind === "connection-loss" || !useRuntimeStore.getState().working) demands.delete(kind);
+      if (demands.size === 0 || attempt + 1 === CONNECTION_RECOVERY_MAX_ATTEMPTS) return;
     }
   }
 
@@ -443,7 +494,7 @@ function startConnectionRecovery(
   connectionGeneration: number,
   activityGeneration: number,
   localMutationGeneration = generations.localMutation,
-  restore = false,
+  request: RecoveryKind = "connection-loss",
 ): Promise<void> {
   const key = runtimeKey(sessionId, cwd);
   const runs = connectionRecoveryRuns.get(client) ?? new Map<string, ConnectionRecoveryRun>();
@@ -453,9 +504,22 @@ function startConnectionRecovery(
     && existing.connectionGeneration === connectionGeneration
     && existing.activityGeneration === activityGeneration
     && existing.localMutationGeneration === localMutationGeneration
-  ) return existing.promise;
-  const promise = runConnectionRecovery(client, sessionId, cwd, connectionGeneration, activityGeneration, localMutationGeneration, restore);
-  runs.set(key, { connectionGeneration, activityGeneration, localMutationGeneration, promise });
+  ) {
+    existing.demands.add(request);
+    existing.wake?.();
+    return existing.promise;
+  }
+  const run: ConnectionRecoveryRun = {
+    connectionGeneration,
+    activityGeneration,
+    localMutationGeneration,
+    demands: new Set([request]),
+    wake: null,
+    promise: Promise.resolve(),
+  };
+  const promise = runConnectionRecovery(client, sessionId, cwd, run);
+  run.promise = promise;
+  runs.set(key, run);
   connectionRecoveryRuns.set(client, runs);
   void promise.finally(() => {
     if (runs.get(key)?.promise === promise) runs.delete(key);
@@ -679,7 +743,7 @@ export function reconcileRestoredSession(
   activityGeneration: number,
   localMutationGeneration: number,
 ): Promise<void> {
-  return startConnectionRecovery(client, sessionId, cwd, connectionGeneration, activityGeneration, localMutationGeneration, true);
+  return startConnectionRecovery(client, sessionId, cwd, connectionGeneration, activityGeneration, localMutationGeneration, "restore");
 }
 
 /** How many consecutive one-second idle REST rounds with no confirmed reply

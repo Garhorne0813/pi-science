@@ -14,17 +14,18 @@ afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 
 const CWD = "/workspace";
 const SESSION = "restore-authority";
-const completedHistory = [
+const completedHistory: Array<Record<string, unknown>> = [
   { id: "old-user", role: "user", content: [{ type: "text", text: "old prompt" }] },
   { id: "old-final", role: "assistant", presentationRole: "final", content: [{ type: "text", text: "old answer" }] },
 ];
 
 function rest(initial: Record<string, unknown>) {
   let snapshot = state(SESSION, initial);
+  let messages = completedHistory;
   let failing = false;
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.includes("/messages")) return jsonResponse({ messages: completedHistory });
+    if (url.includes("/messages")) return jsonResponse({ messages });
     if (url.includes("/state")) return failing ? jsonResponse({ error: "temporarily unavailable" }, 503) : jsonResponse(snapshot);
     if (url.includes("/turn-artifacts")) return jsonResponse({ turns: [] });
     if (url.startsWith("/api/sessions?")) return jsonResponse([]);
@@ -34,8 +35,16 @@ function rest(initial: Record<string, unknown>) {
   return {
     fetchMock,
     idle: () => { snapshot = state(SESSION); },
+    /** The remote turn ended with no event of ours: only REST history carries
+     *  its final. */
+    settle: () => {
+      snapshot = state(SESSION);
+      messages = [...completedHistory, { id: "new-final", role: "assistant", presentationRole: "final", content: [{ type: "text", text: "new answer" }] }];
+    },
     fail: (value: boolean) => { failing = value; },
     stateReads: () => fetchMock.mock.calls.filter(([url]) => String(url).includes("/state")).length,
+    messageReads: () => fetchMock.mock.calls.filter(([url]) => String(url).includes("/messages")).length,
+    artifactReads: () => fetchMock.mock.calls.filter(([url]) => String(url).includes("/artifacts")).length,
   };
 }
 
@@ -94,6 +103,58 @@ describe("restored session authority", () => {
     api.fail(false);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(useRuntimeStore.getState()).toMatchObject({ working: false, turnLifecycle: "settled", status: "ready" });
+  });
+
+  it("reads the history once while a busy restore keeps watching the state", async () => {
+    const api = rest({ is_streaming: true });
+    await useRuntimeStore.getState().connect(CWD, SESSION);
+    const messagesAfterConnect = api.messageReads();
+    const artifactsAfterConnect = api.artifactReads();
+    await vi.advanceTimersByTimeAsync(40_000);
+    // The whole four-probe budget ran against an unchanged busy snapshot.
+    expect(api.stateReads()).toBe(5);
+    expect(useRuntimeStore.getState()).toMatchObject({ working: true, status: "ready", turnLifecycle: "active" });
+    // Only the state is worth re-reading while the turn is still running.
+    expect(api.messageReads() - messagesAfterConnect).toBe(1);
+    expect(api.artifactReads() - artifactsAfterConnect).toBe(1);
+  });
+
+  it("repairs a terminal outcome no event carried when the busy snapshot turns idle", async () => {
+    const api = rest({ is_streaming: true });
+    await useRuntimeStore.getState().connect(CWD, SESSION);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(useRuntimeStore.getState().working).toBe(true);
+    api.settle();
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(useRuntimeStore.getState()).toMatchObject({ working: false, status: "ready" });
+    expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toContain("new-final");
+  });
+
+  it("probes a connection loss without waiting out a pending restore backoff", async () => {
+    const api = rest({ is_streaming: true });
+    await useRuntimeStore.getState().connect(CWD, SESSION);
+    expect(api.stateReads()).toBe(1);
+    const connection = reconcileAfterConnectionLoss(getClient(), SESSION, CWD, generations.connection, generations.activity);
+    await vi.advanceTimersByTimeAsync(0);
+    // The loss is verified inside the restore backoff window, not after it.
+    expect(api.stateReads()).toBe(2);
+    expect(useRuntimeStore.getState().transportStatus).toBe("open");
+    await vi.advanceTimersByTimeAsync(20_000);
+    await connection;
+  });
+
+  it("verifies a connection loss the pending restore run would have skipped", async () => {
+    const api = rest({ is_streaming: true });
+    await useRuntimeStore.getState().connect(CWD, SESSION);
+    // The stream was down: this tab still believes the previous turn settled
+    // while another tab has already started a newer one.
+    useRuntimeStore.setState({ working: false, turnLifecycle: "settled" });
+    const connection = reconcileAfterConnectionLoss(getClient(), SESSION, CWD, generations.connection, generations.activity);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.stateReads()).toBe(2);
+    expect(useRuntimeStore.getState()).toMatchObject({ working: true, turnLifecycle: "active" });
+    await vi.advanceTimersByTimeAsync(20_000);
+    await connection;
   });
 
   it("bounds failed recovery reads and leaves the composer guarded", async () => {
