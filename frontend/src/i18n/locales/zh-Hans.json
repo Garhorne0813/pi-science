@@ -1491,5 +1491,9 @@
   "settings.redesign.nextPage": "下一页",
   "settings.selection.refineSearch": "仅显示前 50 个匹配项，请输入搜索缩小范围。",
   "settings.selection.clearDefault": "清除默认模型",
-  "common.saving": "保存中…"
+  "common.saving": "保存中…",
+  "settings.selection.contextLoading": "正在加载上下文设置…",
+  "settings.selection.contextError": "无法加载上下文设置：{{error}}",
+  "settings.selection.saved": "默认模型已保存",
+  "settings.selection.syncWarning": "默认模型已保存，但上下文设置未能刷新：{{error}}"
 }

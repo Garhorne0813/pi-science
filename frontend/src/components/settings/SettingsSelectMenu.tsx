@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown, Search } from "lucide-react";
 import { cn } from "../../lib/ui";
@@ -83,16 +83,22 @@ export function SettingsSelectMenu({
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
-  const selected = options.find((option) => option.value === value);
+  const index = useMemo(() => ({
+    byValue: new Map(options.map((option) => [option.value, option])),
+    entries: options.map((option) => ({ option, label: option.label.toLowerCase(), value: option.value.toLowerCase(), hint: (option.hint ?? "").toLowerCase() })),
+  }), [options]);
+  const selected = index.byValue.get(value);
   const display = selected?.label ?? placeholder ?? value;
-  const normalizedQuery = query.trim().toLowerCase();
-  const visibleOptions = normalizedQuery
-    ? options.filter((option) =>
-        option.label.toLowerCase().includes(normalizedQuery) ||
-        option.value.toLowerCase().includes(normalizedQuery) ||
-        (option.hint ?? "").toLowerCase().includes(normalizedQuery),
-      )
-    : options;
+  const normalizedQuery = useDeferredValue(query.trim().toLowerCase());
+  const results = useMemo(() => {
+    const matches: SettingsSelectOption[] = [];
+    if (open) for (const entry of index.entries) {
+      if (normalizedQuery && !entry.label.includes(normalizedQuery) && !entry.value.includes(normalizedQuery) && !entry.hint.includes(normalizedQuery)) continue;
+      matches.push(entry.option);
+      if (maxVisibleOptions && matches.length > maxVisibleOptions) break;
+    }
+    return { options: maxVisibleOptions ? matches.slice(0, maxVisibleOptions) : matches, more: Boolean(maxVisibleOptions && matches.length > maxVisibleOptions) };
+  }, [index, normalizedQuery, maxVisibleOptions, open]);
   // Radix focuses the menu content itself when it opens; wait a couple of
   // frames so the search box can steal focus after that pass completes.
   useEffect(() => {
@@ -119,6 +125,11 @@ export function SettingsSelectMenu({
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
+          onKeyDown={(event) => {
+            // Radix dismisses this layer on Escape; keep that key from
+            // bubbling through the portal and closing the Settings dialog.
+            if (event.key === "Escape") event.stopPropagation();
+          }}
           align={align ?? (variant === "row" ? "end" : "start")}
           sideOffset={6}
           collisionPadding={8}
@@ -152,7 +163,7 @@ export function SettingsSelectMenu({
           )}
           <div className={searchable ? "max-h-[min(16rem,var(--radix-dropdown-menu-content-available-height))] overflow-y-auto overscroll-contain" : undefined}>
             <DropdownMenu.RadioGroup value={value} onValueChange={onSelect}>
-              {(maxVisibleOptions ? visibleOptions.slice(0, maxVisibleOptions) : visibleOptions).map((option) => (
+              {results.options.map((option) => (
                 <DropdownMenu.RadioItem
                   key={option.value}
                   value={option.value}
@@ -166,8 +177,8 @@ export function SettingsSelectMenu({
                 </DropdownMenu.RadioItem>
               ))}
             </DropdownMenu.RadioGroup>
-            {maxVisibleOptions && visibleOptions.length > maxVisibleOptions && <p className="px-2.5 py-3 text-ui-caption text-muted">{moreResultsLabel}</p>}
-            {visibleOptions.length === 0 && (
+            {results.more && <p className="px-2.5 py-3 text-ui-caption text-muted">{moreResultsLabel}</p>}
+            {results.options.length === 0 && (
               <p className="px-2.5 py-4 text-center text-ui-caption text-muted">{emptyMessage}</p>
             )}
           </div>

@@ -89,3 +89,47 @@ passed all existing budgets (catalog median 107 ms, Settings median 1,171 ms,
 event-loop maximum delay 212 ms, concurrent health p95 146 ms); repeated Settings
 reads left persisted files unchanged. These benchmark numbers describe this
 Linux test environment, not a universal device latency guarantee.
+
+## Review follow-up: independent defaults and commit status
+
+The Agent default panel now owns its Default API and Catalog API queries,
+including the saved-model summary and capability facts. A pending or failed
+`/api/settings/config` read affects only Context Management. Defaults remain
+selectable, saveable and clearable through their dedicated endpoints.
+
+The successful PUT response commits the default and updates its cache. Neither
+compatibility-cache invalidation nor the subsequent Context Management refresh
+can reject that acknowledgement. Failed persistence retains the draft for retry;
+failed context synchronization instead shows an explicit saved-with-sync-warning
+state. Retrying synchronization does not submit the model again.
+
+The picker memoizes model/options indexes by catalog snapshot, looks up selected
+models by ID, and defers normalized search updates. Search reuses folded keys,
+collects at most the visible limit plus one match, and avoids scanning/filtering
+when the menu is closed. A browser regression exercises 10,000 catalog entries,
+rare-model search, saving while context loading is stalled, and a later context
+failure. It enforces 2,000 ms ready/search, 250 ms maximum Long Task and 1,000 ms
+total Long Tasks budgets on production Chromium; these are regression margins,
+not network or frame-rate guarantees. Both picker and provider-inventory browser
+budgets run in the Ubuntu CI job.
+
+Selection availability already comes from fresh Core `getAvailable()` reads,
+whose managed route projection filters credentials, enabled providers/models,
+endpoints, bindings, model allowlists and endpoint health. Nine additional native
+regressions verify invalidated custom/builtin resources disappear from the
+selectable catalog and return 422 for selection writes without changing defaults
+or existing sessions. No duplicate resource-list validation or ProviderView
+migration was needed. Resource changes concurrent with validation still require
+a future revision/concurrency contract.
+
+Review validation on 2026-10-08: 1,268 frontend tests, 12 native selection-route
+tests (including the nine new availability cases), the disk-backed capability
+persistence regression and eight production-browser checks passed. Typecheck,
+production builds, lint, visual typecheck and bundle budgets passed. The picker
+measured ready/search at 900/421 ms on desktop and 623/693 ms on 375 px mobile;
+maximum Long Tasks were 65/128 ms, within the committed budgets. Fixtures isolate
+frontend work from network/backend latency. Browser coverage also verifies that
+Escape dismisses the model menu without closing Settings. The existing Windows
+capability-persistence integration test now has a 30-second timeout for its
+multiple disk-backed reads; its assertions and separate performance budgets are
+unchanged.

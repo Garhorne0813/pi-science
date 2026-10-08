@@ -111,4 +111,51 @@ describe("ModelSelection v2", () => {
     const draft = await modules.sessions.create({ cwd, config: { model: pro, thinking: "high", skills: [], extensions: [] } });
     expect(draft).toHaveProperty("id");
   }, 30000);
+  it.each(["credential_deleted", "endpoint_disabled", "binding_disabled", "binding_deleted", "allowlist_excludes", "provider_disabled", "model_disabled", "endpoint_blocked"])("rejects a catalogued custom model after %s without changing either owner", async (failure) => {
+    const resources = modules.modelResources;
+    const provider = await resources.createProvider({ name: "Selectable Lab", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
+    const credential = await resources.credentials.put({ kind: "api_key", backend: "managed", secret: "synthetic-selectability-key" });
+    const endpoint = await resources.createEndpoint({ name: "Lab route", base_url: "http://127.0.0.1:9/v1", protocol: "openai", credential_ref: credential.id, enabled: true, data_egress: "local" });
+    const binding = await resources.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 1 });
+    const model = `${provider.id}/lab-model`;
+    await resources.updateModel(provider.id, "lab-model", { enabled: true });
+    const catalog = async () => (await app.inject({ method: "GET", url: "/api/model-selection/catalog" })).json().available_models;
+    expect(await catalog()).toEqual(expect.arrayContaining([expect.objectContaining({ id: model })]));
+    expect((await app.inject({ method: "PUT", url: "/api/model-selection/default", payload: { model, thinking: "off" } })).statusCode).toBe(200);
+    await app.inject({ method: "PUT", url: "/api/model-selection/default", payload: { model: flash, thinking: "off" } });
+    const a = await create();
+    if (failure === "credential_deleted") await resources.credentials.remove(credential.id);
+    if (failure === "endpoint_disabled") await resources.updateEndpoint(endpoint.id, { enabled: false });
+    if (failure === "binding_disabled") await resources.updateBinding(binding.id, { enabled: false });
+    if (failure === "binding_deleted") await resources.deleteBinding(binding.id);
+    if (failure === "allowlist_excludes") await resources.updateBinding(binding.id, { model_allowlist: ["another-model"] });
+    if (failure === "provider_disabled") await resources.updateProvider(provider.id, { enabled: false });
+    if (failure === "model_disabled") await resources.updateModel(provider.id, "lab-model", { enabled: false });
+    if (failure === "endpoint_blocked") await resources.repository.update((state) => { state.endpoints.find((item) => item.id === endpoint.id)!.health = "blocked"; });
+    // This is a real Core projection, not a mocked catalog or resource list.
+    expect(await catalog()).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: model })]));
+    const persisted = await readFile(join(home, "config.json"), "utf8");
+    const configure = vi.spyOn(modules.sessions, "configure");
+    for (const url of ["/api/model-selection/default", path(a), `/api/settings/model?cwd=${encodeURIComponent(cwd)}`]) {
+      const response = await app.inject({ method: "PUT", url, payload: { model, thinking: "off" } });
+      expect(response.statusCode).toBe(422);
+      expect(response.json()).toMatchObject({ code: "invalid_model" });
+    }
+    expect(configure).not.toHaveBeenCalled();
+    expect(await readFile(join(home, "config.json"), "utf8")).toBe(persisted);
+    expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
+  }, 30000);
+  it("rejects a builtin model after its managed credential is deleted", async () => {
+    const a = await create();
+    const ref = (await modules.modelResources.repository.read()).credential_refs.deepseek;
+    expect(ref).toBeDefined();
+    await modules.modelResources.credentials.remove(ref!);
+    const persisted = await readFile(join(home, "config.json"), "utf8");
+    for (const url of ["/api/model-selection/default", path(a)]) {
+      expect((await app.inject({ method: "PUT", url, payload: { model: flash, thinking: "off" } })).statusCode).toBe(422);
+    }
+    expect(await readFile(join(home, "config.json"), "utf8")).toBe(persisted);
+    expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
+  }, 30000);
+
 });

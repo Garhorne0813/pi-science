@@ -1491,5 +1491,9 @@
   "settings.redesign.nextPage": "Next",
   "settings.selection.refineSearch": "Showing the first 50 matches. Refine your search.",
   "settings.selection.clearDefault": "Clear default model",
-  "common.saving": "Saving…"
+  "common.saving": "Saving…",
+  "settings.selection.contextLoading": "Loading context settings…",
+  "settings.selection.contextError": "Context settings could not load: {{error}}",
+  "settings.selection.saved": "Default model saved",
+  "settings.selection.syncWarning": "Default model saved. Context settings could not refresh: {{error}}"
 }

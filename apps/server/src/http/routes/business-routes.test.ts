@@ -382,6 +382,8 @@ describe("native control-plane business routes", () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
+  // Several disk-backed round trips exceed 5s on Windows runners. Keep a
+  // functional integration timeout; benchmark tests enforce latency budgets.
   it("persists runtime capabilities into custom provider model hints on GET config", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
@@ -436,7 +438,7 @@ describe("native control-plane business routes", () => {
     expect(resourceWrite).toHaveBeenCalledOnce();
     expect(await fingerprints()).toEqual(repaired);
 
-  });
+  }, 30000);
 
   it("uses verified runtime levels when saving the legacy default selection", async () => {
     const cwd = await workspace();

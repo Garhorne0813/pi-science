@@ -9,6 +9,12 @@ beforeAll(async () => { await i18n.changeLanguage("en"); });
 beforeEach(() => {
   queryClient.clear();
   vi.spyOn(modelSelectionApi, "readDefault").mockResolvedValue({ scope: "default", selection: { model: "deepseek/flash", thinking: "off" } });
+  queryClient.setQueryData(modelSelectionKeys.catalog(null), { available_models: models });
+  vi.spyOn(modelSelectionApi, "saveDefault").mockImplementation(async (selection) => {
+    const result = { scope: "default" as const, selection };
+    queryClient.setQueryData(modelSelectionKeys.default, result);
+    return result;
+  });
 });
 afterEach(() => { cleanup(); queryClient.clear(); vi.restoreAllMocks(); });
 async function select(name: string, option: string) {
@@ -18,10 +24,9 @@ async function select(name: string, option: string) {
 }
 describe("default model selection", () => {
   it("saves an explicit draft and retains it after a failed save for retry", async () => {
-    const onSave = vi.fn().mockRejectedValueOnce(new Error("disk unavailable")).mockImplementation(async (selection) => {
-      queryClient.setQueryData(modelSelectionKeys.default, { scope: "default", selection });
-    });
-    render(<DefaultModelSelection models={models} saving={false} onSave={onSave} />);
+    const onSave = vi.mocked(modelSelectionApi.saveDefault);
+    onSave.mockRejectedValueOnce(new Error("disk unavailable"));
+    render(<DefaultModelSelection />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Default model: flash" })).toBeEnabled());
     await select("Default model", "pro");
     await select("Thinking Level", "High");
@@ -35,8 +40,8 @@ describe("default model selection", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeDisabled());
   });
   it("clears the default only after Save", async () => {
-    const onSave = vi.fn().mockResolvedValue(undefined);
-    render(<DefaultModelSelection models={models} saving={false} onSave={onSave} />);
+    const onSave = vi.mocked(modelSelectionApi.saveDefault);
+    render(<DefaultModelSelection />);
     const clear = await screen.findByRole("button", { name: "Clear default model" });
     await waitFor(() => expect(clear).toBeEnabled());
     fireEvent.click(clear);
@@ -46,15 +51,33 @@ describe("default model selection", () => {
   });
   it("bounds a large default-model menu while keeping searched models reachable", async () => {
     const catalog = Array.from({ length: 10000 }, (_, index) => ({ ...models[0]!, id: `lab/model-${index}`, label: `Model ${index}` }));
-    render(<DefaultModelSelection models={catalog} saving={false} onSave={vi.fn()} />);
+    queryClient.setQueryData(modelSelectionKeys.catalog(null), { available_models: catalog });
+    render(<DefaultModelSelection />);
     const trigger = screen.getByRole("button", { name: /^Default model:/ });
     await waitFor(() => expect(trigger).toBeEnabled());
     fireEvent.pointerDown(trigger); fireEvent.click(trigger);
     expect(await screen.findAllByRole("menuitemradio")).toHaveLength(50);
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "Model 9999" } });
-    expect(await screen.findAllByRole("menuitemradio")).toHaveLength(1);
+    await waitFor(() => expect(screen.getAllByRole("menuitemradio")).toHaveLength(1));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Model 9999" }));
     expect(screen.getByRole("button", { name: "Default model: Model 9999" })).toBeVisible();
+  });
+
+  it("treats an acknowledged save as success when the context refresh fails", async () => {
+    const onCommitted = vi.fn().mockRejectedValueOnce(new Error("context offline")).mockResolvedValue(undefined);
+    render(<DefaultModelSelection onCommitted={onCommitted} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Default model: flash" })).toBeEnabled());
+    await select("Default model", "pro");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Default model saved. Context settings could not refresh: context offline"));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Default model: pro" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading" }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Default model saved"));
+    expect(modelSelectionApi.saveDefault).toHaveBeenCalledTimes(1);
+    await select("Thinking Level", "High");
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
   });
 
 });

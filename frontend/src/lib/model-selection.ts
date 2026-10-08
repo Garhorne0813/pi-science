@@ -30,7 +30,7 @@ export const modelSelectionApi = {
     await queryClient.cancelQueries({ queryKey: modelSelectionKeys.default });
     const result = await readDefault(json(selection));
     queryClient.setQueryData(modelSelectionKeys.default, result);
-    await queryClient.invalidateQueries({ queryKey: ["settings", "config"] });
+    void queryClient.invalidateQueries({ queryKey: ["settings", "config"] }).catch(() => undefined);
     return result;
   },
   async saveSession(cwd: string, id: string, selection: ModelSelection) {

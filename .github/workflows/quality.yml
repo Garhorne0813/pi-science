@@ -86,7 +86,7 @@ jobs:
 
       - name: Enforce Settings browser performance budgets
         if: runner.os == 'Linux'
-        run: pnpm --filter frontend exec playwright test --config playwright.visual.config.ts settings-performance.spec.ts --project desktop-light --project mobile
+        run: pnpm --filter frontend exec playwright test --config playwright.visual.config.ts settings-performance.spec.ts model-selection-performance.spec.ts --project desktop-light --project mobile
 
       - name: Upload Settings browser performance metrics
         if: always() && runner.os == 'Linux'
