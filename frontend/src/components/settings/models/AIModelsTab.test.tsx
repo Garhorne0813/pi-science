@@ -50,7 +50,7 @@ function labConfig(status: "needs_key" | "invalid" | "needs_login" | "configured
     auth: { kind: status === "needs_login" ? "oauth" : "api_key", api_key_supported: status !== "needs_login", oauth_supported: status === "needs_login", login_supported: false } }], custom_providers: [], available_models: [] };
 }
 
-function connectionApi(failFirstSave = false, missingBinding = false) {
+function connectionApi(failFirstSave = false, missingBinding = false, saveError = "Repair failed") {
   let saves = 0;
   const calls: { url: string; method: string; body?: unknown }[] = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit = {}) => {
@@ -61,7 +61,7 @@ function connectionApi(failFirstSave = false, missingBinding = false) {
     if (url === "/api/provider-views") body = queryClient.getQueryData(modelResourceKeys.providerViews(null));
     else if (url === "/api/endpoints") body = { endpoints: [{ id: "endpoint-lab", name: "Lab", base_url: "https://lab.example/v1", protocol: "openai", health: "unknown", credential_ref: null, owner_provider_id: "user-lab" }] };
     else if (url === "/api/provider-endpoint-bindings") body = { bindings: missingBinding ? [] : [{ id: "binding-lab", provider_id: "user-lab", endpoint_id: "endpoint-lab" }] };
-    else if (method === "PUT" && url === "/api/custom-providers/user-lab" && failFirstSave && ++saves === 1) { status = 500; body = { error: "Repair failed" }; }
+    else if (method === "PUT" && url === "/api/custom-providers/user-lab" && failFirstSave && ++saves === 1) { status = 500; body = { error: saveError }; }
     return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
   }));
   return calls;
@@ -183,8 +183,20 @@ describe("AIModelsTab", () => {
     expect(within(dialog).queryByRole("button", { name: /^Anthropic$/ })).not.toBeInTheDocument();
   });
 
-  it("retains a failed credential repair for retry without clearing the draft", async () => {
-    const calls = connectionApi(true);
+  it("allows a configured builtin service to replace its key without appearing in Connect", async () => {
+    const saveKey = vi.fn(async () => undefined);
+    renderTab({ apiKeyInput: { anthropic: "replacement-test-key" }, saveKey });
+    fireEvent.click(screen.getAllByRole("button", { name: "Connection settings" })[0]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Replace" }));
+    const editor = screen.getByRole("dialog", { name: "Replace API key" });
+    expect(within(editor).getByLabelText(/Anthropic API key/)).toHaveValue("replacement-test-key");
+    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saveKey).toHaveBeenCalledWith("anthropic"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Replace API key" })).not.toBeInTheDocument());
+  });
+
+  it.each(["Repair failed", "Connection changes were saved, but the endpoint binding could not be created. Review the saved connection and retry to complete the repair."])("retains a failed repair draft and displays its outcome: %s", async (message) => {
+    const calls = connectionApi(true, true, message);
     renderTab({ config: labConfig("invalid") });
     fireEvent.click(screen.getByRole("button", { name: "Configure connection" }));
     const editor = screen.getByRole("dialog", { name: "Edit connection" });
@@ -192,7 +204,7 @@ describe("AIModelsTab", () => {
     const key = within(editor).getByLabelText("API key");
     fireEvent.change(key, { target: { value: "test-repair-key" } });
     fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
-    expect(await within(editor).findByRole("alert")).toHaveTextContent("Repair failed");
+    expect(await within(editor).findByRole("alert")).toHaveTextContent(message);
     expect(key).toHaveValue("test-repair-key");
     fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit connection" })).not.toBeInTheDocument());

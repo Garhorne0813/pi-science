@@ -13,6 +13,7 @@ import type { NodeSessionService } from "../../runtime/node/node-session-service
 import { ModelResourceService } from "../../model-resources/model-resource-service.js";
 
 function errorStatus(code: string): number {
+  if (code === "connection_repair_incomplete") return 500;
   if (code === "resource_not_found") return 404;
   if (code === "resource_in_use" || code === "provider_id_conflict") return 409;
   if (code === "discovery_empty" || code === "no_routable_endpoint") return 422;
@@ -23,7 +24,7 @@ function errorStatus(code: string): number {
 function routeError(reply: FastifyReply, error: unknown): FastifyReply {
   const code = typeof error === "object" && error && "code" in error ? String(error.code) : "invalid_resource";
   const message = error instanceof Error ? error.message : String(error);
-  return reply.code(errorStatus(code)).send({ code, error: message });
+  return reply.code(errorStatus(code)).send({ code, error: message, ...(code === "connection_repair_incomplete" ? { partial_commit: true, failed_step: "create_binding" } : {}) });
 }
 
 async function reload<T extends Record<string, unknown>>(service: NodeSessionService, reply: FastifyReply, payload: T): Promise<T | FastifyReply> {

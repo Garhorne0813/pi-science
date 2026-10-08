@@ -167,6 +167,33 @@ describe("ModelSelection v2", () => {
       expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
     }
   }, 30000);
+  it.each([false, true])("reports a partially saved connection when binding creation fails (endpoint lost: %s) and safely retries", async (endpointLost) => {
+    const resources = modules.modelResources;
+    const created = await resources.createCustomProvider({ name: "Repair Lab", base_url: "http://127.0.0.1:9/v1", protocol: "openai", auth: { kind: "api_key", secret: "before-partial-repair" }, models: ["lab-model"] });
+    await resources.deleteBinding(created.binding.id);
+    if (endpointLost) await resources.deleteEndpoint(created.endpoint.id);
+    const createBinding = vi.spyOn(resources, "createBinding").mockRejectedValueOnce(new Error("injected-binding-failure-secret"));
+    const payload = { name: "Repaired Lab", base_url: "http://127.0.0.1:10/v1", auth: { kind: "api_key", secret: "after-partial-repair" } };
+    const response = await app.inject({ method: "PUT", url: `/api/custom-providers/${created.provider.id}`, payload });
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({ code: "connection_repair_incomplete", partial_commit: true, failed_step: "create_binding" });
+    expect(response.json().error).toContain("Connection changes were saved");
+    expect(response.body).not.toContain("injected-binding-failure-secret");
+    const partial = await resources.repository.read();
+    expect(partial.providers.find((item) => item.id === created.provider.id)?.name).toBe("Repaired Lab");
+    const endpoint = partial.endpoints.find((item) => item.owner_provider_id === created.provider.id)!;
+    expect(endpoint).toMatchObject({ base_url: payload.base_url, data_egress: "local", credential_ref: created.credential!.id });
+    expect(partial.bindings.filter((item) => item.provider_id === created.provider.id)).toHaveLength(0);
+    expect(await resources.credentials.getForRuntime(created.credential!.id)).toMatchObject({ secret: "after-partial-repair" });
+    createBinding.mockRestore();
+    const credentialsBeforeRetry = await readFile(join(home, "credentials.json"), "utf8");
+    const retry = await app.inject({ method: "PUT", url: `/api/custom-providers/${created.provider.id}`, payload: { name: payload.name, base_url: payload.base_url } });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json()).toMatchObject({ endpoint: { id: endpoint.id, credential_ref: created.credential!.id }, binding: { endpoint_id: endpoint.id, enabled: true } });
+    expect(await readFile(join(home, "credentials.json"), "utf8")).toBe(credentialsBeforeRetry);
+    expect((await resources.repository.read()).endpoints.filter((item) => item.owner_provider_id === created.provider.id)).toHaveLength(1);
+  }, 30000);
+
   it("rejects a builtin model after its managed credential is deleted", async () => {
     const a = await create();
     const ref = (await modules.modelResources.repository.read()).credential_refs.deepseek;

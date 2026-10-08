@@ -48,6 +48,11 @@ function resourceError(code: string, message: string): Error & { code: string } 
   return Object.assign(new Error(message), { code });
 }
 
+function defaultDataEgress(baseUrl: string): Endpoint["data_egress"] {
+  const hostname = new URL(normalizeBaseUrl(baseUrl)).hostname;
+  return hostname === "localhost" || /^127\./.test(hostname) || hostname === "[::1]" ? "local" : "remote";
+}
+
 function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "provider";
 }
@@ -539,7 +544,7 @@ export class ModelResourceService {
         api: input.api,
         credential_ref: credential?.id ?? null,
         enabled: true,
-        data_egress: input.data_egress ?? (input.base_url.startsWith("http://127.") || input.base_url.includes("localhost") ? "local" : "remote"),
+        data_egress: input.data_egress ?? defaultDataEgress(input.base_url),
         owner_provider_id: providerId,
       });
       provider = await this.createProvider({ name: input.name, adapter: adapterForEndpoint(protocol), catalog_mode: "hybrid", auth_kind: input.auth?.kind ?? "none", enabled: true });
@@ -584,7 +589,7 @@ export class ModelResourceService {
         if (!["openai-compatible", "anthropic-compatible", "ollama"].includes(provider.adapter)) throw resourceError("invalid_resource", "This adapter requires an explicit endpoint repair");
         const credentials = (await this.credentials.listMetadata()).filter((item) => item.owner_provider_id === id && item.owner_kind !== "mcp");
         if (provider.auth_kind !== "none" && credentials.length > 1) throw resourceError("invalid_resource", "Multiple owned credentials exist; repair the connection explicitly");
-        endpoint = await this.createEndpoint({ name: `${provider.name} endpoint`, base_url: input.base_url, protocol: provider.adapter === "anthropic-compatible" ? "anthropic" : provider.adapter === "ollama" ? "ollama" : "openai", ...(input.api ? { api: input.api } : {}), credential_ref: provider.auth_kind === "none" ? null : credentials[0]?.id ?? null, enabled: true, data_egress: "remote", owner_provider_id: id });
+        endpoint = await this.createEndpoint({ name: `${provider.name} endpoint`, base_url: input.base_url, protocol: provider.adapter === "anthropic-compatible" ? "anthropic" : provider.adapter === "ollama" ? "ollama" : "openai", ...(input.api ? { api: input.api } : {}), credential_ref: provider.auth_kind === "none" ? null : credentials[0]?.id ?? null, enabled: true, data_egress: defaultDataEgress(input.base_url), owner_provider_id: id });
       }
     }
     if (!endpoint) throw resourceError("resource_not_found", `Provider '${id}' connection endpoint was not found`);
@@ -611,7 +616,10 @@ export class ModelResourceService {
       }
     }
     if (input.auth?.kind) await this.updateProvider(id, { auth_kind: input.auth.kind });
-    if (!binding) binding = await this.createBinding({ provider_id: id, endpoint_id: endpoint.id, enabled: true, priority: 100 });
+    if (!binding) {
+      try { binding = await this.createBinding({ provider_id: id, endpoint_id: endpoint.id, enabled: true, priority: 100 }); }
+      catch { throw resourceError("connection_repair_incomplete", "Connection changes were saved, but the endpoint binding could not be created. Review the saved connection and retry to complete the repair."); }
+    }
     const updated = await this.repository.read();
     return { provider: structuredClone(updated.providers.find((item) => item.id === id)!), endpoint: structuredClone(updated.endpoints.find((item) => item.id === endpoint.id)!), binding: structuredClone(updated.bindings.find((item) => item.id === binding.id)!) };
   }

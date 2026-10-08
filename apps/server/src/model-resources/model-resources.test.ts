@@ -415,11 +415,24 @@ describe("resource service", () => {
     if (deleteEndpoint) await service.deleteEndpoint(created.endpoint.id);
     const credentialBefore = await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8");
     const repaired = await service.updateCustomProvider(created.provider.id, { base_url: "http://127.0.0.1:9000/v1" });
-    expect(repaired.endpoint).toMatchObject({ credential_ref: created.credential!.id, owner_provider_id: created.provider.id, base_url: "http://127.0.0.1:9000/v1" });
+    expect(repaired.endpoint).toMatchObject({ credential_ref: created.credential!.id, owner_provider_id: created.provider.id, base_url: "http://127.0.0.1:9000/v1", data_egress: "local" });
     if (!deleteEndpoint) expect(repaired.endpoint.id).toBe(created.endpoint.id);
     expect(repaired.binding).toMatchObject({ provider_id: created.provider.id, endpoint_id: repaired.endpoint.id, enabled: true });
     expect(await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8")).toBe(credentialBefore);
     expect((await service.repository.read()).bindings.filter((item) => item.provider_id === created.provider.id)).toHaveLength(1);
+  });
+
+  it.each(["http://localhost:8000/v1", "https://127.0.0.2:8000/v1", "http://[::1]:8000/v1", "https://localhost.example/v1"])("uses the same data egress for creating and rebuilding %s", async (baseUrl) => {
+    const service = new ModelResourceService();
+    const discovery = vi.spyOn(service, "discover").mockRejectedValue(new Error("Discovery is outside this metadata test"));
+    const created = await service.createCustomProvider({ name: "Lab", base_url: baseUrl, protocol: "openai", auth: { kind: "none" }, models: ["lab-model"] });
+    await service.deleteBinding(created.binding.id);
+    await service.deleteEndpoint(created.endpoint.id);
+    const repaired = await service.updateCustomProvider(created.provider.id, { base_url: baseUrl });
+    const expected = baseUrl.includes("localhost.example") ? "remote" : "local";
+    expect(created.endpoint.data_egress).toBe(expected);
+    expect(repaired.endpoint.data_egress).toBe(expected);
+    discovery.mockRestore();
   });
 
   it("does not choose between multiple owned endpoints when repairing a lost binding", async () => {

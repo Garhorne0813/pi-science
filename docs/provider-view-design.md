@@ -96,6 +96,21 @@ configured again through binding CRUD.
 Connect lists only builtin providers whose backend credential fact is
 unconfigured; configured credentials remain maintained through their cards.
 The inventory title, including fallback text, is Model services / 模型服务.
+Configured builtin cards continue to expose replacement whenever the backend
+allows `replace_credential`; Connect's credential filter never governs this
+maintenance action. Creation and endpoint reconstruction share a hostname-based
+loopback classifier (`localhost`, IPv4 127/8 and IPv6 ::1) for default data egress.
+Existing endpoints retain their explicitly configured egress value.
+
+Repair remains a sequence of resource writes, not an atomic transaction. If the
+final binding creation fails, HTTP 500 carries `connection_repair_incomplete`,
+`partial_commit: true` and `failed_step: "create_binding"`. Its user-facing message
+states that connection changes were saved and asks the user to review/retry.
+Provider/endpoint and explicit credential changes may already be persisted; the
+writer does not imply rollback. The editor retains its draft and displays that
+message. Retrying reuses the owned endpoint and credential rather than duplicating
+them. General atomic writes and revision conflicts remain a later phase.
+
 
 ## Validation
 
@@ -125,3 +140,11 @@ component tests and four desktop/mobile production-browser checks. Browser
 repair uses HTTP fixtures; the server integration test separately exercises the
 real writer and Core projection. Workspace typecheck/build, frontend lint and
 visual TypeScript checks passed for this follow-up.
+
+The third review follow-up passed 50 focused server tests, 20 AI Models component
+tests and six desktop/mobile browser checks. Fault injection covers final binding
+failure with both an existing and deleted endpoint, explicit persisted credential
+replacement, partial-commit HTTP metadata and a retry that preserves credential
+bytes without creating duplicate endpoints. Loopback reconstruction keeps local
+egress. The browser verifies configured builtin key replacement and Connect
+exclusion. Workspace typecheck/build, lint and visual TypeScript checks passed.

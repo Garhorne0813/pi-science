@@ -92,3 +92,30 @@ test("repairs a provider with a lost binding without replacing its credential", 
     await expect(connect.getByRole("button", { name: provider.name, exact: true })).toHaveCount(0);
   }
 });
+
+
+test("maintains a configured builtin key through its card while excluding it from Connect", async ({ page }) => {
+  const inventory = providerViewsFixture(FIXTURES.config);
+  const provider = inventory.providers.find((item) => item.source === "builtin" && item.credential.configured && item.allowed_actions.includes("replace_credential"))!;
+  let saved = false;
+  await page.route("**/api/provider-views*", (route) => route.fulfill({ json: { providers: [provider] } }));
+  await page.route("**/api/settings/api-key", async (route) => {
+    expect(route.request().method()).toBe("PUT");
+    expect(route.request().postDataJSON()).toEqual({ provider: provider.id, api_key: "synthetic-replacement-key" });
+    saved = true;
+    await route.fulfill({ json: { ok: true } });
+  });
+  await page.goto("/settings");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("tab", { name: "AI Models", exact: true }).click();
+  await settings.getByRole("button", { name: "Connection settings", exact: true }).click();
+  await settings.getByRole("menuitem", { name: "Replace", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "Replace API key" });
+  await editor.getByLabel(`${provider.name} API key`, { exact: false }).fill("synthetic-replacement-key");
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(editor).not.toBeVisible();
+  expect(saved).toBe(true);
+  await settings.getByRole("button", { name: "+ Connect", exact: true }).click();
+  const connect = page.getByRole("dialog", { name: "Connect a model service" });
+  await expect(connect.getByRole("button", { name: provider.name, exact: true })).toHaveCount(0);
+});
