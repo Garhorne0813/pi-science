@@ -22,6 +22,9 @@ test("settings navigation, model facts and saved compaction across viewports", a
   for (const tab of ["General", "AI Models", "Agent"]) {
     await dialog.getByRole("tab", { name: tab, exact: true }).click();
     await expect(dialog.getByRole("heading", { name: tab, exact: true })).toBeVisible();
+    // Default selection is fetched independently from the Settings shell.
+    // Audit the ready control, rather than racing its disabled loading state.
+    if (tab === "Agent") await expect(dialog.getByRole("button", { name: "Clear default model", exact: true })).toBeEnabled();
     const violations = (await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations.filter((item) => item.impact === "critical" || item.impact === "serious");
     expect(violations, `${tab} accessibility`).toEqual([]);
     expect(await dialog.getByRole("tabpanel").evaluate((element) => element.scrollWidth <= element.clientWidth + 1), `${tab} must fit the viewport`).toBe(true);
