@@ -50,6 +50,30 @@ async function selection(id: string) {
   return response.json().selection;
 }
 describe("ModelSelection v2", () => {
+  it.each(["failed", "threw"])("keeps configured providers manageable when the workspace Core catalog %s", async (scenario) => {
+    const resources = modules.modelResources;
+    const provider = await resources.createProvider({ name: "Recovery Lab", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
+    const credential = await resources.credentials.put({ kind: "api_key", backend: "managed", secret: "recovery-key", owner_provider_id: provider.id });
+    const endpoint = await resources.createEndpoint({ name: "Recovery endpoint", base_url: "http://127.0.0.1:9/v1", protocol: "openai", credential_ref: credential.id, enabled: true, data_egress: "local", owner_provider_id: provider.id });
+    await resources.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 1 });
+    await resources.updateModel(provider.id, "lab-model", { enabled: true });
+    const read = vi.spyOn(modules.sessions, "availableModels");
+    if (scenario === "failed") read.mockResolvedValue({ success: false, code: "unavailable", error: "Core offline" });
+    else read.mockRejectedValue(new Error("Core offline"));
+    const before = await readFile(join(home, "model-resources.json"), "utf8");
+    const response = await app.inject({ method: "GET", url: `/api/provider-views?cwd=${encodeURIComponent(cwd)}` });
+    expect(response.statusCode).toBe(200);
+    expect(providerViewsResponseSchema.safeParse(response.json()).success).toBe(true);
+    expect(response.json().catalog_status).toBe("unavailable");
+    const view = response.json().providers.find((item: { id: string }) => item.id === provider.id);
+    expect(view).toMatchObject({ status: "unavailable", credential: { configured: true },
+      routing: { configured_model_count: 1, selectable_model_count: 0 },
+      models: [expect.objectContaining({ id: `${provider.id}/lab-model`, available: false, availability_reason: "catalog_unavailable" })] });
+    expect(view.allowed_actions).toContain("edit");
+    expect(view.routing.issues).toEqual(expect.arrayContaining([{ code: "catalog_unavailable" }]));
+    expect(response.body).not.toContain("recovery-key");
+    expect(await readFile(join(home, "model-resources.json"), "utf8")).toBe(before);
+  });
   it("separates defaults, existing sessions and cold durable resumes", async () => {
     const reload = vi.spyOn(modules.sessions, "reloadConfiguration");
     const a = await create();
