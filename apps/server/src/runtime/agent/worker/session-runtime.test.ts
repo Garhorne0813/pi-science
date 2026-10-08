@@ -11,9 +11,10 @@ const roots: string[] = [];
 const runtimes: SessionRuntime[] = [];
 const context = BACKGROUND_CONTEXT;
 
-async function runtime() {
+async function runtime(prepare?: (cwd: string) => Promise<void>) {
   const cwd = resolve(await mkdtemp(join(tmpdir(), "pi-science-worker-mutations-")));
   roots.push(cwd);
+  if (prepare) await prepare(cwd);
   const events: Array<Record<string, unknown>> = [];
   const instance = await SessionRuntime.open({ cwd, sessionsRoot: join(cwd, ".pi-science", "agent-sessions"),
     model: { provider: "openai", modelId: "gpt-4.1-mini" }, thinking: "low",
@@ -168,6 +169,25 @@ describe("agent-core worker mutations", () => {
     expect(await second.command("get_state", {})).toMatchObject({
       success: true, data: { model: { provider: "deepseek", modelId: "deepseek-v4-pro" } } });
   }, 20_000);
+
+  it("lists the allowed skill and prompt commands and drops a skill once its policy disables it", async () => {
+    const { instance } = await runtime(async (cwd) => {
+      await mkdir(join(cwd, ".pi", "skills", "review"), { recursive: true });
+      await writeFile(join(cwd, ".pi", "skills", "review", "SKILL.md"), "---\nname: review\ndescription: Review evidence\n---\nFollow the evidence protocol.");
+      await mkdir(join(cwd, ".pi", "prompts"), { recursive: true });
+      await writeFile(join(cwd, ".pi", "prompts", "summarize.md"), "---\ndescription: Summarize text\n---\nSummarize the following text: $ARGUMENTS");
+    });
+    expect(await instance.command("get_commands", {})).toMatchObject({ success: true, data: { commands: expect.arrayContaining([
+      { name: "skill:review", description: "Review evidence", source: "skill", group: "skill" },
+      { name: "summarize", description: "Summarize text", source: "prompt", group: "utility" }]) } });
+    expect(await instance.command("set_skill_policy", { policy: { mode: "none" } })).toMatchObject({ success: true });
+    // The prompt command survives the disable, and the disabled skill is both absent from the
+    // catalogue and rejected when a client invokes it by name.
+    expect(await instance.command("get_commands", {})).toMatchObject({ success: true, data: { commands: [
+      { name: "summarize", description: "Summarize text", source: "prompt", group: "utility" }] } });
+    expect(await instance.command("prompt", { message: "/skill:review check the statistics" }))
+      .toMatchObject({ success: false, code: "unknown_skill" });
+  });
 
   it("does not give ordinary bash processes model, server, or inherited credentials", async () => {
     vi.stubEnv("PR115_PARENT_SECRET", "parent-test-secret");

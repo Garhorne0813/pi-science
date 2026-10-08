@@ -36,6 +36,7 @@ function json(payload: unknown, status = 200): Response {
 }
 
 let filesFail = false;
+let commandsFail = false;
 
 const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
   const url = String(input);
@@ -47,6 +48,7 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
   }
   if (url.startsWith("/api/files/breadcrumbs")) return json([]);
   if (url.includes("/commands?")) {
+    if (commandsFail) return json({ detail: "no runtime" }, 500);
     return json({ commands: [{ name: "skill:review", description: "Review files", source: "skill" }] });
   }
   if (url.startsWith("/api/files?")) {
@@ -118,6 +120,7 @@ beforeEach(() => {
   queryClient.clear();
   useRuntimeStore.setState({ cwd: "project", activeSessionId: "s1" });
   filesFail = false;
+  commandsFail = false;
   onKeyDown.mockClear();
   useUiStore.setState({ workspaceReferences: [] });
   vi.stubGlobal("fetch", fetchMock);
@@ -560,5 +563,21 @@ describe("composer completion keyboard paths", () => {
     expect(input()).toHaveValue("data/pro");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     expect(onKeyDown).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the built-in commands when the command API fails", async () => {
+    commandsFail = true;
+    renderComposer();
+    await type("/skill:rev");
+    expect(input()).toHaveValue("/skill:rev");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    await press("Tab");
+    expect(input()).toHaveValue("/skill:rev");
+    expect(onKeyDown).toHaveBeenCalledTimes(1);
+
+    await type("/exp");
+    expect(screen.getByRole("listbox", { name: "Completions" })).toBeInTheDocument();
+    await press("Tab");
+    expect(input()).toHaveValue("/export ");
   });
 });
