@@ -92,13 +92,13 @@ describe("PiScienceClient message cache", () => {
         messages: [{
           id: "m1", role: "assistant", content: [], details: { rows: 3 },
           presentationRole: "final", turnId: "turn-1", runId: "run-1", itemId: "item-1",
-          revision: 2, sequence: 7, classificationSource: "explicit",
+          revision: 2, sequence: 7, classificationSource: "explicit", turnStatus: "aborted", turnStartedAt: "2026-10-03T00:00:00.000Z", turnEndedAt: "2026-10-03T00:00:29.000Z",
         }],
       },
     }));
     expect(new PiScienceClient().getCachedMessages("s", "/workspace")?.[0]).toMatchObject({
       details: { rows: 3 }, presentationRole: "final", turnId: "turn-1", runId: "run-1",
-      itemId: "item-1", revision: 2, sequence: 7, classificationSource: "explicit",
+      itemId: "item-1", revision: 2, sequence: 7, classificationSource: "explicit", turnStatus: "aborted", turnStartedAt: "2026-10-03T00:00:00.000Z", turnEndedAt: "2026-10-03T00:00:29.000Z",
     });
   });
 

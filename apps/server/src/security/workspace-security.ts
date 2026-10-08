@@ -1,6 +1,7 @@
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathIsInside } from "../support/platform-utils.js";
+import { readProject } from "../project/project-registry.js";
 
 async function canonicalizeForContainment(root: string, path: string): Promise<string> {
   const pathFromRoot = relative(root, path);
@@ -24,6 +25,7 @@ export async function validateWorkspaceCwd(cwd: string): Promise<string> {
   const marker = resolve(root, ".pi-science");
   const rootStat = await stat(root);
   if (!rootStat.isDirectory()) throw new Error(`Not a directory: ${cwd}`);
+  if (await readProject(root)) return root;
   try {
     const markerStat = await stat(marker);
     if (markerStat.isDirectory()) return root;

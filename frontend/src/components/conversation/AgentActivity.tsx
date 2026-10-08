@@ -105,9 +105,8 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
   // Callers that render the final answer outside this component
   // (ConversationTurn) pass the flag down; direct renders scan the blocks.
   const hasExplicitFinal = hasFinalAnswer ?? blocks.some((block) => block.kind === "agent" && block.presentationRole === "final");
-  // Only a settled turn with a delivered answer has two trustworthy boundaries
-  // to measure the whole turn against.
-  const wholeTurnDuration = lifecycle === "settled" && hasExplicitFinal
+  // A terminal result supplies trustworthy boundaries even without an answer.
+  const wholeTurnDuration = ((lifecycle === "settled" && hasExplicitFinal) || lifecycle === "aborted" || lifecycle === "failed")
     ? formatTimestampDuration(turnStartedAt, turnEndedAt)
     : null;
 
@@ -115,8 +114,8 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
     // Nothing folded away, but a plan-only or answer-only turn still carries a
     // measurable turn duration worth showing.
     if (!wholeTurnDuration) return null;
-    const completed = t("conversation.activity.completed");
-    return <div data-state="completed" data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
+    const completed = t(lifecycle === "aborted" ? "conversation.activity.stopped" : lifecycle === "failed" ? "conversation.activity.error" : "conversation.activity.completed");
+    return <div data-state={lifecycle === "aborted" ? "stopped" : lifecycle === "failed" ? "error" : "completed"} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
       <span role="status" aria-label={`${completed}. ${t("conversation.activity.turnDuration", { duration: wholeTurnDuration })}`} className={cn(styles.summary, "flex min-h-primary w-full items-center py-1 text-sm font-medium text-text")}>{completed} · {wholeTurnDuration}</span>
     </div>;
   }
@@ -126,7 +125,7 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
   // explicit instead of promoting commentary into the answer slot.
   const hasNarration = traceBlocks.some((block) => block.kind === "agent");
   const noAnswer = lifecycle === "settled" && !hasExplicitFinal && hasNarration;
-  const state = lifecycle === "failed" || shown?.state === "error" ? "error" : lifecycle === "aborted" ? "stopped" : "completed";
+  const state = lifecycle === "aborted" ? "stopped" : lifecycle === "failed" || shown?.state === "error" ? "error" : "completed";
   const headline = lifecycle === "failed"
     ? t("conversation.activity.error")
     : lifecycle === "aborted"

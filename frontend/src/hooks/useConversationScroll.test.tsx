@@ -157,7 +157,7 @@ describe("useConversationScroll follow output", () => {
     expect(scrollToIndex).toHaveBeenCalledWith({ index: "LAST", align: "end", behavior: "auto" });
   });
 
-  it("keeps follow output when a stale scroll event lags grown content", () => {
+  it("repins after a layout scroll lags grown content, while respecting user browsing", async () => {
     const { result } = renderHook(() => useConversationScroll(options(vi.fn(async () => 0))));
     const scroller = document.createElement("div");
     let scrollTop = 1_200;
@@ -165,7 +165,7 @@ describe("useConversationScroll follow output", () => {
     Object.defineProperties(scroller, {
       clientHeight: { configurable: true, value: 400 },
       scrollHeight: { configurable: true, get: () => scrollHeight },
-      scrollTop: { configurable: true, get: () => scrollTop, set: (value) => { scrollTop = value; } },
+      scrollTop: { configurable: true, get: () => scrollTop, set: (value) => { scrollTop = Math.max(0, Math.min(value, scrollHeight - 400)); } },
     });
 
     act(() => { result.current.attachScroller(scroller); });
@@ -177,6 +177,7 @@ describe("useConversationScroll follow output", () => {
     scrollTop = 1_220;
     act(() => { scroller.dispatchEvent(new Event("scroll")); });
     expect(result.current.showScrollDown).toBe(false);
+    await waitFor(() => expect(scrollTop).toBe(2_000));
 
     // An explicit upward scroll does leave follow mode.
     scrollTop = 800;

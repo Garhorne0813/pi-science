@@ -39,14 +39,17 @@ export const slashCommandsQuery = (cwd: string, sessionId: string | null) => ({
       { signal },
     );
     return (Array.isArray(data.commands) ? data.commands : [])
-      .filter((command: SlashCommand) => command.source === "skill" && command.name.startsWith("skill:"))
-      .map((command: SlashCommand) => ({
+      .filter((command: SlashCommand) => (
+        command.source === "prompt"
+        || (command.source === "skill" && command.name.startsWith("skill:"))
+      ))
+      .map((command: SlashCommand): SlashCommand => ({
         name: command.name,
         description: command.description || "",
         argumentHint: command.argumentHint,
         arguments: command.arguments,
         source: command.source,
-        group: "skill" as const,
+        group: command.source === "prompt" ? "utility" as const : "skill" as const,
       }));
   },
 });

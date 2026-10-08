@@ -123,7 +123,7 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
     ) return;
     const history = historyResult.value;
     // Restore the REST snapshot wholesale for a settled conversation. The Pi
-    // process writes the session JSONL before agent_settled, so a non-empty
+    // process writes the session JSONL before operation.settled, so a non-empty
     // snapshot is authoritative. An empty snapshot can still race the flush.
     if (history.messages.length === 0 && current.thread.blocks.length > 0) return;
     let turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];

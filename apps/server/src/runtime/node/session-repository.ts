@@ -3,8 +3,12 @@ import { createHash } from "node:crypto";
 import { join, relative, resolve } from "node:path";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
+import { boundedToolDetails } from "./message-details.js";
 import { readProject } from "../../project/project-registry.js";
 import { isAiTitlePrompt } from "../title/title-prompt.js";
+import { metadataRoot } from "../../storage/persistence.js";
+import { AgentSessionRepository } from "../agent/agent-session-repository.js";
+import { AgentSessionRegistry } from "../agent/agent-session-registry.js";
 
 export interface SessionInfoRecord {
   id: string;
@@ -25,12 +29,15 @@ export interface SessionMessageRecord {
   toolName?: string;
   isError?: boolean;
   timestamp?: string | null;
-  /** Tool-specific metadata persisted by Pi Orbit (e.g. rpiv-todo's task
+  /** Tool-specific metadata persisted by the agent runtime (e.g. rpiv-todo's task
    *  snapshot). Forwarded to the frontend so read-only panels can rebuild
    *  tool state without live events. Capped: oversized details are dropped. */
   details?: unknown;
   presentation?: Record<string, unknown>;
   presentationRole?: "intermediate" | "final";
+  turnStatus?: "completed" | "declined" | "aborted" | "failed";
+  turnStartedAt?: string;
+  turnEndedAt?: string;
   turnId?: string;
   runId?: string;
   itemId?: string;
@@ -84,7 +91,7 @@ interface ParsedSessionHeader {
 }
 
 function sessionsRoot(cwd: string): string {
-  return join(resolve(cwd), ".pi-science", "sessions");
+  return join(metadataRoot(cwd), "sessions");
 }
 
 const HISTORY_PAGE_SIZE = 50;
@@ -129,7 +136,6 @@ async function messageBoundaryHash(path: string, offset: number): Promise<string
   }
 }
 
-const MAX_TOOL_DETAILS_BYTES = 100_000;
 
 function parseMessageLine(line: string): SessionMessageRecord | null {
   if (!line.trim()) return null;
@@ -156,11 +162,8 @@ function parseMessageLine(line: string): SessionMessageRecord | null {
       ...(typeof message.sequence === "number" && Number.isInteger(message.sequence) && message.sequence >= 0 ? { sequence: message.sequence } : {}),
       ...(message.classificationSource === "explicit" || message.classificationSource === "legacy_inferred" || message.classificationSource === "unknown" ? { classificationSource: message.classificationSource } : {}),
     };
-    if (message.details !== undefined) {
-      try {
-        if (JSON.stringify(message.details).length <= MAX_TOOL_DETAILS_BYTES) record.details = message.details;
-      } catch { /* non-serializable details are dropped */ }
-    }
+    const details = boundedToolDetails(message.details);
+    if (details !== undefined) record.details = details;
     return record;
   } catch {
     return null;
@@ -628,8 +631,14 @@ function isUserVisibleSession(root: string, file: SessionFile): boolean {
 }
 
 export class SessionRepository {
+  private readonly agentSessions = new AgentSessionRepository();
+  private readonly agentRegistry = new AgentSessionRegistry();
+
   async findPath(cwd: string, sessionId: string): Promise<string | null> {
-    return (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId)?.path ?? null;
+    const registration = await this.agentRegistry.get(cwd, sessionId);
+    if (registration) return registration.state === "deleted" ? null : this.agentSessions.findPath(cwd, sessionId);
+    return await this.agentSessions.findPath(cwd, sessionId)
+      ?? (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId)?.path ?? null;
   }
 
   /** Delete-path lookup that bypasses the scan cache entirely and re-reads the
@@ -639,18 +648,23 @@ export class SessionRepository {
    *  resurrects on the next list. Callers should invalidate the cache first so
    *  the fresh scan cannot be poisoned by an in-flight stale one. */
   async findPathOnDisk(cwd: string, sessionId: string): Promise<string | null> {
+    const registration = await this.agentRegistry.get(cwd, sessionId);
+    if (registration) return registration.state === "deleted" ? null : this.agentSessions.findPath(cwd, sessionId);
     const root = sessionsRoot(cwd);
     const scan = await performScan(root);
-    return filesFromDirs(scan?.dirs ?? {}).find(({ header }) => header.id === sessionId)?.path ?? null;
+    return filesFromDirs(scan?.dirs ?? {}).find(({ header }) => header.id === sessionId)?.path
+      ?? this.agentSessions.findPath(cwd, sessionId);
   }
 
   async list(cwd: string): Promise<SessionInfoRecord[]> {
-    const [files, project] = await Promise.all([
+    const [files, project, registered] = await Promise.all([
       sessionFilesWithMtime(sessionsRoot(cwd)),
       readProject(cwd),
+      this.agentRegistry.all(cwd),
     ]);
     const root = sessionsRoot(cwd);
     const visibleFiles = files.filter((file) => {
+      if (typeof file.header.id === "string" && Object.hasOwn(registered, file.header.id)) return false;
       if (!isUserVisibleSession(root, file)) return false;
       const parentSession = typeof file.header.parentSession === "string" ? file.header.parentSession : "";
       // A named top-level session is a user-created fork. An unnamed session
@@ -661,7 +675,7 @@ export class SessionRepository {
       if (file.sessionInfo) return true;
       return !parentSession;
     });
-    const rows = await mapWithConcurrency(visibleFiles, 16, async ({ header, modified, path, mtimeMs, size, ...fileFlags }) => {
+    const rows: SessionInfoRecord[] = await mapWithConcurrency(visibleFiles, 16, async ({ header, modified, path, mtimeMs, size, ...fileFlags }) => {
       const headerTimestamp = typeof header.timestamp === "string" ? header.timestamp : null;
       // updated_at = last real message time, else the session header timestamp
       // (new sessions without messages), else the file mtime as a fallback.
@@ -677,8 +691,13 @@ export class SessionRepository {
     });
     // Sort by the effective updated_at (last message time when present) so the
     // list ordering matches the displayed timestamps.
+    for (const agentSession of await this.agentSessions.list(cwd)) {
+      const legacy = rows.findIndex((row) => row.id === agentSession.id);
+      if (legacy >= 0) rows.splice(legacy, 1);
+      rows.push(agentSession);
+    }
     return rows.sort((left, right) => (
-      right.updated_at.localeCompare(left.updated_at) || right.id.localeCompare(left.id)
+      (right.updated_at ?? "").localeCompare(left.updated_at ?? "") || right.id.localeCompare(left.id)
     ));
   }
 
@@ -687,9 +706,11 @@ export class SessionRepository {
     sessionId: string,
     options: { before?: string; limit?: number } = {},
   ): Promise<SessionMessagePage> {
+    if (await this.agentRegistry.get(cwd, sessionId)) return this.agentSessions.messagesPage(cwd, sessionId, options);
+    if (await this.agentSessions.findPath(cwd, sessionId)) return this.agentSessions.messagesPage(cwd, sessionId, options);
     const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
     if (!file) {
-      return { messages: [], next_cursor: null, has_more: false, snapshot_version: "0:0" };
+      return this.agentSessions.messagesPage(cwd, sessionId, options);
     }
     let metadata;
     try {
@@ -719,8 +740,10 @@ export class SessionRepository {
   }
 
   async userMessageIndex(cwd: string, sessionId: string): Promise<{ messages: SessionUserMessageIndexEntry[]; snapshot_version: string }> {
+    if (await this.agentRegistry.get(cwd, sessionId)) return this.agentSessions.userMessageIndex(cwd, sessionId);
+    if (await this.agentSessions.findPath(cwd, sessionId)) return this.agentSessions.userMessageIndex(cwd, sessionId);
     const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
-    if (!file) return { messages: [], snapshot_version: "0:0" };
+    if (!file) return this.agentSessions.userMessageIndex(cwd, sessionId);
     try {
       const metadata = await stat(file.path);
       return {
@@ -733,8 +756,10 @@ export class SessionRepository {
   }
 
   async messages(cwd: string, sessionId: string): Promise<SessionMessageRecord[]> {
+    if (await this.agentRegistry.get(cwd, sessionId)) return this.agentSessions.messages(cwd, sessionId);
+    if (await this.agentSessions.findPath(cwd, sessionId)) return this.agentSessions.messages(cwd, sessionId);
     const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
-    if (!file) return [];
+    if (!file) return this.agentSessions.messages(cwd, sessionId);
     const rows: SessionMessageRecord[] = [];
     try {
       // Stream the JSONL file line-by-line instead of loading it all into

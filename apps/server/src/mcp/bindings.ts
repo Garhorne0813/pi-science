@@ -25,3 +25,13 @@ export function resolveBindings(values: McpRuntimeConfig["environment"], credent
 export function mcpBaseEnvironment(): Record<string, string> {
   return Object.fromEntries(["PI_SCIENCE_HOME", "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TEMP", "TMP", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "LANG", "LC_ALL"].flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]!]]));
 }
+
+/** Trusted launch configuration for bundled network clients only. Never
+ * forwarded to bash, ordinary tools, or third-party stdio MCP processes. */
+export function builtinNetworkEnvironment(): Record<string, string> {
+  return Object.fromEntries([
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    "NODE_USE_ENV_PROXY", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR",
+  ].flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]!]]));
+}

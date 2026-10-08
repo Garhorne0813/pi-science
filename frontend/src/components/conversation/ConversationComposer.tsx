@@ -184,6 +184,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
                 <ModelControlMenu
                   models={model.models}
                   selectedModel={model.selectedModel}
+                  needsModelSwitch={model.needsModelSwitch}
                   thinking={model.thinking}
                   thinkingLevels={model.thinkingLevels}
                   contextTokens={contextTokens}

@@ -1,328 +1,177 @@
 # Pi-Science 架构
 
-[English](architecture.md)
+[English](architecture.md) · [README](../README.zh-CN.md)
 
-本文描述 Pi-Science 当前的运行时架构，是进程归属、runtime 隔离、服务边界、
-工作区状态和生命周期行为的规范参考。
+本文是当前生产架构的规范参考，说明执行与持久状态由谁负责、事件如何到达浏览器，以及系统如何恢复。实现记录和能力边界见文末链接。
 
-## 系统概览
+## 系统边界
+
+```mermaid
+flowchart TB
+    UI["浏览器 · React"] -->|REST 命令和 SSE v3| CP["Node 控制面 · Fastify"]
+    CP -->|经过校验的父子进程 IPC| W["独立 Node 子进程"]
+    W --> H["AgentHarness · main lane"]
+    H --> AI["pi-ai · 模型提供商"]
+    H --> T["Core 工具和产品工具"]
+    T --> MCP["按能力限制的 MCP 连接器"]
+    T -->|Notebook 服务 API| CP
+    H --> S[("Core v4 会话 · JsonlSessionRepo")]
+    CP -->|JSONL| K["Python / R 内核进程"]
+    CP --> DB[("SQLite · 应用协调状态")]
+    CP --> P[("项目元数据 · 事件和谱系")]
+```
+
+Agent Core 是唯一的智能体执行后端。对话、子代理、研究、复查和 AI 标题都通过 `AgentRuntimeManager` 使用 AgentHarness。这里的 Worker 指 Node **子进程**，而非浏览器 Worker 或共享智能体宿主；SQLite 服务使用的是独立 **worker thread**。
+
+| 组件 | 负责 | 不负责 |
+| --- | --- | --- |
+| 浏览器 | 展示、输入、交互状态和已应用的 SSE 游标 | 模型凭据和智能体执行循环 |
+| `AgentRuntimeManager` | 子进程容量、会话排他归属、启动、空闲清理和关闭 | 持久智能体状态 |
+| `AgentCoreSessionService` | 提示提交对账、配置同步和运行监督 | 第二套执行循环或会话格式 |
+| `SessionRuntime` / AgentHarness | Lane 执行、工具、模型配置、压缩和持久操作结果 | 浏览器展示 |
+| `AgentSessionRepository` | 将 Core 会话只读投影为产品历史 | 另一套权威对话存储 |
+| `ConversationEventHub` | 产品事件身份、持久化、交付及产品侧效果 | 自行推断 Core 已完成 |
+| 科学计算服务 | 内核、Notebook、执行、产物和研究编排状态 | 模型推理 |
+
+默认开发地址是前端 `http://127.0.0.1:5173` 和控制面 `http://127.0.0.1:8787`。Worker 不暴露 HTTP 端点。仓库启动器运行开发服务；构建包不会把启动器变为生产部署服务器。
+
+## 智能体执行与配置
+
+`SessionRuntime` 创建 `NodeExecutionEnv`，打开 `JsonlSessionRepo`，创建 AgentHarness，取得 `main` lane 并监听事件。提示执行使用 `lane.accept()` 和 `lane.drive()`；引导、后续提示与取消分别使用 `lane.steer()`、`lane.followUp()` 和 `lane.abort()`。
+
+Harness 会话数据、`laneState` 和 `operationResult` 是权威状态。配置变更串行执行，并与持久 lane 配置同步；上下文压缩使用 Harness API。技能和提示模板由 Core loader 从配置目录、`.pi/skills/` 和 `.pi/prompts/` 加载，产品策略决定哪些资源可以调用。
+
+工具集合包括 Core 的 `read`、`bash`、`edit`、`write`，以及 Notebook、todo、子代理和浏览器问卷等产品工具。Notebook 工具调用 Node 的 Notebook/内核服务。这不意味着存在通用扩展运行时；实际支持的工具和限制见[能力清单](agent-core-capability-inventory.md)。
+
+隐藏任务共享管理器容量和会话存储：
+
+| 任务 | 能力与生命周期 |
+| --- | --- |
+| 对话 | 已配置工具与技能；持久、可见的会话 |
+| 对话子代理 | 收窄后的父级工具与模型策略；隐藏子会话 |
+| 研究监督者 | `read` 和 `subagent`；隐藏会话 |
+| 项目复查 | 无工具；隐藏会话 |
+| AI 标题 | 无工具、无技能，关闭思考；使用配置的默认模型，临时隐藏会话 |
+
+隐藏会话在激活前登记归属，任务链接使恢复时可以重新打开同一个子会话。标题任务释放时删除临时会话文件和任务链接。隐藏会话不进入正常对话列表。
+
+## 提示提交、生命周期与恢复
+
+首次启动与恢复使用相同顺序：
+
+1. 打开延迟激活的 Worker。
+2. 绑定控制面的事件消费者。
+3. 读取并应用持久快照。
+4. 激活 Worker，再执行或恢复 operation。
+
+提示使用稳定的 operation ID 和浏览器 `client_message_id`。IPC 请求超时意味着提交结果尚不确定；服务先与持久状态对账，再决定报错或重新提交。配置变更串行执行，取消和交互响应不必等待普通配置变更完成。
+
+监督器区分进程存活与操作进展。成功读取 IPC 状态不会重置进展期限。IPC 失败、运行故障、事件丢失，或繁忙操作长期无真实进展，都可触发 Worker 替换和持久操作恢复。等待浏览器问卷或审批的时间不计入无进展期限。
+
+| 配置 | 默认值 | 含义 |
+| --- | --- | --- |
+| `PI_SCIENCE_AGENT_MAX_WORKERS` | 16 | 应用管理器共享的进程级容量，包括启动中与隐藏任务 |
+| `PI_SCIENCE_IDLE_RUNTIME_MS` | 1,800,000 ms | 空闲 Worker 清理期限；非正值关闭空闲清理 |
+| `PI_SCIENCE_EVENT_WATCHDOG_MS` | 60,000 ms | 探测间隔；非正值关闭 watchdog |
+| `PI_SCIENCE_OPERATION_NO_PROGRESS_MS` | 900,000 ms | 繁忙操作无进展期限；合法但长期静默的工具应增大该值 |
+
+连续自动恢复三次后，再次卡住会停止自动恢复，并保留检查点供显式重新打开。`runtime.paused` 表示运行监督停止，**不代表**持久操作结束。`operation.settled` 来自 Core 生命周期事实或权威的持久操作结果。繁忙会话不能删除；控制面关闭时等待已归属工作清理，并释放 Worker 和工具。
+
+## 产品事件与浏览器状态
 
 ```mermaid
 flowchart LR
-    UI[React Web 应用] -->|HTTP 和 SSE| CP[Node / TypeScript 控制面]
-    CP -->|带认证的本机 HTTP 和 SSE| PH[单个 Pi Orbit Web Host]
-    PH --> R1[对话 runtime A]
-    PH --> R2[对话 runtime B]
-    PH --> RN[后台 agent runtime]
-    PH -->|按需启动| MCP[已启用的 MCP 连接器]
-    CP -->|按需 spawn| K[原生 Python 和 R 内核]
-    CP --> DB[(全局 state.sqlite)]
-    CP --> WS[(工作区文件和 .pi-science 元数据)]
-    CP -->|有界的模型与探测 HTTP| EXT[已配置的模型与科学数据服务]
-    MCP -->|有界的科学 API HTTP| EXT
-    PH --> WS
-    K --> WS
+    H["Harness 事件"] --> A["AgentCoreEventAdapter"]
+    A --> I["ProductInput · 唯一实时输入"]
+    I --> C["ConversationEventHub"]
+    C --> E["持久产品事件"]
+    C --> S["SSE v3"]
+    E -->|仅在读取时解码历史格式| S
+    S --> R["前端 reducer"]
 ```
 
-React 应用是 Node 控制面的客户端。控制面拥有应用 API、协调其他 runtime，
-也是浏览器直接调用的唯一后端服务。
+浏览器消费有版本的产品协议，不依赖 Agent Core 包。服务端将执行事实投影为产品事件，不直接发送 SDK 对象，也不在实时链路中绕经旧协议。
 
-| 组件 | 职责 |
-|---|---|
-| React Web 应用 | 对话、项目知识、文件、Notebook、实验运行、技能、设置和科学文件查看器 |
-| Node 控制面 | Session、事件流、文件、任务、谱系、项目状态、设置、托管 MCP 连接器、SQLite 协调、runtime 生命周期和路由鉴权 |
-| Pi Orbit Web Host | Agent session，以及面向对话和有界后台 agent 的隔离 runtime |
-| MCP 连接器进程 | 延迟启动的本地工具服务，以及通往公共科学服务的受保护 transport |
-| Node 原生科学运行时 | 绑定 Workspace 的 Python/R 内核，以及可选 JupyterLab 工具环境 |
-| 全局 SQLite 状态 | Workspace 位置、环境 revision、MCP 定义与策略、持久任务、租约和旧状态导入标记 |
-| 工作区 | 用户文件，以及项目级指令、技能、环境、session、产物和谱系 |
+| 事件族 | 语义 |
+| --- | --- |
+| `operation.started`、`operation.settled` | 持久操作生命周期；结束状态为 `completed`、`declined`、`aborted` 或 `failed` |
+| `message.started`、`message.delta`、`message.reasoning.delta`、`message.completed` | 消息生命周期和内容进展 |
+| `tool.started`、`tool.updated`、`tool.completed` | 工具调用生命周期 |
+| `compaction.started`、`compaction.progress`、`compaction.completed`、`compaction.failed` | 上下文压缩生命周期 |
+| `interaction.requested`、`interaction.resolved` | 带明确交互类型的浏览器交互 |
+| `runtime.paused` | 监督停止，持久工作仍可能恢复 |
 
-## Pi Orbit 运行时模型
+完整事件名称由 [`packages/contracts/src/conversation-events.ts`](../packages/contracts/src/conversation-events.ts) 共享。事件信封携带 `schemaVersion: 3`、工作区/会话身份、流 epoch、事件 ID、序号、时间，以及适用时的操作和条目身份。文本 revision 与有序分块防止重复和过期更新。重连使用 SSE 游标；epoch 和缺口检查保护事件重放与历史恢复。前端保留执行中、等待、恢复中和终态的区别。
 
-Pi-Science 为每个 Node 控制面进程启动**一个 Pi Orbit Web Host**，而不是为每个
-对话启动一个操作系统进程。第一个 agent runtime 会触发 Host 启动，之后的对话和
-后台 agent 复用该 Host。
+旧的持久展示事件仅在 event store 读取路径解码，不修改原文件字节、时间戳、游标和序号。这与 **Core 会话 v3 → v4 转换** 是两个独立边界：会话格式版本与 SSE 协议版本不能混为一谈。
 
-隔离发生在 Host 内部：
+## 持久化与数据归属
 
-- 每个活跃对话都有独立的 Pi Orbit runtime identity。
-- 每个 runtime 绑定到一个规范化工作区和一个 Pi session 文件。
-- 恢复、切换、分叉和克隆对话时，会更新或创建对应的 runtime/session 绑定，
-  不会再启动一个 Host 进程。
-- 项目审查与 research loop subagent 使用由同一控制面 Host 管理的有界 runtime。
-- 停止一个对话只会释放对应 runtime；关闭 Node 控制面时会先释放全部 runtime，
-  再停止共享 Host。
+科研文件仍是普通工作区文件。产品元数据通过 `metadataRoot(workspace)` 解析：已存在的应用托管 `<config-root>/workspaces/<规范路径哈希>/` 优先；否则使用工作区的 `.pi-science/`。代码应调用解析器，不应假定全部项目状态都与科研文件放在一起。
 
-`PiManager` 负责该生命周期。针对同一 runtime 的并发启动请求会去重；共享 Host 的
-并发启动请求也会等待同一个启动操作。
-
-### Host 启动与兼容性检查
-
-安装器默认下载当前平台对应的 Pi Orbit release，并使用发布的 `SHA256SUMS` 校验。
-运行时，`PI_CLI_PATH` 指向该原生可执行文件，或兼容的 JavaScript/TypeScript CLI。
-设置 `PI_ORBIT_REPO` 可以在安装阶段改用本地 Pi Orbit 源码 checkout，而不是 release
-产物。
-
-控制面在随机本机端口上以 Web mode 启动 Pi Orbit，并启用：
-
-- 由应用管理的生命周期；
-- 不隐式创建初始 session；
-- 随机生成的 bearer token；
-- 创建任何 runtime 前的 capability handshake。
-
-Handshake 要求协议版本 1、`single-user-shared-process` 隔离模型、runtime API、
-事件重放 API、浏览器 session 认证、workspace binding、项目 trust，以及旧 session
-兼容 API。缺少任何必需能力时，启动会以安全失败方式终止。
-
-`PI_SCIENCE_PI_MODE=rpc` 保留旧的逐进程 RPC adapter，作为临时回退路径；Web mode
-是受支持的默认架构。
-
-## 命令与事件流
-
-```mermaid
-sequenceDiagram
-    participant Browser as 浏览器
-    participant Control as Node 控制面
-    participant Host as Pi Orbit Web Host
-    participant Runtime as 隔离 runtime
-
-    Browser->>Control: 创建或恢复对话
-    Control->>Host: 为工作区/session 创建 runtime
-    Host-->>Control: runtimeId 和 piSessionId
-    Control->>Host: 打开可重放的 runtime 事件流
-    Browser->>Control: Prompt 或命令
-    Control->>Host: 发送带认证的 runtime 请求
-    Host->>Runtime: 执行 agent turn
-    Runtime-->>Host: 当前 runtime 的事件
-    Host-->>Control: 带序号的 SSE 事件
-    Control-->>Browser: 对话 SSE
-```
-
-浏览器不会获得 Pi Orbit bearer token，也不会直接调用 Host。`PiProcess` 是 Web API
-上的 adapter：它把现有 session command interface 转换为 runtime 与旧 session API，
-并在重连后从最后一个事件序号继续重放当前 runtime 的事件。
-
-## Node 原生科学运行时边界
-
-Node 控制面拥有公开的应用 API。Session、workspace、文件、设置、任务、项目知识、
-产物、谱系、引用、环境和 research loop 等大部分路由都在 Node 中实现。
-
-Kernel 和 Notebook 等科学计算路由由 Node 控制面直接实现。Kernel Session 是从所选
-Micromamba revision 启动的子进程，通过 JSONL 通信并由 Node 统一控制生命周期。
-JupyterLab 仍是可选能力，使用独立的应用级工具环境；项目 kernelspec 指向当前项目 revision。
-
-默认本地拓扑如下：
-
-| 服务 | 地址 | 暴露方式 |
-|---|---|---|
-| React 开发应用 | `http://127.0.0.1:5173` | 面向浏览器 |
-| Node 控制面 | `http://127.0.0.1:8787` | 面向浏览器的应用 API |
-| Pi Orbit Web Host | 随机本机端口 | 内部服务，使用 bearer token 认证 |
-
-控制面通过 `/internal/live`、`/internal/ready` 和 `/internal/diagnostics`
-提供启动器健康检查与本地诊断信息。
-
-## 工作区与持久化状态
-
-Pi-Science 采用 local-first 设计：workspace 始终是普通目录，可移植的项目级状态保存在
-其内部；跨项目的协调状态则单独保存在控制面配置目录中。
+元数据根目录按需包含：
 
 ```text
-project/
-├── AGENTS.md                 # 项目指令
-├── node_modules/             # 工作区级 JavaScript 包
-├── .pi/
-│   ├── skills/
-│   └── agents/
-├── .pi-science/
-│   ├── project.json           # 稳定项目身份与显示元数据
-│   ├── environment.json       # 指向共享 Micromamba revision 的绑定
-│   ├── memory/
-│   │   └── ledger.json       # 项目记忆规范存储（记录、提案、决策）
-│   ├── sessions/             # 持久化的 Pi session JSONL 文件
-│   ├── agent/                # 项目级 runtime 配置回退目录
-│   ├── mcp-runtime.json      # 生成的已启用连接器与有效工具策略
-│   ├── runs/                 # 执行工作区与输出
-│   ├── solutions/            # 不可变 research candidate
-│   ├── session-titles.jsonl
-│   ├── turn-artifacts.jsonl
-│   ├── artifacts.jsonl
-│   ├── provenance.jsonl
-│   └── research-records-v2.jsonl
-└── 科研文件
+<metadata-root>/
+├── project.json                 # 项目身份
+├── environment.json             # 所选环境 revision
+├── agent-sessions/              # 权威 Core v4 JSONL
+├── agent-session-registry.json   # 归属、转换映射、删除 tombstone
+├── agent-task-links/             # 隐藏任务的会话归属
+├── agent-task-results/           # 子任务结果
+├── sessions/                    # 旧 v3 会话：仅作转换输入
+├── events/                      # 有界产品事件重放日志
+├── memory/ledger.json            # 已审核知识、提案与决策
+├── mcp-runtime.json              # 生成的连接器策略，只含凭据引用
+├── runs/                        # 执行目录和输出
+├── solutions/                   # 不可变研究候选方案
+├── session-titles.jsonl
+├── turn-artifacts.jsonl
+├── artifacts.jsonl
+├── provenance.jsonl
+└── research-records-v2.jsonl
 ```
 
-如果设置了 `PI_SCIENCE_HOME`，它就是全局配置目录；否则默认使用
-`~/.pi-science`。首选位置不可写时，会回退到当前 checkout 下的
-`.runtime/pi-science`。生产环境默认启用 SQLite，并由专用 worker thread 管理
-`state.sqlite`。数据库使用 WAL journal，并保存：
+全局配置目录由 `PI_SCIENCE_HOME` 指定，默认 `~/.pi-science`；首选目录不可写时回退到 checkout 内的 `.runtime/pi-science`。SQLite `state.sqlite` 管理工作区注册、环境 revision、持久任务/租约、MCP 资源和导入/schema 迁移状态，使用 WAL 与专用 worker thread。启动迁移在 ready 之前完成，数据库故障使 `/internal/ready` 保持 HTTP 503。文件投影和历史导入不构成另一套规范存储。
 
-- 稳定项目身份和规范化 workspace 位置，包括托管、收藏、最近打开与位置缺失状态；
-- 不可变 Micromamba environment revision 及其生命周期状态；
-- 持久任务记录、输出、owner generation 与恢复租约；
-- schema migration 历史和旧状态导入指纹。
+Core 会话由 `JsonlSessionRepo` 管理。旧 v3 会话先校验和复制，再由官方 SDK 升级，原件保持不变；registry 保存归属与条目 ID 映射，删除 tombstone 防止会话被重新导入。转换可离线执行，不需要 Worker、模型密钥或网络。见[会话转换](agent-core-session-conversion.md)。
 
-服务报告 ready 之前会完成 SQLite schema migration。数据库或迁移失败时，
-`/internal/ready` 持续返回 HTTP 503；`/internal/diagnostics` 会报告状态、schema
-版本、journal mode 和等待中的请求。正常关闭时 worker 会 checkpoint 数据库。
-设置 `PI_SCIENCE_SQLITE_STATE=0` 可在诊断或回退时禁用该状态层；已实现的文件存储
-兼容路径会继续生效。
+Memory Ledger 管理正式项目知识与复查决策。智能体发现只有在用户批准后才能成为正式知识。旧 `project-state.json` 会导入并保留为兼容投影。
 
-审核后的项目记忆按需创建。Agent 发现只有在用户接受后，才会成为正式项目知识。
+## 模型、凭据与 MCP
 
-Memory Ledger 是项目记忆的规范存储：它把现有项目知识、审核提案、证据引用、审批状态
-和决策审计事件统一放在一起。已有的 `.pi-science/project-state.json` 会在第一次读取时
-迁移，并继续作为旧客户端和本地工具的兼容投影保留。
+模型资源区分 `Provider`、`Model`、`Endpoint` 和 `ProviderEndpointBinding`，凭据单独保存。规范模型引用为 `<provider_id>/<model_id>`。`RuntimeModelResolver` 根据启用状态、能力、端点策略、优先级和认证筛选可用路由。
 
-外部 workspace 通过打开 workspace 的 API 显式注册，其规范化路径和收藏状态写入
-SQLite，因此重启后仍可重新发现。启动时会幂等导入旧的
-`registered-workspaces.json`、`pinned.json`、环境 registry 文件和 workspace 任务
-记录；这些文件是兼容输入，不再是生产环境的规范存储。
+Worker 的 [`agentModels()` 适配器](../apps/server/src/runtime/agent/worker/agent-models.ts) 将 pi-ai 官方提供商与托管路由组合，在后端内存中解析凭据，直接构造模型和提供商对象，不生成 `models.json` 运行目录。浏览器 API 只返回凭据元数据，不返回密钥。环境凭据需要显式引用变量名。
 
-### 包隔离
+MCP 定义、启用状态、发现元数据和全局/项目工具策略由控制面管理。`McpRuntimeProjection` 原子写入权限为 0600 的 `mcp-runtime.json`，其中只有有效策略和凭据引用。`AgentMcpTools` 在 Worker 中通过 Core MCP API 加载允许的连接器。
 
-Node 控制面在 SQLite 中维护全局的、带版本的 Micromamba 环境注册表。项目只保存
-`environment.json` 绑定，可以复用已经就绪的 revision，不再重复下载依赖。修改受管
-环境会创建新 revision，不会原地改变其他项目使用的环境。环境选择位于“设置 → 环境”。
+能力检查发生在发现和凭据解析之前。空 `allowedTools` 或仅含非 MCP 工具时跳过整个 MCP；精确 MCP 能力限制启动哪些连接器，再将发现结果与工具能力及托管 include/exclude 策略取交集。`Deny` 优先于项目决策、全局决策和连接器审批默认值。浏览器审批由 Worker 的 interaction bridge 处理。
 
-每个对话 Session 和语言使用独立 Kernel 进程，直接从绑定的 Micromamba revision 启动。
-Ready revision 不可变；安装包会创建并绑定新的 revision，因此一个 Session 不会修改
-其他项目正在使用的 revision。已有 workspace `.venv` 暂时作为迁移回退；格式异常的
-`.venv` 不会被自动覆盖。JavaScript 包仍保留在 workspace 内，全局 npm/pnpm 安装
-重定向到 `.pi-science/`。
+内置 18 个科学连接器定义、85 个工具，初始仅启用 Paper Search。内置定义只读，自定义连接器支持 stdio、Streamable HTTP、SSE 和 socket。探测执行 handshake 与工具发现，按 revision 缓存。连接器凭据保存在独立 `CredentialStore`，不写入策略快照。资源/API 设计见 [MCP 管理说明](mcp-management-implementation.md)。
 
-Session Notebook 从当前对话内部打开，统一展示 Agent 与用户单元的执行历史；磁盘
-`.ipynb` 文件从“文件”打开，只有保存后才持久化。JupyterLab 使用一个应用级工具环境，
-并把项目绑定的 revision 注册为 kernelspec。
+## 科学执行与研究
 
-## 模型资源域和运行时投影
+每个对话和语言使用独立 Python/R 内核进程，从项目绑定的不可变 Micromamba revision 启动。内核按需启动，通过 JSONL 与 Node 通信；安装包创建新 revision。旧工作区 `.venv` 保留为迁移回退，JavaScript 包保存在工作区中。JupyterLab 是可选功能，使用应用级工具环境和项目 kernelspec。
 
-模型配置拆分为五类资源：
+Session Notebook 展示智能体和用户的执行历史。文件型 `.ipynb` 使用 `notebook_read`、`notebook_edit` 和 `notebook_run`。编辑检查文件 SHA-256 或指定 cell revision；源代码变更清除旧输出。执行原子写回受限输出，并记录执行/产物谱系；产物发布失败保留为可见的执行证据。
 
-```mermaid
-flowchart LR
-    P[Provider 提供方] --> M[Model 模型]
-    P --> B[ProviderEndpointBinding 绑定]
-    B --> E[Endpoint 端点]
-    E --> C[Credential 凭据引用]
-    S[模型偏好] --> R[RuntimeModelResolver]
-    P --> R
-    M --> R
-    B --> R
-    E --> R
-    C --> R
-    R --> X[PiRuntimeProjection]
-    X --> J[生成的 models.json / runtime 环境]
-```
+Node 拥有研究循环的状态、revision、预算、确定性评估和停止决策。隐藏 Core Worker 生成候选方案并分析结果；`JobCoordinator` 执行候选与评估命令。不可变快照和追加记录支持恢复。见[研究循环 ADR](adr-research-loop-subagents.md)。
 
-- `Provider` 描述模型由谁提供。系统提供方只读；用户提供方保存到
-  `model-resources.json`。
-- `Model` 保存标准 `<provider_id>/<model_id>` 和能力来源。运行时验证优先级最高，
-  其次是手工设置、发现结果、提供方元数据和保守回退。
-- `Endpoint` 只负责 URL、协议、健康状态、出站策略和 `credential_ref`。它不保存模型
-  能力，也不保存原始密钥。
-- `ProviderEndpointBinding` 把提供方连接到端点，并管理优先级、模型过滤、别名和非敏感
-  header。
-- `CredentialStore` 在单独的 0600 文件中保存托管密钥。普通 API 只返回元数据。环境凭据
-  只有在 Credential 明确写出变量名时才会读取。
-- `RuntimeModelResolver` 会排除禁用、blocked、不健康、被过滤和没有认证的路由，并按
-  优先级稳定排序。
-- `PiRuntimeProjection` 是唯一写入 Pi `models.json` 的适配器。托管密钥只用不可预测的
-  临时 runtime 变量注入，不会写入 runtime descriptor 或浏览器 API。
+## 信任、诊断与实现参考
 
-旧的 `custom_providers`、提供方 API key 字段和 `model-endpoints.json` 只作为迁移输入或
-兼容投影。新写入统一使用模型资源服务。
+Worker 进程提供故障隔离，**不提供 OS sandbox 保证**。工作区路径和运行身份会校验；普通 bash/MCP 子进程使用经过白名单过滤的工具环境，不直接继承 Worker 的凭据环境。已注册项目的指令和技能仍是受信任输入。浏览器命令在控制面鉴权，Worker 只接受内部 IPC；元数据更新使用原子写入和锁，SQLite 变更经串行 repository 操作执行。
 
-## MCP 连接器域和运行时投影
+已配置的模型请求和外部连接器工具可能向本机之外传输数据。模型/连接器网络路径校验目标并限制请求；MCP 远程 fetch 还保护重定向和 DNS rebinding。为支持本地服务，模型端点默认允许私网地址，设置 `PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=0` 可限制。连接器目标记录到 `egress-audit.jsonl`，除非在 `config.json` 中关闭。
 
-MCP 配置由 Node 控制面托管，不需要手工编辑 Pi runtime 文件。连接器定义、全局启用与
-筛选、全局工具决策、项目级工具覆盖和工具发现缓存都是 SQLite 中的规范资源。
+| 端点 / 文档 | 用途 |
+| --- | --- |
+| `/api/health` | 应用健康状态，包括 `active_agent_workers` |
+| `/internal/live`、`/internal/ready` | 启动器存活和就绪检查 |
+| `/internal/diagnostics` | 存储、迁移和本地运行诊断 |
+| [运行时实现](agent-core-runtime-implementation.md) | 执行入口和监督机制 |
+| [通信实现](agent-core-communication-implementation.md) | IPC、事件投影和恢复边界 |
+| [能力清单](agent-core-capability-inventory.md) | 支持的工具、明确限制与验收范围 |
+| [会话转换](agent-core-session-conversion.md) | 离线命令、自动转换和 tombstone |
 
-```mermaid
-flowchart LR
-    UI[设置页面 / MCP API] --> S[McpConnectorService]
-    S --> DB[(MCP SQLite repositories)]
-    S --> P[探测和 tools/list]
-    DB --> RP[McpRuntimeProjection]
-    RP --> F[workspace/.pi-science/mcp-runtime.json]
-    F --> A[Pi MCP adapter]
-    A --> L[本地 stdio 或 socket server]
-    A --> H[远程 HTTP 或 SSE server]
-    L --> D[科学数据 API]
-    H --> D
-```
-
-- 启动时幂等写入 18 个内置定义及其已知工具元数据。定义升级会保留用户的启用和审批
-  设置。Paper Search 默认开启，其他 17 个领域连接器需要显式启用；内置定义不能编辑
-  或删除。
-- 内置连接器共暴露 85 个只读工具。Paper Search 使用独立 MCP 进程；其他领域共用一个
-  实现入口，但以不同领域参数分别启动，因此每个连接器只公布自己的工具。进程采用
-  lazy 生命周期管理。
-- 自定义和从旧配置导入的连接器使用同一资源模型，支持 `stdio`、Streamable HTTP、SSE
-  和 socket transport。导入预览会拒绝包含敏感字段的旧配置。连接器认证可使用本地托管
-  密钥或环境变量引用，并将其传递为进程环境变量、HTTP Header 或 Bearer Token；仍拒绝
-  保存字面量密钥绑定。
-- MCP 凭据保存在独立、权限为 0600 的 `CredentialStore` 中，并记录
-  `owner_kind=mcp` 和所属连接器。通用模型凭据 API 不列出也不能修改这些凭据。运行时
-  快照只包含凭据引用，由 Pi 扩展在进程内解析；内置定义升级会保留已有绑定。
-- 启用状态、include/exclude 筛选和审批模式全局生效。工具的精确名称 `允许`、`询问`、
-  `拒绝` 决策既可以全局设置，也可以按项目覆盖；优先级依次是 `拒绝`、项目决策、全局
-  决策、连接器审批模式。除非连接器显式允许全部工具，未知工具仍需要审批。
-- 影响 runtime 的定义或策略变更会为所有已知 workspace 生成权限为 0600、原子替换的
-  `.pi-science/mcp-runtime.json`，并重载活跃 runtime。快照只保存启用的定义和策略，不
-  保存解析后的密钥。多个项目共享一个 Pi Orbit Host，因此 Pi 扩展会从每个 Session
-  自己的 workspace 加载快照。
-- 探测流程执行 MCP handshake 和 `tools/list`，合并并发探测，并按连接器 revision 与
-  fingerprint 缓存结果。内置工具元数据使用启动时写入的长期缓存，在线探测可以刷新它。
-- 远程 transport 和内置上游客户端都经过受保护的 MCP fetch 路径：连接前校验 URL，
-  公网端点启用 DNS rebinding 防护，拒绝跨 origin 请求和 HTTP 重定向，对请求设置边界，
-  并将结果写入出站审计。
-
-详细 API、schema、迁移和 UI 约定见
-[MCP 管理实现](mcp-management-implementation.md)。
-
-## 信任与安全边界
-
-- Pi Orbit Host 只监听本机地址，控制面的每个请求都需要随机生成的 bearer token。
-- Token 只保留在后端；不会向浏览器 origin 开放 Host 的直接 CORS 访问。
-- 创建 runtime 前会规范化并校验 workspace 路径。
-- 每个已注册 workspace 在 `.pi-science/project.json` 中拥有稳定的项目身份；
-  session 列表通过该清单解析 `project_id`。
-- 注册后的 workspace 位于应用信任边界内。控制面会在创建 runtime 前记录 Pi Orbit
-  项目 trust，因此只应注册你信任其中项目指令与技能的 workspace。
-- Runtime identity 同时包含 workspace 和 session identity，防止通过另一个 workspace
-  的 runtime 恢复 session。
-- 多个 writer 可能更新同一记录时，项目本地元数据使用经过校验的路径、原子写入和
-  advisory lock；全局状态变更通过 SQLite worker 中的 repository 操作串行化。
-- 模型提供商以及用户显式触发的文献/连接器操作可能向本机外发送请求。端点 URL 不允许
-  嵌入凭据；健康检查限制重定向次数、响应大小和超时时间，跨 origin 跳转不会携带敏感
-  header。为支持本地模型服务，默认允许私网端点；设置
-  `PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=0` 可以拒绝私网地址。
-- 默认将出站连接器的目标记录到本地 `egress-audit.jsonl`。在 `config.json` 中设置
-  `egress_audit: false` 可以关闭审计。记录只包含连接器身份、目标域名、时间戳和审批
-  状态，不保存请求正文或凭据。
-
-## 生命周期与恢复
-
-- 对话 runtime 默认在空闲 30 分钟后回收。设置 `PI_SCIENCE_IDLE_RUNTIME_MS=0`
-  可以关闭控制面清理；Pi Orbit Host 自身会按 `PI_ORBIT_IDLE_TIMEOUT_MS` 回收空闲
-  runtime，默认期限为 24 小时。
-- 删除繁忙 runtime 时，最多等待 `PI_SCIENCE_DISPOSE_TIMEOUT_MS`（默认 60 秒）让其
-  稳定；控制面关闭时会跳过等待并直接停止 Host。
-- 只要 Node 控制面仍在运行，共享 Pi Orbit Host 就保持存活，即使当前没有对话 runtime。
-- Kernel 子进程在 Session 首次执行 cell 时按需启动，并在 Session 关闭、workspace
-  关闭、崩溃恢复或超时清理时停止。
-- Runtime 命令使用有界请求超时。超时操作会与 runtime 状态进行 reconciliation，
-  避免已接受的 prompt 被静默当成失败 turn。
-- 事件流重连时会携带最后一个已观察到的序号，因此短暂传输中断不需要新建 agent runtime。
-- 持久任务在 SQLite 中使用 owner generation 和带期限的 lease。启动恢复会协调被中断的
-  工作，同时防止旧进程覆盖新 owner 已写入的终态结果。
-
-## 研究循环
-
-Research loop 由 Node 控制面协调。它使用有界 Pi Orbit subagent runtime 生成与分析
-candidate，使用任务系统执行和确定性评估，使用不可变 candidate snapshot，并通过
-append-only 记录支持恢复与谱系追踪。
-
-Research loop 状态机和持久化约定详见
-[research loop ADR](adr-research-loop-subagents.md)。
+CI 结果证明对应提交执行过的检查，不意味着所有外部提供商、复杂用户会话和各平台全部界面路径都已人工验收。

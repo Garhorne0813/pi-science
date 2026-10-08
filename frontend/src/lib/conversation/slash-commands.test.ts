@@ -32,7 +32,7 @@ describe("slash commands", () => {
     const commands = await queryClient.fetchQuery(slashCommandsQuery("/workspace", "session-a"));
     expect(allCommands(commands).map((command) => command.name)).toContain("skill:review");
     expect(allCommands(commands).map((command) => command.name)).not.toContain("deploy");
-    expect(allCommands(commands).map((command) => command.name)).not.toContain("summarize");
+    expect(allCommands(commands)).toContainEqual(expect.objectContaining({ name: "summarize", group: "utility", source: "prompt" }));
     expect(allCommands(commands).filter((command) => command.name === "compact")).toHaveLength(1);
   });
 
@@ -55,6 +55,20 @@ describe("slash commands", () => {
     expect(queryClient.getQueryData(b.queryKey)).toMatchObject([{ name: "skill:b" }]);
     expect(queryClient.getQueryData(next.queryKey)).toMatchObject([{ name: "skill:next" }]);
     expect(slashCommandsQuery("/b", null).enabled).toBe(false);
+  });
+
+  it("keeps an old session prompt catalogue out of the current session", async () => {
+    const resolve = new Map<string, (response: Response) => void>();
+    vi.stubGlobal("fetch", vi.fn((url: string) => new Promise<Response>((done) => { resolve.set(url, done); })));
+    const previous = slashCommandsQuery("/workspace", "s1");
+    const current = slashCommandsQuery("/workspace", "s2");
+    const first = queryClient.fetchQuery(previous);
+    const second = queryClient.fetchQuery(current);
+    const finish = (index: number, command: Record<string, string>) => [...resolve.values()][index](new Response(JSON.stringify({ commands: [command] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    finish(1, { name: "skill:current", source: "skill" }); await second;
+    finish(0, { name: "summarize", source: "prompt" }); await first;
+    expect(queryClient.getQueryData(current.queryKey)).toMatchObject([{ name: "skill:current" }]);
+    expect(queryClient.getQueryData(current.queryKey)).not.toContainEqual(expect.objectContaining({ name: "summarize" }));
   });
 
   it("ranks a name prefix above a name substring above a description match", () => {

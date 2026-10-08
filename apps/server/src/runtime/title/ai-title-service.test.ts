@@ -1,8 +1,9 @@
+import { CredentialStore } from "../../model-resources/credential-store.js";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AiTitleService, aiTitlesEnabled, cleanTitle, PiTitleRuntimeFactory, type TitleRuntime } from "./ai-title-service.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AiTitleService, aiTitlesEnabled, cleanTitle, CoreTitleRuntimeFactory, type TitleRuntime } from "./ai-title-service.js";
 
 const cleanups: string[] = [];
 
@@ -75,14 +76,15 @@ describe("AiTitleService", () => {
   beforeEach(async () => {
     cwd = join(tmpdir(), `pi-science-title-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     await mkdir(cwd, { recursive: true });
+    vi.stubEnv("PI_SCIENCE_HOME", join(cwd, "home"));
     sessionId = `sess-${Math.random().toString(16).slice(2)}`;
     disposed = { count: 0 };
     cleanups.push(cwd);
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     process.env.PI_SCIENCE_AI_TITLES = undefined;
-    process.env.PI_SCIENCE_PI_MODE = undefined;
   });
 
   it("returns null when the AI-title env flag disables the feature", () => {
@@ -91,36 +93,66 @@ describe("AiTitleService", () => {
     expect(aiTitlesEnabled()).toBe(false);
   });
 
-  it("disables the feature in RPC mode (no isolated runtime available)", () => {
-    process.env.PI_SCIENCE_PI_MODE = "rpc";
-    expect(aiTitlesEnabled()).toBe(false);
-    process.env.PI_SCIENCE_PI_MODE = undefined;
-    expect(aiTitlesEnabled()).toBe(true);
-  });
 
   it("disposes the title runtime through manager.stop so the process map does not leak", async () => {
     const stopped: string[] = [];
     let runtimeSessionDir = "";
+    let childId = "";
+    const declaredCredentials: string[] = [];
     const manager = {
-      async start(key: string, options: { web?: { runtime?: { sessionDir?: string } } }) {
-        runtimeSessionDir = options.web?.runtime?.sessionDir ?? "";
-        await writeFile(join(runtimeSessionDir, "background-title.jsonl"), "ghost", "utf8");
+      async start(key: string, options: { sessionsRoot: string; credentialEnvNames: string[]; sessionId: string }) {
+        runtimeSessionDir = options.sessionsRoot;
+        childId = options.sessionId;
+        declaredCredentials.push(...options.credentialEnvNames);
         return { sendCommand: async () => ({ success: true, data: null }), shutdown: async () => {} };
       },
       async stop(key: string) {
         stopped.push(key);
       },
     };
-    process.env.PI_CLI_PATH = "/nonexistent-pi-cli";
-    const factory = new PiTitleRuntimeFactory(manager as never, { environment: async () => ({}) } as never);
+    const { configPath, writeJsonAtomic } = await import("../../storage/persistence.js");
+    await writeJsonAtomic(configPath("config.json"), { model: "openai/gpt-4.1-mini" });
+    await new CredentialStore().put({ kind: "api_key", backend: "environment", environment_variable: "LAB_TITLE_TOKEN" });
+    const factory = new CoreTitleRuntimeFactory(manager as never, { environment: async () => ({}) } as never);
     const runtime = await factory.start(cwd);
-    expect(runtimeSessionDir).toContain(join(cwd, ".pi-science", "title-runtimes"));
+    expect(declaredCredentials).toEqual(["LAB_TITLE_TOKEN"]);
+    expect(runtimeSessionDir).toBe(join(cwd, ".pi-science", "agent-sessions"));
     expect(runtimeSessionDir).not.toBe(join(cwd, ".pi-science", "sessions"));
-    await expect(access(runtimeSessionDir)).resolves.toBeUndefined();
+    const { AgentSessionRepository } = await import("../agent/agent-session-repository.js");
+    const { SessionRepository } = await import("../node/session-repository.js");
+    const target = await new AgentSessionRepository().findPath(cwd, childId);
+    expect(target).toBeTruthy();
+    expect(await new SessionRepository().list(cwd)).toEqual([]);
+    await expect(access(target!)).resolves.toBeUndefined();
     await runtime.dispose();
     expect(stopped).toHaveLength(1);
-    await expect(access(runtimeSessionDir)).rejects.toThrow();
+    await expect(access(target!)).rejects.toThrow();
+    expect(await new SessionRepository().list(cwd)).toEqual([]);
   });
+
+  it("starts a real hidden Core worker and removes its transcript on shutdown", async () => {
+    const { configPath, writeJsonAtomic } = await import("../../storage/persistence.js");
+    const { SessionRepository } = await import("../node/session-repository.js");
+    const { readdir } = await import("node:fs/promises");
+    await writeJsonAtomic(configPath("config.json"), { model: "openai/gpt-4.1-mini" });
+    const factory = new CoreTitleRuntimeFactory(undefined, { environment: async () => ({}) } as never);
+    try {
+      const runtime = await factory.start(cwd);
+      const state = await runtime.sendCommand("get_state");
+      expect(state).toMatchObject({ success: true, data: { activeTools: [], busy: false } });
+      expect(await runtime.sendCommand("get_skills")).toMatchObject({ success: true, data: { skills: [] } });
+      const { AgentSessionRepository } = await import("../agent/agent-session-repository.js");
+      const target = await new AgentSessionRepository().findPath(cwd, String((state.data as { sessionId: string }).sessionId));
+      expect(target).toBeTruthy();
+      expect(await new SessionRepository().list(cwd)).toEqual([]);
+      await factory.shutdownAll();
+      await runtime.dispose();
+      await expect(access(target!)).rejects.toThrow();
+      expect(await new SessionRepository().list(cwd)).toEqual([]);
+      expect(await readdir(join(cwd, ".pi-science", "agent-task-links"))).toEqual([]);
+      await expect(factory.start(cwd)).rejects.toThrow("closing");
+    } finally { await factory.shutdownAll(); }
+  }, 30_000);
 
   it("generates a title from the latest messages and disposes the runtime", async () => {
     await makeSession(cwd, sessionId, [

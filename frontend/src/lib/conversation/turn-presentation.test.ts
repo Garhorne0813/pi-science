@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentMessageBlock, ThreadBlock, ToolCallBlock } from "../../types/thread";
 import { finalAgentInCompletedTurn, intermediateAgentsInTurn, provisionalAgentInActiveTurn } from "./turn-analysis";
 import { buildTurnPresentations } from "./turn-presentation";
+import { threadFromMessages } from "../agent-runtime/event-fold";
 
 const user = (id: string): ThreadBlock => ({ kind: "user", id, text: id });
 const agent = (id: string, partial = false): AgentMessageBlock => ({ kind: "agent", id, parts: [{ id: `${id}-part`, text: id }], ...(partial ? { partial: true } : {}) });
@@ -242,4 +243,27 @@ describe("buildTurnPresentations", () => {
     expect(running?.active).toBe(true);
     expect(running?.lifecycle).toBe("active");
   });
+});
+
+it("keeps a stopped history turn stopped after idle restore and after the next completed turn", () => {
+  const blocks = threadFromMessages([
+    { id: "u1", role: "user", content: [{ type: "text", text: "stop" }], turnId: "r1", turnStatus: "aborted", turnStartedAt: "2026-10-03T00:00:00.000Z", turnEndedAt: "2026-10-03T00:00:29.000Z" },
+    { id: "t1", role: "toolResult", content: [{ type: "text", text: "Command aborted" }], toolName: "bash", toolCallId: "c1", isError: true, turnId: "r1", turnStatus: "aborted", turnStartedAt: "2026-10-03T00:00:00.000Z", turnEndedAt: "2026-10-03T00:00:29.000Z" },
+  ]).blocks;
+  expect(buildTurnPresentations(blocks, { lastTurnLifecycle: "settled" })[0]).toMatchObject({ lifecycle: "aborted", startedAt: "2026-10-03T00:00:00.000Z", endedAt: "2026-10-03T00:00:29.000Z", finalAgent: null });
+  const next = [...blocks, ...threadFromMessages([{ id: "u2", role: "user", content: [{ type: "text", text: "next" }], turnId: "r2", turnStatus: "completed" }]).blocks];
+  expect(buildTurnPresentations(next).map((turn) => turn.lifecycle)).toEqual(["aborted", "settled"]);
+});
+
+
+it("routes a replayed older run back to its owner instead of completing the newest stopped turn", () => {
+  const turns = buildTurnPresentations([
+    { kind: "user", id: "old", text: "notebook", runId: "old-run", turnId: "old-durable", turnStatus: "completed" },
+    { kind: "user", id: "new", text: "stop", runId: "new-run", turnId: "new-durable", turnStatus: "aborted" },
+    { kind: "tool", id: "stopped-tool", callId: "c", tool: "bash", status: "error", runId: "new-run" },
+    { kind: "agent", id: "replayed-answer", parts: [{ id: "part", text: "Notebook verified" }], runId: "old-run", turnId: "old-live" },
+  ], { lastTurnLifecycle: "settled" });
+  expect(turns).toHaveLength(2);
+  expect(turns[0].finalAgent?.id).toBe("replayed-answer");
+  expect(turns[1]).toMatchObject({ lifecycle: "aborted", finalAgent: null });
 });

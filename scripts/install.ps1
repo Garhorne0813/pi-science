@@ -3,8 +3,7 @@
     Installs Pi-Science dependencies and the Windows launcher.
 
 .DESCRIPTION
-    Installs the JavaScript workspace, reuses an existing Pi runtime when
-    possible, writes install.env, and installs a collision-safe pi-science.cmd
+    Installs the JavaScript workspace (including Agent Core), writes install.env, and installs a collision-safe pi-science.cmd
     in the user's .local\bin directory.
 #>
 
@@ -12,7 +11,6 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectDir = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir ".."))
-$RuntimeDir = Join-Path $ProjectDir "runtime\pi"
 $InstallStateDir = Join-Path $ProjectDir ".runtime\pi-science"
 $InstallStateFile = Join-Path $InstallStateDir "install.env"
 
@@ -118,47 +116,6 @@ function Normalize-PathForCompare {
     }
 }
 
-function Read-RuntimeCli {
-    param([hashtable]$InstallValues)
-
-    $explicit = [Environment]::GetEnvironmentVariable("PI_CLI_PATH", "Process")
-    if (-not [string]::IsNullOrWhiteSpace($explicit)) {
-        if (-not (Test-Path -LiteralPath $explicit -PathType Leaf)) {
-            throw "PI_CLI_PATH does not point to a file: $explicit"
-        }
-        return (Resolve-Path -LiteralPath $explicit).Path
-    }
-
-    if ($InstallValues.ContainsKey("PI_SCIENCE_INSTALL_PI_CLI")) {
-        $fromState = [string]$InstallValues["PI_SCIENCE_INSTALL_PI_CLI"]
-        if (Test-Path -LiteralPath $fromState -PathType Leaf) {
-            return (Resolve-Path -LiteralPath $fromState).Path
-        }
-    }
-
-    $cliMarker = Join-Path $RuntimeDir ".cli-path"
-    if (Test-Path -LiteralPath $cliMarker -PathType Leaf) {
-        $marked = (Get-Content -LiteralPath $cliMarker -Raw).Trim()
-        if (Test-Path -LiteralPath $marked -PathType Leaf) {
-            return (Resolve-Path -LiteralPath $marked).Path
-        }
-    }
-
-    $devMarker = Join-Path $RuntimeDir ".dev-repo-path"
-    if (Test-Path -LiteralPath $devMarker -PathType Leaf) {
-        $repo = (Get-Content -LiteralPath $devMarker -Raw).Trim()
-        $devCli = Join-Path $repo "packages\coding-agent\src\cli.ts"
-        if (Test-Path -LiteralPath $devCli -PathType Leaf) {
-            return (Resolve-Path -LiteralPath $devCli).Path
-        }
-    }
-
-    $releasedCli = Join-Path $RuntimeDir "node_modules\@earendil-works\pi-coding-agent\dist\cli.js"
-    if (Test-Path -LiteralPath $releasedCli -PathType Leaf) {
-        return (Resolve-Path -LiteralPath $releasedCli).Path
-    }
-    return $null
-}
 
 Write-Host "==> Checking installation prerequisites..."
 $NodePath = Get-ProcessCommand "node"
@@ -177,35 +134,14 @@ if (-not $PnpmPath) {
 Write-Host ("  Node.js: " + (& $NodePath --version))
 Write-Host ("  pnpm:   " + (& $PnpmPath --version))
 
-$installValues = Read-InstallEnv -Path $InstallStateFile
-$PiCliPath = Read-RuntimeCli -InstallValues $installValues
-if (-not $PiCliPath) {
-    Write-Host "==> Installing Pi agent runtime..."
-    $fetchScript = Join-Path $ScriptDir "fetch-pi.ps1"
-    if (-not (Test-Path -LiteralPath $fetchScript -PathType Leaf)) {
-        throw "Windows Pi runtime installer is missing: $fetchScript"
-    }
-    & $fetchScript
-    if ($LASTEXITCODE -ne 0) {
-        throw "Pi runtime installer exited with code $LASTEXITCODE."
-    }
-    $PiCliPath = Read-RuntimeCli -InstallValues @{}
-    if (-not $PiCliPath) {
-        throw "Pi installer did not produce a usable CLI under $RuntimeDir."
-    }
-} else {
-    Write-Host "==> Reusing the existing Pi agent runtime"
-}
-
 Write-Host "==> Installing JavaScript workspace dependencies..."
 $PnpmStoreDir = if ($env:PNPM_STORE_DIR) { $env:PNPM_STORE_DIR } else { Join-Path $ProjectDir ".cache\pnpm-store" }
 New-Item -ItemType Directory -Path $PnpmStoreDir -Force | Out-Null
 Invoke-Checked -FilePath $PnpmPath -Arguments @("--config.store-dir=$PnpmStoreDir", "install", "--frozen-lockfile") -WorkingDirectory $ProjectDir
 
 New-Item -ItemType Directory -Path $InstallStateDir -Force | Out-Null
-$cliForState = To-PortablePath $PiCliPath
 $stateLines = @(
-    "PI_SCIENCE_INSTALL_PI_CLI=$cliForState"
+    "PI_SCIENCE_INSTALL_RUNTIME=agent-core"
 )
 [System.IO.File]::WriteAllLines($InstallStateFile, $stateLines, [System.Text.UTF8Encoding]::new($false))
 
@@ -249,6 +185,6 @@ if (-not $pathAlreadyContainsBin) {
 }
 
 Write-Host "==> Installation complete."
-Write-Host "  Pi CLI:   $PiCliPath"
+Write-Host "  Runtime:  Agent Core"
 Write-Host "  Launcher: $launcherPath"
 Write-Host "  Start it with: pi-science"

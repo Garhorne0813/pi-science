@@ -6,8 +6,8 @@ import { dirname } from "node:path";
 const TITLE_RENAME_RETRIES = 5;
 const TITLE_RENAME_RETRY_MS = 20;
 
-/** Persisted session display titles. Kept in
- *  `<workspace>/.pi-science/session-titles.jsonl` so the conversation list
+/** Persisted session display titles. Kept in the workspace's private state
+ *  root so the conversation list
  *  survives browser changes and cache clears (localStorage is only a
  *  transient fallback). A session id maps to at most one title (upsert). */
 

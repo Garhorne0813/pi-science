@@ -1,14 +1,48 @@
+# Pi Science MCP 管理实现
+
+MCP 配置与策略由 Node 控制面管理，React 设置页提供 connector、凭据绑定、项目工具覆盖和健康状态入口。Worker 使用官方 MCP SDK 执行连接和工具调用。当前运行架构见[架构说明](architecture.zh-CN.md)。
+
+## 配置与凭据
+
+connector 定义、启用策略、include/exclude、确认策略和凭据引用由控制面投影为工作区的 `mcp-runtime.json`。快照保存引用；环境变量和 managed credential 在所属 Worker 内按 connector 解析，不把整个 Worker 凭据环境传给 stdio 子进程。
+
+stdio 使用普通工具环境白名单及 connector 自身绑定。受信任的内置网络工具可使用专门的代理/CA 配置。HTTP/SSE 使用受控 fetch、绑定 header 和 endpoint 网络策略。
+
+## 能力范围
+
+`allowedTools` 未指定时，初始化所有配置的 connector。显式空列表或仅包含非 MCP 工具时跳过 discovery。
+
+允许 `mcp__foo__bar` 时，在解析 env/header 凭据前选出匹配 connector；只连接该范围内的服务。初始化和 `listTools` 属于 connector 协议操作，因此会读取该服务的工具目录；只有完整工具名在能力列表中且通过 managed include/exclude 策略的工具才会注册到 Harness。其他 connector 不解析凭据、不启动进程、不连接网络。
+
+Worker 工具能力不会覆盖控制面禁止的工具，也不会跳过现有用户确认策略。能力限制同时作用于工具发现和模型可见工具集。
+
+## 生命周期与错误
+
+`AgentMcpTools` 拥有每个 Worker 的 SDK clients，支持 stdio、Streamable HTTP、SSE 和 Unix socket。发现阶段共享有界期限；初始化、工具目录或凭据错误记录为 connector diagnostics。Worker 关闭会清理已打开 clients。
+
+工具请求使用 connector 的请求期限和 operation 取消信号。需要确认的工具通过 `InteractionBridge` 请求浏览器授权；拒绝不会发起实际工具调用。用户交互等待不计入 operation 无进展期限。
+
+## 验证
+
+回归覆盖 SDK 连接与工具调用、stdio 环境隔离、HTTP 网络策略、确认拒绝、发现预算、能力范围、凭据解析和关闭。只允许一个工具的真实 stdio fixture 同时配置其他 stdio/HTTP connector，验证它们不被启动或解析凭据。
+
+测试不能替代全部真实第三方 connector、OAuth 服务和传输组合的端到端验收。新增 connector 应结合自身认证和网络要求验证。
+
+## 历史设计附录
+
+以下保留早期管理子系统的设计细节，包含当时的 adapter、配置格式和 API 示例，供追溯设计用途；不代表当前运行架构或可直接执行的接口。当前实现以前文和源码为准。
+
 # Pi-Science MCP 管理改造实现文档
 
 > 状态：Draft for implementation
 >
-> 适用基线：当前 `main`，Node 控制面 + React 设置页 + Pi Orbit + `pi-mcp-adapter@2.18.0`
+> 适用基线：编写时的代码基线，Node 控制面 + React 设置页 + 旧会话运行时 + `pi-mcp-adapter@2.18.0`
 >
 > 目标：将现有“读取 MCP JSON 并显示开关”的功能改造成由 Pi-Science 控制面统一管理配置、全局启用策略、项目级工具覆盖、认证引用、运行时投影、健康状态和工具授权的 MCP Connector 子系统。
 
 ## 1. 摘要
 
-本改造不重写 MCP 协议运行时。`pi-mcp-adapter` 继续负责 MCP 连接、懒加载、工具发现、资源暴露、输出保护和实际工具调用；OAuth 在第一阶段仍由 adapter 承担，最终由 Pi-Science 控制面提供设置页授权与 token 生命周期管理。Pi-Science Node 控制面成为 MCP 配置与策略的唯一权威，并向每个 Pi Orbit runtime 投影一份隔离、无明文密钥的有效配置。
+本改造不重写 MCP 协议运行时。`pi-mcp-adapter` 继续负责 MCP 连接、懒加载、工具发现、资源暴露、输出保护和实际工具调用；OAuth 在第一阶段仍由 adapter 承担，最终由 Pi-Science 控制面提供设置页授权与 token 生命周期管理。Pi-Science Node 控制面成为 MCP 配置与策略的唯一权威，并向每个 旧会话运行时 runtime 投影一份隔离、无明文密钥的有效配置。
 
 改造后的职责边界如下：
 
@@ -663,7 +697,7 @@ const snapshot = parseSnapshot(readFileSync(join(workspace, ".pi-science/mcp-run
 export default createMcpAdapter({ config: { mcpServers: snapshot.mcpServers } });
 ```
 
-实际实现必须避免模块加载时跨 runtime 共享 snapshot：若 Pi Orbit extension 模块会被 Host 缓存，应在 extension factory 初始化时按当前 runtime env 读取，并添加多 runtime characterization test。
+实际实现必须避免模块加载时跨 runtime 共享 snapshot：若 旧会话运行时 extension 模块会被 Host 缓存，应在 extension factory 初始化时按当前 runtime env 读取，并添加多 runtime characterization test。
 
 ### 10.3 Projection 输出
 
@@ -971,7 +1005,7 @@ Remote HTTP/SSE 的握手、SSE 消息和工具请求都经过控制面出站 gu
 - ambient `.mcp.json` 不会进入 programmatic config；
 - include/exclude/approval 映射正确；
 - snapshot 不含 credential value；
-- 多个 Pi Orbit runtime 不共享错误项目的 snapshot；
+- 多个 旧会话运行时 runtime 不共享错误项目的 snapshot；
 - runtime restart 后 adapter tool catalog 与 API effective config 一致。
 
 ### 16.6 Frontend

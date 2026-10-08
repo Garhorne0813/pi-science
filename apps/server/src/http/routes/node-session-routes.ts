@@ -6,14 +6,14 @@ import type { SessionTitleRepository } from "../../runtime/node/session-titles.j
 import { sessionTitleRepository } from "../../runtime/node/session-titles.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { AiTitleService } from "../../runtime/title/ai-title-service.js";
-import { PromptRequestRepository } from "../../runtime/node/prompt-request-repository.js";
+import { PromptRequestRepository, isPromptDeliveryIndeterminate } from "../../runtime/node/prompt-request-repository.js";
 
 function cwd(request: { query: unknown }): string {
   const value = (request.query as { cwd?: unknown }).cwd;
   return typeof value === "string" && value ? value : ".";
 }
 
-function status(code: unknown): number {
+export function sessionRuntimeStatus(code: unknown): number {
   switch (String(code ?? "")) {
     case "workspace_invalid": return 403;
     case "not_found":
@@ -27,12 +27,17 @@ function status(code: unknown): number {
     case "busy":
     case "cancelled": return 409;
     case "runtime_evicted": return 410;
+    case "invalid_model":
+    case "legacy_session_invalid":
+    case "legacy_session_unsupported":
+    case "legacy_import_failed":
     case "runtime_initialization_failed": return 422;
     case "runtime_capacity_exceeded":
     case "agent_turn_capacity_exceeded": return 429;
     case "invalid_request": return 400;
     case "environment_failed": return 500;
     case "spawn_failed":
+    case "configuration_reload_failed":
     case "process_closed":
     case "process_exit": return 503;
     case "timeout": return 504;
@@ -41,7 +46,7 @@ function status(code: unknown): number {
 }
 
 function sendFailure(reply: FastifyReply, result: Record<string, unknown>) {
-  return reply.code(status(result.code)).send({ ok: false, ...result });
+  return reply.code(sessionRuntimeStatus(result.code)).send({ ok: false, ...result });
 }
 
 export function registerNodeSessionRoutes(
@@ -56,7 +61,7 @@ export function registerNodeSessionRoutes(
     const parsed = createSessionRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid session request", code: "invalid_request" });
     const result = await nodeSessionService.create(parsed.data);
-    if ("error" in result) return reply.code(status(result.code)).send({ ok: false, ...result });
+    if ("error" in result) return reply.code(sessionRuntimeStatus(result.code)).send({ ok: false, ...result });
     return result;
   });
 
@@ -103,7 +108,7 @@ export function registerNodeSessionRoutes(
 
       let result: Awaited<ReturnType<NodeSessionService["command"]>>;
       try {
-        result = await nodeSessionService.command(sessionId, workspace, "prompt", { message: promptMessage });
+        result = await nodeSessionService.command(sessionId, workspace, "prompt", { message: promptMessage, client_message_id: requestId });
       } catch (error) {
         const delivery = await promptRequests.update(workspace, sessionId, requestId, "indeterminate", { error_code: "prompt_command_threw" });
         return reply.code(502).send({ ok: false, code: "prompt_command_threw", error: String(error), ...(delivery ?? {}) });
@@ -116,11 +121,9 @@ export function registerNodeSessionRoutes(
       // A transport failure can happen after Pi accepted the command. Preserve
       // that ambiguity; only a definite HTTP/runtime rejection is retryable.
       const errorCode = typeof result.code === "string" ? result.code : "runtime_command_failed";
-      const indeterminateCodes = new Set(["timeout", "process_closed", "process_exit", "write_failed", "spawn_failed", "runtime_command_failed", "internal_error"]);
-      const state = indeterminateCodes.has(errorCode) ? "indeterminate" as const : "rejected" as const;
+      const state = isPromptDeliveryIndeterminate(errorCode) ? "indeterminate" as const : "rejected" as const;
       const delivery = await promptRequests.update(workspace, sessionId, requestId, state, { error_code: errorCode });
-      if (state === "rejected") await promptRequests.clearAssociation(workspace, sessionId, requestId);
-      return reply.code(status(result.code)).send({ ok: false, ...result, ...(delivery ?? {}) });
+      return reply.code(sessionRuntimeStatus(result.code)).send({ ok: false, ...result, ...(delivery ?? {}) });
     });
   });
 

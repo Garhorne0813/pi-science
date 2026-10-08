@@ -13,8 +13,7 @@ __pycache__/
 .venv/
 venv/
 
-# Pi runtime (fetched by scripts/fetch-pi.sh) — anchored: an unanchored
-# "runtime/" silently ignored frontend/src/lib/runtime/ during batch A7
+# Local caches left by earlier installations
 /runtime/
 
 # Session data (per-workspace)

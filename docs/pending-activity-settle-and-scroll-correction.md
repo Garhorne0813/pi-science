@@ -1,3 +1,5 @@
+> 历史排查记录：以下旧事件名和代码片段记录当时的实现。当前实时协议为 v3，使用 `operation.started` / `operation.settled`、`message.*`、`tool.*`；旧 SSE 仅在持久历史读取边界解码。
+
 # 待办问题交接：运行中瞬时 settle（提前显示「Completed」）+ 滚动容器误判的更正
 
 面向：接手分析/修复的 agent

@@ -9,6 +9,7 @@ import { settingsApi, settingsKey } from "../lib/settings";
 interface ModelConfigData {
   available_models?: AvailableModel[];
   model?: string;
+  unavailable_model?: string | null;
   thinking?: string;
 }
 
@@ -23,6 +24,7 @@ export function useModelConfig(cwd: string, sessionId: string | undefined) {
   const [selectedModel, setSelectedModel] = useState("");
   const [thinking, setThinking] = useState("high");
   const [modelError, setModelError] = useState<string | null>(null);
+  const [needsModelSwitch, setNeedsModelSwitch] = useState(false);
   const [configuringModel, setConfiguringModel] = useState(false);
   // The saved settings config is the authoritative model/thinking source: the
   // composer and the settings page both save through PUT /api/settings/model,
@@ -31,7 +33,7 @@ export function useModelConfig(cwd: string, sessionId: string | undefined) {
   // last settings-provided values per workspace so late runtime updates fill
   // gaps but never override a configured value — and never leak one workspace's
   // saved config into another workspace that has none.
-  const settingsRef = useRef<{ cwd: string; model?: string; thinking?: string } | null>(null);
+  const settingsRef = useRef<{ cwd: string; model?: string; thinking?: string; unavailable?: boolean } | null>(null);
   // The runtime store's model/thinking are global (the last session state
   // seen), so a value is only attributable to the current workspace if it
   // changed after the hook started observing that workspace. Remember the
@@ -54,16 +56,20 @@ export function useModelConfig(cwd: string, sessionId: string | undefined) {
       // right after a settings save the runtime still reports the previous
       // model until the reload's replacement session state arrives, so the
       // runtime-first order keeps the composer stuck on the old value.
-      const nextModel = data.model || runtime.model || "";
+      const candidate = data.model || runtime.model || "";
+      const nextModel = !data.unavailable_model && availableModels.some((model) => model.id === candidate) ? candidate : "";
+      const unavailableModel = data.unavailable_model || (!nextModel ? candidate : null);
       const nextModelInfo = availableModels.find((model: AvailableModel) => model.id === nextModel);
       const supported = nextModelInfo?.thinking_levels || [];
       const configuredThinking = data.thinking || runtime.thinking || "high";
-      settingsRef.current = { cwd, model: data.model || undefined, thinking: data.thinking || undefined };
+      settingsRef.current = { cwd, model: data.model === nextModel ? nextModel || undefined : undefined,
+        thinking: data.thinking || undefined, unavailable: Boolean(data.unavailable_model) };
       setSelectedModel(nextModel);
       setThinking(supported.length > 0 ? clampThinkingLevel(configuredThinking, supported) : configuredThinking);
+      setNeedsModelSwitch(Boolean(unavailableModel));
       setModelError(availableModels.length === 0
         ? t("conversation.configureProvider")
-        : null);
+        : unavailableModel ? t("conversation.unavailableModel", { model: unavailableModel }) : null);
     };
     // The settings dialog saves the model while this page stays mounted under
     // the modal, so the composer tracks the shared cache instead of only the
@@ -88,10 +94,12 @@ export function useModelConfig(cwd: string, sessionId: string | undefined) {
     const settings = settingsRef.current;
     const scoped = settings?.cwd === cwd;
     const snapshot = runtimeSnapshotRef.current;
+    const runtimeModelIsAvailable = Boolean(runtimeModel && models.some((model) => model.id === runtimeModel));
+    if (scoped && settings.unavailable) return;
     if (!snapshot) {
       // Fresh mount: the store describes the boot target, so it may fill gaps.
       runtimeSnapshotRef.current = { cwd, model: runtimeModel, thinking: runtimeThinking };
-      if ((!scoped || !settings.model) && runtimeModel) setSelectedModel(runtimeModel);
+      if ((!scoped || !settings.model) && runtimeModelIsAvailable) setSelectedModel(runtimeModel!);
       if ((!scoped || !settings.thinking) && runtimeThinking) setThinking(runtimeThinking);
       return;
     }
@@ -107,9 +115,9 @@ export function useModelConfig(cwd: string, sessionId: string | undefined) {
     }
     // Same workspace: a late runtime update fills gaps but never overrides the
     // saved settings config.
-    if ((!scoped || !settings.model) && runtimeModel !== snapshot.model) setSelectedModel(runtimeModel ?? "");
+    if ((!scoped || !settings.model) && runtimeModel !== snapshot.model) setSelectedModel(runtimeModelIsAvailable ? runtimeModel! : "");
     if ((!scoped || !settings.thinking) && runtimeThinking !== snapshot.thinking) setThinking(runtimeThinking ?? "high");
-  }, [cwd, runtimeModel, runtimeThinking]);
+  }, [cwd, models, runtimeModel, runtimeThinking]);
 
   const selectedModelInfo = models.find((model) => model.id === selectedModel);
   const thinkingLevels = selectedModelInfo?.thinking_levels?.length
@@ -124,18 +132,20 @@ export function useModelConfig(cwd: string, sessionId: string | undefined) {
     setSelectedModel(model);
     setThinking(nextThinking);
     setModelError(null);
+    setNeedsModelSwitch(false);
     setConfiguringModel(true);
     try {
       const data = await settingsApi.saveModel<{
         model?: string;
         thinking?: string;
         session_replacements?: SessionReplacement[];
-      }>(model, nextThinking, cwd);
+      }>(model, nextThinking, cwd, sessionId ?? activeSessionId);
       const replacementId = applySessionReplacements(
         Array.isArray(data.session_replacements) ? data.session_replacements as SessionReplacement[] : [],
       );
       setSelectedModel(typeof data.model === "string" ? data.model : model);
       setThinking(typeof data.thinking === "string" ? data.thinking : nextThinking);
+      settingsRef.current = { cwd, model: typeof data.model === "string" ? data.model : model, thinking: typeof data.thinking === "string" ? data.thinking : nextThinking };
       if (replacementId && replacementId !== sessionId) {
         navigate(
           `/workspace/${encodeURIComponent(cwd)}/session/${replacementId}`,
@@ -147,6 +157,7 @@ export function useModelConfig(cwd: string, sessionId: string | undefined) {
       setThinking(previousThinking);
       const message = e instanceof Error ? e.message : t("conversation.modelSetError");
       setModelError(message);
+      setNeedsModelSwitch(!models.some((item) => item.id === previousModel));
     } finally {
       setConfiguringModel(false);
     }
@@ -163,5 +174,5 @@ export function useModelConfig(cwd: string, sessionId: string | undefined) {
     void applyModelConfig(selectedModel, level);
   };
 
-  return { models, selectedModel, thinking, thinkingLevels, selectedModelInfo, modelError, configuringModel, handleModelChange, handleThinkingChange };
+  return { models, selectedModel, thinking, thinkingLevels, selectedModelInfo, modelError, needsModelSwitch, configuringModel, handleModelChange, handleThinkingChange };
 }

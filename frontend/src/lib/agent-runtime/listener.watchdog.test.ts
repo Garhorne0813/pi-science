@@ -26,7 +26,7 @@ async function startProbe() {
   const client = useRuntimeStore.getState().client!;
   const source = FakeEventSource.instances.at(-1)!;
   source.open();
-  source.emit("agent_start", { type: "agent_start", sessionId: "session-a", turnId: "turn-1", runId: "run-1" });
+  source.emit("operation.started", { type: "operation.started", sessionId: "session-a", turnId: "turn-1", runId: "run-1" });
   // Isolate watchdog probing from transport recovery. Individual tests deliver
   // the events that a recovered SSE connection would send while REST is pending.
   const reconnect = vi.spyOn(client, "reconnect").mockImplementation(() => {});
@@ -42,8 +42,8 @@ async function startProbe() {
 
 describe("live-turn watchdog response ownership", () => {
   it.each([
-    { type: "text.updated", partId: "answer", text: "Still working", turnId: "turn-1", runId: "run-1" },
-    { type: "agent_start", turnId: "turn-2", runId: "run-2" },
+    { type: "message.delta", partId: "answer", text: "Still working", turnId: "turn-1", runId: "run-1" },
+    { type: "operation.started", turnId: "turn-2", runId: "run-2" },
     { type: "session.stats", stats: {} },
   ])("does not publish a transient settled state after $type arrives during the probe", async (event) => {
     const { source, resolve } = await startProbe();
@@ -65,7 +65,7 @@ describe("live-turn watchdog response ownership", () => {
 
   it("does not clear a permission request that arrived during the probe", async () => {
     const { source, resolve } = await startProbe();
-    source.emit("permission.asked", { type: "permission.asked", sessionId: "session-a", requestId: "permission-1", title: "Allow write?" });
+    source.emit("interaction.requested", { type: "interaction.requested", sessionId: "session-a", requestId: "permission-1", title: "Allow write?" });
     const waiting = useRuntimeStore.getState();
     resolve(state("session-a"));
     await vi.advanceTimersByTimeAsync(0);
@@ -93,7 +93,7 @@ describe("live-turn watchdog response ownership", () => {
   it("keeps the next turn's watchdog armed when an older probe finishes", async () => {
     const { source, probe, reconnect, resolve } = await startProbe();
     source.emit("error", { type: "error", sessionId: "session-a", message: "run failed" });
-    source.emit("agent_start", { type: "agent_start", sessionId: "session-a", turnId: "turn-2", runId: "run-2" });
+    source.emit("operation.started", { type: "operation.started", sessionId: "session-a", turnId: "turn-2", runId: "run-2" });
     probe.mockResolvedValue(state("session-a"));
     resolve(state("session-a"));
     await vi.advanceTimersByTimeAsync(0);

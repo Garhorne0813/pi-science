@@ -1,11 +1,14 @@
 import { lookup } from "node:dns";
-import { Agent, fetch as transportFetch } from "undici";
+import { EnvHttpProxyAgent, fetch as transportFetch } from "undici";
 import { isPrivateOrReservedAddress, validateConnectorOutboundUrl } from "../security/outbound-security.js";
 import { egressAuditEnabled, recordEgress } from "../security/egress-audit.js";
 
 // Check the actual connection lookup as well as the URL preflight, so a DNS
 // answer cannot change to a private address between validation and connection.
-const publicDispatcher = new Agent({ connect: {
+// Environment proxies are operator-configured egress gateways. URL validation
+// still runs before every request; the gateway owns connection-time DNS checks
+// for tunneled destinations. Direct/NO_PROXY traffic retains the socket guard.
+const publicDispatcher = new EnvHttpProxyAgent({ connect: {
   lookup(hostname, options, callback) {
     lookup(hostname, options, (error, address, family) => {
       if (error) return callback(error, address, family);
@@ -15,6 +18,8 @@ const publicDispatcher = new Agent({ connect: {
     });
   },
 } });
+
+const privateDispatcher = new EnvHttpProxyAgent();
 
 export interface McpFetchPolicy {
   connectorId: string;
@@ -45,7 +50,7 @@ export function createMcpFetch(policy: McpFetchPolicy): typeof fetch {
     const response = await transportFetch(request.url, {
       method: request.method, headers: [...request.headers.entries()], body: request.body,
       signal: request.signal, redirect: "manual", duplex: "half",
-      ...(!policy.allowPrivate ? { dispatcher: publicDispatcher } : {}),
+      dispatcher: policy.allowPrivate ? privateDispatcher : publicDispatcher,
     }).catch(async (error: unknown) => {
       if (audit) await recordEgress({ connector_type: "mcp", connector_id: policy.connectorId, project_id: policy.projectId, target_domain: request.url, approved: false, note: "mcp_connection_failed" });
       throw error;

@@ -21,105 +21,94 @@
 
 ---
 
-Most AI research tools stop at reading and summarizing papers. Pi-Science is built around the things an open chat tab **cannot** do:
+Pi-Science brings AI conversations, scientific computation, data previews and project knowledge into one local workbench.
 
-- **Execute, don't just explain.** Python code blocks in any answer run on a real workspace kernel with one click — state persists across blocks, so a conversation is also a live analysis session.
-- **Reproducibility as a side effect, not a virtue.** Every run lands in an event log, artifacts carry sha256 digests, projects bind to versioned Micromamba environments, and results trace back to the code and data that produced them — without changing how you work.
-- **Autonomous research loops with a human in charge.** Describe an objective and a deterministic metric; a supervised agent proposes candidates, executes them in immutable snapshots, evaluates, analyzes, and iterates — with budgets, pause/resume, and crash recovery.
-- **Literature with real, verifiable citations.** Zero-config Crossref/arXiv/PubMed retrieval with inline DOIs rendered as clickable sources — never invented references.
-- **Local-first by architecture.** Workspaces are plain folders on your machine, and project files stay local unless you send content through a configured model or explicitly invoke an external service such as literature search. Fully local endpoints such as Ollama and LM Studio are supported, and connector destinations are recorded in a local egress audit.
+- **Run analyses in context.** Execute Python/R code on session kernels and inspect the resulting tables, plots and files alongside the conversation.
+- **Keep execution evidence.** Runs record code, environment revisions, artifact hashes and provenance so results can be inspected and reproduced.
+- **Explore with research loops.** Agents propose and analyze candidates; the control plane applies deterministic evaluation, budgets and pause/resume controls.
+- **Find scientific sources.** Built-in connectors retrieve papers and scientific data, with linked citation metadata you can verify.
+- **Use ordinary project folders.** Research files stay in your workspace. Model requests and external connector calls use the services you configure.
 
-Each project keeps its own conversations, files, runs, provenance, and reviewed knowledge. Conversations run in isolated runtimes inside a shared Pi host, so multiple sessions continue concurrently without blocking one another.
+Conversations run concurrently in isolated Agent Core Worker processes. AgentHarness owns execution and durable sessions; Pi-Science adds the scientific workspace and product interface.
 
 ## Quick Start
 
 ### Requirements
 
-- Node.js 24.16 or newer
-- Python 3.11 or newer
-- pnpm
-- An LLM provider API key, or a trusted OpenAI/Anthropic-compatible local endpoint
-- Windows: PowerShell 5.1 or newer
+- Node.js **24.16+**, Python **3.11+**, and pnpm **11.7.0** (the pinned package manager)
+- An LLM API key, or a configured local endpoint such as Ollama or LM Studio
+- On Windows, PowerShell **5.1+**
 
-### One-command setup
+Clone the repository:
 
 ```bash
 git clone https://github.com/Garhorne0813/pi-science.git
 cd pi-science
+```
+
+On macOS/Linux, install and start in one step:
+
+```bash
 bash scripts/dev.sh
 ```
 
-`dev.sh` installs missing dependencies and starts the complete local stack.
-
-### Separate installation and startup
-
-For a repeatable local checkout, install dependencies once and start the development services independently:
+Or install once and start separately:
 
 ```bash
 bash scripts/install.sh
 bash scripts/start.sh
 ```
 
-On Windows, use the native PowerShell equivalents:
+On native Windows, use PowerShell:
 
 ```powershell
 powershell -File scripts/install.ps1
 powershell -File scripts/start.ps1
 ```
 
-The Bash launcher is designed for macOS/Linux and is intended to run under WSL; CI validates its lifecycle on Linux. The PowerShell installer downloads and verifies the native Windows Pi runtime ZIP, so Git Bash is not required for a fresh Windows installation. Both launchers deliberately run `tsx watch` and the Vite development server, so they are not production deployment servers. Starting an installed checkout invokes package-local executables directly, so npm and pnpm wrappers are not runtime requirements; pnpm is still required for installation, builds, and dependency updates.
+Open **http://127.0.0.1:5173**. In **Settings → LLM**, configure a provider and default model, then open a workspace and start a conversation. Use **Settings → Skills** to manage skills and **Settings → MCP** to enable scientific connectors; only Paper Search is enabled initially. The control-plane API runs on `127.0.0.1:8787`.
 
-### The `pi-science` command
+These launchers run the Vite and `tsx watch` **development servers**. Bash supports macOS/Linux and WSL; native Windows does not require Git Bash. Installation includes the Agent Core SDK through workspace dependencies.
 
-`scripts/install.sh` also puts a `pi-science` launcher in `~/.local/bin` (override with `PI_SCIENCE_BIN_DIR`). Once that directory is on your `PATH`:
+### Start, stop and update
 
-```bash
-pi-science                  # start everything and open the browser
-pi-science start --detach   # keep it running in the background instead
-pi-science status           # report what is currently running
-pi-science stop             # stop the services started from this checkout
+The installer provides a `pi-science` command. On macOS/Linux, add `~/.local/bin` to `PATH` if needed (`PI_SCIENCE_BIN_DIR` overrides that directory). On Windows, open a new terminal after installation updates `PATH`.
+
+```text
+pi-science                 Start the services
+pi-science status          Show service status
+pi-science stop            Stop this checkout's services
+pi-science help            Show command help
 ```
 
-On Windows, open a new terminal after `scripts/install.ps1` updates `PATH`, then use the foreground launcher:
+Foreground startup keeps the terminal open; **Ctrl+C** stops the services. Bash also supports `pi-science start --detach`; the Windows launcher is foreground-only.
 
-```powershell
-pi-science              # start everything
-pi-science start        # start everything
-pi-science status       # report what is currently running
-pi-science stop         # stop the services
-pi-science help         # show command help
-```
-
-The Windows launcher writes `.runtime/pi-science/run.state` after both services are healthy and uses it for precise shutdown, with a local-port fallback when state is unavailable. Without `--detach`, the Bash `pi-science` command holds the terminal and Ctrl+C stops it, exactly like `bash scripts/start.sh`; the PowerShell launcher is also foreground-only. Both launchers use an end-to-end readiness deadline (`PI_SCIENCE_STARTUP_TIMEOUT_SECONDS`, default 90 seconds). The generated launchers refuse to overwrite an unrelated file, directory, symlink, or Windows executable collision; re-running the installer safely updates a launcher owned by the same checkout.
-
-Re-run the platform-appropriate installer (`scripts/install.sh` or `powershell -File scripts/install.ps1`) after moving the checkout or after a `git pull` changes `package.json`, `pnpm-lock.yaml`, Python dependency metadata, or the Pi runtime version. Source-only changes do not require reinstalling. After installation, use `bash scripts/start.sh` on macOS/Linux or `powershell -File scripts/start.ps1` on Windows; to keep using `dev.sh` while skipping installation, run:
+Re-run the platform installer after moving the checkout or updating Node/Python dependency metadata, the lockfile or SDK dependencies. Source-only edits do not require reinstallation. To skip installation with the combined Bash launcher:
 
 ```bash
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 ```
 
-The installers download Pi Orbit 0.4.0 by default. Pi Orbit Web Mode exposes
-`GET /api/catalog` for the complete provider/model runtime catalog while the
-existing `GET /api/models` endpoint keeps its available-models meaning. Set
-`PI_ORBIT_VERSION` to select another compatible release, or set `PI_ORBIT_REPO`
-to use a local Pi Orbit source checkout.
+<details>
+<summary>Launcher behavior and persistent state</summary>
 
-Open **Settings → LLM** after startup and configure a provider and default
-model. Installed and workspace-discovered skills can be enabled, disabled, or
-reset from **Settings → Skills**. Built-in and custom MCP connectors are managed
-from **Settings → MCP**; only Paper Search is enabled on a fresh installation.
+Installed launchers use package-local executables, so npm/pnpm wrappers are not needed for startup; pnpm is required for installation, builds and dependency updates. Startup has a 90-second readiness deadline, configurable with `PI_SCIENCE_STARTUP_TIMEOUT_SECONDS`. Launchers track owned services for shutdown and refuse to overwrite an unrelated launcher path.
+
+Application state uses `PI_SCIENCE_HOME` or `~/.pi-science`, with a checkout-local fallback when necessary. Project metadata may be workspace-local or application-managed; see [data ownership](docs/architecture.md#persistence-and-data-ownership) before moving or backing up state. Existing v3 sessions can be converted automatically or with the [offline conversion command](docs/agent-core-session-conversion.md).
+
+</details>
 
 ## Highlights
 
 | Area | What Pi-Science provides |
 |---|---|
-| Agent workspace | Streaming conversations, tool cards, Markdown, LaTeX, slash commands, and interactive extension prompts |
-| Concurrent sessions | Isolated runtimes for active, restored, and forked conversations inside one shared Pi host |
+| Agent workspace | Streaming conversations, tool cards, Markdown, LaTeX, slash commands, and browser questionnaires and approvals |
+| Concurrent sessions | Independent Agent Core Worker processes for active, restored, and forked conversations |
 | Scientific files | Native previews for molecular structures, FITS, genomics, phase data, 3D models, tables, office documents, media, and code |
 | Reproducibility | Live session-scoped execution records, artifact hashes, generating code and diffs, environment snapshots, provenance history, and reproduce actions |
 | Project memory | Reviewer proposals, human approval, evidence links, project versions, research loops, and Pareto-frontier tracking |
 | Computation | Shared versioned Micromamba environments, isolated Python/R Session kernels, executable `.ipynb` files, agent notebook cell read/edit/run tools, conversation-linked runs, and an optional app-managed Jupyter Lab |
-| Extensibility | Pi skills, extensions, MCP servers, subagents, custom model providers, and managed endpoints |
+| Extensibility | Pi skills, prompt templates, MCP servers, subagents, custom model providers, and managed endpoints |
 | Workspace safety | Project-scoped metadata, validated paths, isolated session state, and controlled outbound provider discovery |
 
 ## Scientific MCP Connectors
@@ -157,13 +146,7 @@ socket connectors can also be registered. Settings apply globally; individual
 projects may override tool decisions. Connector changes are projected into
 active agent runtimes without manually editing Pi configuration files.
 
-Connector details also contain authentication settings modeled after Claude
-Science: an API key or token can be saved in Pi-Science's local mode-0600
-credential store, or referenced from an existing environment variable, then
-delivered as a process environment variable, an HTTP header, or a Bearer token.
-The workspace runtime snapshot contains only the credential reference; the
-secret is resolved in memory by the Pi process. OAuth login/refresh remains a
-separate follow-up rather than being represented as a partially working option.
+Connector authentication can reference a managed key/token or a named environment variable, delivered as a process variable, HTTP header or Bearer token. Policy snapshots contain only credential references; permitted credentials are resolved in Worker memory. OAuth login/refresh is not currently supported.
 
 ## Scientific Viewers
 
@@ -182,15 +165,20 @@ Pi-Science renders common research formats directly in the browser.
 
 ## Architecture
 
-Pi-Science uses a local-first Node control plane, one shared Pi Orbit Web host
-with isolated agent runtimes, and on-demand native Python/R kernel processes.
-Global workspace, environment, and job state is coordinated through SQLite;
-project files and reproducibility records remain inside each workspace. Managed
-MCP definitions and global policies also live in SQLite; each workspace receives
-an atomic runtime projection containing only enabled connectors and its effective
-tool decisions. See the
-[architecture reference](docs/architecture.md) for process ownership, service
-boundaries, workspace state, lifecycle, and security details.
+```mermaid
+flowchart LR
+    UI[Browser] -->|REST / SSE v3| CP[Node control plane]
+    CP -->|IPC| W[Agent Core Workers]
+    W --> H[AgentHarness / pi-ai]
+    H --> S[(Core v4 sessions)]
+    CP --> K[Python / R kernels]
+```
+
+AgentHarness owns agent execution and durable operation state. The Node control plane supervises isolated Workers, projects Core facts into the versioned browser protocol, and coordinates scientific services. Conversations, titles, research, reviews and subagents share this execution stack.
+
+Core session format **v4** and product SSE protocol **v3** are independent versions. History is a projection of Core sessions; earlier formats are handled only at data-read/conversion boundaries. SQLite coordinates workspaces, environments, jobs and MCP policy. Research files and product metadata have separate storage ownership.
+
+See the [architecture reference](docs/architecture.md) for process boundaries, event delivery, state locations, recovery and capability isolation.
 
 ## Slash Commands
 
@@ -204,8 +192,7 @@ Type `/` in the conversation composer to open the command menu.
 
 Pi-Science-managed workspaces trust `.pi/skills/` by default; these
 project-built-in skills participate in Pi command discovery. Use **Settings →
-Skills** to review and control discovered skills. The former standalone
-`/skills` routes have been removed.
+Skills** to review and control discovered skills.
 
 ## Execution Evidence
 
@@ -214,7 +201,7 @@ conversation session that produced them. Execution status streams live, and
 the Runs view can locate an execution in its source conversation or open files
 and artifacts produced by that execution.
 
-Managed Pi sessions provide `notebook_read`, `notebook_edit`, and
+Conversation Workers provide `notebook_read`, `notebook_edit`, and
 `notebook_run` for file-backed `.ipynb` notebooks. Cell edits are revision-safe;
 `notebook_read` exposes per-cell revisions so `notebook_edit` can protect only
 the cells it changes when unrelated concurrent edits should be allowed. Selected
@@ -227,24 +214,13 @@ through the control plane.
 
 Providers can be configured from **Settings → LLM**. Pi-Science supports built-in vendors, OpenAI-compatible endpoints, Anthropic-compatible endpoints, and trusted keyless local services such as Ollama or LM Studio. Managed endpoints can be registered, enabled or disabled, and health-checked from the same page. Health checks are bounded outbound requests; private-network endpoints are allowed by default for local model servers and can be disabled with `PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=0`.
 
-API keys may also be provided through environment variables:
-
-```bash
-export OPENAI_API_KEY=sk-...
-# or ANTHROPIC_API_KEY, DEEPSEEK_API_KEY, and other supported vendors
-```
+API keys are managed through **Settings → LLM**. Environment-backed credentials require an explicit variable reference in model-resource configuration; exporting a vendor variable alone does not establish a binding.
 
 ## AI Session Titles
 
-When a conversation settles, Pi-Science may generate a concise AI title for it
-(**enabled by default**). The feature runs a short prompt through the same
-configured provider as your sessions — a fresh isolated Pi runtime sends the
-most recent few messages (≤ 6 messages, each trimmed to ≤ 200 characters) and
-asks for a title of at most 8 words. This means **the latest conversation
-excerpt is sent to your configured LLM provider** on each settled turn. The
-result is persisted in the workspace at
-`.pi-science/session-titles.jsonl`; browser storage is retained only as an
-immediate fallback.
+After a successfully completed turn, Pi-Science may generate an AI title (**enabled by default**) using the configured **default model**, which can differ from the conversation's model. A disposable Worker with tools and skills disabled sends up to 6 recent messages, each trimmed to 200 characters, and requests a title of at most 8 words.
+
+This is an additional model request containing a conversation excerpt. Titles are stored in `session-titles.jsonl` under the resolved project metadata root; browser storage is an immediate fallback.
 
 To disable it, set the environment variable before starting the services and
 restart:
@@ -253,10 +229,9 @@ restart:
 export PI_SCIENCE_AI_TITLES=0
 ```
 
-Title generation never blocks the conversation and failures are silent (the
-sidebar keeps the derived name). It is also disabled automatically when the Pi
-runtime runs in RPC mode (`PI_SCIENCE_PI_MODE=rpc`), which has no way to run
-an isolated title runtime without persisting a ghost session.
+Title generation never blocks the conversation and failures leave the derived
+sidebar name in place. Its temporary session remains hidden and is removed
+when the Worker is disposed.
 
 ## Development
 
@@ -276,7 +251,7 @@ Additional end-to-end checks:
 ```bash
 pnpm smoke
 pnpm uat:conversation
-PI_CLI_PATH=/absolute/path/to/pi-orbit pnpm smoke:real-pi
+pnpm smoke:agent-core
 ```
 
 Focused frontend UAT commands:
@@ -289,10 +264,16 @@ pnpm --filter frontend test:uat:office
 
 ## Documentation
 
-- [Architecture](docs/architecture.md)
-- [MCP management implementation](docs/mcp-management-implementation.md)
-- [Research loop architecture (ADR)](docs/adr-research-loop-subagents.md)
-- Runtime health and SQLite diagnostics are available from the control-plane internal endpoints.
+| Read about | Reference |
+| --- | --- |
+| Process boundaries, state ownership, events and recovery | [Architecture](docs/architecture.md) |
+| Supported tools and known limits | [Agent Core capability inventory](docs/agent-core-capability-inventory.md) |
+| Existing sessions and offline conversion | [Session conversion](docs/agent-core-session-conversion.md) |
+| Scientific connectors, credentials and tool policy | [MCP management](docs/mcp-management-implementation.md) |
+| Research orchestration and deterministic evaluation | [Research-loop ADR](docs/adr-research-loop-subagents.md) |
+| Writing project skills | [Skill authoring](docs/skill-authoring.md) |
+
+Implementation notes are linked from the architecture reference. Documents without an English counterpart are available in their original language.
 
 ## Contributing
 
