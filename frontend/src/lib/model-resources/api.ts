@@ -24,7 +24,7 @@ function query(params: Record<string, string | boolean | undefined>): string {
 }
 
 export const modelResourcesApi = {
-  providerViews(cwd: string | null = null, signal?: AbortSignal): Promise<{ providers: ProviderView[] }> {
+  providerViews(cwd: string | null = null, signal?: AbortSignal): Promise<{ providers: ProviderView[]; catalog_status?: "ready" | "unavailable" }> {
     return apiRequest(`/api/provider-views${query({ cwd: cwd ?? undefined })}`, { signal });
   },
   providers(): Promise<{ providers: ModelProvider[] }> {
