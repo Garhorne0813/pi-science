@@ -8,7 +8,7 @@ import { GeneralTab } from "./GeneralTab";
 import { Icon, IconButton } from "../ui/Icon";
 
 const ComputeSettings = lazy(() => import("./ComputeSettings").then((module) => ({ default: module.ComputeSettings })));
-const ExtensionsTab = lazy(() => import("./ExtensionsTab").then((module) => ({ default: module.ExtensionsTab })));
+const CapabilitiesTab = lazy(() => import("./CapabilitiesTab").then((module) => ({ default: module.CapabilitiesTab })));
 const AIModelsTab = lazy(() => import("./models/AIModelsTab").then((module) => ({ default: module.AIModelsTab })));
 const AgentTab = lazy(() => import("./agent/AgentTab").then((module) => ({ default: module.AgentTab })));
 const MCPTab = lazy(() => import("./MCPTab").then((module) => ({ default: module.MCPTab })));
@@ -16,7 +16,7 @@ const SkillsTab = lazy(() => import("./SkillsTab").then((module) => ({ default: 
 const EnvironmentSettings = lazy(() => import("./EnvironmentSettings").then((module) => ({ default: module.EnvironmentSettings })));
 const ProgressTab = lazy(() => import("./ProgressTab").then((module) => ({ default: module.ProgressTab })));
 
-type Tab = "general" | "models" | "agent" | "progress" | "skills" | "extensions" | "mcp" | "compute" | "environments";
+type Tab = "general" | "models" | "agent" | "progress" | "skills" | "capabilities" | "mcp" | "compute" | "environments";
 
 const GROUP_STARTS: Partial<Record<Tab, string>> = { general: "settings.redesign.workbench", skills: "settings.redesign.capabilities", environments: "settings.redesign.computeGroup" };
 
@@ -26,7 +26,7 @@ const TABS: { id: Tab; labelKey: string; titleKey: string; icon: LucideIcon }[] 
   { id: "agent", labelKey: "settings.agent.title", titleKey: "settings.agent.title", icon: UserRound },
   { id: "progress", labelKey: "settings.progress.nav", titleKey: "settings.progress.nav", icon: Activity },
   { id: "skills", labelKey: "skills.title", titleKey: "skills.title", icon: WandSparkles },
-  { id: "extensions", labelKey: "settings.extensions", titleKey: "settings.extensions", icon: Blocks },
+  { id: "capabilities", labelKey: "settings.capabilities.title", titleKey: "settings.capabilities.title", icon: Blocks },
   { id: "mcp", labelKey: "settings.mcp", titleKey: "settings.mcpPage.title", icon: Unplug },
   { id: "environments", labelKey: "settings.environments", titleKey: "settings.environments", icon: Boxes },
   { id: "compute", labelKey: "settings.compute", titleKey: "settings.computePage.title", icon: ServerCog },
@@ -188,7 +188,7 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
         <div className="mx-auto flex min-h-full w-full max-w-[820px] flex-col md:px-6">
           <header className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-card border-b border-faint bg-surface-raised px-card py-panel md:px-0 md:py-4">
             <div className="min-w-0">
-              <p className="mb-1 text-ui-meta text-muted">{t("nav.settings")} / {t(tab === "skills" || tab === "extensions" || tab === "mcp" ? "settings.redesign.capabilities" : tab === "environments" || tab === "compute" ? "settings.redesign.computeGroup" : "settings.redesign.workbench")}</p>
+              <p className="mb-1 text-ui-meta text-muted">{t("nav.settings")} / {t(tab === "skills" || tab === "capabilities" || tab === "mcp" ? "settings.redesign.capabilities" : tab === "environments" || tab === "compute" ? "settings.redesign.computeGroup" : "settings.redesign.workbench")}</p>
               <h1 id="settings-panel-title" className="text-ui-title font-medium tracking-tight text-text">{t(activeTab.titleKey)}</h1>
             </div>
             <IconButton
@@ -209,7 +209,7 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
                 {tab === "agent" && <AgentTab config={config} saving={saving === "compaction"} onSave={saveCompaction} scope={scope} loading={loading} error={error} onRefreshContext={loadConfig} onOpenModels={() => { changeTab("models"); focusTab("models"); }} />}
                 {tab === "progress" && <ProgressTab />}
                 {tab === "skills" && <SkillsTab workspaceCwd={scope} />}
-                {tab === "extensions" && <ExtensionsTab workspaceCwd={scope} />}
+                {tab === "capabilities" && <CapabilitiesTab workspaceCwd={scope} onOpenMcp={() => { changeTab("mcp"); focusTab("mcp"); }} />}
                 {tab === "mcp" && <MCPTab workspaceCwd={scope} />}
                 {tab === "compute" && <ComputeSettings workspaceCwd={scope} />}
                 {tab === "environments" && <EnvironmentSettings workspaceCwd={scope} />}

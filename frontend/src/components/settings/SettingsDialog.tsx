@@ -22,7 +22,7 @@ export function SettingsDialog() {
   const panelRef = useRef<HTMLDivElement>(null);
   const lastFocused = useRef<HTMLElement | null>(null);
 
-  // The conversation blocks on extension UI requests until the user responds;
+  // The conversation blocks on agent interaction requests until the user responds;
   // never leave that request hidden behind the modal.
   useEffect(() => {
     if (settingsOpen && pendingInteraction) closeSettings();

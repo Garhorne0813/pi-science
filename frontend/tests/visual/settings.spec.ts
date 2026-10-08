@@ -43,3 +43,24 @@ test("settings navigation, model facts and saved compaction across viewports", a
   await dialog.getByRole("button", { name: "Manage models", exact: true }).click();
   await expect(dialog.getByRole("tab", { name: "AI Models", exact: true })).toHaveAttribute("aria-selected", "true");
 });
+
+test("Core capabilities replace extension installation controls", async ({ page }, testInfo) => {
+  const obsoleteRequests: string[] = [];
+  page.on("request", (request) => {
+    if (/\/api\/(settings\/(extensions|web-access)|agent-profiles)/.test(request.url())) obsoleteRequests.push(request.url());
+  });
+  await page.goto("/settings");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await dialog.getByRole("tab", { name: "Agent Capabilities", exact: true }).click();
+  await expect(dialog.getByRole("heading", { name: "Built-in tools", exact: true })).toBeVisible();
+  await expect(dialog.getByText(/no Pi extension installation is required/)).toBeVisible();
+  await expect(dialog.getByRole("tab", { name: "Extensions", exact: true })).toHaveCount(0);
+  await expect(dialog.getByText("Installed Extensions", { exact: true })).toHaveCount(0);
+  expect(await dialog.getByRole("tabpanel").evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  const violations = (await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations.filter((item) => item.impact === "critical" || item.impact === "serious");
+  expect(violations).toEqual([]);
+  await dialog.screenshot({ path: testInfo.outputPath("agent-capabilities.png"), animations: "disabled" });
+  await dialog.getByRole("button", { name: "Manage MCP connectors", exact: true }).click();
+  await expect(dialog.getByRole("tab", { name: "MCP", exact: true })).toHaveAttribute("aria-selected", "true");
+  expect(obsoleteRequests).toEqual([]);
+});
