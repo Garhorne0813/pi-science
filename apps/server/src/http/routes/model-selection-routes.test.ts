@@ -1,3 +1,4 @@
+import { providerViewsResponseSchema } from "@pi-science/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -114,7 +115,7 @@ describe("ModelSelection v2", () => {
   it.each(["credential_deleted", "endpoint_disabled", "binding_disabled", "binding_deleted", "allowlist_excludes", "provider_disabled", "model_disabled", "endpoint_blocked"])("rejects a catalogued custom model after %s without changing either owner", async (failure) => {
     const resources = modules.modelResources;
     const provider = await resources.createProvider({ name: "Selectable Lab", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
-    const credential = await resources.credentials.put({ kind: "api_key", backend: "managed", secret: "synthetic-selectability-key" });
+    const credential = await resources.credentials.put({ kind: "api_key", backend: "managed", secret: "synthetic-selectability-key", owner_provider_id: provider.id });
     const endpoint = await resources.createEndpoint({ name: "Lab route", base_url: "http://127.0.0.1:9/v1", protocol: "openai", credential_ref: credential.id, enabled: true, data_egress: "local" });
     const binding = await resources.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 1 });
     const model = `${provider.id}/lab-model`;
@@ -132,6 +133,16 @@ describe("ModelSelection v2", () => {
     if (failure === "provider_disabled") await resources.updateProvider(provider.id, { enabled: false });
     if (failure === "model_disabled") await resources.updateModel(provider.id, "lab-model", { enabled: false });
     if (failure === "endpoint_blocked") await resources.repository.update((state) => { state.endpoints.find((item) => item.id === endpoint.id)!.health = "blocked"; });
+    const resourceBeforeGet = await readFile(join(home, "model-resources.json"), "utf8");
+    const management = await app.inject({ method: "GET", url: "/api/provider-views" });
+    expect(management.statusCode).toBe(200);
+    expect(providerViewsResponseSchema.safeParse(management.json()).success).toBe(true);
+    const view = management.json().providers.find((item: { id: string }) => item.id === provider.id);
+    expect(view).toMatchObject({ routing: { configured_model_count: 1, selectable_model_count: 0 }, last_verification: { state: "never", checked_at: null }, models: [expect.objectContaining({ id: model, available: false })] });
+    expect(view.allowed_actions).toContain("edit");
+    if (failure === "binding_deleted") expect(view).toMatchObject({ status: "unavailable", credential: { state: "ready", configured: true }, routing: { issues: [{ code: "no_binding" }] } });
+    expect(management.body).not.toContain("synthetic-selectability-key");
+    expect(await readFile(join(home, "model-resources.json"), "utf8")).toBe(resourceBeforeGet);
     // This is a real Core projection, not a mocked catalog or resource list.
     expect(await catalog()).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: model })]));
     const persisted = await readFile(join(home, "config.json"), "utf8");
@@ -156,6 +167,32 @@ describe("ModelSelection v2", () => {
     }
     expect(await readFile(join(home, "config.json"), "utf8")).toBe(persisted);
     expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
+  }, 30000);
+
+  it("keeps configured native routes distinct from Core selectability and inference verification", async () => {
+    const resources = modules.modelResources;
+    const provider = await resources.createProvider({ name: "Native Lab", adapter: "native", catalog_mode: "manual", auth_kind: "none", enabled: true });
+    const endpoint = await resources.createEndpoint({ name: "Native", base_url: "http://127.0.0.1:9", protocol: "native", credential_ref: null, enabled: true, data_egress: "local" });
+    await resources.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 1 });
+    await resources.updateModel(provider.id, "unsupported", { capabilities: { context_window: 65536 } });
+    await resources.repository.update((state) => { const row = state.endpoints.find((item) => item.id === endpoint.id)!; row.health = "ready"; row.last_checked_at = new Date().toISOString(); });
+    const snapshot = await readFile(join(home, "model-resources.json"), "utf8");
+    const response = await app.inject({ method: "GET", url: "/api/provider-views" });
+    expect(response.statusCode).toBe(200);
+    const view = response.json().providers.find((item: { id: string }) => item.id === provider.id);
+    expect(view).toMatchObject({ status: "unavailable", credential: { configured: true, state: "ready" }, routing: { configured_model_count: 1, selectable_model_count: 0 }, last_verification: { state: "never", checked_at: null }, models: [expect.objectContaining({ available: false, availability_reason: "core_unavailable", capabilities: expect.objectContaining({ context_window: 65536 }), routes: [expect.objectContaining({ health: "ready" })] })] });
+    expect((await app.inject({ method: "GET", url: "/api/provider-views" })).json()).toEqual(response.json());
+    expect(await readFile(join(home, "model-resources.json"), "utf8")).toBe(snapshot);
+  }, 30000);
+  it("scopes provider views to the validated workspace catalog", async () => {
+    const response = await app.inject({ method: "GET", url: `/api/provider-views?cwd=${encodeURIComponent(cwd)}` });
+    expect(response.statusCode).toBe(200);
+    const catalog = (await app.inject({ method: "GET", url: `/api/model-selection/catalog?cwd=${encodeURIComponent(cwd)}` })).json().available_models;
+    const ids = new Set(catalog.map((item: { id: string }) => item.id));
+    for (const provider of response.json().providers) {
+      expect(provider.routing.selectable_model_count).toBe(provider.models.filter((model: { id: string }) => ids.has(model.id)).length);
+    }
+    expect((await app.inject({ method: "GET", url: "/api/provider-views?cwd=" })).statusCode).toBe(400);
   }, 30000);
 
 });

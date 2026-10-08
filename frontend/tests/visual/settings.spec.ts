@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "./fixtures/app.fixture";
+import { providerViewsFixture } from "../fixtures/provider-views";
 import { FIXTURES } from "./fixtures/data.mjs";
 
 test("settings navigation, model facts and saved compaction across viewports", async ({ page }, testInfo) => {
@@ -7,8 +8,9 @@ test("settings navigation, model facts and saved compaction across viewports", a
   let enabled = true;
   await page.route("**/api/settings/config*", (route) => route.fulfill({ json: {
     ...FIXTURES.config, compaction_threshold_percent: threshold, compaction_enabled: enabled,
-    providers: [...FIXTURES.config.providers, { id: "subscription", name: "Subscription service", models: [], has_key: true, credential_status: "connected", auth: { kind: "oauth", api_key_supported: false, oauth_supported: true, login_supported: false } }],
+    providers: [...FIXTURES.config.providers, { id: "subscription", name: "Subscription service", models: [], has_key: true, credential_status: "connected" as const, auth: { kind: "oauth" as const, api_key_supported: false, oauth_supported: true, login_supported: false } }],
   } }));
+  await page.route("**/api/provider-views*", (route) => route.fulfill({ json: providerViewsFixture({ ...FIXTURES.config, providers: [...FIXTURES.config.providers, { id: "subscription", name: "Subscription service", models: [], has_key: true, credential_status: "connected" as const, auth: { kind: "oauth" as const, api_key_supported: false, oauth_supported: true, login_supported: false } }] }) }));
   await page.route("**/api/settings/compaction*", async (route) => {
     const body = route.request().postDataJSON();
     threshold = body.threshold_percent;

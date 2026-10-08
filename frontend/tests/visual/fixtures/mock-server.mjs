@@ -16,6 +16,7 @@
  *  never leaves a zombie listening on the port.
  */
 
+import { providerViewsFixture } from "../../fixtures/provider-views.ts";
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
@@ -96,6 +97,7 @@ function handleApi(req, res, url) {
   }
 
   // Settings / model config.
+  if (method === "GET" && pathname === "/api/provider-views") return json(res, 200, providerViewsFixture(FIXTURES.config));
   if (method === "GET" && pathname === "/api/settings/config") {
     log();
     return json(res, 200, FIXTURES.config);

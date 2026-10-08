@@ -1,6 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
+import type { ProviderView } from "@pi-science/contracts";
+import { providerViewsFixture } from "../../../../tests/fixtures/provider-views";
+import { modelResourceKeys } from "../../../lib/model-resources";
 import { AIModelsTab } from "./AIModelsTab";
 import { queryClient } from "../../../lib/client/query-client";
 import i18n from "../../../i18n";
@@ -22,11 +25,12 @@ const config: SettingsConfig = {
   compaction_threshold_percent: 85,
 };
 
-function renderTab(overrides: Partial<React.ComponentProps<typeof AIModelsTab>> = {}) {
+function renderTab(overrides: Partial<React.ComponentProps<typeof AIModelsTab>> & { config?: SettingsConfig; views?: ProviderView[] } = {}) {
+  const { config: fixture = config, views, ...props } = overrides;
+  queryClient.setQueryData(modelResourceKeys.providerViews(null), views ? { providers: views } : providerViewsFixture(fixture));
   return render(
     <QueryClientProvider client={queryClient}>
       <AIModelsTab
-        config={config}
         apiKeyInput={{}}
         setApiKeyInput={vi.fn()}
         showKey={{}}
@@ -35,7 +39,7 @@ function renderTab(overrides: Partial<React.ComponentProps<typeof AIModelsTab>> 
         saveKey={vi.fn()}
         deleteKey={vi.fn()}
         onConfigReload={vi.fn(async () => undefined)}
-        {...overrides}
+        {...props}
       />
     </QueryClientProvider>,
   );
@@ -54,7 +58,8 @@ function connectionApi(failFirstSave = false) {
     calls.push({ url, method, body: init.body ? JSON.parse(String(init.body)) : undefined });
     let body: unknown = { ok: true };
     let status = 200;
-    if (url === "/api/endpoints") body = { endpoints: [{ id: "endpoint-lab", name: "Lab", base_url: "https://lab.example/v1", protocol: "openai", health: "unknown", credential_ref: null }] };
+    if (url === "/api/provider-views") body = queryClient.getQueryData(modelResourceKeys.providerViews(null));
+    else if (url === "/api/endpoints") body = { endpoints: [{ id: "endpoint-lab", name: "Lab", base_url: "https://lab.example/v1", protocol: "openai", health: "unknown", credential_ref: null }] };
     else if (url === "/api/provider-endpoint-bindings") body = { bindings: [{ id: "binding-lab", provider_id: "user-lab", endpoint_id: "endpoint-lab" }] };
     else if (method === "PUT" && url === "/api/custom-providers/user-lab" && failFirstSave && ++saves === 1) { status = 500; body = { error: "Repair failed" }; }
     return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -72,8 +77,8 @@ afterEach(() => { queryClient.clear(); vi.unstubAllGlobals(); });
 describe("AIModelsTab", () => {
   it("shows connected services and model capabilities without runtime controls", () => {
     renderTab();
-    expect(screen.getByText("Models available to Pi")).toBeInTheDocument();
-    expect(screen.getByText("Configured services")).toBeInTheDocument();
+    expect(screen.getByText("Manage model services and their availability.")).toBeInTheDocument();
+    expect(screen.getByText("Model services")).toBeInTheDocument();
     expect(screen.getAllByText("Anthropic").length).toBeGreaterThan(0);
     expect(screen.getByText("Claude Sonnet 4.6")).toBeInTheDocument();
     expect(screen.getByText("Input format")).toBeInTheDocument();
@@ -122,16 +127,15 @@ describe("AIModelsTab", () => {
     expect(screen.getByText("Claude Sonnet 4.6")).toBeInTheDocument();
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "sonnet" } });
     expect(screen.getByText("Claude Sonnet 4.6")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Anthropic.*Connected/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Anthropic.*Available/ }));
     expect(screen.queryByText("Claude Sonnet 4.6")).not.toBeInTheDocument();
   });
 
-  it("marks subscription providers unavailable even when a credential exists", () => {
+  it("keeps backend-reported subscription login states visible even when credentials exist", () => {
     renderTab({ config: { ...config, providers: [...config.providers, { id: "subscription", name: "Subscription provider", models: [], has_key: true, credential_status: "connected", auth: { kind: "oauth", api_key_supported: false, oauth_supported: true, login_supported: false } }] } });
-    expect(screen.getByRole("heading", { name: "Unavailable services" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Subscription provider.*Login required/ })).toBeInTheDocument();
     expect(screen.getByText("Subscription provider")).toBeInTheDocument();
-    expect(screen.getByText("Login required")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Subscription provider/ })).not.toBeInTheDocument();
+    expect(screen.getAllByText("Login required").length).toBeGreaterThan(0);
   });
 
   it("keeps a custom provider with missing credentials visible and repairs it through the canonical API", async () => {
@@ -139,9 +143,9 @@ describe("AIModelsTab", () => {
     const reload = vi.fn(async () => undefined);
     renderTab({ config: labConfig(), onConfigReload: reload });
     expect(screen.getByText("Lab")).toBeInTheDocument();
-    expect(screen.getByText("Needs authentication")).toBeInTheDocument();
+    expect(screen.getByText("Needs API key")).toBeInTheDocument();
     expect(screen.getByText("model-a")).toBeInTheDocument();
-    expect(screen.getByText("Not currently available")).toBeInTheDocument();
+    expect(screen.getAllByText("API key is missing or unavailable.").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Configure connection" }));
     const editor = screen.getByRole("dialog", { name: "Edit connection" });
     const url = within(editor).getByLabelText("Base URL");
@@ -203,7 +207,7 @@ describe("AIModelsTab", () => {
     connectionApi();
     renderTab({ config: labConfig("needs_login") });
     expect(screen.getByText("Lab")).toBeInTheDocument();
-    expect(screen.getByText("Login required")).toBeInTheDocument();
+    expect(screen.getAllByText("Login required").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Connection settings" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Edit connection" }));
     const editor = screen.getByRole("dialog", { name: "Edit connection" });
@@ -241,6 +245,34 @@ describe("AIModelsTab", () => {
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "Service 44" } });
     expect(await screen.findByText("Service 44")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Connection settings" })).toHaveLength(1);
+  });
+
+  it("keeps a configured but unroutable service visible and filters using the server status", () => {
+    const view = providerViewsFixture(labConfig("configured")).providers[0];
+    view.status = "unavailable";
+    view.routing.selectable_model_count = 0;
+    view.routing.issues = [{ code: "disabled_endpoint" }];
+    view.models[0].available = false;
+    view.models[0].availability_reason = "disabled_endpoint";
+    view.models[0].capabilities.context_window = 128000;
+    renderTab({ views: [view] });
+    expect(screen.getByText("No selectable models")).toBeInTheDocument();
+    expect(screen.getByText(/Global credential: Configured/)).toBeInTheDocument();
+    expect(screen.getByText(/Inference verification: not performed/)).toBeInTheDocument();
+    expect(screen.getAllByText("Endpoint is disabled.").length).toBeGreaterThan(0);
+    expect(screen.getByText("128K")).toBeInTheDocument();
+    expect(screen.getByText("Capability source: Manual")).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole("group", { name: "Service availability" })).getByRole("button", { name: "Available" }));
+    expect(screen.queryByText("Lab")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Needs attention" }));
+    expect(screen.getByText("Lab")).toBeInTheDocument();
+  });
+  it("only offers actions allowed by the server", () => {
+    const view = providerViewsFixture(labConfig()).providers[0];
+    view.allowed_actions = [];
+    renderTab({ views: [view] });
+    expect(screen.queryByRole("button", { name: "Connection settings" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Configure connection" })).not.toBeInTheDocument();
   });
 
 });

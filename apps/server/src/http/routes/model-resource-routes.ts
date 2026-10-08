@@ -1,3 +1,5 @@
+import { agentModelCatalog } from "../../runtime/agent/worker/agent-models.js";
+import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import {
   createBindingRequestSchema,
@@ -38,6 +40,30 @@ function queryValue(request: { query: unknown }, name: string): string | undefin
  * kept in model-endpoint-routes.ts so its old response aliases can remain
  * available during the migration window. */
 export function registerModelResourceRoutes(app: FastifyInstance, resources: ModelResourceService, nodeSessionService: NodeSessionService): void {
+  app.get("/api/provider-views", async (request, reply) => {
+    try {
+      const raw = (request.query as { cwd?: unknown }).cwd;
+      if (raw !== undefined && (typeof raw !== "string" || !raw)) return reply.code(400).send({ code: "invalid_resource", error: "cwd must be a nonempty string" });
+      const cwd = raw ? await validateWorkspaceCwd(raw as string) : "";
+      await resources.ensureMigrated();
+      let models: Array<{ provider?: string; id: string; input?: string[] }>;
+      if (cwd) {
+        const result = await nodeSessionService.availableModels(cwd);
+        if (!result.success) return reply.code(503).send({ code: "catalog_unavailable", error: "Core catalog is unavailable" });
+        models = (result.data as { models: typeof models }).models;
+      } else models = await agentModelCatalog();
+      const aliases = (await resources.repository.read()).aliases;
+      const inputFormats = new Map<string, string[]>();
+      const ids = new Set(models.map((model) => {
+        const id = model.provider && !model.id.startsWith(`${model.provider}/`) ? `${model.provider}/${model.id}` : model.id;
+        const canonical = aliases[id] ?? id;
+        if (Array.isArray(model.input)) inputFormats.set(canonical, model.input.filter((format) => typeof format === "string"));
+        return canonical;
+      }));
+      return { providers: await resources.providerViews(ids, inputFormats) };
+    } catch (error) { return routeError(reply, error); }
+  });
+
   app.get("/api/providers", async (_request, reply) => {
     try { return { providers: await resources.listProviders() }; }
     catch (error) { return routeError(reply, error); }

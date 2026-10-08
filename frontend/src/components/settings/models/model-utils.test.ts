@@ -1,50 +1,23 @@
 import { describe, expect, it } from "vitest";
-import type { SettingsConfig } from "../../../lib/settings";
+import { providerViewsFixture } from "../../../../tests/fixtures/provider-views";
 import { buildServices } from "./model-utils";
 
-function config(providers: SettingsConfig["providers"], customProviders: SettingsConfig["custom_providers"] = []): SettingsConfig {
-  return {
-    api_keys: {}, model: "", thinking: "high", providers, custom_providers: customProviders,
-    available_models: [
-      { id: "user-lab/model-a", provider: "user-lab", model: "model-a", label: "Lab · Model A", custom: true, reasoning: false, thinking_levels: [], capability_source: "manual", context_window: 128000, max_output_tokens: 8192 },
-    ],
-    compaction_enabled: true, compaction_threshold_percent: 85,
-  };
-}
-
-describe("buildServices", () => {
-  it("deduplicates runtime and canonical views of one custom provider", () => {
-    const services = buildServices(config([
-      { id: "custom-lab", name: "Lab runtime", models: ["custom-lab/model-a"], has_key: true, enabled: true, credential_status: "configured", custom: true },
-      { id: "user-lab", name: "Lab", models: ["user-lab/model-a"], has_key: true, enabled: true, credential_status: "configured", custom: true },
-    ], [{ id: "lab", name: "Legacy Lab", base_url: "http://localhost:8000/v1", api: "openai-completions", models: ["model-a"], has_key: true }]));
-
-    expect(services).toHaveLength(1);
-    expect(services[0]).toMatchObject({ id: "user-lab", name: "Lab", custom: true });
-    expect(services[0].models.map((model) => model.id)).toEqual(["user-lab/model-a"]);
+const fixture = providerViewsFixture({ providers: [{ id: "user-lab", name: "Lab", custom: true, has_key: false, models: ["model-a"], credential_status: "needs_key" }], available_models: [], custom_providers: [] }).providers[0];
+describe("ProviderView presentation", () => {
+  it.each(["ready", "needs_key", "invalid", "needs_login", "unavailable", "disabled"] as const)("preserves the server's %s status and configured models", (status) => {
+    const service = buildServices([{ ...fixture, status }])[0];
+    expect(service.status).toBe(status);
+    expect(service.models).toHaveLength(1);
+    expect(service.models[0]).toMatchObject({ available: false, contextWindow: null, maxOutputTokens: null, reason: "missing_credential" });
   });
-  it("does not label invalid or OAuth-only credentials as connected", () => {
-    expect(buildServices(config([
-      { id: "bad", name: "Bad", models: [], has_key: true, credential_status: "invalid", enabled: true },
-      { id: "subscription", name: "Subscription", models: [], has_key: true, credential_status: "connected", auth: { kind: "oauth", api_key_supported: false, oauth_supported: true, login_supported: false } },
-    ]))).toEqual([]);
+  it("does not override Core availability using credential state", () => {
+    const service = buildServices([{ ...fixture, status: "ready", models: [{ ...fixture.models[0], available: true }] }])[0];
+    expect(service.models[0].available).toBe(true);
+    expect(service.view.credential.configured).toBe(false);
   });
-
-  it.each([
-    ["needs_key", true, "needs_key"],
-    ["invalid", true, "needs_key"],
-    ["needs_login", true, "needs_login"],
-    ["configured", false, "disabled"],
-  ] as const)("keeps a %s custom provider in the inventory", (credentialStatus, enabled, status) => {
-    const services = buildServices({ ...config([{ id: "user-lab", name: "Lab", models: ["model-a"], has_key: credentialStatus === "configured", credential_status: credentialStatus, enabled, custom: true }]), available_models: [] });
-    expect(services).toHaveLength(1);
-    expect(services[0]).toMatchObject({ id: "user-lab", name: "Lab", status, custom: true });
-    expect(services[0].models).toEqual([expect.objectContaining({ id: "user-lab/model-a", available: false, contextWindow: null, maxOutputTokens: null, inputFormats: [] })]);
-  });
-
-  it("keeps a legacy custom provider with no key manageable using its canonical ID", () => {
-    const services = buildServices(config([], [{ id: "lab", name: "Legacy Lab", base_url: "https://lab.example/v1", api: "openai-completions", models: ["model-a"], has_key: false }]));
-    expect(services[0]).toMatchObject({ id: "user-lab", name: "Legacy Lab", status: "needs_key", custom: true });
+  it("does not fabricate input formats from vision capability", () => {
+    const service = buildServices([{ ...fixture, models: [{ ...fixture.models[0], input_formats: undefined, capabilities: { ...fixture.models[0].capabilities, vision: true } }] }])[0];
+    expect(service.models[0].inputFormats).toEqual([]);
   });
 
 });

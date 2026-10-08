@@ -263,3 +263,17 @@ export const modelResourceErrorCodes = [
   "runtime_reload_failed",
 ] as const;
 export type ModelResourceErrorCode = (typeof modelResourceErrorCodes)[number];
+
+/** Read-only management projection; routing and inference verification are independent. */
+export const providerViewSchema = z.object({
+  id: z.string().min(1), name: z.string().min(1), source: z.enum(["builtin", "user"]), enabled: z.boolean(),
+  status: z.enum(["ready", "needs_key", "needs_login", "invalid", "unavailable", "disabled"]),
+  auth: z.object({ kind: providerAuthKindSchema, api_key_supported: z.boolean(), login_supported: z.literal(false) }),
+  credential: z.object({ state: z.enum(["ready", "needs_key", "needs_login", "invalid", "unknown"]), configured: z.boolean() }),
+  routing: z.object({ selectable_model_count: z.number().int().nonnegative(), configured_model_count: z.number().int().nonnegative(), issues: z.array(z.object({ code: z.string(), resource_id: z.string().optional() })) }),
+  models: z.array(modelReadSchema.extend({ input_formats: z.array(z.string()).optional() })),
+  last_verification: z.object({ state: z.literal("never"), checked_at: z.null() }),
+  allowed_actions: z.array(z.enum(["edit", "replace_credential", "remove_credential", "disable", "enable", "delete", "discover"])),
+});
+export const providerViewsResponseSchema = z.object({ providers: z.array(providerViewSchema) });
+export type ProviderView = z.infer<typeof providerViewSchema>;

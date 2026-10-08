@@ -11,6 +11,7 @@ import {
   type ModelCapabilities,
   type ModelRead,
   type Provider,
+  type ProviderView,
   type ProviderEndpointBinding,
   type UpdateBindingRequest,
   type UpdateEndpointRequest,
@@ -288,6 +289,65 @@ export class ModelResourceService {
       });
     }
     return result.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** One management snapshot; selection comes from Core, never credential heuristics. */
+  async providerViews(selectable: Set<string>, inputFormats: Map<string, string[]> = new Map()): Promise<ProviderView[]> {
+    await this.ensureMigrated();
+    const [state, catalog] = await Promise.all([this.repository.read(), this.readRuntimeCatalog()]);
+    const providers = new Map<string, Provider>();
+    const builtinConfigured = new Set(catalog.providers.filter((provider) => provider.auth.configured).map((provider) => provider.id));
+    for (const entry of catalog.providers) providers.set(entry.id, { id: entry.id, name: entry.name, kind: "system", source: "pi-ai", adapter: "pi-ai", enabled: true, catalog_mode: "runtime", auth_kind: entry.auth.apiKey && entry.auth.oauth ? "api_key_or_oauth" : entry.auth.oauth ? "oauth" : entry.auth.apiKey ? "api_key" : "none" });
+    for (const provider of state.providers) providers.set(provider.id, provider);
+    const declaredFormats = new Map(catalog.providers.flatMap((provider) => provider.models.map((model) => [canonicalModelRef(provider.id, model.id), model.input] as const)));
+    const modelsByProvider = new Map<string, Map<string, ModelRead>>();
+    const add = (model: ModelRead) => {
+      const rows = modelsByProvider.get(model.provider_id) ?? new Map<string, ModelRead>();
+      rows.set(model.id, model); modelsByProvider.set(model.provider_id, rows);
+    };
+    for (const model of await this.systemModelReads(state, catalog)) add(model);
+    const sourceModels = new Map(state.models.map((model) => [canonicalModelRef(model.provider_id, model.model_id), model]));
+    for (const model of await new RuntimeModelResolver(this.repository, this.credentials).resolveState(state)) add(resolvedModelToRead(model, sourceModels.get(model.id)));
+    const refs = new Map<string, Set<string>>();
+    const endpoints = new Map(state.endpoints.map((endpoint) => [endpoint.id, endpoint]));
+    for (const [id, ref] of Object.entries(state.credential_refs)) refs.set(id, new Set([ref]));
+    for (const binding of state.bindings) {
+      const ref = endpoints.get(binding.endpoint_id)?.credential_ref;
+      if (ref) { const ids = refs.get(binding.provider_id) ?? new Set<string>(); ids.add(ref); refs.set(binding.provider_id, ids); }
+    }
+    // Owned credentials remain configured when their binding/endpoint needs
+    // repair. Ownership is canonical metadata, not a guessed route association.
+    for (const endpoint of state.endpoints) if (endpoint.owner_provider_id && endpoint.credential_ref) {
+      const ids = refs.get(endpoint.owner_provider_id) ?? new Set<string>(); ids.add(endpoint.credential_ref); refs.set(endpoint.owner_provider_id, ids);
+    }
+    for (const credential of await this.credentials.listMetadata()) if (credential.owner_provider_id && credential.owner_kind !== "mcp") {
+      const ids = refs.get(credential.owner_provider_id) ?? new Set<string>(); ids.add(credential.id); refs.set(credential.owner_provider_id, ids);
+    }
+    const credentials = new Map(await Promise.all([...new Set([...refs.values()].flatMap((ids) => [...ids]))].map(async (ref) => [ref, await this.credentials.getForRuntime(ref)] as const)));
+    return [...providers.values()].map((provider): ProviderView => {
+      const values = [...(refs.get(provider.id) ?? [])].map((ref) => credentials.get(ref));
+      const configured = provider.auth_kind === "none" || provider.kind === "system" && builtinConfigured.has(provider.id) || values.some((value) => Boolean(value?.secret) && ["configured", "connected"].includes(value!.metadata.status));
+      const credentialState = configured ? "ready" : values.some((value) => value?.metadata.status === "invalid") ? "invalid" : provider.auth_kind === "oauth" ? "needs_login" : "needs_key";
+      const models = [...(modelsByProvider.get(provider.id)?.values() ?? [])].map((model) => {
+        const available = provider.enabled && selectable.has(model.id);
+        const formats = inputFormats.get(model.id) ?? declaredFormats.get(model.id);
+        return { ...model, available, ...(formats ? { input_formats: formats } : {}), ...(available ? { availability_reason: undefined } : { availability_reason: !provider.enabled ? "provider_disabled" : model.availability_reason ?? "core_unavailable" }) };
+      });
+      const count = models.filter((model) => model.available).length;
+      const issues = [...new Set(models.filter((model) => !model.available).map((model) => model.availability_reason!))].map((code) => ({ code }));
+      if (!models.length) issues.push({ code: "no_models" });
+      if (provider.auth_kind === "oauth" && !count) issues.push({ code: "unsupported_login" });
+      const status = !provider.enabled ? "disabled" : count ? "ready" : provider.auth_kind === "oauth" ? "needs_login" : credentialState !== "ready" ? credentialState : "unavailable";
+      const custom = provider.kind === "user";
+      const apiKey = provider.auth_kind === "api_key" || provider.auth_kind === "api_key_or_oauth";
+      return { id: provider.id, name: provider.name, source: custom ? "user" : "builtin", enabled: provider.enabled, status,
+        auth: { kind: provider.auth_kind, api_key_supported: apiKey, login_supported: false },
+        credential: { state: credentialState, configured },
+        routing: { selectable_model_count: count, configured_model_count: models.length, issues }, models,
+        // Endpoint probes and discovered capabilities are not inference verification.
+        last_verification: { state: "never", checked_at: null },
+        allowed_actions: [...(custom ? ["edit", provider.enabled ? "disable" : "enable", "delete", "discover"] as const : []), ...(apiKey ? ["replace_credential"] as const : []), ...(!custom && apiKey && configured ? ["remove_credential"] as const : [])] };
+    }).sort((a, b) => a.name.localeCompare(b.name));
   }
 
   async getProvider(id: string): Promise<ProviderRead> {
