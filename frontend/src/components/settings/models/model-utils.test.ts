@@ -23,6 +23,11 @@ describe("buildServices", () => {
     expect(services[0]).toMatchObject({ id: "user-lab", name: "Lab", custom: true });
     expect(services[0].models.map((model) => model.id)).toEqual(["user-lab/model-a"]);
   });
+  it("retains a keyless builtin even when the legacy enabled flag is false", () => {
+    const services = buildServices(config([{ id: "local", name: "Local", models: [], has_key: false, enabled: false, credential_status: "connected", auth: { kind: "none", api_key_supported: false, oauth_supported: false, login_supported: false } }]));
+    expect(services).toEqual([expect.objectContaining({ id: "local", status: "unreachable", auth: { kind: "none", api_key_supported: false, oauth_supported: false, login_supported: false } })]);
+  });
+
   it("does not label invalid or OAuth-only credentials as connected", () => {
     expect(buildServices(config([
       { id: "bad", name: "Bad", models: [], has_key: true, credential_status: "invalid", enabled: true },

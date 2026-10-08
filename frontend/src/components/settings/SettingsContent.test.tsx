@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { SettingsContent } from "./SettingsContent";
@@ -269,6 +269,23 @@ describe("SettingsContent", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry loading" }));
     expect(await screen.findByText("Configured services")).toBeInTheDocument();
     expect(attempts).toBe(3);
+  });
+
+  it.each(["save", "delete"])("propagates API key %s failures to the open maintenance dialog", async (operation) => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      if (String(input).startsWith("/api/settings/api-key")) return jsonResponse({ error: "Credential write failed" }, 500);
+      return defaultFetch(String(input), init);
+    });
+    renderContent(null);
+    fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Connection settings" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: operation === "save" ? "Replace" : "Disconnect" }));
+    const dialog = screen.getByRole("dialog", { name: operation === "save" ? "Replace API key" : "Disconnect service" });
+    if (operation === "save") fireEvent.change(within(dialog).getByLabelText(/DeepSeek API key/), { target: { value: "retained-test-key" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: operation === "save" ? "Save" : "Disconnect" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Credential write failed");
+    expect(dialog).toBeInTheDocument();
+    if (operation === "save") expect(within(dialog).getByLabelText(/DeepSeek API key/)).toHaveValue("retained-test-key");
   });
 
 });
