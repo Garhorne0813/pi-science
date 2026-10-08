@@ -175,3 +175,25 @@ and builtin credential maintenance. The local credential-growth medians were
 benchmark also passed: catalog 131 ms, Settings 1,357 ms, ProviderView 1,216 ms,
 event-loop delay 255 ms and concurrent health p95 186 ms. Both benchmarks verified
 unchanged persisted files; browser fixtures do not exercise live inference.
+
+
+Endpoint maintenance keeps enablement explicit. Editing/saving connection fields
+preserves a disabled endpoint; its detail editor exposes Enable endpoint using
+the existing endpoint API. Enabling retains unsaved editor fields and credentials,
+and refreshes endpoint/provider facts. Failed enablement retains the editor for
+retry. Real Core integration verifies the disabled route becomes selectable.
+
+Builtin credential removal also checks endpoint references before any writes or
+runtime reload, returning `resource_in_use` for a shared managed credential.
+ProviderView withholds Disconnect while referenced; replacing the key remains
+available. Removing the endpoint reference makes normal managed removal available
+again. Revision-based protection against concurrent reference changes remains
+part of the later write-protocol phase.
+
+The maintenance-boundary regressions passed 62 focused resource/selection server
+tests and 52 frontend tests (including inherited Composer reference regressions),
+plus 16 production-browser checks on desktop/mobile. Workspace typecheck/build,
+lint, visual typecheck and bundle budgets passed. The real credential-growth
+benchmark passed again at 428/442/454 ms for 1/100/1,000 credentials and retained
+unchanged persisted files. These are scoped follow-up results, not a rerun of the
+previously recorded full-stack suite.

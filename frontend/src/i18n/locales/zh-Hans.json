@@ -1519,6 +1519,7 @@
   "settings.providerView.reason.provider_disabled": "服务已禁用。",
   "settings.providerView.reason.model_disabled": "模型已禁用。",
   "settings.providerView.reason.no_binding": "没有启用的路由绑定。",
+  "settings.providerView.enableEndpoint": "启用端点",
   "settings.providerView.reason.disabled_endpoint": "端点已禁用。",
   "settings.providerView.reason.blocked": "端点被阻止。",
   "settings.providerView.reason.endpoint_error": "端点报告错误。",

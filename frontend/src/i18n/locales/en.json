@@ -1519,6 +1519,7 @@
   "settings.providerView.reason.provider_disabled": "Provider is disabled.",
   "settings.providerView.reason.model_disabled": "Model is disabled.",
   "settings.providerView.reason.no_binding": "No enabled binding.",
+  "settings.providerView.enableEndpoint": "Enable endpoint",
   "settings.providerView.reason.disabled_endpoint": "Endpoint is disabled.",
   "settings.providerView.reason.blocked": "Endpoint is blocked.",
   "settings.providerView.reason.endpoint_error": "Endpoint reported an error.",

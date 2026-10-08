@@ -329,6 +329,7 @@ export class ModelResourceService {
     for (const credential of await credentialRead.listMetadata()) if (credential.owner_provider_id && credential.owner_kind !== "mcp") {
       const ids = refs.get(credential.owner_provider_id) ?? new Set<string>(); ids.add(credential.id); refs.set(credential.owner_provider_id, ids);
     }
+    const endpointCredentialRefs = new Set(state.endpoints.map((endpoint) => endpoint.credential_ref).filter(Boolean));
     const credentials = new Map(await Promise.all([...new Set([...refs.values()].flatMap((ids) => [...ids]))].map(async (ref) => [ref, await credentialRead.getForRuntime(ref)] as const)));
     return [...providers.values()].map((provider): ProviderView => {
       const values = [...(refs.get(provider.id) ?? [])].map((ref) => credentials.get(ref));
@@ -345,7 +346,8 @@ export class ModelResourceService {
       if (provider.auth_kind === "oauth" && !count) issues.push({ code: "unsupported_login" });
       const status = !provider.enabled ? "disabled" : count ? "ready" : provider.auth_kind === "oauth" ? "needs_login" : credentialState !== "ready" ? credentialState : "unavailable";
       const custom = provider.kind === "user";
-      const removable = credentials.get(state.credential_refs[provider.id] ?? "")?.metadata.backend === "managed";
+      const credentialRef = state.credential_refs[provider.id] ?? "";
+      const removable = credentials.get(credentialRef)?.metadata.backend === "managed" && !endpointCredentialRefs.has(credentialRef);
       const apiKey = provider.auth_kind === "api_key" || provider.auth_kind === "api_key_or_oauth";
       return { id: provider.id, name: provider.name, source: custom ? "user" : "builtin", enabled: provider.enabled, status,
         auth: { kind: provider.auth_kind, api_key_supported: apiKey, login_supported: false },

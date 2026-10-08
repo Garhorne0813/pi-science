@@ -120,3 +120,36 @@ test("maintains a configured builtin key through its card while excluding it fro
   const connect = page.getByRole("dialog", { name: "Connect a model service" });
   await expect(connect.getByRole("button", { name: provider.name, exact: true })).toHaveCount(0);
 });
+
+
+test("explicitly enables a disabled endpoint without committing connection drafts", async ({ page }) => {
+  const inventory = providerViewsFixture(FIXTURES.config);
+  const lab = structuredClone(inventory.providers.find((provider) => provider.credential.configured && provider.auth.api_key_supported)!);
+  lab.id = "user-lab"; lab.name = "Lab"; lab.source = "user"; lab.status = "unavailable";
+  lab.allowed_actions = ["edit", "disable", "delete", "discover", "replace_credential"];
+  lab.models = lab.models.slice(0, 1).map((model) => ({ ...model, id: `user-lab/${model.model_id}`, provider_id: "user-lab", available: false, availability_reason: "disabled_endpoint" }));
+  lab.routing = { configured_model_count: 1, selectable_model_count: 0, issues: [{ code: "disabled_endpoint" }] };
+  let enabled = false;
+  await page.route("**/api/provider-views*", (route) => route.fulfill({ json: { providers: [lab] } }));
+  await page.route("**/api/endpoints", (route) => route.fulfill({ json: { endpoints: [{ id: "endpoint-lab", owner_provider_id: "user-lab", name: "Lab endpoint", base_url: "https://lab.example/v1", credential_ref: "cred-lab", protocol: "openai", enabled }] } }));
+  await page.route("**/api/provider-endpoint-bindings", (route) => route.fulfill({ json: { bindings: [{ id: "binding-lab", provider_id: "user-lab", endpoint_id: "endpoint-lab" }] } }));
+  await page.route("**/api/endpoints/endpoint-lab/enabled?enabled=true", async (route) => {
+    expect(route.request().method()).toBe("PUT");
+    enabled = true; lab.status = "ready"; lab.routing.selectable_model_count = 1; lab.routing.issues = [];
+    lab.models[0].available = true; delete lab.models[0].availability_reason;
+    await route.fulfill({ json: { ok: true } });
+  });
+  await page.goto("/settings");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("tab", { name: "AI Models", exact: true }).click();
+  await settings.getByRole("button", { name: "Configure connection", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "Edit connection" });
+  await editor.getByLabel("Provider name", { exact: true }).fill("Unsaved lab name");
+  await editor.getByRole("button", { name: "Enable endpoint", exact: true }).click();
+  await expect(editor.getByRole("button", { name: "Enable endpoint", exact: true })).toHaveCount(0);
+  await expect(editor.getByLabel("Provider name", { exact: true })).toHaveValue("Unsaved lab name");
+  expect(enabled).toBe(true);
+  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+  await settings.getByRole("button", { name: "Available", exact: true }).click();
+  await expect(settings.getByText("Lab", { exact: true })).toBeVisible();
+});

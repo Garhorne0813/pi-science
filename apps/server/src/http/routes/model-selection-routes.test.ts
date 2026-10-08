@@ -155,6 +155,17 @@ describe("ModelSelection v2", () => {
     expect(configure).not.toHaveBeenCalled();
     expect(await readFile(join(home, "config.json"), "utf8")).toBe(persisted);
     expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
+    if (failure === "endpoint_disabled") {
+      const credentialBefore = await readFile(join(home, "credentials.json"), "utf8");
+      expect((await app.inject({ method: "PUT", url: `/api/custom-providers/${provider.id}`, payload: { name: "Edited Lab", base_url: "http://127.0.0.1:10/v1" } })).statusCode).toBe(200);
+      expect((await resources.repository.read()).endpoints.find((item) => item.id === endpoint.id)?.enabled).toBe(false);
+      expect((await app.inject({ method: "PUT", url: `/api/endpoints/${endpoint.id}/enabled?enabled=true` })).statusCode).toBe(200);
+      const recovered = (await app.inject({ method: "GET", url: "/api/provider-views" })).json().providers.find((item: { id: string }) => item.id === provider.id);
+      expect(recovered).toMatchObject({ status: "ready", routing: { selectable_model_count: 1, issues: [] } });
+      expect(await catalog()).toEqual(expect.arrayContaining([expect.objectContaining({ id: model })]));
+      expect(await readFile(join(home, "credentials.json"), "utf8")).toBe(credentialBefore);
+      expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
+    }
     if (failure === "binding_deleted") {
       const credentialBefore = await readFile(join(home, "credentials.json"), "utf8");
       const repaired = await app.inject({ method: "PUT", url: `/api/custom-providers/${provider.id}`, payload: { name: provider.name, base_url: endpoint.base_url } });
@@ -235,6 +246,28 @@ describe("ModelSelection v2", () => {
     expect(removed.json()).toMatchObject({ code: "credential_not_removable" });
     expect(await Promise.all(["config.json", "credentials.json", "model-resources.json"].map((file) => readFile(join(home, file), "utf8")))).toEqual(before);
     expect((await app.inject({ method: "GET", url: "/api/model-selection/default" })).json().selection).toEqual({ model: flash, thinking: "off" });
+  }, 30000);
+
+  it("refuses to remove a managed builtin credential shared with another endpoint", async () => {
+    const resources = modules.modelResources;
+    const ref = (await resources.repository.read()).credential_refs.deepseek!;
+    const provider = await resources.createProvider({ name: "Shared Lab", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
+    const endpoint = await resources.createEndpoint({ name: "Shared route", base_url: "http://127.0.0.1:9/v1", protocol: "openai", credential_ref: ref, enabled: true, data_egress: "local", owner_provider_id: provider.id });
+    await resources.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 1 });
+    await resources.updateModel(provider.id, "lab-model", { enabled: true });
+    const before = await Promise.all(["config.json", "credentials.json", "model-resources.json"].map((file) => readFile(join(home, file), "utf8")));
+    const view = (await app.inject({ method: "GET", url: "/api/provider-views" })).json().providers.find((item: { id: string }) => item.id === "deepseek");
+    expect(view.allowed_actions).not.toContain("remove_credential");
+    const reload = vi.spyOn(modules.sessions, "reloadConfiguration");
+    const removed = await app.inject({ method: "DELETE", url: "/api/settings/api-key/deepseek" });
+    expect(removed.statusCode).toBe(409);
+    expect(removed.json()).toMatchObject({ code: "resource_in_use" });
+    expect(reload).not.toHaveBeenCalled();
+    expect(await Promise.all(["config.json", "credentials.json", "model-resources.json"].map((file) => readFile(join(home, file), "utf8")))).toEqual(before);
+    expect((await app.inject({ method: "GET", url: "/api/model-selection/catalog" })).json().available_models).toEqual(expect.arrayContaining([expect.objectContaining({ id: `${provider.id}/lab-model` })]));
+    expect((await app.inject({ method: "GET", url: "/api/model-selection/default" })).json().selection).toEqual({ model: flash, thinking: "off" });
+    await resources.updateEndpoint(endpoint.id, { credential_ref: null });
+    expect((await app.inject({ method: "DELETE", url: "/api/settings/api-key/deepseek" })).statusCode).toBe(200);
   }, 30000);
 
   it("offers and removes an actual managed builtin credential", async () => {

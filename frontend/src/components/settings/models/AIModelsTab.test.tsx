@@ -50,7 +50,9 @@ function labConfig(status: "needs_key" | "invalid" | "needs_login" | "configured
     auth: { kind: status === "needs_login" ? "oauth" : "api_key", api_key_supported: status !== "needs_login", oauth_supported: status === "needs_login", login_supported: false } }], custom_providers: [], available_models: [] };
 }
 
-function connectionApi(failFirstSave = false, missingBinding = false, saveError = "Repair failed") {
+function connectionApi(failFirstSave = false, missingBinding = false, saveError = "Repair failed", disabledEndpoint = false, failFirstEnable = false) {
+  let enabled = !disabledEndpoint;
+  let enables = 0;
   let saves = 0;
   const calls: { url: string; method: string; body?: unknown }[] = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit = {}) => {
@@ -59,8 +61,12 @@ function connectionApi(failFirstSave = false, missingBinding = false, saveError 
     let body: unknown = { ok: true };
     let status = 200;
     if (url === "/api/provider-views") body = queryClient.getQueryData(modelResourceKeys.providerViews(null));
-    else if (url === "/api/endpoints") body = { endpoints: [{ id: "endpoint-lab", name: "Lab", base_url: "https://lab.example/v1", protocol: "openai", health: "unknown", credential_ref: null, owner_provider_id: "user-lab" }] };
+    else if (url === "/api/endpoints") body = { endpoints: [{ id: "endpoint-lab", name: "Lab", base_url: "https://lab.example/v1", protocol: "openai", health: "unknown", credential_ref: null, owner_provider_id: "user-lab", enabled }] };
     else if (url === "/api/provider-endpoint-bindings") body = { bindings: missingBinding ? [] : [{ id: "binding-lab", provider_id: "user-lab", endpoint_id: "endpoint-lab" }] };
+    else if (method === "PUT" && url === "/api/endpoints/endpoint-lab/enabled?enabled=true") {
+      if (failFirstEnable && ++enables === 1) { status = 500; body = { error: "Enable failed" }; }
+      else enabled = true;
+    }
     else if (method === "PUT" && url === "/api/custom-providers/user-lab" && failFirstSave && ++saves === 1) { status = 500; body = { error: saveError }; }
     return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
   }));
@@ -75,6 +81,27 @@ beforeEach(() => queryClient.clear());
 afterEach(() => { queryClient.clear(); vi.unstubAllGlobals(); });
 
 describe("AIModelsTab", () => {
+  it.each([false, true])("explicitly enables a disabled endpoint and preserves the editor draft (retry: %s)", async (retry) => {
+    const calls = connectionApi(false, false, "Repair failed", true, retry);
+    const onConfigReload = vi.fn(async () => undefined);
+    renderTab({ config: labConfig("configured"), onConfigReload });
+    fireEvent.click(screen.getByRole("button", { name: "Connection settings" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit connection" }));
+    const editor = screen.getByRole("dialog", { name: "Edit connection" });
+    fireEvent.change(within(editor).getByLabelText("Provider name"), { target: { value: "Unsaved lab name" } });
+    const enable = await within(editor).findByRole("button", { name: "Enable endpoint" });
+    fireEvent.click(enable);
+    if (retry) {
+      expect(await within(editor).findByRole("alert")).toHaveTextContent("Enable failed");
+      expect(onConfigReload).not.toHaveBeenCalled();
+      fireEvent.click(enable);
+    }
+    await waitFor(() => expect(within(editor).queryByRole("button", { name: "Enable endpoint" })).not.toBeInTheDocument());
+    expect(editor).toBeInTheDocument();
+    expect(within(editor).getByLabelText("Provider name")).toHaveValue("Unsaved lab name");
+    expect(onConfigReload).toHaveBeenCalledOnce();
+    expect(calls.filter((call) => call.method === "PUT")).toEqual(Array.from({ length: retry ? 2 : 1 }, () => ({ url: "/api/endpoints/endpoint-lab/enabled?enabled=true", method: "PUT", body: undefined })));
+  });
   it("shows connected services and model capabilities without runtime controls", () => {
     renderTab();
     expect(screen.getByText("Manage model services and their availability.")).toBeInTheDocument();

@@ -735,6 +735,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       const ref = state.credential_refs[request.params.provider];
       const metadata = ref ? await modelResources.credentials.metadata(ref) : null;
       if (metadata?.backend !== "managed") return reply.code(409).send({ ok: false, code: "credential_not_removable", error: "No managed API key can be removed. Environment and external credentials must be changed at their source." });
+      if (state.endpoints.some((endpoint) => endpoint.credential_ref === ref)) return reply.code(409).send({ ok: false, code: "resource_in_use", error: `Credential '${ref}' is still referenced by an endpoint` });
       await modelResources.credentials.remove(ref!);
       await modelResources.repository.update((current) => { delete current.credential_refs[request.params.provider]; });
       await mutate((config) => { if (String(config.model ?? "").startsWith(`${request.params.provider}/`)) config.model = ""; });
