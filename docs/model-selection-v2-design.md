@@ -50,8 +50,8 @@ new endpoints and strict validation.
 
 Settings uses explicit Save and retains failed drafts. Composer reads are
 cached independently by default or by `(cwd, session_id)`; writes cancel stale
-reads and replace only their owner's cache. Existing sessions never fall back
-to the default when their selection is missing or unavailable. Scope/version
+reads and replace only their owner's cache. A saved session model that becomes
+unavailable is never substituted with the default. Scope/version
 checks prevent a delayed session A mutation from changing session B's UI.
 
 A draft selection is scoped to its workspace, retained after failed creation,
@@ -64,6 +64,18 @@ no file migration is necessary. Previously selected session configurations
 remain authoritative across worker shutdown and cold resume. Historical shared
 writes may already have changed the default before this migration; an earlier
 intended default cannot be reconstructed automatically.
+
+Historical sessions with no durable lane model inherit the current global
+default on cold activation, including its thinking level when none was saved.
+They are not frozen to an inferred earlier default: there is no authoritative
+model to reconstruct. Once Core persists a lane model, that selection wins on
+subsequent activation even if the global default changes. An empty default with
+no durable model fails activation with `invalid_model`; it does not guess.
+This compatibility exception is covered separately from normal durable sessions.
+
+Composer model options are memoized by the catalog model-array reference.
+Context/stream updates do not rebuild model options or the menu's search/index
+structures; a changed catalog still rebuilds them.
 
 Runtime reloads needed for provider credentials and other configuration still
 rebuild workers, preserving each session's durable model selection. The removed

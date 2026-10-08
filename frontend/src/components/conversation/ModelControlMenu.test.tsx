@@ -22,6 +22,18 @@ beforeAll(async () => {
 });
 
 describe("ModelControlMenu", () => {
+  it("does not rebuild its 10,000-model indexes on context-only rerenders", () => {
+    const models = Array.from({ length: 10000 }, (_, index) => ({ ...model, id: `test/model-${index}`, model: `model-${index}` }));
+    const map = vi.spyOn(models, "map");
+    const props = { models, selectedModel: models[0].id, thinking: "off", thinkingLevels: ["off"], onModelChange: vi.fn(), onThinkingChange: vi.fn() };
+    const { rerender } = render(<ModelControlMenu {...props} contextTokens={0} />);
+    expect(map).toHaveBeenCalledTimes(2);
+    map.mockClear();
+    for (let index = 1; index <= 20; index++) rerender(<ModelControlMenu {...props} contextTokens={index * 100} contextPercent={index} />);
+    expect(map).not.toHaveBeenCalled();
+    rerender(<ModelControlMenu {...props} models={[...models, { ...model, id: "test/new" }]} />);
+    map.mockRestore();
+  });
   it("prompts to switch when the saved model is unavailable", () => {
     render(
       <ModelControlMenu

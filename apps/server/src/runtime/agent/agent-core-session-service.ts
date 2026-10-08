@@ -335,6 +335,8 @@ export class AgentCoreSessionService {
     if (!path) return { success: false, code: "not_found", error: "session not found in this workspace" };
     const saved = await readJson<Pick<PiConfig, "skills" | "model_context_window_override"> | null>(configPath(cwd, sessionId), null);
     const persisted = await this.repository.configuration(cwd, sessionId);
+    // Legacy sessions without a lane model inherit the current default until
+    // Core persists a model; unavailable saved models never use this fallback.
     const model = persisted?.model ?? splitModel(config.model);
     if (!model) return { success: false, code: "invalid_model", error: "An agent-core session requires a provider/model setting" };
     try {

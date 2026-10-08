@@ -11,6 +11,39 @@ import { AgentRuntimeExitedError, AgentRuntimeTimeoutError } from "./agent-runti
 import { EventEmitter } from "node:events";
 
 describe("agent-core session configuration", () => {
+  it("inherits current defaults for a legacy cold session only until a durable lane model exists", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-legacy-selection-"));
+    try {
+      const service = new AgentCoreSessionService({} as never, { environment: async () => ({}) } as never);
+      const internals = service as unknown as {
+        repository: { findPath: (...args: unknown[]) => Promise<string>; configuration: (...args: unknown[]) => Promise<unknown> };
+        registry: { register: (...args: unknown[]) => Promise<unknown> };
+        manager: { start: (...args: unknown[]) => Promise<unknown> };
+        attach: (...args: unknown[]) => Promise<unknown>;
+        credentialEnvNames: (...args: unknown[]) => Promise<string[]>;
+        openOnce: (cwd: string, id: string, config: { model: string; thinking: string; skills: string[]; extensions: string[] }) => Promise<unknown>;
+      };
+      vi.spyOn(internals.repository, "findPath").mockResolvedValue(join(cwd, "legacy.jsonl"));
+      const configuration = vi.spyOn(internals.repository, "configuration").mockResolvedValue(null);
+      vi.spyOn(internals.registry, "register").mockResolvedValue(undefined);
+      const start = vi.spyOn(internals.manager, "start").mockResolvedValue({});
+      vi.spyOn(internals, "attach").mockResolvedValue({ success: true });
+      vi.spyOn(internals, "credentialEnvNames").mockResolvedValue([]);
+      const config = { model: "deepseek/deepseek-flash", thinking: "off", skills: [], extensions: [] };
+      await internals.openOnce(cwd, "legacy", config);
+      expect(start.mock.calls.at(-1)?.[1]).toMatchObject({ model: { provider: "deepseek", modelId: "deepseek-flash" }, thinking: "off" });
+      await internals.openOnce(cwd, "legacy", { ...config, model: "openai/new", thinking: "high" });
+      expect(start.mock.calls.at(-1)?.[1]).toMatchObject({ model: { provider: "openai", modelId: "new" }, thinking: "high" });
+      configuration.mockResolvedValue({ model: { provider: "deepseek", modelId: "saved" }, thinkingLevel: "low" });
+      await internals.openOnce(cwd, "legacy", { ...config, model: "openai/new", thinking: "high" });
+      expect(start.mock.calls.at(-1)?.[1]).toMatchObject({ model: { provider: "deepseek", modelId: "saved" }, thinking: "low" });
+      configuration.mockResolvedValue(null);
+      start.mockClear();
+      expect(await internals.openOnce(cwd, "legacy", { ...config, model: "" })).toMatchObject({ success: false, code: "invalid_model" });
+      expect(start).not.toHaveBeenCalled();
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+
   it("rejects model changes while the session is busy without touching the worker", async () => {
     const cwd = resolve(join(tmpdir(), "pi-science-core-busy-test"));
     const sessionId = "busy-session";

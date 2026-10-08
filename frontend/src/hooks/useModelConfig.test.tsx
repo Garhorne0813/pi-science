@@ -3,7 +3,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ModelSelection } from "@pi-science/contracts";
 import { useModelConfig } from "./useModelConfig";
 import { queryClient } from "../lib/client/query-client";
-import { modelSelectionApi } from "../lib/model-selection";
+import { modelSelectionApi, modelSelectionKeys } from "../lib/model-selection";
 import { useRuntimeStore } from "../lib/agent-runtime";
 import i18n from "../i18n";
 
@@ -41,6 +41,24 @@ beforeEach(() => {
 afterEach(() => { cleanup(); queryClient.clear(); vi.unstubAllGlobals(); });
 
 describe("ModelSelection composer ownership", () => {
+  it("keeps 10,000 model options stable through context updates and refreshes changed catalogs", async () => {
+    const large = Array.from({ length: 10000 }, (_, index) => ({ ...models[0], id: `deepseek/model-${index}`, model: `model-${index}` }));
+    queryClient.setQueryData(modelSelectionKeys.catalog("proj"), { available_models: large });
+    fetchMock.mockImplementation((url, init) => String(url).includes("/catalog") ? Promise.resolve(json({ available_models: large })) : respond(url, init));
+    const { result } = renderHook(() => {
+      useRuntimeStore((state) => state.contextTokens);
+      return useModelConfig("proj", "s1");
+    });
+    await waitFor(() => expect(result.current.models).toHaveLength(10000));
+    const first = result.current.models;
+    for (let index = 0; index < 20; index++) {
+      act(() => useRuntimeStore.setState({ contextTokens: index * 100 }));
+      expect(result.current.models).toBe(first);
+    }
+    act(() => queryClient.setQueryData(modelSelectionKeys.catalog("proj"), { available_models: [...large, models[1]] }));
+    await waitFor(() => expect(result.current.models).toHaveLength(10001));
+    expect(result.current.models).not.toBe(first);
+  });
   it("uses the durable session selection and ignores the default and stale runtime", async () => {
     useRuntimeStore.setState({ model: flash, thinking: "off" });
     const { result } = renderHook(() => useModelConfig("proj", "s2"));
