@@ -29,6 +29,8 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
     if (url.includes("fail")) return Promise.resolve(jsonResponse({ ok: false, error: "boom" }, 500));
     return Promise.resolve(jsonResponse({ ok: true, model: "deepseek/deepseek-v4-flash", thinking: "high" }));
   }
+  if (url.startsWith("/api/settings/subagents?")) return Promise.resolve(jsonResponse({ agents: [{ name: "reviewer", path: ".pi/agents/reviewer.md" }] }));
+  if (url === "/api/mcp/connectors") return Promise.resolve(jsonResponse({ connectors: [] }));
   if (url === "/api/settings/skills" || url.startsWith("/api/settings/skills?cwd=")) {
     return Promise.resolve(jsonResponse({
       skills: [{ skill_id: "alpha", name: "alpha", description: "Analyze alpha data", enabled: true, validation: { valid: true } }],
@@ -107,7 +109,7 @@ describe("SettingsContent", () => {
     const general = screen.getByRole("tab", { name: "General" });
     expect(general).toHaveClass("h-9", "w-9", "rounded-full", "md:h-10", "md:w-full", "md:rounded-card", "md:px-3", "md:gap-2");
     expect(general).toHaveClass("bg-surface-selected", "text-text");
-    expect(screen.getByRole("tab", { name: "Extensions" })).toHaveClass("hover:bg-surface-hover");
+    expect(screen.getByRole("tab", { name: "Agent Capabilities" })).toHaveClass("hover:bg-surface-hover");
     expect(screen.getByRole("tab", { name: "Environments" })).toBeInTheDocument();
     // Every nav item uses a different outline icon (distinct svg content).
     const icons = screen.getAllByRole("tab").map((tab) => tab.querySelector("svg")?.innerHTML ?? null);
@@ -162,6 +164,40 @@ describe("SettingsContent", () => {
     expect(screen.queryByRole("columnheader", { name: "Actions" })).not.toBeInTheDocument();
     expect(screen.queryByText("Scientific Environment")).not.toBeInTheDocument();
     expect(screen.queryByText("Project Skills")).not.toBeInTheDocument();
+  });
+
+  it("uses Core capabilities and links to MCP without obsolete extension requests", async () => {
+    renderContent(null);
+    expect(screen.queryByRole("tab", { name: "Extensions" })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("tab", { name: "Agent Capabilities" }));
+    expect(await screen.findByText(/no Pi extension installation is required/)).toBeInTheDocument();
+    expect(screen.queryByText("Installed Extensions")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Manage MCP connectors" }));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "MCP" })).toHaveAttribute("aria-selected", "true"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "MCP" })).toHaveFocus());
+    const requests = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(requests.some((url) => /extensions|web-access|agent-profiles|settings\/config/.test(url))).toBe(false);
+  });
+
+  it("describes Core capabilities consistently in Chinese", async () => {
+    await i18n.changeLanguage("zh-Hans");
+    try {
+      renderContent(null);
+      fireEvent.click(await screen.findByRole("tab", { name: "智能体能力" }));
+      expect(await screen.findByText(/无需安装 Pi 扩展/)).toBeInTheDocument();
+      expect(screen.queryByText("已安装扩展")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "管理 MCP 连接器" })).toBeInTheDocument();
+    } finally { await i18n.changeLanguage("en"); }
+  });
+
+  it("lists workspace subagent files without unsupported mutation controls", async () => {
+    renderContent("/lab/project");
+    fireEvent.click(await screen.findByRole("tab", { name: "Agent Capabilities" }));
+    expect(await screen.findByText("reviewer")).toBeInTheDocument();
+    expect(screen.getByText(".pi/agents/reviewer.md")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New subagent" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Fork parent")).not.toBeInTheDocument();
   });
 
   it("supports arrow-key navigation between tabs", async () => {

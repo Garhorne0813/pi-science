@@ -16,7 +16,7 @@ source and branding are not copied.
 | Group | Pages | Purpose |
 | --- | --- | --- |
 | Workbench | General, AI Models, Agent, Progress | Device preferences, model connections, context policy and activity presentation |
-| Capabilities | Skills, Extensions, MCP | Preserve the existing skill, subagent, web access and managed connector controls |
+| Capabilities | Skills, Agent Capabilities, MCP | Manage skills, project subagent definitions and managed connectors |
 | Compute | Environments, Compute | Environment revisions and scientific execution resources |
 
 The desktop sidebar identifies the workspace path or global scope. The content
@@ -38,6 +38,14 @@ composer changes configure the targeted durable session **and** update the share
 model/thinking settings used by new sessions. This is not independent default
 and session ownership; the Agent page describes the shared configured model. A missing model stays unavailable; Settings does not replace it
 or infer capacity from a cached value for another model.
+
+The Agent Capabilities page describes built-in Core tools without package installation
+status. Project subagents are listed from workspace files and document the supported prompt/tools
+contract. Dead subagent/profile mutation forms and ignored model, context-fork
+and inheritance controls are removed; no profile policy enforcement is implied. Web search and
+URL fetching are configured through the separate MCP page, including connector
+credentials and tool permissions. The synthetic extension inventory and unused
+legacy Web Access provider/workflow settings endpoints have been removed.
 
 ## Compatibility and follow-up scope
 
