@@ -1,8 +1,8 @@
 /** File-tree revision coordination.
  *
  *  `fileRevision` drives the sidebar tree and the files page to re-read the
- *  workspace after a turn settles. Both the SSE listener (agent_settled /
- *  session.idle) and the REST recovery paths (idle confirmed after a
+ *  workspace after a turn settles. Both the SSE listener (operation.settled /
+ *  operation.settled) and the REST recovery paths (idle confirmed after a
  *  connection loss) must bump it — but only once per activity generation:
  *  a double bump from the same turn is harmless, yet wasteful, and recovery
  *  of an older session must still bump when no live event did. The key

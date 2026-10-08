@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { access, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join, resolve, sep } from "node:path";
-import { configPath } from "../../storage/persistence.js";
+import { configPath, metadataRoot } from "../../storage/persistence.js";
 import { environmentPythonExecutable, type EnvironmentRevision, type WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
 
 export interface NotebookFile {
@@ -274,7 +274,7 @@ export class NotebookService {
   }
 
   private async installProjectKernelspec(workspace: string, allowDependencyInstall = true): Promise<void> {
-    const bindingPath = join(workspace, ".pi-science", "environment.json");
+    const bindingPath = join(metadataRoot(workspace), "environment.json");
     let binding: { environment_id?: unknown; revision_id?: unknown };
     try {
       binding = JSON.parse(await readFile(bindingPath, "utf8")) as typeof binding;

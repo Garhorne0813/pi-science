@@ -67,7 +67,7 @@ function sendSse(res, sessionId) {
   // Settled conversation: the session is idle from the first byte. Keeping
   // the socket open (with periodic comments) holds EventSource in OPEN state,
   // so the UI shows the deterministic "ready" state instead of reconnecting.
-  send("session.idle", { type: "session.idle", sessionId });
+  send("operation.settled", { type: "operation.settled", status: "completed", sessionId });
   const keepAlive = setInterval(() => res.write(": keep-alive\n\n"), 15_000);
   const stop = () => clearInterval(keepAlive);
   res.on("close", stop);

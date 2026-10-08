@@ -130,9 +130,9 @@ export const settingsApi = {
     invalidateSettings();
   },
 
-  async saveModel<T>(model: string, thinking: string, cwd?: string | null): Promise<T> {
+  async saveModel<T>(model: string, thinking: string, cwd?: string | null, sessionId?: string | null): Promise<T> {
     const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
-    const result = unwrapSettings(await apiRequest<T & SettingsEnvelope>(`/api/settings/model${query}`, json("PUT", { model, thinking })), "Unable to save default model");
+    const result = unwrapSettings(await apiRequest<T & SettingsEnvelope>(`/api/settings/model${query}`, json("PUT", { model, thinking, ...(sessionId ? { session_id: sessionId } : {}) })), "Unable to save default model");
     // Wait for invalidation before SettingsPage immediately reloads. Without
     // this, fetchQuery can return the still-fresh 3s cached config and keep
     // showing the previous model's context window.

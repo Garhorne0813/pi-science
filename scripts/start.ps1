@@ -160,18 +160,13 @@ function Write-RunState {
 }
 
 $installValues = Read-InstallEnv -Path $InstallStateFile
-$piCliValue = Get-ConfiguredValue -EnvironmentName "PI_CLI_PATH" -InstallName "PI_SCIENCE_INSTALL_PI_CLI" -InstallValues $installValues
 $nodeValue = Get-ConfiguredValue -EnvironmentName "PI_NODE_PATH" -InstallName "PI_NODE_PATH" -InstallValues @{}
 
-$PiCliPath = Resolve-Executable $piCliValue
 $NodePath = Resolve-Executable $nodeValue
 if (-not $NodePath) {
     $NodePath = Resolve-Executable "node"
 }
 
-if (-not $PiCliPath) {
-    throw "Pi runtime is not installed. Run: powershell -File scripts/install.ps1"
-}
 if (-not $NodePath) {
     throw "Node.js >=24.16.0 is required. Run: powershell -File scripts/install.ps1"
 }
@@ -202,7 +197,6 @@ if (-not (Test-PortAvailable -Port $FrontendPort)) {
     throw "Port $FrontendPort is already in use."
 }
 
-$env:PI_CLI_PATH = $PiCliPath
 $env:PI_NODE_PATH = $NodePath
 $env:PI_SCIENCE_HOME = if ($env:PI_SCIENCE_HOME) { $env:PI_SCIENCE_HOME } else { Join-Path $HOME ".pi-science" }
 $env:PI_SCIENCE_WORKSPACES = if ($env:PI_SCIENCE_WORKSPACES) { $env:PI_SCIENCE_WORKSPACES } else { Join-Path $HOME "pi-science-workspaces" }

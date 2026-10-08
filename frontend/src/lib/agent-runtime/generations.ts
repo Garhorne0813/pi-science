@@ -17,7 +17,7 @@
  *     asynchronous recovery probe cannot replace the newly expanded window.
  *   - `promptMonitor`: bumped when the late-stream prompt monitor must stop.
  *  `turnState.errored` records whether the turn in flight ended in a
- *  non-recoverable error, so `session.idle` can settle to error instead of ready. */
+ *  non-recoverable error, so `operation.settled` can settle to error instead of ready. */
 
 export const generations = {
   connection: 0,

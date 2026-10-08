@@ -103,7 +103,7 @@ function clearOptimisticRetry(): void {
 /** AI title generation is best-effort: one in-flight request per session,
  *  skipped once a title is already marked as AI-generated, silent on failure.
  *  Failed attempts are recorded with a TTL so a broken provider or runtime
- *  does not spawn a fresh Pi process on every idle event. */
+ *  does not spawn a fresh agent worker on every idle event. */
 const aiTitleInFlight = new Set<string>();
 const AI_TITLE_RETRY_MS = 60 * 60 * 1000;
 
@@ -434,7 +434,7 @@ export function registerEventListener(client: PiScienceClient) {
     ) {
       const missingSessionId = String(event.sessionId || state.activeSessionId || "");
       // A just-created session can briefly be invisible to the disk-based
-      // existence check: the Pi process writes its JSONL only after emitting
+      // existence check: Harness persists the durable session before projecting
       // the session event, so the first SSE connect may see a terminal
       // "session not found" while the record is still being flushed. For an
       // optimistic (locally created, not yet listed from disk) session, retry
@@ -524,6 +524,7 @@ export function registerEventListener(client: PiScienceClient) {
             operation: String(event.operation || payload.operation || ""),
             scope: String(event.scope || payload.scope || ""),
             effect: String(event.effect || payload.effect || ""),
+            ...(event.questionnaire === true ? { questionnaire: true, toolCallId: String(event.toolCallId || "") } : {}),
           },
         });
       }
@@ -538,44 +539,14 @@ export function registerEventListener(client: PiScienceClient) {
       }
     }
 
-    if (event.type === "permission.asked" || event.type === "question.asked") {
-      bumpConversationGeneration();
-      const method = (event.method as PendingInteraction["method"]) || (event.type === "permission.asked" ? "confirm" : "input");
-      const kind = interactionKind(event.kind)
-        ?? (event.type === "permission.asked"
-          ? "permission"
-          : method === "confirm"
-            ? "confirmation"
-            : "question");
-      useRuntimeStore.setState({
-        working: true,
-        turnLifecycle: "waiting",
-        status: "ready",
-        pendingInteraction: {
-          requestId: String(event.requestId || ""),
-          kind,
-          method,
-          title: String(event.title || (method === "confirm" ? "Confirmation" : "Question")),
-          message: String(event.message || ""),
-          options: Array.isArray(event.options) ? event.options as PendingInteraction["options"] : [],
-          placeholder: String(event.placeholder || ""),
-          prefill: String(event.prefill || ""),
-          operation: String(event.operation || ""),
-          scope: String(event.scope || ""),
-          effect: String(event.effect || ""),
-          ...(event.questionnaire === true ? { questionnaire: true, toolCallId: String(event.toolCallId || "") } : {}),
-        },
-      });
-    }
-
     const eventStatus = String(event.status ?? payload.status ?? "");
-    const runStarted = event.type === "agent_start" || event.type === "run.started";
-    const activityEvent = event.type === "text.updated"
-      || event.type === "thinking.updated"
-      || event.type === "item.text.delta"
-      || event.type === "item.snapshot"
-      || event.type === "item.started"
-      || event.type === "item.completed"
+    const runStarted = event.type === "operation.started";
+    const activityEvent = event.type === "message.delta"
+      || event.type === "message.reasoning.delta"
+      || event.type === "message.started"
+      || event.type === "message.snapshot"
+      || event.type === "tool.started"
+      || event.type === "tool.completed"
       || event.type === "tool.updated"
       || event.type === "plan.updated";
     const knownTerminalRun = typeof event.runId === "string" && state.thread.foldState?.terminalRunIds.includes(event.runId);
@@ -592,7 +563,7 @@ export function registerEventListener(client: PiScienceClient) {
         useRuntimeStore.setState({ working: true, turnLifecycle: event.type === "tool.updated" && eventStatus === "waiting-approval" ? "waiting" : "active", status: "ready" });
         if (state.turnLifecycle !== "waiting") ensureTurnWatchdog();
       }
-    } else if (event.type === "compaction.updated") {
+    } else if (event.type === "compaction.progress" || event.type === "compaction.started" || event.type === "compaction.completed" || event.type === "compaction.failed") {
       bumpConversationGeneration();
       const status = String(event.status || "");
       const failed = status === "error";
@@ -604,13 +575,13 @@ export function registerEventListener(client: PiScienceClient) {
     } else if (event.type === "turn.artifacts") {
       bumpPresentationMetadataGeneration();
       // No extra tree refresh here: the server publishes this event from the
-      // agent_settled observer, and that settled event already bumped the
+      // operation.settled observer, and that settled event already bumped the
       // file revision above. Marking again would double-refresh every turn.
-    } else if (event.type === "agent_settled" || event.type === "session.idle" || event.type === "run.completed" || event.type === "run.cancelled") {
+    } else if (event.type === "operation.settled") {
       bumpConversationGeneration();
       if (!blocksLateEvents(state.turnLifecycle)) {
-        const successful = !turnState.errored;
-        const cancelled = event.type === "run.cancelled" || event.cancelled === true;
+        const successful = !turnState.errored && event.status !== "failed";
+        const cancelled = event.status === "aborted";
         useRuntimeStore.setState({
           working: false,
           turnLifecycle: cancelled ? "aborted" : successful ? "settled" : "failed",
@@ -622,10 +593,13 @@ export function registerEventListener(client: PiScienceClient) {
         markWorkspaceFilesChanged();
         if (successful && state.activeSessionId && event.handledWithoutTurn !== true) {
           void resyncCompletedHistory(state.activeSessionId, state.cwd);
-          maybeGenerateAiTitle(state.activeSessionId, state.cwd);
+          if (event.status === "completed") maybeGenerateAiTitle(state.activeSessionId, state.cwd);
         }
       }
       void loadSessionsInternal();
+    } else if (event.type === "runtime.paused") {
+      useRuntimeStore.setState({ working: false, turnLifecycle: "failed", status: "error", pendingInteraction: null, pendingQuestionnaire: null });
+      disarmTurnWatchdog();
     } else if (event.type === "session.stats") {
       bumpPresentationMetadataGeneration();
       const stats = event.stats as SessionStats | undefined;
@@ -635,7 +609,7 @@ export function registerEventListener(client: PiScienceClient) {
       if (stats && typeof stats === "object" && state.activeSessionId && event.sessionId === state.activeSessionId) {
         useRuntimeStore.setState({ sessionStats: stats });
       }
-    } else if (event.type === "error" || event.type === "run.failed") {
+    } else if (event.type === "error") {
       bumpConversationGeneration();
       if (event.recoverable === true) {
         if (!blocksLateEvents(state.turnLifecycle)) useRuntimeStore.setState({ turnLifecycle: "recovering", status: "connecting" });
@@ -683,7 +657,7 @@ export function registerEventListener(client: PiScienceClient) {
       return false;
     }
     if (
-      event.schemaVersion === 2
+      event.schemaVersion === 3
       && newThread.foldState?.pendingEvents.some((pending) => pending.eventId === event.eventId)
     ) return false;
     return true;

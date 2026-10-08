@@ -140,7 +140,6 @@ cp "$START_SCRIPT" "$FIXTURE/scripts/start.sh"
 cp "$COMMAND_SCRIPT" "$FIXTURE/scripts/pi-science.sh"
 cp "$NODE_CHECK_SCRIPT" "$FIXTURE/scripts/check-node-version.mjs"
 cp "$NODE_RUNTIME_SCRIPT" "$FIXTURE/scripts/node-runtime.sh"
-printf '// fake Pi CLI\n' > "$FIXTURE/pi-cli.mjs"
 cat > "$FIXTURE/apps/server/node_modules/tsx/dist/cli.mjs" <<'EOF'
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -182,7 +181,7 @@ CONTROL_PORT="$(free_port)"
 RUNTIME_PORT="$(free_port)"
 FRONTEND_PORT="$(free_port)"
 LOG="$TEMP_ROOT/start.log"
-PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_CONTROL_PLANE_PORT="$CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=10 bash "$FIXTURE/scripts/start.sh" >"$LOG" 2>&1 &
+PI_SCIENCE_PYTHON="$(command -v python3)" PI_SCIENCE_CONTROL_PLANE_PORT="$CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=10 bash "$FIXTURE/scripts/start.sh" >"$LOG" 2>&1 &
 START_PID=$!
 wait_url "http://127.0.0.1:$CONTROL_PORT/internal/ready" || { cat "$LOG" >&2; fail "control plane did not become ready"; }
 wait_url "http://127.0.0.1:$FRONTEND_PORT" || { cat "$LOG" >&2; fail "frontend did not become ready"; }
@@ -210,18 +209,23 @@ exit 7
 EOF
 chmod +x "$FIXTURE/frontend/node_modules/.bin/vite"
 FAIL_PORT="$(free_port)"
-if PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_CONTROL_PLANE_PORT="$FAIL_PORT" PI_SCIENCE_RUNTIME_PORT="$(free_port)" PI_SCIENCE_FRONTEND_PORT="$(free_port)" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=3 bash "$FIXTURE/scripts/start.sh" >"$TEMP_ROOT/failure.log" 2>&1; then fail "frontend startup failure returned success"; fi
+if PI_SCIENCE_PYTHON="$(command -v python3)" PI_SCIENCE_CONTROL_PLANE_PORT="$FAIL_PORT" PI_SCIENCE_RUNTIME_PORT="$(free_port)" PI_SCIENCE_FRONTEND_PORT="$(free_port)" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=3 bash "$FIXTURE/scripts/start.sh" >"$TEMP_ROOT/failure.log" 2>&1; then fail "frontend startup failure returned success"; fi
 wait_port_available "$FAIL_PORT" || fail "startup failure left the control-plane port occupied"
-assert_contains "$TEMP_ROOT/failure.log" 'frontend exited during startup'
+# An immediate exit may precede process identity capture on macOS. Both
+# diagnostics fail closed and must still release the ready control plane.
+if ! grep -Fq 'frontend exited during startup' "$TEMP_ROOT/failure.log" && ! grep -Fq 'unable to establish frontend process identity' "$TEMP_ROOT/failure.log"; then
+  cat "$TEMP_ROOT/failure.log" >&2
+  fail "frontend startup failure was not diagnosed"
+fi
 
 # Missing package-local dependencies fail before starting either service.
 cp "$FIXTURE/apps/server/node_modules/tsx/dist/cli.mjs" "$TEMP_ROOT/fake-tsx.mjs"
 rm -f "$FIXTURE/apps/server/node_modules/tsx/dist/cli.mjs"
-if PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" bash "$FIXTURE/scripts/start.sh" >"$TEMP_ROOT/missing-tsx.log" 2>&1; then fail "missing tsx dependency returned success"; fi
+if PI_SCIENCE_PYTHON="$(command -v python3)" bash "$FIXTURE/scripts/start.sh" >"$TEMP_ROOT/missing-tsx.log" 2>&1; then fail "missing tsx dependency returned success"; fi
 assert_contains "$TEMP_ROOT/missing-tsx.log" 'server dependencies are not installed. Run: bash scripts/install.sh'
 cp "$TEMP_ROOT/fake-tsx.mjs" "$FIXTURE/apps/server/node_modules/tsx/dist/cli.mjs"
 rm -f "$FIXTURE/frontend/node_modules/.bin/vite"
-if PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" bash "$FIXTURE/scripts/start.sh" >"$TEMP_ROOT/missing-vite.log" 2>&1; then fail "missing Vite dependency returned success"; fi
+if PI_SCIENCE_PYTHON="$(command -v python3)" bash "$FIXTURE/scripts/start.sh" >"$TEMP_ROOT/missing-vite.log" 2>&1; then fail "missing Vite dependency returned success"; fi
 assert_contains "$TEMP_ROOT/missing-vite.log" 'frontend dependencies are not installed. Run: bash scripts/install.sh'
 cat > "$FIXTURE/frontend/node_modules/.bin/vite" <<EOF
 #!/usr/bin/env bash
@@ -240,17 +244,41 @@ assert_contains "$TEMP_ROOT/invalid-timeout.log" 'must be a positive integer'
 # Invalid PI_SCIENCE_SERVER_WATCH values fail before any service is spawned.
 rm -f "$FIXTURE/control.pid" "$FIXTURE/.runtime/pi-science/run.state"
 INVALID_WATCH_PORT="$(free_port)"
-if PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_SERVER_WATCH=yes PI_SCIENCE_CONTROL_PLANE_PORT="$INVALID_WATCH_PORT" PI_SCIENCE_RUNTIME_PORT="$(free_port)" PI_SCIENCE_FRONTEND_PORT="$(free_port)" bash "$FIXTURE/scripts/start.sh" >"$TEMP_ROOT/invalid-watch.log" 2>&1; then fail "invalid PI_SCIENCE_SERVER_WATCH returned success"; fi
+if PI_SCIENCE_PYTHON="$(command -v python3)" PI_SCIENCE_SERVER_WATCH=yes PI_SCIENCE_CONTROL_PLANE_PORT="$INVALID_WATCH_PORT" PI_SCIENCE_RUNTIME_PORT="$(free_port)" PI_SCIENCE_FRONTEND_PORT="$(free_port)" bash "$FIXTURE/scripts/start.sh" >"$TEMP_ROOT/invalid-watch.log" 2>&1; then fail "invalid PI_SCIENCE_SERVER_WATCH returned success"; fi
 assert_contains "$TEMP_ROOT/invalid-watch.log" 'PI_SCIENCE_SERVER_WATCH must be 0 or 1'
 [ ! -e "$FIXTURE/control.pid" ] || fail "invalid watch value spawned the control plane"
 wait_port_available "$INVALID_WATCH_PORT" || fail "invalid watch value left the control-plane port occupied"
+
+# A PID/start identity may be visible before the child execs the supervisor.
+# Simulate one pre-exec command observation without relying on scheduler timing.
+PRE_EXEC_OBSERVED="$TEMP_ROOT/pre-exec-observed"
+PRE_EXEC_CONTROL_PORT="$(free_port)"; PRE_EXEC_RUNTIME_PORT="$(free_port)"; PRE_EXEC_FRONTEND_PORT="$(free_port)"
+PI_SCIENCE_PYTHON="$(command -v python3)" PI_SCIENCE_CONTROL_PLANE_PORT="$PRE_EXEC_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$PRE_EXEC_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$PRE_EXEC_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=10 bash -c '
+  observed="$2"
+  PI_SCIENCE_SOURCE_ONLY=1 source "$1"
+  process_command() {
+    if [ "$1" = "$BOOTSTRAP_PID" ] && [ ! -f "$observed" ]; then
+      : > "$observed"
+      printf "%s\n" "bootstrap shell before supervisor exec"
+    else
+      ps -ww -o command= -p "$1" 2>/dev/null | sed "s/^[[:space:]]*//" | head -n 1
+    fi
+  }
+  cmd_start --detach --no-open
+' _ "$FIXTURE/scripts/pi-science.sh" "$PRE_EXEC_OBSERVED" >"$TEMP_ROOT/pre-exec.log" 2>&1 || { cat "$TEMP_ROOT/pre-exec.log" >&2; fail "pre-exec observation caused a false startup failure"; }
+[ -f "$PRE_EXEC_OBSERVED" ] || fail "pre-exec command observation was not exercised"
+PRE_EXEC_PID="$(cat "$FIXTURE/.runtime/pi-science/run.state/pid")"
+PI_SCIENCE_CONTROL_PLANE_PORT="$PRE_EXEC_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$PRE_EXEC_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$PRE_EXEC_FRONTEND_PORT" bash "$FIXTURE/scripts/pi-science.sh" stop >/dev/null
+wait_pid_gone "$PRE_EXEC_PID" || fail "pre-exec supervisor survived stop"
+wait_port_available "$PRE_EXEC_CONTROL_PORT" || fail "pre-exec supervisor left control port occupied"
+wait_port_available "$PRE_EXEC_FRONTEND_PORT" || fail "pre-exec supervisor left frontend port occupied"
 
 # A live checkout-local launch lock refuses a simultaneous detached contender
 # before it can commit supervisor state.
 CONCURRENT_BARRIER="$TEMP_ROOT/concurrent-bootstrap"
 CONCURRENT_CONTROL_PORT="$(free_port)"; CONCURRENT_RUNTIME_PORT="$(free_port)"; CONCURRENT_FRONTEND_PORT="$(free_port)"
 rm -f "$CONCURRENT_BARRIER.ready" "$CONCURRENT_BARRIER.release"
-PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_CONTROL_PLANE_PORT="$CONCURRENT_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$CONCURRENT_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$CONCURRENT_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=8 PI_SCIENCE_TEST_BOOTSTRAP_BARRIER="$CONCURRENT_BARRIER" bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/concurrent-owner.log" 2>&1 &
+PI_SCIENCE_PYTHON="$(command -v python3)" PI_SCIENCE_CONTROL_PLANE_PORT="$CONCURRENT_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$CONCURRENT_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$CONCURRENT_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=8 PI_SCIENCE_TEST_BOOTSTRAP_BARRIER="$CONCURRENT_BARRIER" bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/concurrent-owner.log" 2>&1 &
 CONCURRENT_OWNER_PID=$!
 wait_file "$CONCURRENT_BARRIER.ready" || fail "concurrent launch owner did not reach bootstrap barrier"
 if PI_SCIENCE_CONTROL_PLANE_PORT="$CONCURRENT_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$CONCURRENT_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$CONCURRENT_FRONTEND_PORT" bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/concurrent-contender.log" 2>&1; then fail "concurrent detached contender returned success"; fi
@@ -268,7 +296,7 @@ wait_pid_gone "$CONCURRENT_STATE_PID" || fail "concurrent owner supervisor survi
 SIGNAL_BOOTSTRAP_BARRIER="$TEMP_ROOT/signal-bootstrap"
 SIGNAL_CONTROL_PORT="$(free_port)"; SIGNAL_RUNTIME_PORT="$(free_port)"; SIGNAL_FRONTEND_PORT="$(free_port)"
 rm -f "$SIGNAL_BOOTSTRAP_BARRIER.ready" "$SIGNAL_BOOTSTRAP_BARRIER.release"
-PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_CONTROL_PLANE_PORT="$SIGNAL_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$SIGNAL_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$SIGNAL_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=8 PI_SCIENCE_TEST_BOOTSTRAP_BARRIER="$SIGNAL_BOOTSTRAP_BARRIER" bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/signal-bootstrap.log" 2>&1 &
+PI_SCIENCE_PYTHON="$(command -v python3)" PI_SCIENCE_CONTROL_PLANE_PORT="$SIGNAL_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$SIGNAL_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$SIGNAL_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=8 PI_SCIENCE_TEST_BOOTSTRAP_BARRIER="$SIGNAL_BOOTSTRAP_BARRIER" bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/signal-bootstrap.log" 2>&1 &
 SIGNAL_BOOTSTRAP_PID=$!
 wait_file "$SIGNAL_BOOTSTRAP_BARRIER.ready" || fail "signalled bootstrap did not reach barrier"
 SIGNAL_SUPERVISOR_PID="$(cat "$SIGNAL_BOOTSTRAP_BARRIER.pid")"
@@ -345,7 +373,7 @@ if find "$FIXTURE/.runtime/pi-science" -maxdepth 1 \( -name 'start.lock.reclaim'
 KILL_BOOTSTRAP_BARRIER="$TEMP_ROOT/kill-bootstrap"
 KILL_CONTROL_PORT="$(free_port)"; KILL_RUNTIME_PORT="$(free_port)"; KILL_FRONTEND_PORT="$(free_port)"
 rm -f "$KILL_BOOTSTRAP_BARRIER.ready" "$KILL_BOOTSTRAP_BARRIER.release" "$KILL_BOOTSTRAP_BARRIER.pid" "$KILL_BOOTSTRAP_BARRIER.started"
-PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_CONTROL_PLANE_PORT="$KILL_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$KILL_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$KILL_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=8 PI_SCIENCE_TEST_BOOTSTRAP_BARRIER="$KILL_BOOTSTRAP_BARRIER" bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/kill-bootstrap-owner.log" 2>&1 &
+PI_SCIENCE_PYTHON="$(command -v python3)" PI_SCIENCE_CONTROL_PLANE_PORT="$KILL_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$KILL_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$KILL_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=8 PI_SCIENCE_TEST_BOOTSTRAP_BARRIER="$KILL_BOOTSTRAP_BARRIER" bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/kill-bootstrap-owner.log" 2>&1 &
 KILL_BOOTSTRAP_OWNER=$!
 wait_file "$KILL_BOOTSTRAP_BARRIER.ready" || fail "SIGKILL bootstrap did not reach barrier"
 KILL_SUPERVISOR_PID="$(cat "$KILL_BOOTSTRAP_BARRIER.pid")"; KILL_SUPERVISOR_STARTED="$(cat "$KILL_BOOTSTRAP_BARRIER.started")"
@@ -387,7 +415,7 @@ kill "$PREEXISTING_PID"; wait "$PREEXISTING_PID" 2>/dev/null || true
 
 # Sequential slow readiness remains within one coherent detached deadline.
 DETACH_CONTROL_PORT="$(free_port)"; DETACH_RUNTIME_PORT="$(free_port)"; DETACH_FRONTEND_PORT="$(free_port)"
-PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_CONTROL_PLANE_PORT="$DETACH_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$DETACH_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$DETACH_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=5 PI_SCIENCE_TEST_CONTROL_DELAY_MS=1200 PI_SCIENCE_TEST_FRONTEND_DELAY_MS=1200 bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/detach.log"
+PI_SCIENCE_PYTHON="$(command -v python3)" PI_SCIENCE_CONTROL_PLANE_PORT="$DETACH_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$DETACH_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$DETACH_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=5 PI_SCIENCE_TEST_CONTROL_DELAY_MS=1200 PI_SCIENCE_TEST_FRONTEND_DELAY_MS=1200 bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/detach.log"
 assert_contains "$TEMP_ROOT/detach.log" 'running in the background'
 [ -d "$FIXTURE/.runtime/pi-science/run.state" ] || fail "detached start did not write run.state"
 PI_SCIENCE_CONTROL_PLANE_PORT="$DETACH_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$DETACH_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$DETACH_FRONTEND_PORT" bash "$FIXTURE/scripts/pi-science.sh" status >"$TEMP_ROOT/status.log"
@@ -408,7 +436,7 @@ wait_pid_gone "$DETACH_FRONTEND_PID" || fail "detached stop left frontend alive"
 
 # A never-ready detached frontend rolls back its supervisor, PID file and ports.
 NEVER_CONTROL_PORT="$(free_port)"; NEVER_RUNTIME_PORT="$(free_port)"; NEVER_FRONTEND_PORT="$(free_port)"
-if PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_CONTROL_PLANE_PORT="$NEVER_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$NEVER_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$NEVER_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=2 PI_SCIENCE_TEST_FRONTEND_NEVER_READY=1 bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/never.log" 2>&1; then fail "never-ready detached start returned success"; fi
+if PI_SCIENCE_PYTHON="$(command -v python3)" PI_SCIENCE_CONTROL_PLANE_PORT="$NEVER_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$NEVER_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$NEVER_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=2 PI_SCIENCE_TEST_FRONTEND_NEVER_READY=1 bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/never.log" 2>&1; then fail "never-ready detached start returned success"; fi
 assert_contains "$TEMP_ROOT/never.log" 'did not become ready within 2s'
 [ ! -e "$FIXTURE/.runtime/pi-science/run.state" ] || fail "timed-out detached start left run.state"
 NEVER_CONTROL_PID="$(cat "$FIXTURE/control.pid")"; NEVER_CONTROL_CHILD_PID="$(cat "$FIXTURE/control.child.pid")"; NEVER_FRONTEND_PID="$(cat "$FIXTURE/frontend.pid")"
@@ -422,7 +450,7 @@ wait_pid_gone "$NEVER_FRONTEND_PID" || fail "deadline rollback left frontend ali
 # stays direct so detached supervisors never see a tsx watch restart loop.
 WATCH_CONTROL_PORT="$(free_port)"; WATCH_RUNTIME_PORT="$(free_port)"; WATCH_FRONTEND_PORT="$(free_port)"
 rm -f "$FIXTURE/control.pid"
-PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_SERVER_WATCH=1 PI_SCIENCE_CONTROL_PLANE_PORT="$WATCH_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$WATCH_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$WATCH_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=10 bash "$FIXTURE/scripts/start.sh" >"$TEMP_ROOT/watch.log" 2>&1 &
+PI_SCIENCE_PYTHON="$(command -v python3)" PI_SCIENCE_SERVER_WATCH=1 PI_SCIENCE_CONTROL_PLANE_PORT="$WATCH_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$WATCH_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$WATCH_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=10 bash "$FIXTURE/scripts/start.sh" >"$TEMP_ROOT/watch.log" 2>&1 &
 WATCH_START_PID=$!
 wait_url "http://127.0.0.1:$WATCH_CONTROL_PORT/internal/ready" || { cat "$TEMP_ROOT/watch.log" >&2; fail "watch control plane did not become ready"; }
 wait_url "http://127.0.0.1:$WATCH_FRONTEND_PORT" || { cat "$TEMP_ROOT/watch.log" >&2; fail "watch frontend did not become ready"; }
@@ -443,7 +471,7 @@ INT_CONTROL_PORT="$(free_port)"; INT_RUNTIME_PORT="$(free_port)"; INT_FRONTEND_P
 cat > "$TEMP_ROOT/test-sigint.py" <<'PY'
 import os, signal, socket, subprocess, sys, time, urllib.request
 script, control, runtime, frontend, python, cli, log = sys.argv[1:]
-env = {**os.environ, "PI_SCIENCE_PYTHON": python, "PI_CLI_PATH": cli, "PI_SCIENCE_CONTROL_PLANE_PORT": control, "PI_SCIENCE_RUNTIME_PORT": runtime, "PI_SCIENCE_FRONTEND_PORT": frontend, "PI_SCIENCE_STARTUP_TIMEOUT_SECONDS": "5"}
+env = {**os.environ, "PI_SCIENCE_PYTHON": python, "PI_SCIENCE_CONTROL_PLANE_PORT": control, "PI_SCIENCE_RUNTIME_PORT": runtime, "PI_SCIENCE_FRONTEND_PORT": frontend, "PI_SCIENCE_STARTUP_TIMEOUT_SECONDS": "5"}
 with open(log, "wb") as output:
     child = subprocess.Popen(["bash", script], env=env, stdout=output, stderr=subprocess.STDOUT)
     deadline = time.time() + 10

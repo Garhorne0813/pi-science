@@ -100,6 +100,9 @@ export function useConversationFollow({ scrollRef, virtuosoRef, scope, blocks, w
         following.current = true;
         scheduleFollow();
       }
+      // Virtualization may adjust the viewport after its height callback.
+      // A layout scroll still follows unless a user gesture opted out.
+      if (following.current && scroller.scrollHeight - top - scroller.clientHeight > 1) scheduleFollow();
       setShowScrollDown(!following.current && !nearBottom);
     };
     scroller.addEventListener("scroll", onScroll, { passive: true });

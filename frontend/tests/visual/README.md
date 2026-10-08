@@ -94,7 +94,7 @@ Covered:
 
 Intentionally not covered yet (streaming/tool-state visuals belong to the
 conversation UI milestone; the SSE fixture is ready to push scripted
-`text.updated` / `agent_start` / `tool.updated` events):
+`message.delta` / `operation.started` / `tool.updated` events):
 
 - Mid-stream rendering (streaming text, open code fences, running tool cards).
 - Tool error states, interaction/question prompts, research-loop cards.

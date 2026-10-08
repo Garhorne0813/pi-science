@@ -8,6 +8,8 @@ vi.mock("../security/outbound-security.js", async (original) => ({
   validateConnectorOutboundUrl: async (url: string) => new URL(url),
 }));
 vi.mock("../security/egress-audit.js", () => ({ egressAuditEnabled: async () => true, recordEgress: vi.fn() }));
+// Force this case onto the direct socket path rather than the cloud proxy.
+vi.hoisted(() => { process.env.no_proxy = "*"; });
 import { createMcpFetch } from "./runtime-fetch.js";
 import { recordEgress } from "../security/egress-audit.js";
 it("blocks DNS rebinding at the actual socket lookup", async () => {

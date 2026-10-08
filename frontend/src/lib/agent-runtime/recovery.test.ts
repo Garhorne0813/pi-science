@@ -397,7 +397,7 @@ describe("runtime conversation recovery", () => {
     expect(useRuntimeStore.getState().working).toBe(true);
   });
 
-  it("uses state idle to settle a turn when agent_settled was missed", async () => {
+  it("uses state idle to settle a turn when operation.settled was missed", async () => {
     let stateReads = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -415,7 +415,7 @@ describe("runtime conversation recovery", () => {
 
     await useRuntimeStore.getState().connect("/workspace", "session-a");
     expect(useRuntimeStore.getState().working).toBe(true);
-    // No agent_settled is emitted. Reconnect recovery must use the persisted
+    // No operation.settled is emitted. Reconnect recovery must use the persisted
     // messages plus the authoritative idle state instead.
     const source = FakeEventSource.instances[0];
     source.readyState = FakeEventSource.CONNECTING;
@@ -885,11 +885,11 @@ describe("runtime conversation recovery", () => {
 
     await useRuntimeStore.getState().sendPrompt("hello");
     // Live turn: user block id is user-<ts>; agent block id is the SSE partId.
-    FakeEventSource.instances.at(-1)!.emit("text.updated", { type: "text.updated", sessionId: "session-a", partId: "live-part", text: "world" });
+    FakeEventSource.instances.at(-1)!.emit("message.delta", { type: "message.delta", sessionId: "session-a", partId: "live-part", text: "world" });
     expect(useRuntimeStore.getState().thread.blocks.some((b) => b.kind === "user")).toBe(true);
     expect(useRuntimeStore.getState().thread.blocks.some((b) => b.kind === "agent" && (b as { parts?: Array<{ id: string }> }).parts?.some((p) => p.id === "live-part"))).toBe(true);
 
-    FakeEventSource.instances.at(-1)!.emit("session.idle", { type: "session.idle", sessionId: "session-a" });
+    FakeEventSource.instances.at(-1)!.emit("operation.settled", { type: "operation.settled", status: "completed", sessionId: "session-a" });
     await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false));
     await vi.waitFor(() => {
       const ids = useRuntimeStore.getState().thread.blocks.map((b) => b.id);

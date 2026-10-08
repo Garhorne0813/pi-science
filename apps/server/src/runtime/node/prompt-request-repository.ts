@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { unlink } from "node:fs/promises";
-import { appendJsonLineUnlocked, readJson, readJsonLines, withFileWriteLock, writeJsonAtomic, workspaceFile } from "../../storage/persistence.js";
+import { appendJsonLineUnlocked, readJsonLines, withFileWriteLock, workspaceFile } from "../../storage/persistence.js";
 import type { SessionRepository } from "./session-repository.js";
 
 export type PromptRequestState = "pending" | "accepted" | "persisted" | "rejected" | "indeterminate";
@@ -23,12 +22,6 @@ interface PromptRequestRecord {
   error_code?: string;
 }
 
-interface PromptAssociationMarker {
-  version: 1;
-  session_id: string;
-  client_message_id: string;
-}
-
 export type PreparePromptResult =
   | { dispatch: true; status: PromptRequestStatus }
   | { dispatch: false; status: PromptRequestStatus }
@@ -36,17 +29,15 @@ export type PreparePromptResult =
   | { conflict: true };
 
 const SERVER_INSTANCE_ID = randomUUID();
+const INDETERMINATE_CODES = new Set([
+  "timeout", "process_closed", "process_exit", "write_failed", "spawn_failed",
+  "runtime_command_failed", "internal_error", "agent_runtime_error", "worker_error",
+]);
+
+export function isPromptDeliveryIndeterminate(code: string): boolean { return INDETERMINATE_CODES.has(code); }
 
 function requestFile(cwd: string): string {
   return workspaceFile(cwd, "prompt-requests.jsonl");
-}
-
-/** Must stay in sync with the Pi runtime extension's marker path. The hashed
- *  session component prevents path traversal and keeps identifiers out of
- *  filesystem names. */
-export function promptAssociationPath(cwd: string, sessionId: string): string {
-  const sessionKey = createHash("sha256").update(sessionId).digest("hex");
-  return workspaceFile(cwd, `prompt-associations/${sessionKey}.json`);
 }
 
 function digestMessage(message: string): string {
@@ -71,17 +62,15 @@ function asStatus(record: PromptRequestRecord): PromptRequestStatus {
 }
 
 /** Durable idempotency ledger for a workspace. It stores only the content
- *  digest and delivery metadata; prompt text stays in Pi's normal transcript. */
+ *  digest and delivery metadata; prompt text stays in the agent transcript. */
 export class PromptRequestRepository {
   constructor(
     private readonly sessions: Pick<SessionRepository, "messages">,
     private readonly serverInstanceId: string = SERVER_INSTANCE_ID,
   ) {}
 
-  /** Serialize the sidecar association and Pi preflight for one session across
-   *  server processes. Pi RPC acknowledges prompt preflight after the extension
-   *  consumes the marker, so releasing here prevents a later request from
-   *  replacing an association before that exact prompt reaches Pi. */
+  /** Serialize prompt admission for one session across server processes, so two
+   *  concurrent sends cannot both decide they are the one to dispatch. */
   async withSessionMutationLock<T>(cwd: string, sessionId: string, operation: () => Promise<T>): Promise<T> {
     const sessionKey = createHash("sha256").update(sessionId).digest("hex");
     return withFileWriteLock(workspaceFile(cwd, `prompt-mutations/${sessionKey}`), operation);
@@ -96,6 +85,21 @@ export class PromptRequestRepository {
       if (prior && prior.content_sha256 !== contentSha256) return { conflict: true };
 
       if (prior?.status === "persisted") return { dispatch: false, status: asStatus(prior) };
+      if (prior) {
+        // A lost acknowledgement can leave even a rejected ledger record next
+        // to an already-durable message. Reconcile this ID before any dispatch.
+        const matches = (await this.sessions.messages(cwd, sessionId))
+          .filter((message) => message.role === "user" && message.client_message_id === clientMessageId);
+        if (matches.length === 1) {
+          prior = await this.appendState(file, prior, "persisted", { durable_message_id: matches[0]!.id });
+          return { dispatch: false, status: asStatus(prior) };
+        }
+        if (matches.length > 1 || (prior.status === "rejected" && isPromptDeliveryIndeterminate(prior.error_code ?? ""))) {
+          prior = await this.appendState(file, prior, "indeterminate", {
+            error_code: matches.length > 1 ? "multiple_durable_messages" : prior.error_code,
+          });
+        }
+      }
       if (prior && prior.status !== "rejected") {
         if (prior.server_instance_id !== this.serverInstanceId && prior.status !== "indeterminate") {
           prior = await this.appendState(file, prior, "indeterminate", { error_code: "server_restarted_before_confirmation" });
@@ -103,10 +107,10 @@ export class PromptRequestRepository {
         return { dispatch: false, status: asStatus(prior) };
       }
 
-      // A different unresolved ID may still have a Pi prompt in preflight or
-      // in flight. Never replace its marker or dispatch around it. First
-      // reconcile against authoritative message metadata so a completed write
-      // does not unnecessarily block the next prompt.
+      // A different unresolved ID may still have a prompt in flight. Never
+      // dispatch around it. First reconcile against authoritative message
+      // metadata so a completed write does not unnecessarily block the next
+      // prompt.
       const latestForSession = new Map<string, PromptRequestRecord>();
       for (const row of records) {
         if (row.session_id === sessionId) latestForSession.set(row.client_message_id, row);
@@ -128,20 +132,10 @@ export class PromptRequestRepository {
       }
 
       const pending = this.newRecord(sessionId, clientMessageId, contentSha256, "pending");
-      // Write intent first. If the process dies before the sidecar or before
-      // Pi accepts the operation, a retry sees an unresolved ID and will not
-      // issue a duplicate prompt.
+      // Write intent first. If the process dies before the worker accepts the
+      // operation, a retry sees an unresolved ID and will not issue a duplicate
+      // prompt.
       await appendJsonLineUnlocked(file, pending);
-      try {
-        await writeJsonAtomic(promptAssociationPath(cwd, sessionId), {
-          version: 1,
-          session_id: sessionId,
-          client_message_id: clientMessageId,
-        } satisfies PromptAssociationMarker);
-      } catch {
-        const rejected = await this.appendState(file, pending, "rejected", { error_code: "association_marker_write_failed" });
-        return { dispatch: false, status: asStatus(rejected) };
-      }
       return { dispatch: true, status: asStatus(pending) };
     });
   }
@@ -164,21 +158,6 @@ export class PromptRequestRepository {
     });
   }
 
-  /** Remove only this request's unused marker. Comparing under the request
-   *  ledger lock prevents an old rejected command from clearing a newer send. */
-  async clearAssociation(cwd: string, sessionId: string, clientMessageId: string): Promise<void> {
-    const file = requestFile(cwd);
-    await withFileWriteLock(file, async () => {
-      const markerPath = promptAssociationPath(cwd, sessionId);
-      const marker = await readJson<PromptAssociationMarker | null>(markerPath, null);
-      if (marker?.session_id === sessionId && marker.client_message_id === clientMessageId) {
-        await unlink(markerPath).catch((error) => {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        });
-      }
-    });
-  }
-
   async getStatus(cwd: string, sessionId: string, clientMessageId: string): Promise<PromptRequestStatus | null> {
     const file = requestFile(cwd);
     const records = await readJsonLines<PromptRequestRecord>(file);
@@ -196,6 +175,10 @@ export class PromptRequestRepository {
     if (matches.length > 1) {
       const indeterminate = await this.update(cwd, sessionId, clientMessageId, "indeterminate", { error_code: "multiple_durable_messages" });
       return indeterminate;
+    }
+
+    if (record.status === "rejected" && isPromptDeliveryIndeterminate(record.error_code ?? "")) {
+      return this.update(cwd, sessionId, clientMessageId, "indeterminate", { error_code: record.error_code });
     }
 
     if (record.server_instance_id !== this.serverInstanceId && record.status !== "persisted" && record.status !== "rejected" && record.status !== "indeterminate") {

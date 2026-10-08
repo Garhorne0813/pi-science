@@ -17,6 +17,7 @@ const STYLE_PRESETS: Array<{ id: MoleculeStylePreset; labelKey: string }> = [
   { id: "spacefill", labelKey: "molecule.style.spacefill" },
   { id: "surface", labelKey: "molecule.style.surface" },
 ];
+const RENDER_TIMEOUT_MS = 45_000;
 
 /**
  * Local-first Mol* structure viewer. Embedded Mol* controls expose structure
@@ -33,6 +34,7 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
   const [error, setError] = useState<string | null>(null);
   const [stylePreset, setStylePreset] = useState<MoleculeStylePreset>("auto");
   const [styleBusy, setStyleBusy] = useState(false);
+  const [retry, setRetry] = useState(0);
   const format = moleculeFormatFor(filename, text);
 
   useEffect(() => {
@@ -40,6 +42,15 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
     if (!container || !format) return;
     const generation = ++generationRef.current;
     let disposed = false;
+    let timedOut = false;
+    const timeout = window.setTimeout(() => {
+      if (disposed || generation !== generationRef.current) return;
+      timedOut = true;
+      viewerRef.current?.dispose();
+      viewerRef.current = null;
+      setError(t("molecule.renderTimeout"));
+      setRendering(false);
+    }, RENDER_TIMEOUT_MS);
     setRendering(true);
     setError(null);
     setSummary(null);
@@ -52,36 +63,39 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
         handle = await createMolstarViewer(container);
       } catch (cause) {
         console.error("Failed to initialize Mol* viewer", cause);
-        if (!disposed && generation === generationRef.current) setError(t("molecule.viewerFailed"));
-        if (!disposed && generation === generationRef.current) setRendering(false);
+        if (!disposed && !timedOut && generation === generationRef.current) setError(t("molecule.viewerFailed"));
+        if (!disposed && !timedOut && generation === generationRef.current) setRendering(false);
+        window.clearTimeout(timeout);
         return;
       }
 
       try {
-        if (disposed || generation !== generationRef.current) {
+        if (disposed || timedOut || generation !== generationRef.current) {
           handle.dispose();
           return;
         }
         viewerRef.current = handle;
         const next = await handle.load(filename, text);
-        if (disposed || generation !== generationRef.current) return;
+        if (disposed || timedOut || generation !== generationRef.current) return;
         setSummary(next);
       } catch (cause) {
         console.error("Failed to load molecular structure", cause);
-        if (!disposed && generation === generationRef.current) setError(t("molecule.loadFailed"));
+        if (!disposed && !timedOut && generation === generationRef.current) setError(t("molecule.loadFailed"));
       } finally {
-        if (!disposed && generation === generationRef.current) setRendering(false);
+        window.clearTimeout(timeout);
+        if (!disposed && !timedOut && generation === generationRef.current) setRendering(false);
       }
     })();
 
     return () => {
+      window.clearTimeout(timeout);
       disposed = true;
       generationRef.current += 1;
       const handle = viewerRef.current;
       viewerRef.current = null;
       handle?.dispose();
     };
-  }, [filename, text, format, t]);
+  }, [filename, text, format, t, retry]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -194,8 +208,8 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
           {summary && <span className="ml-2">{t("molecule.atomCount", { count: summary.atomCount })}</span>}
         </div>
         {(rendering || error) && (
-          <div className="ui-popover pointer-events-none absolute bottom-3 left-3 z-10 max-w-[70%] rounded-input bg-surface/95 px-3 py-1.5 text-xs text-muted backdrop-blur">
-            {rendering ? t("molecule.rendering") : error}
+          <div className={`ui-popover absolute bottom-3 left-3 z-10 max-w-[70%] rounded-input bg-surface/95 px-3 py-1.5 text-xs text-muted backdrop-blur ${error && !rendering ? "pointer-events-auto" : "pointer-events-none"}`}>
+            {rendering ? t("molecule.rendering") : <>{error} <button type="button" className="ml-2 text-link underline" onClick={() => setRetry((value) => value + 1)}>{t("molecule.retry")}</button></>}
           </div>
         )}
       </div>

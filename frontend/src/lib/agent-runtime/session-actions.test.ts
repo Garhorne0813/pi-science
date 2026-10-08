@@ -595,12 +595,12 @@ describe("runtime session actions", () => {
 
     const connecting = useRuntimeStore.getState().connect("/workspace", "session-a");
     await Promise.resolve();
-    FakeEventSource.instances[0].emit("agent_start", {
-      type: "agent_start",
+    FakeEventSource.instances[0].emit("operation.started", {
+      type: "operation.started",
       sessionId: "session-a",
     });
-    FakeEventSource.instances[0].emit("text.updated", {
-      type: "text.updated",
+    FakeEventSource.instances[0].emit("message.delta", {
+      type: "message.delta",
       sessionId: "session-a",
       partId: "assistant-live",
       text: "still working",
@@ -667,8 +667,8 @@ describe("runtime session actions", () => {
     await useRuntimeStore.getState().connect("/workspace", "session-a");
 
     const sending = useRuntimeStore.getState().sendPrompt("accepted despite timeout");
-    FakeEventSource.instances[0].emit("text.updated", {
-      type: "text.updated",
+    FakeEventSource.instances[0].emit("message.delta", {
+      type: "message.delta",
       sessionId: "session-a",
       text: "answer started",
     });
@@ -707,7 +707,7 @@ describe("runtime session actions", () => {
     expect(useRuntimeStore.getState().turnLifecycle).toBe("aborted");
     expect(useRuntimeStore.getState().status).toBe("ready");
 
-    FakeEventSource.instances[0].emit("session.idle", { type: "session.idle", sessionId: "session-a" });
+    FakeEventSource.instances[0].emit("operation.settled", { type: "operation.settled", status: "completed", sessionId: "session-a" });
     expect(useRuntimeStore.getState().turnLifecycle).toBe("aborted");
   });
 

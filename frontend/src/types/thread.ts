@@ -9,6 +9,9 @@ import type { ToolPresentation } from "@pi-science/contracts";
  * these fields; the presentation adapter keeps that path explicit rather than
  * manufacturing an identity from timestamps or message text. */
 export interface ConversationBlockIdentity {
+  turnStatus?: "completed" | "declined" | "aborted" | "failed";
+  turnStartedAt?: string;
+  turnEndedAt?: string;
   turnId?: string;
   runId?: string;
   itemId?: string;

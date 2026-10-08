@@ -23,20 +23,20 @@ const planV2 = { action: "update", params: { id: 1, status: "completed" }, nextI
 function emitTurn(): void {
   const source = FakeEventSource.instances[0];
   const emit = (type: string, payload: Record<string, unknown>) => source.emit(type, { type, sessionId: SESSION, ...payload });
-  emit("agent_start", {});
-  emit("text.updated", { partId: "m1", text: "我先读取 turn-presentation.ts。" });
+  emit("operation.started", {});
+  emit("message.delta", { partId: "m1", text: "我先读取 turn-presentation.ts。" });
   emit("tool.updated", { callId: "c1", tool: "read", status: "running", title: "Reading turn-presentation.ts", input: { path: "frontend/src/lib/conversation/turn-presentation.ts" }, startedAt: "2026-08-30T02:00:01.000Z" });
   emit("tool.updated", { callId: "c1", tool: "read", status: "done", title: "Reading turn-presentation.ts", output: "export function buildTurnPresentations", endedAt: "2026-08-30T02:00:02.000Z" });
   emit("tool.updated", { callId: "td1", tool: "todo", status: "running", input: { action: "create" }, startedAt: "2026-08-30T02:00:02.100Z" });
   emit("tool.updated", { callId: "td1", tool: "todo", status: "done", output: "Created #1", details: planV1, endedAt: "2026-08-30T02:00:02.200Z" });
-  emit("text.updated", { partId: "m2", text: "接下来看事件折叠。" });
+  emit("message.delta", { partId: "m2", text: "接下来看事件折叠。" });
   emit("tool.updated", { callId: "c2", tool: "read", status: "running", title: "Reading event-fold.ts", input: { path: "frontend/src/lib/agent-runtime/event-fold.ts" }, startedAt: "2026-08-30T02:00:03.000Z" });
   emit("tool.updated", { callId: "c2", tool: "read", status: "done", title: "Reading event-fold.ts", output: "case \"tool.updated\"", endedAt: "2026-08-30T02:00:04.000Z" });
   emit("tool.updated", { callId: "td2", tool: "todo", status: "done", output: "Updated #1", details: planV2, endedAt: "2026-08-30T02:00:04.100Z" });
   emit("tool.updated", { callId: "c3", tool: "bash", status: "running", input: { command: "pnpm vitest run src/lib/conversation/turn-presentation.test.ts", description: "运行 turn 呈现层测试" }, startedAt: "2026-08-30T02:00:05.000Z" });
   emit("tool.updated", { callId: "c3", tool: "bash", status: "done", output: "7 passed", endedAt: "2026-08-30T02:00:06.000Z" });
-  emit("text.updated", { partId: "m3", text: "实现符合方案：一个 turn 只有一个 Activity。" });
-  emit("session.idle", {});
+  emit("message.delta", { partId: "m3", text: "实现符合方案：一个 turn 只有一个 Activity。" });
+  emit("operation.settled", {});
 }
 
 function stubWorkspace(): void {
@@ -122,8 +122,8 @@ describe("turn-level activity through the live event path", () => {
     stubWorkspace();
     await useRuntimeStore.getState().connect("/workspace", SESSION);
     const source = FakeEventSource.instances[0];
-    source.emit("agent_start", { type: "agent_start", sessionId: SESSION });
-    source.emit("text.updated", { type: "text.updated", sessionId: SESSION, partId: "m1", text: "我先读取实现。" });
+    source.emit("operation.started", { type: "operation.started", sessionId: SESSION });
+    source.emit("message.delta", { type: "message.delta", sessionId: SESSION, partId: "m1", text: "我先读取实现。" });
     source.emit("tool.updated", { type: "tool.updated", sessionId: SESSION, callId: "c1", tool: "read", status: "running", title: "Reading turn-presentation.ts", input: { path: "a.ts" } });
 
     const runtime = useRuntimeStore.getState();
@@ -191,7 +191,7 @@ describe("turn-level activity through the history path", () => {
 });
 
 describe("activity over time (PRD v1.2 §26/§28)", () => {
-  it("streams provisional text, keeps one phase row, and confirms the answer at session.idle", async () => {
+  it("streams provisional text, keeps one phase row, and confirms the answer at operation.settled", async () => {
     stubWorkspace();
     await useRuntimeStore.getState().connect("/workspace", SESSION);
     vi.useFakeTimers();
@@ -204,8 +204,8 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       };
       const { rerender } = render(view());
 
-      emit("agent_start", {});
-      emit("text.updated", { partId: "m1", text: "我先检查一下。" });
+      emit("operation.started", {});
+      emit("message.delta", { partId: "m1", text: "我先检查一下。" });
       rerender(view());
       // Prose streams immediately, then joins the open process when a tool arrives.
       expect(screen.getByText("我先检查一下。")).toBeInTheDocument();
@@ -240,14 +240,14 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       expect(screen.getByText("Working")).toBeInTheDocument();
 
       emit("tool.updated", { callId: "b1", tool: "bash", status: "done" });
-      emit("text.updated", { partId: "m2", text: "这是最终回答。" });
+      emit("message.delta", { partId: "m2", text: "这是最终回答。" });
       rerender(view());
       // The final answer is visible while its text is still streaming.
       expect(screen.getByText("这是最终回答。")).toBeInTheDocument();
       expect(screen.queryByRole("status")).not.toBeInTheDocument();
       expect(screen.getByText("Working")).toBeInTheDocument();
 
-      emit("session.idle", {});
+      emit("operation.settled", {});
       rerender(view());
       expect(screen.getByText("这是最终回答。")).toBeInTheDocument();
       // The turn is now terminal: commentary/tools collapse into the process

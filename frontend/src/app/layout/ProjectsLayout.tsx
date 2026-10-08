@@ -405,7 +405,7 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
 
   const handleNew = async () => {
     // Session creation is lazy: the first prompt creates the server-side
-    // session, avoiding an empty Pi process for every click. A repeated click
+    // session, avoiding an empty agent worker for every click. A repeated click
     // at the root is already on the intended landing, so it must not leave a
     // suppression marker behind for the next normal root entry.
     if (isWorkspaceRoot) {

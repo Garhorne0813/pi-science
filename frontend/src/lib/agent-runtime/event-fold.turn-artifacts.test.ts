@@ -119,7 +119,7 @@ describe("foldEvent turn.artifacts", () => {
       revision?: number,
       payloadRevision?: number,
     ): PiScienceEvent => ({
-      schemaVersion: 2,
+      schemaVersion: 3,
       eventId,
       seq,
       streamEpoch: "epoch-1",
@@ -253,8 +253,8 @@ describe("foldEvent turn.artifacts", () => {
     let state = threadWith([{ kind: "user", id: "user-1", text: "analyze" }]);
     // Part ids mirror Pi's anonymous-N series: one narration message, then the
     // final answer — the strip must land after the LAST one, not in between.
-    state = foldEvent(state, { type: "text.updated", sessionId: "s", partId: "anonymous-2", text: "narration" });
-    state = foldEvent(state, { type: "text.updated", sessionId: "s", partId: "anonymous-3", text: "final answer" });
+    state = foldEvent(state, { type: "message.delta", sessionId: "s", partId: "anonymous-2", text: "narration" });
+    state = foldEvent(state, { type: "message.delta", sessionId: "s", partId: "anonymous-3", text: "final answer" });
     state = foldEvent(state, { type: "turn.artifacts", sessionId: "s", turnId: "turn-1", artifacts: [{ path: "x.png", kind: "image", mime: "image/png", size: 1 }] });
     expect(state.blocks.map((block) => block.kind)).toEqual(["user", "agent", "agent", "artifact-summary"]);
     expect(state.index["turn-artifacts-turn-1"]).toBe(3);
@@ -264,13 +264,13 @@ describe("foldEvent turn.artifacts", () => {
     let state = threadWith([{ kind: "user", id: "user-1", text: "go" }]);
     const base = { type: "turn.artifacts", sessionId: "s" } as PiScienceEvent;
     // Turn 1: two assistant messages.
-    state = foldEvent(state, { type: "text.updated", sessionId: "s", partId: "anonymous-2", text: "r1a" });
-    state = foldEvent(state, { type: "text.updated", sessionId: "s", partId: "anonymous-3", text: "r1b" });
+    state = foldEvent(state, { type: "message.delta", sessionId: "s", partId: "anonymous-2", text: "r1a" });
+    state = foldEvent(state, { type: "message.delta", sessionId: "s", partId: "anonymous-3", text: "r1b" });
     state = foldEvent(state, { ...base, turnId: "turn-1", artifacts: [{ path: "x.png", kind: "image", mime: "image/png", size: 1 }] });
-    // Turn 2 (agent_start clears the turn state) with two assistant messages.
+    // Turn 2 (operation.started clears the turn state) with two assistant messages.
     resetTurnBuffer();
-    state = foldEvent(state, { type: "text.updated", sessionId: "s", partId: "anonymous-4", text: "r2a" });
-    state = foldEvent(state, { type: "text.updated", sessionId: "s", partId: "anonymous-5", text: "r2b" });
+    state = foldEvent(state, { type: "message.delta", sessionId: "s", partId: "anonymous-4", text: "r2a" });
+    state = foldEvent(state, { type: "message.delta", sessionId: "s", partId: "anonymous-5", text: "r2b" });
     state = foldEvent(state, { ...base, turnId: "turn-2", artifacts: [{ path: "y.csv", kind: "table", mime: "text/csv", size: 2 }] });
     expect(state.blocks.map((block) => block.kind)).toEqual(["user", "agent", "agent", "artifact-summary", "agent", "agent", "artifact-summary"]);
     expect(state.blocks[3]).toMatchObject({ turnId: "turn-1" });
@@ -283,7 +283,7 @@ describe("foldEvent turn.artifacts", () => {
       { kind: "agent", id: "exact", parts: [{ id: "exact", text: "matched" }] },
     ]);
     // A later live text block moves the turn-end anchor away from "exact".
-    state = foldEvent(state, { type: "text.updated", sessionId: "s", partId: "live-part", text: "live text" });
+    state = foldEvent(state, { type: "message.delta", sessionId: "s", partId: "live-part", text: "live text" });
     state = foldEvent(state, { type: "turn.artifacts", sessionId: "s", turnId: "turn-1", assistantMessageId: "exact", artifacts: [{ path: "a.png", kind: "image", mime: "image/png", size: 1 }] });
     // The strip lands after the turn's FINAL assistant message ("live-part"),
     // not right after "exact".
