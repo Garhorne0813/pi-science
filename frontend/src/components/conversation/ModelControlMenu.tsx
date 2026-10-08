@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type FocusEvent, type PointerEvent } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown, ChevronRight, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -80,6 +80,12 @@ export function ModelControlMenu({
   const roundedContextPercent = Math.round(contextPercent ?? 0);
   const contextRingLabel = `${labels.context}: ${contextSummary} · ${roundedContextPercent}%${nearCompaction ? ` · ${labels.threshold}: ${compactionThresholdPercent}%` : ""}`;
 
+  const [submenuOffset, setSubmenuOffset] = useState(4);
+  const fitSubmenu = (event: FocusEvent<HTMLDivElement> | PointerEvent<HTMLDivElement>) => {
+    // Below the sm breakpoint there is no room for two adjacent menus.
+    // Open the submenu over its parent instead of placing it offscreen.
+    setSubmenuOffset(window.innerWidth < 640 ? -event.currentTarget.getBoundingClientRect().width : 4);
+  };
   // Model list: filter by query, then group by provider preserving first-seen order.
   const normalizedQuery = modelQuery.trim().toLowerCase();
   const visibleModels = normalizedQuery
@@ -141,13 +147,13 @@ export function ModelControlMenu({
           className={MENU_ROOT_CLASS}
         >
           <DropdownMenu.Sub>
-            <DropdownMenu.SubTrigger className={MENU_ITEM_CLASS}>
+            <DropdownMenu.SubTrigger onFocus={fitSubmenu} onPointerEnter={fitSubmenu} className={MENU_ITEM_CLASS}>
               <span className="font-medium">{labels.model}</span>
               <span className="ml-auto max-w-[120px] truncate text-muted">{modelLabel}</span>
               <ChevronRight size={13} className="shrink-0 text-muted" />
             </DropdownMenu.SubTrigger>
             <DropdownMenu.Portal>
-              <DropdownMenu.SubContent sideOffset={4} alignOffset={-6} collisionPadding={8} className={MENU_CONTENT_CLASS}>
+              <DropdownMenu.SubContent sideOffset={submenuOffset} alignOffset={-6} collisionPadding={8} className={MENU_CONTENT_CLASS}>
                 <div className="mb-1.5 border-b border-faint pb-1.5">
                   <div className="flex h-8 items-center gap-1.5 rounded-input bg-surface-2 px-2">
                     <Search size={12} className="shrink-0 text-muted" />
@@ -192,13 +198,13 @@ export function ModelControlMenu({
           </DropdownMenu.Sub>
 
           <DropdownMenu.Sub>
-            <DropdownMenu.SubTrigger disabled={!selectedModel || thinkingLevels.length === 0} className={MENU_ITEM_CLASS}>
+            <DropdownMenu.SubTrigger onFocus={fitSubmenu} onPointerEnter={fitSubmenu} disabled={!selectedModel || thinkingLevels.length === 0} className={MENU_ITEM_CLASS}>
               <span className="font-medium">{labels.effort}</span>
               <span className="ml-auto text-muted">{thinkingLabel}</span>
               <ChevronRight size={13} className="shrink-0 text-muted" />
             </DropdownMenu.SubTrigger>
             <DropdownMenu.Portal>
-              <DropdownMenu.SubContent sideOffset={4} alignOffset={-6} collisionPadding={8} className={MENU_CONTENT_CLASS}>
+              <DropdownMenu.SubContent sideOffset={submenuOffset} alignOffset={-6} collisionPadding={8} className={MENU_CONTENT_CLASS}>
                 <div className="max-h-[min(320px,calc(100vh-120px))] overflow-y-auto overscroll-contain">
                   <DropdownMenu.RadioGroup value={thinking}>
                   {thinkingLevels.map((level) => (

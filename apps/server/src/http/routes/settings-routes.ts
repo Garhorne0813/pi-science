@@ -1,3 +1,4 @@
+import { registerModelSelectionRoutes } from "./model-selection-routes.js";
 import { readFile } from "node:fs/promises";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { defaultProgressAppearance, progressAppearanceInputSchema, progressAppearanceSchema } from "@pi-science/contracts";
@@ -70,9 +71,7 @@ function parseProjectSubagent(content: string): { name: string; description: str
 }
 async function respondWithRuntimeReload<T extends Record<string, unknown>>(nodeSessionService: NodeSessionService, reply: FastifyReply, payload: T): Promise<(T & { session_replacements: Array<{ cwd: string; oldId: string; newId: string }> }) | FastifyReply> {
   try {
-    const replacements = typeof payload.model === "string" && typeof payload.thinking === "string"
-      ? await nodeSessionService.reloadConfiguration({ model: payload.model, thinking: payload.thinking })
-      : await nodeSessionService.reloadConfiguration();
+    const replacements = await nodeSessionService.reloadConfiguration();
     return { ...payload, session_replacements: replacements };
   }
   catch (error) {
@@ -739,89 +738,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       await mutate((config) => { if (String(config.model ?? "").startsWith(`${request.params.provider}/`)) config.model = ""; });
     } else await mutate((config) => { if (config.api_keys) delete config.api_keys[request.params.provider]; if (String(config.model ?? "").startsWith(`${request.params.provider}/`)) config.model = ""; });
     return respondWithReload(nodeSessionService, reply, { ok: true, provider: request.params.provider }); });
-  app.put("/api/settings/model", async (request, reply) => { const body = (request.body ?? {}) as { model?: unknown; thinking?: unknown; session_id?: unknown }; const model = String(body.model ?? ""); const requestedThinking = String(body.thinking ?? "high"); const cwdValue = query(request, "cwd", ""); const current = await load(); const canonicalState = modelResources?.repository.readSync(); const useCanonicalResources = Boolean(modelResources && (canonicalState?.migration || canonicalState?.providers?.length || canonicalState?.models?.length));
-    if (useCanonicalResources && modelResources) {
-      const canonicalModel = canonicalState?.aliases[model] ?? model;
-      const selected = (await modelResources.listModels({ available: true })).find((item) => item.id === canonicalModel);
-      if (model && !selected) return reply.code(422).send({ code: "no_routable_endpoint", error: "Model is not available from a configured provider" });
-      const coreModel = (await modelCatalog(nodeSessionService, current, cwdValue, runtimeCatalog)).available.find((item) => item.id === canonicalModel);
-      if (model && !coreModel) return reply.code(422).send({ code: "unsupported_runtime_model", error: "Model is unavailable in agent-core" });
-      let levels = normalizeThinkingLevels(coreModel?.thinking_levels ?? selected?.capabilities.thinking_levels);
-      let runtimeLevelsVerified = false;
-      if (cwdValue && canonicalModel) {
-        const actual = await nodeSessionService.availableThinkingLevels(cwdValue, canonicalModel).catch(() => null);
-        if (actual?.success && actual.data && typeof actual.data === "object") {
-          const data = actual.data as Record<string, unknown>;
-          const runtimeLevels = normalizeThinkingLevels(data.levels);
-          if (runtimeLevels && data.model === canonicalModel) {
-            levels = runtimeLevels;
-            runtimeLevelsVerified = true;
-          }
-        }
-      }
-      const thinking = clampThinking(requestedThinking, levels ?? ["off"]);
-      // A cold session also needs a durable configure commit: its saved model
-      // intentionally wins over defaults when its worker reopens.
-      if (typeof body.session_id === "string" && body.session_id) {
-        const configured = await nodeSessionService.configure(body.session_id, cwdValue, canonicalModel, thinking);
-        if (!configured.success) return reply.code(configured.code === "busy" ? 409 : 502).send({ ok: false, ...configured });
-      }
-      await mutate((config) => { config.model = canonicalModel; config.thinking = thinking; const contextWindow = Number(selected?.capabilities.context_window ?? 0); if (contextWindow > 0) config.model_context_window = contextWindow; const maxOutputTokens = Number(selected?.capabilities.max_output_tokens ?? 0); if (maxOutputTokens > 0) config.model_max_output_tokens = maxOutputTokens; });
-      if (runtimeLevelsVerified && canonicalModel.startsWith("user-") && selected) {
-        const separator = canonicalModel.indexOf("/");
-        if (separator > 0) await modelResources.applyRuntimeCapabilities(canonicalModel.slice(0, separator), canonicalModel.slice(separator + 1), { reasoning: selected.capabilities.reasoning, thinking_levels: levels ?? selected.capabilities.thinking_levels });
-      }
-      const reloaded = await respondWithRuntimeReload(nodeSessionService, reply, { ok: true, model: canonicalModel, thinking });
-      if (!reloaded || "send" in reloaded) return reloaded;
-      if (cwdValue && canonicalModel) {
-        const actual = await nodeSessionService.availableThinkingLevels(cwdValue, canonicalModel).catch(() => null);
-        if (actual?.success && actual.data && typeof actual.data === "object") {
-          const data = actual.data as Record<string, unknown>;
-          const runtimeLevels = normalizeThinkingLevels(data.levels);
-          if (runtimeLevels && data.model === canonicalModel) {
-            if (canonicalModel.startsWith("user-") && selected) {
-              const separator = canonicalModel.indexOf("/");
-              if (separator > 0) await modelResources.applyRuntimeCapabilities(canonicalModel.slice(0, separator), canonicalModel.slice(separator + 1), { reasoning: selected.capabilities.reasoning, thinking_levels: runtimeLevels });
-            }
-            const effective = clampThinking(requestedThinking, runtimeLevels);
-            if (effective !== thinking) {
-              await mutate((config) => { if (String(config.model ?? "") === canonicalModel) config.thinking = effective; });
-              reloaded.thinking = effective;
-            }
-          }
-        }
-      }
-      return reloaded;
-    }
-    const catalog = await modelCatalog(nodeSessionService, current, cwdValue, runtimeCatalog); const selected = catalog.available.find((item) => item.id === model); if (model && !selected) return reply.code(400).send({ error: "Model is not available from a configured provider" }); // Never persist a thinking level the model does not support. Clamp to the
-    // catalog levels for the selected model; when the levels are unknown,
-    // fall back to "off" instead of inventing a level.
-    const levels = normalizeThinkingLevels(selected?.thinking_levels);
-    const thinking = clampThinking(requestedThinking, levels ?? ["off"]);
-    await mutate((config) => { config.model = model; config.thinking = thinking; const contextWindow = Number(selected?.context_window ?? 0); if (contextWindow > 0) config.model_context_window = contextWindow; });
-    // Reload the Pi runtime so the new model/thinking take effect, keeping the
-    // existing 502 + session_replacements semantics.
-    const reloaded = await respondWithRuntimeReload(nodeSessionService, reply, { ok: true, model, thinking });
-    if (!reloaded || "send" in reloaded) return reloaded;
-    // The runtime is the final authority for the active model: once it has
-    // reloaded with the new model, correct the persisted level to the
-    // runtime's actual supported set (identity must match). Never reload a
-    // second time; the runtime already adopted the level it supports.
-    if (cwdValue && model) {
-      const actual = await nodeSessionService.availableThinkingLevels(cwdValue, model).catch(() => null);
-      if (actual && actual.success && actual.data && typeof actual.data === "object") {
-        const data = actual.data as Record<string, unknown>;
-        const actualLevels = normalizeThinkingLevels(data.levels);
-        if (actualLevels && data.model === model) {
-          const effective = clampThinking(requestedThinking, actualLevels);
-          if (effective !== thinking) {
-            await mutate((config) => { if (String(config.model ?? "") !== model) return; config.thinking = effective; });
-            reloaded.thinking = effective;
-          }
-        }
-      }
-    }
-    return reloaded; });
+  registerModelSelectionRoutes(app, nodeSessionService, settingsStore, modelResources, async (cwd) => (await modelCatalog(nodeSessionService, await load(), cwd, runtimeCatalog)).available);
   app.put("/api/settings/compaction", async (request, reply) => { const body = (request.body ?? {}) as { enabled?: unknown; threshold_percent?: unknown }; const threshold = body.threshold_percent === undefined ? undefined : Number(body.threshold_percent); if (threshold !== undefined && (!Number.isFinite(threshold) || threshold < 50 || threshold > 95)) return reply.code(400).send({ error: "Compaction threshold must be between 50 and 95 percent" }); const stored = await mutate((config) => { config.compaction_enabled = body.enabled !== false; if (threshold !== undefined) config.compaction_threshold_percent = threshold; return config.compaction_threshold_percent; }); return respondWithReload(nodeSessionService, reply, { ok: true, compaction_enabled: body.enabled !== false, compaction_threshold_percent: threshold ?? stored }); });
   app.get("/api/settings/custom-providers", async () => {
     const config = await load();

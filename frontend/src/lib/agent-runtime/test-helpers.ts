@@ -100,6 +100,7 @@ export function installRuntimeTestEnvironment(): void {
       client: null,
       sessions: [],
       activeSessionId: null,
+      draftModelSelection: null,
       cwd: ".",
       thread: { blocks: [], index: {}, loaded: false },
       historyCursor: null,

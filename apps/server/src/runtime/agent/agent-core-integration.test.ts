@@ -114,7 +114,7 @@ describe("agent-core main service integration", () => {
     expect(await instance.state(created.id, cwd)).toMatchObject({ id: created.id });
   }, 20_000);
 
-  it("commits a settings model change before reload and preserves it on cold resume", async () => {
+  it("commits a session model change before reload and preserves it on cold resume", async () => {
     const cwd = await realpath(await mkdtemp(join(tmpdir(), "pi-science-core-model-reload-")));
     roots.push(cwd);
     await mkdir(join(cwd, ".pi-science"));
@@ -122,11 +122,13 @@ describe("agent-core main service integration", () => {
     const instance = service();
     const created = await instance.create({ cwd, config: { model: "deepseek/deepseek-flash", thinking: "off", skills: [], extensions: [] } });
     if (!("id" in created)) throw new Error(String(created.error));
-    expect(await instance.reloadConfiguration({ model: "deepseek/deepseek-v4-pro", thinking: "high" })).toEqual([]);
+    expect(await instance.configure(created.id, cwd, "deepseek/deepseek-v4-pro", "high")).toMatchObject({ success: true });
+    expect(await instance.reloadConfiguration()).toEqual([]);
     expect(await instance.state(created.id, cwd)).toMatchObject({ model: "deepseek/deepseek-v4-pro", thinking: "high" });
     expect(await instance.resume(created.id, cwd)).toMatchObject({ success: true });
     expect(await instance.state(created.id, cwd)).toMatchObject({ model: "deepseek/deepseek-v4-pro", thinking: "high" });
-    await instance.reloadConfiguration({ model: "deepseek/deepseek-flash", thinking: "off" });
+    expect(await instance.configure(created.id, cwd, "deepseek/deepseek-flash", "off")).toMatchObject({ success: true });
+    await instance.reloadConfiguration();
     expect(await instance.resume(created.id, cwd)).toMatchObject({ success: true });
     expect(await instance.state(created.id, cwd)).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
   }, 30_000);

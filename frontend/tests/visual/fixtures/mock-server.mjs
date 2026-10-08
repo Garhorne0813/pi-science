@@ -101,6 +101,13 @@ function handleApi(req, res, url) {
     return json(res, 200, FIXTURES.config);
   }
 
+  if (method === "GET" && pathname === "/api/model-selection/default") {
+    return json(res, 200, { scope: "default", selection: { model: FIXTURES.config.model, thinking: FIXTURES.config.thinking } });
+  }
+  if (method === "GET" && pathname === "/api/model-selection/catalog") {
+    return json(res, 200, { available_models: FIXTURES.config.available_models });
+  }
+
   // Session list + lazy creation.
   if (method === "GET" && pathname === "/api/sessions") {
     log();
@@ -126,6 +133,9 @@ function handleApi(req, res, url) {
     }
     const sub = sessionMatch[2] || "";
 
+    if (method === "GET" && sub === "/model-selection") {
+      return json(res, 200, { scope: "session", session_id: sessionId, selection: { model: FIXTURES.sessionState.model, thinking: FIXTURES.sessionState.thinking } });
+    }
     if (method === "GET" && sub === "/messages/index") {
       log();
       return json(res, 200, FIXTURES.userMessageIndex);

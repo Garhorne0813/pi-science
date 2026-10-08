@@ -926,7 +926,9 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       if (existing) return existing;
       const promise = (async () => {
         const client = getClient();
-        const result = await client.createSession(requestCwd);
+        const draft = get().draftModelSelection;
+        const selection = draft?.cwd === requestCwd ? draft.selection : undefined;
+        const result = selection?.model ? await client.createSession(requestCwd, selection.model, selection.thinking) : await client.createSession(requestCwd);
         if (get().cwd !== requestCwd) {
           throw new Error("Workspace changed while the conversation was being created");
         }
@@ -940,6 +942,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         set({
           client,
           activeSessionId: result.id,
+          draftModelSelection: selection && get().draftModelSelection === draft ? null : get().draftModelSelection,
           thread: live.thread.blocks.length > 0 ? live.thread : emptyThread(),
           historyCursor: null,
           historyHasMore: false,

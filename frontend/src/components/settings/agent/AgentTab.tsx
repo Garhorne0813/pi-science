@@ -3,8 +3,10 @@ import { useTranslation } from "react-i18next";
 import { ContextManagementSection } from "../ContextManagementSection";
 import type { SettingsConfig } from "../../../lib/settings";
 import { configuredContextWindow } from "./context-policy";
+import type { ModelSelection } from "@pi-science/contracts";
+import { DefaultModelSelection } from "./DefaultModelSelection";
 
-export function AgentTab({ config, saving, onSave, onOpenModels }: { config: SettingsConfig | null; saving: boolean; onSave: (enabled: boolean, threshold: number) => Promise<void>; onOpenModels?: () => void }) {
+export function AgentTab({ config, saving, onSave, onOpenModels, savingModel = false, onSaveModel }: { config: SettingsConfig | null; saving: boolean; onSave: (enabled: boolean, threshold: number) => Promise<void>; onOpenModels?: () => void; savingModel?: boolean; onSaveModel?: (selection: ModelSelection) => Promise<void> }) {
   const { t } = useTranslation();
   if (!config) return null;
   const selectedModel = config.available_models.find((model) => model.id === config.model);
@@ -20,6 +22,7 @@ export function AgentTab({ config, saving, onSave, onOpenModels }: { config: Set
         <p className="mt-3 break-words text-ui-title font-medium text-text">{selectedModel?.label || config.unavailable_model || config.model || t("settings.agent.noModel")}</p>
         <p className="mt-1 text-ui-caption text-muted">{t("settings.redesign.modelSelectionHelp")}</p>
         {config.unavailable_model && <p role="alert" className="mt-3 text-ui-caption text-error-text">{t("settings.redesign.modelUnavailable")}</p>}
+        {onSaveModel && <DefaultModelSelection models={config.available_models} saving={savingModel} onSave={onSaveModel} />}
         <dl className="mt-4 grid gap-4 border-t border-border pt-4 sm:grid-cols-2">
           <div><dt className="text-ui-caption text-muted">{t("settings.redesign.contextWindow")}</dt><dd className="mt-1 font-mono text-ui-body text-text">{contextWindow ? t("settings.redesign.tokens", { count: contextWindow }) : t("settings.redesign.unknown")}</dd></div>
           <div><dt className="text-ui-caption text-muted">{t("settings.redesign.thinking")}</dt><dd className="mt-1 text-ui-body text-text">{selectedModel?.thinking_levels.includes(config.thinking) ? t(`settings.thinking.${config.thinking}`, { defaultValue: config.thinking }) : t("settings.redesign.unknown")}</dd></div>

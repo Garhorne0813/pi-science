@@ -54,6 +54,8 @@ export function SettingsSelectMenu({
   align,
   autoFocus = false,
   searchable = false,
+  maxVisibleOptions,
+  moreResultsLabel,
   searchPlaceholder,
   emptyMessage,
   className,
@@ -70,6 +72,8 @@ export function SettingsSelectMenu({
   align?: "start" | "center" | "end";
   autoFocus?: boolean;
   searchable?: boolean;
+  maxVisibleOptions?: number;
+  moreResultsLabel?: string;
   searchPlaceholder?: string;
   emptyMessage?: string;
   className?: string;
@@ -148,7 +152,7 @@ export function SettingsSelectMenu({
           )}
           <div className={searchable ? "max-h-[min(16rem,var(--radix-dropdown-menu-content-available-height))] overflow-y-auto overscroll-contain" : undefined}>
             <DropdownMenu.RadioGroup value={value} onValueChange={onSelect}>
-              {visibleOptions.map((option) => (
+              {(maxVisibleOptions ? visibleOptions.slice(0, maxVisibleOptions) : visibleOptions).map((option) => (
                 <DropdownMenu.RadioItem
                   key={option.value}
                   value={option.value}
@@ -162,6 +166,7 @@ export function SettingsSelectMenu({
                 </DropdownMenu.RadioItem>
               ))}
             </DropdownMenu.RadioGroup>
+            {maxVisibleOptions && visibleOptions.length > maxVisibleOptions && <p className="px-2.5 py-3 text-ui-caption text-muted">{moreResultsLabel}</p>}
             {visibleOptions.length === 0 && (
               <p className="px-2.5 py-4 text-center text-ui-caption text-muted">{emptyMessage}</p>
             )}

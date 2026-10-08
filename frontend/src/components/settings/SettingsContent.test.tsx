@@ -15,6 +15,7 @@ const putCalls: { url: string; body: unknown }[] = [];
 
 function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   const method = (init.method || "GET").toUpperCase();
+  if (url === "/api/model-selection/default") return Promise.resolve(jsonResponse({ scope: "default", selection: { model: null, thinking: "off" } }));
   if (url.startsWith("/api/settings/config")) {
     return Promise.resolve(jsonResponse({
       ok: true,
@@ -195,8 +196,8 @@ describe("SettingsContent", () => {
     fireEvent.click(await screen.findByRole("tab", { name: "Agent" }));
     expect(await screen.findByText("Control how Pi manages long-running work.")).toBeInTheDocument();
     expect(screen.getByText("Context Management")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Configured model" })).toBeInTheDocument();
-    expect(screen.getByText(/They affect new conversations and are also applied to other open conversations/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Default model for new conversations" })).toBeInTheDocument();
+    expect(screen.getByText(/Defaults apply to new conversations/)).toBeInTheDocument();
     expect(screen.queryByText(/Configured model defaults/)).not.toBeInTheDocument();
   });
   it("uses a single keyboard tab stop in the navigation and links Agent to model connections", async () => {

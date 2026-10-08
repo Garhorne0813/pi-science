@@ -166,8 +166,8 @@ export class NodeSessionService {
     const runtime = this.agentCore.liveRuntime(resolve(cwdValue));
     return runtime ? runtime.sendCommand("get_available_thinking_levels") : { success: false, code: "not_found", error: "no live agent runtime" };
   }
-  async reloadConfiguration(modelChange?: { model: string; thinking: string }): Promise<Array<{ cwd: string; oldId: string; newId: string }>> {
-    await this.agentCore.reloadConfiguration(modelChange); return [];
+  async reloadConfiguration(): Promise<Array<{ cwd: string; oldId: string; newId: string }>> {
+    await this.agentCore.reloadConfiguration(); return [];
   }
   setGlobalSkillPolicy(policy: RuntimeSkillPolicy): Promise<void> { return this.agentCore.setGlobalSkillPolicy(policy); }
   refreshAllRuntimeSkills(): Promise<void> { return this.agentCore.refreshAllSkills(); }

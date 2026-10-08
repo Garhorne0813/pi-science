@@ -205,10 +205,10 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
                   type="button"
                   aria-label={t("conversation.sendMessage")}
                   onClick={composer.handleSend}
-                  disabled={working || interactionPending || (!model.selectedModel && !research.mode) || reviewingProject || research.busy || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
+                  disabled={working || model.configuringModel || interactionPending || (!model.selectedModel && !research.mode) || reviewingProject || research.busy || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
                   className={cn(
                     "flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full",
-                    ((model.selectedModel || research.mode) && !interactionPending && !reviewingProject && !research.busy && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent-fill text-accent-fg" : "bg-surface-2 text-muted cursor-default",
+                    ((model.selectedModel || research.mode) && !model.configuringModel && !interactionPending && !reviewingProject && !research.busy && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent-fill text-accent-fg" : "bg-surface-2 text-muted cursor-default",
                   )}
                 >
                   <ArrowUp size={16} />

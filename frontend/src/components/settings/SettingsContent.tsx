@@ -5,6 +5,8 @@ import { cn } from "../../lib/ui";
 import { settingsApi } from "../../lib/settings";
 import type { SettingsConfig } from "../../lib/settings";
 import { GeneralTab } from "./GeneralTab";
+import type { ModelSelection } from "@pi-science/contracts";
+import { modelSelectionApi } from "../../lib/model-selection";
 import { Icon, IconButton } from "../ui/Icon";
 
 const ComputeSettings = lazy(() => import("./ComputeSettings").then((module) => ({ default: module.ComputeSettings })));
@@ -140,6 +142,14 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
     }
   };
 
+  const saveDefaultModel = async (selection: ModelSelection) => {
+    setSaving("model");
+    setError(null);
+    try { await modelSelectionApi.saveDefault(selection); await loadConfig(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); throw cause; }
+    finally { setSaving(null); }
+  };
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       {/* Settings navigation: a light rail on mobile (56px icon column) and a
@@ -203,7 +213,7 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
             {needsModelConfig && loading && !config && <div role="status" className="flex min-h-60 items-center justify-center text-sm text-muted"><Icon icon={Loader2} size={18} className="mr-2 animate-spin" />{t("common.loading")}</div>}
                 {tab === "general" && <GeneralTab />}
                 {tab === "models" && <AIModelsTab config={config} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} onConfigReload={loadConfig} />}
-                {tab === "agent" && <AgentTab config={config} saving={saving === "compaction"} onSave={saveCompaction} onOpenModels={() => { changeTab("models"); focusTab("models"); }} />}
+                {tab === "agent" && <AgentTab config={config} saving={saving === "compaction"} onSave={saveCompaction} savingModel={saving === "model"} onSaveModel={saveDefaultModel} onOpenModels={() => { changeTab("models"); focusTab("models"); }} />}
                 {tab === "progress" && <ProgressTab />}
                 {tab === "skills" && <SkillsTab workspaceCwd={scope} />}
                 {tab === "extensions" && <ExtensionsTab workspaceCwd={scope} />}

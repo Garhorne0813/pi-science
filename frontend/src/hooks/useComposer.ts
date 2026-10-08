@@ -17,6 +17,7 @@ export function useComposer(params: {
   cwd: string;
   conversationKey?: string | null;
   selectedModel: string;
+  configuringModel?: boolean;
   reviewingProject: boolean;
   setReviewNotice: (notice: string) => void;
   research: {
@@ -29,7 +30,7 @@ export function useComposer(params: {
    *  trigger it). */
   onSend?: () => void;
 }) {
-  const { cwd, conversationKey = null, selectedModel, reviewingProject, setReviewNotice, research, onSend } = params;
+  const { cwd, conversationKey = null, selectedModel, configuringModel = false, reviewingProject, setReviewNotice, research, onSend } = params;
   const { t } = useTranslation();
   const { toast } = useFeedback();
   const navigate = useNavigate();
@@ -115,7 +116,7 @@ export function useComposer(params: {
   const handleSend = async () => {
     const originalDraft = input;
     const text = input.trim();
-    if (!selectedModel || (!text && files.length === 0 && workspaceReferences.length === 0) || working || reviewingProject) return;
+    if (!selectedModel || (!text && files.length === 0 && workspaceReferences.length === 0) || working || reviewingProject || configuringModel) return;
     let workflowMessage: string | null = null;
     if (research.mode && !research.draft && text) {
       const prepared = await research.intent(text);

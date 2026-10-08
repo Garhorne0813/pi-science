@@ -6,8 +6,8 @@ import { cacheMessages } from "./message-cache";
 import type { HistoryMessage, InteractionResponse, PromptRequestStatus, SessionInfo, SessionListPage, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
 import { parseWirePayload } from "./wire-schema";
 
-export async function createSession(baseUrl: string, cwd: string, model?: string): Promise<{ id: string; cwd?: string; project_id?: string }> {
-  const config = model ? { model } : {};
+export async function createSession(baseUrl: string, cwd: string, model?: string, thinking?: string): Promise<{ id: string; cwd?: string; project_id?: string }> {
+  const config = model ? { model, ...(thinking ? { thinking } : {}) } : {};
   const res = await request(`${baseUrl}/api/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -89,7 +89,7 @@ let overrides: Array<(url: string, init: RequestInit) => Promise<Response> | nul
 
 function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   const method = (init.method || "GET").toUpperCase();
-  if (url.startsWith("/api/settings/config")) {
+  if (url.startsWith("/api/model-selection/catalog")) {
     return Promise.resolve(jsonResponse({ ok: true, available_models: MODELS, model: "prov/m1", thinking: "high" }));
   }
   if (url.startsWith("/api/settings/subagents/discovery")) {
@@ -118,8 +118,10 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   }
   if (url.includes("/commands?")) return Promise.resolve(jsonResponse({ commands: [] }));
   if (url.startsWith("/api/project-memory/research-loops")) return Promise.resolve(jsonResponse({ loops: [] }));
-  if (method === "PUT" && url.startsWith("/api/settings/model")) {
-    return Promise.resolve(jsonResponse({ ok: true, model: "prov/m2", thinking: "medium" }));
+  if (url.startsWith("/api/model-selection/default")) return Promise.resolve(jsonResponse({ scope: "default", selection: { model: "prov/m1", thinking: "high" } }));
+  if (url.includes("/model-selection?")) {
+    const sessionId = url.match(/sessions\/([^/]+)/)?.[1];
+    return Promise.resolve(jsonResponse({ scope: "session", session_id: sessionId, selection: method === "PUT" ? JSON.parse(String(init.body)) : { model: "prov/m1", thinking: "high" } }));
   }
   if (method === "POST" && url.includes("/compact")) return Promise.resolve(jsonResponse({ ok: true }));
   return Promise.resolve(jsonResponse({ error: `unhandled ${method} ${url}` }, 404));
@@ -733,11 +735,11 @@ describe("stable Virtuoso footer", () => {
 });
 
 describe("model change optimistic rollback", () => {
-  it("rolls back both model and thinking when the settings save fails", async () => {
+  it("rolls back both model and thinking when the session selection save fails", async () => {
     let rejectSave: (error: Error) => void = () => undefined;
     const savePending = new Promise<Response>((_resolve, reject) => { rejectSave = reject; });
     overrides.push((url, init) => (
-      (init.method || "GET").toUpperCase() === "PUT" && url.startsWith("/api/settings/model") ? savePending : null
+      (init.method || "GET").toUpperCase() === "PUT" && url.includes("/model-selection?") ? savePending : null
     ));
     await renderReady();
 
@@ -763,7 +765,7 @@ describe("model change optimistic rollback", () => {
 
   it("rolls back a failed thinking-level change", async () => {
     overrides.push((url, init) => (
-      (init.method || "GET").toUpperCase() === "PUT" && url.startsWith("/api/settings/model")
+      (init.method || "GET").toUpperCase() === "PUT" && url.includes("/model-selection?")
         ? Promise.resolve(jsonResponse({ error: "thinking rejected" }, 500))
         : null
     ));

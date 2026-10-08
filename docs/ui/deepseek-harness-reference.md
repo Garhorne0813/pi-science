@@ -338,3 +338,11 @@ or branding is copied.
   compaction point, never measured session usage. Labels wrap on mobile.
 - Switch geometry retains 36×20px with a 16px thumb; focus uses the existing
   2px accent ring. Muted surfaces use semantic colors without extra opacity.
+
+### Pi-Science proposal: narrow Composer submenus
+
+Below the existing `sm` breakpoint (640 px), model/effort submenus overlap their
+parent menu using a negative offset equal to the measured trigger width.
+Adjacent menus cannot fit in a 375 px viewport; the previous submenu extended
+past its left edge. Existing menu widths, collision padding, surfaces and
+spacing stay in use. Above `sm`, the existing 4 px side offset applies.
