@@ -275,5 +275,10 @@ export const providerViewSchema = z.object({
   last_verification: z.object({ state: z.literal("never"), checked_at: z.null() }),
   allowed_actions: z.array(z.enum(["edit", "replace_credential", "remove_credential", "disable", "enable", "delete", "discover"])),
 });
-export const providerViewsResponseSchema = z.object({ providers: z.array(providerViewSchema) });
+export const providerViewsResponseSchema = z.object({
+  providers: z.array(providerViewSchema),
+  // "unavailable" means Core could not supply a catalog; model selection
+  // cannot be inferred from an empty result in that case.
+  catalog_status: z.enum(["ready", "unavailable"]).optional(),
+});
 export type ProviderView = z.infer<typeof providerViewSchema>;
