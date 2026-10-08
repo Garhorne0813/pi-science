@@ -47,12 +47,20 @@ export function registerModelResourceRoutes(app: FastifyInstance, resources: Mod
       if (raw !== undefined && (typeof raw !== "string" || !raw)) return reply.code(400).send({ code: "invalid_resource", error: "cwd must be a nonempty string" });
       const cwd = raw ? await validateWorkspaceCwd(raw as string) : "";
       await resources.ensureMigrated();
-      let models: Array<{ provider?: string; id: string; input?: string[] }>;
-      if (cwd) {
-        const result = await nodeSessionService.availableModels(cwd);
-        if (!result.success) return reply.code(503).send({ code: "catalog_unavailable", error: "Core catalog is unavailable" });
-        models = (result.data as { models: typeof models }).models;
-      } else models = await agentModelCatalog();
+      // Management must remain available when Core cannot list selectable
+      // models. An unavailable catalog is unknown, not an empty catalog.
+      let models: Array<{ provider?: string; id: string; input?: string[] }> = [];
+      let catalogAvailable = true;
+      try {
+        if (cwd) {
+          const result = await nodeSessionService.availableModels(cwd);
+          const listed = (result.data as { models?: unknown } | undefined)?.models;
+          if (!result.success || !Array.isArray(listed)) catalogAvailable = false;
+          else models = listed as typeof models;
+        } else models = await agentModelCatalog();
+      } catch {
+        catalogAvailable = false;
+      }
       const aliases = (await resources.repository.read()).aliases;
       const inputFormats = new Map<string, string[]>();
       const ids = new Set(models.map((model) => {
@@ -61,7 +69,8 @@ export function registerModelResourceRoutes(app: FastifyInstance, resources: Mod
         if (Array.isArray(model.input)) inputFormats.set(canonical, model.input.filter((format) => typeof format === "string"));
         return canonical;
       }));
-      return { providers: await resources.providerViews(ids, inputFormats) };
+      return { providers: await resources.providerViews(ids, inputFormats, catalogAvailable),
+        catalog_status: catalogAvailable ? "ready" : "unavailable" };
     } catch (error) { return routeError(reply, error); }
   });
 
