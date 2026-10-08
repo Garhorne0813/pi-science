@@ -171,6 +171,35 @@ describe("AIModelsTab", () => {
     expect(deleteKey).toHaveBeenCalledTimes(2);
   });
 
+  it("does not repeat a successful disconnect when only the settings refresh fails", async () => {
+    const calls = connectionApi();
+    const reload = vi.fn().mockRejectedValueOnce(new Error("Config temporarily unavailable")).mockResolvedValue(undefined);
+    renderTab({ config: labConfig("configured"), onConfigReload: reload });
+    fireEvent.click(screen.getByRole("button", { name: "Connection settings" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Disconnect" }));
+    const dialog = screen.getByRole("dialog", { name: "Disconnect service" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Disconnect" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Disconnect service" })).not.toBeInTheDocument());
+    expect(await screen.findByText(/Changes were saved, but the view could not be refreshed/)).toBeInTheDocument();
+    expect(calls.filter(({ method, url }) => method === "DELETE" && url === "/api/custom-providers/user-lab")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByText(/Changes were saved, but the view could not be refreshed/)).not.toBeInTheDocument());
+    expect(reload).toHaveBeenCalledTimes(2);
+    expect(calls.filter(({ method, url }) => method === "DELETE" && url === "/api/custom-providers/user-lab")).toHaveLength(1);
+  });
+
+  it("closes a committed connection edit even if configuration synchronization fails", async () => {
+    const calls = connectionApi();
+    const reload = vi.fn().mockRejectedValueOnce(new Error("Settings unavailable"));
+    renderTab({ config: labConfig(), onConfigReload: reload });
+    fireEvent.click(screen.getByRole("button", { name: "Configure connection" }));
+    const editor = screen.getByRole("dialog", { name: "Edit connection" });
+    await waitFor(() => expect(within(editor).getByLabelText("Base URL")).toHaveValue("https://lab.example/v1"));
+    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit connection" })).not.toBeInTheDocument());
+    expect(await screen.findByText(/Changes were saved, but the view could not be refreshed/)).toBeInTheDocument();
+    expect(calls.filter(({ method, url }) => method === "PUT" && url === "/api/custom-providers/user-lab")).toHaveLength(1);
+  });
   it("keeps model rows as readable, non-clickable inventory rows", () => {
     renderTab();
     expect(screen.getByText("Claude Sonnet 4.6")).toBeInTheDocument();
