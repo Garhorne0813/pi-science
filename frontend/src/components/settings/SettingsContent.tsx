@@ -105,9 +105,10 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
     try {
       await settingsApi.saveApiKey(provider, key);
       setApiKeyInput((prev) => ({ ...prev, [provider]: "" }));
-      await loadConfig();
+      await loadConfig().catch(() => undefined);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      throw e;
     } finally {
       setSaving(null);
     }
@@ -118,9 +119,10 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
     setError(null);
     try {
       await settingsApi.deleteApiKey(provider);
-      await loadConfig();
+      await loadConfig().catch(() => undefined);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      throw e;
     } finally {
       setSaving(null);
     }

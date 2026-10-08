@@ -80,12 +80,13 @@ export function buildServices(config: SettingsConfig): Service[] {
     }
     return models;
   };
-  const builtin = config.providers.filter((provider) => !provider.custom && isConnected(provider)).map((provider) => ({
+  const builtin = config.providers.filter((provider) => !provider.custom && (isConnected(provider) || provider.auth?.kind === "none")).map((provider) => ({
     id: provider.id,
     name: provider.name,
-    status: provider.credential_status === "needs_key" ? "needs_key" as const : provider.enabled === false ? "disabled" as const : "connected" as const,
+    status: provider.credential_status === "needs_key" ? "needs_key" as const : provider.enabled === false ? "unreachable" as const : "connected" as const,
     models: serviceModels(provider.id, provider.models),
     custom: false,
+    auth: provider.auth,
     provider,
   }));
   const canonicalCustom = mergeCustomProviders(config.providers.filter((provider) => provider.custom));
