@@ -80,6 +80,29 @@ describe("ModelSelection composer ownership", () => {
     expect(defaults).toEqual({ model: flash, thinking: "high" });
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT").map(([url]) => String(url))).toEqual(["/api/sessions/s1/model-selection?cwd=proj"]);
   });
+  it("unblocks sending after the session PUT even when the subsequent state read hangs", async () => {
+    const releases: Array<(value: { model: string; thinking: string }) => void> = [];
+    const getSessionState = vi.fn(() => new Promise<{ model: string; thinking: string }>((resolve) => releases.push(resolve)));
+    useRuntimeStore.setState({ cwd: "proj", activeSessionId: "s1",
+      client: { getSessionState } as unknown as NonNullable<ReturnType<typeof useRuntimeStore.getState>["client"]> });
+    const { result } = renderHook(() => useModelConfig("proj", "s1"));
+    await waitFor(() => expect(result.current.selectedModel).toBe(flash));
+    act(() => result.current.handleModelChange(pro));
+    await waitFor(() => expect(getSessionState).toHaveBeenCalledTimes(1));
+    // A state GET which never resolves must not hold configuringModel=true.
+    await waitFor(() => expect(result.current.configuringModel).toBe(false));
+    expect(result.current.selectedModel).toBe(pro);
+    expect(useRuntimeStore.getState().model).toBe(pro);
+
+    // A second selection can commit while the first state GET is in flight.
+    act(() => result.current.handleThinkingChange("max"));
+    await waitFor(() => expect(getSessionState).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.configuringModel).toBe(false));
+    await act(async () => { releases[0]!({ model: flash, thinking: "off" }); });
+    expect(useRuntimeStore.getState()).toMatchObject({ model: pro, thinking: "max" });
+    await act(async () => { releases[1]!({ model: pro, thinking: "max" }); });
+    expect(useRuntimeStore.getState()).toMatchObject({ model: pro, thinking: "max" });
+  });
   it("switches ownership when navigating between sessions in one workspace", async () => {
     const { result, rerender } = renderHook(({ id }) => useModelConfig("proj", id), { initialProps: { id: "s1" } });
     await waitFor(() => expect(result.current.selectedModel).toBe(flash));

@@ -65,12 +65,15 @@ export function useModelConfig(cwd: string, sessionId: string | undefined) {
       if (runtime.cwd === cwd && runtime.activeSessionId === target) {
         useRuntimeStore.setState({ model: result.selection.model, thinking: result.selection.thinking, contextWindow: null, contextPercent: null });
         // A failed snapshot read cannot undo an already committed selection.
-        const state = await runtime.client?.getSessionState(target, cwd).catch(() => null);
-        const latest = useRuntimeStore.getState();
-        if (state && latest.cwd === cwd && latest.activeSessionId === target && currentScope.current === scope && version === mutationVersion.current) {
-          useRuntimeStore.setState({ model: state.model ?? result.selection.model, thinking: state.thinking ?? result.selection.thinking,
-            contextTokens: state.context_tokens ?? null, contextWindow: state.context_window ?? null, contextPercent: state.context_percent ?? null });
-        }
+        // Session state is a best-effort refresh, not part of the committed
+        // model change. Do not keep Composer blocked on a slow state GET.
+        void runtime.client?.getSessionState(target, cwd).then((state) => {
+          const latest = useRuntimeStore.getState();
+          if (state && latest.cwd === cwd && latest.activeSessionId === target && currentScope.current === scope && version === mutationVersion.current) {
+            useRuntimeStore.setState({ model: state.model ?? result.selection.model, thinking: state.thinking ?? result.selection.thinking,
+              contextTokens: state.context_tokens ?? null, contextWindow: state.context_window ?? null, contextPercent: state.context_percent ?? null });
+          }
+        }).catch(() => undefined);
       }
     } catch (cause) {
       if (currentScope.current !== scope || version !== mutationVersion.current) return;
