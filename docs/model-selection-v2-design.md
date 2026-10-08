@@ -133,3 +133,12 @@ Escape dismisses the model menu without closing Settings. The existing Windows
 capability-persistence integration test now has a 30-second timeout for its
 multiple disk-backed reads; its assertions and separate performance budgets are
 unchanged.
+
+Review follow-up: the default PUT carries the picker workspace solely as a
+capability-validation context; default ownership and caching remain global. A
+regression covers incomplete Core entries enriched by migrated custom hints.
+Composer searches use a deferred, memoized index and provider grouping uses a
+Map. Its submenu mounts at most 50 models per page; pagination and search retain
+access to the entire catalog. Separate 10,000-model desktop/mobile interaction
+budgets cover opening, paging, search and Long Tasks, alongside default/session
+isolation. These browser fixtures measure frontend work, not live inference.
