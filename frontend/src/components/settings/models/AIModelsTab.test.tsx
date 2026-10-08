@@ -171,15 +171,15 @@ describe("AIModelsTab", () => {
     expect(deleteKey).toHaveBeenCalledTimes(2);
   });
 
-  it("does not repeat a successful disconnect when only the settings refresh fails", async () => {
+  it("does not repeat a successful provider deletion when only the settings refresh fails", async () => {
     const calls = connectionApi();
     const reload = vi.fn().mockRejectedValueOnce(new Error("Config temporarily unavailable")).mockResolvedValue(undefined);
     renderTab({ config: labConfig("configured"), onConfigReload: reload });
     fireEvent.click(screen.getByRole("button", { name: "Connection settings" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Disconnect" }));
-    const dialog = screen.getByRole("dialog", { name: "Disconnect service" });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Disconnect" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Disconnect service" })).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete provider" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete provider" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Delete provider" })).not.toBeInTheDocument());
     expect(await screen.findByText(/Changes were saved, but the view could not be refreshed/)).toBeInTheDocument();
     expect(calls.filter(({ method, url }) => method === "DELETE" && url === "/api/custom-providers/user-lab")).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Retry loading" }));
@@ -301,6 +301,26 @@ describe("AIModelsTab", () => {
     expect(screen.queryByRole("menuitem", { name: "Disconnect" })).not.toBeInTheDocument();
   });
 
+  it("labels a custom provider's destructive action as deletion, not disconnection", async () => {
+    const calls = connectionApi();
+    renderTab({ config: labConfig("configured") });
+    fireEvent.click(screen.getByRole("button", { name: "Connection settings" }));
+    expect(screen.queryByRole("menuitem", { name: "Disconnect" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete provider" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete provider" });
+    expect(within(dialog).getByText(/removes the provider's models, binding, private API connection, and managed API credential/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(calls).toContainEqual({ url: "/api/custom-providers/user-lab", method: "DELETE", body: undefined }));
+  });
+
+  it("counts models with a singular noun for a single model", () => {
+    const view = providerViewsFixture(config).providers[0];
+    view.models = view.models.slice(0, 1);
+    renderTab({ views: [view] });
+    expect(screen.getByText("1 model")).toBeInTheDocument();
+    expect(screen.queryByText("1 models")).not.toBeInTheDocument();
+  });
+
   it("allows a configured builtin service to replace its key without appearing in Connect", async () => {
     const saveKey = vi.fn(async () => undefined);
     renderTab({ apiKeyInput: { anthropic: "replacement-test-key" }, saveKey });
@@ -351,8 +371,8 @@ describe("AIModelsTab", () => {
     await waitFor(() => expect(reload).toHaveBeenCalledOnce());
     expect(calls).toContainEqual({ url: `/api/custom-providers/user-lab/enabled?enabled=${!enabled}`, method: "PUT", body: undefined });
     fireEvent.click(screen.getByRole("button", { name: "Connection settings" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Disconnect" }));
-    fireEvent.click(within(screen.getByRole("dialog", { name: "Disconnect service" })).getByRole("button", { name: "Disconnect" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete provider" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Delete provider" })).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(calls).toContainEqual({ url: "/api/custom-providers/user-lab", method: "DELETE", body: undefined }));
   });
 

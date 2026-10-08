@@ -34,7 +34,7 @@ export function AIModelsTab({ scope = null, apiKeyInput, setApiKeyInput, showKey
   const [connectTarget, setConnectTarget] = useState<ConnectTarget>(null);
   const [manageService, setManageService] = useState<Service | null>(null);
   const [replaceService, setReplaceService] = useState<Service | null>(null);
-  const [disconnectService, setDisconnectService] = useState<Service | null>(null);
+  const [destructive, setDestructive] = useState<{ service: Service; intent: "disconnect" | "delete" } | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [syncWarning, setSyncWarning] = useState<string | null>(null);
@@ -84,10 +84,16 @@ export function AIModelsTab({ scope = null, apiKeyInput, setApiKeyInput, showKey
   };
   const refreshService = (service: Service) => void runServiceAction(service, () => service.custom ? modelResourcesApi.refreshCustomProviderModels(service.id).then(() => undefined) : Promise.resolve());
   const disableService = (service: Service) => void runServiceAction(service, () => modelResourcesApi.setCustomProviderEnabled(service.id, service.status === "disabled").then(() => undefined));
-  const disconnect = async () => {
-    if (!disconnectService) return;
-    const service = disconnectService;
-    if (await runServiceAction(service, () => service.custom ? modelResourcesApi.deleteCustomProvider(service.id).then(() => undefined) : deleteKey(service.id))) setDisconnectService(null);
+  // Removing a builtin credential (`remove_credential`) and deleting a custom
+  // provider (`delete`) are different backend mutations, so each keeps its own
+  // label, confirmation copy, and request.
+  const runDestructiveAction = async () => {
+    if (!destructive) return;
+    const { service, intent } = destructive;
+    const action = intent === "delete"
+      ? () => modelResourcesApi.deleteCustomProvider(service.id).then(() => undefined)
+      : () => deleteKey(service.id);
+    if (await runServiceAction(service, action)) setDestructive(null);
   };
 
   return (
@@ -121,7 +127,7 @@ export function AIModelsTab({ scope = null, apiKeyInput, setApiKeyInput, showKey
         ) : (
           <div className="space-y-3">
             {pageServices.map((service) => (
-              <ProviderSection key={`${service.id}:${normalizedQuery}`}  service={service} expanded={expanded[service.id] === true} onToggle={() => toggleService(service.id)} onManage={() => setManageService(service)} onReplace={() => setReplaceService(service)} onRefresh={() => refreshService(service)} onDisable={() => disableService(service)} onDisconnect={() => setDisconnectService(service)} busy={actionBusy === service.id} />
+              <ProviderSection key={`${service.id}:${normalizedQuery}`}  service={service} expanded={expanded[service.id] === true} onToggle={() => toggleService(service.id)} onManage={() => setManageService(service)} onReplace={() => setReplaceService(service)} onRefresh={() => refreshService(service)} onDisable={() => disableService(service)} onDisconnect={() => setDestructive({ service, intent: "disconnect" })} onDelete={() => setDestructive({ service, intent: "delete" })} busy={actionBusy === service.id} />
             ))}
             <CatalogPagination page={currentPage} pageSize={20} total={visibleServices.length} onPage={setServicePage} label={t("settings.redesign.servicePages")} />
           </div>
@@ -133,13 +139,13 @@ export function AIModelsTab({ scope = null, apiKeyInput, setApiKeyInput, showKey
       {syncWarning && <p role="status" className="text-ui-caption text-muted">{t("settings.providerView.syncWarning", { error: syncWarning })}<button type="button" className="ml-2 min-h-9 px-2 text-link" onClick={() => void syncCommitted()}>{t("settings.redesign.retryLoad")}</button></p>}
       {connectOpen && <ConnectDialog providers={inventory.data?.providers ?? []} target={connectTarget} availableTargets={availableTargets} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} onClose={closeConnect} onSelect={setConnectTarget} onConfigReload={syncCommitted} />}
       {replaceService && <ReplaceKeyDialog service={replaceService} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={async (id) => { await saveKey(id); void syncCommitted(); }} onClose={() => setReplaceService(null)} />}
-      {disconnectService && <DisconnectDialog busy={actionBusy === disconnectService.id} error={actionError} onCancel={() => setDisconnectService(null)} onConfirm={() => void disconnect()} />}
+      {destructive && <DestructiveActionDialog intent={destructive.intent} busy={actionBusy === destructive.service.id} error={actionError} onCancel={() => setDestructive(null)} onConfirm={() => void runDestructiveAction()} />}
       {manageService && <ManageConnectionDrawer service={manageService} onClose={() => setManageService(null)} onConfigReload={syncCommitted} />}
     </div>
   );
 }
 
-function ProviderSection({ service, expanded, onToggle, onManage, onReplace, onRefresh, onDisable, onDisconnect, busy }: { service: Service; expanded: boolean; onToggle: () => void; onManage: () => void; onReplace: () => void; onRefresh: () => void; onDisable: () => void; onDisconnect: () => void; busy: boolean }) {
+function ProviderSection({ service, expanded, onToggle, onManage, onReplace, onRefresh, onDisable, onDisconnect, onDelete, busy }: { service: Service; expanded: boolean; onToggle: () => void; onManage: () => void; onReplace: () => void; onRefresh: () => void; onDisable: () => void; onDisconnect: () => void; onDelete: () => void; busy: boolean }) {
   const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
   const [modelPage, setModelPage] = useState(0);
@@ -151,7 +157,7 @@ function ProviderSection({ service, expanded, onToggle, onManage, onReplace, onR
     <div className="rounded-card border border-border px-4">
       <div className="flex min-h-16 items-center gap-3 py-3">
         <button type="button" aria-expanded={expanded} aria-controls={panelId} onClick={onToggle} className="flex min-w-0 flex-1 flex-wrap items-center gap-3 rounded-input text-left outline-none focus-visible:ring-2 focus-visible:ring-accent">
-          <span aria-hidden="true" className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-card bg-surface-2 text-ui-body font-medium text-muted sm:flex">{service.name.slice(0, 1).toUpperCase()}</span><span className="min-w-0 flex-1"><span className="block truncate text-ui-label font-medium text-text">{service.name}</span><span className="mt-0.5 block text-ui-meta text-muted">{service.models.length ? `${service.models.length} ${t("settings.models.models", { defaultValue: "models" })}` : t("settings.models.noModels", { defaultValue: "No models discovered" })}</span></span>
+          <span aria-hidden="true" className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-card bg-surface-2 text-ui-body font-medium text-muted sm:flex">{service.name.slice(0, 1).toUpperCase()}</span><span className="min-w-0 flex-1"><span className="block truncate text-ui-label font-medium text-text">{service.name}</span><span className="mt-0.5 block text-ui-meta text-muted">{service.models.length ? t("settings.models.modelCount", { count: service.models.length, defaultValue: "{{count}} models" }) : t("settings.models.noModels", { defaultValue: "No models discovered" })}</span></span>
           <span className={cn("flex shrink-0 items-center gap-1.5 text-ui-meta font-medium", statusTone)}><span aria-hidden="true" className={cn("size-1.5 rounded-full", service.status === "ready" ? "bg-ok" : service.status === "needs_key" || service.status === "invalid" || service.status === "needs_login" ? "bg-warn" : service.status === "disabled" ? "bg-muted" : "bg-error")} />{statusText}</span>
           {expanded ? <ChevronDown size={16} className="shrink-0 text-muted" /> : <ChevronRight size={16} className="shrink-0 text-muted" />}
         </button>
@@ -162,7 +168,8 @@ function ProviderSection({ service, expanded, onToggle, onManage, onReplace, onR
             {!service.custom && service.view.allowed_actions.includes("replace_credential") && <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onReplace(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-text hover:bg-surface-hover">{t("settings.models.replace", { defaultValue: "Replace API key" })}</button>}
             {service.view.allowed_actions.includes("discover") && <button type="button" role="menuitem" disabled={busy} onClick={() => { setMenuOpen(false); onRefresh(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-text hover:bg-surface-hover disabled:opacity-40">{t("settings.models.refresh", { defaultValue: "Refresh models" })}</button>}
             {(service.view.allowed_actions.includes("enable") || service.view.allowed_actions.includes("disable")) && <button type="button" role="menuitem" disabled={busy} onClick={() => { setMenuOpen(false); onDisable(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-text hover:bg-surface-hover disabled:opacity-40">{service.status === "disabled" ? t("settings.redesign.enableService") : t("settings.models.disable", { defaultValue: "Disable service" })}</button>}
-            {(service.view.allowed_actions.includes("delete") || service.view.allowed_actions.includes("remove_credential")) && <button type="button" role="menuitem" disabled={busy} onClick={() => { setMenuOpen(false); onDisconnect(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-error-text hover:bg-error/10 disabled:opacity-40">{t("settings.models.disconnect", { defaultValue: "Disconnect" })}</button>}
+            {service.view.allowed_actions.includes("remove_credential") && <button type="button" role="menuitem" disabled={busy} onClick={() => { setMenuOpen(false); onDisconnect(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-error-text hover:bg-error/10 disabled:opacity-40">{t("settings.models.disconnect", { defaultValue: "Disconnect" })}</button>}
+            {service.view.allowed_actions.includes("delete") && <button type="button" role="menuitem" disabled={busy} onClick={() => { setMenuOpen(false); onDelete(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-error-text hover:bg-error/10 disabled:opacity-40">{t("settings.models.deleteProvider", { defaultValue: "Delete provider" })}</button>}
           </div>}
         </div>
       </div>
@@ -229,12 +236,15 @@ function ReplaceKeyDialog({ service, apiKeyInput, setApiKeyInput, showKey, setSh
   </Modal>;
 }
 
-function DisconnectDialog({ busy, error, onCancel, onConfirm }: { busy: boolean; error?: string | null; onCancel: () => void; onConfirm: () => void }) {
+function DestructiveActionDialog({ intent, busy, error, onCancel, onConfirm }: { intent: "disconnect" | "delete"; busy: boolean; error?: string | null; onCancel: () => void; onConfirm: () => void }) {
   const { t } = useTranslation();
-  return <Modal title={t("settings.models.disconnectTitle", { defaultValue: "Disconnect service" })} onClose={onCancel}>
-    <p className="text-ui-caption text-text">{t("settings.models.disconnectConfirm", { defaultValue: "This removes the connection and its models. Historical conversations are not deleted." })}</p>
+  const isDelete = intent === "delete";
+  return <Modal title={isDelete ? t("settings.models.deleteProvider", { defaultValue: "Delete provider" }) : t("settings.models.disconnectTitle", { defaultValue: "Disconnect service" })} onClose={onCancel}>
+    <p className="text-ui-caption text-text">{isDelete
+      ? t("settings.resources.deleteBody", { defaultValue: "This removes the provider's models, binding, private API connection, and managed API credential. Shared connections and credentials are kept." })
+      : t("settings.models.disconnectConfirm", { defaultValue: "This removes the connection and its models. Historical conversations are not deleted." })}</p>
     {error && <p role="alert" className="text-ui-caption text-error-text">{error}</p>}
-    <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={onCancel} className="min-h-9 rounded-input px-3 text-ui-meta text-muted hover:text-text">{t("common.cancel", { defaultValue: "Cancel" })}</button><button type="button" disabled={busy} onClick={onConfirm} className="min-h-9 rounded-input bg-error/10 px-3 text-ui-meta font-medium text-error-text disabled:opacity-40">{t("settings.models.disconnect", { defaultValue: "Disconnect" })}</button></div>
+    <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={onCancel} className="min-h-9 rounded-input px-3 text-ui-meta text-muted hover:text-text">{t("common.cancel", { defaultValue: "Cancel" })}</button><button type="button" disabled={busy} onClick={onConfirm} className="min-h-9 rounded-input bg-error/10 px-3 text-ui-meta font-medium text-error-text disabled:opacity-40">{isDelete ? t("common.delete", { defaultValue: "Delete" }) : t("settings.models.disconnect", { defaultValue: "Disconnect" })}</button></div>
   </Modal>;
 }
 

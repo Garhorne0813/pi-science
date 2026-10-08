@@ -213,6 +213,13 @@ available. Removing the endpoint reference makes normal managed removal availabl
 again. Revision-based protection against concurrent reference changes remains
 part of the later write-protocol phase.
 
+The card menu labels each destructive action by the mutation it performs. A
+custom provider shows Delete provider, confirmed with the provider-deletion copy,
+and sends `DELETE /api/custom-providers/:id`; Disconnect stays reserved for
+builtin credentials whose ProviderView reports `remove_credential`, so a card
+never offers credential-style wording for a provider deletion. The AI Models
+model count uses pluralized copy.
+
 The maintenance-boundary regressions passed 62 focused resource/selection server
 tests and 52 frontend tests (including inherited Composer reference regressions),
 plus 16 production-browser checks on desktop/mobile. Workspace typecheck/build,
