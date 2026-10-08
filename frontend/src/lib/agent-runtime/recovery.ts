@@ -254,6 +254,7 @@ export async function reconcileWorkingState(
   connectionGeneration: number,
   activityGeneration: number,
 ): Promise<void> {
+  const localMutationGeneration = generations.localMutation;
   for (let attempt = 0; attempt < WORKING_STATE_MAX_ATTEMPTS; attempt += 1) {
     try {
       const runtimeState = await client.getSessionState(sessionId, cwd);
@@ -261,6 +262,8 @@ export async function reconcileWorkingState(
       if (
         connectionGeneration !== generations.connection
         || activityGeneration !== generations.activity
+        || localMutationGeneration !== generations.localMutation
+        || getClient() !== client
         || current.activeSessionId !== sessionId
         || current.cwd !== cwd
       ) return;
@@ -282,6 +285,8 @@ export async function reconcileWorkingState(
   if (
     connectionGeneration !== generations.connection
     || activityGeneration !== generations.activity
+    || localMutationGeneration !== generations.localMutation
+    || getClient() !== client
     || current.activeSessionId !== sessionId
     || current.cwd !== cwd
   ) return;
@@ -300,7 +305,7 @@ export async function reconcileWorkingState(
   } else if (!hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
     // Only an authoritative idle snapshot from this activity generation may
     // settle a failed probe. An unknown state must remain conservatively busy.
-        useRuntimeStore.setState({ working: false, turnLifecycle: "settled" });
+    useRuntimeStore.setState({ working: false, turnLifecycle: confirmedIdleLifecycle(current.thread, current.turnLifecycle) });
     markWorkspaceFilesChanged();
   }
 }
@@ -355,8 +360,8 @@ async function runConnectionRecovery(
       if (
         connectionGeneration !== generations.connection
         || activityGeneration !== generations.activity
-      || localMutationGeneration !== generations.localMutation
-      || getClient() !== client
+        || localMutationGeneration !== generations.localMutation
+        || getClient() !== client
         || historyWindowGeneration !== generations.historyWindow
         || latest.activeSessionId !== sessionId
         || latest.cwd !== cwd
@@ -758,7 +763,7 @@ export async function reconcilePromptAfterLateStream(
           || !recheck.working
         ) return;
         ++generations.activity;
-        useRuntimeStore.setState({ working: false, turnLifecycle: "settled", status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
+        useRuntimeStore.setState({ working: false, turnLifecycle: confirmedIdleLifecycle(recheck.thread, recheck.turnLifecycle), status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
         void resyncCompletedHistory(sessionId, cwd);
         void loadSessionsInternal();
         return;

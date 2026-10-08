@@ -61,7 +61,8 @@ Knowledge 的普通事件 1→2→3 在 250ms 内只交付 3。resume/reconnect 
 
 - `59f20c6`：本 PRD 初稿；`cc851ba`：权威 busy/idle、生命周期、有界恢复和竞态回归。
 - `c6cec4a`：合并并发修复，保留 Knowledge debounce、连接状态与新增测试。该提交 quality（Linux、Windows、macOS）和 CodeQL 全部通过。
-- 后续补充：R-07 共享 execution 连接和 refcount 回归；真实浏览器验收 Knowledge count、Runs+Notebook、Research list/detail 的 hide/show 与 cleanup。
+- `23d9ee1`：完成 R-07 共享 execution 连接和 refcount 回归；真实浏览器验收 Knowledge count、Runs+Notebook、Research list/detail 的 hide/show 与 cleanup。本地全量 140 文件/1288 测试通过。
+- 收尾复核统一工作状态探测的 known-idle fallback 与 prompt monitor 终态推导，避免覆盖 failed/aborted；工作状态探测增加 client/localMutation fence。新增 3 项回归，相关 3 文件/96 测试、lint、typecheck 通过。最终全项目及跨平台验证以新提交 CI 为准。
 - 本轮环境恢复后，frontend lint/typecheck/build、bundle budget、真实 Chromium SSE budget 均通过。浏览器额外验证：Knowledge count 1→隐藏→REST 2；Notebook/Runs 共享一条 execution SSE、隐藏全部关闭、resume 更新输出、卸载最后消费者释放连接；Research list/detail 更新与卸载；execution SSE 被请求 gate 保持 CONNECTING 时，运行中 Notebook 的 5 秒 REST fallback 更新输出，随后 OPEN 正常接管。验收无生产模型调用。
 - CONNECTING 的 connection=false 和订阅 refcount 另有确定性单测；原浏览器预算保留会话初次 CONNECTING、双标签页、reload、Runs hide/show。未把静默半开 socket 检测列为完成项。
 - 验证结果以当前 PR head 的 Actions 链接为准，不沿用前序提交的通过记录。

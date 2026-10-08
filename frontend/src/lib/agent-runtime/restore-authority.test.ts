@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useRuntimeStore } from "./index";
 import { generations } from "./generations";
+import { getClient } from "../client/pi-science-client";
+import { reconcileWorkingState, rememberRuntimeState } from "./recovery";
 import { installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
 installRuntimeTestEnvironment();
@@ -35,6 +37,29 @@ function rest(initial: Record<string, unknown>) {
 }
 
 describe("restored session authority", () => {
+  it.each(["failed", "aborted"] as const)("preserves %s when retries fall back to a known idle snapshot", async (outcome) => {
+    const client = getClient();
+    useRuntimeStore.setState({ activeSessionId: SESSION, cwd: CWD, working: true, turnLifecycle: outcome });
+    rememberRuntimeState(client, SESSION, CWD, state(SESSION));
+    vi.spyOn(client, "getSessionState").mockRejectedValue(new Error("unavailable"));
+    const recovery = reconcileWorkingState(client, SESSION, CWD, generations.connection, generations.activity);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await recovery;
+    expect(useRuntimeStore.getState()).toMatchObject({ working: false, turnLifecycle: outcome });
+  });
+
+  it("drops a working-state probe superseded by a local mutation", async () => {
+    const client = getClient();
+    useRuntimeStore.setState({ activeSessionId: SESSION, cwd: CWD, working: true, turnLifecycle: "queued" });
+    let resolve!: (value: ReturnType<typeof state>) => void;
+    vi.spyOn(client, "getSessionState").mockReturnValue(new Promise((done) => { resolve = done; }));
+    const recovery = reconcileWorkingState(client, SESSION, CWD, generations.connection, generations.activity);
+    generations.localMutation += 1;
+    resolve(state(SESSION));
+    await recovery;
+    expect(useRuntimeStore.getState()).toMatchObject({ working: true, turnLifecycle: "queued" });
+  });
+
   it.each([
     ["streaming", { is_streaming: true }, "active"],
     ["compacting", { is_compacting: true }, "active"],
