@@ -2,11 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useRuntimeStore } from "./index";
 import { generations } from "./generations";
 import { getClient } from "../client/pi-science-client";
-import { reconcileWorkingState, rememberRuntimeState } from "./recovery";
+import { reconcileAfterConnectionLoss, reconcileRestoredSession, reconcileWorkingState, rememberRuntimeState } from "./recovery";
 import { installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
 installRuntimeTestEnvironment();
-beforeEach(() => { vi.useFakeTimers(); });
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+});
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 
 const CWD = "/workspace";
@@ -79,7 +82,7 @@ describe("restored session authority", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(useRuntimeStore.getState().working).toBe(true);
     api.idle();
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(useRuntimeStore.getState()).toMatchObject({ working: false, turnLifecycle: "settled", status: "ready" });
   });
 
@@ -97,12 +100,75 @@ describe("restored session authority", () => {
     const api = rest({});
     api.fail(true);
     await useRuntimeStore.getState().connect(CWD, SESSION);
-    await vi.advanceTimersByTimeAsync(20_000);
+    expect(api.stateReads()).toBe(1);
+    for (const delay of [1_000, 2_000, 4_000, 8_000]) {
+      const before = api.stateReads();
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(api.stateReads()).toBe(before);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(api.stateReads()).toBe(before + 1);
+    }
     const reads = api.stateReads();
-    expect(reads).toBe(17); // Initial read plus four rounds of four bounded retries.
+    expect(reads).toBe(5); // Initial read plus one shared budget of four probes.
     await vi.advanceTimersByTimeAsync(20_000);
     expect(api.stateReads()).toBe(reads);
     expect(useRuntimeStore.getState()).toMatchObject({ working: true, status: "error" });
+  });
+
+  it("bounds successful busy probes without releasing the composer", async () => {
+    const api = rest({ is_streaming: true });
+    await useRuntimeStore.getState().connect(CWD, SESSION);
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(api.stateReads()).toBe(5);
+    expect(useRuntimeStore.getState()).toMatchObject({ working: true, status: "ready", turnLifecycle: "active" });
+    await expect(useRuntimeStore.getState().sendPrompt("another prompt")).rejects.toThrow("still running");
+  });
+
+  it("shares restore and connection-loss triggers while a probe is in flight", async () => {
+    const api = rest({ is_streaming: true });
+    await useRuntimeStore.getState().connect(CWD, SESSION);
+    const client = getClient();
+    let resolve!: (value: ReturnType<typeof state>) => void;
+    const read = vi.spyOn(client, "getSessionState").mockReturnValue(new Promise((done) => { resolve = done; }));
+    const first = reconcileRestoredSession(client, SESSION, CWD, generations.connection, generations.activity, generations.localMutation);
+    const duplicate = reconcileRestoredSession(client, SESSION, CWD, generations.connection, generations.activity, generations.localMutation);
+    const connection = reconcileAfterConnectionLoss(client, SESSION, CWD, generations.connection, generations.activity);
+    expect(duplicate).toBe(first);
+    expect(connection).toBe(first);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(read).toHaveBeenCalledOnce();
+    expect(api.stateReads()).toBe(1);
+    resolve(state(SESSION));
+    await first;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(read).toHaveBeenCalledOnce();
+    expect(useRuntimeStore.getState().working).toBe(false);
+  });
+
+  it.each([0, 1])("jitters restore delays between tabs (random=%s)", async (random) => {
+    vi.mocked(Math.random).mockReturnValue(random);
+    const api = rest({});
+    api.fail(true);
+    await useRuntimeStore.getState().connect(CWD, SESSION);
+    const firstDelay = 1_000 * (0.8 + random * 0.4);
+    await vi.advanceTimersByTimeAsync(firstDelay - 1);
+    expect(api.stateReads()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(api.stateReads()).toBe(2);
+    expect(useRuntimeStore.getState().working).toBe(true);
+  });
+
+  it.each(["connection", "activity", "localMutation", "session"] as const)("cancels a scheduled retry after %s ownership changes", async (fence) => {
+    const api = rest({});
+    api.fail(true);
+    await useRuntimeStore.getState().connect(CWD, SESSION);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(api.stateReads()).toBe(2);
+    if (fence === "session") useRuntimeStore.setState({ activeSessionId: "new-session", cwd: "/new-workspace" });
+    else generations[fence] += 1;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(api.stateReads()).toBe(2);
+    expect(useRuntimeStore.getState().working).toBe(true);
   });
 
   it.each(["connection", "activity", "localMutation", "session"] as const)("drops an idle response after %s ownership changes", async (fence) => {

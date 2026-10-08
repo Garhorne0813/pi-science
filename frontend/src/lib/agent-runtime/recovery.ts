@@ -19,11 +19,12 @@ const WORKING_STATE_MAX_ATTEMPTS = 3;
 const WORKING_STATE_BACKOFF_MS = [0, 100, 250] as const;
 const CONNECTION_RECOVERY_MAX_ATTEMPTS = 4;
 const CONNECTION_RECOVERY_BACKOFF_MS = [0, 100, 250, 500] as const;
+const RESTORE_RECOVERY_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000] as const;
 const MAX_GAP_RECOVERY_ROUNDS = 3;
 const GAP_RECOVERY_BACKOFF_MS = [0, 100, 250] as const;
 
 type KnownRuntimeState = { busy: boolean; activityGeneration: number };
-type ConnectionRecoveryRun = { connectionGeneration: number; activityGeneration: number; promise: Promise<void> };
+type ConnectionRecoveryRun = { connectionGeneration: number; activityGeneration: number; localMutationGeneration: number; promise: Promise<void> };
 type GapRecoveryResult = "completed" | "superseded" | "aborted" | "retryable-failure";
 interface GapRecoveryRun {
   promise: Promise<void>;
@@ -321,13 +322,30 @@ async function runConnectionRecovery(
   cwd: string,
   connectionGeneration: number,
   activityGeneration: number,
+  localMutationGeneration: number,
+  restore: boolean,
 ): Promise<void> {
-  const localMutationGeneration = generations.localMutation;
   let lastState: SessionState | undefined;
   let historySucceeded = false;
   let stateSucceeded = false;
 
+  const ownsRecovery = () => {
+    const current = useRuntimeStore.getState();
+    return connectionGeneration === generations.connection
+      && activityGeneration === generations.activity
+      && localMutationGeneration === generations.localMutation
+      && getClient() === client && current.activeSessionId === sessionId && current.cwd === cwd
+      && (!restore || current.working);
+  };
   for (let attempt = 0; attempt < CONNECTION_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
+    if (!ownsRecovery()) return;
+    // Restore has one retry budget, shared with connection recovery. Jitter
+    // spreads probes from tabs that were restored at the same time.
+    const delay = restore
+      ? RESTORE_RECOVERY_BACKOFF_MS[attempt]! * (0.8 + Math.random() * 0.4)
+      : CONNECTION_RECOVERY_BACKOFF_MS[attempt]!;
+    if (delay > 0) await waitForRecovery(delay);
+    if (!ownsRecovery()) return;
     const [historyResult, stateResult, artifactsResult] = await Promise.allSettled([
       client.getMessagesPage(sessionId, cwd),
       client.getSessionState(sessionId, cwd),
@@ -387,10 +405,7 @@ async function runConnectionRecovery(
       // while the stream was down and no terminal event reached the tree.
       markWorkspaceFilesChanged();
       void loadSessionsInternal();
-      return;
-    }
-    if (attempt + 1 < CONNECTION_RECOVERY_MAX_ATTEMPTS) {
-      await waitForRecovery(CONNECTION_RECOVERY_BACKOFF_MS[attempt + 1] ?? CONNECTION_RECOVERY_BACKOFF_MS.at(-1)!);
+      if (!restore || !useRuntimeStore.getState().working || attempt + 1 === CONNECTION_RECOVERY_MAX_ATTEMPTS) return;
     }
   }
 
@@ -421,12 +436,14 @@ async function runConnectionRecovery(
   applyTransportEvent({ transport: "error", reason: "recovery", foreground: "error", sessionId });
 }
 
-export function reconcileAfterConnectionLoss(
+function startConnectionRecovery(
   client: PiScienceClient,
   sessionId: string,
   cwd: string,
   connectionGeneration: number,
   activityGeneration: number,
+  localMutationGeneration = generations.localMutation,
+  restore = false,
 ): Promise<void> {
   const key = runtimeKey(sessionId, cwd);
   const runs = connectionRecoveryRuns.get(client) ?? new Map<string, ConnectionRecoveryRun>();
@@ -435,15 +452,26 @@ export function reconcileAfterConnectionLoss(
     existing
     && existing.connectionGeneration === connectionGeneration
     && existing.activityGeneration === activityGeneration
+    && existing.localMutationGeneration === localMutationGeneration
   ) return existing.promise;
-  const promise = runConnectionRecovery(client, sessionId, cwd, connectionGeneration, activityGeneration);
-  runs.set(key, { connectionGeneration, activityGeneration, promise });
+  const promise = runConnectionRecovery(client, sessionId, cwd, connectionGeneration, activityGeneration, localMutationGeneration, restore);
+  runs.set(key, { connectionGeneration, activityGeneration, localMutationGeneration, promise });
   connectionRecoveryRuns.set(client, runs);
   void promise.finally(() => {
     if (runs.get(key)?.promise === promise) runs.delete(key);
     if (runs.size === 0) connectionRecoveryRuns.delete(client);
   }).catch(() => undefined);
   return promise;
+}
+
+export function reconcileAfterConnectionLoss(
+  client: PiScienceClient,
+  sessionId: string,
+  cwd: string,
+  connectionGeneration: number,
+  activityGeneration: number,
+): Promise<void> {
+  return startConnectionRecovery(client, sessionId, cwd, connectionGeneration, activityGeneration);
 }
 
 /** Recover the authoritative conversation snapshot after a `stream.gap`:
@@ -640,10 +668,10 @@ export function reconcileAfterGap(
   return promise;
 }
 
-/** Restore snapshots may disagree with each other or be unavailable. Reuse
- * bounded REST recovery, but never poll a restored busy/error snapshot forever.
- * Live activity and user mutations take ownership away from this restore. */
-export async function reconcileRestoredSession(
+/** Restore uses the shared recovery worker with a single four-probe budget.
+ * Busy and unavailable snapshots back off; only authoritative idle unlocks.
+ * Ownership fences cancel retries after live activity or user mutations. */
+export function reconcileRestoredSession(
   client: PiScienceClient,
   sessionId: string,
   cwd: string,
@@ -651,18 +679,7 @@ export async function reconcileRestoredSession(
   activityGeneration: number,
   localMutationGeneration: number,
 ): Promise<void> {
-  const ownsRestore = () => {
-    const current = useRuntimeStore.getState();
-    return getClient() === client && current.activeSessionId === sessionId && current.cwd === cwd
-      && generations.connection === connectionGeneration && generations.activity === activityGeneration
-      && generations.localMutation === localMutationGeneration && current.working;
-  };
-  for (let round = 0; round < 4; round += 1) {
-    await waitForRecovery(1_000);
-    if (!ownsRestore()) return;
-    await reconcileAfterConnectionLoss(client, sessionId, cwd, connectionGeneration, activityGeneration);
-    if (!ownsRestore()) return;
-  }
+  return startConnectionRecovery(client, sessionId, cwd, connectionGeneration, activityGeneration, localMutationGeneration, true);
 }
 
 /** How many consecutive one-second idle REST rounds with no confirmed reply

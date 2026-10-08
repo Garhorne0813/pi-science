@@ -24,7 +24,7 @@
 2. pending interaction/questionnaire 独立阻止新 prompt。等待用户回复时 working=false、lifecycle=waiting；未配对数据继续阻塞。
 3. authoritative idle 后 working=false，保存当前轮次明确 failed/aborted；未知结果 settled 不代表成功。
 4. 状态失败不得凭旧 final 解锁，保留可见 error 和停止/重试入口。
-5. 恢复专用外层最多四轮，轮间 1 秒，复用既有有界 connection recovery 对 messages/state/artifacts 的读取和历史窗口合并。最后仍 busy/error 时保留保守状态，不通过计时强行解锁。原 prompt monitor 与既有 watchdog 保留自己的职责。
+5. 恢复与 connection recovery 共用单层、最多四次探测的预算和 in-flight 任务；恢复延迟按 1/2/4/8 秒退避并加入 ±20% jitter。同一 client/cwd/session 和 connection/activity/localMutation 身份下重复触发共用 Promise，持续失败最多产生五次 /state 读取（含初始读取）。最后仍 busy/error 时保留保守状态，不通过计时强行解锁。原 prompt monitor 与既有 watchdog 保留自己的职责。
 6. 异步提交检查 client、cwd、sessionId、connection/activity/localMutation；分页继续使用 historyWindow fence。切换、live activity 或用户 mutation 使旧恢复无效。
 7. 不因连接 OPEN/CONNECTING/CLOSED 直接推断执行 busy/idle。
 
@@ -66,3 +66,10 @@ Knowledge 的普通事件 1→2→3 在 250ms 内只交付 3。resume/reconnect 
 - 本轮环境恢复后，frontend lint/typecheck/build、bundle budget、真实 Chromium SSE budget 均通过。浏览器额外验证：Knowledge count 1→隐藏→REST 2；Notebook/Runs 共享一条 execution SSE、隐藏全部关闭、resume 更新输出、卸载最后消费者释放连接；Research list/detail 更新与卸载；execution SSE 被请求 gate 保持 CONNECTING 时，运行中 Notebook 的 5 秒 REST fallback 更新输出，随后 OPEN 正常接管。验收无生产模型调用。
 - CONNECTING 的 connection=false 和订阅 refcount 另有确定性单测；原浏览器预算保留会话初次 CONNECTING、双标签页、reload、Runs hide/show。未把静默半开 socket 检测列为完成项。
 - 验证结果以当前 PR head 的 Actions 链接为准，不沿用前序提交的通过记录。
+
+### P2 恢复请求退避收尾
+
+- 将 restored recovery 的四轮嵌套内部重试改为共享 worker 的单层四次探测，持续失败最多五次 /state 读取（含初始请求）。
+- 恢复探测按 1/2/4/8 秒延迟并加入 ±20% jitter；同标签页、相同恢复身份的 restore 与 connection-loss 触发共用 Promise。退避前后校验 ownership，取消失效任务，不用超时解除 busy。
+- fake timers 覆盖退避间隔、jitter、并发触发去重、scheduled/in-flight ownership 变更、持续 busy/失败的请求上限与 Composer 保护。相关旧测试使用可控计时验证新的恢复时序。
+- 本地 agent-runtime 18 文件/304 测试、frontend typecheck/lint/build、bundle budget 与真实浏览器 SSE budget 通过。新提交 CI 以 Actions 为准。
