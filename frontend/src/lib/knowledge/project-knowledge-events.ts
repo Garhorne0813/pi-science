@@ -15,10 +15,17 @@ const SIGNAL_DEBOUNCE_MS = 250;
 export function subscribeProjectKnowledgeEvents(cwd: string, onSignal: (event?: ProjectKnowledgeEvent) => void): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let latest: ProjectKnowledgeEvent | undefined;
+  let needsCatchUp = false;
   const signal = (event?: ProjectKnowledgeEvent) => {
-    latest = event ?? latest;
+    if (event === undefined) {
+      needsCatchUp = true;
+      latest = undefined;
+    } else if (!needsCatchUp) {
+      latest = event;
+    }
     timer ??= setTimeout(() => {
-      const next = latest;
+      const next = needsCatchUp ? undefined : latest;
+      needsCatchUp = false;
       latest = undefined;
       timer = null;
       onSignal(next);
@@ -41,5 +48,6 @@ export function subscribeProjectKnowledgeEvents(cwd: string, onSignal: (event?: 
     if (timer !== null) clearTimeout(timer);
     timer = null;
     latest = undefined;
+    needsCatchUp = false;
   };
 }

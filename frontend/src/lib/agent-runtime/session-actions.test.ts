@@ -297,7 +297,7 @@ describe("runtime session actions", () => {
     expect(useRuntimeStore.getState()).toMatchObject({ working: false, turnLifecycle: "waiting" });
   });
 
-  it("does not reactivate a restored final answer from a stale busy snapshot", async () => {
+  it("keeps a restored final answer blocked until REST confirms idle", async () => {
     const userBlock: ThreadBlock = { kind: "user", id: "user-final", text: "finished?", timestamp: "2026-09-24T12:00:00.000Z" };
     const finalBlock: ThreadBlock = { kind: "agent", id: "agent-final", presentationRole: "final", parts: [{ id: "answer", text: "Done." }] };
     useRuntimeStore.setState({
@@ -314,7 +314,7 @@ describe("runtime session actions", () => {
     }));
 
     await useRuntimeStore.getState().connect("/workspace", "session-final");
-    expect(useRuntimeStore.getState()).toMatchObject({ working: false, turnLifecycle: "settled" });
+    expect(useRuntimeStore.getState()).toMatchObject({ working: true, turnLifecycle: "active" });
     expect(useRuntimeStore.getState().thread.blocks).toContainEqual(expect.objectContaining({ id: "agent-final", presentationRole: "final" }));
   });
 

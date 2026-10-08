@@ -6,7 +6,6 @@ import type { StoreApi } from "zustand";
 import { v4 as uuidv4 } from "uuid";
 import type { ThreadBlock } from "../../types/thread";
 import { activityPolicy } from "../conversation/activity-policy";
-import { buildTurnPresentations } from "../conversation/turn-presentation";
 import {
   clearCachedMessages,
   getClient,
@@ -29,7 +28,7 @@ import { mergeRecoveryHistoryWindow } from "./history-window-recovery";
 import { generations, turnState } from "./generations";
 import { registerEventListener, ensureTurnWatchdog } from "./listener";
 import { applyPromptSessionName, backfillSessionName } from "./naming";
-import { recoverMissingSession, reconcileAfterConnectionLoss, reconcilePromptAfterLateStream, rememberRuntimeState, suppressConnectionRecovery } from "./recovery";
+import { recoverMissingSession, reconcileAfterConnectionLoss, reconcilePromptAfterLateStream, reconcileRestoredSession, restoredActivityState, rememberRuntimeState, suppressConnectionRecovery } from "./recovery";
 import { loadMoreSessionsInternal, loadSessionsInternal, optimisticSessionIds } from "./sessions";
 import { hasActivePendingInteraction, hasPendingInteractionData, type RuntimeState } from "./types";
 
@@ -220,34 +219,9 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           const runtimeState = runtimeStateResult.value;
           rememberRuntimeState(client, targetSessionId, cwd, runtimeState, connectActivityGeneration);
           if (!liveActivityArrived) {
-            const current = get();
-            const pendingInteraction = hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire);
-            const awaitingUserInput = hasActivePendingInteraction(current.pendingInteraction, current.pendingQuestionnaire);
-            // Build from history after it has been merged with events that
-            // arrived during restore. Only the currently owned turn's
-            // unsuperseded explicit final can override a stale busy snapshot.
-            const restoredThread = nextState.thread ?? current.thread;
-            const activeTurn = buildTurnPresentations(restoredThread.blocks, {
-              lastTurnLifecycle: "active",
-              lastTurnId: restoredThread.foldState?.activeTurnId,
-            }).findLast((turn) => turn.lifecycle === "active");
-            const hasTrustedFinal = Boolean(activeTurn?.finalAgent);
-            const streaming = runtimeState.is_streaming || runtimeState.is_compacting;
-            const queued = runtimeState.pending_message_count > 0;
-            const runtimeBusy = streaming || queued;
-
-            nextState.working = pendingInteraction
-              ? !awaitingUserInput
-              : hasTrustedFinal ? false : runtimeBusy;
-            if (pendingInteraction) {
-              nextState.turnLifecycle = "waiting";
-            } else if (hasTrustedFinal) {
-              nextState.turnLifecycle = "settled";
-            } else if (streaming) {
-              nextState.turnLifecycle = "active";
-            } else if (queued) {
-              nextState.turnLifecycle = "queued";
-            }
+            // History is presentation evidence; only REST busy/idle determines
+            // availability when no newer live event owns the state.
+            Object.assign(nextState, restoredActivityState(runtimeState, get(), nextState.thread ?? get().thread));
           }
           nextState.model = runtimeState.model ?? null;
           nextState.thinking = runtimeState.thinking ?? null;
@@ -263,6 +237,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
             // confirms an idle runtime.
             nextState.status = "error";
             nextState.working = true;
+            nextState.turnLifecycle = "recovering";
           }
         }
         // A newly-created session may already have opened its SSE connection
@@ -280,20 +255,10 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         if (nextState.thread) backfillSessionName(cwd, targetSessionId, nextState.thread);
         void restorePendingPromptRequests(client, cwd, targetSessionId, get, set);
 
-        // A refresh can restore a cached busy snapshot after the turn's final
-        // SSE event has already passed. Keep checking the authoritative state
-        // until it is idle, and resync history, instead of leaving Working
-        // latched forever waiting for an event that cannot be replayed.
+        // Conflicting busy/history snapshots and failed state reads are repaired
+        // within bounded rounds; a final alone never unlocks the composer.
         if (!liveActivityArrived && nextState.working === true) {
-          void reconcilePromptAfterLateStream(
-            client,
-            targetSessionId,
-            cwd,
-            generations.promptMonitor,
-            undefined,
-            1,
-            connectActivityGeneration,
-          );
+          void reconcileRestoredSession(client, targetSessionId, cwd, generation, connectActivityGeneration, localMutationGeneration);
         }
 
         const failure = messagesResult.status === "rejected"
@@ -307,7 +272,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         }
         if (failure) {
           appendRuntimeError(failure, targetSessionId, cwd);
-          if (!liveActivityArrived) {
+          if (!liveActivityArrived && nextState.working !== true) {
             void reconcileAfterConnectionLoss(
               client,
               targetSessionId,

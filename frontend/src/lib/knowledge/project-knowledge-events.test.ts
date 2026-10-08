@@ -123,4 +123,42 @@ describe("subscribeProjectKnowledgeEvents", () => {
     expect(source.closed).toBe(true);
     expect(onSignal).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])("keeps resume catch-up authoritative with a later count=%s", (laterCount) => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    const onSignal = vi.fn();
+    const cleanup = subscribeProjectKnowledgeEvents(".", onSignal);
+    const first = FakeEventSource.instances[0]!;
+    first.onopen?.();
+    first.message(1);
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    const resumed = FakeEventSource.instances[1]!;
+    resumed.onopen?.();
+    if (laterCount) resumed.message(9);
+    vi.advanceTimersByTime(250);
+    expect(onSignal).toHaveBeenCalledExactlyOnceWith(undefined);
+    // The next ordinary window can use fresh events again.
+    resumed.message(2);
+    vi.advanceTimersByTime(250);
+    expect(onSignal).toHaveBeenLastCalledWith({ type: "project-knowledge.changed", pending_count: 2 });
+    cleanup();
+  });
+
+  it("prioritizes reconnect catch-up over an already buffered count", () => {
+    const onSignal = vi.fn();
+    const cleanup = subscribeProjectKnowledgeEvents(".", onSignal);
+    const source = FakeEventSource.instances[0]!;
+    source.onopen?.();
+    source.message(1);
+    source.onopen?.();
+    source.message(9);
+    vi.advanceTimersByTime(250);
+    expect(onSignal).toHaveBeenCalledExactlyOnceWith(undefined);
+    cleanup();
+  });
+
 });

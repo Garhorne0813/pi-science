@@ -105,4 +105,25 @@ describe("subscribeExecutionInvalidation", () => {
     expect(invalidate).toHaveBeenCalledTimes(2);
     cleanup();
   });
+
+  it("keeps the REST fallback enabled when a resumed source remains CONNECTING", () => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    const onConnectionChange = vi.fn();
+    const cleanup = subscribeExecutionInvalidation(".", { onConnectionChange });
+    FakeEventSource.instances[0]!.onopen?.();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(true);
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    vi.advanceTimersByTime(30_000);
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    FakeEventSource.instances[1]!.onopen?.();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(true);
+    cleanup();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+  });
+
 });
