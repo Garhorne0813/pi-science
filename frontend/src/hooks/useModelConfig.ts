@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { DefaultModelSelection, ModelSelection, SessionModelSelection } from "@pi-science/contracts";
@@ -28,7 +28,8 @@ export function useModelConfig(cwd: string, sessionId: string | undefined) {
     queryFn: ({ signal }) => target ? modelSelectionApi.readSession(cwd, target, { signal }) : modelSelectionApi.readDefault({ signal }),
     staleTime: 0,
   }, queryClient);
-  const models = conversationModelOptions(catalog.data?.available_models ?? []);
+  const catalogModels = catalog.data?.available_models;
+  const models = useMemo(() => conversationModelOptions(catalogModels ?? []), [catalogModels]);
   const selection = override?.scope === scope ? override.selection
     : !target && draft?.cwd === cwd ? draft.selection : owner.data?.selection;
   const candidate = selection?.model ?? "";
