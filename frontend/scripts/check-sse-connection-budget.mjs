@@ -230,11 +230,115 @@ try {
   assert(await activeSourceCount(runsPage, executionEndpoint) === 1, "Resuming executions must leave one invalidation SSE");
   await assertStreamBudget(runsPage, "Resuming executions", RUNS_PAGE_BUDGET);
 
+  // These three tabs already consume six HTTP/1.1 SSE sockets. Release them
+  // before opening independent scenarios on the same fixture origin.
   console.log(`Observed session-page streams: ${(await activeSourcePaths(firstPage)).join(", ")}`);
   console.log(`Observed executions-page streams: ${(await activeSourcePaths(runsPage)).join(", ")}`);
+  await firstPage.close();
+  await secondPage.close();
+  await runsPage.close();
+
+
+  // A knowledge badge must use the REST count after a hidden interval.
+  const knowledgePage = await context.newPage();
+  let pendingCount = 1;
+  await knowledgePage.route("**/api/project-knowledge/proposals/count**", (route) =>
+    route.fulfill({ json: { pending_count: pendingCount } }));
+  await openSession(knowledgePage);
+  const badge = knowledgePage.getByRole("button", { name: /Project Knowledge/ });
+  await badge.getByText("1", { exact: true }).waitFor();
+  await setHidden(knowledgePage, true);
+  await waitForNoActiveSources(knowledgePage, "Knowledge hidden");
+  pendingCount = 2;
+  await setHidden(knowledgePage, false);
+  await badge.getByText("2", { exact: true }).waitFor();
+  await waitForOpenSource(knowledgePage, knowledgeEndpoint);
+  await assertStreamBudget(knowledgePage, "Knowledge catch-up", SESSION_PAGE_BUDGET);
+  await knowledgePage.close();
+
+  // Runs and its Notebook inspector must share the execution signal.
+  const notebookPage = await context.newPage();
+  let notebookOutput = "initial notebook output";
+  let kernelStatus = "succeeded";
+  const kernelExecution = () => ({
+    schema_version: 1, execution_id: "budget-kernel", kind: "kernel_cell",
+    surface: "python", status: kernelStatus, workspace_id: cwd,
+    created_at: "2026-09-24T00:00:00Z", started_at: "2026-09-24T00:00:00Z",
+    ended_at: "2026-09-24T00:00:01Z", producer: "node-kernel-gateway",
+    correlation: { request_id: "budget-request", session_id: VISUAL_SESSION },
+    request: { notebook_id: `session-${VISUAL_SESSION}`, code: "print('fixture')",
+      language: "python", source: "session_notebook" },
+    runtime: { cwd, gateway_timeout_ms: 125000 },
+    result: { stdout_preview: notebookOutput }, files: { read: [], written: [] }, artifacts: [],
+  });
+  await notebookPage.route("**/api/executions?**", (route) => route.fulfill({ json: { executions: [kernelExecution()] } }));
+  await notebookPage.goto(`${origin}/workspace/${encodeURIComponent(cwd)}/session/${VISUAL_SESSION}?view=runs`, { waitUntil: "domcontentloaded" });
+  await notebookPage.getByRole("button", { name: "Open session kernel", exact: true }).click();
+  await notebookPage.getByRole("button", { name: /Close notebook/i }).waitFor();
+  await notebookPage.getByText(notebookOutput, { exact: true }).waitFor();
+  await waitForOpenSource(notebookPage, executionEndpoint);
+  const notebookBudget = [...SESSION_PAGE_BUDGET, executionEndpoint];
+  await assertStreamBudget(notebookPage, "Runs plus Notebook", notebookBudget);
+  await setHidden(notebookPage, true);
+  await waitForNoActiveSources(notebookPage, "Notebook hidden");
+  notebookOutput = "restored notebook output";
+  kernelStatus = "running";
+  let releaseExecutionRequest;
+  const executionGate = new Promise((resolve) => { releaseExecutionRequest = resolve; });
+  const executionRoute = `**${executionEndpoint}**`;
+  await notebookPage.route(executionRoute, async (route) => {
+    await executionGate;
+    try { await route.continue(); } catch { /* navigation can abort the held request */ }
+  });
+  await setHidden(notebookPage, false);
+  await notebookPage.getByText(notebookOutput, { exact: true }).waitFor();
+  const connectingSource = (await sources(notebookPage)).findLast((source) => source.url.includes(executionEndpoint));
+  assert(connectingSource && !connectingSource.opened, "The restored execution stream must still be CONNECTING");
+  notebookOutput = "polled notebook output";
+  await notebookPage.getByText(notebookOutput, { exact: true }).waitFor({ timeout: 15_000 });
+  assert(!(await sources(notebookPage)).findLast((source) => source.url.includes(executionEndpoint))?.opened,
+    "REST fallback must update Notebook before execution SSE reaches OPEN");
+  releaseExecutionRequest();
+  await notebookPage.unroute(executionRoute);
+  await waitForOpenSource(notebookPage, executionEndpoint);
+  await assertStreamBudget(notebookPage, "Notebook catch-up", notebookBudget);
+  await notebookPage.getByRole("button", { name: /Close notebook/i }).click();
+  await assertStreamBudget(notebookPage, "Notebook cleanup keeps Runs subscribed", notebookBudget);
+  await openSession(notebookPage);
+  await waitForOpenSource(notebookPage, sessionEndpoint);
+  await assertStreamBudget(notebookPage, "Leaving Runs releases execution SSE", SESSION_PAGE_BUDGET);
+  await notebookPage.close();
+
+  // Research list and detail must both recover authoritative REST data.
+  const researchPage = await context.newPage();
+  let researchTitle = "Budget research";
+  let revision = 1;
+  const loop = () => ({ loop_id: "budget-loop", title: researchTitle,
+    objective: "Verify visibility recovery", task_type: "research_loop", status: "running",
+    revision, candidates: [], operations: [] });
+  await researchPage.route("**/api/project-memory/research-loops**", (route) =>
+    route.fulfill({ json: new URL(route.request().url()).pathname.endsWith("/research-loops")
+      ? { loops: [loop()] } : loop() }));
+  await researchPage.goto(`${origin}/workspace/${encodeURIComponent(cwd)}/research`, { waitUntil: "domcontentloaded" });
+  const researchEndpoint = "/api/project-memory/research-events";
+  await researchPage.getByRole("heading", { name: researchTitle, exact: true }).waitFor();
+  await waitForOpenSource(researchPage, researchEndpoint);
+  await assertStreamBudget(researchPage, "Research", [knowledgeEndpoint, researchEndpoint]);
+  await setHidden(researchPage, true);
+  await waitForNoActiveSources(researchPage, "Research hidden");
+  researchTitle = "Recovered research"; revision += 1;
+  await setHidden(researchPage, false);
+  await researchPage.getByRole("heading", { name: researchTitle, exact: true }).waitFor();
+  await waitForOpenSource(researchPage, researchEndpoint);
+  await assertStreamBudget(researchPage, "Research catch-up", [knowledgeEndpoint, researchEndpoint]);
+  await researchPage.goto(`${origin}/workspace/${encodeURIComponent(cwd)}/runs`, { waitUntil: "domcontentloaded" });
+  await waitForOpenSource(researchPage, executionEndpoint);
+  await assertStreamBudget(researchPage, "Research cleanup", RUNS_PAGE_BUDGET);
+  await researchPage.close();
+
   const health = await fetch(`${origin}/api/health`);
   assert(health.ok, `/api/health returned ${health.status}`);
-  console.log("SSE connection budget passed: per-page subscription sets, two visible tabs, hidden-tab release, first CONNECTING resume, reload, executions resume, and /api/health.");
+  console.log("SSE connection budget passed: per-page subscription sets, two visible tabs, hidden-tab release, first CONNECTING resume, reload, executions resume, Knowledge count, shared Notebook stream, Research detail, and /api/health.");
   await context.close();
 } finally {
   // A rejected close must never skip the SIGTERM: a leftover fixture server

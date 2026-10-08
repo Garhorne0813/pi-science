@@ -14,6 +14,7 @@
 | R-04 | P2 | idle 分支可能保留 active/queued；恢复分支硬编码 settled | 共享状态推导，保留 failed/aborted，未知终态采用中性 settled |
 | R-05 | P2 | 隐藏关闭 source 未通知 connected=false，Runs/Notebook 会暂停 fallback | 只有真正 OPEN 为 true，CONNECTING/hide/error/cleanup 为 false |
 | R-06 | P2 | 初始恢复复用的 monitor 可无限等待 busy/error，connection recovery 缺少 localMutation fence | 四轮有界恢复，增加完整异步身份校验 |
+| R-07 | P2 | Session Runs 与 NotebookPanel 同时挂载会各自打开 execution SSE | 按 cwd 共享订阅，最后一个消费者卸载时关闭 |
 
 保留后台断流、applied cursor、gap live fence、共享 SSE v3 名单、去冗余订阅及浏览器预算。服务端 admission 继续是并发提交的最终权威。不改变调度，不引入 WebSocket，不新增 active_run_id/revision 契约。
 
@@ -31,7 +32,7 @@
 
 Knowledge 的普通事件 1→2→3 在 250ms 内只交付 3。resume/reconnect 设置 needsCatchUp 并清除 buffered count；直至本窗口以 undefined 发出 REST invalidation，随后无版本的 count 不能取消该标记。cleanup 清除 timer 与标记。
 
-通用 JSON SSE 增加 onConnectionChange；创建 CONNECTING、hide、native error、cleanup 通知 false，只有当前 source 的 OPEN 通知 true。过期源回调无效，closeOnError=false 原生重试不变。执行订阅透传状态，resume 立即 invalidation，延迟 OPEN 后再次 catch-up。Runs/Notebook 在 CONNECTING 期间保留 5s/30s fallback，隐藏期遵守 refetchIntervalInBackground=false。Research 保留恢复 invalidation。
+通用 JSON SSE 增加 onConnectionChange；创建 CONNECTING、hide、native error、cleanup 通知 false，只有当前 source 的 OPEN 通知 true。过期源回调无效，closeOnError=false 原生重试不变。执行订阅按 cwd 共享连接和 debounce；新消费者获得当前连接状态，单个消费者卸载不关闭其他消费者仍在使用的连接。最后一个消费者卸载时清理 timer、source 和映射。执行订阅透传状态，resume 立即 invalidation，延迟 OPEN 后再次 catch-up。Runs/Notebook 在 CONNECTING 期间保留 5s/30s fallback，隐藏期遵守 refetchIntervalInBackground=false。Research 保留恢复 invalidation。
 
 不以合法的静默 OPEN 连接判定失效：无 heartbeat/revision 证据时任意空闲超时会错误触发轮询。当前承诺覆盖 CONNECTING 和明确 transport error，不声称检测所有半开 socket。
 
@@ -58,4 +59,9 @@ Knowledge 的普通事件 1→2→3 在 250ms 内只交付 3。resume/reconnect 
 
 ## 6. 实施记录
 
-计划按以上需求执行；本节在实现提交中补充实际改动、覆盖范围和检查入口。任务完成以修复提交的 quality/CodeQL 结果及最终说明为准。
+- `59f20c6`：本 PRD 初稿；`cc851ba`：权威 busy/idle、生命周期、有界恢复和竞态回归。
+- `c6cec4a`：合并并发修复，保留 Knowledge debounce、连接状态与新增测试。该提交 quality（Linux、Windows、macOS）和 CodeQL 全部通过。
+- 后续补充：R-07 共享 execution 连接和 refcount 回归；真实浏览器验收 Knowledge count、Runs+Notebook、Research list/detail 的 hide/show 与 cleanup。
+- 本轮环境恢复后，frontend lint/typecheck/build、bundle budget、真实 Chromium SSE budget 均通过。浏览器额外验证：Knowledge count 1→隐藏→REST 2；Notebook/Runs 共享一条 execution SSE、隐藏全部关闭、resume 更新输出、卸载最后消费者释放连接；Research list/detail 更新与卸载；execution SSE 被请求 gate 保持 CONNECTING 时，运行中 Notebook 的 5 秒 REST fallback 更新输出，随后 OPEN 正常接管。验收无生产模型调用。
+- CONNECTING 的 connection=false 和订阅 refcount 另有确定性单测；原浏览器预算保留会话初次 CONNECTING、双标签页、reload、Runs hide/show。未把静默半开 socket 检测列为完成项。
+- 验证结果以当前 PR head 的 Actions 链接为准，不沿用前序提交的通过记录。

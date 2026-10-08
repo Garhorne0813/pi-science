@@ -152,4 +152,34 @@ describe("subscribeExecutionInvalidation", () => {
     expect(onConnectionChange).toHaveBeenLastCalledWith(false);
   });
 
+  it("shares a workspace stream until its last consumer unmounts", () => {
+    const firstListener = vi.fn();
+    const secondListener = vi.fn();
+    const first = subscribeExecutionInvalidation("/workspace/shared", { onConnectionChange: firstListener });
+    const source = FakeEventSource.instances[0]!;
+    source.onopen?.();
+    const second = subscribeExecutionInvalidation("/workspace/shared", { onConnectionChange: secondListener });
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(secondListener).toHaveBeenLastCalledWith(true);
+    first();
+    first();
+    expect(source.closed).toBe(false);
+    expect(firstListener).toHaveBeenLastCalledWith(false);
+    source.onerror?.({} as Event);
+    expect(secondListener).toHaveBeenLastCalledWith(false);
+    second();
+    expect(source.closed).toBe(true);
+    const third = subscribeExecutionInvalidation("/workspace/shared");
+    expect(FakeEventSource.instances).toHaveLength(2);
+    third();
+  });
+
+  it("keeps distinct workspaces isolated", () => {
+    const first = subscribeExecutionInvalidation("/workspace/one");
+    const second = subscribeExecutionInvalidation("/workspace/two");
+    expect(FakeEventSource.instances).toHaveLength(2);
+    first();
+    expect(FakeEventSource.instances[1]!.closed).toBe(false);
+    second();
+  });
 });
