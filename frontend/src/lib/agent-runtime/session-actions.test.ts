@@ -62,6 +62,58 @@ describe("runtime session actions", () => {
     expect(fetchMock.mock.calls.some(([url, init]) => String(url).includes("/obsolete-draft?") && init?.method === "DELETE")).toBe(true);
   });
 
+  it("keeps a late blank runtime the user has already opened", async () => {
+    let finish!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { finish = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/sessions" && init?.method === "POST") return pending;
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("obsolete-draft"));
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useRuntimeStore.setState({ cwd: "/workspace", activeSessionId: null, status: "ready" });
+    const creating = useRuntimeStore.getState().createNewSession();
+    const rejected = expect(creating).rejects.toThrow("Conversation changed");
+    // The runtime answered on the server and the user opened that session before the
+    // creation response landed, which is the state the cleanup must not delete from.
+    await useRuntimeStore.getState().connect("/workspace", "obsolete-draft");
+    finish(jsonResponse({ id: "obsolete-draft", cwd: "/workspace" }));
+    await rejected;
+
+    expect(useRuntimeStore.getState().activeSessionId).toBe("obsolete-draft");
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).includes("/obsolete-draft?") && init?.method === "DELETE")).toBe(false);
+  });
+
+  it("does not fail a conversation the user switched to while a lazy creation failed", async () => {
+    let finish!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { finish = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/sessions" && init?.method === "POST") return pending;
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useRuntimeStore.setState({ cwd: "/workspace", activeSessionId: null, status: "ready", working: false, turnLifecycle: "settled" });
+    const sending = useRuntimeStore.getState().sendPrompt("hello");
+    const rejected = expect(sending).rejects.toThrow();
+
+    // The user opens another conversation while the first prompt is still waiting for its
+    // runtime. The failure belongs to the conversation that was left behind.
+    useRuntimeStore.setState({ activeSessionId: "session-b", status: "ready", working: false, turnLifecycle: "settled" });
+    finish(jsonResponse({ error: "no usable model" }, 500));
+    await rejected;
+
+    const state = useRuntimeStore.getState();
+    expect(state.activeSessionId).toBe("session-b");
+    expect(state.turnLifecycle).toBe("settled");
+    expect(state.status).toBe("ready");
+    expect(state.thread.blocks.filter((block) => block.kind === "status-line")).toEqual([]);
+  });
+
   it("does not create ghost sessions when StrictMode reopens a workspace route", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

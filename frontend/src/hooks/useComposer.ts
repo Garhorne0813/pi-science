@@ -152,6 +152,9 @@ export function useComposer(params: {
     setFiles([]);
     clearWorkspaceReferences(cwd);
     onSend?.();
+    // A late result belongs to the conversation that sent the prompt. The composer records
+    // that context, so a user who opened another conversation meanwhile is left alone.
+    const sentFrom = conversationKey;
     void sendPrompt(message)
       .then((sentSessionId) => {
         // A first prompt on a workspace landing route (no :sessionId segment)
@@ -159,13 +162,16 @@ export function useComposer(params: {
         // otherwise the route stays on the bare
         // workspace path and a later connect() without a sessionId clears the
         // thread back to the blank composer.
-        if (sentSessionId && !location.pathname.match(/\/session\/[^/]+$/)) {
+        if (!sentSessionId || composerContextRef.current?.conversationKey !== sentFrom) return;
+        if (!window.location.pathname.match(/\/session\/[^/]+$/)) {
           navigate(`/workspace/${encodeURIComponent(cwd)}/session/${sentSessionId}`, { replace: true });
         }
       })
       .catch(() => {
         // Keep the failed message visible with its inline error, but restore the
         // original draft/attachments so retrying does not require retyping.
+        const composer = composerContextRef.current;
+        if (composer?.cwd !== cwd || composer.conversationKey !== sentFrom) return;
         if (!useRuntimeStore.getState().draft) setInput(originalDraft);
         setMentions((current) => current.length > 0 ? current : sentMentions);
         setFiles((current) => current.length > 0 ? current : sentFiles);
