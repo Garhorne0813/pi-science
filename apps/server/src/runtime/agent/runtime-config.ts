@@ -174,13 +174,6 @@ export function loadDefaultPiConfig(): PiConfig {
     extensions: [],
   };
 }
-export function runtimeExtensionStatus() {
-  return [
-    ["pi-mcp-adapter", "MCP Adapter", "MCP tools"], ["pi-subagents", "Subagents", "Scientific subagents"],
-    ["pi-web-access", "Web Access", "Web search and URL fetching"], ["rpiv-ask-user-question", "Ask User Question", "Structured questions"],
-    ["rpiv-todo", "Todo", "Task tracking"],
-  ].map(([id, name, description]) => ({ id, name, description, installed: true, path: null }));
-}
 function readSettings(dataRoot: string): Record<string, any> {
   try { return JSON.parse(readFileSync(join(resolve(dataRoot), "config.json"), "utf8")) as Record<string, any>; }
   catch { return {}; }

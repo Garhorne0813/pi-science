@@ -43,6 +43,23 @@ describe("progress appearance settings", () => {
     await expect(modules.settings.read()).resolves.toMatchObject({ progress_appearance: progress });
   });
 
+  it("does not expose synthetic extensions or unused web-access settings", async () => {
+    const home = join(tmpdir(), `pi-science-retired-settings-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    tempDirs.push(home);
+    await mkdir(home, { recursive: true });
+    process.env.PI_SCIENCE_HOME = home;
+    const modules = createServerModules(config());
+    const reload = vi.spyOn(modules.sessions, "reloadConfiguration");
+    const app = buildApp(config(), modules);
+    apps.push(app);
+    for (const [method, url] of [["GET", "/api/settings/extensions"], ["GET", "/api/settings/web-access"], ["PUT", "/api/settings/web-access"]] as const) {
+      const response = await app.inject({ method, url, ...(method === "PUT" ? { payload: { provider: "exa" } } : {}) });
+      expect(response.statusCode).toBe(404);
+    }
+    expect(reload).not.toHaveBeenCalled();
+    await expect(modules.settings.read()).resolves.not.toHaveProperty("web_access");
+  });
+
   it("reads the stored appearance from the dedicated lightweight route", async () => {
     const home = join(tmpdir(), `pi-science-progress-settings-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     tempDirs.push(home);

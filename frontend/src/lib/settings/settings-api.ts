@@ -1,7 +1,7 @@
 import { applySessionReplacements, type SessionReplacement } from "../agent-runtime";
 import { apiRequest } from "../client/api";
 import { queryClient } from "../client/query-client";
-import type { AgentProfile, McpServer, ProjectSubagent, RuntimeExtension, WebAccessConfig } from "./settings-types";
+import type { McpServer, ProjectSubagent } from "./settings-types";
 import type {
   McpConnector,
   McpConnectorCreate,
@@ -60,12 +60,6 @@ const configQuery = <T,>(cwd?: string | null) => ({
  * in-flight deduplication and the 5xx retry. Only `/api/settings/*` resources sit
  * under the `settings` key so `invalidateSettings()` keeps its existing blast radius. */
 
-export const extensionsQuery = (errorFallback: string) => ({
-  queryKey: settingsKey("extensions"),
-  queryFn: () => apiRequest<{ extensions?: RuntimeExtension[] }>("/api/settings/extensions", { errorFallback }),
-  staleTime: 0,
-});
-
 export const subagentsKey = (cwd: string) => settingsKey("subagents", cwd);
 export const subagentsQuery = (cwd: string, errorFallback: string) => ({
   queryKey: subagentsKey(cwd),
@@ -77,20 +71,6 @@ export const subagentsDiscoveryQuery = (cwd: string) => ({
   queryKey: subagentsDiscoveryKey(cwd),
   queryFn: () => apiRequest<{ agents?: Array<{ name: string; description?: string; source?: string }> }>(`/api/settings/subagents/discovery?cwd=${encodeURIComponent(cwd)}`),
   staleTime: 3_000,
-});
-
-export const webAccessKey = settingsKey("web-access");
-export const webAccessQuery = (errorFallback: string) => ({
-  queryKey: webAccessKey,
-  queryFn: () => apiRequest<WebAccessConfig>("/api/settings/web-access", { errorFallback }),
-  staleTime: 0,
-});
-
-export const agentProfilesKey = ["agent-profiles"];
-export const agentProfilesQuery = (errorFallback: string) => ({
-  queryKey: agentProfilesKey,
-  queryFn: () => apiRequest<{ profiles?: AgentProfile[] }>("/api/agent-profiles", { errorFallback }),
-  staleTime: 0,
 });
 
 export const mcpCatalogKey = (cwd: string) => ["mcp", "catalog", cwd];
@@ -153,26 +133,6 @@ export const settingsApi = {
     return data.progress_appearance ?? progress;
   },
 
-
-
-  saveWebAccess(body: { provider: string; workflow: string; api_keys: Record<string, string>; remove_keys: string[] }, fallback: string) {
-    return writeSettings<WebAccessConfig>("/api/settings/web-access", json("PUT", body), fallback);
-  },
-
-  /* ── Project subagents ── */
-
-  async saveSubagent(cwd: string, name: string, body: ProjectSubagent, fallback: string): Promise<void> {
-    await apiRequest(`/api/settings/subagents/${encodeURIComponent(name)}?cwd=${encodeURIComponent(cwd)}`, { ...json("PUT", body), errorFallback: fallback });
-    void queryClient.invalidateQueries({ queryKey: subagentsKey(cwd) });
-    void queryClient.invalidateQueries({ queryKey: subagentsDiscoveryKey(cwd) });
-  },
-
-  async deleteSubagent(cwd: string, name: string, fallback: string): Promise<void> {
-    await apiRequest(`/api/settings/subagents/${encodeURIComponent(name)}?cwd=${encodeURIComponent(cwd)}`, { method: "DELETE", errorFallback: fallback });
-    void queryClient.invalidateQueries({ queryKey: subagentsKey(cwd) });
-    void queryClient.invalidateQueries({ queryKey: subagentsDiscoveryKey(cwd) });
-  },
-
   /* ── MCP catalog ── */
 
   setMcpEnabled(id: string, enabled: boolean, fallback: string) {
@@ -222,12 +182,7 @@ export const settingsApi = {
     return apiRequest<{ imported: McpConnector[]; failed: Array<{ name: string; error: string }> }>(`/api/mcp/import/commit${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`, json("POST", { names }));
   },
 
-  /* ── Agent profiles ── */
 
-  async createAgentProfile(body: Record<string, unknown>, fallback: string): Promise<void> {
-    await apiRequest("/api/agent-profiles", { ...json("POST", body), errorFallback: fallback });
-    void queryClient.invalidateQueries({ queryKey: agentProfilesKey });
-  },
 };
 
 /** Every settings write drops the whole settings resource from cache. */
