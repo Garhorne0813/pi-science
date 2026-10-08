@@ -5,10 +5,11 @@ import { cn } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
 import { IconButton } from "../ui/Icon";
+import { loadSettingsContent } from "./settings-loading";
 
 /** The settings content (vertical nav + tabs) is the heavy part; it only
  *  loads once the dialog is first opened. */
-const SettingsContent = lazy(() => import("./SettingsContent").then((m) => ({ default: m.SettingsContent })));
+const SettingsContent = lazy(() => loadSettingsContent().then((m) => ({ default: m.SettingsContent })));
 
 /** Floating settings dialog: one instance mounted at the layout root,
  *  driven entirely by the UI store, floating above every page. */

@@ -139,3 +139,38 @@ including overflow and serious/critical accessibility checks. Workspace typechec
 frontend lint, production build and bundle budget passed. Screenshot-guided
 coordinate input additionally exercised repair, disable, mobile enable and delete
 against isolated provider fixtures; this run used no live provider credentials.
+
+## Settings loading and large inventories
+
+General renders from local preferences without calling `/api/settings/config`.
+Only AI Models and Agent request that compatibility projection; pending requests
+and errors do not block other tabs. Feature tabs load their own chunks and data
+on demand. Progress hydrates through its existing lightweight appearance API.
+Model-read errors offer an explicit retry, and obsolete scope reads cannot
+overwrite a newer request.
+
+Each config response reuses one fresh runtime/catalog snapshot for both model
+capabilities and provider inventory. Credential state is not cached across
+requests or mutations. Provider/model lookups use indexes instead of repeatedly
+scanning the entire catalog.
+
+Configured services use 20-card pages; each expanded provider uses 50-model
+pages. Pagination bounds mounted content without introducing virtual scrolling.
+Search uses a deferred, indexed query, resets pages, and preserves the user's
+expansion choices rather than expanding every matching provider. All matching
+models remain reachable through search and pagination.
+
+Pointer hover or keyboard focus on Settings preloads the shell and General.
+Other feature chunks stay lazy. The production SettingsContent chunk decreased
+from approximately 149.6 kB to 13.4 kB before gzip; this is a shell reduction,
+not a claim that the total code across all Settings tabs decreased by that amount.
+
+Performance regressions cover a held model response, usable General/Progress
+while it is pending, isolated errors and retry, and 100 providers with 10,000
+models. Browser checks assert the 20-card/50-row pages, search beyond the first
+page, cleared-search recovery and no horizontal overflow. Fixture timings are
+diagnostic, not a production latency or frame-rate guarantee. Focused frontend
+coverage passed 77 tests; backend business routes passed 47 tests (7 skipped).
+All 12 browser checks passed across six viewport/theme projects, including the
+large-inventory scenarios and existing accessibility/save/navigation checks.
+Workspace typechecking, frontend lint, production build and bundle budget passed.

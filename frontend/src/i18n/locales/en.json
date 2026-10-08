@@ -1483,5 +1483,10 @@
   "settings.redesign.enableService": "Enable service",
   "settings.redesign.configureConnection": "Configure connection",
   "settings.redesign.keepCredential": "Leave the API key blank to keep the existing credential.",
-  "settings.redesign.modelNotAvailable": "Not currently available"
+  "settings.redesign.modelNotAvailable": "Not currently available",
+  "settings.redesign.retryLoad": "Retry loading",
+  "settings.redesign.servicePages": "Service pages",
+  "settings.redesign.pageRange": "{{start}}–{{end}} of {{total}}",
+  "settings.redesign.previousPage": "Previous",
+  "settings.redesign.nextPage": "Next"
 }

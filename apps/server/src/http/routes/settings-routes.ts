@@ -23,7 +23,7 @@ import {
   updateProjectSkill,
 } from "../../catalog/project-skill-service.js";
 import { knownWorkspacePaths } from "./catalog-routes.js";
-import type { RuntimeSkillPolicy } from "../../runtime/agent/agent-runtime-types.js";
+import type { RuntimeResult, RuntimeSkillPolicy } from "../../runtime/agent/agent-runtime-types.js";
 import type { ModelResourceService } from "../../model-resources/model-resource-service.js";
 import type { RuntimeCatalogService } from "../../runtime/agent/runtime-catalog.js";
 import { resolveMcpConfig } from "../../catalog/mcp-config.js";
@@ -261,15 +261,24 @@ function mergeModelCatalog(primary: Array<Record<string, unknown>>, overlay: Arr
   }
   return [...byId.values()];
 }
-async function modelCatalog(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">): Promise<{ available: Array<Record<string, unknown>>; source: "pi" | "fallback" }> {
+type ModelSnapshot = { catalog: RuntimeCatalog; models: RuntimeResult };
+async function readModelSnapshot(nodeSessionService: NodeSessionService, cwdValue: string, runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">): Promise<ModelSnapshot> {
+  const [catalog, models] = await Promise.all([
+    readRuntimeCatalog(runtimeCatalog),
+    cwdValue ? nodeSessionService.availableModels(cwdValue) : agentModelCatalog().then((models) => ({ success: true, data: { models } })),
+  ]);
+  return { catalog, models };
+}
+
+async function modelCatalog(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">, snapshot?: ModelSnapshot): Promise<{ available: Array<Record<string, unknown>>; source: "pi" | "fallback" }> {
+  const read = snapshot ?? await readModelSnapshot(nodeSessionService, cwdValue, runtimeCatalog);
+  const data = read.models.data && typeof read.models.data === "object" ? read.models.data as Record<string, unknown> : {};
   if (!cwdValue) {
-    return { available: (await agentModelCatalog()).map(normalizePiModel).filter((item): item is Record<string, unknown> => Boolean(item)), source: "pi" };
+    return { available: (Array.isArray(data.models) ? data.models : []).map(normalizePiModel).filter((item): item is Record<string, unknown> => Boolean(item)), source: "pi" };
   }
-  const catalog = await readRuntimeCatalog(runtimeCatalog);
-  const catalogEntries = catalogModels(catalog);
+  const catalogEntries = catalogModels(read.catalog);
   if (cwdValue) {
-    const result = await nodeSessionService.availableModels(cwdValue);
-    const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
+    const result = read.models;
     if (result.success && Array.isArray(data.models)) {
       const runtimeModels = data.models.map(normalizePiModel).filter((item): item is Record<string, unknown> => Boolean(item));
       const runtimeById = new Map(runtimeModels.map((item) => [String(item.id), item]));
@@ -303,11 +312,12 @@ type ProviderInventoryEntry = {
 
 /** Builtin provider inventory from the Agent Core catalog. Workspace model
  *  availability still comes from the live session's `/api/models` command. */
-async function providerInventory(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, modelResources?: ModelResourceService, runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">): Promise<ProviderInventoryEntry[]> {
-  const catalog = await readRuntimeCatalog(runtimeCatalog);
+async function providerInventory(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, modelResources?: ModelResourceService, runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">, snapshot?: ModelSnapshot): Promise<ProviderInventoryEntry[]> {
+  const read = snapshot ?? await readModelSnapshot(nodeSessionService, cwdValue, runtimeCatalog);
+  const catalog = read.catalog;
   let runtimeModels: Record<string, string[]> | null = null;
   {
-    const result = cwdValue ? await nodeSessionService.availableModels(cwdValue) : { success: true, data: { models: await agentModelCatalog() } };
+    const result = read.models;
     const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
     if (result.success && Array.isArray(data.models)) {
       runtimeModels = {};
@@ -321,8 +331,9 @@ async function providerInventory(nodeSessionService: NodeSessionService, config:
     }
   }
   const entries: ProviderInventoryEntry[] = [];
+  const credentialRefs = modelResources?.repository.readSync().credential_refs ?? {};
   for (const provider of catalog.providers) {
-    const ref = modelResources?.repository.readSync().credential_refs[provider.id];
+    const ref = credentialRefs[provider.id];
     const managed = ref && modelResources ? Boolean((await modelResources.credentials.getForRuntime(ref))?.secret) : false;
     const stored = typeof config.api_keys?.[provider.id] === "string" && config.api_keys[provider.id] !== "";
     const localCredential = managed || stored;
@@ -552,7 +563,11 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
     await modelResources?.ensureMigrated();
     const config = await load();
     const cwdValue = query(request, "cwd", "");
-    const catalog = await modelCatalog(nodeSessionService, config, cwdValue, runtimeCatalog);
+    // Request-scoped snapshot: inventory and capabilities observe the same
+    // model read, without caching credentials across configuration writes.
+    const snapshot = await readModelSnapshot(nodeSessionService, cwdValue, runtimeCatalog);
+    const catalog = await modelCatalog(nodeSessionService, config, cwdValue, runtimeCatalog, snapshot);
+    const catalogById = new Map(catalog.available.map((model) => [model.id, model]));
     let available = catalog.available;
     const canonicalState = modelResources?.repository.readSync();
     const hasCanonicalResources = Boolean(canonicalState && (canonicalState.migration || canonicalState.providers.length > 0 || canonicalState.models.length > 0));
@@ -560,7 +575,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       const resourceModels = await modelResources.listModels();
       const projected = resourceModels
         .filter((item) => item.provider_id.startsWith("user-") && item.available)
-        .filter((item) => catalog.available.some((model) => model.id === item.id))
+        .filter((item) => catalogById.has(item.id))
         .map((item) => ({
           id: item.id,
           provider: item.provider_id,
@@ -577,7 +592,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
         }));
       available = mergeModelCatalog(available, projected);
       available = available.map((item) => {
-        const actual = catalog.available.find((model) => model.id === item.id);
+        const actual = catalogById.get(item.id);
         return actual ? { ...item, thinking_levels: actual.thinking_levels ?? item.thinking_levels, reasoning: actual.reasoning ?? item.reasoning, context_window: actual.context_window ?? item.context_window, capability_source: actual.capability_source } : item;
       });
     }
@@ -653,7 +668,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
     }
     const progressAppearance = progressAppearanceSchema.safeParse(config.progress_appearance ?? {});
     const effectiveProgressAppearance = progressAppearance.success ? progressAppearance.data : defaultProgressAppearance;
-    const providers = await providerInventory(nodeSessionService, config, cwdValue, modelResources, runtimeCatalog);
+    const providers = await providerInventory(nodeSessionService, config, cwdValue, modelResources, runtimeCatalog, snapshot);
     if (modelResources) {
       const canonicalProviders = await modelResources.listProviders();
       for (const provider of canonicalProviders.filter((item) => item.kind === "user")) {

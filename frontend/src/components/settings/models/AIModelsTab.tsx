@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Check, ChevronDown, ChevronRight, Ellipsis, Eye, EyeOff, Loader2, PlugZap, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
@@ -41,19 +41,24 @@ export function AIModelsTab({ config, apiKeyInput, setApiKeyInput, showKey, setS
   const services = useMemo(() => (config ? buildServices(config) : []), [config]);
   const availableTargets = useMemo(() => (config ? config.providers.filter((provider) => !provider.custom && !isConnected(provider)).map((provider) => ({ id: provider.id, name: provider.name, kind: "builtin" as const })) : []), [config]);
 
-  const normalizedQuery = query.trim().toLowerCase();
-  const visibleServices = services.flatMap((service) => {
-    if (!normalizedQuery || `${service.name} ${service.id}`.toLowerCase().includes(normalizedQuery)) return [service];
-    const models = service.models.filter((model) => `${model.name} ${model.id}`.toLowerCase().includes(normalizedQuery));
-    return models.length ? [{ ...service, models }] : [];
-  });
+  const normalizedQuery = useDeferredValue(query.trim().toLowerCase());
+  const indexedServices = useMemo(() => services.map((service) => ({ service, key: `${service.name} ${service.id}`.toLowerCase(), models: service.models.map((model) => ({ model, key: `${model.name} ${model.id}`.toLowerCase() })) })), [services]);
+  const visibleServices = useMemo(() => indexedServices.flatMap(({ service, key, models }) => {
+    if (!normalizedQuery || key.includes(normalizedQuery)) return [service];
+    const matches = models.filter((model) => model.key.includes(normalizedQuery)).map(({ model }) => model);
+    return matches.length ? [{ ...service, models: matches }] : [];
+  }), [indexedServices, normalizedQuery]);
+  const [servicePage, setServicePage] = useState(0);
+  const currentPage = Math.min(servicePage, Math.max(0, Math.ceil(visibleServices.length / 20) - 1));
+  const pageServices = visibleServices.slice(currentPage * 20, (currentPage + 1) * 20);
+  useEffect(() => { setServicePage(0); }, [normalizedQuery]);
   const loginProviders = config?.providers.filter((provider) => !provider.custom && (provider.auth?.api_key_supported === false && provider.auth.kind !== "none" || provider.credential_status === "needs_login")) ?? [];
 
   useEffect(() => {
     if (services.length > 0 && Object.keys(expanded).length === 0) setExpanded({ [services[0].id]: true });
   }, [services, expanded]);
 
-  if (!config) return <div className="text-sm text-muted">{t("common.loading")}</div>;
+  if (!config) return null;
 
   const openConnect = () => { setConnectTarget(null); setConnectOpen(true); };
   const closeConnect = () => { setConnectOpen(false); setConnectTarget(null); };
@@ -88,10 +93,10 @@ export function AIModelsTab({ config, apiKeyInput, setApiKeyInput, showKey, setS
 
       {services.length > 0 && <div className="flex h-10 items-center gap-2 rounded-input border border-border bg-bg px-3 focus-within:border-accent">
         <Search size={16} className="shrink-0 text-muted" />
-        <input type="search" aria-label={t("settings.redesign.searchModels")} placeholder={t("settings.redesign.searchModels")} value={query} onChange={(event) => { setQuery(event.target.value); if (event.target.value.trim()) setExpanded(Object.fromEntries(services.map((service) => [service.id, true]))); }} className="min-w-0 flex-1 bg-transparent text-ui-label text-text outline-none placeholder:text-muted" />
+        <input type="search" aria-label={t("settings.redesign.searchModels")} placeholder={t("settings.redesign.searchModels")} value={query} onChange={(event) => setQuery(event.target.value)} className="min-w-0 flex-1 bg-transparent text-ui-label text-text outline-none placeholder:text-muted" />
         {query && <button type="button" onClick={() => setQuery("")} className="text-ui-caption text-link">{t("settings.redesign.clearSearch")}</button>}
       </div>}
-      <section aria-labelledby="connected-services-title">
+      <section aria-labelledby="connected-services-title" aria-busy={normalizedQuery !== query.trim().toLowerCase()}>
         <h3 id="connected-services-title" className="mb-2 text-ui-label font-medium text-text">{t("settings.models.connectedServices", { defaultValue: "Connected services" })}</h3>
         {services.length === 0 ? (
           <div className="border-y border-faint py-10 text-center">
@@ -101,9 +106,10 @@ export function AIModelsTab({ config, apiKeyInput, setApiKeyInput, showKey, setS
           </div>
         ) : (
           <div className="space-y-3">
-            {visibleServices.map((service) => (
-              <ProviderSection key={service.id} service={service} expanded={expanded[service.id] === true} onToggle={() => toggleService(service.id)} onManage={() => setManageService(service)} onReplace={() => setReplaceService(service)} onRefresh={() => refreshService(service)} onDisable={() => disableService(service)} onDisconnect={() => setDisconnectService(service)} busy={actionBusy === service.id} />
+            {pageServices.map((service) => (
+              <ProviderSection key={`${service.id}:${normalizedQuery}`}  service={service} expanded={expanded[service.id] === true} onToggle={() => toggleService(service.id)} onManage={() => setManageService(service)} onReplace={() => setReplaceService(service)} onRefresh={() => refreshService(service)} onDisable={() => disableService(service)} onDisconnect={() => setDisconnectService(service)} busy={actionBusy === service.id} />
             ))}
+            <CatalogPagination page={currentPage} pageSize={20} total={visibleServices.length} onPage={setServicePage} label={t("settings.redesign.servicePages")} />
           </div>
         )}
       </section>
@@ -126,6 +132,8 @@ export function AIModelsTab({ config, apiKeyInput, setApiKeyInput, showKey, setS
 function ProviderSection({ service, expanded, onToggle, onManage, onReplace, onRefresh, onDisable, onDisconnect, busy }: { service: Service; expanded: boolean; onToggle: () => void; onManage: () => void; onReplace: () => void; onRefresh: () => void; onDisable: () => void; onDisconnect: () => void; busy: boolean }) {
   const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [modelPage, setModelPage] = useState(0);
+  const currentPage = Math.min(modelPage, Math.max(0, Math.ceil(service.models.length / 50) - 1));
   const panelId = `models-for-${service.id}`;
   const statusText = service.status === "connected" ? t("settings.models.status.connected", { defaultValue: "Connected" }) : service.status === "needs_key" ? t("settings.models.status.needsAuth", { defaultValue: "Needs authentication" }) : service.status === "needs_login" ? t("settings.redesign.needsLogin") : service.status === "disabled" ? t("settings.models.status.disabled", { defaultValue: "Disabled" }) : t("settings.models.status.unreachable", { defaultValue: "Unreachable" });
   const statusTone = service.status === "connected" ? "text-ok-text" : service.status === "needs_key" || service.status === "needs_login" ? "text-warn-text" : service.status === "disabled" ? "text-muted" : "text-error-text";
@@ -151,13 +159,22 @@ function ProviderSection({ service, expanded, onToggle, onManage, onReplace, onR
       {service.custom && service.status === "needs_key" && <div className="pb-3"><button type="button" disabled={busy} onClick={onManage} className="min-h-9 rounded-input border border-border px-3 text-ui-caption text-link hover:bg-surface-hover disabled:opacity-40">{t("settings.redesign.configureConnection")}</button></div>}
       {service.custom && service.status === "needs_login" && <p className="pb-3 text-ui-caption text-muted">{t("settings.redesign.oauthUnavailable")}</p>}
       {expanded && <div id={panelId} className="border-t border-faint pb-2 pl-3" role="region" aria-label={`${service.name} ${t("settings.models.models", { defaultValue: "models" })}`}>
-        {service.models.length === 0 ? <p className="py-4 text-ui-caption text-muted">{t("settings.models.noModelsHelp", { defaultValue: "Check the endpoint or refresh the model list." })}</p> : <><div className="hidden grid-cols-2 gap-2 sm:grid sm:grid-cols-[minmax(0,1fr)_7rem_7rem_5rem] sm:gap-3 border-b border-faint py-2 pr-2 text-ui-meta font-medium text-muted"><span>{t("settings.models.modelName", { defaultValue: "Model" })}</span><span className="text-right">{t("settings.models.inputFormats", { defaultValue: "Input format" })}</span><span className="text-right">{t("settings.models.contextWindow", { defaultValue: "Context" })}</span><span className="text-right">{t("settings.models.maxOutputTokens", { defaultValue: "Max output" })}</span></div>{service.models.map((model) => <ModelRow key={model.id} model={model} />)}</>}
+        {service.models.length === 0 ? <p className="py-4 text-ui-caption text-muted">{t("settings.models.noModelsHelp", { defaultValue: "Check the endpoint or refresh the model list." })}</p> : <><div className="hidden grid-cols-2 gap-2 sm:grid sm:grid-cols-[minmax(0,1fr)_7rem_7rem_5rem] sm:gap-3 border-b border-faint py-2 pr-2 text-ui-meta font-medium text-muted"><span>{t("settings.models.modelName", { defaultValue: "Model" })}</span><span className="text-right">{t("settings.models.inputFormats", { defaultValue: "Input format" })}</span><span className="text-right">{t("settings.models.contextWindow", { defaultValue: "Context" })}</span><span className="text-right">{t("settings.models.maxOutputTokens", { defaultValue: "Max output" })}</span></div>{service.models.slice(currentPage * 50, (currentPage + 1) * 50).map((model) => <ModelRow key={model.id} model={model} />)}<CatalogPagination page={currentPage} pageSize={50} total={service.models.length} onPage={setModelPage} label={`${service.name} ${t("settings.models.models")}`} /></>}
       </div>}
     </div>
   );
 }
 
-function ModelRow({ model }: { model: ModelView }) {
+function CatalogPagination({ page, pageSize, total, onPage, label }: { page: number; pageSize: number; total: number; onPage: (page: number) => void; label: string }) {
+  const { t } = useTranslation();
+  if (total <= pageSize) return null;
+  return <nav aria-label={label} className="flex flex-wrap items-center justify-between gap-2 py-3 text-ui-caption text-muted">
+    <span role="status">{t("settings.redesign.pageRange", { start: page * pageSize + 1, end: Math.min((page + 1) * pageSize, total), total })}</span>
+    <div className="flex gap-2"><button type="button" disabled={page === 0} onClick={() => onPage(page - 1)} className="min-h-9 rounded-input border border-border px-3 text-text hover:bg-surface-hover disabled:opacity-40">{t("settings.redesign.previousPage")}</button><button type="button" disabled={(page + 1) * pageSize >= total} onClick={() => onPage(page + 1)} className="min-h-9 rounded-input border border-border px-3 text-text hover:bg-surface-hover disabled:opacity-40">{t("settings.redesign.nextPage")}</button></div>
+  </nav>;
+}
+
+const ModelRow = memo(function ModelRow({ model }: { model: ModelView }) {
   const { t } = useTranslation();
   return <div className="grid min-h-12 grid-cols-2 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_7rem_7rem_5rem] sm:gap-3 border-b border-faint py-2 pr-2 last:border-0">
     <span className="col-span-2 min-w-0 break-words text-ui-label text-text sm:col-span-1">{model.name}{model.thinkingLevels.length > 0 && <span className="mt-1 block text-ui-meta text-muted">{t("settings.redesign.supportedThinking")}: {model.thinkingLevels.map((level) => t(`settings.thinking.${level}`, { defaultValue: level })).join(" · ")}</span>}{model.available === false && <span className="mt-1 block text-ui-meta text-muted">{t("settings.redesign.modelNotAvailable")}</span>}</span>
@@ -165,7 +182,7 @@ function ModelRow({ model }: { model: ModelView }) {
     <span className="font-mono text-ui-meta text-muted sm:text-right"><span className="font-sans sm:hidden">{t("settings.models.contextWindow")}: </span>{formatContext(model.contextWindow)}</span>
     <span className="text-right font-mono text-ui-meta text-muted"><span className="font-sans sm:hidden">{t("settings.models.maxOutputTokens")}: </span>{formatContext(model.maxOutputTokens)}</span>
   </div>;
-}
+});
 
 function ConnectDialog({ config, target, availableTargets, apiKeyInput, setApiKeyInput, showKey, setShowKey, saving, saveKey, onClose, onSelect, onConfigReload }: { config: SettingsConfig; target: ConnectTarget; availableTargets: Array<NonNullable<ConnectTarget>>; apiKeyInput: Record<string, string>; setApiKeyInput: React.Dispatch<React.SetStateAction<Record<string, string>>>; showKey: Record<string, boolean>; setShowKey: React.Dispatch<React.SetStateAction<Record<string, boolean>>>; saving: string | null; saveKey: (provider: string) => Promise<void>; onClose: () => void; onSelect: (target: ConnectTarget) => void; onConfigReload: () => Promise<void> }) {
   const { t } = useTranslation();

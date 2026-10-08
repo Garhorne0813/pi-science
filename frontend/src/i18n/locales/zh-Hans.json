@@ -1483,5 +1483,10 @@
   "settings.redesign.enableService": "启用服务",
   "settings.redesign.configureConnection": "配置连接",
   "settings.redesign.keepCredential": "API key 留空将保留已有凭证。",
-  "settings.redesign.modelNotAvailable": "当前不可用"
+  "settings.redesign.modelNotAvailable": "当前不可用",
+  "settings.redesign.retryLoad": "重新加载",
+  "settings.redesign.servicePages": "服务分页",
+  "settings.redesign.pageRange": "第 {{start}}–{{end}} 项，共 {{total}} 项",
+  "settings.redesign.previousPage": "上一页",
+  "settings.redesign.nextPage": "下一页"
 }

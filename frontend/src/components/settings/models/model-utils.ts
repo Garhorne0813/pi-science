@@ -42,10 +42,18 @@ function customStatus(provider: SettingsProvider): Service["status"] {
 
 export function buildServices(config: SettingsConfig): Service[] {
   const available = config.available_models || [];
+  const byProvider = new Map<string, SettingsConfig["available_models"]>();
+  const byId = new Map(available.map((model) => [model.id, model]));
+  for (const model of available) for (const id of new Set([model.provider, model.id.split("/")[0]])) {
+    const models = byProvider.get(id) ?? [];
+    models.push(model);
+    byProvider.set(id, models);
+  }
   const serviceModels = (id: string, names: string[]): ModelView[] => {
     const providerIds = /^(?:custom|user)-/.test(id) ? [`user-${customProviderId(id)}`, `custom-${customProviderId(id)}`] : [id];
-    const models: ModelView[] = available
-      .filter((model) => providerIds.includes(model.provider) || providerIds.some((providerId) => model.id.startsWith(`${providerId}/`)) || names.includes(model.id))
+    const candidates = new Map(providerIds.flatMap((providerId) => (byProvider.get(providerId) ?? []).map((model) => [model.id, model] as const)));
+    for (const name of names) { const model = byId.get(name); if (model) candidates.set(model.id, model); }
+    const models: ModelView[] = [...candidates.values()]
       .map((model) => ({
       id: model.id,
       name: shortModelName(model.label, model.model),
@@ -65,9 +73,10 @@ export function buildServices(config: SettingsConfig): Service[] {
     }));
     // Keep configured inventory visible even when the available-model catalog
     // omits an unauthenticated or disabled custom provider. Do not guess facts.
+    const modelIds = new Set(models.map((model) => model.id));
     if (/^(?:custom|user)-/.test(id)) for (const name of names) {
       const modelName = providerIds.reduce((value, prefix) => value.startsWith(`${prefix}/`) ? value.slice(prefix.length + 1) : value, name);
-      if (!models.some((model) => providerIds.some((prefix) => model.id === `${prefix}/${modelName}`))) models.push({ id: `${id}/${modelName}`, name: modelName, reasoning: false, inputFormats: [], contextWindow: null, maxOutputTokens: null, thinkingLevels: [], available: false });
+      if (!providerIds.some((prefix) => modelIds.has(`${prefix}/${modelName}`))) { modelIds.add(`${id}/${modelName}`); models.push({ id: `${id}/${modelName}`, name: modelName, reasoning: false, inputFormats: [], contextWindow: null, maxOutputTokens: null, thinkingLevels: [], available: false }); }
     }
     return models;
   };

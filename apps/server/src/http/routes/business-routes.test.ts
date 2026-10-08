@@ -102,7 +102,7 @@ describe("native control-plane business routes", () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     const modules = createServerModules();
-    vi.spyOn(modules.sessions, "availableModels").mockResolvedValue({ success: true, data: { models: [{ provider: "openai", id: "gpt-5.5", reasoning: true, thinking_levels: ["off", "high", "max"] }] } });
+    const modelRead = vi.spyOn(modules.sessions, "availableModels").mockResolvedValue({ success: true, data: { models: [{ provider: "openai", id: "gpt-5.5", reasoning: true, thinking_levels: ["off", "high", "max"] }] } });
     const runtimeCatalog = {
       getCatalog: vi.fn(async () => ({
         schemaVersion: 1 as const,
@@ -123,6 +123,17 @@ describe("native control-plane business routes", () => {
     expect(settings.available_models).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "openai/gpt-5.5", thinking_levels: ["off", "high", "max"] }),
     ]));
+    expect(modelRead).toHaveBeenCalledOnce();
+    expect(runtimeCatalog.getCatalog).toHaveBeenCalledOnce();
+    expect(settings.providers.find((provider: { id: string }) => provider.id === "openai").models).toEqual(["gpt-5.5"]);
+    // A new read must see updated availability, not stale credentials/catalog
+    // cached across a provider mutation. Reuse is scoped to one response.
+    modelRead.mockResolvedValue({ success: true, data: { models: [] } });
+    const refreshed = (await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` })).json();
+    expect(refreshed.available_models).toEqual([]);
+    expect(refreshed.providers.find((provider: { id: string }) => provider.id === "openai").models).toEqual([]);
+    expect(modelRead).toHaveBeenCalledTimes(2);
+    expect(runtimeCatalog.getCatalog).toHaveBeenCalledTimes(2);
   });
 
   it("persists the unified skill policy without replacing active sessions", async () => {

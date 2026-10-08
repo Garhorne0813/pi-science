@@ -1,19 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Activity, Blocks, Boxes, BrainCircuit, Loader2, ServerCog, Settings2, FolderOpen, Globe2, Unplug, UserRound, WandSparkles, X, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/ui";
 import { settingsApi } from "../../lib/settings";
 import type { SettingsConfig } from "../../lib/settings";
-import { ComputeSettings } from "./ComputeSettings";
-import { ExtensionsTab } from "./ExtensionsTab";
 import { GeneralTab } from "./GeneralTab";
-import { AIModelsTab } from "./models/AIModelsTab";
-import { AgentTab } from "./agent/AgentTab";
-import { MCPTab } from "./MCPTab";
-import { SkillsTab } from "./SkillsTab";
 import { Icon, IconButton } from "../ui/Icon";
-import { EnvironmentSettings } from "./EnvironmentSettings";
-import { ProgressTab } from "./ProgressTab";
+
+const ComputeSettings = lazy(() => import("./ComputeSettings").then((module) => ({ default: module.ComputeSettings })));
+const ExtensionsTab = lazy(() => import("./ExtensionsTab").then((module) => ({ default: module.ExtensionsTab })));
+const AIModelsTab = lazy(() => import("./models/AIModelsTab").then((module) => ({ default: module.AIModelsTab })));
+const AgentTab = lazy(() => import("./agent/AgentTab").then((module) => ({ default: module.AgentTab })));
+const MCPTab = lazy(() => import("./MCPTab").then((module) => ({ default: module.MCPTab })));
+const SkillsTab = lazy(() => import("./SkillsTab").then((module) => ({ default: module.SkillsTab })));
+const EnvironmentSettings = lazy(() => import("./EnvironmentSettings").then((module) => ({ default: module.EnvironmentSettings })));
+const ProgressTab = lazy(() => import("./ProgressTab").then((module) => ({ default: module.ProgressTab })));
 
 type Tab = "general" | "models" | "agent" | "progress" | "skills" | "extensions" | "mcp" | "compute" | "environments";
 
@@ -38,12 +39,15 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>("general");
   const [config, setConfig] = useState<SettingsConfig | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState<Record<string, string>>({});
   const [showKey, setShowKey] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const needsModelConfig = tab === "models" || tab === "agent";
+  const requestId = useRef(0);
+  useEffect(() => () => { requestId.current++; }, [scope]);
   const activeTab = TABS.find((item) => item.id === tab) ?? TABS[0];
 
   const changeTab = (next: Tab) => {
@@ -74,21 +78,24 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
   };
 
   const loadConfig = useCallback(async () => {
+    const id = ++requestId.current;
+    setLoading(true);
+    setError(null);
     try {
-      setConfig(await settingsApi.config<SettingsConfig>(scope));
-      setError(null);
+      const next = await settingsApi.config<SettingsConfig>(scope);
+      if (id === requestId.current) setConfig(next);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      setError(message);
+      if (id === requestId.current) setError(message);
       throw e;
     } finally {
-      setLoading(false);
+      if (id === requestId.current) setLoading(false);
     }
   }, [scope]);
 
   useEffect(() => {
-    void loadConfig().catch(() => undefined);
-  }, [loadConfig]);
+    if (needsModelConfig) void loadConfig().catch(() => undefined);
+  }, [needsModelConfig, loadConfig]);
 
   const saveKey = async (provider: string) => {
     const key = apiKeyInput[provider]?.trim();
@@ -191,25 +198,19 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
           </header>
           <div className="min-h-0 flex-1 px-card py-card md:px-0 md:py-6">
             <p className="mb-4 flex items-start gap-2 rounded-input bg-sidebar px-3 py-2 text-ui-caption leading-relaxed text-muted"><Icon icon={scope ? FolderOpen : Globe2} size={14} className="mt-0.5 shrink-0" /><span>{t(scope ? "settings.redesign.workspaceScopeHelp" : "settings.redesign.globalScopeHelp")}</span></p>
-            {loading ? (
-              <div className="flex min-h-[240px] items-center justify-center text-sm text-muted">
-                <Icon icon={Loader2} size={18} className="mr-2 animate-spin" />
-                {t("common.loading")}
-              </div>
-            ) : (
-              <>
-                {error && <p role="alert" className="mb-card rounded-input bg-error/10 px-panel py-2 text-ui-caption text-error-text">{error}</p>}
+            {needsModelConfig && error && <div role="alert" className="mb-card rounded-input bg-error/10 px-panel py-2 text-ui-caption text-error-text">{error}<button type="button" onClick={() => void loadConfig().catch(() => undefined)} className="ml-3 min-h-9 rounded-input px-3 text-link hover:bg-surface-hover">{t("settings.redesign.retryLoad")}</button></div>}
+            <Suspense fallback={<div role="status" className="py-4 text-sm text-muted">{t("common.loading")}</div>}>
+            {needsModelConfig && loading && !config && <div role="status" className="flex min-h-60 items-center justify-center text-sm text-muted"><Icon icon={Loader2} size={18} className="mr-2 animate-spin" />{t("common.loading")}</div>}
                 {tab === "general" && <GeneralTab />}
                 {tab === "models" && <AIModelsTab config={config} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} onConfigReload={loadConfig} />}
                 {tab === "agent" && <AgentTab config={config} saving={saving === "compaction"} onSave={saveCompaction} onOpenModels={() => { changeTab("models"); focusTab("models"); }} />}
-                {tab === "progress" && config && <ProgressTab config={config} />}
+                {tab === "progress" && <ProgressTab />}
                 {tab === "skills" && <SkillsTab workspaceCwd={scope} />}
                 {tab === "extensions" && <ExtensionsTab workspaceCwd={scope} />}
                 {tab === "mcp" && <MCPTab workspaceCwd={scope} />}
                 {tab === "compute" && <ComputeSettings workspaceCwd={scope} />}
                 {tab === "environments" && <EnvironmentSettings workspaceCwd={scope} />}
-              </>
-            )}
+            </Suspense>
           </div>
         </div>
       </div>

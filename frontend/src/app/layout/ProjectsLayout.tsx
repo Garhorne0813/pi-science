@@ -10,6 +10,7 @@ import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { useWorkspaceCwd } from "../../lib/workspace";
 import { usePendingProposalCount } from "../../lib/knowledge";
 import { cn } from "../../lib/ui";
+import { preloadSettingsContent } from "../../components/settings/settings-loading";
 
 // The settings bundle (dialog + tabs) only loads on first open.
 const SettingsDialog = lazy(() => import("../../components/settings/SettingsDialog").then((m) => ({ default: m.SettingsDialog })));
@@ -567,17 +568,18 @@ export function SettingsNavItem({ cwd, collapsed = false }: { cwd: string | null
   const settingsOpen = useUiStore((s) => s.settingsOpen);
   const openSettings = useUiStore((s) => s.openSettings);
   const handleClick = () => {
+    preloadSettingsContent();
     openSettings(cwd);
     if (window.innerWidth < 768) useUiStore.getState().setSidebarCollapsed(true);
   };
 
   if (collapsed) {
     return (
-      <IconButton icon={Settings} label={t("nav.settings")} size="standard" onClick={handleClick} className={cn("h-11 w-11", settingsOpen && "bg-surface-selected text-accent")} />
+      <IconButton icon={Settings} label={t("nav.settings")} size="standard" onClick={handleClick} onPointerEnter={preloadSettingsContent} onFocus={preloadSettingsContent} className={cn("h-11 w-11", settingsOpen && "bg-surface-selected text-accent")} />
     );
   }
   return (
-    <button onClick={handleClick} className={cn("flex h-nav min-h-0 w-full items-center gap-1.5 rounded-input px-2 text-left text-ui-label transition-colors", settingsOpen ? "bg-surface-selected font-medium text-text" : "text-text/90 hover:bg-surface-hover hover:text-text")}>
+    <button onClick={handleClick} onPointerEnter={preloadSettingsContent} onFocus={preloadSettingsContent} className={cn("flex h-nav min-h-0 w-full items-center gap-1.5 rounded-input px-2 text-left text-ui-label transition-colors", settingsOpen ? "bg-surface-selected font-medium text-text" : "text-text/90 hover:bg-surface-hover hover:text-text")}>
       <Icon icon={Settings} size="md" className="shrink-0 text-muted" />
       <span className="min-w-0 flex-1 truncate">{t("nav.settings")}</span>
     </button>

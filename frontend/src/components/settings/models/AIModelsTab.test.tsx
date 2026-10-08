@@ -211,4 +211,36 @@ describe("AIModelsTab", () => {
     expect(within(editor).queryByLabelText("API key")).not.toBeInTheDocument();
   });
 
+  it("bounds a 10,000-model inventory and finds models beyond the first page", async () => {
+    const models = Array.from({ length: 10_000 }, (_, index) => ({ ...config.available_models[0], id: `anthropic/model-${index}`, model: `model-${index}`, label: `Model ${index}` }));
+    renderTab({ config: { ...config, providers: [{ ...config.providers[0], models: models.map(model => model.id) }], available_models: models } });
+    expect(screen.getByText("Model 0")).toBeInTheDocument();
+    expect(screen.queryByText("Model 50")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByText("Model 50")).toBeInTheDocument();
+    expect(screen.queryByText("Model 0")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "model-9999" } });
+    expect(await screen.findByText("Model 9999")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Next" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(await screen.findByText("Model 0")).toBeInTheDocument();
+    expect(screen.queryByText("Model 50")).not.toBeInTheDocument();
+  });
+
+  it("bounds provider cards without expanding every service on search", async () => {
+    const providers = Array.from({ length: 45 }, (_, index) => ({ id: `provider-${index}`, name: `Service ${index}`, models: [`provider-${index}/model`], has_key: true, credential_status: "configured" as const, enabled: true }));
+    renderTab({ config: { ...config, providers, available_models: providers.map(provider => ({ ...config.available_models[0], id: `${provider.id}/model`, provider: provider.id, model: "model", label: `Model ${provider.id}` })) } });
+    expect(screen.getAllByRole("button", { name: "Connection settings" })).toHaveLength(20);
+    expect(screen.getAllByRole("region", { name: /Service \d+ models/ })).toHaveLength(1);
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "Service" } });
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Connection settings" })).toHaveLength(20));
+    expect(screen.getAllByRole("region", { name: /Service \d+ models/ })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByText("Service 20")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /Service \d+ models/ })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "Service 44" } });
+    expect(await screen.findByText("Service 44")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Connection settings" })).toHaveLength(1);
+  });
+
 });

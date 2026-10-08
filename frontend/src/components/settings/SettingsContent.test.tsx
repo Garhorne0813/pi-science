@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { SettingsContent } from "./SettingsContent";
@@ -232,6 +232,43 @@ describe("SettingsContent", () => {
     expect(await screen.findByRole("button", { name: /Lab.*Connected/ })).toBeInTheDocument();
     expect(screen.queryByText("Needs authentication")).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Edit connection" })).not.toBeInTheDocument();
+  });
+
+  it("keeps General and Skills usable while model configuration is delayed", async () => {
+    let resolveModel!: (response: Response) => void;
+    const modelResponse = new Promise<Response>((resolve) => { resolveModel = resolve; });
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => String(input).startsWith("/api/settings/config") ? modelResponse : defaultFetch(String(input), init));
+    renderContent(null);
+    expect(screen.getByRole("button", { name: "Light" })).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("tab", { name: "General" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dark" }));
+    expect(useUiStore.getState().theme).toBe("dark");
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Skills" }));
+    expect(await screen.findByText("Analyze alpha data")).toBeInTheDocument();
+    await act(async () => resolveModel(jsonResponse({ providers: [], available_models: [], api_keys: {}, custom_providers: [], model: "", thinking: "off" })));
+  });
+
+  it("isolates model loading errors from General and supports retry", async () => {
+    let attempts = 0;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      if (String(input).startsWith("/api/settings/config") && ++attempts <= 2) return jsonResponse({ error: "Catalog unavailable" }, 400);
+      return defaultFetch(String(input), init);
+    });
+    renderContent(null);
+    fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Catalog unavailable");
+    fireEvent.click(screen.getByRole("tab", { name: "General" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Light" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Catalog unavailable");
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading" }));
+    expect(await screen.findByText("Configured services")).toBeInTheDocument();
+    expect(attempts).toBe(3);
   });
 
 });
