@@ -52,6 +52,32 @@ describe("subscribeExecutionInvalidation", () => {
     cleanup();
   });
 
+  it("keeps REST fallback enabled until a delayed replacement reaches OPEN", () => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    const onConnectionChange = vi.fn();
+    const cleanup = subscribeExecutionInvalidation(".", { onConnectionChange });
+    const first = FakeEventSource.instances[0]!;
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    first.onopen?.();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(true);
+
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    vi.advanceTimersByTime(30_000);
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    // A closed source cannot disable polling again.
+    first.onopen?.();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    FakeEventSource.instances[1]!.onopen?.();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(true);
+    cleanup();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+  });
+
   it("debounces execution events and invalidates the workspace ledger", () => {
     const key = runsKey("/workspace/demo");
     queryClient.setQueryData(key, []);

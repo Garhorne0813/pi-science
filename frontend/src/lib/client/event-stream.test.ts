@@ -52,6 +52,35 @@ describe("openJsonEventStream visibility recovery", () => {
     cleanup();
   });
 
+  it("reports transport state across native retries and ignores callbacks after cleanup", () => {
+    const onConnectionChange = vi.fn();
+    const onError = vi.fn();
+    const onMessage = vi.fn();
+    const cleanup = openJsonEventStream("/events", {
+      onMessage, onError, onConnectionChange, closeOnError: false,
+    });
+    const source = FakeEventSource.instances[0]!;
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    source.open();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(true);
+    source.onmessage?.({ data: "invalid json" } as MessageEvent);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(true);
+    source.onerror?.({} as Event);
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    expect(source.closed).toBe(false);
+    source.open();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(true);
+    cleanup();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    onConnectionChange.mockClear();
+    source.open();
+    source.onerror?.({} as Event);
+    source.onmessage?.({ data: "{}" } as MessageEvent);
+    expect(onConnectionChange).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+
   it("does not reopen after cleanup when the tab becomes visible", () => {
     let hidden = true;
     vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);

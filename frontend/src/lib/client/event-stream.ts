@@ -2,6 +2,8 @@ export interface JsonEventStreamOptions<T> {
   onMessage: (data: T) => void;
   onOpen?: (state: { resumed: boolean; reconnect: boolean }) => void;
   onError?: (error: Error) => void;
+  /** Only OPEN is connected; pauses, retries and cleanup restore REST fallback. */
+  onConnectionChange?: (connected: boolean) => void;
   closeOnError?: boolean;
   /** Release a long-lived subscription while this tab is in the background. */
   pauseWhenHidden?: boolean;
@@ -19,6 +21,7 @@ export function openJsonEventStream<T>(url: string, options: JsonEventStreamOpti
     if (closed || source) return;
     const next = new EventSource(url, { withCredentials: true });
     source = next;
+    options.onConnectionChange?.(false);
     next.onmessage = (event) => {
       if (source !== next) return;
       try {
@@ -32,10 +35,12 @@ export function openJsonEventStream<T>(url: string, options: JsonEventStreamOpti
       const state = { resumed: resumePending, reconnect: openedOnce };
       openedOnce = true;
       resumePending = false;
+      options.onConnectionChange?.(true);
       options.onOpen?.(state);
     };
     next.onerror = (event) => {
       if (source !== next || "data" in event) return;
+      options.onConnectionChange?.(false);
       if (options.closeOnError !== false) close();
       options.onError?.(new Error("Event stream connection failed"));
     };
@@ -44,6 +49,7 @@ export function openJsonEventStream<T>(url: string, options: JsonEventStreamOpti
     if (document.hidden) {
       source?.close();
       source = null;
+      options.onConnectionChange?.(false);
     } else if (!closed && !source) {
       // Remember this before opening: a first EventSource that was closed
       // while CONNECTING still needs a REST catch-up after the replacement
@@ -59,8 +65,10 @@ export function openJsonEventStream<T>(url: string, options: JsonEventStreamOpti
     if (options.pauseWhenHidden) document.removeEventListener("visibilitychange", onVisibilityChange);
     source?.close();
     source = null;
+    options.onConnectionChange?.(false);
   };
   if (options.pauseWhenHidden) document.addEventListener("visibilitychange", onVisibilityChange);
   if (!options.pauseWhenHidden || !document.hidden) open();
+  else options.onConnectionChange?.(false);
   return close;
 }

@@ -20,10 +20,9 @@ export function subscribeExecutionInvalidation(cwd: string, options: ExecutionEv
   const closeStream = openJsonEventStream<unknown>(`/api/executions/events?cwd=${encodeURIComponent(cwd)}`, {
     onMessage: signal,
     onOpen: ({ resumed, reconnect }) => {
-      options.onConnectionChange?.(true);
       if (resumed || reconnect) signal();
     },
-    onError: () => options.onConnectionChange?.(false),
+    onConnectionChange: options.onConnectionChange,
     closeOnError: false,
     pauseWhenHidden: true,
     onResume: signal,

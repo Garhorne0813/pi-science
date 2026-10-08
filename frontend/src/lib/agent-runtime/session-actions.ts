@@ -6,7 +6,6 @@ import type { StoreApi } from "zustand";
 import { v4 as uuidv4 } from "uuid";
 import type { ThreadBlock } from "../../types/thread";
 import { activityPolicy } from "../conversation/activity-policy";
-import { buildTurnPresentations } from "../conversation/turn-presentation";
 import {
   clearCachedMessages,
   getClient,
@@ -223,30 +222,25 @@ export function createRuntimeActions(set: SetState, get: GetState) {
             const current = get();
             const pendingInteraction = hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire);
             const awaitingUserInput = hasActivePendingInteraction(current.pendingInteraction, current.pendingQuestionnaire);
-            // Build from history after it has been merged with events that
-            // arrived during restore. Only the currently owned turn's
-            // unsuperseded explicit final can override a stale busy snapshot.
-            const restoredThread = nextState.thread ?? current.thread;
-            const activeTurn = buildTurnPresentations(restoredThread.blocks, {
-              lastTurnLifecycle: "active",
-              lastTurnId: restoredThread.foldState?.activeTurnId,
-            }).findLast((turn) => turn.lifecycle === "active");
-            const hasTrustedFinal = Boolean(activeTurn?.finalAgent);
+            // History can lag a turn started in another tab. Without a
+            // server turn/run identity, a historical final cannot clear busy.
             const streaming = runtimeState.is_streaming || runtimeState.is_compacting;
             const queued = runtimeState.pending_message_count > 0;
             const runtimeBusy = streaming || queued;
 
             nextState.working = pendingInteraction
               ? !awaitingUserInput
-              : hasTrustedFinal ? false : runtimeBusy;
+              : runtimeBusy;
             if (pendingInteraction) {
               nextState.turnLifecycle = "waiting";
-            } else if (hasTrustedFinal) {
-              nextState.turnLifecycle = "settled";
             } else if (streaming) {
               nextState.turnLifecycle = "active";
             } else if (queued) {
               nextState.turnLifecycle = "queued";
+            } else {
+              nextState.turnLifecycle = current.turnLifecycle === "failed" || current.turnLifecycle === "aborted"
+                ? current.turnLifecycle
+                : "settled";
             }
           }
           nextState.model = runtimeState.model ?? null;

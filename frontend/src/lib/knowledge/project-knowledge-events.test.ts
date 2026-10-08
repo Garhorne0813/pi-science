@@ -79,6 +79,51 @@ describe("subscribeProjectKnowledgeEvents", () => {
     cleanup();
   });
 
+  it.each([false, true])("prioritizes catch-up over buffered and resumed counts (delayed OPEN: %s)", (delayedOpen) => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    const onSignal = vi.fn();
+    const cleanup = subscribeProjectKnowledgeEvents(".", onSignal);
+    const first = FakeEventSource.instances[0]!;
+    first.onopen?.();
+    first.message(1);
+    vi.advanceTimersByTime(100);
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    const resumed = FakeEventSource.instances[1]!;
+    if (!delayedOpen) resumed.onopen?.();
+    resumed.message(2);
+    vi.advanceTimersByTime(150);
+    expect(onSignal).toHaveBeenCalledExactlyOnceWith(undefined);
+
+    if (delayedOpen) {
+      resumed.onopen?.();
+      resumed.message(3);
+      vi.advanceTimersByTime(250);
+      expect(onSignal).toHaveBeenLastCalledWith(undefined);
+    }
+    // The next normal window can use SSE counts again.
+    resumed.message(4);
+    vi.advanceTimersByTime(250);
+    expect(onSignal).toHaveBeenLastCalledWith({ type: "project-knowledge.changed", pending_count: 4 });
+    cleanup();
+  });
+
+  it("prioritizes a native reconnect over a buffered count", () => {
+    const onSignal = vi.fn();
+    const cleanup = subscribeProjectKnowledgeEvents(".", onSignal);
+    const source = FakeEventSource.instances[0]!;
+    source.onopen?.();
+    source.message(1);
+    source.onopen?.();
+    source.message(2);
+    vi.advanceTimersByTime(250);
+    expect(onSignal).toHaveBeenCalledExactlyOnceWith(undefined);
+    cleanup();
+  });
+
   it("debounces a burst and keeps the latest pending count", () => {
     const onSignal = vi.fn();
     const cleanup = subscribeProjectKnowledgeEvents("/workspace/demo", onSignal);

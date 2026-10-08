@@ -297,7 +297,11 @@ describe("runtime session actions", () => {
     expect(useRuntimeStore.getState()).toMatchObject({ working: false, turnLifecycle: "waiting" });
   });
 
-  it("does not reactivate a restored final answer from a stale busy snapshot", async () => {
+  it.each([
+    [{ is_streaming: true }, "active"],
+    [{ is_compacting: true }, "active"],
+    [{ pending_message_count: 1 }, "queued"],
+  ] as const)("keeps a new remote turn busy when history only holds the previous final (%j)", async (busyState, lifecycle) => {
     const userBlock: ThreadBlock = { kind: "user", id: "user-final", text: "finished?", timestamp: "2026-09-24T12:00:00.000Z" };
     const finalBlock: ThreadBlock = { kind: "agent", id: "agent-final", presentationRole: "final", parts: [{ id: "answer", text: "Done." }] };
     useRuntimeStore.setState({
@@ -308,14 +312,17 @@ describe("runtime session actions", () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/messages")) return jsonResponse({ messages: [] });
-      if (url.includes("/state")) return jsonResponse(state("session-final", { is_streaming: true }));
+      if (url.includes("/state")) return jsonResponse(state("session-final", busyState));
       if (url.startsWith("/api/sessions?")) return jsonResponse([]);
       throw new Error(`Unexpected request: ${url}`);
     }));
 
     await useRuntimeStore.getState().connect("/workspace", "session-final");
-    expect(useRuntimeStore.getState()).toMatchObject({ working: false, turnLifecycle: "settled" });
+    expect(useRuntimeStore.getState()).toMatchObject({ working: true, turnLifecycle: lifecycle });
     expect(useRuntimeStore.getState().thread.blocks).toContainEqual(expect.objectContaining({ id: "agent-final", presentationRole: "final" }));
+    await expect(useRuntimeStore.getState().sendPrompt("another prompt")).rejects.toThrow(
+      "The current conversation is still running",
+    );
   });
 
   it("checks the final answer on the reducer's active turn owner", async () => {
