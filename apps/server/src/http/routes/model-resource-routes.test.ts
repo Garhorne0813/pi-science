@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
@@ -39,6 +39,54 @@ describe("model resource routes", () => {
     expect((await app.inject({ method: "DELETE", url: "/api/credentials/mcp_owned" })).statusCode).toBe(409);
     expect((await app.inject({ method: "POST", url: "/api/credentials", payload: { kind: "api_key", backend: "managed", secret: "bad", owner_kind: "mcp", owner_id: "connector-2" } })).statusCode).toBe(403);
     expect((await service.credentials.getForRuntime("mcp_owned"))?.secret).toBe("mcp-secret");
+  });
+
+  it.each([
+    { sharing: "endpoint", edit: { base_url: "https://new.example/v1" } },
+    { sharing: "endpoint", edit: { api: "openai-responses" } },
+    { sharing: "endpoint", edit: { auth: { kind: "api_key", secret: "replacement-secret" } } },
+    { sharing: "endpoint", edit: { auth: { kind: "none" } } },
+    { sharing: "disabled-binding", edit: { base_url: "https://new.example/v1" } },
+    { sharing: "credential", edit: { auth: { kind: "api_key", secret: "replacement-secret" } } },
+    { sharing: "disabled-endpoint", edit: { auth: { kind: "api_key", secret: "replacement-secret" } } },
+    { sharing: "builtin", edit: { auth: { kind: "api_key", secret: "replacement-secret" } } },
+    { sharing: "repair", edit: { base_url: "https://new.example/v1", auth: { kind: "api_key", secret: "replacement-secret" } } },
+  ])("rejects aggregate edits of $sharing resources before any write ($edit)", async ({ sharing, edit }) => {
+    const reloadConfiguration = vi.fn().mockResolvedValue([]);
+    const service = new ModelResourceService();
+    const app = Fastify({ logger: false });
+    registerModelResourceRoutes(app, service, { reloadConfiguration } as unknown as NodeSessionService);
+    const a = await service.createProvider({ name: "A", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
+    const b = await service.createProvider({ name: "B", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
+    const key = await service.credentials.put({ kind: "api_key", backend: "managed", secret: "shared-secret", owner_provider_id: a.id });
+    const endpoint = await service.createEndpoint({ name: "A connection", base_url: "https://old.example/v1", protocol: "openai", data_egress: "remote", api: "openai-completions", credential_ref: key.id, enabled: true, owner_provider_id: a.id });
+    const binding = await service.createBinding({ priority: 100, provider_id: a.id, endpoint_id: endpoint.id, enabled: true });
+    const sharedEndpoint = sharing === "endpoint" || sharing === "disabled-binding";
+    const otherEndpoint = sharedEndpoint ? endpoint : await service.createEndpoint({ name: "B connection", base_url: "https://other.example/v1", protocol: "openai", data_egress: "remote", credential_ref: key.id, enabled: sharing !== "disabled-endpoint", owner_provider_id: b.id });
+    await service.createBinding({ priority: 100, provider_id: b.id, endpoint_id: otherEndpoint.id, enabled: sharing !== "disabled-binding" });
+    await service.updateModel(b.id, "model-b", { enabled: true });
+    if (sharing === "builtin") {
+      await service.updateEndpoint(otherEndpoint.id, { credential_ref: null });
+      await service.repository.update((state) => { state.credential_refs.openai = key.id; });
+    }
+    if (sharing === "repair") {
+      await service.deleteBinding(binding.id);
+      await service.deleteEndpoint(endpoint.id);
+    }
+    await new SettingsStore().update((settings) => { settings.model = `${b.id}/model-b`; });
+    const routeBefore = await service.resolveModelRoute(`${b.id}/model-b`);
+    const files = ["model-resources.json", "credentials.json", "config.json"].map((name) => join(process.env.PI_SCIENCE_HOME!, name));
+    const snapshot = () => Promise.all(files.map(async (file) => ({ bytes: await readFile(file, "utf8"), modified: (await stat(file)).mtimeMs })));
+    const before = await snapshot();
+    const response = await app.inject({ method: "PUT", url: `/api/custom-providers/${a.id}`, payload: { name: "A renamed", ...edit } });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "resource_in_use" });
+    expect(response.body).not.toContain("replacement-secret");
+    expect(await snapshot()).toEqual(before);
+    expect(await service.resolveModelRoute(`${b.id}/model-b`)).toEqual(routeBefore);
+    expect((await service.credentials.getForRuntime(key.id))?.secret).toBe("shared-secret");
+    expect(reloadConfiguration).not.toHaveBeenCalled();
+    await app.close();
   });
 
   it("switches an aggregate provider to no authentication", async () => {

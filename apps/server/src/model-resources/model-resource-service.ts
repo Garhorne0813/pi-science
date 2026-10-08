@@ -582,23 +582,48 @@ export class ModelResourceService {
     const state = await this.repository.read();
     const provider = state.providers.find((item) => item.id === id);
     if (!provider || provider.kind !== "user") throw resourceError("resource_not_found", `Custom provider '${id}' was not found`);
+    const baseUrl = input.base_url ? normalizeBaseUrl(input.base_url) : undefined;
     let binding = state.bindings.find((item) => item.provider_id === id);
     let endpoint = state.endpoints.find((item) => item.id === binding?.endpoint_id);
+    let repairCredential: CredentialMetadata | undefined;
     if (!binding) {
       const owned = state.endpoints.filter((item) => item.owner_provider_id === id);
       if (owned.length > 1) throw resourceError("invalid_resource", "Multiple owned endpoints exist; repair the binding explicitly");
       endpoint = owned[0];
       if (!endpoint) {
-        if (!input.base_url) throw resourceError("invalid_resource", "A base URL is required to rebuild this connection");
+        if (!baseUrl) throw resourceError("invalid_resource", "A base URL is required to rebuild this connection");
         if (!["openai-compatible", "anthropic-compatible", "ollama"].includes(provider.adapter)) throw resourceError("invalid_resource", "This adapter requires an explicit endpoint repair");
         const credentials = (await this.credentials.listMetadata()).filter((item) => item.owner_provider_id === id && item.owner_kind !== "mcp");
         if (provider.auth_kind !== "none" && credentials.length > 1) throw resourceError("invalid_resource", "Multiple owned credentials exist; repair the connection explicitly");
-        endpoint = await this.createEndpoint({ name: `${provider.name} endpoint`, base_url: input.base_url, protocol: provider.adapter === "anthropic-compatible" ? "anthropic" : provider.adapter === "ollama" ? "ollama" : "openai", ...(input.api ? { api: input.api } : {}), credential_ref: provider.auth_kind === "none" ? null : credentials[0]?.id ?? null, enabled: true, data_egress: defaultDataEgress(input.base_url), owner_provider_id: id });
+        repairCredential = provider.auth_kind === "none" ? undefined : credentials[0];
       }
+    } else if (!endpoint) throw resourceError("resource_not_found", `Provider '${id}' connection endpoint was not found`);
+
+    const replacingKey = input.auth?.kind === "api_key" && Boolean(input.auth.secret);
+    const changesConnection = endpoint && (
+      baseUrl !== undefined && baseUrl !== endpoint.base_url ||
+      input.api !== undefined && input.api !== endpoint.api ||
+      replacingKey || input.auth?.kind === "none" && Boolean(endpoint.credential_ref)
+    );
+    // Preflight the entire aggregate before changing provider metadata, endpoint
+    // configuration, or secrets (including a missing-binding repair).
+    const endpointId = endpoint?.id;
+    if (endpoint && changesConnection && state.bindings.some((item) => item.endpoint_id === endpointId && item.provider_id !== id)) {
+      throw resourceError("resource_in_use", `Endpoint '${endpoint.id}' is shared with another provider`);
     }
-    if (!endpoint) throw resourceError("resource_not_found", `Provider '${id}' connection endpoint was not found`);
-    await this.updateProvider(id, { ...(input.name ? { name: input.name } : {}) });
-    await this.updateEndpoint(endpoint.id, { ...(input.base_url ? { base_url: input.base_url } : {}), ...(input.api ? { api: input.api } : {}) });
+    const credentialRef = endpoint?.credential_ref ?? repairCredential?.id;
+    if (replacingKey && credentialRef && (
+      state.endpoints.some((item) => item.id !== endpoint?.id && item.credential_ref === credentialRef) ||
+      Object.values(state.credential_refs).includes(credentialRef)
+    )) throw resourceError("resource_in_use", `Credential '${credentialRef}' is shared with another connection or builtin provider`);
+
+    if (!endpoint) {
+      endpoint = await this.createEndpoint({ name: `${provider.name} endpoint`, base_url: baseUrl!, protocol: provider.adapter === "anthropic-compatible" ? "anthropic" : provider.adapter === "ollama" ? "ollama" : "openai", ...(input.api ? { api: input.api } : {}), credential_ref: repairCredential?.id ?? null, enabled: true, data_egress: defaultDataEgress(baseUrl!), owner_provider_id: id });
+    }
+    if (input.name) await this.updateProvider(id, { name: input.name });
+    if (baseUrl !== undefined && baseUrl !== endpoint.base_url || input.api !== undefined && input.api !== endpoint.api) {
+      await this.updateEndpoint(endpoint.id, { ...(baseUrl ? { base_url: baseUrl } : {}), ...(input.api ? { api: input.api } : {}) });
+    }
     if (input.auth?.kind === "api_key" && input.auth.secret) {
       if (endpoint.credential_ref) {
         await this.credentials.put({ id: endpoint.credential_ref, kind: "api_key", backend: "managed", secret: input.auth.secret, owner_provider_id: provider.id });
@@ -758,7 +783,13 @@ export class ModelResourceService {
       const endpoint = state.endpoints.find((item) => item.id === id);
       if (!endpoint) throw resourceError("resource_not_found", `Endpoint '${id}' was not found`);
       if (input.name !== undefined) endpoint.name = input.name.trim();
-      if (input.base_url !== undefined) endpoint.base_url = normalizeBaseUrl(input.base_url);
+      if (input.base_url !== undefined) {
+        const baseUrl = normalizeBaseUrl(input.base_url);
+        // Preserve an explicit classification, but never carry an inferred
+        // local/remote label across an address change.
+        if (baseUrl !== endpoint.base_url && input.data_egress === undefined) endpoint.data_egress = defaultDataEgress(baseUrl);
+        endpoint.base_url = baseUrl;
+      }
       if (input.protocol !== undefined) endpoint.protocol = normalizeProtocol(input.protocol);
       if (input.api !== undefined) endpoint.api = input.api;
       if (input.credential_ref !== undefined) endpoint.credential_ref = input.credential_ref;

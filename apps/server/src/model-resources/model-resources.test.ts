@@ -451,6 +451,57 @@ describe("resource service", () => {
     expect(await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8")).toContain("new-secret");
   });
 
+  it.each([
+    ["http://127.0.0.1:8000/v1", "https://public.example/v1", "local", "remote"],
+    ["https://public.example/v1", "http://localhost:8000/v1", "remote", "local"],
+    ["https://public.example/v1", "http://[::1]:8000/v1", "remote", "local"],
+    ["http://localhost:8000/v1", "https://localhost.example/v1", "local", "remote"],
+  ] as const)("reclassifies existing provider endpoints from %s to %s", async (oldUrl, newUrl, oldEgress, newEgress) => {
+    const service = new ModelResourceService();
+    const provider = await service.createProvider({ name: "Lab", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "none", enabled: true });
+    const endpoint = await service.createEndpoint({ name: "Lab connection", base_url: oldUrl, protocol: "openai", enabled: true, data_egress: oldEgress });
+    await service.createBinding({ priority: 100, provider_id: provider.id, endpoint_id: endpoint.id, enabled: true });
+    const updated = await service.updateCustomProvider(provider.id, { base_url: newUrl });
+    expect(updated.endpoint).toMatchObject({ id: endpoint.id, base_url: newUrl, data_egress: newEgress });
+    expect(await service.getEndpoint(endpoint.id)).toMatchObject({ base_url: newUrl, data_egress: newEgress });
+  });
+
+  it("allows name-only or identical-address edits without rewriting a shared endpoint", async () => {
+    const service = new ModelResourceService();
+    const a = await service.createProvider({ name: "A", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "none", enabled: true });
+    const b = await service.createProvider({ name: "B", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "none", enabled: true });
+    const endpoint = await service.createEndpoint({ name: "Shared", base_url: "https://old.example/v1", protocol: "openai", data_egress: "remote", enabled: true });
+    await service.createBinding({ priority: 100, provider_id: a.id, endpoint_id: endpoint.id, enabled: true });
+    await service.createBinding({ priority: 100, provider_id: b.id, endpoint_id: endpoint.id, enabled: true });
+    const updated = await service.updateCustomProvider(a.id, { name: "Renamed", base_url: "https://old.example/v1/" });
+    expect(updated.provider.name).toBe("Renamed");
+    expect(updated.endpoint).toEqual(endpoint);
+    expect((await service.repository.read()).providers.find((item) => item.id === b.id)).toEqual(b);
+  });
+
+  it("detaches a private endpoint without deleting or replacing its shared credential", async () => {
+    const service = new ModelResourceService();
+    const a = await service.createProvider({ name: "A", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
+    const key = await service.credentials.put({ kind: "api_key", backend: "managed", secret: "preserved-secret", owner_provider_id: a.id });
+    const endpoint = await service.createEndpoint({ name: "A connection", base_url: "https://a.example/v1", protocol: "openai", data_egress: "remote", credential_ref: key.id, enabled: true });
+    const other = await service.createEndpoint({ name: "Other connection", base_url: "https://b.example/v1", protocol: "openai", data_egress: "remote", credential_ref: key.id, enabled: true });
+    await service.createBinding({ priority: 100, provider_id: a.id, endpoint_id: endpoint.id, enabled: true });
+    const credentialBefore = await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8");
+    const updated = await service.updateCustomProvider(a.id, { auth: { kind: "none" } });
+    expect(updated.endpoint.credential_ref).toBeNull();
+    expect(updated.provider.auth_kind).toBe("none");
+    expect(await service.getEndpoint(other.id)).toEqual(other);
+    expect(await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8")).toBe(credentialBefore);
+  });
+
+  it("preserves explicit egress on direct endpoint updates and unchanged addresses", async () => {
+    const service = new ModelResourceService();
+    const endpoint = await service.createEndpoint({ name: "Connection", base_url: "https://old.example/v1", protocol: "openai", data_egress: "remote", enabled: true });
+    expect(await service.updateEndpoint(endpoint.id, { base_url: "http://localhost:8000/v1", data_egress: "remote" })).toMatchObject({ data_egress: "remote" });
+    expect(await service.updateEndpoint(endpoint.id, { base_url: "http://localhost:8000/v1/" })).toMatchObject({ data_egress: "remote" });
+    expect(await service.updateEndpoint(endpoint.id, { base_url: "http://127.0.0.1:8000/v1" })).toMatchObject({ data_egress: "local" });
+  });
+
   it.each([false, true])("repairs a lost binding (endpoint deleted: %s) without replacing the owned secret", async (deleteEndpoint) => {
     const service = new ModelResourceService();
     const created = await service.createCustomProvider({ name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "api_key", secret: "preserved-repair-secret" }, models: ["lab-model"] });

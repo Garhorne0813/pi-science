@@ -82,6 +82,25 @@ event-loop delay. Production-browser budgets still cover paged 10,000-model
 inventory and default selection on desktop and mobile; test-only fixture adapters
 never participate in the production read path.
 
+## Shared connection edits
+
+Custom-provider edits preflight all affected resources before changing a name,
+endpoint, or credential. If another provider binding references the endpoint,
+changes to its address, API format, key, or credential reference return HTTP 409
+`resource_in_use`. Disabled bindings still count. Name-only edits and identical
+normalized addresses remain valid without rewriting the endpoint.
+
+Key replacement also rejects credentials referenced by another endpoint
+(including a disabled endpoint) or an entry in the builtin credential-reference
+map. Missing-connection repair performs this check before creating its endpoint.
+Rejected edits leave resources, credentials, defaults, routing, and runtime
+reload untouched. No copy-on-write or cross-resource transaction is introduced;
+concurrent reference changes still need the later revision/write protocol.
+
+Switching a private endpoint to no authentication detaches only its own reference.
+A key still used by another endpoint or builtin provider is preserved. Shared
+endpoints cannot be detached through an individual provider editor.
+
 ## Lost connection repair
 
 Editing a custom provider with no binding reuses its single owned endpoint and
@@ -100,7 +119,11 @@ Configured builtin cards continue to expose replacement whenever the backend
 allows `replace_credential`; Connect's credential filter never governs this
 maintenance action. Creation and endpoint reconstruction share a hostname-based
 loopback classifier (`localhost`, IPv4 127/8 and IPv6 ::1) for default data egress.
-Existing endpoints retain their explicitly configured egress value.
+When an existing endpoint address changes, its default egress classification is
+recomputed using the same rule. A direct Endpoint API update can explicitly supply
+`data_egress`; unchanged normalized addresses retain their current classification.
+Custom-provider edits do not supply an explicit override. This classification is
+metadata and does not replace outbound URL validation or network policy.
 
 Repair remains a sequence of resource writes, not an atomic transaction. If the
 final binding creation fails, HTTP 500 carries `connection_repair_incomplete`,
