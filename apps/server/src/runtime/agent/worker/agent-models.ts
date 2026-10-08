@@ -17,9 +17,10 @@ export function agentModels(settings: RuntimeSettings = {}) {
   const resources = new ModelResourceRepository();
   const credentials = new CredentialStore();
   const state = resources.readSync();
+  const credentialRead = credentials.readSnapshotSync();
   const credentialValues = new Map<string, CredentialRuntimeValue | null>();
   const credentialValue = (ref: string) => {
-    if (!credentialValues.has(ref)) credentialValues.set(ref, credentials.readSync(ref));
+    if (!credentialValues.has(ref)) credentialValues.set(ref, credentialRead.readSync(ref));
     return credentialValues.get(ref);
   };
   const credentialFor = (providerId: string) => {
@@ -41,7 +42,7 @@ export function agentModels(settings: RuntimeSettings = {}) {
     async modify() { throw new Error("Managed credentials must be changed in Settings"); },
     async delete() { throw new Error("Managed credentials must be changed in Settings"); },
   } });
-  const resolved = new RuntimeModelResolver(resources, credentials).resolveStateSync(state);
+  const resolved = new RuntimeModelResolver(resources, credentialRead).resolveStateSync(state);
   const canonicalByProvider = new Map<string, Set<string>>();
   for (const model of state.models) {
     const ids = canonicalByProvider.get(model.provider_id) ?? new Set<string>();

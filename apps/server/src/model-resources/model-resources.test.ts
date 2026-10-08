@@ -60,6 +60,20 @@ describe("credential store", () => {
     delete process.env.PI_SCIENCE_EXPLICIT_KEY;
   });
 
+  it("keeps credential snapshots private, immutable and fresh between projections", async () => {
+    const store = new CredentialStore();
+    await store.put({ id: "snapshot-key", kind: "api_key", backend: "managed", secret: "before-snapshot" });
+    const first = await store.readSnapshot();
+    const value = await first.getForRuntime("snapshot-key");
+    value!.metadata.status = "invalid";
+    value!.secret = "mutated-copy";
+    await store.put({ id: "snapshot-key", secret: "after-snapshot" });
+    expect(first.readSync("snapshot-key")).toMatchObject({ metadata: { status: "configured" }, secret: "before-snapshot" });
+    expect(await (await store.readSnapshot()).getForRuntime("snapshot-key")).toMatchObject({ secret: "after-snapshot" });
+    expect(await first.listMetadata()).not.toEqual(expect.arrayContaining([expect.objectContaining({ secret: expect.anything() })]));
+    expect(JSON.stringify(first)).not.toContain("before-snapshot");
+  });
+
   it("creates credentials.json with 0600 permissions on POSIX", async () => {
     await new CredentialStore().put({ id: "cred-mode", kind: "api_key", backend: "managed", secret: "mode-secret" });
     const mode = (await stat(join(process.env.PI_SCIENCE_HOME!, "credentials.json"))).mode & 0o777;
@@ -394,6 +408,35 @@ describe("resource service", () => {
     state = await service.repository.read();
     expect(state.providers.some((provider) => provider.id === created.provider.id)).toBe(false);
     expect(await service.credentials.metadata(created.credential!.id)).toBeNull();
+  });
+
+  it("shares one credential-file read across builtin facts, routes and provider statuses", async () => {
+    const catalog = { schemaVersion: 1 as const, providers: Array.from({ length: 10 }, (_, index) => ({ id: `builtin-${index}`, name: `Builtin ${index}`, baseUrl: null, auth: { apiKey: true, oauth: false, subscription: false, configured: false }, models: [{ id: "model", name: "Model", api: "openai-completions", reasoning: false, input: ["text"], contextWindow: 8192, maxTokens: 1024 }] })) };
+    const service = new ModelResourceService({ runtimeCatalog: { getCatalog: async () => catalog } });
+    await service.ensureMigrated();
+    const state = emptyModelResourceState();
+    state.migration = { version: 1, completed_at: "2026-01-01T00:00:00.000Z" };
+    const selectable = new Set<string>();
+    for (let index = 0; index < 10; index++) {
+      const id = `user-lab${index}`;
+      const credential = await service.credentials.put({ id: `snapshot-${index}`, kind: "api_key", backend: "managed", secret: `snapshot-secret-${index}`, owner_provider_id: id });
+      state.credential_refs[`builtin-${index}`] = credential.id;
+      state.providers.push({ id, name: id, kind: "user", adapter: "openai-compatible", enabled: true, catalog_mode: "manual", auth_kind: "api_key", source: "user" });
+      state.endpoints.push({ id: `ep-${index}`, name: id, base_url: "http://127.0.0.1:9/v1", protocol: "openai", credential_ref: credential.id, enabled: true, health: "unknown", data_egress: "local", owner_provider_id: id });
+      state.bindings.push({ id: `bind-${index}`, provider_id: id, endpoint_id: `ep-${index}`, enabled: true, priority: 1 });
+      state.models.push({ provider_id: id, model_id: "model", display_name: "Model", enabled: true, capabilities: { reasoning: false, thinking_levels: ["off"], context_window: 8192, max_output_tokens: 1024 }, capability_source: "manual" });
+      selectable.add(`${id}/model`); selectable.add(`builtin-${index}/model`);
+    }
+    await service.repository.replace(state);
+    const reads = vi.spyOn(persistence, "readJson");
+    const repeated = vi.spyOn(service.credentials, "getForRuntime");
+    const views = await service.providerViews(selectable);
+    expect(views).toHaveLength(20);
+    expect(views.every((view) => view.credential.configured && view.status === "ready")).toBe(true);
+    expect(JSON.stringify(views)).not.toContain("snapshot-secret");
+    expect(repeated).not.toHaveBeenCalled();
+    expect(reads.mock.calls.filter(([path]) => path === join(process.env.PI_SCIENCE_HOME!, "credentials.json"))).toHaveLength(1);
+    reads.mockRestore(); repeated.mockRestore();
   });
 
   it("updates a custom provider connection base URL and key", async () => {

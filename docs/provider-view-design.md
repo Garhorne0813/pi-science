@@ -148,3 +148,30 @@ replacement, partial-commit HTTP metadata and a retry that preserves credential
 bytes without creating duplicate endpoints. Loopback reconstruction keeps local
 egress. The browser verifies configured builtin key replacement and Connect
 exclusion. Workspace typecheck/build, lint and visual TypeScript checks passed.
+
+Review comment follow-up: `remove_credential` requires an existing managed
+credential reference, independently from credential configuration/selectability.
+Environment-only and external credentials remain configured/selectable when Core
+reports them available, but their cards expose no Disconnect action. Direct
+legacy deletion attempts return `credential_not_removable` without altering
+resources, credentials or the global default.
+
+Management projections share a request-local credential snapshot across builtin
+model facts, canonical routes and status/actions. Snapshot reads parse the file
+once; defensive copies prevent mutation, and each new projection reads fresh
+state. Core construction shares a synchronous snapshot for canonical routes and
+keeps builtin authentication callbacks live. There is no cross-request secret
+cache or new credential owner. `scripts/benchmark-provider-credentials.mjs` keeps
+100 providers/10,000 models fixed while increasing stored credentials through
+1/100/1,000, with a 2,000 ms median budget and unchanged-file assertions.
+Linux CI enforces this budget and uploads the credential-growth measurements.
+
+The integrated comment fixes passed 15 contract tests, 874 server tests (15
+skipped), 1,285 frontend tests and 28 skills tests, plus typecheck, builds, lint,
+visual TypeScript checks and bundle budgets. Fourteen production-browser checks
+passed across desktop and mobile, including inventory/default/Composer budgets
+and builtin credential maintenance. The local credential-growth medians were
+489/463/499 ms for 1/100/1,000 credentials. The independent 10,000-model backend
+benchmark also passed: catalog 131 ms, Settings 1,357 ms, ProviderView 1,216 ms,
+event-loop delay 255 ms and concurrent health p95 186 ms. Both benchmarks verified
+unchanged persisted files; browser fixtures do not exercise live inference.

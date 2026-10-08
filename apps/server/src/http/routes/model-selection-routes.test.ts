@@ -213,6 +213,39 @@ describe("ModelSelection v2", () => {
     expect((await modules.settings.read()).model).toBe(model);
   }, 30000);
 
+  it.each(["environment-only", "environment-reference", "external-reference"])("keeps %s credentials usable but cannot remove them or clear the default", async (source) => {
+    const resources = modules.modelResources;
+    const previous = (await resources.repository.read()).credential_refs.deepseek;
+    await resources.credentials.remove(previous!);
+    vi.stubEnv("DEEPSEEK_API_KEY", "synthetic-environment-only-key");
+    let ref: string | undefined;
+    if (source === "environment-reference") ref = (await resources.credentials.put({ kind: "api_key", backend: "environment", environment_variable: "DEEPSEEK_API_KEY" })).id;
+    if (source === "external-reference") ref = (await resources.credentials.put({ kind: "api_key", backend: "external", external_ref: "synthetic-external-reference" })).id;
+    await resources.repository.update((state) => { if (ref) state.credential_refs.deepseek = ref; else delete state.credential_refs.deepseek; });
+    const before = await Promise.all(["config.json", "credentials.json", "model-resources.json"].map((file) => readFile(join(home, file), "utf8")));
+    const response = await app.inject({ method: "GET", url: "/api/provider-views" });
+    const view = response.json().providers.find((item: { id: string }) => item.id === "deepseek");
+    expect(view).toMatchObject({ credential: { configured: true }, status: "ready" });
+    expect(view.allowed_actions).toContain("replace_credential");
+    expect(view.allowed_actions).not.toContain("remove_credential");
+    expect(response.body).not.toContain("synthetic-environment-only-key");
+    expect(response.body).not.toContain("synthetic-external-reference");
+    const removed = await app.inject({ method: "DELETE", url: "/api/settings/api-key/deepseek" });
+    expect(removed.statusCode).toBe(409);
+    expect(removed.json()).toMatchObject({ code: "credential_not_removable" });
+    expect(await Promise.all(["config.json", "credentials.json", "model-resources.json"].map((file) => readFile(join(home, file), "utf8")))).toEqual(before);
+    expect((await app.inject({ method: "GET", url: "/api/model-selection/default" })).json().selection).toEqual({ model: flash, thinking: "off" });
+  }, 30000);
+
+  it("offers and removes an actual managed builtin credential", async () => {
+    const response = await app.inject({ method: "GET", url: "/api/provider-views" });
+    const view = response.json().providers.find((item: { id: string }) => item.id === "deepseek");
+    expect(view.allowed_actions).toContain("remove_credential");
+    const removed = await app.inject({ method: "DELETE", url: "/api/settings/api-key/deepseek" });
+    expect(removed.statusCode).toBe(200);
+    expect((await modules.modelResources.repository.read()).credential_refs.deepseek).toBeUndefined();
+  }, 30000);
+
   it("rejects a builtin model after its managed credential is deleted", async () => {
     const a = await create();
     const ref = (await modules.modelResources.repository.read()).credential_refs.deepseek;

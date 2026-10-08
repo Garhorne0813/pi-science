@@ -236,6 +236,15 @@ describe("AIModelsTab", () => {
     expect(within(dialog).queryByRole("button", { name: /^Anthropic$/ })).not.toBeInTheDocument();
   });
 
+  it("does not offer Disconnect for configured credentials that the backend cannot remove", () => {
+    const view = providerViewsFixture(config).providers[0];
+    view.allowed_actions = ["replace_credential"];
+    renderTab({ views: [view] });
+    fireEvent.click(screen.getByRole("button", { name: "Connection settings" }));
+    expect(screen.getByRole("menuitem", { name: "Replace" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Disconnect" })).not.toBeInTheDocument();
+  });
+
   it("allows a configured builtin service to replace its key without appearing in Connect", async () => {
     const saveKey = vi.fn(async () => undefined);
     renderTab({ apiKeyInput: { anthropic: "replacement-test-key" }, saveKey });

@@ -109,6 +109,7 @@ test("maintains a configured builtin key through its card while excluding it fro
   const settings = page.getByRole("dialog", { name: "Settings" });
   await settings.getByRole("tab", { name: "AI Models", exact: true }).click();
   await settings.getByRole("button", { name: "Connection settings", exact: true }).click();
+  await expect(settings.getByRole("menuitem", { name: "Disconnect", exact: true })).toHaveCount(0);
   await settings.getByRole("menuitem", { name: "Replace", exact: true }).click();
   const editor = page.getByRole("dialog", { name: "Replace API key" });
   await editor.getByLabel(`${provider.name} API key`, { exact: false }).fill("synthetic-replacement-key");

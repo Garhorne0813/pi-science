@@ -1,10 +1,10 @@
 import type { CredentialMetadata } from "@pi-science/contracts";
-import { CredentialStore, type CredentialRuntimeValue } from "./credential-store.js";
+import { CredentialStore, type CredentialReader, type CredentialRuntimeValue } from "./credential-store.js";
 
 /** Single credential lookup boundary used by routing and runtime projection.
  * Provider and endpoint code should not inspect process.env directly. */
 export class CredentialResolver {
-  constructor(private readonly store: CredentialStore = new CredentialStore()) {}
+  constructor(private readonly store: CredentialReader = new CredentialStore()) {}
 
   resolve(credentialRef: string | null | undefined): Promise<CredentialRuntimeValue | null> {
     return credentialRef ? this.store.getForRuntime(credentialRef) : Promise.resolve(null);

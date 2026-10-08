@@ -21,7 +21,7 @@ import type { RuntimeCatalog, RuntimeCatalogService } from "../runtime/agent/run
 import { egressAuditEnabled, recordEgress } from "../security/egress-audit.js";
 import { safeConnectorFetch, validateOutboundHttpUrl } from "../security/outbound-security.js";
 import { SettingsStore } from "../storage/settings-store.js";
-import { CredentialStore } from "./credential-store.js";
+import { CredentialStore, type CredentialReader } from "./credential-store.js";
 import { resolveCapabilities, normalizeContextWindow, normalizeThinkingLevels, type CapabilityPatch } from "./capability-resolver.js";
 import { migrateLegacyModelResources, type MigrationResult } from "./migration/migrate-custom-providers.js";
 import { ModelResourceRepository } from "./model-resource-repository.js";
@@ -304,15 +304,16 @@ export class ModelResourceService {
     const builtinConfigured = new Set(catalog.providers.filter((provider) => provider.auth.configured).map((provider) => provider.id));
     for (const entry of catalog.providers) providers.set(entry.id, { id: entry.id, name: entry.name, kind: "system", source: "pi-ai", adapter: "pi-ai", enabled: true, catalog_mode: "runtime", auth_kind: entry.auth.apiKey && entry.auth.oauth ? "api_key_or_oauth" : entry.auth.oauth ? "oauth" : entry.auth.apiKey ? "api_key" : "none" });
     for (const provider of state.providers) providers.set(provider.id, provider);
+    const credentialRead = await this.credentials.readSnapshot();
     const declaredFormats = new Map(catalog.providers.flatMap((provider) => provider.models.map((model) => [canonicalModelRef(provider.id, model.id), model.input] as const)));
     const modelsByProvider = new Map<string, Map<string, ModelRead>>();
     const add = (model: ModelRead) => {
       const rows = modelsByProvider.get(model.provider_id) ?? new Map<string, ModelRead>();
       rows.set(model.id, model); modelsByProvider.set(model.provider_id, rows);
     };
-    for (const model of await this.systemModelReads(state, catalog)) add(model);
+    for (const model of await this.systemModelReads(state, catalog, credentialRead)) add(model);
     const sourceModels = new Map(state.models.map((model) => [canonicalModelRef(model.provider_id, model.model_id), model]));
-    for (const model of await new RuntimeModelResolver(this.repository, this.credentials).resolveState(state)) add(resolvedModelToRead(model, sourceModels.get(model.id)));
+    for (const model of await new RuntimeModelResolver(this.repository, credentialRead).resolveState(state)) add(resolvedModelToRead(model, sourceModels.get(model.id)));
     const refs = new Map<string, Set<string>>();
     const endpoints = new Map(state.endpoints.map((endpoint) => [endpoint.id, endpoint]));
     for (const [id, ref] of Object.entries(state.credential_refs)) refs.set(id, new Set([ref]));
@@ -325,10 +326,10 @@ export class ModelResourceService {
     for (const endpoint of state.endpoints) if (endpoint.owner_provider_id && endpoint.credential_ref) {
       const ids = refs.get(endpoint.owner_provider_id) ?? new Set<string>(); ids.add(endpoint.credential_ref); refs.set(endpoint.owner_provider_id, ids);
     }
-    for (const credential of await this.credentials.listMetadata()) if (credential.owner_provider_id && credential.owner_kind !== "mcp") {
+    for (const credential of await credentialRead.listMetadata()) if (credential.owner_provider_id && credential.owner_kind !== "mcp") {
       const ids = refs.get(credential.owner_provider_id) ?? new Set<string>(); ids.add(credential.id); refs.set(credential.owner_provider_id, ids);
     }
-    const credentials = new Map(await Promise.all([...new Set([...refs.values()].flatMap((ids) => [...ids]))].map(async (ref) => [ref, await this.credentials.getForRuntime(ref)] as const)));
+    const credentials = new Map(await Promise.all([...new Set([...refs.values()].flatMap((ids) => [...ids]))].map(async (ref) => [ref, await credentialRead.getForRuntime(ref)] as const)));
     return [...providers.values()].map((provider): ProviderView => {
       const values = [...(refs.get(provider.id) ?? [])].map((ref) => credentials.get(ref));
       const configured = provider.auth_kind === "none" || provider.kind === "system" && builtinConfigured.has(provider.id) || values.some((value) => Boolean(value?.secret) && ["configured", "connected"].includes(value!.metadata.status));
@@ -344,6 +345,7 @@ export class ModelResourceService {
       if (provider.auth_kind === "oauth" && !count) issues.push({ code: "unsupported_login" });
       const status = !provider.enabled ? "disabled" : count ? "ready" : provider.auth_kind === "oauth" ? "needs_login" : credentialState !== "ready" ? credentialState : "unavailable";
       const custom = provider.kind === "user";
+      const removable = credentials.get(state.credential_refs[provider.id] ?? "")?.metadata.backend === "managed";
       const apiKey = provider.auth_kind === "api_key" || provider.auth_kind === "api_key_or_oauth";
       return { id: provider.id, name: provider.name, source: custom ? "user" : "builtin", enabled: provider.enabled, status,
         auth: { kind: provider.auth_kind, api_key_supported: apiKey, login_supported: false },
@@ -351,7 +353,7 @@ export class ModelResourceService {
         routing: { selectable_model_count: count, configured_model_count: models.length, issues }, models,
         // Endpoint probes and discovered capabilities are not inference verification.
         last_verification: { state: "never", checked_at: null },
-        allowed_actions: [...(custom ? ["edit", provider.enabled ? "disable" : "enable", "delete", "discover"] as const : []), ...(apiKey ? ["replace_credential"] as const : []), ...(!custom && apiKey && configured ? ["remove_credential"] as const : [])] };
+        allowed_actions: [...(custom ? ["edit", provider.enabled ? "disable" : "enable", "delete", "discover"] as const : []), ...(apiKey ? ["replace_credential"] as const : []), ...(!custom && apiKey && removable ? ["remove_credential"] as const : [])] };
     }).sort((a, b) => a.name.localeCompare(b.name));
   }
 
@@ -1061,11 +1063,11 @@ export class ModelResourceService {
     }
   }
 
-  private async systemModelReads(state: Awaited<ReturnType<ModelResourceRepository["read"]>>, catalog: RuntimeCatalog): Promise<ModelRead[]> {
+  private async systemModelReads(state: Awaited<ReturnType<ModelResourceRepository["read"]>>, catalog: RuntimeCatalog, credentials: CredentialReader = this.credentials): Promise<ModelRead[]> {
     const result: ModelRead[] = [];
     for (const provider of catalog.providers) {
       const ref = state.credential_refs[provider.id];
-      const hasCredential = Boolean(ref && await this.credentials.getForRuntime(ref)?.then((value) => value?.secret)) || provider.auth.configured;
+      const hasCredential = Boolean(ref && await credentials.getForRuntime(ref)?.then((value) => value?.secret)) || provider.auth.configured;
       const available = hasCredential || (!provider.auth.apiKey && !provider.auth.oauth);
       for (const entry of provider.models) {
         const modelId = entry.id;

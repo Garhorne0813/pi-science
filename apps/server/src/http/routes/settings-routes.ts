@@ -733,7 +733,9 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       await modelResources.ensureMigrated();
       const state = await modelResources.repository.read();
       const ref = state.credential_refs[request.params.provider];
-      if (ref) await modelResources.credentials.remove(ref);
+      const metadata = ref ? await modelResources.credentials.metadata(ref) : null;
+      if (metadata?.backend !== "managed") return reply.code(409).send({ ok: false, code: "credential_not_removable", error: "No managed API key can be removed. Environment and external credentials must be changed at their source." });
+      await modelResources.credentials.remove(ref!);
       await modelResources.repository.update((current) => { delete current.credential_refs[request.params.provider]; });
       await mutate((config) => { if (String(config.model ?? "").startsWith(`${request.params.provider}/`)) config.model = ""; });
     } else await mutate((config) => { if (config.api_keys) delete config.api_keys[request.params.provider]; if (String(config.model ?? "").startsWith(`${request.params.provider}/`)) config.model = ""; });
