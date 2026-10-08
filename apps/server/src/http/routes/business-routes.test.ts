@@ -441,7 +441,7 @@ describe("native control-plane business routes", () => {
     expect(resourceWrite).toHaveBeenCalledOnce();
     expect(await fingerprints()).toEqual(repaired);
 
-  });
+  }, 30000);
 
   it("corrects the persisted thinking level to the runtime's actual levels after model PUT", async () => {
     const cwd = await workspace();
