@@ -182,7 +182,7 @@ describe("AIModelsTab", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Disconnect service" })).not.toBeInTheDocument());
     expect(await screen.findByText(/Changes were saved, but the view could not be refreshed/)).toBeInTheDocument();
     expect(calls.filter(({ method, url }) => method === "DELETE" && url === "/api/custom-providers/user-lab")).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading" }));
     await waitFor(() => expect(screen.queryByText(/Changes were saved, but the view could not be refreshed/)).not.toBeInTheDocument());
     expect(reload).toHaveBeenCalledTimes(2);
     expect(calls.filter(({ method, url }) => method === "DELETE" && url === "/api/custom-providers/user-lab")).toHaveLength(1);
