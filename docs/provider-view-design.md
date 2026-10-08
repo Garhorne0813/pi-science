@@ -82,6 +82,21 @@ event-loop delay. Production-browser budgets still cover paged 10,000-model
 inventory and default selection on desktop and mobile; test-only fixture adapters
 never participate in the production read path.
 
+## Lost connection repair
+
+Editing a custom provider with no binding reuses its single owned endpoint and
+recreates the binding through existing resource CRUD. The editor reads the same
+ownership metadata to prefill the base URL. If the endpoint is also missing, an
+explicit base URL rebuilds it with the compatible adapter and its unambiguous
+owned credential. An empty key field preserves the credential. Multiple owned
+endpoints or credentials require explicit resource repair rather than guessing.
+The new binding does not restore deleted allowlists or aliases; those must be
+configured again through binding CRUD.
+
+Connect lists only builtin providers whose backend credential fact is
+unconfigured; configured credentials remain maintained through their cards.
+The inventory title, including fallback text, is Model services / 模型服务.
+
 ## Validation
 
 On 2026-10-08, contracts (15), the full server suite (858 passed, 15 skipped),
@@ -103,3 +118,10 @@ The final real backend benchmark passed all committed budgets: catalog median
 delay 237 ms and concurrent health p95 136 ms. Configuration, model resources and
 credentials kept identical content and modification timestamps after repeated
 reads. These measurements describe the local Linux environment.
+
+The lost-binding follow-up passed 44 focused server tests (including real Core
+catalog restoration and byte-identical credential persistence), 18 AI Models
+component tests and four desktop/mobile production-browser checks. Browser
+repair uses HTTP fixtures; the server integration test separately exercises the
+real writer and Core projection. Workspace typecheck/build, frontend lint and
+visual TypeScript checks passed for this follow-up.

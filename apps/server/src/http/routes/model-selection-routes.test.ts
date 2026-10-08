@@ -116,7 +116,7 @@ describe("ModelSelection v2", () => {
     const resources = modules.modelResources;
     const provider = await resources.createProvider({ name: "Selectable Lab", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
     const credential = await resources.credentials.put({ kind: "api_key", backend: "managed", secret: "synthetic-selectability-key", owner_provider_id: provider.id });
-    const endpoint = await resources.createEndpoint({ name: "Lab route", base_url: "http://127.0.0.1:9/v1", protocol: "openai", credential_ref: credential.id, enabled: true, data_egress: "local" });
+    const endpoint = await resources.createEndpoint({ name: "Lab route", base_url: "http://127.0.0.1:9/v1", protocol: "openai", credential_ref: credential.id, enabled: true, data_egress: "local", owner_provider_id: provider.id });
     const binding = await resources.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 1 });
     const model = `${provider.id}/lab-model`;
     await resources.updateModel(provider.id, "lab-model", { enabled: true });
@@ -155,6 +155,17 @@ describe("ModelSelection v2", () => {
     expect(configure).not.toHaveBeenCalled();
     expect(await readFile(join(home, "config.json"), "utf8")).toBe(persisted);
     expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
+    if (failure === "binding_deleted") {
+      const credentialBefore = await readFile(join(home, "credentials.json"), "utf8");
+      const repaired = await app.inject({ method: "PUT", url: `/api/custom-providers/${provider.id}`, payload: { name: provider.name, base_url: endpoint.base_url } });
+      expect(repaired.statusCode).toBe(200);
+      expect(repaired.json()).toMatchObject({ endpoint: { id: endpoint.id, credential_ref: credential.id }, binding: { provider_id: provider.id, endpoint_id: endpoint.id, enabled: true } });
+      expect(await readFile(join(home, "credentials.json"), "utf8")).toBe(credentialBefore);
+      expect(await catalog()).toEqual(expect.arrayContaining([expect.objectContaining({ id: model })]));
+      const recovered = (await app.inject({ method: "GET", url: "/api/provider-views" })).json().providers.find((item: { id: string }) => item.id === provider.id);
+      expect(recovered).toMatchObject({ status: "ready", credential: { configured: true }, routing: { selectable_model_count: 1, issues: [] } });
+      expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
+    }
   }, 30000);
   it("rejects a builtin model after its managed credential is deleted", async () => {
     const a = await create();

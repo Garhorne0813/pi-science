@@ -50,7 +50,7 @@ function labConfig(status: "needs_key" | "invalid" | "needs_login" | "configured
     auth: { kind: status === "needs_login" ? "oauth" : "api_key", api_key_supported: status !== "needs_login", oauth_supported: status === "needs_login", login_supported: false } }], custom_providers: [], available_models: [] };
 }
 
-function connectionApi(failFirstSave = false) {
+function connectionApi(failFirstSave = false, missingBinding = false) {
   let saves = 0;
   const calls: { url: string; method: string; body?: unknown }[] = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit = {}) => {
@@ -59,8 +59,8 @@ function connectionApi(failFirstSave = false) {
     let body: unknown = { ok: true };
     let status = 200;
     if (url === "/api/provider-views") body = queryClient.getQueryData(modelResourceKeys.providerViews(null));
-    else if (url === "/api/endpoints") body = { endpoints: [{ id: "endpoint-lab", name: "Lab", base_url: "https://lab.example/v1", protocol: "openai", health: "unknown", credential_ref: null }] };
-    else if (url === "/api/provider-endpoint-bindings") body = { bindings: [{ id: "binding-lab", provider_id: "user-lab", endpoint_id: "endpoint-lab" }] };
+    else if (url === "/api/endpoints") body = { endpoints: [{ id: "endpoint-lab", name: "Lab", base_url: "https://lab.example/v1", protocol: "openai", health: "unknown", credential_ref: null, owner_provider_id: "user-lab" }] };
+    else if (url === "/api/provider-endpoint-bindings") body = { bindings: missingBinding ? [] : [{ id: "binding-lab", provider_id: "user-lab", endpoint_id: "endpoint-lab" }] };
     else if (method === "PUT" && url === "/api/custom-providers/user-lab" && failFirstSave && ++saves === 1) { status = 500; body = { error: "Repair failed" }; }
     return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
   }));
@@ -158,6 +158,29 @@ describe("AIModelsTab", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit connection" })).not.toBeInTheDocument());
     expect(calls).toContainEqual({ url: "/api/custom-providers/user-lab", method: "PUT", body: { name: "Lab", base_url: "https://repaired.example/v1", auth: { kind: "api_key", secret: "test-repair-key" } } });
     expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("repairs a missing binding using the owned endpoint without submitting a replacement credential", async () => {
+    const calls = connectionApi(false, true);
+    const view = providerViewsFixture(labConfig("configured")).providers[0];
+    view.status = "unavailable";
+    view.routing.issues = [{ code: "no_binding" }];
+    renderTab({ views: [view] });
+    expect(screen.getByText("No enabled binding.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Configure connection" }));
+    const editor = screen.getByRole("dialog", { name: "Edit connection" });
+    await waitFor(() => expect(within(editor).getByLabelText("Base URL")).toHaveValue("https://lab.example/v1"));
+    fireEvent.click(within(editor).getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit connection" })).not.toBeInTheDocument());
+    expect(calls).toContainEqual({ url: "/api/custom-providers/user-lab", method: "PUT", body: { name: "Lab", base_url: "https://lab.example/v1" } });
+  });
+
+  it("offers only unconfigured builtin services in Connect while retaining configured-card maintenance", () => {
+    renderTab();
+    fireEvent.click(screen.getByRole("button", { name: /^\+ Connect$/ }));
+    const dialog = screen.getByRole("dialog", { name: "Connect a model service" });
+    expect(within(dialog).getByRole("button", { name: /^OpenAI$/ })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: /^Anthropic$/ })).not.toBeInTheDocument();
   });
 
   it("retains a failed credential repair for retry without clearing the draft", async () => {

@@ -408,6 +408,30 @@ describe("resource service", () => {
     expect(await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8")).toContain("new-secret");
   });
 
+  it.each([false, true])("repairs a lost binding (endpoint deleted: %s) without replacing the owned secret", async (deleteEndpoint) => {
+    const service = new ModelResourceService();
+    const created = await service.createCustomProvider({ name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "api_key", secret: "preserved-repair-secret" }, models: ["lab-model"] });
+    await service.deleteBinding(created.binding.id);
+    if (deleteEndpoint) await service.deleteEndpoint(created.endpoint.id);
+    const credentialBefore = await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8");
+    const repaired = await service.updateCustomProvider(created.provider.id, { base_url: "http://127.0.0.1:9000/v1" });
+    expect(repaired.endpoint).toMatchObject({ credential_ref: created.credential!.id, owner_provider_id: created.provider.id, base_url: "http://127.0.0.1:9000/v1" });
+    if (!deleteEndpoint) expect(repaired.endpoint.id).toBe(created.endpoint.id);
+    expect(repaired.binding).toMatchObject({ provider_id: created.provider.id, endpoint_id: repaired.endpoint.id, enabled: true });
+    expect(await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8")).toBe(credentialBefore);
+    expect((await service.repository.read()).bindings.filter((item) => item.provider_id === created.provider.id)).toHaveLength(1);
+  });
+
+  it("does not choose between multiple owned endpoints when repairing a lost binding", async () => {
+    const service = new ModelResourceService();
+    const created = await service.createCustomProvider({ name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "none" }, models: ["lab-model"] });
+    await service.deleteBinding(created.binding.id);
+    await service.createEndpoint({ name: "Other", base_url: "http://127.0.0.1:9000/v1", protocol: "openai", enabled: true, data_egress: "local", owner_provider_id: created.provider.id });
+    const before = await service.repository.read();
+    await expect(service.updateCustomProvider(created.provider.id, { name: "Changed", base_url: "http://127.0.0.1:9001/v1" })).rejects.toThrow("Multiple owned endpoints");
+    expect(await service.repository.read()).toEqual(before);
+  });
+
   it("retries credential cleanup when switching a custom provider to no authentication", async () => {
     const service = new ModelResourceService();
     const created = await service.createCustomProvider({ name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "api_key", secret: "retry-auth-secret" } });

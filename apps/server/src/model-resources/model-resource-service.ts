@@ -573,9 +573,20 @@ export class ModelResourceService {
     const state = await this.repository.read();
     const provider = state.providers.find((item) => item.id === id);
     if (!provider || provider.kind !== "user") throw resourceError("resource_not_found", `Custom provider '${id}' was not found`);
-    const binding = state.bindings.find((item) => item.provider_id === id);
-    if (!binding) throw resourceError("resource_not_found", `Provider '${id}' has no connection`);
-    const endpoint = state.endpoints.find((item) => item.id === binding.endpoint_id);
+    let binding = state.bindings.find((item) => item.provider_id === id);
+    let endpoint = state.endpoints.find((item) => item.id === binding?.endpoint_id);
+    if (!binding) {
+      const owned = state.endpoints.filter((item) => item.owner_provider_id === id);
+      if (owned.length > 1) throw resourceError("invalid_resource", "Multiple owned endpoints exist; repair the binding explicitly");
+      endpoint = owned[0];
+      if (!endpoint) {
+        if (!input.base_url) throw resourceError("invalid_resource", "A base URL is required to rebuild this connection");
+        if (!["openai-compatible", "anthropic-compatible", "ollama"].includes(provider.adapter)) throw resourceError("invalid_resource", "This adapter requires an explicit endpoint repair");
+        const credentials = (await this.credentials.listMetadata()).filter((item) => item.owner_provider_id === id && item.owner_kind !== "mcp");
+        if (provider.auth_kind !== "none" && credentials.length > 1) throw resourceError("invalid_resource", "Multiple owned credentials exist; repair the connection explicitly");
+        endpoint = await this.createEndpoint({ name: `${provider.name} endpoint`, base_url: input.base_url, protocol: provider.adapter === "anthropic-compatible" ? "anthropic" : provider.adapter === "ollama" ? "ollama" : "openai", ...(input.api ? { api: input.api } : {}), credential_ref: provider.auth_kind === "none" ? null : credentials[0]?.id ?? null, enabled: true, data_egress: "remote", owner_provider_id: id });
+      }
+    }
     if (!endpoint) throw resourceError("resource_not_found", `Provider '${id}' connection endpoint was not found`);
     await this.updateProvider(id, { ...(input.name ? { name: input.name } : {}) });
     await this.updateEndpoint(endpoint.id, { ...(input.base_url ? { base_url: input.base_url } : {}), ...(input.api ? { api: input.api } : {}) });
@@ -600,6 +611,7 @@ export class ModelResourceService {
       }
     }
     if (input.auth?.kind) await this.updateProvider(id, { auth_kind: input.auth.kind });
+    if (!binding) binding = await this.createBinding({ provider_id: id, endpoint_id: endpoint.id, enabled: true, priority: 100 });
     const updated = await this.repository.read();
     return { provider: structuredClone(updated.providers.find((item) => item.id === id)!), endpoint: structuredClone(updated.endpoints.find((item) => item.id === endpoint.id)!), binding: structuredClone(updated.bindings.find((item) => item.id === binding.id)!) };
   }
