@@ -297,7 +297,7 @@ export class ModelResourceService {
   }
 
   /** One management snapshot; selection comes from Core, never credential heuristics. */
-  async providerViews(selectable: Set<string>, inputFormats: Map<string, string[]> = new Map()): Promise<ProviderView[]> {
+  async providerViews(selectable: Set<string>, inputFormats: Map<string, string[]> = new Map(), catalogAvailable = true): Promise<ProviderView[]> {
     await this.ensureMigrated();
     const [state, catalog] = await Promise.all([this.repository.read(), this.readRuntimeCatalog()]);
     const providers = new Map<string, Provider>();
@@ -336,13 +336,14 @@ export class ModelResourceService {
       const configured = provider.auth_kind === "none" || provider.kind === "system" && builtinConfigured.has(provider.id) || values.some((value) => Boolean(value?.secret) && ["configured", "connected"].includes(value!.metadata.status));
       const credentialState = configured ? "ready" : values.some((value) => value?.metadata.status === "invalid") ? "invalid" : provider.auth_kind === "oauth" ? "needs_login" : "needs_key";
       const models = [...(modelsByProvider.get(provider.id)?.values() ?? [])].map((model) => {
-        const available = provider.enabled && selectable.has(model.id);
+        const available = provider.enabled && catalogAvailable && selectable.has(model.id);
         const formats = inputFormats.get(model.id) ?? declaredFormats.get(model.id);
-        return { ...model, available, ...(formats ? { input_formats: formats } : {}), ...(available ? { availability_reason: undefined } : { availability_reason: !provider.enabled ? "provider_disabled" : model.availability_reason ?? "core_unavailable" }) };
+        return { ...model, available, ...(formats ? { input_formats: formats } : {}), ...(available ? { availability_reason: undefined } : { availability_reason: !provider.enabled ? "provider_disabled" : model.availability_reason ?? (catalogAvailable ? "core_unavailable" : "catalog_unavailable") }) };
       });
       const count = models.filter((model) => model.available).length;
       const issues = [...new Set(models.filter((model) => !model.available).map((model) => model.availability_reason!))].map((code) => ({ code }));
       if (!models.length) issues.push({ code: "no_models" });
+      if (!catalogAvailable && !issues.some((issue) => issue.code === "catalog_unavailable")) issues.push({ code: "catalog_unavailable" });
       if (provider.auth_kind === "oauth" && !count) issues.push({ code: "unsupported_login" });
       const status = !provider.enabled ? "disabled" : count ? "ready" : provider.auth_kind === "oauth" ? "needs_login" : credentialState !== "ready" ? credentialState : "unavailable";
       const custom = provider.kind === "user";
