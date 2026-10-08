@@ -399,12 +399,13 @@ describe("native control-plane business routes", () => {
     }), "utf8");
     // The live runtime is the authority: it reports a larger window and the
     // actual thinking levels for the running model.
-    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
+    const modelRead = vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
       success: true,
       data: { models: [{ provider: "user-local-provider", id: "local-model", name: "Local Model", reasoning: true, contextWindow: 262144, thinkingLevelMap: { off: "off", high: "high" } }] },
     });
     vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({ success: true, data: { levels: ["off", "high"], model: "user-local-provider/local-model" } });
-    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
+    const modules = createServerModules();
+    const app = buildApp(config(), { ...modules, sessions: nodeSessionService }); apps.push(app);
     const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
     expect(settings.statusCode).toBe(200);
     expect(settings.json()).toMatchObject({ model: "user-local-provider/local-model", model_context_window: 262144 });
@@ -417,6 +418,29 @@ describe("native control-plane business routes", () => {
     const resources = new (await import("../../model-resources/model-resource-service.js")).ModelResourceService();
     const canonical = (await resources.listModels()).find((item) => item.id === "user-local-provider/local-model");
     expect(canonical?.capabilities).toMatchObject({ context_window: 262144, reasoning: true, thinking_levels: ["off", "high"] });
+    const paths = [join(process.env.PI_SCIENCE_HOME, "config.json"), join(process.env.PI_SCIENCE_HOME, "model-resources.json")];
+    const fingerprints = () => Promise.all(paths.map(async (path) => ({ content: await readFile(path, "utf8"), mtime: (await stat(path, { bigint: true })).mtimeNs })));
+    const before = await fingerprints();
+    const settingsWrite = vi.spyOn(modules.settings, "update");
+    const resourceWrite = vi.spyOn(modules.modelResources.repository, "update");
+    for (let read = 0; read < 3; read++) {
+      expect((await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(200);
+    }
+    expect(settingsWrite).not.toHaveBeenCalled();
+    expect(resourceWrite).not.toHaveBeenCalled();
+    expect(await fingerprints()).toEqual(before);
+    // A real capability change must still self-heal once, then remain stable.
+    modelRead.mockResolvedValue({ success: true, data: { models: [{ provider: "user-local-provider", id: "local-model", reasoning: true, contextWindow: 524288, thinkingLevelMap: { off: "off", high: "high" } }] } });
+    expect((await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` })).json().model_context_window).toBe(524288);
+    expect(settingsWrite).toHaveBeenCalledOnce();
+    expect(resourceWrite).toHaveBeenCalledOnce();
+    const repaired = await fingerprints();
+    expect(JSON.parse(repaired[1]!.content).models[0].capabilities.context_window).toBe(524288);
+    await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
+    expect(settingsWrite).toHaveBeenCalledOnce();
+    expect(resourceWrite).toHaveBeenCalledOnce();
+    expect(await fingerprints()).toEqual(repaired);
+
   });
 
   it("corrects the persisted thinking level to the runtime's actual levels after model PUT", async () => {

@@ -529,7 +529,7 @@ async function discoverProvider(baseUrl: string, apiKey: string, api: string, al
 
 export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService: NodeSessionService, settingsStore: SettingsStore, modelResources?: ModelResourceService, runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">, mcp?: McpConnectorService): void {
   const load = () => settingsStore.read();
-  const mutate = <T>(operation: (config: Settings) => T | Promise<T>) => settingsStore.update(operation);
+  const mutate = <T>(operation: (config: Settings) => T | Promise<T>) => settingsStore.update(operation, { skipUnchanged: true });
   // Direct API clients may save without calling the discovery endpoint first.
   // Only fill missing per-model hints here; the normal UI carries the richer
   // discovery result into this request and avoids a second network round trip.
@@ -572,7 +572,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
     const canonicalState = modelResources?.repository.readSync();
     const hasCanonicalResources = Boolean(canonicalState && (canonicalState.migration || canonicalState.providers.length > 0 || canonicalState.models.length > 0));
     if (modelResources && hasCanonicalResources) {
-      const resourceModels = await modelResources.listModels();
+      const resourceModels = await modelResources.listModels({}, snapshot.catalog);
       const projected = resourceModels
         .filter((item) => item.provider_id.startsWith("user-") && item.available)
         .filter((item) => catalogById.has(item.id))
@@ -635,7 +635,9 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
             ...(Number.isInteger(runtimeContextWindow) && runtimeContextWindow >= 4096 ? { context_window: runtimeContextWindow } : {}),
             ...(runtimeLevelsApplied ? { reasoning: selected.reasoning === true, thinking_levels: Array.isArray(selected.thinking_levels) ? [...selected.thinking_levels] : [] } : {}),
           });
-          await mutate((current) => { if (current.model === configured) current.model_context_window = runtimeContextWindow; });
+          if (Number(config.model_context_window ?? 0) !== runtimeContextWindow) {
+            await mutate((current) => { if (current.model === configured) current.model_context_window = runtimeContextWindow; });
+          }
           config.model_context_window = runtimeContextWindow;
         } else {
           const providerId = provider.startsWith("custom-") ? provider.slice("custom-".length) : "";
@@ -670,7 +672,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
     const effectiveProgressAppearance = progressAppearance.success ? progressAppearance.data : defaultProgressAppearance;
     const providers = await providerInventory(nodeSessionService, config, cwdValue, modelResources, runtimeCatalog, snapshot);
     if (modelResources) {
-      const canonicalProviders = await modelResources.listProviders();
+      const canonicalProviders = await modelResources.listProviders(snapshot.catalog);
       for (const provider of canonicalProviders.filter((item) => item.kind === "user")) {
         const authKind = provider.auth_kind;
         const entry: ProviderInventoryEntry = {

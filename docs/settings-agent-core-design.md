@@ -174,3 +174,63 @@ coverage passed 77 tests; backend business routes passed 47 tests (7 skipped).
 All 12 browser checks passed across six viewport/theme projects, including the
 large-inventory scenarios and existing accessibility/save/navigation checks.
 Workspace typechecking, frontend lint, production build and bundle budget passed.
+
+## Backend persistence and measured performance
+
+Identical runtime capability observations preserve `verified_at` and skip the
+resource write lock. A real capability/source change still self-heals once;
+the locked path rechecks concurrent repairs and skips unchanged persistence.
+Settings context-cache repair only enters the write path when the window differs,
+and no-op Settings mutations also skip persistence. Regressions check repeated
+GETs against both file contents and nanosecond modification times, changed
+capabilities followed by a stable read, and concurrent capability repairs.
+
+Runtime resolution builds provider, endpoint, binding and allowlist indexes per
+snapshot, sorts each binding group once, and resolves each distinct credential
+once per pass. These values never survive into the next read: credential removal
+is covered by both synchronous and asynchronous resolution tests. Single-model
+route lookup resolves only the requested model. Agent projections group canonical
+and resolved models by provider, index original models and headers, and reuse
+credential reads. Resource model/provider views use indexed joins and share the
+route's runtime catalog rather than rebuilding it inside each projection.
+
+After a production build, run `node scripts/benchmark-settings.mjs`. This creates
+an isolated repository under `.cache`, persists 100 authenticated custom providers
+and 10,000 models, starts the actual Node/Fastify server, and makes real HTTP
+config and concurrent health requests. Catalog construction, repositories,
+credential resolution, capability repair and response serialization are real.
+There are no mocked backend services or upstream inference calls. One warm read
+excludes cold imports and the legitimate initial capability repair. The script
+cleans up its isolated data and fails if unchanged files are rewritten.
+
+Local Linux/Node 24.19 measurements (milliseconds):
+
+| Metric | Before `cb8d22d` | After, two runs | Enforced budget |
+| --- | ---: | ---: | ---: |
+| Catalog median, 5 samples | 585 | 103–127 | 500 |
+| Config HTTP median, 3 samples | 9,928 | 810–1,176 | 2,000 |
+| Maximum event-loop probe delay | 3,982 | 234–271 | 500 |
+| Concurrent health HTTP p95 | 754 | 107–151 | 750 |
+| Config/resource files unchanged | No | Yes | Required |
+
+Raw baseline summaries and the six browser measurements are recorded in
+`docs/performance/settings-baseline.json`. The browser test now observes Long
+Tasks during catalog rendering, paging, search and clear, and fails on budgets
+for cold General readiness (10 s), catalog readiness (1.5 s), search (2 s),
+maximum Long Task (250 ms) and total Long Task time (1 s). The measured maximum
+Long Task was 52–170 ms; search including deliberate typing delays was 361–707 ms.
+These margins catch substantial regressions; they do not claim smooth 60-fps
+rendering, and the frontend fixture does not measure real backend latency.
+
+Linux PR CI runs the standalone backend benchmark after the build, outside the
+parallel unit suite, then the browser budget checks at desktop and mobile sizes.
+Both publish metrics as artifacts. The nightly browser suite covers all six
+viewport/theme projects. Backend metrics include client parsing and shared-process
+GC, and exclude cold worker startup and external provider network latency.
+
+Verification after these backend and performance changes: all 844 backend tests
+passed (15 skipped), including repeated GET and concurrent-write regressions.
+The final builtin-auth safeguard also passed the two Agent model integration
+cases. All six browser performance checks passed, both standalone backend
+budget runs passed, and workspace typecheck, production build, frontend lint,
+visual-test typecheck and bundle budget passed.

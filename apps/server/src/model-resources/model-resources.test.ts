@@ -9,6 +9,7 @@ import { ModelResourceRepository, emptyModelResourceState } from "./model-resour
 import { ModelResourceService } from "./model-resource-service.js";
 import { RuntimeModelResolver } from "./runtime-model-resolver.js";
 import { SettingsStore } from "../storage/settings-store.js";
+import * as persistence from "../storage/persistence.js";
 
 const roots: string[] = [];
 const originalHome = process.env.PI_SCIENCE_HOME;
@@ -92,6 +93,39 @@ describe("credential store", () => {
 });
 
 describe("runtime model resolver", () => {
+  it("reuses credentials only within one snapshot and preserves indexed binding policies", async () => {
+    const repository = new ModelResourceRepository();
+    const credentials = new CredentialStore();
+    await credentials.put({ id: "shared", kind: "api_key", backend: "managed", secret: "fixture-secret" });
+    const state = emptyModelResourceState();
+    state.providers.push({ id: "user-lab", name: "Lab", kind: "user", adapter: "openai-compatible", enabled: true, catalog_mode: "manual", auth_kind: "api_key", source: "user" });
+    state.endpoints.push({ id: "ep", name: "Lab", base_url: "http://127.0.0.1:9/v1", protocol: "openai", credential_ref: "shared", enabled: true, health: "unknown", data_egress: "local" });
+    state.bindings.push(
+      { id: "z", provider_id: "user-lab", endpoint_id: "ep", enabled: true, priority: 1 },
+      { id: "a", provider_id: "user-lab", endpoint_id: "ep", enabled: true, priority: 1, model_allowlist: ["one"], model_aliases: { one: "upstream-one" } },
+      { id: "disabled", provider_id: "user-lab", endpoint_id: "ep", enabled: false, priority: 0 },
+    );
+    for (const id of ["one", "two", "disabled"]) state.models.push({ provider_id: "user-lab", model_id: id, display_name: id, enabled: id !== "disabled", capabilities: { reasoning: false, thinking_levels: ["off"], context_window: 8192, max_output_tokens: null }, capability_source: "manual" });
+    state.aliases["custom-lab/one"] = "user-lab/one";
+    await repository.replace(state);
+    const asyncReads = vi.spyOn(credentials, "getForRuntime");
+    const syncReads = vi.spyOn(credentials, "readSync");
+    const resolver = new RuntimeModelResolver(repository, credentials);
+    const asyncModels = await resolver.resolveState(state);
+    const syncModels = resolver.resolveStateSync(state);
+    expect(syncModels).toEqual(asyncModels);
+    expect(asyncReads).toHaveBeenCalledOnce();
+    expect(syncReads).toHaveBeenCalledOnce();
+    expect(asyncModels[0]?.routes.map((route) => [route.binding_id, route.model_id])).toEqual([["a", "upstream-one"], ["z", "one"]]);
+    expect(asyncModels[1]?.routes.map((route) => route.binding_id)).toEqual(["z"]);
+    expect(asyncModels[2]).toMatchObject({ available: false, availability_reason: "model_disabled" });
+    expect(await resolver.resolveModelRoute("custom-lab/one")).toMatchObject({ binding_id: "a", model_id: "upstream-one" });
+    await credentials.remove("shared");
+    expect((await resolver.resolveState(state))[0]).toMatchObject({ available: false, availability_reason: "missing_credential" });
+    expect(resolver.resolveStateSync(state)[0]).toMatchObject({ available: false, availability_reason: "missing_credential" });
+    expect(asyncReads).toHaveBeenCalledTimes(3);
+    expect(syncReads).toHaveBeenCalledTimes(2);
+  });
   it("requires a usable credential and chooses bindings by priority", async () => {
     const repository = new ModelResourceRepository();
     const credentials = new CredentialStore();
@@ -150,6 +184,26 @@ describe("legacy migration", () => {
 });
 
 describe("resource service", () => {
+  it("does not refresh identical runtime facts, including concurrent repairs", async () => {
+    const service = new ModelResourceService();
+    const provider = await service.createProvider({ name: "Runtime Lab", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "none", enabled: true });
+    await service.updateModel(provider.id, "one", { capabilities: { context_window: 8192 } });
+    const patch = { context_window: 16384 };
+    const persisted = vi.spyOn(persistence, "writeJsonAtomic");
+    await Promise.all([service.applyRuntimeCapabilities(provider.id, "one", patch), service.applyRuntimeCapabilities(provider.id, "one", patch)]);
+    expect(persisted).toHaveBeenCalledOnce();
+    persisted.mockRestore();
+    const file = join(process.env.PI_SCIENCE_HOME!, "model-resources.json");
+    const contents = await readFile(file, "utf8");
+    const mtime = (await stat(file, { bigint: true })).mtimeNs;
+    const write = vi.spyOn(service.repository, "update");
+    const result = await service.applyRuntimeCapabilities(provider.id, "one", patch);
+    expect(result).toMatchObject({ capability_source: "runtime", capabilities: { context_window: 16384 } });
+    expect(write).not.toHaveBeenCalled();
+    expect(await service.applyRuntimeCapabilities(provider.id, "missing", patch)).toBeNull();
+    expect(await readFile(file, "utf8")).toBe(contents);
+    expect((await stat(file, { bigint: true })).mtimeNs).toBe(mtime);
+  });
   it("uses normalized thinking levels from system catalog models", async () => {
     const service = new ModelResourceService({
       runtimeCatalog: {

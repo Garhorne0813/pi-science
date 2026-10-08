@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   type CreateBindingRequest,
   type CreateCredentialRequest,
@@ -15,7 +16,7 @@ import {
   type UpdateEndpointRequest,
   type UpdateProviderRequest,
 } from "@pi-science/contracts";
-import type { RuntimeCatalogService } from "../runtime/agent/runtime-catalog.js";
+import type { RuntimeCatalog, RuntimeCatalogService } from "../runtime/agent/runtime-catalog.js";
 import { egressAuditEnabled, recordEgress } from "../security/egress-audit.js";
 import { safeConnectorFetch, validateOutboundHttpUrl } from "../security/outbound-security.js";
 import { SettingsStore } from "../storage/settings-store.js";
@@ -224,11 +225,11 @@ export class ModelResourceService {
     return true;
   }
 
-  async listProviders(): Promise<ProviderRead[]> {
+  async listProviders(catalog?: RuntimeCatalog): Promise<ProviderRead[]> {
     await this.ensureMigrated();
     const state = await this.repository.read();
     const result: ProviderRead[] = [];
-    const catalog = await this.readRuntimeCatalog();
+    catalog ??= await this.readRuntimeCatalog();
     for (const entry of catalog.providers) {
       const ref = state.credential_refs[entry.id];
       const credential = ref ? await this.credentials.getForRuntime(ref) : null;
@@ -250,21 +251,40 @@ export class ModelResourceService {
       });
     }
     const resolver = new RuntimeModelResolver(this.repository, this.credentials);
-    const resolved = await resolver.resolveAvailableModels();
+    const resolved = await resolver.resolveState(state);
+    const modelsByProvider = new Map<string, string[]>();
+    for (const model of state.models) {
+      const models = modelsByProvider.get(model.provider_id) ?? [];
+      models.push(model.model_id);
+      modelsByProvider.set(model.provider_id, models);
+    }
+    const routeCounts = new Map<string, number>();
+    for (const model of resolved) routeCounts.set(model.provider_id, (routeCounts.get(model.provider_id) ?? 0) + model.routes.length);
+    const endpointsById = new Map(state.endpoints.map((endpoint) => [endpoint.id, endpoint]));
+    const endpointsByProvider = new Map<string, Set<Endpoint>>();
+    for (const binding of state.bindings) {
+      const endpoint = endpointsById.get(binding.endpoint_id);
+      if (!endpoint) continue;
+      const endpoints = endpointsByProvider.get(binding.provider_id) ?? new Set<Endpoint>();
+      endpoints.add(endpoint);
+      endpointsByProvider.set(binding.provider_id, endpoints);
+    }
+    const credentialConfigured = new Map<string, boolean>();
+    const hasCredential = (ref: string) => {
+      if (!credentialConfigured.has(ref)) credentialConfigured.set(ref, Boolean(state.credential_refs[ref]) || Boolean(this.credentials.readSync(ref)?.secret));
+      return credentialConfigured.get(ref)!;
+    };
     for (const provider of state.providers) {
-      const models = state.models.filter((model) => model.provider_id === provider.id).map((model) => model.model_id);
-      const providerModels = resolved.filter((model) => model.provider_id === provider.id);
-      const providerEndpointIds = new Set(state.bindings.filter((binding) => binding.provider_id === provider.id).map((binding) => binding.endpoint_id));
-      const hasConfiguredCredential = provider.auth_kind === "none" || state.endpoints
-        .filter((endpoint) => providerEndpointIds.has(endpoint.id) && endpoint.credential_ref)
-        .some((endpoint) => Boolean(endpoint.credential_ref && state.credential_refs[endpoint.credential_ref]) || Boolean(endpoint.credential_ref && this.credentials.readSync(endpoint.credential_ref)?.secret));
+      const models = modelsByProvider.get(provider.id) ?? [];
+      const hasConfiguredCredential = provider.auth_kind === "none" || [...(endpointsByProvider.get(provider.id) ?? [])]
+        .some((endpoint) => Boolean(endpoint.credential_ref && hasCredential(endpoint.credential_ref)));
       const needsLogin = provider.auth_kind === "oauth" && !hasConfiguredCredential;
       result.push({
         ...provider,
         models,
         has_key: provider.auth_kind !== "none" && hasConfiguredCredential,
         credential_status: provider.auth_kind === "none" ? "connected" : hasConfiguredCredential ? "configured" : needsLogin ? "needs_login" : "needs_key",
-        routes: providerModels.reduce((count, model) => count + model.routes.length, 0),
+        routes: routeCounts.get(provider.id) ?? 0,
       });
     }
     return result.sort((a, b) => a.name.localeCompare(b.name));
@@ -777,20 +797,22 @@ export class ModelResourceService {
     });
   }
 
-  async listModels(filters: { provider_id?: string; available?: boolean } = {}): Promise<ModelRead[]> {
+  async listModels(filters: { provider_id?: string; available?: boolean } = {}, catalog?: RuntimeCatalog): Promise<ModelRead[]> {
     await this.ensureMigrated();
     const state = await this.repository.read();
     const resolver = new RuntimeModelResolver(this.repository, this.credentials);
-    const resolved = await resolver.resolveAvailableModels();
+    const resolved = await resolver.resolveState(state);
+    const resolvedById = new Map(resolved.map((model) => [model.id, model]));
     const userModels = state.models
       .filter((model) => !filters.provider_id || model.provider_id === filters.provider_id)
-      .map((model) => resolvedModelToRead(resolved.find((item) => item.id === canonicalModelRef(model.provider_id, model.model_id)) ?? {
+      .map((model) => resolvedModelToRead(resolvedById.get(canonicalModelRef(model.provider_id, model.model_id)) ?? {
         id: canonicalModelRef(model.provider_id, model.model_id), provider_id: model.provider_id, model_id: model.model_id, display_name: model.display_name, available: false, capabilities: model.capabilities, capability_source: model.capability_source, routes: [], availability_reason: "no_routable_endpoint",
       }, model));
-    const systemProviderIds = new Set((await this.readRuntimeCatalog()).providers.map((provider) => provider.id));
+    catalog ??= await this.readRuntimeCatalog();
+    const systemProviderIds = new Set(catalog.providers.map((provider) => provider.id));
     const systemModels = filters.provider_id && !systemProviderIds.has(filters.provider_id)
       ? []
-      : await this.systemModelReads();
+      : await this.systemModelReads(state, catalog);
     const all = [...userModels, ...systemModels].filter((model) => filters.available === undefined || model.available === filters.available);
     return all.sort((a, b) => a.id.localeCompare(b.id));
   }
@@ -843,18 +865,27 @@ export class ModelResourceService {
 
   async applyRuntimeCapabilities(providerId: string, modelId: string, patch: Partial<ModelCapabilities>): Promise<Model | null> {
     await this.ensureMigrated();
+    const resolve = (model: Model, verifiedAt = model.verified_at) => resolveCapabilities(modelId, [
+      { ...model.capabilities, source: model.capability_source, verified_at: model.verified_at },
+      { ...patch, source: "runtime", verified_at: verifiedAt },
+    ]);
+    const unchanged = (model: Model) => model.capability_source === "runtime" && isDeepStrictEqual(model.capabilities, resolve(model).capabilities);
+    const snapshot = await this.repository.read();
+    const existing = snapshot.models.find((item) => item.provider_id === providerId && item.model_id === modelId);
+    // Repeated observations of identical facts do not refresh timestamps or
+    // acquire the write lock. The locked path rechecks for concurrent repairs.
+    if (!existing) return null;
+    if (unchanged(existing)) return structuredClone(existing);
     return this.repository.update((state) => {
       const model = state.models.find((item) => item.provider_id === providerId && item.model_id === modelId);
       if (!model) return null;
-      const resolved = resolveCapabilities(modelId, [
-        { ...model.capabilities, source: model.capability_source, verified_at: model.verified_at },
-        { ...patch, source: "runtime", verified_at: now() },
-      ]);
+      if (unchanged(model)) return structuredClone(model);
+      const resolved = resolve(model, now());
       model.capabilities = resolved.capabilities;
       model.capability_source = "runtime";
       model.verified_at = resolved.verified_at;
       return structuredClone(model);
-    });
+    }, { skipUnchanged: true });
   }
 
   async deleteModel(providerId: string, modelId: string): Promise<{ provider_id: string; model_id: string; default_cleared: boolean }> {
@@ -950,9 +981,7 @@ export class ModelResourceService {
     }
   }
 
-  private async systemModelReads(): Promise<ModelRead[]> {
-    const state = await this.repository.read();
-    const catalog = await this.readRuntimeCatalog();
+  private async systemModelReads(state: Awaited<ReturnType<ModelResourceRepository["read"]>>, catalog: RuntimeCatalog): Promise<ModelRead[]> {
     const result: ModelRead[] = [];
     for (const provider of catalog.providers) {
       const ref = state.credential_refs[provider.id];

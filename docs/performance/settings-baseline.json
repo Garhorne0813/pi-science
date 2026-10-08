@@ -1,0 +1,105 @@
+{
+  "environment": {
+    "node": "v24.19.0",
+    "platform": "linux",
+    "browser": "production Chromium, one Playwright worker, no CPU throttling"
+  },
+  "fixture": {
+    "providers": 100,
+    "models": 10000,
+    "authentication": "100 endpoints share one synthetic managed credential",
+    "backend": "real built Node/Fastify HTTP server, real persisted model resources and credentials; no mocked catalog or resolver",
+    "sampling": "one warm config read; five catalog samples; three config samples with concurrent health requests and a 5ms event-loop probe"
+  },
+  "backend": {
+    "beforeCommit": "cb8d22d891b69d458d5a54aab815297689dda0c5",
+    "before": {
+      "catalogMedianMs": 584.94,
+      "configMedianMs": 9927.94,
+      "eventLoopMaxDelayMs": 3982.36,
+      "healthP95Ms": 754.32,
+      "unchangedFiles": false
+    },
+    "afterRuns": [
+      {
+        "catalogMedianMs": 103.33,
+        "configMedianMs": 809.67,
+        "eventLoopMaxDelayMs": 233.83,
+        "healthP95Ms": 106.9,
+        "unchangedFiles": true
+      },
+      {
+        "catalogMedianMs": 127.43,
+        "configMedianMs": 1175.61,
+        "eventLoopMaxDelayMs": 270.55,
+        "healthP95Ms": 151.32,
+        "unchangedFiles": true
+      }
+    ],
+    "budgets": {
+      "catalogMedianMs": 500,
+      "configMedianMs": 2000,
+      "eventLoopMaxDelayMs": 500,
+      "healthP95Ms": 750
+    }
+  },
+  "browser": {
+    "fixture": "mocked delayed config response with the same 100-provider/10,000-model size; excludes app boot from Long Tasks observation",
+    "runs": {
+      "desktop-dark": {
+        "generalReadyMs": 1447,
+        "catalogReadyMs": 522,
+        "searchReadyMs": 510,
+        "maxLongTaskMs": 145,
+        "totalLongTaskMs": 197
+      },
+      "desktop-lg": {
+        "generalReadyMs": 1305,
+        "catalogReadyMs": 304,
+        "searchReadyMs": 455,
+        "maxLongTaskMs": 109,
+        "totalLongTaskMs": 109
+      },
+      "desktop-light": {
+        "generalReadyMs": 1409,
+        "catalogReadyMs": 606,
+        "searchReadyMs": 707,
+        "maxLongTaskMs": 151,
+        "totalLongTaskMs": 220
+      },
+      "mobile": {
+        "generalReadyMs": 1314,
+        "catalogReadyMs": 335,
+        "searchReadyMs": 463,
+        "maxLongTaskMs": 135,
+        "totalLongTaskMs": 135
+      },
+      "tablet": {
+        "generalReadyMs": 1389,
+        "catalogReadyMs": 378,
+        "searchReadyMs": 551,
+        "maxLongTaskMs": 170,
+        "totalLongTaskMs": 170
+      },
+      "wide": {
+        "generalReadyMs": 1187,
+        "catalogReadyMs": 230,
+        "searchReadyMs": 361,
+        "maxLongTaskMs": 52,
+        "totalLongTaskMs": 52
+      }
+    },
+    "budgets": {
+      "generalReadyMs": 10000,
+      "catalogReadyMs": 1500,
+      "searchReadyMs": 2000,
+      "maxLongTaskMs": 250,
+      "totalLongTaskMs": 1000
+    }
+  },
+  "limits": [
+    "Backend numbers include local HTTP client/JSON parsing and shared-process GC.",
+    "Budgets are regression guardrails with headroom, not production SLAs or 60-fps guarantees.",
+    "Cold runtime/worker start, inference latency and external provider network requests are outside this benchmark."
+  ]
+}
