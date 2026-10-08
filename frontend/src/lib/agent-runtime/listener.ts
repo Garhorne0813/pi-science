@@ -46,29 +46,15 @@ function signalRunsForCurrentWorkspace(): void {
   }, RUNS_SIGNAL_DEBOUNCE_MS);
 }
 
-/** The records that create or settle an execution. Tool updates stream the
- *  output tail many times per call while an execution stays pending/running,
- *  so only the boundaries may invalidate: `startedAt` is written by
- *  tool_execution_start, and the terminal status/`endedAt` by
- *  tool_execution_end. Run-level starts and settles bracket the same window
- *  for executions the conversation stream never observes a tool call for.
- *  `session.idle` is the wire name the hub publishes for a settled turn — Pi's
- *  `agent_settled` is translated into it, never forwarded — so it is also what
- *  settles a run whose terminal tool record never reached this stream. */
+/** SSE v3 names operation/tool boundaries explicitly. Output deltas never
+ *  invalidate runs, even when a replayed tool.updated carries old metadata. */
 function isExecutionBoundary(event: PiScienceEvent): boolean {
   switch (event.type) {
-    case "agent_start":
-    case "run.started":
-    case "run.completed":
-    case "run.cancelled":
-    case "run.failed":
-    case "agent_settled":
-    case "session.idle":
+    case "operation.started":
+    case "operation.settled":
+    case "tool.started":
+    case "tool.completed":
       return true;
-    case "tool.updated": {
-      const status = String(event.status ?? "");
-      return status === "done" || status === "error" || typeof event.startedAt === "string";
-    }
     default:
       return false;
   }

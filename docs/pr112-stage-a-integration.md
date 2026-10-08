@@ -1,6 +1,6 @@
 # PR #112 阶段 A：集成与协议核对记录
 
-日期：2026-10-08。范围：PRD 第 9 节阶段 A；阶段 B/C/D 尚未实施。
+日期：2026-10-08。下文为首次阶段 A 的验证记录；文末追加本次协议集成修正，当前状态以追加记录为准。
 
 ## 基线与同步方式
 
@@ -69,3 +69,15 @@ runs 的目标边界是 operation.started、operation.settled、tool.started、t
 
 本工作区已集成；中间补丁与验证日志保存在 work/。远端 PR 分支的发布结果以本次返回的提交 SHA 为准；代理恢复后可正常 fetch。本环境未挂载约定的 /codex/.../output 目录，因此没有导出到该目录的可下载交付物。
 
+## 追加：协议集成问题修正
+
+用户反馈“冲突了”后重新核对：GitHub PR 可合并，无文本冲突。quality 工作流的 Linux/Windows 均在 frontend 的旧 session.idle 测试失败；两端各为 1257 通过、1 失败，typecheck/lint 均通过。
+
+本次修正：
+- runs 边界改为 SSE v3 的 operation.started、operation.settled、tool.started、tool.completed。
+- tool.updated 不再触发 runs invalidation；保留 150ms debounce、connection.open 恢复刷新与 stream.gap 刷新。
+- 将旧测试迁移到正式命名事件，新增带 schemaVersion=3 envelope 的完整 operation/tool 序列测试，逐个断言开始/结束边界刷新。
+- listener、watchdog 与 runs 定向测试：3 文件、43 用例通过。
+- 修正后完整 frontend Vitest：139 文件、1259 用例全部通过；frontend build 和 lint 通过。
+
+本次包含 R-03 的协议集成修复。R-01（旧 final 覆盖 busy）、R-02（Knowledge catch-up 优先级）以及阶段 C/D 其余工作仍待实施。远端 CI 的后续结果须以修正提交对应的运行记录为准。

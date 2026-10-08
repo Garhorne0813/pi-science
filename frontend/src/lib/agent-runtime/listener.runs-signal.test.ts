@@ -35,11 +35,34 @@ async function flushSignal() {
 }
 
 describe("execution invalidation on the conversation stream", () => {
+  it("invalidates each boundary in a versioned operation/tool sequence", async () => {
+    const source = await connectStream();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const events = [
+      { type: "operation.started" },
+      { type: "tool.started", callId: "call-1", itemId: "call-1", tool: "bash", input: {}, status: "running", startedAt: "2026-10-08T00:00:00.000Z" },
+      { type: "tool.completed", callId: "call-1", itemId: "call-1", tool: "bash", status: "done", output: "ok", endedAt: "2026-10-08T00:00:01.000Z" },
+      { type: "operation.settled", status: "completed", outcome: "ok" },
+    ];
+    for (const [index, event] of events.entries()) {
+      const payload = { ...event, sessionId: SESSION, turnId: "turn-1", runId: "run-1", turnOrdinal: 1 };
+      source.emit(event.type, {
+        ...payload, payload,
+        schemaVersion: 3, workspaceId: CWD, streamEpoch: "epoch",
+        eventId: `epoch:${index + 1}`, seq: index + 1,
+        occurredAt: "2026-10-08T00:00:00.000Z",
+      }, `epoch:${index + 1}`);
+      await vi.advanceTimersByTimeAsync(150);
+      const runsCalls = invalidate.mock.calls.filter(([options]) => JSON.stringify(options?.queryKey) === JSON.stringify(runsKey(CWD)));
+      expect(runsCalls).toHaveLength(index + 1);
+    }
+  });
+
   it("invalidates the workspace runs key when a tool execution starts", async () => {
     const source = await connectStream();
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
-    source.emit("tool.updated", {
-      type: "tool.updated",
+    source.emit("tool.started", {
+      type: "tool.started",
       sessionId: SESSION,
       callId: "call-1",
       tool: "bash",
@@ -54,8 +77,8 @@ describe("execution invalidation on the conversation stream", () => {
   it("invalidates when a tool execution settles", async () => {
     const source = await connectStream();
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
-    source.emit("tool.updated", {
-      type: "tool.updated",
+    source.emit("tool.completed", {
+      type: "tool.completed",
       sessionId: SESSION,
       callId: "call-1",
       tool: "bash",
@@ -66,10 +89,10 @@ describe("execution invalidation on the conversation stream", () => {
     expect(invalidate).toHaveBeenCalledTimes(1);
   });
 
-  it("invalidates on session.idle, the wire name the hub publishes when a turn settles", async () => {
+  it("invalidates on operation.settled, the SSE v3 turn boundary", async () => {
     const source = await connectStream();
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
-    source.emit("session.idle", { type: "session.idle", sessionId: SESSION, outcome: "ok" });
+    source.emit("operation.settled", { type: "operation.settled", sessionId: SESSION, status: "completed", outcome: "ok" });
     await flushSignal();
     // Settling a turn also invalidates the workspace file list, so this pins the
     // runs key itself rather than the total number of invalidations.
@@ -96,10 +119,10 @@ describe("execution invalidation on the conversation stream", () => {
   it("invalidates once for a burst of parallel tool starts", async () => {
     const source = await connectStream();
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
-    source.emit("agent_start", { type: "agent_start", sessionId: SESSION, turnId: "turn-1" });
+    source.emit("operation.started", { type: "operation.started", sessionId: SESSION, turnId: "turn-1" });
     for (const callId of ["a", "b", "c"]) {
-      source.emit("tool.updated", {
-        type: "tool.updated",
+      source.emit("tool.started", {
+        type: "tool.started",
         sessionId: SESSION,
         callId,
         tool: "bash",
@@ -142,8 +165,8 @@ describe("execution invalidation on the conversation stream", () => {
   it("ignores boundaries belonging to another session", async () => {
     const source = await connectStream();
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
-    source.emit("tool.updated", {
-      type: "tool.updated",
+    source.emit("tool.completed", {
+      type: "tool.completed",
       sessionId: "session-other",
       callId: "call-1",
       tool: "bash",
@@ -164,7 +187,7 @@ describe("execution invalidation on the conversation stream", () => {
     }));
     await useRuntimeStore.getState().connect(CWD, "session-a");
     FakeEventSource.instances.at(-1)!.open();
-    FakeEventSource.instances.at(-1)!.emit("run.started", { type: "run.started", sessionId: "session-a", turnId: "turn-a" });
+    FakeEventSource.instances.at(-1)!.emit("operation.started", { type: "operation.started", sessionId: "session-a", turnId: "turn-a" });
 
     queryClient.setQueryData(runsKey(otherCwd), []);
     await useRuntimeStore.getState().connect(otherCwd, "session-b");
