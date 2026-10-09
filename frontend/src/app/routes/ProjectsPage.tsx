@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, ChevronDown, Pin, PinOff, Pencil, Trash2, Activity } from "lucide-react";
+import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, Pin, PinOff, Pencil, Trash2, Activity, Search, Grid2X2, LayoutList, ArrowRight, Clock3, Sparkles, X } from "lucide-react";
 import { cn } from "../../lib/ui";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { useTranslation } from "react-i18next";
@@ -35,14 +35,30 @@ function setPinnedPaths(paths: string[]) {
   queryClient.setQueryData(pinnedQuery.queryKey, { paths });
 }
 
+export type ProjectSort = "recent" | "name" | "sessions";
+
+function modifiedAt(w: Workspace) {
+  return Date.parse(w.last_modified) || 0;
+}
+
+export function sortProjects<T extends Workspace>(items: T[], mode: ProjectSort): T[] {
+  return [...items].sort((a, b) => {
+    if (mode === "name") return a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || a.path.localeCompare(b.path);
+    if (mode === "sessions") return b.session_count - a.session_count || modifiedAt(b) - modifiedAt(a) || a.path.localeCompare(b.path);
+    return modifiedAt(b) - modifiedAt(a) || a.name.localeCompare(b.name);
+  });
+}
+
 export function ProjectsPage() {
   const { t } = useTranslation();
   const { toast, confirm: confirmAction } = useFeedback();
   const [creating, setCreating] = useState(false);
-  const [dropdownOpen, setDropdownOpen] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [importingFolder, setImportingFolder] = useState(false);
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<ProjectSort>("recent");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const dirInputRef = useRef<HTMLInputElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
@@ -66,7 +82,7 @@ export function ProjectsPage() {
   const loading = workspacesResult.isPending && !loadTimedOut;
 
   const handleCreate = async () => {
-    setCreating(true); setDropdownOpen(false);
+    setCreating(true);
     try {
       const name = `Untitled Workspace ${randomIdSuffix(8)}`;
       await apiRequest("/api/workspaces", {
@@ -76,6 +92,7 @@ export function ProjectsPage() {
       const updated = await queryClient.fetchQuery(workspacesQuery);
       const newest = updated.find((w: Workspace) => w.name === name);
       if (newest) {
+        setSearch("");
         setEditingName(newest.path);
         setEditValue("");
         setTimeout(() => nameInputRef.current?.focus(), 50);
@@ -160,7 +177,6 @@ export function ProjectsPage() {
   };
 
   const handleOpenFolder = () => {
-    setDropdownOpen(false);
     const input = dirInputRef.current;
     if (input) {
       input.value = "";
@@ -215,82 +231,161 @@ export function ProjectsPage() {
 
   if (loading) return <div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin text-muted" /></div>;
 
-  // Split into pinned & unpinned
-  const pinnedWs = workspaces.filter(w => pinned.has(w.path));
-  const unpinnedWs = workspaces.filter(w => !pinned.has(w.path));
+
+  const lastWorkspace = sortProjects(workspaces, "recent")[0];
+  const sessionsTotal = workspaces.reduce((sum, w) => sum + w.session_count, 0);
+  const pinnedTotal = workspaces.filter(w => pinned.has(w.path)).length;
+  const needle = search.trim().toLocaleLowerCase();
+  const visible = sortProjects(workspaces.filter(w => !needle || (w.name + " " + w.path).toLocaleLowerCase().includes(needle)), sort);
+  const pinnedWs = visible.filter(w => pinned.has(w.path));
+  const unpinnedWs = visible.filter(w => !pinned.has(w.path));
+  const cards = (items: Workspace[]) => (
+    <div className={cn(viewMode === "grid" ? "grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3" : "flex flex-col gap-2")}>
+      {items.map(w => <WorkspaceCard key={w.path} w={w} {...{ pinned, togglePin, editingName, setEditingName, editValue, setEditValue, handleRename, handleDelete, nameInputRef, navigate, timeAgo, viewMode }} />)}
+    </div>
+  );
+
   return (
     <ErrorBoundary>
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto w-full max-w-[1200px] px-card py-page sm:px-page lg:py-12">
-        {/* Header */}
-        <div className="mb-page flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-medium tracking-tight text-text">{t("nav.projects")}</h1>
-            <p className="mt-1 text-sm text-muted">{t("projects.workspaceCount", { count: workspaces.length })}</p>
-          </div>
-          <div className="relative">
-            <input
-              ref={dirInputRef}
-              type="file"
-              // @ts-ignore webkitdirectory is widely supported
-              {...{ webkitdirectory: "", directory: "" }}
-              className="hidden"
-              onChange={handleFolderPicked}
-            />
-            <button
-              onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="flex h-primary items-center gap-compact rounded-input bg-accent-fill px-panel text-ui-body font-medium text-accent-fg hover:opacity-90"
-            >
-              {t("projects.newWorkspace")} <ChevronDown size={14} />
-            </button>
-            {dropdownOpen && (
-              <div className="ui-popover absolute right-0 top-full z-20 mt-1 w-56 rounded-card p-compact">
-                <button onClick={handleCreate} disabled={creating || importingFolder} className="flex h-control w-full items-center gap-2.5 rounded-input px-panel text-left text-ui-label text-text hover:bg-surface-2 disabled:opacity-60">
-                  {creating ? <Loader2 size={15} className="animate-spin text-muted" /> : <Plus size={15} className="text-muted" />} {t("projects.newWorkspace")}
-                </button>
-                <button onClick={handleOpenFolder} disabled={creating || importingFolder} className="flex h-control w-full items-center gap-2.5 rounded-input px-panel text-left text-ui-label text-text hover:bg-surface-2 disabled:opacity-60">
-                  {importingFolder ? <Loader2 size={15} className="animate-spin text-muted" /> : <FolderInput size={15} className="text-muted" />} {t("projects.openFolder")}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
+      <div className="h-full overflow-y-auto bg-bg">
+        <div className="mx-auto w-full max-w-[1360px] px-card pb-16 pt-8 sm:px-page lg:px-10 lg:pt-12">
+          <input
+            ref={dirInputRef}
+            type="file"
+            // @ts-ignore webkitdirectory is widely supported
+            {...{ webkitdirectory: "", directory: "" }}
+            className="hidden"
+            onChange={handleFolderPicked}
+            aria-label={t("projects.openFolder")}
+          />
 
-        {/* Workspace cards */}
-        {workspaces.length === 0 ? (
-          <div className="text-center py-20">
-            <FolderOpen size={48} className="mx-auto text-muted/40 mb-4" />
-            <p className="text-muted text-sm">{t("projects.empty")}</p>
+          <header className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
+            <div>
+              <div className="mb-2 flex items-center gap-2 text-ui-caption font-semibold uppercase tracking-[0.16em] text-accent">
+                <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+                {t("projects.workbench")}
+              </div>
+              <h1 className="text-3xl font-semibold tracking-[-0.035em] text-text sm:text-4xl">{t("nav.projects")}</h1>
+              <p className="mt-2 max-w-xl text-sm leading-6 text-muted">{t("projects.description")}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={handleOpenFolder} disabled={creating || importingFolder}
+                className="inline-flex h-primary items-center gap-2 rounded-input border border-border bg-surface-raised px-4 text-ui-body font-medium text-text transition-colors hover:bg-surface-2 disabled:opacity-50">
+                {importingFolder ? <Loader2 size={16} className="animate-spin" /> : <FolderInput size={16} />}
+                {t("projects.openFolder")}
+              </button>
+              <button type="button" onClick={handleCreate} disabled={creating || importingFolder}
+                className="inline-flex h-primary items-center gap-2 rounded-input bg-accent-fill px-4 text-ui-body font-semibold text-accent-fg transition-opacity hover:opacity-90 disabled:opacity-50">
+                {creating ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
+                {t("projects.newWorkspace")}
+              </button>
+            </div>
+          </header>
+
+          <div className="mb-9 grid gap-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
+            <section className="relative flex min-h-[215px] flex-col justify-between overflow-hidden rounded-2xl border border-border bg-surface-2 p-6 sm:p-7">
+              <div className="pointer-events-none absolute -right-14 -top-24 h-64 w-64 rounded-full border-[35px] border-accent/5" />
+              <div className="pointer-events-none absolute -bottom-28 right-20 h-52 w-52 rounded-full border-[26px] border-accent/5" />
+              <div className="relative">
+                <span className="mb-3 inline-flex items-center gap-2 rounded-full border border-accent/15 bg-accent/5 px-3 py-1 text-ui-caption font-medium text-accent">
+                  <Sparkles size={13} /> {t("projects.overview")}
+                </span>
+                <h2 className="max-w-lg text-xl font-semibold leading-snug tracking-tight text-text sm:text-2xl">{t("projects.overviewTitle")}</h2>
+                <p className="mt-2 max-w-lg text-ui-body leading-6 text-muted">{t("projects.overviewDescription")}</p>
+              </div>
+              <div className="relative mt-6 flex flex-wrap items-end gap-x-9 gap-y-4">
+                <div><p className="text-2xl font-semibold tracking-tight tabular-nums text-text">{workspaces.length}</p><p className="mt-1 text-ui-caption text-muted">{t("projects.totalProjects")}</p></div>
+                <div><p className="text-2xl font-semibold tracking-tight tabular-nums text-text">{sessionsTotal}</p><p className="mt-1 text-ui-caption text-muted">{t("projects.totalSessions")}</p></div>
+                <div><p className="text-2xl font-semibold tracking-tight tabular-nums text-text">{pinnedTotal}</p><p className="mt-1 text-ui-caption text-muted">{t("projects.pinnedProjects")}</p></div>
+              </div>
+            </section>
+            <section className="flex min-h-[215px] flex-col justify-between rounded-2xl border border-border bg-surface-raised p-6 sm:p-7">
+              <div className="flex items-center gap-2 text-ui-caption font-medium text-muted"><Clock3 size={15} />{t("projects.lastEdited")}</div>
+              {lastWorkspace ? (
+                <div className="mt-5 min-w-0">
+                  <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-accent-soft text-accent"><FolderOpen size={20} /></div>
+                  <h3 className="truncate text-lg font-semibold tracking-tight text-text" title={lastWorkspace.name}>{lastWorkspace.name}</h3>
+                  <p className="mt-1 text-ui-caption text-muted">{t("projects.editedAgo", { time: timeAgo(lastWorkspace.last_modified) })}</p>
+                  <Link to={"/workspace/" + encodeURIComponent(lastWorkspace.path)}
+                    className="mt-4 inline-flex items-center gap-1.5 text-ui-body font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+                    {t("projects.continueProject")} <ArrowRight size={15} />
+                  </Link>
+                </div>
+              ) : (
+                <div className="mt-5"><h3 className="text-lg font-semibold text-text">{t("projects.startHere")}</h3><p className="mt-2 text-ui-body leading-6 text-muted">{t("projects.startHereDescription")}</p></div>
+              )}
+            </section>
           </div>
-        ) : (
-          <>
-            {/* Pinned section */}
-            {pinnedWs.length > 0 && (
-              <>
-                <div className="mb-panel flex h-nav items-center gap-2">
-                  <Pin size={13} className="text-accent" />
-                  <span className="text-ui-caption font-medium uppercase tracking-wider text-muted">{t("projects.pinned")}</span>
-                  <span className="text-[10px] text-muted ml-1">{pinnedWs.length}</span>
+
+          <section aria-labelledby="projects-library-title">
+            <div className="mb-4 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
+              <div>
+                <h2 id="projects-library-title" className="text-lg font-semibold tracking-tight text-text">{t("projects.library")}</h2>
+                <p className="mt-1 text-ui-body text-muted">{t("projects.workspaceCount", { count: workspaces.length })}</p>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div className="relative min-w-0 sm:w-64">
+                  <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+                  <input type="search" value={search} onChange={e => setSearch(e.target.value)}
+                    placeholder={t("projects.searchPlaceholder")} aria-label={t("projects.searchPlaceholder")}
+                    className="h-control w-full rounded-input border border-border bg-surface-raised pl-9 pr-9 text-ui-body text-text outline-none placeholder:text-muted/70 focus:border-accent/50 focus:ring-2 focus:ring-accent/10" />
+                  {search && <button type="button" onClick={() => setSearch("")} aria-label={t("projects.clearSearch")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted hover:text-text"><X size={14} /></button>}
                 </div>
-                <div className="mb-page grid grid-cols-1 gap-card sm:grid-cols-2 lg:grid-cols-4">
-                  {pinnedWs.map(w => <WorkspaceCard key={w.path} w={w} {...{ pinned, togglePin, editingName, setEditingName, editValue, setEditValue, handleRename, handleDelete, nameInputRef, navigate, timeAgo }} />)}
+                <select value={sort} onChange={e => setSort(e.target.value as ProjectSort)}
+                  aria-label={t("projects.sortLabel")}
+                  className="h-control rounded-input border border-border bg-surface-raised px-3 text-ui-body text-text outline-none focus:border-accent/50 focus:ring-2 focus:ring-accent/10">
+                  <option value="recent">{t("projects.sortRecent")}</option>
+                  <option value="name">{t("projects.sortName")}</option>
+                  <option value="sessions">{t("projects.sortSessions")}</option>
+                </select>
+                <div role="group" aria-label={t("projects.viewLabel")} className="inline-flex h-control w-fit shrink-0 gap-0.5 rounded-input border border-border bg-surface-raised p-1">
+                  <button type="button" onClick={() => setViewMode("grid")} aria-label={t("projects.gridView")} aria-pressed={viewMode === "grid"}
+                    className={cn("flex h-full w-8 items-center justify-center rounded-md", viewMode === "grid" ? "bg-accent/10 text-accent" : "text-muted hover:bg-surface-2")}><Grid2X2 size={16} /></button>
+                  <button type="button" onClick={() => setViewMode("list")} aria-label={t("projects.listView")} aria-pressed={viewMode === "list"}
+                    className={cn("flex h-full w-8 items-center justify-center rounded-md", viewMode === "list" ? "bg-accent/10 text-accent" : "text-muted hover:bg-surface-2")}><LayoutList size={16} /></button>
                 </div>
-                {unpinnedWs.length > 0 && (
-                  <div className="mb-page border-t border-faint" />
+              </div>
+            </div>
+
+            {workspacesResult.isError && workspaces.length === 0 ? (
+              <div className="rounded-2xl border border-border bg-surface-raised px-6 py-16 text-center">
+                <p className="text-ui-body text-muted">{t("projects.loadError")}</p>
+                <button type="button" onClick={() => void workspacesResult.refetch()} className="mt-4 rounded-input bg-accent-fill px-4 py-2 text-ui-body text-accent-fg">{t("common.refresh")}</button>
+              </div>
+            ) : workspaces.length === 0 ? (
+              <div className="flex flex-col items-center rounded-2xl border border-dashed border-border bg-surface/40 px-6 py-16 text-center">
+                <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-accent/10 text-accent"><FolderOpen size={26} /></div>
+                <h3 className="text-lg font-semibold text-text">{t("projects.emptyTitle")}</h3>
+                <p className="mt-2 max-w-sm text-ui-body leading-6 text-muted">{t("projects.empty")}</p>
+                <button type="button" onClick={handleCreate} disabled={creating || importingFolder} className="mt-5 inline-flex h-primary items-center gap-2 rounded-input bg-accent-fill px-4 text-ui-body font-medium text-accent-fg disabled:opacity-50"><Plus size={16} />{t("projects.newWorkspace")}</button>
+              </div>
+            ) : visible.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-border bg-surface/40 px-6 py-14 text-center">
+                <Search size={24} className="mx-auto text-muted" />
+                <h3 className="mt-3 text-base font-semibold text-text">{t("projects.noResults")}</h3>
+                <p className="mt-1 text-ui-body text-muted">{t("projects.noResultsDescription")}</p>
+                <button type="button" onClick={() => setSearch("")} className="mt-4 text-ui-body font-semibold text-accent hover:underline">{t("projects.clearSearch")}</button>
+              </div>
+            ) : (
+              <div className="space-y-8">
+                {pinnedWs.length > 0 && (
+                  <div>
+                    <div className="mb-3 flex items-center gap-2.5"><Pin size={15} className="text-accent" /><h3 className="text-ui-body font-semibold text-text">{t("projects.pinned")}</h3><span className="rounded-full bg-surface-2 px-2 py-0.5 text-ui-meta tabular-nums text-muted">{pinnedWs.length}</span></div>
+                    {cards(pinnedWs)}
+                  </div>
                 )}
-              </>
-            )}
-
-            {/* Unpinned grid */}
-            {unpinnedWs.length > 0 && (
-              <div className="grid grid-cols-1 gap-card sm:grid-cols-2 lg:grid-cols-4">
-                {unpinnedWs.map(w => <WorkspaceCard key={w.path} w={w} {...{ pinned, togglePin, editingName, setEditingName, editValue, setEditValue, handleRename, handleDelete, nameInputRef, navigate, timeAgo }} />)}
+                {unpinnedWs.length > 0 && (
+                  <div>
+                    <div className="mb-3 flex items-center gap-2.5"><FolderOpen size={15} className="text-accent" /><h3 className="text-ui-body font-semibold text-text">{t("projects.allProjects")}</h3><span className="rounded-full bg-surface-2 px-2 py-0.5 text-ui-meta tabular-nums text-muted">{unpinnedWs.length}</span></div>
+                    {cards(unpinnedWs)}
+                  </div>
+                )}
               </div>
             )}
-          </>
-        )}
+          </section>
+        </div>
       </div>
-    </div>
     </ErrorBoundary>
   );
 }
