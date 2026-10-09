@@ -2,6 +2,7 @@ import { join, resolve } from "node:path";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { metadataRoot } from "../../storage/persistence.js";
 import { AgentCoreRuntimeClient } from "./agent-runtime-client.js";
+import { AgentRuntimeCapacityError } from "./agent-runtime-errors.js";
 import type { AgentRuntimeStartOptions } from "./worker/protocol.js";
 import { bindSubagentDispatch } from "./subagent-dispatch.js";
 
@@ -84,7 +85,9 @@ export class AgentRuntimeManager {
   get processCount(): number { return this.runtimes.size; }
 
   private async startOnce(key: string, options: AgentRuntimeStartOptions, ownerKey: string): Promise<AgentCoreRuntimeClient> {
-    if (capacity.size >= workerLimit()) throw new Error("Agent worker capacity limit reached");
+    // Typed so the caller can tell a definite pre-dispatch rejection from an
+    // ambiguous transport failure. The two need opposite retry treatment.
+    if (capacity.size >= workerLimit()) throw new AgentRuntimeCapacityError("Agent worker capacity limit reached");
     const slot = Symbol(key); capacity.add(slot);
     const requestedOwner = options.sessionId ? sessionKey(options.cwd, options.sessionId) : undefined;
     if (requestedOwner && processOwners.has(requestedOwner)) {

@@ -11,9 +11,10 @@ const roots: string[] = [];
 const runtimes: SessionRuntime[] = [];
 const context = BACKGROUND_CONTEXT;
 
-async function runtime() {
+async function runtime(prepare?: (cwd: string) => Promise<void>) {
   const cwd = resolve(await mkdtemp(join(tmpdir(), "pi-science-worker-mutations-")));
   roots.push(cwd);
+  if (prepare) await prepare(cwd);
   const events: Array<Record<string, unknown>> = [];
   const instance = await SessionRuntime.open({ cwd, sessionsRoot: join(cwd, ".pi-science", "agent-sessions"),
     model: { provider: "openai", modelId: "gpt-4.1-mini" }, thinking: "low",
@@ -123,6 +124,69 @@ describe("agent-core worker mutations", () => {
       expect(await instance.command("abort", {})).toMatchObject({ success: false }); // No active model operation.
     } finally { release(); }
     expect(await configure).toMatchObject({ success: true });
+  });
+
+  it("keeps the durable model at start so only a verified configure can change it", async () => {
+    const cwd = resolve(await mkdtemp(join(tmpdir(), "pi-science-worker-model-request-")));
+    roots.push(cwd);
+    const options = { cwd, sessionsRoot: join(cwd, ".pi-science", "agent-sessions"),
+      model: { provider: "openai", modelId: "gpt-4.1-mini" }, thinking: "low" as const,
+      env: { PATH: process.env.PATH ?? "", OPENAI_API_KEY: "model-test-secret", PI_SCIENCE_INTERNAL_TOKEN: "server-test-secret" } };
+    const first = await SessionRuntime.open(options, () => undefined, (error) => { throw error; });
+    runtimes.push(first);
+    await first.command("activate", {});
+
+    // A start must not commit the model it was asked for: the request may still be rejected by
+    // the configure that follows, and then the session would run on a model it refused.
+    const second = await SessionRuntime.open({ ...options, sessionId: first.sessionId,
+      model: { provider: "deepseek", modelId: "deepseek-v4-pro" } }, () => undefined, (error) => { throw error; });
+    runtimes.push(second);
+    await second.command("activate", {});
+
+    expect(await second.command("get_state", {})).toMatchObject({
+      success: true, data: { model: { provider: "openai", modelId: "gpt-4.1-mini" } } });
+  }, 20_000);
+
+  it("adopts the requested model when the durable one is no longer in the catalog", async () => {
+    const cwd = resolve(await mkdtemp(join(tmpdir(), "pi-science-worker-model-adopt-")));
+    roots.push(cwd);
+    const options = { cwd, sessionsRoot: join(cwd, ".pi-science", "agent-sessions"),
+      model: { provider: "openai", modelId: "gpt-4.1-mini" }, thinking: "low" as const,
+      env: { PATH: process.env.PATH ?? "", OPENAI_API_KEY: "model-test-secret", PI_SCIENCE_INTERNAL_TOKEN: "server-test-secret" } };
+    const first = await SessionRuntime.open(options, () => undefined, (error) => { throw error; });
+    runtimes.push(first);
+    await first.command("activate", {});
+    // Leave the session on a model the catalog does not contain, which is what disabling a
+    // provider does. The session has to stay openable instead of failing before it can be
+    // reconfigured, so the requested model is adopted and becomes the durable one.
+    await (first as unknown as { lane: AgentLane }).lane.setModel({ provider: "openai", modelId: "gone" }, context);
+
+    const second = await SessionRuntime.open({ ...options, sessionId: first.sessionId,
+      model: { provider: "deepseek", modelId: "deepseek-v4-pro" } }, () => undefined, (error) => { throw error; });
+    runtimes.push(second);
+    await second.command("activate", {});
+
+    expect(await second.command("get_state", {})).toMatchObject({
+      success: true, data: { model: { provider: "deepseek", modelId: "deepseek-v4-pro" } } });
+  }, 20_000);
+
+  it("lists the allowed skill and prompt commands and drops a skill once its policy disables it", async () => {
+    const { instance } = await runtime(async (cwd) => {
+      await mkdir(join(cwd, ".pi", "skills", "review"), { recursive: true });
+      await writeFile(join(cwd, ".pi", "skills", "review", "SKILL.md"), "---\nname: review\ndescription: Review evidence\n---\nFollow the evidence protocol.");
+      await mkdir(join(cwd, ".pi", "prompts"), { recursive: true });
+      await writeFile(join(cwd, ".pi", "prompts", "summarize.md"), "---\ndescription: Summarize text\n---\nSummarize the following text: $ARGUMENTS");
+    });
+    expect(await instance.command("get_commands", {})).toMatchObject({ success: true, data: { commands: expect.arrayContaining([
+      { name: "skill:review", description: "Review evidence", source: "skill", group: "skill" },
+      { name: "summarize", description: "Summarize text", source: "prompt", group: "utility" }]) } });
+    expect(await instance.command("set_skill_policy", { policy: { mode: "none" } })).toMatchObject({ success: true });
+    // The prompt command survives the disable, and the disabled skill is both absent from the
+    // catalogue and rejected when a client invokes it by name.
+    expect(await instance.command("get_commands", {})).toMatchObject({ success: true, data: { commands: [
+      { name: "summarize", description: "Summarize text", source: "prompt", group: "utility" }] } });
+    expect(await instance.command("prompt", { message: "/skill:review check the statistics" }))
+      .toMatchObject({ success: false, code: "unknown_skill" });
   });
 
   it("does not give ordinary bash processes model, server, or inherited credentials", async () => {

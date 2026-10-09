@@ -15,9 +15,10 @@
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ComponentType, ReactNode, Ref } from "react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { VirtuosoHandle } from "react-virtuoso";
 
 const { virtuosoProps } = vi.hoisted(() => ({ virtuosoProps: [] as Array<Record<string, unknown>> }));
@@ -39,10 +40,11 @@ vi.mock("../../components/conversation/ModelControlMenu", () => ({
     selectedModel: string;
     thinking: string;
     disabled?: boolean;
+    needsModelSwitch?: boolean;
     onModelChange: (model: string) => void;
     onThinkingChange: (level: string) => void;
   }) => (
-    <div data-testid="model-control" data-model={props.selectedModel} data-thinking={props.thinking} data-disabled={String(!!props.disabled)}>
+    <div data-testid="model-control" data-model={props.selectedModel} data-thinking={props.thinking} data-disabled={String(!!props.disabled)} data-needs-model-switch={String(!!props.needsModelSwitch)}>
       {props.models.map((model) => (
         <button key={model.id} type="button" onClick={() => props.onModelChange(model.id)}>{`pick ${model.id}`}</button>
       ))}
@@ -67,7 +69,6 @@ import { FeedbackContext } from "../../components/feedback/feedback-context";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
 import { queryClient } from "../../lib/client/query-client";
-import { resetDynamicCommands } from "../../lib/conversation";
 import type { PendingInteraction, PendingQuestionnaire } from "../../lib/agent-runtime";
 import i18n from "../../i18n";
 import type { ThreadBlock } from "../../types/thread";
@@ -194,27 +195,53 @@ function sendButton(): HTMLElement {
 
 function renderPage(search = "") {
   return render(
-    <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
-      <MemoryRouter initialEntries={[`/workspace/${CWD}/session/${SESSION_ID}${search}`]}>
-        <Routes>
-          {/* The app mounts WorkspaceProvider around the route tree (app/router.tsx). */}
-          <Route path="/workspace/:cwd/session/:sessionId" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
-        </Routes>
-      </MemoryRouter>
-    </FeedbackContext.Provider>,
+    <QueryClientProvider client={queryClient}>
+      <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
+        <MemoryRouter initialEntries={[`/workspace/${CWD}/session/${SESSION_ID}${search}`]}>
+          <Routes>
+            {/* The app mounts WorkspaceProvider around the route tree (app/router.tsx). */}
+            <Route path="/workspace/:cwd/session/:sessionId" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
+          </Routes>
+        </MemoryRouter>
+      </FeedbackContext.Provider>
+    </QueryClientProvider>,
   );
 }
 
 function renderWorkspaceLanding() {
   return render(
-    <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
-      <MemoryRouter initialEntries={[`/workspace/${CWD}`]}>
-        <Routes>
-          <Route path="/workspace/:cwd" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
-        </Routes>
-      </MemoryRouter>
-    </FeedbackContext.Provider>,
+    <QueryClientProvider client={queryClient}>
+      <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
+        <MemoryRouter initialEntries={[`/workspace/${CWD}`]}>
+          <Routes>
+            <Route path="/workspace/:cwd" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
+          </Routes>
+        </MemoryRouter>
+      </FeedbackContext.Provider>
+    </QueryClientProvider>,
   );
+}
+
+/** A landing route whose workspace can change without remounting the page. */
+function renderSwitchableLanding() {
+  let navigate: ((path: string) => void) | null = null;
+  function RouteHandle() {
+    navigate = useNavigate();
+    return null;
+  }
+  render(
+    <QueryClientProvider client={queryClient}>
+      <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
+        <MemoryRouter initialEntries={[`/workspace/${CWD}`]}>
+          <RouteHandle />
+          <Routes>
+            <Route path="/workspace/:cwd" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
+          </Routes>
+        </MemoryRouter>
+      </FeedbackContext.Provider>
+    </QueryClientProvider>,
+  );
+  return (path: string) => navigate!(path);
 }
 
 /** Render and wait until the model list has loaded (handleSend no-ops without it). */
@@ -256,7 +283,6 @@ beforeEach(() => {
     clear: () => storage.clear(),
   });
   queryClient.clear();
-  resetDynamicCommands();
   useUiStore.setState({ inspectorOpen: false, inspectorData: null, workspaceReferences: [], settingsOpen: false, settingsScope: null, });
   useRuntimeStore.setState({
     status: "ready",
@@ -786,7 +812,9 @@ describe("slash-command dispatcher", () => {
     act(() => { useRuntimeStore.getState().setDraft("/"); });
 
     expect(screen.getByRole("listbox")).toBeInTheDocument();
-    fireEvent.keyDown(window, { key: "Escape" });
+    // Escape is handled on the textarea, not on window: the composer must not eat keys that
+    // belong to another surface, such as the settings dialog.
+    fireEvent.keyDown(textarea(), { key: "Escape" });
 
     expect(textarea()).toHaveValue("/");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
@@ -801,6 +829,26 @@ describe("slash-command dispatcher", () => {
 
     await waitFor(() => expect(textarea()).toHaveValue(""));
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("discovers skills on a cold new conversation and preserves its draft", async () => {
+    let finish!: (id: string) => void;
+    const pending = new Promise<string>((resolve) => { finish = resolve; });
+    const create = vi.fn(() => pending);
+    overrides.push((url) => url.includes("/commands?")
+      ? Promise.resolve(jsonResponse({ commands: [{ name: "skill:review", description: "Review files", source: "skill" }] }))
+      : null);
+    useRuntimeStore.setState({ activeSessionId: null, createNewSession: create });
+    renderWorkspaceLanding();
+    expect(create).not.toHaveBeenCalled();
+    act(() => { useRuntimeStore.getState().setDraft("/skill:rev"); });
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    act(() => { useRuntimeStore.setState({ activeSessionId: "s2" }); finish("s2"); });
+    await waitFor(() => expect(screen.getByRole("listbox")).toHaveTextContent("/skill:review"));
+    expect(textarea()).toHaveValue("/skill:rev");
+    fireEvent.keyDown(textarea(), { key: "Tab" });
+    await waitFor(() => expect(textarea()).toHaveValue("/skill:review"));
+    expect(create).toHaveBeenCalledTimes(1);
   });
 
   it("/compact posts to the compact endpoint and reports it without sending a prompt", async () => {
@@ -1393,5 +1441,273 @@ describe("session stats line", () => {
     useRuntimeStore.setState({ sessionStats: null });
     await renderReady();
     expect(screen.queryByLabelText("Session stats")).toBeNull();
+  });
+});
+
+/* Route-level completion lifecycle: the candidate menu is fed by the runtime's command catalogue,
+ * and the runtime is only initialized for a workspace that can actually accept a prompt. These
+ * cases pin which model states may start that discovery, what survives the session it creates,
+ * that a discovered prompt command only ever rewrites the draft, and that a session switch cannot
+ * leak the previous session's catalogue into the menu. */
+
+/** A response the test settles by hand, so a switch can happen while it is in flight. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => { resolve = settle; });
+  return { promise, resolve };
+}
+
+const SKILL_COMMAND = { name: "skill:review", description: "Review files", source: "skill", group: "skill" };
+const PROMPT_COMMAND = { name: "summarize", description: "Summarize text", source: "prompt", group: "utility" };
+
+/** Answer every commands request with this catalogue. */
+function stubCommands(...commands: Array<Record<string, unknown>>) {
+  overrides.push((url) => (url.includes("/commands?") ? Promise.resolve(jsonResponse({ commands })) : null));
+}
+
+async function typeDraft(value: string) {
+  await act(async () => { useRuntimeStore.getState().setDraft(value); });
+}
+
+/** Attach one file through the composer's picker and wait for its chip. */
+async function attachFile(name: string) {
+  overrides.push((url) => (url.startsWith("/api/files/upload") ? Promise.resolve(jsonResponse({ ok: true })) : null));
+  const picker = document.querySelector("input[type='file']") as HTMLInputElement;
+  fireEvent.change(picker, { target: { files: [new File(["id"], name, { type: "text/csv" })] } });
+  await waitFor(() => expect(screen.getByText(name)).toBeInTheDocument());
+}
+
+/** The built-in half of the catalogue is available in every model state. */
+function expectBuiltinMenu() {
+  const menu = screen.getByRole("listbox");
+  expect(within(menu).getByText("/compact")).toBeInTheDocument();
+  expect(within(menu).getByText("/export")).toBeInTheDocument();
+}
+
+describe("route-level completion lifecycle", () => {
+  describe("slash discovery waits for a usable model (AC-20)", () => {
+    /** A cold workspace landing route where the config answers `config`, with the runtime store
+     *  patched before mount (useModelConfig reads the store on its first effect pass). */
+    function renderColdLanding(config: Record<string, unknown>, storeModel = "prov/m1") {
+      overrides.push((url) => (url.startsWith("/api/settings/config")
+        ? Promise.resolve(jsonResponse({ ok: true, available_models: MODELS, thinking: "high", ...config }))
+        : null));
+      // createNewSession is the page's only path to a session-create request, so the stubbed
+      // runtime action counts those requests exactly.
+      const create = vi.fn(async (): Promise<string> => "s2");
+      useRuntimeStore.setState({ sessions: [], activeSessionId: null, model: storeModel, createNewSession: create });
+      renderWorkspaceLanding();
+      return create;
+    }
+
+    it("does not create a session for a slash draft when no model is configured", async () => {
+      const create = renderColdLanding({ model: "" }, "");
+      const control = await screen.findByTestId("model-control");
+      expect(control).toHaveAttribute("data-model", "");
+
+      await typeDraft("/");
+
+      expectBuiltinMenu();
+      expect(sendButton()).toBeDisabled();
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it("does not create a session for a slash draft when the configured model is unavailable", async () => {
+      const create = renderColdLanding({ model: "prov/m9", unavailable_model: "prov/m9" });
+      const control = await screen.findByTestId("model-control");
+      await waitFor(() => expect(control).toHaveAttribute("data-needs-model-switch", "true"));
+      expect(control).toHaveAttribute("data-model", "");
+
+      await typeDraft("/");
+
+      expectBuiltinMenu();
+      expect(sendButton()).toBeDisabled();
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it("does not create a session while the switch prompt is up for a still-selected model", async () => {
+      let saves = 0;
+      overrides.push((url, init) => {
+        if (!url.startsWith("/api/settings/model") || (init.method || "GET").toUpperCase() !== "PUT") return null;
+        saves += 1;
+        return Promise.resolve(saves === 1
+          ? jsonResponse({ ok: true, model: "prov/m9", thinking: "medium" })
+          : jsonResponse({ error: "save rejected" }, 500));
+      });
+      const create = vi.fn(async (): Promise<string> => "s2");
+      useRuntimeStore.setState({ sessions: [], activeSessionId: null, createNewSession: create });
+      renderWorkspaceLanding();
+      const control = await screen.findByTestId("model-control");
+      expect(control).toHaveAttribute("data-model", "prov/m1");
+
+      // A save that reports a model the workspace does not list leaves the selection on it. The
+      // retry then fails and rolls back to that same model, which is the state the menu warns
+      // about: a model is still selected and the switch flag is set.
+      fireEvent.click(screen.getByRole("button", { name: "pick prov/m2" }));
+      await waitFor(() => expect(control).toHaveAttribute("data-model", "prov/m9"));
+      fireEvent.click(screen.getByRole("button", { name: "pick prov/m2" }));
+      await waitFor(() => expect(control).toHaveAttribute("data-needs-model-switch", "true"));
+      expect(control).toHaveAttribute("data-model", "prov/m9");
+
+      await typeDraft("/");
+
+      expectBuiltinMenu();
+      expect(create).not.toHaveBeenCalled();
+      // A model is still selected, so the send control is not what refuses here: the discovery
+      // guard is the only thing between the slash draft and a session create.
+      expect(sendButton()).toBeEnabled();
+    });
+
+    it("does not create a session while a model switch is saving", async () => {
+      const save = deferred<Response>();
+      overrides.push((url, init) => {
+        if (!url.startsWith("/api/settings/model") || (init.method || "GET").toUpperCase() !== "PUT") return null;
+        return save.promise;
+      });
+      const create = vi.fn(async (): Promise<string> => "s2");
+      useRuntimeStore.setState({ sessions: [], activeSessionId: null, createNewSession: create });
+      renderWorkspaceLanding();
+      const control = await screen.findByTestId("model-control");
+
+      fireEvent.click(screen.getByRole("button", { name: "pick prov/m2" }));
+      await waitFor(() => expect(control).toHaveAttribute("data-disabled", "true"));
+      expect(control).toHaveAttribute("data-model", "prov/m2");
+
+      await typeDraft("/");
+
+      expectBuiltinMenu();
+      expect(create).not.toHaveBeenCalled();
+      // The optimistic selection already satisfies the send control; only the in-flight save
+      // holds discovery back.
+      expect(sendButton()).toBeEnabled();
+    });
+  });
+
+  it("creates exactly one runtime session for a slash draft and keeps the draft, attachment and reference (AC-14)", async () => {
+    stubCommands(SKILL_COMMAND);
+    const create = vi.fn(async (): Promise<string> => "s2");
+    useRuntimeStore.setState({ sessions: [], activeSessionId: null, createNewSession: create });
+    renderWorkspaceLanding();
+    await screen.findByTestId("model-control");
+
+    act(() => { useUiStore.getState().addWorkspaceReference({ cwd: CWD, path: "data/protein.csv", name: "protein.csv", isDir: false }); });
+    await attachFile("protein.csv");
+    await typeDraft("/skill:rev");
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+
+    // The runtime answers: the composer adopts the new session without dropping what was typed.
+    await act(async () => { useRuntimeStore.setState({ activeSessionId: "s2" }); });
+
+    const menu = await screen.findByRole("listbox");
+    expect(within(menu).getByText("/skill:review")).toBeInTheDocument();
+    expect(textarea()).toHaveValue("/skill:rev");
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("protein.csv")).toBeInTheDocument();
+    expect(screen.getByLabelText("Remove reference protein.csv")).toBeInTheDocument();
+    expect(useUiStore.getState().workspaceReferences).toEqual([
+      { cwd: CWD, path: "data/protein.csv", name: "protein.csv", isDir: false },
+    ]);
+  });
+
+  it("does not initialize a workspace the slash draft was not typed in", async () => {
+    const create = vi.fn(async (): Promise<string> => "s2");
+    // The real connect moves the store to the new workspace synchronously, before the
+    // composer has had the chance to clear the previous workspace's draft.
+    const connect = vi.fn(async (cwd: string) => { useRuntimeStore.setState({ cwd }); });
+    useRuntimeStore.setState({ sessions: [], activeSessionId: null, model: "prov/m1", createNewSession: create, connect });
+    const navigate = renderSwitchableLanding();
+    await screen.findByTestId("model-control");
+
+    await typeDraft("/skill:rev");
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    create.mockClear();
+
+    // The user leaves for another workspace while that creation is still in flight. The draft
+    // belongs to the workspace it was typed in, so the new workspace stays lazy.
+    await act(async () => { navigate("/workspace/proj-b"); });
+
+    expect(useRuntimeStore.getState().cwd).toBe("proj-b");
+    expect(useRuntimeStore.getState().draft).toBe("");
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  describe("discovered prompt commands", () => {
+    it("offers a prompt command and accepts it with Tab without sending", async () => {
+      stubCommands(PROMPT_COMMAND);
+      const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
+      useRuntimeStore.setState({ sendPrompt });
+      await renderReady();
+      await typeDraft("/sum");
+
+      const menu = await screen.findByRole("listbox");
+      expect(within(menu).getByText("/summarize")).toBeInTheDocument();
+
+      fireEvent.keyDown(textarea(), { key: "Tab" });
+
+      // Accepting a candidate only rewrites the draft: the prompt count stays at zero.
+      await waitFor(() => expect(textarea()).toHaveValue("/summarize"));
+      expect(sendPrompt).not.toHaveBeenCalled();
+      expect(useRuntimeStore.getState().draft).toBe("/summarize");
+    });
+
+    it("offers a prompt command and accepts it with Enter without sending", async () => {
+      stubCommands(PROMPT_COMMAND);
+      const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
+      useRuntimeStore.setState({ sendPrompt });
+      await renderReady();
+      await typeDraft("/sum");
+
+      const menu = await screen.findByRole("listbox");
+      expect(within(menu).getByText("/summarize")).toBeInTheDocument();
+
+      fireEvent.keyDown(textarea(), { key: "Enter" });
+
+      await waitFor(() => expect(textarea()).toHaveValue("/summarize"));
+      expect(sendPrompt).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not show the previous session's prompt command when its response lands late (AC-18)", async () => {
+    // Each request gets its own response body, so both the in-flight request and the refetch the
+    // same session issues later get real data.
+    const firstGate = deferred<void>();
+    const secondGate = deferred<void>();
+    overrides.push((url) => {
+      if (!url.includes("/commands?")) return null;
+      if (url.includes(`/sessions/${SESSION_ID}/`)) return firstGate.promise.then(() => jsonResponse({ commands: [PROMPT_COMMAND] }));
+      if (url.includes("/sessions/s2/")) return secondGate.promise.then(() => jsonResponse({ commands: [{ name: "summaries", description: "Summarize a set", source: "prompt", group: "utility" }] }));
+      return null;
+    });
+    await renderReady();
+    // The previous session's catalogue is requested on mount and still in flight.
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes(`/sessions/${SESSION_ID}/commands?`))).toBe(true));
+
+    await act(async () => { useRuntimeStore.setState({ activeSessionId: "s2" }); });
+    await typeDraft("/sum");
+
+    await act(async () => {
+      secondGate.resolve();
+      await secondGate.promise;
+    });
+
+    const menu = await screen.findByRole("listbox");
+    expect(within(menu).getByText("/summaries")).toBeInTheDocument();
+
+    // The previous session's response lands only now, after the switch.
+    await act(async () => {
+      firstGate.resolve();
+      await firstGate.promise;
+    });
+    await waitFor(() => expect(textarea()).toHaveValue("/sum"));
+    expect(within(screen.getByRole("listbox")).queryByText("/summarize")).toBeNull();
+    expect(within(screen.getByRole("listbox")).getByText("/summaries")).toBeInTheDocument();
+
+    // Control: the same catalogue does reach the menu while its own session is current, so the
+    // negative above is session scoping and not a response this harness can never surface.
+    await act(async () => { useRuntimeStore.setState({ activeSessionId: SESSION_ID }); });
+    await typeDraft("/sum");
+    const back = await screen.findByRole("listbox");
+    expect(within(back).getByText("/summarize")).toBeInTheDocument();
   });
 });

@@ -36,6 +36,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   queryClient.clear();
 });
 
@@ -109,4 +110,29 @@ describe("subscribeResearchInvalidation", () => {
     expect(onSignal).toHaveBeenCalledTimes(1);
     cleanup();
   });
+
+  it("catches up before and after delayed OPEN when first hidden while CONNECTING", () => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    const onSignal = vi.fn();
+    const cleanup = subscribeResearchEvents(".", onSignal);
+    const first = FakeEventSource.instances[0]!;
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(first.closed).toBe(true);
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    vi.advanceTimersByTime(500);
+    expect(onSignal).toHaveBeenCalledOnce();
+    FakeEventSource.instances[1]!.onopen?.({} as Event);
+    vi.advanceTimersByTime(500);
+    expect(onSignal).toHaveBeenCalledTimes(2);
+    cleanup();
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(FakeEventSource.instances).toHaveLength(2);
+  });
+
 });

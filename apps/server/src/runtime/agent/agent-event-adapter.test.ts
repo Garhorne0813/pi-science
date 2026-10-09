@@ -11,12 +11,34 @@ function event(value: Record<string, unknown>): HarnessEvent {
 }
 
 describe("AgentCoreEventAdapter", () => {
-  it("forwards manual and automatic compaction outcomes through existing browser events", () => {
+  it("supervises a manual compaction as its own operation", () => {
     const adapter = new AgentCoreEventAdapter();
     expect(adapter.adapt(event({ type: "compaction_start", runId: "compact", reason: "manual" })))
-      .toEqual([{ type: "compaction.start", runId: "compact", reason: "manual" }]);
-    expect(adapter.adapt(event({ type: "compaction_end", runId: "compact", reason: "manual", status: "aborted" })))
-      .toEqual([{ type: "compaction.end", runId: "compact", reason: "manual", outcome: "aborted" }]);
+      .toEqual([
+        { type: "operation.started", runId: "compact", turnId: "compact" },
+        { type: "compaction.start", runId: "compact", reason: "manual" },
+      ]);
+    expect(adapter.adapt(event({ type: "compaction_end", runId: "compact", reason: "manual", status: "completed" })))
+      .toEqual([
+        { type: "compaction.end", runId: "compact", reason: "manual", outcome: "completed" },
+        { type: "operation.settled", runId: "compact", status: "completed", handledWithoutTurn: true },
+      ]);
+  });
+
+  it("keeps an in-run compaction inside the run that owns it", () => {
+    const adapter = new AgentCoreEventAdapter();
+    adapter.adapt(event({ type: "run_start", runId: "run-1", startedAt: 1 }));
+    adapter.adapt(event({ type: "turn_start", runId: "run-1", turnId: "turn-1" }));
+    expect(adapter.adapt(event({ type: "compaction_start", runId: "run-1", reason: "threshold" })))
+      .toEqual([{ type: "compaction.start", runId: "run-1", reason: "threshold" }]);
+    expect(adapter.adapt(event({ type: "compaction_end", runId: "run-1", reason: "threshold", status: "completed" })))
+      .toEqual([{ type: "compaction.end", runId: "run-1", reason: "threshold", outcome: "completed" }]);
+    expect(adapter.adapt(event({ type: "run_end", runId: "run-1", status: "completed" })))
+      .toEqual([{ type: "operation.settled", runId: "run-1", status: "completed" }]);
+  });
+
+  it("forwards compaction failures through existing browser events", () => {
+    const adapter = new AgentCoreEventAdapter();
     expect(adapter.adapt(event({ type: "compaction_end", runId: "compact", status: "failed", error: { message: "summary failed" } })))
       .toEqual([{ type: "compaction.error", runId: "compact", message: "summary failed" }, { type: "runtime.error", runId: "compact", message: "summary failed" }]);
   });

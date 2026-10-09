@@ -28,10 +28,56 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   queryClient.clear();
 });
 
 describe("subscribeExecutionInvalidation", () => {
+  it("releases its stream in the background and invalidates runs on return", () => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    const key = runsKey("/workspace/demo");
+    queryClient.setQueryData(key, []);
+    const cleanup = subscribeExecutionInvalidation("/workspace/demo");
+    const first = FakeEventSource.instances[0]!;
+
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(first.closed).toBe(true);
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(FakeEventSource.instances).toHaveLength(2);
+    vi.advanceTimersByTime(150);
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+    cleanup();
+  });
+
+  it("keeps REST fallback enabled until a delayed replacement reaches OPEN", () => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    const onConnectionChange = vi.fn();
+    const cleanup = subscribeExecutionInvalidation(".", { onConnectionChange });
+    const first = FakeEventSource.instances[0]!;
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    first.onopen?.();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(true);
+
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    vi.advanceTimersByTime(30_000);
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    // A closed source cannot disable polling again.
+    first.onopen?.();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    FakeEventSource.instances[1]!.onopen?.();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(true);
+    cleanup();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+  });
+
   it("debounces execution events and invalidates the workspace ledger", () => {
     const key = runsKey("/workspace/demo");
     queryClient.setQueryData(key, []);
@@ -62,5 +108,78 @@ describe("subscribeExecutionInvalidation", () => {
     expect(onConnectionChange).toHaveBeenLastCalledWith(true);
     cleanup();
     expect(source.closed).toBe(true);
+  });
+
+  it("invalidates again when the first source resumes only after a delayed OPEN", () => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const cleanup = subscribeExecutionInvalidation("/workspace/delayed-open");
+    const first = FakeEventSource.instances[0]!;
+
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(first.closed).toBe(true);
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    const resumed = FakeEventSource.instances[1]!;
+
+    vi.advanceTimersByTime(150);
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    resumed.onopen?.();
+    vi.advanceTimersByTime(150);
+    expect(invalidate).toHaveBeenCalledTimes(2);
+    cleanup();
+  });
+
+  it("keeps the REST fallback enabled when a resumed source remains CONNECTING", () => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    const onConnectionChange = vi.fn();
+    const cleanup = subscribeExecutionInvalidation(".", { onConnectionChange });
+    FakeEventSource.instances[0]!.onopen?.();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(true);
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    vi.advanceTimersByTime(30_000);
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    FakeEventSource.instances[1]!.onopen?.();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(true);
+    cleanup();
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("shares a workspace stream until its last consumer unmounts", () => {
+    const firstListener = vi.fn();
+    const secondListener = vi.fn();
+    const first = subscribeExecutionInvalidation("/workspace/shared", { onConnectionChange: firstListener });
+    const source = FakeEventSource.instances[0]!;
+    source.onopen?.();
+    const second = subscribeExecutionInvalidation("/workspace/shared", { onConnectionChange: secondListener });
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(secondListener).toHaveBeenLastCalledWith(true);
+    first();
+    first();
+    expect(source.closed).toBe(false);
+    expect(firstListener).toHaveBeenLastCalledWith(false);
+    source.onerror?.({} as Event);
+    expect(secondListener).toHaveBeenLastCalledWith(false);
+    second();
+    expect(source.closed).toBe(true);
+    const third = subscribeExecutionInvalidation("/workspace/shared");
+    expect(FakeEventSource.instances).toHaveLength(2);
+    third();
+  });
+
+  it("keeps distinct workspaces isolated", () => {
+    const first = subscribeExecutionInvalidation("/workspace/one");
+    const second = subscribeExecutionInvalidation("/workspace/two");
+    expect(FakeEventSource.instances).toHaveLength(2);
+    first();
+    expect(FakeEventSource.instances[1]!.closed).toBe(false);
+    second();
   });
 });

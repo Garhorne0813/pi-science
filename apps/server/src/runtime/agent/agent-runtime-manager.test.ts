@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentRuntimeManager } from "./agent-runtime-manager.js";
+import { AgentRuntimeCapacityError } from "./agent-runtime-errors.js";
 
 const roots: string[] = [];
 const managers: AgentRuntimeManager[] = [];
@@ -21,7 +22,9 @@ describe("AgentRuntimeManager", () => {
     const options = { cwd, sessionsRoot: join(cwd, ".pi-science", "agent-sessions"), model: { provider: "openai", modelId: "gpt-4.1-mini" } };
     vi.stubEnv("PI_SCIENCE_AGENT_MAX_WORKERS", "1");
     const runtime = await first.start("first", options);
-    await expect(second.start("extra", options)).rejects.toThrow("capacity");
+    // Typed, so the caller can record a definite rejection instead of an
+    // ambiguous one and let the same prompt ID retry.
+    await expect(second.start("extra", options)).rejects.toThrow(AgentRuntimeCapacityError);
     vi.stubEnv("PI_SCIENCE_AGENT_MAX_WORKERS", "2");
     await expect(second.start("duplicate", { ...options, sessionId: runtime.sessionId })).rejects.toThrow("another manager");
     await first.stop("first");
