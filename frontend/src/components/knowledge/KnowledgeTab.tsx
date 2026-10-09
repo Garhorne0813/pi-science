@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowUpRight, FileText, Search, X } from "lucide-react";
+import { FileText, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { KNOWLEDGE_LABELS, type KnowledgeItem, type KnowledgeType } from "../../lib/knowledge";
 import { EmptyState } from "./EmptyState";

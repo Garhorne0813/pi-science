@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowUpRight, BookOpen, CheckCircle2, Clock3, FileText, FlaskConical, HelpCircle, Inbox, Lightbulb, Search } from "lucide-react";
+import { ArrowUpRight, BookOpen, CheckCircle2, Clock3, FileText, FlaskConical, HelpCircle, Inbox, Lightbulb } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
 import type { KnowledgeItem, ProjectSummary } from "../../lib/knowledge";
