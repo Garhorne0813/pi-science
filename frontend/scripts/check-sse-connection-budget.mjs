@@ -275,7 +275,10 @@ try {
   await notebookPage.goto(`${origin}/workspace/${encodeURIComponent(cwd)}/session/${VISUAL_SESSION}?view=runs`, { waitUntil: "domcontentloaded" });
   await notebookPage.getByRole("button", { name: "Open session kernel", exact: true }).click();
   await notebookPage.getByRole("button", { name: /Close notebook/i }).waitFor();
-  await notebookPage.getByText(notebookOutput, { exact: true }).waitFor();
+  // Runs also renders output previews. Verify recovery in the Notebook itself,
+  // so a matching preview cannot satisfy this assertion or make it ambiguous.
+  const notebookPanel = notebookPage.getByRole("tabpanel").filter({ has: notebookPage.getByRole("button", { name: /Close notebook/i }) });
+  await notebookPanel.getByText(notebookOutput, { exact: true }).waitFor();
   await waitForOpenSource(notebookPage, executionEndpoint);
   const notebookBudget = [...SESSION_PAGE_BUDGET, executionEndpoint];
   await assertStreamBudget(notebookPage, "Runs plus Notebook", notebookBudget);
@@ -291,11 +294,11 @@ try {
     try { await route.continue(); } catch { /* navigation can abort the held request */ }
   });
   await setHidden(notebookPage, false);
-  await notebookPage.getByText(notebookOutput, { exact: true }).waitFor();
+  await notebookPanel.getByText(notebookOutput, { exact: true }).waitFor();
   const connectingSource = (await sources(notebookPage)).findLast((source) => source.url.includes(executionEndpoint));
   assert(connectingSource && !connectingSource.opened, "The restored execution stream must still be CONNECTING");
   notebookOutput = "polled notebook output";
-  await notebookPage.getByText(notebookOutput, { exact: true }).waitFor({ timeout: 15_000 });
+  await notebookPanel.getByText(notebookOutput, { exact: true }).waitFor({ timeout: 15_000 });
   assert(!(await sources(notebookPage)).findLast((source) => source.url.includes(executionEndpoint))?.opened,
     "REST fallback must update Notebook before execution SSE reaches OPEN");
   releaseExecutionRequest();
