@@ -1,5 +1,6 @@
 import { readFileSync, chmodSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   bindingSchema,
   endpointSchema,
@@ -71,12 +72,13 @@ export class ModelResourceRepository {
     catch { return emptyModelResourceState(); }
   }
 
-  async update<T>(operation: (state: ModelResourceState) => T | Promise<T>): Promise<T> {
+  async update<T>(operation: (state: ModelResourceState) => T | Promise<T>, options: { skipUnchanged?: boolean } = {}): Promise<T> {
     const path = modelResourcePath();
     const pending = this.writes.catch(() => undefined).then(() => withFileWriteLock(path, async () => {
       const state = parseState(await readJson<unknown>(path, emptyModelResourceState()));
+      const before = options.skipUnchanged ? clone(state) : undefined;
       const result = await operation(state);
-      await writeJsonAtomic(path, state);
+      if (!options.skipUnchanged || !isDeepStrictEqual(before, state)) await writeJsonAtomic(path, state);
       return result;
     }));
     this.writes = pending.then(() => undefined, () => undefined);

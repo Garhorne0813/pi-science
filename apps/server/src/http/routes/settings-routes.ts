@@ -6,7 +6,6 @@ import { configPath } from "../../storage/persistence.js";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import { agentModelCatalog } from "../../runtime/agent/worker/agent-models.js";
 import { resolveCompaction } from "../../runtime/agent/agent-runtime-settings.js";
-import { runtimeExtensionStatus } from "../../runtime/agent/runtime-config.js";
 import { safeConnectorFetch, validateOutboundHttpUrl } from "../../security/outbound-security.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { SettingsStore, type SettingsData as Settings } from "../../storage/settings-store.js";
@@ -23,7 +22,7 @@ import {
   updateProjectSkill,
 } from "../../catalog/project-skill-service.js";
 import { knownWorkspacePaths } from "./catalog-routes.js";
-import type { RuntimeSkillPolicy } from "../../runtime/agent/agent-runtime-types.js";
+import type { RuntimeResult, RuntimeSkillPolicy } from "../../runtime/agent/agent-runtime-types.js";
 import type { ModelResourceService } from "../../model-resources/model-resource-service.js";
 import type { RuntimeCatalogService } from "../../runtime/agent/runtime-catalog.js";
 import { resolveMcpConfig } from "../../catalog/mcp-config.js";
@@ -135,6 +134,7 @@ function runtimeModel(provider: RuntimeCatalogProvider, model: RuntimeCatalogMod
     context_window: model.contextWindow || null,
     max_output_tokens: model.maxTokens || null,
     input_formats: model.input,
+    vision: model.input.includes("image"),
     capability_source: "agent-core-catalog",
   };
 }
@@ -234,7 +234,10 @@ function normalizePiModel(value: unknown): Record<string, unknown> | null {
     : reasoning === false ? ["off"] : undefined;
   const name = typeof item.name === "string" && item.name ? item.name : model;
   const contextWindow = Number(item.contextWindow ?? 0);
-  return { id: `${provider}/${model}`, provider, model, label: `${provider} · ${name}`, custom: provider.startsWith("custom-"), reasoning, thinking_levels: thinkingLevels, context_window: contextWindow > 0 ? contextWindow : null, capability_source: "Pi runtime" };
+  const maxTokens = Number(item.maxTokens ?? item.max_output_tokens ?? 0);
+  const inputFormats = Array.isArray(item.input) ? item.input.filter((format): format is string => typeof format === "string") : undefined;
+  return { id: `${provider}/${model}`, provider, model, label: `${provider} · ${name}`, custom: provider.startsWith("custom-"), reasoning, thinking_levels: thinkingLevels, context_window: contextWindow > 0 ? contextWindow : null,
+    max_output_tokens: maxTokens > 0 ? maxTokens : undefined, input_formats: inputFormats, vision: inputFormats ? inputFormats.includes("image") : undefined, capability_source: "Pi runtime" };
 }
 function mergeModelCatalog(primary: Array<Record<string, unknown>>, overlay: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
   const byId = new Map(primary.map((item) => [String(item.id), item]));
@@ -257,15 +260,24 @@ function mergeModelCatalog(primary: Array<Record<string, unknown>>, overlay: Arr
   }
   return [...byId.values()];
 }
-async function modelCatalog(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">): Promise<{ available: Array<Record<string, unknown>>; source: "pi" | "fallback" }> {
+type ModelSnapshot = { catalog: RuntimeCatalog; models: RuntimeResult };
+async function readModelSnapshot(nodeSessionService: NodeSessionService, cwdValue: string, runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">): Promise<ModelSnapshot> {
+  const [catalog, models] = await Promise.all([
+    readRuntimeCatalog(runtimeCatalog),
+    cwdValue ? nodeSessionService.availableModels(cwdValue) : agentModelCatalog().then((models) => ({ success: true, data: { models } })),
+  ]);
+  return { catalog, models };
+}
+
+async function modelCatalog(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">, snapshot?: ModelSnapshot): Promise<{ available: Array<Record<string, unknown>>; source: "pi" | "fallback" }> {
+  const read = snapshot ?? await readModelSnapshot(nodeSessionService, cwdValue, runtimeCatalog);
+  const data = read.models.data && typeof read.models.data === "object" ? read.models.data as Record<string, unknown> : {};
   if (!cwdValue) {
-    return { available: (await agentModelCatalog()).map(normalizePiModel).filter((item): item is Record<string, unknown> => Boolean(item)), source: "pi" };
+    return { available: (Array.isArray(data.models) ? data.models : []).map(normalizePiModel).filter((item): item is Record<string, unknown> => Boolean(item)), source: "pi" };
   }
-  const catalog = await readRuntimeCatalog(runtimeCatalog);
-  const catalogEntries = catalogModels(catalog);
+  const catalogEntries = catalogModels(read.catalog);
   if (cwdValue) {
-    const result = await nodeSessionService.availableModels(cwdValue);
-    const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
+    const result = read.models;
     if (result.success && Array.isArray(data.models)) {
       const runtimeModels = data.models.map(normalizePiModel).filter((item): item is Record<string, unknown> => Boolean(item));
       const runtimeById = new Map(runtimeModels.map((item) => [String(item.id), item]));
@@ -278,6 +290,7 @@ async function modelCatalog(nodeSessionService: NodeSessionService, config: Sett
         if (!existing.context_window) existing.context_window = source.context_window;
         if (!existing.max_output_tokens) existing.max_output_tokens = source.max_output_tokens;
         if (!Array.isArray(existing.input_formats) || existing.input_formats.length === 0) existing.input_formats = source.input_formats;
+        if (existing.vision === undefined && Array.isArray(existing.input_formats)) existing.vision = existing.input_formats.includes("image");
       }
       return { available: [...runtimeById.values()], source: "pi" };
     }
@@ -298,11 +311,12 @@ type ProviderInventoryEntry = {
 
 /** Builtin provider inventory from the Agent Core catalog. Workspace model
  *  availability still comes from the live session's `/api/models` command. */
-async function providerInventory(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, modelResources?: ModelResourceService, runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">): Promise<ProviderInventoryEntry[]> {
-  const catalog = await readRuntimeCatalog(runtimeCatalog);
+async function providerInventory(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, modelResources?: ModelResourceService, runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">, snapshot?: ModelSnapshot): Promise<ProviderInventoryEntry[]> {
+  const read = snapshot ?? await readModelSnapshot(nodeSessionService, cwdValue, runtimeCatalog);
+  const catalog = read.catalog;
   let runtimeModels: Record<string, string[]> | null = null;
   {
-    const result = cwdValue ? await nodeSessionService.availableModels(cwdValue) : { success: true, data: { models: await agentModelCatalog() } };
+    const result = read.models;
     const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
     if (result.success && Array.isArray(data.models)) {
       runtimeModels = {};
@@ -316,8 +330,9 @@ async function providerInventory(nodeSessionService: NodeSessionService, config:
     }
   }
   const entries: ProviderInventoryEntry[] = [];
+  const credentialRefs = modelResources?.repository.readSync().credential_refs ?? {};
   for (const provider of catalog.providers) {
-    const ref = modelResources?.repository.readSync().credential_refs[provider.id];
+    const ref = credentialRefs[provider.id];
     const managed = ref && modelResources ? Boolean((await modelResources.credentials.getForRuntime(ref))?.secret) : false;
     const stored = typeof config.api_keys?.[provider.id] === "string" && config.api_keys[provider.id] !== "";
     const localCredential = managed || stored;
@@ -513,7 +528,7 @@ async function discoverProvider(baseUrl: string, apiKey: string, api: string, al
 
 export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService: NodeSessionService, settingsStore: SettingsStore, modelResources?: ModelResourceService, runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">, mcp?: McpConnectorService): void {
   const load = () => settingsStore.read();
-  const mutate = <T>(operation: (config: Settings) => T | Promise<T>) => settingsStore.update(operation);
+  const mutate = <T>(operation: (config: Settings) => T | Promise<T>) => settingsStore.update(operation, { skipUnchanged: true });
   // Direct API clients may save without calling the discovery endpoint first.
   // Only fill missing per-model hints here; the normal UI carries the richer
   // discovery result into this request and avoids a second network round trip.
@@ -547,15 +562,19 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
     await modelResources?.ensureMigrated();
     const config = await load();
     const cwdValue = query(request, "cwd", "");
-    const catalog = await modelCatalog(nodeSessionService, config, cwdValue, runtimeCatalog);
+    // Request-scoped snapshot: inventory and capabilities observe the same
+    // model read, without caching credentials across configuration writes.
+    const snapshot = await readModelSnapshot(nodeSessionService, cwdValue, runtimeCatalog);
+    const catalog = await modelCatalog(nodeSessionService, config, cwdValue, runtimeCatalog, snapshot);
+    const catalogById = new Map(catalog.available.map((model) => [model.id, model]));
     let available = catalog.available;
     const canonicalState = modelResources?.repository.readSync();
     const hasCanonicalResources = Boolean(canonicalState && (canonicalState.migration || canonicalState.providers.length > 0 || canonicalState.models.length > 0));
     if (modelResources && hasCanonicalResources) {
-      const resourceModels = await modelResources.listModels();
+      const resourceModels = await modelResources.listModels({}, snapshot.catalog);
       const projected = resourceModels
         .filter((item) => item.provider_id.startsWith("user-") && item.available)
-        .filter((item) => catalog.available.some((model) => model.id === item.id))
+        .filter((item) => catalogById.has(item.id))
         .map((item) => ({
           id: item.id,
           provider: item.provider_id,
@@ -572,7 +591,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
         }));
       available = mergeModelCatalog(available, projected);
       available = available.map((item) => {
-        const actual = catalog.available.find((model) => model.id === item.id);
+        const actual = catalogById.get(item.id);
         return actual ? { ...item, thinking_levels: actual.thinking_levels ?? item.thinking_levels, reasoning: actual.reasoning ?? item.reasoning, context_window: actual.context_window ?? item.context_window, capability_source: actual.capability_source } : item;
       });
     }
@@ -615,7 +634,9 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
             ...(Number.isInteger(runtimeContextWindow) && runtimeContextWindow >= 4096 ? { context_window: runtimeContextWindow } : {}),
             ...(runtimeLevelsApplied ? { reasoning: selected.reasoning === true, thinking_levels: Array.isArray(selected.thinking_levels) ? [...selected.thinking_levels] : [] } : {}),
           });
-          await mutate((current) => { if (current.model === configured) current.model_context_window = runtimeContextWindow; });
+          if (Number(config.model_context_window ?? 0) !== runtimeContextWindow) {
+            await mutate((current) => { if (current.model === configured) current.model_context_window = runtimeContextWindow; });
+          }
           config.model_context_window = runtimeContextWindow;
         } else {
           const providerId = provider.startsWith("custom-") ? provider.slice("custom-".length) : "";
@@ -648,9 +669,9 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
     }
     const progressAppearance = progressAppearanceSchema.safeParse(config.progress_appearance ?? {});
     const effectiveProgressAppearance = progressAppearance.success ? progressAppearance.data : defaultProgressAppearance;
-    const providers = await providerInventory(nodeSessionService, config, cwdValue, modelResources, runtimeCatalog);
+    const providers = await providerInventory(nodeSessionService, config, cwdValue, modelResources, runtimeCatalog, snapshot);
     if (modelResources) {
-      const canonicalProviders = await modelResources.listProviders();
+      const canonicalProviders = await modelResources.listProviders(snapshot.catalog);
       for (const provider of canonicalProviders.filter((item) => item.kind === "user")) {
         const authKind = provider.auth_kind;
         const entry: ProviderInventoryEntry = {
@@ -680,7 +701,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       const resourceState = modelResources.repository.readSync();
       for (const [id, ref] of Object.entries(resourceState.credential_refs)) if (modelResources.credentials.readSync(ref)?.secret) apiKeys[id] = true;
     }
-    return { api_keys: apiKeys, model: configured, unavailable_model: unavailableModel, thinking, model_context_window: config.model_context_window ?? null, model_max_output_tokens: Number(selected?.max_output_tokens ?? 0) || null, progress_appearance: effectiveProgressAppearance, compaction_enabled: config.compaction_enabled !== false, compaction_threshold_percent: compactionThreshold(config, available, configured), allow_private_providers: config.allow_private_providers !== false, providers, custom_providers: (config.custom_providers ?? []).map(publicCustom), available_models: available, model_catalog_source: catalog.source };
+    return { api_keys: apiKeys, model: configured, unavailable_model: unavailableModel, thinking, model_context_window: config.model_context_window ?? null, model_context_window_override: config.model_context_window_override ?? null, model_max_output_tokens: Number(selected?.max_output_tokens ?? 0) || null, progress_appearance: effectiveProgressAppearance, compaction_enabled: config.compaction_enabled !== false, compaction_threshold_percent: compactionThreshold(config, available, configured), allow_private_providers: config.allow_private_providers !== false, providers, custom_providers: (config.custom_providers ?? []).map(publicCustom), available_models: available, model_catalog_source: catalog.source };
   });
   // UI-only state: a dedicated cheap read (no provider inventory or model
   // catalog work) and a write that never reloads runtimes or replaces
@@ -838,8 +859,6 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
     }
     const result = await mutate((config) => { const requestedKey = String(body.api_key ?? ""); const next = { id, name: String(body.name ?? "Custom API"), base_url: baseUrl, api: String(body.api ?? "openai-completions"), models: modelList, api_key: requestedKey || old?.api_key || "", reasoning: typeof body.reasoning === "boolean" ? body.reasoning : old?.reasoning, context_window: contextWindow, model_hints: body.model_hints && typeof body.model_hints === "object" ? body.model_hints as NonNullable<Settings["custom_providers"]>[number]["model_hints"] : old?.model_hints }; config.custom_providers = [...(config.custom_providers ?? []).filter((item) => item.id !== id), next]; return next; }); return respondWithReload(reply, { ok: true, provider: publicCustom(result) }); });
   app.delete<{ Params: { provider_id: string } }>("/api/settings/custom-providers/:provider_id", async (request, reply) => { const id = slug(request.params.provider_id); if (modelResources) { await modelResources.deleteProvider(`user-${id}`, true).catch((error) => { if (!(error instanceof Error) || !String(error.message).includes("was not found")) throw error; }); } await mutate((config) => { config.custom_providers = (config.custom_providers ?? []).filter((item) => item.id !== id); if (String(config.model ?? "").startsWith(`custom-${id}/`) || String(config.model ?? "").startsWith(`user-${id}/`)) config.model = ""; }); return respondWithReload(reply, { ok: true, id }); });
-  app.get("/api/settings/web-access", async () => { const config = await load(); const web = config.web_access ?? {}; const stored = typeof web.api_keys === "object" && web.api_keys ? web.api_keys as Record<string, string> : {}; return { provider: typeof web.provider === "string" ? web.provider : "auto", workflow: typeof web.workflow === "string" ? web.workflow : "none", providers: Object.entries({ openai: "OPENAI_API_KEY", exa: "EXA_API_KEY", brave: "BRAVE_API_KEY", parallel: "PARALLEL_API_KEY", tavily: "TAVILY_API_KEY", perplexity: "PERPLEXITY_API_KEY", gemini: "GEMINI_API_KEY" }).map(([id, env]) => ({ id, has_key: Boolean(stored[id] || process.env[env]), key_source: stored[id] ? "web-access" : process.env[env] ? "environment" : null, env })) }; });
-  app.put("/api/settings/web-access", async (request, reply) => { const body = (request.body ?? {}) as { provider?: unknown; workflow?: unknown; api_keys?: unknown; remove_keys?: unknown }; const supported = ["openai", "exa", "brave", "parallel", "tavily", "perplexity", "gemini"]; if (body.api_keys && typeof body.api_keys === "object") for (const key of Object.keys(body.api_keys as Record<string, unknown>)) if (!supported.includes(key)) return reply.code(400).send({ error: `Unknown web search provider: ${key}` }); await mutate((config) => { const web = config.web_access ?? {}; web.provider = String(body.provider ?? "auto"); web.workflow = String(body.workflow ?? "none"); const stored = typeof web.api_keys === "object" && web.api_keys ? web.api_keys as Record<string, string> : {}; if (body.api_keys && typeof body.api_keys === "object") for (const [key, value] of Object.entries(body.api_keys as Record<string, unknown>)) if (String(value).trim()) stored[key] = String(value).trim(); if (Array.isArray(body.remove_keys)) for (const key of body.remove_keys.map(String)) delete stored[key]; web.api_keys = stored; config.web_access = web; }); const response = await app.inject({ method: "GET", url: "/api/settings/web-access" }); return respondWithReload(reply, { ok: true, ...(response.json() as Record<string, unknown>) }); });
   app.get("/api/settings/mcp", async () => { if (mcp) { const result = await mcp.list(); return { servers: result.connectors.filter((item) => item.settings.enabled).map((item) => item.connector_id), configured: result.connectors.map((item) => item.connector_id), config_path: null, deprecated: true }; } const config = await load(); const { definitions, source } = await resolveMcpConfig({ explicitPath: typeof config.mcp_config_path === "string" ? config.mcp_config_path : undefined }); const configured = Object.keys(definitions); const enabled = Array.isArray(config.mcp_servers) ? config.mcp_servers.filter((id) => configured.includes(id)) : configured; return { servers: enabled, configured, config_path: source }; });
   app.put<{ Params: { server_id: string } }>("/api/settings/mcp/:server_id", async (request, reply) => { const on = String((request.query as { enabled?: string }).enabled ?? "true") !== "false"; if (mcp) { const item = (await mcp.list()).connectors.find((connector) => connector.connector_id === request.params.server_id || connector.name === request.params.server_id); if (!item) return reply.code(404).send({ error: "MCP connector not found" }); await mcp.setSettings(item.connector_id, { enabled: on, include_tools: item.settings.include_tools, exclude_tools: item.settings.exclude_tools, approval_mode: item.settings.approval_mode, revision: item.settings.revision }); return { ok: true, server: item.connector_id, enabled: on, deprecated: true }; } await mutate(async (config) => { const { definitions } = await resolveMcpConfig({ explicitPath: typeof config.mcp_config_path === "string" ? config.mcp_config_path : undefined }); const enabled = new Set(Array.isArray(config.mcp_servers) ? config.mcp_servers : Object.keys(definitions)); if (on) enabled.add(request.params.server_id); else enabled.delete(request.params.server_id); config.mcp_servers = [...enabled].sort(); }); return respondWithReload(reply, { ok: true, server: request.params.server_id, enabled: on }); });
   app.get("/api/settings/skills", async (request, reply) => {
@@ -1037,7 +1056,6 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       return reply.code(400).send({ ok: false, error: error instanceof Error ? error.message : String(error) });
     }
   });
-  app.get("/api/settings/extensions", async () => ({ extensions: runtimeExtensionStatus() }));
   app.get("/api/settings/subagents/discovery", async (request, reply) => {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(query(request, "cwd")); }

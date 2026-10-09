@@ -6,6 +6,7 @@ import { defaultProgressAppearance } from "@pi-science/contracts";
 import { ProgressVisual } from "../progress/ProgressVisual";
 import {
   getProgressSettings,
+  hydrateProgressAppearance,
   seedProgressAppearance,
   subscribeProgressSettings,
   updateProgressAppearance,
@@ -40,12 +41,12 @@ function configFrom(input: ProgressAppearance | undefined): ProgressAppearance {
   return normalizeProgressAppearance(input ? structuredClone(input) : structuredClone(defaultProgressAppearance));
 }
 
-export function ProgressTab({ config }: { config: SettingsConfig }) {
+export function ProgressTab({ config }: { config?: Pick<SettingsConfig, "progress_appearance"> } = {}) {
   const { t } = useTranslation();
   const { appearance: draft, saving, saveError, dirty } = useSyncExternalStore(subscribeProgressSettings, getProgressSettings, getProgressSettings);
-  // The settings payload usually resolves before this tab mounts; seed the
-  // shared controller when no local state has established the appearance yet.
-  useEffect(() => { seedProgressAppearance(config.progress_appearance); }, [config.progress_appearance]);
+  // Existing payloads may seed the shared controller. Otherwise hydrate from
+  // its dedicated cheap endpoint without waiting for model configuration.
+  useEffect(() => { if (config?.progress_appearance) seedProgressAppearance(config.progress_appearance); else void hydrateProgressAppearance(); }, [config?.progress_appearance]);
 
   const update = (patch: Partial<ProgressAppearance>) => updateProgressAppearance({ ...draft, ...patch });
   const updatePreset = (preset: ProgressAppearance["preset"]) => updateProgressPreset(preset, preset === "custom" ? undefined : structuredClone(PRESET_PATTERNS[preset]));

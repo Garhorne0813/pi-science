@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Check, ChevronDown, ChevronRight, Ellipsis, Eye, EyeOff, Loader2, PlugZap, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
@@ -6,6 +6,7 @@ import { cn } from "../../../lib/ui";
 import { Modal as AccessibleModal } from "../../ui/Modal";
 import { modelResourceKeys, modelResourcesApi } from "../../../lib/model-resources";
 import type { SettingsConfig } from "../../../lib/settings";
+import { invalidateSettings } from "../../../lib/settings";
 import { buildServices, formatContext, isConnected, type ModelView, type Service } from "./model-utils";
 import { SettingsSelectMenu } from "../SettingsSelectMenu";
 
@@ -27,6 +28,7 @@ const EMPTY_CUSTOM = { name: "", baseUrl: "", protocol: "openai" as "openai" | "
 
 export function AIModelsTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKey, saving, saveKey, deleteKey, onConfigReload }: AIModelsTabProps) {
   const { t } = useTranslation();
+  const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [connectOpen, setConnectOpen] = useState(false);
   const [connectTarget, setConnectTarget] = useState<ConnectTarget>(null);
@@ -39,29 +41,42 @@ export function AIModelsTab({ config, apiKeyInput, setApiKeyInput, showKey, setS
   const services = useMemo(() => (config ? buildServices(config) : []), [config]);
   const availableTargets = useMemo(() => (config ? config.providers.filter((provider) => !provider.custom && !isConnected(provider)).map((provider) => ({ id: provider.id, name: provider.name, kind: "builtin" as const })) : []), [config]);
 
+  const normalizedQuery = useDeferredValue(query.trim().toLowerCase());
+  const indexedServices = useMemo(() => services.map((service) => ({ service, key: `${service.name} ${service.id}`.toLowerCase(), models: service.models.map((model) => ({ model, key: `${model.name} ${model.id}`.toLowerCase() })) })), [services]);
+  const visibleServices = useMemo(() => indexedServices.flatMap(({ service, key, models }) => {
+    if (!normalizedQuery || key.includes(normalizedQuery)) return [service];
+    const matches = models.filter((model) => model.key.includes(normalizedQuery)).map(({ model }) => model);
+    return matches.length ? [{ ...service, models: matches }] : [];
+  }), [indexedServices, normalizedQuery]);
+  const [servicePage, setServicePage] = useState(0);
+  const currentPage = Math.min(servicePage, Math.max(0, Math.ceil(visibleServices.length / 20) - 1));
+  const pageServices = visibleServices.slice(currentPage * 20, (currentPage + 1) * 20);
+  useEffect(() => { setServicePage(0); }, [normalizedQuery]);
+  const loginProviders = config?.providers.filter((provider) => !provider.custom && (provider.auth?.api_key_supported === false && provider.auth.kind !== "none" || provider.credential_status === "needs_login")) ?? [];
+
   useEffect(() => {
     if (services.length > 0 && Object.keys(expanded).length === 0) setExpanded({ [services[0].id]: true });
   }, [services, expanded]);
 
-  if (!config) return <div className="text-sm text-muted">{t("common.loading")}</div>;
+  if (!config) return null;
 
   const openConnect = () => { setConnectTarget(null); setConnectOpen(true); };
   const closeConnect = () => { setConnectOpen(false); setConnectTarget(null); };
   const toggleService = (id: string) => setExpanded((current) => ({ ...current, [id]: !current[id] }));
+  const reloadModelConfig = async () => { await invalidateSettings(); await onConfigReload(); };
   const runServiceAction = async (service: Service, action: () => Promise<void>) => {
     setActionBusy(service.id);
     setActionError(null);
-    try { await action(); await onConfigReload(); }
-    catch (cause) { setActionError(cause instanceof Error ? cause.message : String(cause)); }
+    try { await action(); await reloadModelConfig(); return true; }
+    catch (cause) { setActionError(cause instanceof Error ? cause.message : String(cause)); return false; }
     finally { setActionBusy(null); }
   };
   const refreshService = (service: Service) => void runServiceAction(service, () => service.custom ? modelResourcesApi.refreshCustomProviderModels(service.id).then(() => undefined) : Promise.resolve());
-  const disableService = (service: Service) => void runServiceAction(service, () => modelResourcesApi.setCustomProviderEnabled(service.id, false).then(() => undefined));
+  const disableService = (service: Service) => void runServiceAction(service, () => modelResourcesApi.setCustomProviderEnabled(service.id, service.status === "disabled").then(() => undefined));
   const disconnect = async () => {
     if (!disconnectService) return;
     const service = disconnectService;
-    await runServiceAction(service, () => service.custom ? modelResourcesApi.deleteCustomProvider(service.id).then(() => undefined) : deleteKey(service.id));
-    setDisconnectService(null);
+    if (await runServiceAction(service, () => service.custom ? modelResourcesApi.deleteCustomProvider(service.id).then(() => undefined) : deleteKey(service.id))) setDisconnectService(null);
   };
 
   return (
@@ -75,7 +90,12 @@ export function AIModelsTab({ config, apiKeyInput, setApiKeyInput, showKey, setS
         </button>
       </header>
 
-      <section aria-labelledby="connected-services-title">
+      {services.length > 0 && <div className="flex h-10 items-center gap-2 rounded-input border border-border bg-bg px-3 focus-within:border-accent">
+        <Search size={16} className="shrink-0 text-muted" />
+        <input type="search" aria-label={t("settings.redesign.searchModels")} placeholder={t("settings.redesign.searchModels")} value={query} onChange={(event) => setQuery(event.target.value)} className="min-w-0 flex-1 bg-transparent text-ui-label text-text outline-none placeholder:text-muted" />
+        {query && <button type="button" onClick={() => setQuery("")} className="text-ui-caption text-link">{t("settings.redesign.clearSearch")}</button>}
+      </div>}
+      <section aria-labelledby="connected-services-title" aria-busy={normalizedQuery !== query.trim().toLowerCase()}>
         <h3 id="connected-services-title" className="mb-2 text-ui-label font-medium text-text">{t("settings.models.connectedServices", { defaultValue: "Connected services" })}</h3>
         {services.length === 0 ? (
           <div className="border-y border-faint py-10 text-center">
@@ -84,19 +104,26 @@ export function AIModelsTab({ config, apiKeyInput, setApiKeyInput, showKey, setS
             <button type="button" onClick={openConnect} className="mt-4 inline-flex min-h-9 items-center gap-1.5 rounded-input bg-accent-fill px-3 text-xs font-medium text-accent-fg"><PlugZap size={14} /> {t("settings.models.connectService", { defaultValue: "Connect a service" })}</button>
           </div>
         ) : (
-          <div className="divide-y divide-faint border-y border-faint">
-            {services.map((service) => (
-              <ProviderSection key={service.id} service={service} expanded={expanded[service.id] === true} onToggle={() => toggleService(service.id)} onManage={() => setManageService(service)} onReplace={() => setReplaceService(service)} onRefresh={() => refreshService(service)} onDisable={() => disableService(service)} onDisconnect={() => setDisconnectService(service)} busy={actionBusy === service.id} />
+          <div className="space-y-3">
+            {pageServices.map((service) => (
+              <ProviderSection key={`${service.id}:${normalizedQuery}`}  service={service} expanded={expanded[service.id] === true} onToggle={() => toggleService(service.id)} onManage={() => setManageService(service)} onReplace={() => setReplaceService(service)} onRefresh={() => refreshService(service)} onDisable={() => disableService(service)} onDisconnect={() => setDisconnectService(service)} busy={actionBusy === service.id} />
             ))}
+            <CatalogPagination page={currentPage} pageSize={20} total={visibleServices.length} onPage={setServicePage} label={t("settings.redesign.servicePages")} />
           </div>
         )}
       </section>
 
+      {services.length > 0 && visibleServices.length === 0 && <p role="status" className="py-4 text-ui-caption text-muted">{t("settings.redesign.noMatchingModels")}</p>}
+      {loginProviders.length > 0 && <section aria-labelledby="unavailable-services-title" className="rounded-card border border-border p-4">
+        <h3 id="unavailable-services-title" className="text-ui-label font-medium text-text">{t("settings.redesign.unavailableServices")}</h3>
+        <p className="mt-1 text-ui-caption leading-relaxed text-muted">{t("settings.redesign.oauthUnavailable")}</p>
+        <ul className="mt-3 divide-y divide-faint">{loginProviders.map((provider) => <li key={provider.id} className="flex flex-wrap items-center justify-between gap-2 py-3 text-ui-label"><span className="text-text">{provider.name}</span><span className="text-ui-caption text-warn-text">{t("settings.redesign.needsLogin")}</span></li>)}</ul>
+      </section>}
       {actionError && <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-ui-meta text-error-text">{actionError}</p>}
-      {connectOpen && <ConnectDialog config={config} target={connectTarget} availableTargets={availableTargets} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} onClose={closeConnect} onSelect={setConnectTarget} onConfigReload={onConfigReload} />}
+      {connectOpen && <ConnectDialog config={config} target={connectTarget} availableTargets={availableTargets} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} onClose={closeConnect} onSelect={setConnectTarget} onConfigReload={reloadModelConfig} />}
       {replaceService && <ReplaceKeyDialog service={replaceService} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} onClose={() => setReplaceService(null)} />}
-      {disconnectService && <DisconnectDialog busy={actionBusy === disconnectService.id} onCancel={() => setDisconnectService(null)} onConfirm={() => void disconnect()} />}
-      {manageService && <ManageConnectionDrawer service={manageService} onClose={() => setManageService(null)} onConfigReload={onConfigReload} />}
+      {disconnectService && <DisconnectDialog busy={actionBusy === disconnectService.id} error={actionError} onCancel={() => setDisconnectService(null)} onConfirm={() => void disconnect()} />}
+      {manageService && <ManageConnectionDrawer service={manageService} onClose={() => setManageService(null)} onConfigReload={reloadModelConfig} />}
     </div>
   );
 }
@@ -104,44 +131,57 @@ export function AIModelsTab({ config, apiKeyInput, setApiKeyInput, showKey, setS
 function ProviderSection({ service, expanded, onToggle, onManage, onReplace, onRefresh, onDisable, onDisconnect, busy }: { service: Service; expanded: boolean; onToggle: () => void; onManage: () => void; onReplace: () => void; onRefresh: () => void; onDisable: () => void; onDisconnect: () => void; busy: boolean }) {
   const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [modelPage, setModelPage] = useState(0);
+  const currentPage = Math.min(modelPage, Math.max(0, Math.ceil(service.models.length / 50) - 1));
   const panelId = `models-for-${service.id}`;
-  const statusText = service.status === "connected" ? t("settings.models.status.connected", { defaultValue: "Connected" }) : service.status === "needs_key" ? t("settings.models.status.needsAuth", { defaultValue: "Needs authentication" }) : service.status === "disabled" ? t("settings.models.status.disabled", { defaultValue: "Disabled" }) : t("settings.models.status.unreachable", { defaultValue: "Unreachable" });
-  const statusTone = service.status === "connected" ? "text-ok-text" : service.status === "needs_key" ? "text-warn-text" : "text-error-text";
+  const statusText = service.status === "connected" ? t("settings.models.status.connected", { defaultValue: "Connected" }) : service.status === "needs_key" ? t("settings.models.status.needsAuth", { defaultValue: "Needs authentication" }) : service.status === "needs_login" ? t("settings.redesign.needsLogin") : service.status === "disabled" ? t("settings.models.status.disabled", { defaultValue: "Disabled" }) : t("settings.models.status.unreachable", { defaultValue: "Unreachable" });
+  const statusTone = service.status === "connected" ? "text-ok-text" : service.status === "needs_key" || service.status === "needs_login" ? "text-warn-text" : service.status === "disabled" ? "text-muted" : "text-error-text";
   return (
-    <div>
+    <div className="rounded-card border border-border px-4">
       <div className="flex min-h-16 items-center gap-3 py-3">
-        <button type="button" aria-expanded={expanded} aria-controls={panelId} onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-3 text-left outline-none">
-          <span className="min-w-0 flex-1"><span className="block truncate text-ui-label font-medium text-text">{service.name}</span><span className="mt-0.5 block text-ui-meta text-muted">{service.models.length ? `${service.models.length} ${t("settings.models.models", { defaultValue: "models" })}` : t("settings.models.noModels", { defaultValue: "No models discovered" })}</span></span>
-          <span className={cn("flex shrink-0 items-center gap-1.5 text-ui-meta font-medium", statusTone)}><span aria-hidden="true" className={cn("size-1.5 rounded-full", service.status === "connected" ? "bg-ok" : service.status === "needs_key" ? "bg-warn" : "bg-error")} />{statusText}</span>
+        <button type="button" aria-expanded={expanded} aria-controls={panelId} onClick={onToggle} className="flex min-w-0 flex-1 flex-wrap items-center gap-3 rounded-input text-left outline-none focus-visible:ring-2 focus-visible:ring-accent">
+          <span aria-hidden="true" className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-card bg-surface-2 text-ui-body font-medium text-muted sm:flex">{service.name.slice(0, 1).toUpperCase()}</span><span className="min-w-0 flex-1"><span className="block truncate text-ui-label font-medium text-text">{service.name}</span><span className="mt-0.5 block text-ui-meta text-muted">{service.models.length ? `${service.models.length} ${t("settings.models.models", { defaultValue: "models" })}` : t("settings.models.noModels", { defaultValue: "No models discovered" })}</span></span>
+          <span className={cn("flex shrink-0 items-center gap-1.5 text-ui-meta font-medium", statusTone)}><span aria-hidden="true" className={cn("size-1.5 rounded-full", service.status === "connected" ? "bg-ok" : service.status === "needs_key" || service.status === "needs_login" ? "bg-warn" : service.status === "disabled" ? "bg-muted" : "bg-error")} />{statusText}</span>
           {expanded ? <ChevronDown size={16} className="shrink-0 text-muted" /> : <ChevronRight size={16} className="shrink-0 text-muted" />}
         </button>
         <div className="relative shrink-0">
           <button type="button" aria-label={t("settings.models.connectionSettings", { defaultValue: "Connection settings" })} aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)} className="rounded-input p-2 text-muted hover:bg-surface-hover hover:text-text"><Ellipsis size={16} /></button>
           {menuOpen && <div role="menu" className="absolute right-0 top-10 z-20 w-48 rounded-input border border-border bg-surface-raised p-1 shadow-pop">
             {service.custom && <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onManage(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-text hover:bg-surface-hover">{t("settings.models.editConnection", { defaultValue: "Edit connection" })}</button>}
-            {!service.custom && <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onReplace(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-text hover:bg-surface-hover">{t("settings.models.replace", { defaultValue: "Replace API key" })}</button>}
+            {!service.custom && service.auth?.kind !== "none" && <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onReplace(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-text hover:bg-surface-hover">{t("settings.models.replace", { defaultValue: "Replace API key" })}</button>}
             <button type="button" role="menuitem" disabled={busy} onClick={() => { setMenuOpen(false); onRefresh(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-text hover:bg-surface-hover disabled:opacity-40">{t("settings.models.refresh", { defaultValue: "Refresh models" })}</button>
-            {service.custom && <button type="button" role="menuitem" disabled={busy} onClick={() => { setMenuOpen(false); onDisable(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-text hover:bg-surface-hover disabled:opacity-40">{t("settings.models.disable", { defaultValue: "Disable service" })}</button>}
-            <button type="button" role="menuitem" disabled={busy} onClick={() => { setMenuOpen(false); onDisconnect(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-error-text hover:bg-error/10 disabled:opacity-40">{t("settings.models.disconnect", { defaultValue: "Disconnect" })}</button>
+            {service.custom && <button type="button" role="menuitem" disabled={busy} onClick={() => { setMenuOpen(false); onDisable(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-text hover:bg-surface-hover disabled:opacity-40">{service.status === "disabled" ? t("settings.redesign.enableService") : t("settings.models.disable", { defaultValue: "Disable service" })}</button>}
+            {(service.custom || service.auth?.kind !== "none") && <button type="button" role="menuitem" disabled={busy} onClick={() => { setMenuOpen(false); onDisconnect(); }} className="w-full rounded-input px-3 py-2 text-left text-ui-meta text-error-text hover:bg-error/10 disabled:opacity-40">{t("settings.models.disconnect", { defaultValue: "Disconnect" })}</button>}
           </div>}
         </div>
       </div>
+      {service.custom && service.status === "needs_key" && <div className="pb-3"><button type="button" disabled={busy} onClick={onManage} className="min-h-9 rounded-input border border-border px-3 text-ui-caption text-link hover:bg-surface-hover disabled:opacity-40">{t("settings.redesign.configureConnection")}</button></div>}
+      {service.custom && service.status === "needs_login" && <p className="pb-3 text-ui-caption text-muted">{t("settings.redesign.oauthUnavailable")}</p>}
       {expanded && <div id={panelId} className="border-t border-faint pb-2 pl-3" role="region" aria-label={`${service.name} ${t("settings.models.models", { defaultValue: "models" })}`}>
-        {service.models.length === 0 ? <p className="py-4 text-ui-caption text-muted">{t("settings.models.noModelsHelp", { defaultValue: "Check the endpoint or refresh the model list." })}</p> : <><div className="grid grid-cols-[minmax(0,1fr)_5rem_5rem_4rem] gap-2 sm:grid-cols-[minmax(0,1fr)_7rem_7rem_5rem] sm:gap-3 border-b border-faint py-2 pr-2 text-ui-meta font-medium text-muted"><span>{t("settings.models.modelName", { defaultValue: "Model" })}</span><span className="text-right">{t("settings.models.inputFormats", { defaultValue: "Input format" })}</span><span className="text-right">{t("settings.models.contextWindow", { defaultValue: "Context" })}</span><span className="text-right">{t("settings.models.maxOutputTokens", { defaultValue: "Max output" })}</span></div>{service.models.map((model) => <ModelRow key={model.id} model={model} />)}</>}
+        {service.models.length === 0 ? <p className="py-4 text-ui-caption text-muted">{t("settings.models.noModelsHelp", { defaultValue: "Check the endpoint or refresh the model list." })}</p> : <><div className="hidden grid-cols-2 gap-2 sm:grid sm:grid-cols-[minmax(0,1fr)_7rem_7rem_5rem] sm:gap-3 border-b border-faint py-2 pr-2 text-ui-meta font-medium text-muted"><span>{t("settings.models.modelName", { defaultValue: "Model" })}</span><span className="text-right">{t("settings.models.inputFormats", { defaultValue: "Input format" })}</span><span className="text-right">{t("settings.models.contextWindow", { defaultValue: "Context" })}</span><span className="text-right">{t("settings.models.maxOutputTokens", { defaultValue: "Max output" })}</span></div>{service.models.slice(currentPage * 50, (currentPage + 1) * 50).map((model) => <ModelRow key={model.id} model={model} />)}<CatalogPagination page={currentPage} pageSize={50} total={service.models.length} onPage={setModelPage} label={`${service.name} ${t("settings.models.models")}`} /></>}
       </div>}
     </div>
   );
 }
 
-function ModelRow({ model }: { model: ModelView }) {
+function CatalogPagination({ page, pageSize, total, onPage, label }: { page: number; pageSize: number; total: number; onPage: (page: number) => void; label: string }) {
   const { t } = useTranslation();
-  return <div className="grid min-h-12 grid-cols-[minmax(0,1fr)_5rem_5rem_4rem] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_7rem_7rem_5rem] sm:gap-3 border-b border-faint py-2 pr-2 last:border-0">
-    <span className="min-w-0 truncate text-ui-label text-text">{model.name}</span>
-    <span className="truncate text-right text-ui-meta text-muted">{model.inputFormats.map((format) => t(`settings.models.input.${format}`, { defaultValue: format })).join(" · ")}</span>
-    <span className="text-right font-mono text-ui-meta text-muted">{formatContext(model.contextWindow)}</span>
-    <span className="text-right font-mono text-ui-meta text-muted">{formatContext(model.maxOutputTokens)}</span>
-  </div>;
+  if (total <= pageSize) return null;
+  return <nav aria-label={label} className="flex flex-wrap items-center justify-between gap-2 py-3 text-ui-caption text-muted">
+    <span role="status">{t("settings.redesign.pageRange", { start: page * pageSize + 1, end: Math.min((page + 1) * pageSize, total), total })}</span>
+    <div className="flex gap-2"><button type="button" disabled={page === 0} onClick={() => onPage(page - 1)} className="min-h-9 rounded-input border border-border px-3 text-text hover:bg-surface-hover disabled:opacity-40">{t("settings.redesign.previousPage")}</button><button type="button" disabled={(page + 1) * pageSize >= total} onClick={() => onPage(page + 1)} className="min-h-9 rounded-input border border-border px-3 text-text hover:bg-surface-hover disabled:opacity-40">{t("settings.redesign.nextPage")}</button></div>
+  </nav>;
 }
+
+const ModelRow = memo(function ModelRow({ model }: { model: ModelView }) {
+  const { t } = useTranslation();
+  return <div className="grid min-h-12 grid-cols-2 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_7rem_7rem_5rem] sm:gap-3 border-b border-faint py-2 pr-2 last:border-0">
+    <span className="col-span-2 min-w-0 break-words text-ui-label text-text sm:col-span-1">{model.name}{model.thinkingLevels.length > 0 && <span className="mt-1 block text-ui-meta text-muted">{t("settings.redesign.supportedThinking")}: {model.thinkingLevels.map((level) => t(`settings.thinking.${level}`, { defaultValue: level })).join(" · ")}</span>}{model.available === false && <span className="mt-1 block text-ui-meta text-muted">{t("settings.redesign.modelNotAvailable")}</span>}</span>
+    <span className="col-span-2 text-ui-meta text-muted sm:col-span-1 sm:text-right">{model.inputFormats.length ? model.inputFormats.map((format) => t(`settings.models.input.${format}`, { defaultValue: format })).join(" · ") : "—"}</span>
+    <span className="font-mono text-ui-meta text-muted sm:text-right"><span className="font-sans sm:hidden">{t("settings.models.contextWindow")}: </span>{formatContext(model.contextWindow)}</span>
+    <span className="text-right font-mono text-ui-meta text-muted"><span className="font-sans sm:hidden">{t("settings.models.maxOutputTokens")}: </span>{formatContext(model.maxOutputTokens)}</span>
+  </div>;
+});
 
 function ConnectDialog({ config, target, availableTargets, apiKeyInput, setApiKeyInput, showKey, setShowKey, saving, saveKey, onClose, onSelect, onConfigReload }: { config: SettingsConfig; target: ConnectTarget; availableTargets: Array<NonNullable<ConnectTarget>>; apiKeyInput: Record<string, string>; setApiKeyInput: React.Dispatch<React.SetStateAction<Record<string, string>>>; showKey: Record<string, boolean>; setShowKey: React.Dispatch<React.SetStateAction<Record<string, boolean>>>; saving: string | null; saveKey: (provider: string) => Promise<void>; onClose: () => void; onSelect: (target: ConnectTarget) => void; onConfigReload: () => Promise<void> }) {
   const { t } = useTranslation();
@@ -155,26 +195,29 @@ function ConnectDialog({ config, target, availableTargets, apiKeyInput, setApiKe
   const updateCustom = (patch: Partial<typeof custom>) => { setCustom((current) => ({ ...current, ...patch })); setTestResult(null); };
   const runTest = async () => { if (!custom.baseUrl.trim()) return; setBusy(true); setError(null); try { setTestResult(await modelResourcesApi.testCustomProvider({ base_url: custom.baseUrl.trim(), protocol: custom.protocol, auth: custom.authKind === "api_key" ? { kind: "api_key", secret: custom.apiKey.trim() } : { kind: "none" } })); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } finally { setBusy(false); } };
   const createCustom = async () => { if (!custom.name.trim() || !custom.baseUrl.trim() || !testResult) return; setBusy(true); setError(null); try { await modelResourcesApi.createCustomProvider({ name: custom.name.trim(), base_url: custom.baseUrl.trim(), protocol: custom.protocol, auth: custom.authKind === "api_key" ? { kind: "api_key", secret: custom.apiKey.trim() } : { kind: "none" }, models: testResult.models.map((model) => model.id) }); await onConfigReload(); onClose(); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } finally { setBusy(false); } };
-  const connectBuiltin = async () => { if (!target || !apiKeyInput[target.id]?.trim()) return; await saveKey(target.id); onClose(); };
+  const connectBuiltin = async () => { if (!target || !apiKeyInput[target.id]?.trim()) return; setError(null); try { await saveKey(target.id); onClose(); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } };
   return <Modal title={target ? (target.kind === "builtin" ? `${t("settings.models.connect", { defaultValue: "Connect" })} ${target.name}` : t("settings.models.customTitle", { defaultValue: "Connect custom service" })) : t("settings.models.connectTitle", { defaultValue: "Connect a model service" })} onClose={onClose}>
-    {!target ? <div className="space-y-5"><div><Field label={t("settings.models.searchServices", { defaultValue: "Search services" })}><div className="relative"><Search size={14} className="pointer-events-none absolute left-3 top-3 text-muted" /><input autoFocus value={serviceSearch} onChange={(event) => setServiceSearch(event.target.value)} placeholder={t("settings.models.searchServicesPlaceholder", { defaultValue: "Search connected services" })} className={cn(inputClass, "pl-9")} /></div></Field><div className="mt-3 max-h-64 space-y-1 overflow-y-auto">{availableTargets.filter((item) => item.name.toLowerCase().includes(serviceSearch.trim().toLowerCase()) || item.id.toLowerCase().includes(serviceSearch.trim().toLowerCase())).map((item) => <button key={item.id} type="button" onClick={() => onSelect(item)} className="flex min-h-10 w-full items-center rounded-input border border-transparent px-3 text-left text-ui-caption text-text hover:border-border hover:bg-surface-hover">{item.name}</button>)}{availableTargets.filter((item) => item.name.toLowerCase().includes(serviceSearch.trim().toLowerCase()) || item.id.toLowerCase().includes(serviceSearch.trim().toLowerCase())).length === 0 && <p className="px-3 py-4 text-center text-ui-caption text-muted">{t("settings.models.noMatchingServices", { defaultValue: "No matching services" })}</p>}</div></div><div className="border-t border-faint pt-4"><p className="mb-2 text-ui-meta font-medium uppercase tracking-wide text-muted">{t("settings.models.custom", { defaultValue: "Custom" })}</p><button type="button" onClick={() => onSelect({ id: "custom", name: t("settings.models.customService", { defaultValue: "Custom service" }), kind: "custom" })} className="min-h-10 w-full rounded-input border border-dashed border-border px-3 text-left text-ui-caption text-text hover:bg-surface-hover">{t("settings.models.openAiCompatible", { defaultValue: "OpenAI-compatible service" })}</button></div></div> : target.kind === "builtin" && selectedProvider ? <div className="space-y-4"><p className="text-ui-caption text-muted">{t("settings.models.connectInstructions", { defaultValue: "Add credentials to make this service available to Pi." })}</p>{selectedProvider.auth?.api_key_supported !== false ? <ApiKeyField provider={selectedProvider} value={apiKeyInput[selectedProvider.id] || ""} visible={showKey[selectedProvider.id] === true} onChange={(value) => setApiKeyInput((current) => ({ ...current, [selectedProvider.id]: value }))} onToggle={() => setShowKey((current) => ({ ...current, [selectedProvider.id]: !current[selectedProvider.id] }))} /> : <p className="rounded-input bg-surface-inset px-3 py-2 text-ui-caption text-muted">{t("settings.models.loginRequired", { defaultValue: "This service requires subscription login through the runtime." })}</p>}<button type="button" onClick={() => void connectBuiltin()} disabled={saving === selectedProvider.id || !apiKeyInput[selectedProvider.id]?.trim()} className="flex min-h-9 w-full items-center justify-center gap-1.5 rounded-input bg-accent-fill px-3 text-xs font-medium text-accent-fg disabled:opacity-40">{saving === selectedProvider.id && <Loader2 size={13} className="animate-spin" />}{t("settings.models.connectAction", { defaultValue: "Connect" })}</button></div> : <div className="space-y-3"><Field label={t("settings.resources.name", { defaultValue: "Name" })}><input value={custom.name} onChange={(event) => updateCustom({ name: event.target.value })} className={inputClass} /></Field><Field label={t("settings.resources.baseUrl", { defaultValue: "Base URL" })}><input value={custom.baseUrl} onChange={(event) => updateCustom({ baseUrl: event.target.value })} className={cn(inputClass, "font-mono")} /></Field><div className="grid gap-3 sm:grid-cols-2"><Field label={t("settings.resources.protocol", { defaultValue: "Protocol" })}><SettingsSelectMenu variant="field" ariaLabel={t("settings.resources.protocol", { defaultValue: "Protocol" })} value={custom.protocol} options={[{ value: "openai", label: t("settings.resources.openai", { defaultValue: "OpenAI-compatible" }) }, { value: "anthropic", label: t("settings.resources.anthropic", { defaultValue: "Anthropic-compatible" }) }, { value: "ollama", label: t("settings.resources.ollama", { defaultValue: "Ollama" }) }]} onSelect={(value) => updateCustom({ protocol: value as typeof custom.protocol })} /></Field><Field label={t("settings.resources.auth", { defaultValue: "Authentication" })}><SettingsSelectMenu variant="field" ariaLabel={t("settings.resources.auth", { defaultValue: "Authentication" })} value={custom.authKind} options={[{ value: "api_key", label: t("settings.resources.managedKey", { defaultValue: "API key" }) }, { value: "none", label: t("settings.resources.noAuth", { defaultValue: "No authentication" }) }]} onSelect={(value) => updateCustom({ authKind: value as typeof custom.authKind, ...(value === "none" ? { apiKey: "" } : {}) })} /></Field></div>{custom.authKind === "api_key" && <Field label={t("settings.resources.apiKey", { defaultValue: "API key" })}><SecretInput value={custom.apiKey} visible={customShowKey} onChange={(value) => updateCustom({ apiKey: value })} onToggle={() => setCustomShowKey((value) => !value)} /></Field>}<button type="button" onClick={() => void runTest()} disabled={busy || !custom.baseUrl.trim()} className="flex min-h-9 w-full items-center justify-center gap-1.5 rounded-input border border-border px-3 text-xs font-medium text-text hover:bg-surface-hover disabled:opacity-40">{busy && <Loader2 size={13} className="animate-spin" />}{t("settings.models.testDiscover", { defaultValue: "Test & Discover" })}</button>{error && <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-ui-meta text-error-text">{error}</p>}{testResult && <div className="rounded-input bg-surface-inset px-3 py-2 text-ui-caption text-ok-text"><Check size={13} className="mr-1 inline" />{t("settings.models.discovered", { defaultValue: "Connection successful: {{count}} models discovered", count: testResult.models.length })}</div>}<button type="button" onClick={() => void createCustom()} disabled={busy || !testResult || !custom.name.trim()} className="flex min-h-9 w-full items-center justify-center gap-1.5 rounded-input bg-accent-fill px-3 text-xs font-medium text-accent-fg disabled:opacity-40">{busy && <Loader2 size={13} className="animate-spin" />}{t("settings.models.addService", { defaultValue: "Add service" })}</button></div>}
+    {!target ? <div className="space-y-5"><div><Field label={t("settings.models.searchServices", { defaultValue: "Search services" })}><div className="relative"><Search size={14} className="pointer-events-none absolute left-3 top-3 text-muted" /><input autoFocus value={serviceSearch} onChange={(event) => setServiceSearch(event.target.value)} placeholder={t("settings.models.searchServicesPlaceholder", { defaultValue: "Search connected services" })} className={cn(inputClass, "pl-9")} /></div></Field><div className="mt-3 max-h-64 space-y-1 overflow-y-auto">{availableTargets.filter((item) => item.name.toLowerCase().includes(serviceSearch.trim().toLowerCase()) || item.id.toLowerCase().includes(serviceSearch.trim().toLowerCase())).map((item) => <button key={item.id} type="button" onClick={() => onSelect(item)} className="flex min-h-10 w-full items-center rounded-input border border-transparent px-3 text-left text-ui-caption text-text hover:border-border hover:bg-surface-hover">{item.name}</button>)}{availableTargets.filter((item) => item.name.toLowerCase().includes(serviceSearch.trim().toLowerCase()) || item.id.toLowerCase().includes(serviceSearch.trim().toLowerCase())).length === 0 && <p className="px-3 py-4 text-center text-ui-caption text-muted">{t("settings.models.noMatchingServices", { defaultValue: "No matching services" })}</p>}</div></div><div className="border-t border-faint pt-4"><p className="mb-2 text-ui-meta font-medium uppercase tracking-wide text-muted">{t("settings.models.custom", { defaultValue: "Custom" })}</p><button type="button" onClick={() => onSelect({ id: "custom", name: t("settings.models.customService", { defaultValue: "Custom service" }), kind: "custom" })} className="min-h-10 w-full rounded-input border border-dashed border-border px-3 text-left text-ui-caption text-text hover:bg-surface-hover">{t("settings.models.openAiCompatible", { defaultValue: "OpenAI-compatible service" })}</button></div></div> : target.kind === "builtin" && selectedProvider ? <div className="space-y-4"><p className="text-ui-caption text-muted">{t("settings.models.connectInstructions", { defaultValue: "Add credentials to make this service available to Pi." })}</p>{selectedProvider.auth?.api_key_supported !== false ? <ApiKeyField provider={selectedProvider} value={apiKeyInput[selectedProvider.id] || ""} visible={showKey[selectedProvider.id] === true} onChange={(value) => setApiKeyInput((current) => ({ ...current, [selectedProvider.id]: value }))} onToggle={() => setShowKey((current) => ({ ...current, [selectedProvider.id]: !current[selectedProvider.id] }))} /> : <p className="rounded-input bg-surface-inset px-3 py-2 text-ui-caption text-muted">{t("settings.redesign.oauthUnavailable", { defaultValue: "Subscription login is not available here. Connect an API-key provider instead." })}</p>}{error && <p role="alert" className="text-ui-caption text-error-text">{error}</p>}<button type="button" onClick={() => void connectBuiltin()} disabled={selectedProvider.auth?.api_key_supported === false || saving === selectedProvider.id || !apiKeyInput[selectedProvider.id]?.trim()} className="flex min-h-9 w-full items-center justify-center gap-1.5 rounded-input bg-accent-fill px-3 text-xs font-medium text-accent-fg disabled:opacity-40">{saving === selectedProvider.id && <Loader2 size={13} className="animate-spin" />}{t("settings.models.connectAction", { defaultValue: "Connect" })}</button></div> : <div className="space-y-3"><Field label={t("settings.resources.name", { defaultValue: "Name" })}><input value={custom.name} onChange={(event) => updateCustom({ name: event.target.value })} className={inputClass} /></Field><Field label={t("settings.resources.baseUrl", { defaultValue: "Base URL" })}><input value={custom.baseUrl} onChange={(event) => updateCustom({ baseUrl: event.target.value })} className={cn(inputClass, "font-mono")} /></Field><div className="grid gap-3 sm:grid-cols-2"><Field label={t("settings.resources.protocol", { defaultValue: "Protocol" })}><SettingsSelectMenu variant="field" ariaLabel={t("settings.resources.protocol", { defaultValue: "Protocol" })} value={custom.protocol} options={[{ value: "openai", label: t("settings.resources.openai", { defaultValue: "OpenAI-compatible" }) }, { value: "anthropic", label: t("settings.resources.anthropic", { defaultValue: "Anthropic-compatible" }) }, { value: "ollama", label: t("settings.resources.ollama", { defaultValue: "Ollama" }) }]} onSelect={(value) => updateCustom({ protocol: value as typeof custom.protocol })} /></Field><Field label={t("settings.resources.auth", { defaultValue: "Authentication" })}><SettingsSelectMenu variant="field" ariaLabel={t("settings.resources.auth", { defaultValue: "Authentication" })} value={custom.authKind} options={[{ value: "api_key", label: t("settings.resources.managedKey", { defaultValue: "API key" }) }, { value: "none", label: t("settings.resources.noAuth", { defaultValue: "No authentication" }) }]} onSelect={(value) => updateCustom({ authKind: value as typeof custom.authKind, ...(value === "none" ? { apiKey: "" } : {}) })} /></Field></div>{custom.authKind === "api_key" && <Field label={t("settings.resources.apiKey", { defaultValue: "API key" })}><SecretInput value={custom.apiKey} visible={customShowKey} onChange={(value) => updateCustom({ apiKey: value })} onToggle={() => setCustomShowKey((value) => !value)} /></Field>}<button type="button" onClick={() => void runTest()} disabled={busy || !custom.baseUrl.trim()} className="flex min-h-9 w-full items-center justify-center gap-1.5 rounded-input border border-border px-3 text-xs font-medium text-text hover:bg-surface-hover disabled:opacity-40">{busy && <Loader2 size={13} className="animate-spin" />}{t("settings.models.testDiscover", { defaultValue: "Test & Discover" })}</button>{error && <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-ui-meta text-error-text">{error}</p>}{testResult && <div className="rounded-input bg-surface-inset px-3 py-2 text-ui-caption text-ok-text"><Check size={13} className="mr-1 inline" />{t("settings.models.discovered", { defaultValue: "Connection successful: {{count}} models discovered", count: testResult.models.length })}</div>}<button type="button" onClick={() => void createCustom()} disabled={busy || !testResult || !custom.name.trim()} className="flex min-h-9 w-full items-center justify-center gap-1.5 rounded-input bg-accent-fill px-3 text-xs font-medium text-accent-fg disabled:opacity-40">{busy && <Loader2 size={13} className="animate-spin" />}{t("settings.models.addService", { defaultValue: "Add service" })}</button></div>}
   </Modal>;
 }
 
 function ReplaceKeyDialog({ service, apiKeyInput, setApiKeyInput, showKey, setShowKey, saving, saveKey, onClose }: { service: Service; apiKeyInput: Record<string, string>; setApiKeyInput: React.Dispatch<React.SetStateAction<Record<string, string>>>; showKey: Record<string, boolean>; setShowKey: React.Dispatch<React.SetStateAction<Record<string, boolean>>>; saving: string | null; saveKey: (provider: string) => Promise<void>; onClose: () => void }) {
   const { t } = useTranslation();
-  const save = async () => { await saveKey(service.id); onClose(); };
+  const [error, setError] = useState<string | null>(null);
+  const save = async () => { setError(null); try { await saveKey(service.id); onClose(); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } };
   return <Modal title={t("settings.models.replaceKeyTitle", { defaultValue: "Replace API key" })} onClose={onClose}>
     <p className="mb-4 text-ui-caption text-muted">{service.name}</p>
     <ApiKeyField provider={service.provider!} value={apiKeyInput[service.id] || ""} visible={showKey[service.id] === true} onChange={(value) => setApiKeyInput((current) => ({ ...current, [service.id]: value }))} onToggle={() => setShowKey((current) => ({ ...current, [service.id]: !current[service.id] }))} />
+    {error && <p role="alert" className="text-ui-caption text-error-text">{error}</p>}
     <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={onClose} className="min-h-9 rounded-input px-3 text-ui-meta text-muted hover:text-text">{t("common.cancel", { defaultValue: "Cancel" })}</button><button type="button" disabled={saving === service.id || !apiKeyInput[service.id]?.trim()} onClick={() => void save()} className="min-h-9 rounded-input bg-accent-fill px-3 text-ui-meta font-medium text-accent-fg disabled:opacity-40">{t("common.save", { defaultValue: "Save" })}</button></div>
   </Modal>;
 }
 
-function DisconnectDialog({ busy, onCancel, onConfirm }: { busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+function DisconnectDialog({ busy, error, onCancel, onConfirm }: { busy: boolean; error?: string | null; onCancel: () => void; onConfirm: () => void }) {
   const { t } = useTranslation();
   return <Modal title={t("settings.models.disconnectTitle", { defaultValue: "Disconnect service" })} onClose={onCancel}>
     <p className="text-ui-caption text-text">{t("settings.models.disconnectConfirm", { defaultValue: "This removes the connection and its models. Historical conversations are not deleted." })}</p>
+    {error && <p role="alert" className="text-ui-caption text-error-text">{error}</p>}
     <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={onCancel} className="min-h-9 rounded-input px-3 text-ui-meta text-muted hover:text-text">{t("common.cancel", { defaultValue: "Cancel" })}</button><button type="button" disabled={busy} onClick={onConfirm} className="min-h-9 rounded-input bg-error/10 px-3 text-ui-meta font-medium text-error-text disabled:opacity-40">{t("settings.models.disconnect", { defaultValue: "Disconnect" })}</button></div>
   </Modal>;
 }
@@ -183,6 +226,11 @@ function ManageConnectionDrawer({ service, onClose, onConfigReload }: { service:
   const { t } = useTranslation();
   const [name, setName] = useState(service.name);
   const [baseUrl, setBaseUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
+  const initialAuth = service.auth?.kind === "none" ? "none" : "api_key";
+  const [authKind, setAuthKind] = useState(initialAuth);
+  const canEditAuth = service.auth?.api_key_supported !== false || service.auth.kind === "none";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const endpointRead = useQuery({ queryKey: modelResourceKeys.endpoints, queryFn: modelResourcesApi.endpoints, enabled: service.custom, staleTime: 0 });
@@ -194,12 +242,12 @@ function ManageConnectionDrawer({ service, onClose, onConfigReload }: { service:
     if (!name.trim() || !baseUrl.trim()) return;
     setBusy(true);
     setError(null);
-    try { await modelResourcesApi.updateCustomProvider(service.id, { name: name.trim(), base_url: baseUrl.trim() }); await onConfigReload(); onClose(); }
+    try { await modelResourcesApi.updateCustomProvider(service.id, { name: name.trim(), base_url: baseUrl.trim(), ...(canEditAuth && (apiKey.trim() || authKind !== initialAuth) ? { auth: authKind === "none" ? { kind: "none" } : { kind: "api_key", secret: apiKey.trim() } } : {}) }); await onConfigReload(); onClose(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(false); }
   };
   return <Modal title={t("settings.models.editConnection", { defaultValue: "Edit connection" })} onClose={onClose}>
-    <div className="space-y-4"><Field label={t("settings.resources.name", { defaultValue: "Name" })}><input value={name} onChange={(event) => setName(event.target.value)} className={inputClass} /></Field><Field label={t("settings.models.baseUrl", { defaultValue: "Base URL" })}><input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} className={cn(inputClass, "font-mono")} /></Field>{endpoint && <DetailGroup title={t("settings.models.advanced", { defaultValue: "Advanced" })}><DetailRow label={t("settings.models.protocol", { defaultValue: "Protocol" })} value={endpoint.protocol} /><DetailRow label={t("settings.models.health", { defaultValue: "Health check" })} value={endpoint.health} /></DetailGroup>}{error && <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-ui-meta text-error-text">{error}</p>}<div className="flex justify-end gap-2"><button type="button" onClick={onClose} className="min-h-9 rounded-input px-3 text-ui-meta text-muted hover:text-text">{t("common.cancel", { defaultValue: "Cancel" })}</button><button type="button" disabled={busy || !name.trim() || !baseUrl.trim()} onClick={() => void save()} className="min-h-9 rounded-input bg-accent-fill px-3 text-ui-meta font-medium text-accent-fg disabled:opacity-40">{t("common.save", { defaultValue: "Save" })}</button></div></div>
+    <div className="space-y-4"><Field label={t("settings.resources.name", { defaultValue: "Name" })}><input value={name} onChange={(event) => setName(event.target.value)} className={inputClass} /></Field><Field label={t("settings.models.baseUrl", { defaultValue: "Base URL" })}><input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} className={cn(inputClass, "font-mono")} /></Field>{canEditAuth && <Field label={t("settings.resources.auth")}><SettingsSelectMenu variant="field" ariaLabel={t("settings.resources.auth")} value={authKind} options={[{ value: "api_key", label: t("settings.resources.managedKey") }, { value: "none", label: t("settings.resources.noAuth") }]} onSelect={setAuthKind} /></Field>}{canEditAuth && authKind === "api_key" && <><Field label={t("settings.resources.apiKey")}><SecretInput value={apiKey} visible={showApiKey} onChange={setApiKey} onToggle={() => setShowApiKey((value) => !value)} /></Field><p className="text-ui-caption text-muted">{t("settings.redesign.keepCredential")}</p></>}{!canEditAuth && <p className="text-ui-caption text-muted">{t("settings.redesign.oauthUnavailable")}</p>}{endpoint && <DetailGroup title={t("settings.models.advanced", { defaultValue: "Advanced" })}><DetailRow label={t("settings.models.protocol", { defaultValue: "Protocol" })} value={endpoint.protocol} /><DetailRow label={t("settings.models.health", { defaultValue: "Health check" })} value={endpoint.health} /></DetailGroup>}{error && <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-ui-meta text-error-text">{error}</p>}<div className="flex justify-end gap-2"><button type="button" onClick={onClose} className="min-h-9 rounded-input px-3 text-ui-meta text-muted hover:text-text">{t("common.cancel", { defaultValue: "Cancel" })}</button><button type="button" disabled={busy || !name.trim() || !baseUrl.trim() || canEditAuth && authKind === "api_key" && authKind !== initialAuth && !apiKey.trim()} onClick={() => void save()} className="min-h-9 rounded-input bg-accent-fill px-3 text-ui-meta font-medium text-accent-fg disabled:opacity-40">{t("common.save", { defaultValue: "Save" })}</button></div></div>
   </Modal>;
 }
 

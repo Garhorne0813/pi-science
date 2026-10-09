@@ -1,8 +1,9 @@
 import type { ProgressAppearance } from "@pi-science/contracts";
 
-/** Legacy settings DTOs plus unrelated settings-page resources. The canonical
- *  model domain lives under `lib/model-resources`; legacy fields remain only
- *  for migration responses consumed by older clients. */
+/** Compatibility settings projection plus unrelated settings-page resources. The
+ *  canonical model domain lives under `lib/model-resources`; the current Settings
+ *  UI still reads this projection while model-selection/provider API migration
+ *  remains follow-up work. */
 
 export type ProviderAuthKind = "api_key" | "oauth" | "api_key_or_oauth" | "none";
 export type ProviderCredentialStatus = "configured" | "connected" | "needs_key" | "needs_login" | "invalid";
@@ -27,7 +28,7 @@ export interface Provider {
   enabled?: boolean;
 }
 
-/** @deprecated Legacy response shape. New UI uses `lib/model-resources`. */
+/** @deprecated Compatibility fallback; canonical resources live under `lib/model-resources`. */
 export interface CustomProvider {
   id: string;
   name: string;
@@ -61,6 +62,7 @@ export interface SettingsConfig {
   api_keys: Record<string, boolean>;
   model: string;
   thinking: string;
+  unavailable_model?: string | null;
   providers: Provider[];
   /** @deprecated Compatibility projection only. */
   custom_providers: CustomProvider[];
@@ -69,52 +71,15 @@ export interface SettingsConfig {
   compaction_enabled: boolean;
   compaction_threshold_percent: number;
   model_context_window?: number | null;
+  model_context_window_override?: { model: string; context_window: number } | null;
   progress_appearance?: ProgressAppearance;
   model_max_output_tokens?: number | null;
 }
 
-export interface RuntimeExtension {
-  id: string;
-  name: string;
-  description: string;
-  installed: boolean;
-}
-
-export interface WebProvider {
-  id: string;
-  has_key: boolean;
-  key_source: "web-access" | "environment" | "llm-settings" | null;
-  env: string;
-}
-
-export interface WebAccessConfig {
-  provider: string;
-  workflow: string;
-  providers: WebProvider[];
-}
-
+/** Read-only file inventory; the Core dispatcher loads these definitions per invocation. */
 export interface ProjectSubagent {
   name: string;
-  description: string;
-  prompt: string;
-  model: string;
-  thinking: string;
-  tools: string;
-  system_prompt_mode: "replace" | "append";
-  inherit_project_context: boolean;
-  inherit_skills: boolean;
-  default_context: "fresh" | "fork";
-  path?: string;
-}
-
-export interface AgentProfile {
-  name: string;
-  display_name: string;
-  description: string;
-  read_scope?: string[];
-  write_scope?: string[];
-  unrestricted?: boolean;
-  source: string;
+  path: string;
 }
 
 export interface McpServer {

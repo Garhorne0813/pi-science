@@ -5,10 +5,11 @@ import { cn } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
 import { IconButton } from "../ui/Icon";
+import { loadSettingsContent } from "./settings-loading";
 
 /** The settings content (vertical nav + tabs) is the heavy part; it only
  *  loads once the dialog is first opened. */
-const SettingsContent = lazy(() => import("./SettingsContent").then((m) => ({ default: m.SettingsContent })));
+const SettingsContent = lazy(() => loadSettingsContent().then((m) => ({ default: m.SettingsContent })));
 
 /** Floating settings dialog: one instance mounted at the layout root,
  *  driven entirely by the UI store, floating above every page. */
@@ -21,7 +22,7 @@ export function SettingsDialog() {
   const panelRef = useRef<HTMLDivElement>(null);
   const lastFocused = useRef<HTMLElement | null>(null);
 
-  // The conversation blocks on extension UI requests until the user responds;
+  // The conversation blocks on agent interaction requests until the user responds;
   // never leave that request hidden behind the modal.
   useEffect(() => {
     if (settingsOpen && pendingInteraction) closeSettings();
@@ -42,7 +43,7 @@ export function SettingsDialog() {
   const handlePanelKeyDown = (event: React.KeyboardEvent) => {
     if (event.key !== "Tab") return;
     const focusables = panelRef.current?.querySelectorAll<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]):not([tabindex="-1"]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])',
     );
     if (!focusables || focusables.length === 0) return;
     const first = focusables[0];
@@ -102,7 +103,7 @@ export function SettingsDialog() {
             </div>
           </div>
         )}>
-          <SettingsContent scope={settingsScope} onClose={closeSettings} />
+          <SettingsContent key={settingsScope === null ? "global" : `workspace:${settingsScope}`} scope={settingsScope} onClose={closeSettings} />
         </Suspense>
       </div>
     </div>

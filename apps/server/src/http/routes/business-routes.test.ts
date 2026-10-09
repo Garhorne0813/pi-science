@@ -41,7 +41,7 @@ async function workspace(): Promise<string> {
 }
 
 describe("native control-plane business routes", () => {
-  it("connects and selects the official agent-core model using the official SDK catalog", async () => {
+  it("connects official models and characterizes shared legacy selection ownership (v2 migration pending)", async () => {
     const cwd = await workspace();
     delete process.env.PI_SCIENCE_AGENT_RUNTIME;
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
@@ -55,7 +55,7 @@ describe("native control-plane business routes", () => {
       const connected = await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "deepseek", api_key: "catalog-test-key" } });
       expect(connected.statusCode).toBe(200);
       const listed = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
-      expect(listed.available_models).toContainEqual(expect.objectContaining({ id: "deepseek/deepseek-flash" }));
+      expect(listed.available_models).toContainEqual(expect.objectContaining({ id: "deepseek/deepseek-flash", context_window: 1000000, max_output_tokens: 384000, input_formats: ["text", "image"], vision: true }));
       const selected = await app.inject({ method: "PUT", url: "/api/settings/model", payload: { model: "deepseek/deepseek-flash", thinking: "off" } });
       expect(selected.statusCode).toBe(200);
       expect(selected.json()).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
@@ -66,11 +66,24 @@ describe("native control-plane business routes", () => {
         payload: { model: "deepseek/deepseek-v4-pro", thinking: "high", session_id: created.id } });
       expect(switched.statusCode).toBe(200);
       expect(await modules.sessions.state(created.id, cwd)).toMatchObject({ model: "deepseek/deepseek-v4-pro", thinking: "high" });
+      // Transitional contract: the session composer also updates shared
+      // settings. Default/session separation must deliberately replace this
+      // regression when the ModelSelection v2 endpoints are introduced.
+      const shared = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
+      expect(shared).toMatchObject({ model: "deepseek/deepseek-v4-pro", thinking: "high" });
+      const nextSession = await modules.sessions.create({ cwd, config: { skills: [], extensions: [] } });
+      if (!("id" in nextSession)) throw new Error(String(nextSession.error));
+      expect(await modules.sessions.state(nextSession.id, cwd)).toMatchObject({ model: "deepseek/deepseek-v4-pro", thinking: "high" });
+      await modules.sessions.resume(nextSession.id, cwd);
       const switchedAgain = await app.inject({ method: "PUT", url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
         payload: { model: "deepseek/deepseek-flash", thinking: "off", session_id: created.id } });
       expect(switchedAgain.statusCode).toBe(200);
       await modules.sessions.resume(created.id, cwd);
       expect(await modules.sessions.state(created.id, cwd)).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
+      expect((await app.inject({ method: "GET", url: "/api/settings/config" })).json()).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
+      // Legacy model reload also applies the shared selection to other loaded
+      // sessions; this is intentionally not independent session ownership.
+      expect(await modules.sessions.state(nextSession.id, cwd)).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
       expect(JSON.stringify(listed)).not.toContain("catalog-test-key");
     } finally {
       try {
@@ -89,7 +102,7 @@ describe("native control-plane business routes", () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     const modules = createServerModules();
-    vi.spyOn(modules.sessions, "availableModels").mockResolvedValue({ success: true, data: { models: [{ provider: "openai", id: "gpt-5.5", reasoning: true, thinking_levels: ["off", "high", "max"] }] } });
+    const modelRead = vi.spyOn(modules.sessions, "availableModels").mockResolvedValue({ success: true, data: { models: [{ provider: "openai", id: "gpt-5.5", reasoning: true, thinking_levels: ["off", "high", "max"] }] } });
     const runtimeCatalog = {
       getCatalog: vi.fn(async () => ({
         schemaVersion: 1 as const,
@@ -110,6 +123,17 @@ describe("native control-plane business routes", () => {
     expect(settings.available_models).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "openai/gpt-5.5", thinking_levels: ["off", "high", "max"] }),
     ]));
+    expect(modelRead).toHaveBeenCalledOnce();
+    expect(runtimeCatalog.getCatalog).toHaveBeenCalledOnce();
+    expect(settings.providers.find((provider: { id: string }) => provider.id === "openai").models).toEqual(["gpt-5.5"]);
+    // A new read must see updated availability, not stale credentials/catalog
+    // cached across a provider mutation. Reuse is scoped to one response.
+    modelRead.mockResolvedValue({ success: true, data: { models: [] } });
+    const refreshed = (await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` })).json();
+    expect(refreshed.available_models).toEqual([]);
+    expect(refreshed.providers.find((provider: { id: string }) => provider.id === "openai").models).toEqual([]);
+    expect(modelRead).toHaveBeenCalledTimes(2);
+    expect(runtimeCatalog.getCatalog).toHaveBeenCalledTimes(2);
   });
 
   it("persists the unified skill policy without replacing active sessions", async () => {
@@ -375,12 +399,13 @@ describe("native control-plane business routes", () => {
     }), "utf8");
     // The live runtime is the authority: it reports a larger window and the
     // actual thinking levels for the running model.
-    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
+    const modelRead = vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
       success: true,
       data: { models: [{ provider: "user-local-provider", id: "local-model", name: "Local Model", reasoning: true, contextWindow: 262144, thinkingLevelMap: { off: "off", high: "high" } }] },
     });
     vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({ success: true, data: { levels: ["off", "high"], model: "user-local-provider/local-model" } });
-    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
+    const modules = createServerModules();
+    const app = buildApp(config(), { ...modules, sessions: nodeSessionService }); apps.push(app);
     const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
     expect(settings.statusCode).toBe(200);
     expect(settings.json()).toMatchObject({ model: "user-local-provider/local-model", model_context_window: 262144 });
@@ -393,7 +418,30 @@ describe("native control-plane business routes", () => {
     const resources = new (await import("../../model-resources/model-resource-service.js")).ModelResourceService();
     const canonical = (await resources.listModels()).find((item) => item.id === "user-local-provider/local-model");
     expect(canonical?.capabilities).toMatchObject({ context_window: 262144, reasoning: true, thinking_levels: ["off", "high"] });
-  });
+    const paths = [join(process.env.PI_SCIENCE_HOME, "config.json"), join(process.env.PI_SCIENCE_HOME, "model-resources.json")];
+    const fingerprints = () => Promise.all(paths.map(async (path) => ({ content: await readFile(path, "utf8"), mtime: (await stat(path, { bigint: true })).mtimeNs })));
+    const before = await fingerprints();
+    const settingsWrite = vi.spyOn(modules.settings, "update");
+    const resourceWrite = vi.spyOn(modules.modelResources.repository, "update");
+    for (let read = 0; read < 3; read++) {
+      expect((await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(200);
+    }
+    expect(settingsWrite).not.toHaveBeenCalled();
+    expect(resourceWrite).not.toHaveBeenCalled();
+    expect(await fingerprints()).toEqual(before);
+    // A real capability change must still self-heal once, then remain stable.
+    modelRead.mockResolvedValue({ success: true, data: { models: [{ provider: "user-local-provider", id: "local-model", reasoning: true, contextWindow: 524288, thinkingLevelMap: { off: "off", high: "high" } }] } });
+    expect((await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` })).json().model_context_window).toBe(524288);
+    expect(settingsWrite).toHaveBeenCalledOnce();
+    expect(resourceWrite).toHaveBeenCalledOnce();
+    const repaired = await fingerprints();
+    expect(JSON.parse(repaired[1]!.content).models[0].capabilities.context_window).toBe(524288);
+    await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
+    expect(settingsWrite).toHaveBeenCalledOnce();
+    expect(resourceWrite).toHaveBeenCalledOnce();
+    expect(await fingerprints()).toEqual(repaired);
+
+  }, 30000);
 
   it("corrects the persisted thinking level to the runtime's actual levels after model PUT", async () => {
     const cwd = await workspace();

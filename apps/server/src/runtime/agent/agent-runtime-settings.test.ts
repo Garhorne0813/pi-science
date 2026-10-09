@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { shouldCompact, type Entry } from "@earendil-works/pi-agent-core";
 import { contextUsage, resolveCompaction, resolveContextWindow } from "./agent-runtime-settings.js";
@@ -7,6 +8,11 @@ const assistant = (tokens: number) => entry({ type: "message", message: { role: 
   stopReason: "stop", usage: { input: tokens, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: tokens }, timestamp: 1 } });
 
 describe("agent-core context and compaction facts", () => {
+  it("loads contracts through the native Node entrypoint used by the production server", () => {
+    const entrypoint = new URL("../../../../../packages/contracts/src/index.ts", import.meta.url).href;
+    const result = execFileSync(process.execPath, ["--input-type=module", "-e", `import { resolveAgentCompaction } from ${JSON.stringify(entrypoint)}; console.log(resolveAgentCompaction(128000, { compaction_threshold_percent: 95 }).compactionPointTokens);`], { encoding: "utf8" });
+    expect(result.trim()).toBe("121600");
+  });
   it("applies both explicit and displayed default thresholds to the upstream engine", () => {
     const explicit = resolveCompaction(100000, { compaction_threshold_percent: 80 });
     expect(explicit.compaction.reserveTokens).toBe(20000);

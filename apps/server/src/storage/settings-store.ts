@@ -1,4 +1,5 @@
 import { configPath, readJson, writeJsonAtomic } from "./persistence.js";
+import { isDeepStrictEqual } from "node:util";
 import { defaultProgressAppearance, progressAppearanceInputSchema, progressAppearanceSchema, type ProgressAppearance } from "@pi-science/contracts";
 import type { RuntimeSkillPolicy } from "../runtime/agent/agent-runtime-types.js";
 
@@ -12,7 +13,6 @@ export type SettingsData = {
   model_context_window_override?: { model: string; context_window: number };
   custom_providers?: Array<{ id: string; name: string; base_url: string; api_key?: string; api: string; models: string[]; reasoning?: boolean; context_window?: number; model_hints?: Record<string, { context_window?: number; reasoning?: boolean; thinking_levels?: string[] }> }>;
   allow_private_providers?: boolean;
-  web_access?: Record<string, unknown>;
   mcp_servers?: string[];
   skills_configured?: boolean;
   skill_paths?: string[];
@@ -56,11 +56,12 @@ export class SettingsStore {
     return value;
   }
 
-  async update<T>(operation: (config: SettingsData) => T | Promise<T>): Promise<T> {
+  async update<T>(operation: (config: SettingsData) => T | Promise<T>, options: { skipUnchanged?: boolean } = {}): Promise<T> {
     const pending = this.writes.catch(() => undefined).then(async () => {
       const config = normalizeSettingsData(await readJson<SettingsData>(configPath("config.json"), {}));
+      const before = options.skipUnchanged ? structuredClone(config) : undefined;
       const result = await operation(config);
-      await writeJsonAtomic(configPath("config.json"), config);
+      if (!options.skipUnchanged || !isDeepStrictEqual(before, config)) await writeJsonAtomic(configPath("config.json"), config);
       this.cached = { expiresAt: Date.now() + this.cacheTtlMs, value: structuredClone(config) };
       return result;
     });

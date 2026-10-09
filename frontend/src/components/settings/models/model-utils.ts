@@ -22,22 +22,38 @@ export type Service = {
   status: "connected" | "needs_key" | "needs_login" | "unreachable" | "disabled";
   models: ModelView[];
   custom: boolean;
+  auth?: SettingsProvider["auth"];
   provider?: Pick<SettingsProvider, "id" | "name">;
 };
 
-export function isConnected(provider: { credential_status?: string; has_key: boolean; enabled?: boolean }) {
-  return provider.credential_status === "configured"
-    || provider.credential_status === "connected"
-    || (provider.credential_status === undefined && provider.has_key)
-    || provider.enabled === true && provider.has_key;
+export function isConnected(provider: { credential_status?: string; has_key: boolean; enabled?: boolean; auth?: { api_key_supported: boolean; kind?: string } }) {
+  if (provider.enabled === false) return false;
+  if (provider.auth?.api_key_supported === false && provider.auth.kind !== "none") return false;
+  if (provider.credential_status !== undefined) return provider.credential_status === "configured" || provider.credential_status === "connected";
+  return provider.has_key || provider.auth?.kind === "none" && provider.enabled === true;
+}
+
+function customStatus(provider: SettingsProvider): Service["status"] {
+  if (provider.enabled === false) return "disabled";
+  if (provider.credential_status === "needs_login" || provider.auth?.api_key_supported === false && provider.auth.kind !== "none") return "needs_login";
+  if (provider.credential_status === "invalid" || provider.credential_status === "needs_key") return "needs_key";
+  return isConnected(provider) ? "connected" : "needs_key";
 }
 
 export function buildServices(config: SettingsConfig): Service[] {
   const available = config.available_models || [];
+  const byProvider = new Map<string, SettingsConfig["available_models"]>();
+  const byId = new Map(available.map((model) => [model.id, model]));
+  for (const model of available) for (const id of new Set([model.provider, model.id.split("/")[0]])) {
+    const models = byProvider.get(id) ?? [];
+    models.push(model);
+    byProvider.set(id, models);
+  }
   const serviceModels = (id: string, names: string[]): ModelView[] => {
-    const providerIds = id.startsWith("custom-") ? [id, `user-${id.slice("custom-".length)}`] : [id];
-    return available
-      .filter((model) => providerIds.includes(model.provider) || providerIds.some((providerId) => model.id.startsWith(`${providerId}/`)) || names.includes(model.id))
+    const providerIds = /^(?:custom|user)-/.test(id) ? [`user-${customProviderId(id)}`, `custom-${customProviderId(id)}`] : [id];
+    const candidates = new Map(providerIds.flatMap((providerId) => (byProvider.get(providerId) ?? []).map((model) => [model.id, model] as const)));
+    for (const name of names) { const model = byId.get(name); if (model) candidates.set(model.id, model); }
+    const models: ModelView[] = [...candidates.values()]
       .map((model) => ({
       id: model.id,
       name: shortModelName(model.label, model.model),
@@ -55,31 +71,41 @@ export function buildServices(config: SettingsConfig): Service[] {
       source: model.capability_source,
       available: true,
     }));
+    // Keep configured inventory visible even when the available-model catalog
+    // omits an unauthenticated or disabled custom provider. Do not guess facts.
+    const modelIds = new Set(models.map((model) => model.id));
+    if (/^(?:custom|user)-/.test(id)) for (const name of names) {
+      const modelName = providerIds.reduce((value, prefix) => value.startsWith(`${prefix}/`) ? value.slice(prefix.length + 1) : value, name);
+      if (!providerIds.some((prefix) => modelIds.has(`${prefix}/${modelName}`))) { modelIds.add(`${id}/${modelName}`); models.push({ id: `${id}/${modelName}`, name: modelName, reasoning: false, inputFormats: [], contextWindow: null, maxOutputTokens: null, thinkingLevels: [], available: false }); }
+    }
+    return models;
   };
-  const builtin = config.providers.filter((provider) => !provider.custom && isConnected(provider)).map((provider) => ({
+  const builtin = config.providers.filter((provider) => !provider.custom && (isConnected(provider) || provider.auth?.kind === "none")).map((provider) => ({
     id: provider.id,
     name: provider.name,
-    status: provider.credential_status === "needs_key" ? "needs_key" as const : provider.enabled === false ? "disabled" as const : "connected" as const,
+    status: provider.credential_status === "needs_key" ? "needs_key" as const : provider.enabled === false ? "unreachable" as const : "connected" as const,
     models: serviceModels(provider.id, provider.models),
     custom: false,
+    auth: provider.auth,
     provider,
   }));
   const canonicalCustom = mergeCustomProviders(config.providers.filter((provider) => provider.custom));
   const custom = [
-    ...canonicalCustom.filter(isConnected).map((provider) => ({
-      id: provider.id,
+    ...canonicalCustom.map((provider) => ({
+      id: `user-${customProviderId(provider.id)}`,
       name: provider.name,
-      status: provider.enabled === false ? "disabled" as const : "connected" as const,
-      models: serviceModels(provider.id, provider.models),
+      status: customStatus(provider),
+      models: serviceModels(`user-${customProviderId(provider.id)}`, provider.models).map((model) => ({ ...model, available: isConnected(provider) && model.available })),
       custom: true,
+      auth: provider.auth,
     })),
     ...(config.custom_providers || [])
-      .filter((provider) => provider.has_key && !canonicalCustom.some((item) => customProviderId(item.id) === customProviderId(provider.id)))
+      .filter((provider) => !canonicalCustom.some((item) => customProviderId(item.id) === customProviderId(provider.id)))
       .map((provider) => ({
-        id: provider.id,
+        id: `user-${customProviderId(provider.id)}`,
         name: provider.name,
-        status: "connected" as const,
-        models: serviceModels(`custom-${provider.id}`, provider.models),
+        status: provider.has_key ? "connected" as const : "needs_key" as const,
+        models: serviceModels(`user-${customProviderId(provider.id)}`, provider.models).map((model) => ({ ...model, available: provider.has_key && model.available })),
         custom: true,
       })),
   ];

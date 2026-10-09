@@ -9,7 +9,7 @@ import type {
   ResolvedRuntimeModel,
 } from "@pi-science/contracts";
 import { CredentialResolver } from "./credential-resolver.js";
-import { CredentialStore } from "./credential-store.js";
+import { CredentialStore, type CredentialRuntimeValue } from "./credential-store.js";
 import { ModelResourceRepository } from "./model-resource-repository.js";
 import { resolveCapabilities } from "./capability-resolver.js";
 
@@ -37,6 +37,38 @@ function routeFailureReason(provider: Provider | undefined, bindings: ProviderEn
   return "no_routable_endpoint";
 }
 
+type ResolutionIndex = {
+  providers: Map<string, Provider>;
+  endpoints: Map<string, Endpoint>;
+  bindings: Map<string, ProviderEndpointBinding[]>;
+  providerEndpoints: Map<string, Endpoint[]>;
+  allowlists: Map<string, Set<string>>;
+  syncCredentials: Map<string, CredentialRuntimeValue | null>;
+  asyncCredentials: Map<string, Promise<CredentialRuntimeValue | null>>;
+};
+
+/** Indexes and credentials live for one resource snapshot, never across reads. */
+function indexState(state: ModelResourceState): ResolutionIndex {
+  const index: ResolutionIndex = {
+    providers: new Map(state.providers.map((provider) => [provider.id, provider])),
+    endpoints: new Map(state.endpoints.map((endpoint) => [endpoint.id, endpoint])),
+    bindings: new Map(), providerEndpoints: new Map(), allowlists: new Map(),
+    syncCredentials: new Map(), asyncCredentials: new Map(),
+  };
+  for (const binding of state.bindings) {
+    if (!binding.enabled) continue;
+    const bindings = index.bindings.get(binding.provider_id) ?? [];
+    bindings.push(binding);
+    index.bindings.set(binding.provider_id, bindings);
+    if (binding.model_allowlist) index.allowlists.set(binding.id, new Set(binding.model_allowlist));
+  }
+  for (const [provider, bindings] of index.bindings) {
+    bindings.sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
+    index.providerEndpoints.set(provider, [...new Set(bindings.map((binding) => index.endpoints.get(binding.endpoint_id)).filter((endpoint): endpoint is Endpoint => Boolean(endpoint)))]);
+  }
+  return index;
+}
+
 export class RuntimeModelResolver {
   private readonly credentials: CredentialResolver;
 
@@ -50,42 +82,45 @@ export class RuntimeModelResolver {
 
   async resolveAvailableModels(): Promise<ResolvedRuntimeModel[]> {
     const state = await this.repository.read();
-    return Promise.all(state.models.map((model) => this.resolveModelFromStateAsync(state, model)));
+    return this.resolveState(state);
+  }
+
+  async resolveState(state: ModelResourceState): Promise<ResolvedRuntimeModel[]> {
+    const index = indexState(state);
+    return Promise.all(state.models.map((model) => this.resolveModelFromStateAsync(index, model)));
   }
 
   resolveStateSync(state: ModelResourceState): ResolvedRuntimeModel[] {
-    // The sync path is used by the runtime projection. It reads only the
-    // already persisted resource snapshot; credential values are loaded by the
-    // projection itself, while this resolver can still classify metadata.
-    return state.models.map((model) => this.resolveModelFromState(state, model));
+    const index = indexState(state);
+    return state.models.map((model) => this.resolveModelFromState(index, model));
   }
 
   async resolveModelRoute(ref: string): Promise<ResolvedRoute | null> {
     const state = await this.repository.read();
     const canonical = state.aliases[ref] ?? ref;
-    const resolved = (await Promise.all(state.models.map((model) => this.resolveModelFromStateAsync(state, model)))).find((item) => item.id === canonical);
-    return resolved?.routes[0] ?? null;
+    const model = state.models.find((item) => canonicalModelRef(item.provider_id, item.model_id) === canonical);
+    if (!model) return null;
+    const resolved = await this.resolveModelFromStateAsync(indexState(state), model);
+    return resolved.routes[0] ?? null;
   }
 
-  private resolveModelFromState(state: ModelResourceState, model: Model): ResolvedRuntimeModel {
-    const provider = state.providers.find((candidate) => candidate.id === model.provider_id);
-    const bindings = state.bindings
-      .filter((binding) => binding.provider_id === model.provider_id && binding.enabled)
-      .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
-    const endpoints = state.endpoints;
+  private resolveModelFromState(index: ResolutionIndex, model: Model): ResolvedRuntimeModel {
+    const provider = index.providers.get(model.provider_id);
+    const bindings = index.bindings.get(model.provider_id) ?? [];
     const routes: ResolvedRoute[] = [];
     let credentialMissing = false;
     for (const binding of bindings) {
       if (!provider?.enabled || !model.enabled) continue;
-      const endpoint = endpoints.find((candidate) => candidate.id === binding.endpoint_id);
+      const endpoint = index.endpoints.get(binding.endpoint_id);
       if (!endpoint || !endpoint.enabled || endpoint.health === "blocked" || (!this.policy.allow_error_health && endpoint.health === "error")) continue;
-      if (binding.model_allowlist && !binding.model_allowlist.includes(model.model_id)) continue;
+      if (index.allowlists.has(binding.id) && !index.allowlists.get(binding.id)!.has(model.model_id)) continue;
       const modelId = binding.model_aliases?.[model.model_id] ?? model.model_id;
       if (provider?.auth_kind !== "none") {
         if (!endpoint.credential_ref) { credentialMissing = true; continue; }
         // This async-independent pass only has metadata from the state. The
         // full async resolver checks the secret below before accepting a route.
-        const metadata = this.credentials.resolveSync(endpoint.credential_ref)?.metadata;
+        if (!index.syncCredentials.has(endpoint.credential_ref)) index.syncCredentials.set(endpoint.credential_ref, this.credentials.resolveSync(endpoint.credential_ref));
+        const metadata = index.syncCredentials.get(endpoint.credential_ref)?.metadata;
         if (!metadata || !["configured", "connected"].includes(metadata.status)) { credentialMissing = true; continue; }
       }
       routes.push(this.route(provider, endpoint, binding, modelId));
@@ -101,26 +136,25 @@ export class RuntimeModelResolver {
       capabilities: capabilities.capabilities,
       capability_source: capabilities.capability_source,
       routes: routes.sort(routeSort),
-      ...(available ? {} : { availability_reason: routeFailureReason(provider, bindings, endpoints.filter((endpoint) => bindings.some((binding) => binding.endpoint_id === endpoint.id)), credentialMissing, model.enabled) }),
+      ...(available ? {} : { availability_reason: routeFailureReason(provider, bindings, index.providerEndpoints.get(model.provider_id) ?? [], credentialMissing, model.enabled) }),
     };
   }
 
-  private async resolveModelFromStateAsync(state: ModelResourceState, model: Model): Promise<ResolvedRuntimeModel> {
-    const provider = state.providers.find((candidate) => candidate.id === model.provider_id);
-    const bindings = state.bindings
-      .filter((binding) => binding.provider_id === model.provider_id && binding.enabled)
-      .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
+  private async resolveModelFromStateAsync(index: ResolutionIndex, model: Model): Promise<ResolvedRuntimeModel> {
+    const provider = index.providers.get(model.provider_id);
+    const bindings = index.bindings.get(model.provider_id) ?? [];
     const routes: ResolvedRoute[] = [];
     let credentialMissing = false;
     for (const binding of bindings) {
       if (!provider?.enabled || !model.enabled) continue;
-      const endpoint = state.endpoints.find((candidate) => candidate.id === binding.endpoint_id);
+      const endpoint = index.endpoints.get(binding.endpoint_id);
       if (!endpoint || !endpoint.enabled || endpoint.health === "blocked" || (!this.policy.allow_error_health && endpoint.health === "error")) continue;
-      if (binding.model_allowlist && !binding.model_allowlist.includes(model.model_id)) continue;
+      if (index.allowlists.has(binding.id) && !index.allowlists.get(binding.id)!.has(model.model_id)) continue;
       const modelId = binding.model_aliases?.[model.model_id] ?? model.model_id;
       if (provider?.auth_kind !== "none") {
         if (!endpoint.credential_ref) { credentialMissing = true; continue; }
-        const credential = await this.credentials.resolve(endpoint.credential_ref);
+        if (!index.asyncCredentials.has(endpoint.credential_ref)) index.asyncCredentials.set(endpoint.credential_ref, this.credentials.resolve(endpoint.credential_ref));
+        const credential = await index.asyncCredentials.get(endpoint.credential_ref);
         if (!credential || !["configured", "connected"].includes(credential.metadata.status) || (credential.metadata.kind !== "none" && !credential.secret)) {
           credentialMissing = true;
           continue;
@@ -139,7 +173,7 @@ export class RuntimeModelResolver {
       capabilities: capabilities.capabilities,
       capability_source: capabilities.capability_source,
       routes: routes.sort(routeSort),
-      ...(available ? {} : { availability_reason: routeFailureReason(provider, bindings, state.endpoints.filter((endpoint) => bindings.some((binding) => binding.endpoint_id === endpoint.id)), credentialMissing, model.enabled) }),
+      ...(available ? {} : { availability_reason: routeFailureReason(provider, bindings, index.providerEndpoints.get(model.provider_id) ?? [], credentialMissing, model.enabled) }),
     };
   }
 
