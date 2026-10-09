@@ -186,7 +186,47 @@ Every future frontend UI change must follow this reference:
 These keep our app readable without an exact upstream counterpart; a design
 owner should confirm or revise them:
 
-- Expanded sidebar default `260px` (existing value, unchanged).
+- V4 workspace shell: context panel default width `299px`, owned by
+  `useUiStore.sidebarWidth`. The panel collapses independently of the rail, and the
+  branch keeps its drag-resize with a `220px` to `420px` clamp. V4 Pi-Science
+  proposal citing PRD `docs/prd-sidebar-v4/pi_science_sidebar_v4_PRD.md` §4.1
+  "Context Panel | 默认 299px" row and the prototype `.context` rule
+  (`width:299px`); no upstream selector. OQ-05 keeps drag-resize as P1.
+- Workspace primary navigation rail width `68px` on desktop and `58px` below
+  `768px`; tokens `--rail-width` and `--rail-width-mobile`. V4 Pi-Science
+  proposal citing PRD §4.1 "Rail | 68px 固定宽（移动端原型约 58px）" row and the
+  prototype `.rail` rule (`width:68px`) plus `@media(max-width:720px) .rail`
+  (`width:58px`); `768px` is the project breakpoint per PRD FR-09 and OQ-07.
+  This supersedes the confirmed upstream `56px` collapsed-rail value for this
+  surface; the upstream `56px` row stays as the frozen record.
+- Rail item box `44px`, reusing the existing `--density-header` value
+  (`2.75rem`), inside a `12px` horizontal rail gutter. Rail active indicator: a
+  `3px` bar, radius `3px`, height `26px`, `--accent` fill, offset `8px` outside
+  the item's leading edge. V4 Pi-Science proposal citing PRD §4.1 "Rail 一级按钮"
+  row and prototype `.rail-button` / `.rail-button[aria-current=page]::before`
+  (`width:3px;height:26px;border-radius:3px;left:-8px`). The prototype box is
+  `45px` inside an `8px` rail padding; this proposal takes `44px` so the rail
+  math is `12 + 44 + 12 = 68px` and the box reuses `--density-header`.
+- Context panel tab active indicator: a `2px` `--accent` bar inset `5px` from
+  each end of the tab trigger, and the tab list stops using a filled pill. V4
+  Pi-Science proposal for the tab geometry, citing prototype
+  `.context-tab[aria-selected=true]::after` (`left:5px;right:5px;height:2px`);
+  the `2px` active bar itself reuses the confirmed conversation-tabs value from
+  `ConversationRoot.module.css` `.tabs`.
+- Rail count badge: minimum width `17px`, height `17px`, radius `9px`,
+  `--accent-fg` ink on `--accent-fill`, `text-ui-micro` type (`0.625rem`). V4
+  Pi-Science proposal citing prototype `.rail-button .count`
+  (`min-width:17px;height:17px;border-radius:9px`); it replaces the ad-hoc
+  `text-[10px]` badge currently in `frontend/src/app/layout/ProjectsLayout.tsx`.
+  `text-ui-micro` is the existing utility class at `frontend/src/index.css:43`,
+  not a `--text-ui-micro` custom property, which does not exist. The prototype
+  badge ink is `#e77e39`; this proposal keeps the Pi-Science `--accent-fill` /
+  `--accent-fg` pair instead.
+- Rail to context panel divider: `1px` l1 using `--border-faint`. V4 Pi-Science
+  proposal; the branch currently ships l2 (`--border`) on this edge and this
+  aligns it with the confirmed sidebar rule (upstream `AppFrame.module.css`
+  `.sidebarCol`, rail right `1px` l1) and with prototype `.rail`
+  (`border-right:1px solid var(--line)`).
 - App `body` base font-size stays `15px` (existing); UI labels `13px`.
 - Page title scale: `20–28px` sans, weight 500.
 - Inspector default width `420px` (existing, unchanged).
@@ -220,7 +260,7 @@ owner should confirm or revise them:
 | `--dsh-chat-content-width` | `--conversation-content-width` |
 | `--dsh-composer-card-max-width` | `--conversation-composer-width` |
 | `.composerSeat` 36px band | `--composer-fade-height` |
-| rail 56px | `--sidebar-collapsed-width` |
+| rail 56px | `--sidebar-collapsed-width` (frozen upstream record; V4 replaces this token with `--rail-width` and `--rail-width-mobile` for the workspace shell, and `--sidebar-collapsed-width` is removed by that change) |
 | `--ds-ease-in-out` | `--ease-standard` |
 | `--ds-transition-duration(-fast/-slow)` | `--motion-normal` / `--motion-fast` / `--motion-slow` |
 
