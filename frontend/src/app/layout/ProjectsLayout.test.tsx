@@ -408,7 +408,8 @@ describe("WorkspaceSessionList", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     await userEvent.keyboard("{Enter}{Enter}");
     await waitFor(() => expect(useRuntimeStore.getState().forkSession).toHaveBeenCalledWith("s1"));
-    expect(screen.getByTestId("path")).toHaveTextContent("/workspace/proj/session/forked");
+    // Calling the async fork action precedes its resolved result and navigation.
+    await waitFor(() => expect(screen.getByTestId("path")).toHaveTextContent("/workspace/proj/session/forked"));
   });
 
   it("does not kick the user out of a session they opened while the delete was in flight", async () => {
