@@ -311,6 +311,16 @@ describe("WorkspaceSessionList", () => {
     expect(useUiStore.getState().suppressAutoSessionNav).toBe(false);
   });
 
+  it("uses concise search copy without weakening the loaded-only accessible label", () => {
+    renderList();
+    const search = screen.getByRole("searchbox", { name: "Search loaded conversations" });
+    expect(search).toHaveAttribute("placeholder", "Search conversations…");
+    expect(search).toHaveAttribute("aria-describedby");
+    expect(search.closest("label")).toHaveClass("bg-surface-2");
+    expect(screen.getByRole("button", { name: "New conversation" })).toHaveClass("focus-visible:ring-2");
+    expect(screen.getByRole("tab", { name: "Conversations" })).toHaveClass("focus-visible:ring-2");
+  });
+
   it("keeps sessions mounted while switching tabs and applies search to loaded pages", async () => {
     const loadSessions = vi.fn(async () => []);
     useRuntimeStore.setState({ sessions: [session("s1", "Protein study"), session("s2", "Genome study")], activeSessionId: "s1", sessionsHasMore: true, loadSessions });

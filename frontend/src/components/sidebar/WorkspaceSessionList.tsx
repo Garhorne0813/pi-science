@@ -138,21 +138,21 @@ export function WorkspaceSessionList({ cwd, query = "" }: { cwd: string; query?:
       <div className="min-h-0 flex-1 overflow-y-auto" aria-label={t("sidebar.sessionList")}>
         {groups.length === 0 && <p className="px-2 py-2 text-ui-meta text-muted">{t(query.trim() ? "sidebar.noMatches" : "conversation.noSessions")}</p>}
         {groups.map(group => <section key={group.key} className="mb-2">
-          <h2 className="px-2 py-1 text-ui-caption font-medium text-muted">{t(`sidebar.${group.key}`)}</h2>
+          <h2 className="px-2 pb-1 pt-2 text-ui-meta font-medium tracking-wide text-muted">{t(`sidebar.${group.key}`)}</h2>
           {group.sessions.map(session => {
             const active = activeSessionId === session.id;
             const label = session.name === "New Session" ? t("conversation.newSession") : session.name || session.id.slice(0, 8);
-            return <div key={session.id} className={cn("group relative flex min-w-0 items-center rounded-input hover:bg-surface-hover focus-within:bg-surface-hover", active && "bg-surface-selected")}>
+            return <div key={session.id} className={cn("group relative flex min-w-0 items-center rounded-input hover:bg-surface-hover focus-within:bg-surface-hover", active && "bg-surface-selected hover:bg-surface-selected")}>
               <button type="button" title={label} aria-current={active ? "page" : undefined}
                 onClick={() => { navigate(`${workspaceRoot}/session/${session.id}`); closeSidebarOnNarrow(); }}
-                className={cn("flex h-nav min-w-0 flex-1 items-center gap-2 px-2 text-left text-ui-label", active && "font-medium")}>
+                className={cn("flex h-control min-w-0 flex-1 items-center gap-2 px-2 text-left text-ui-label text-text/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40", active && "font-medium text-text")}>
                 <span aria-hidden="true" className={cn("h-1.5 w-1.5 shrink-0 rounded-full", active ? "bg-accent" : "bg-transparent")} />
                 <span className="min-w-0 flex-1 truncate">{label}</span>
               </button>
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger asChild>
                   <button type="button" aria-label={t("sidebar.manageSession", { name: label })} disabled={!!deleting || !!forking}
-                    className="mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-input text-muted opacity-0 hover:bg-surface-2 hover:text-text group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100 disabled:opacity-60">
+                    className="mr-1 flex h-tool w-tool shrink-0 items-center justify-center rounded-input text-muted transition-colors hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 data-[state=open]:opacity-100 disabled:opacity-60">
                     <MoreHorizontal size={16} />
                   </button>
                 </DropdownMenu.Trigger>

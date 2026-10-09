@@ -184,7 +184,7 @@ export function ProjectsLayout() {
         <aside hidden={sidebarCollapsed} className={cn(sidebarCollapsed && "!hidden", "app-sidebar sidebar-enter absolute z-30 flex h-full shrink-0 flex-col overflow-hidden border-r border-border md:relative")} style={{ width: sidebarDragWidth ?? sidebarWidth, maxWidth: "86vw" }}>
           <div className="flex h-full flex-col px-panel py-card">
             {/* Header */}
-            <div className="mb-card flex shrink-0 items-center justify-between px-2">
+            <div className="mb-2 flex min-h-header shrink-0 items-center justify-between px-2">
               <h1 className="text-ui-title font-semibold tracking-tight text-text">
                 Pi-Science
               </h1>
@@ -198,12 +198,14 @@ export function ProjectsLayout() {
             </div>
 
             {/* Projects / Back to workspace list */}
-            <nav className="mb-2 flex shrink-0 flex-col gap-px">
+            <nav aria-label={t("sidebar.projectContext")} className="mb-3 flex shrink-0 flex-col gap-1">
+              {isWorkspace && <span className="px-2 text-ui-micro font-medium uppercase tracking-wider text-muted">{t("sidebar.currentProject")}</span>}
               <SidebarNavItem
                 to="/"
                 label={isWorkspace ? (workspacePathLeaf(activeCwd!) || t("nav.projects")) : t("nav.projects")}
                 icon={isWorkspace ? ArrowLeft : FolderOpen}
                 active={false}
+                prominent={isWorkspace}
               />
             </nav>
             {isWorkspace && <SidebarMainArea key={activeCwd!} cwd={activeCwd!} renderSessions={query => <WorkspaceSessionList cwd={activeCwd!} query={query} />} />}
@@ -214,11 +216,8 @@ export function ProjectsLayout() {
             </nav>}
 
             {/* Bottom */}
-            <div className="mt-auto shrink-0">
-              <div className="my-panel border-t border-faint" />
-              <div className="mt-2">
-                <SettingsNavItem cwd={activeCwd} />
-              </div>
+            <div className="mt-auto shrink-0 border-t border-faint pt-2">
+              <SettingsNavItem cwd={activeCwd} />
             </div>
           </div>
           <div
@@ -322,12 +321,12 @@ function CollapsedNavItem({ to, icon, label, active: explicitActive }: { to: str
       size="standard"
       aria-current={active ? "page" : undefined}
       onClick={() => navigate(to)}
-      className={cn("h-11 w-11", active && "bg-surface-selected text-accent")}
+      className={cn("h-11 w-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40", active && "bg-surface-selected text-accent")}
     />
   );
 }
 
-function SidebarNavItem({ to, label, icon, active, badge }: { to: string; label: string; icon?: LucideIcon; active: boolean; badge?: number }) {
+function SidebarNavItem({ to, label, icon, active, badge, prominent = false }: { to: string; label: string; icon?: LucideIcon; active: boolean; badge?: number; prominent?: boolean }) {
   const navigate = useNavigate();
   const setSidebarCollapsed = useUiStore((state) => state.setSidebarCollapsed);
   return (
@@ -337,7 +336,8 @@ function SidebarNavItem({ to, label, icon, active, badge }: { to: string; label:
         if (window.innerWidth < 768) setSidebarCollapsed(true);
       }}
       className={cn(
-        "flex h-nav min-h-0 w-full items-center gap-1.5 rounded-input px-2 text-left text-ui-label transition-colors",
+        "flex min-h-0 w-full items-center gap-2 rounded-input px-2 text-left text-ui-label transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+        prominent ? "h-control font-medium" : "h-nav",
         active ? "bg-surface-selected font-medium text-text" : "text-text/90 hover:bg-surface-hover hover:text-text",
       )}
     >
@@ -360,11 +360,11 @@ export function SettingsNavItem({ cwd, collapsed = false }: { cwd: string | null
 
   if (collapsed) {
     return (
-      <IconButton icon={Settings} label={t("nav.settings")} size="standard" onClick={handleClick} onPointerEnter={preloadSettingsContent} onFocus={preloadSettingsContent} className={cn("h-11 w-11", settingsOpen && "bg-surface-selected text-accent")} />
+      <IconButton icon={Settings} label={t("nav.settings")} size="standard" onClick={handleClick} onPointerEnter={preloadSettingsContent} onFocus={preloadSettingsContent} className={cn("h-11 w-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40", settingsOpen && "bg-surface-selected text-accent")} />
     );
   }
   return (
-    <button onClick={handleClick} onPointerEnter={preloadSettingsContent} onFocus={preloadSettingsContent} className={cn("flex h-nav min-h-0 w-full items-center gap-1.5 rounded-input px-2 text-left text-ui-label transition-colors", settingsOpen ? "bg-surface-selected font-medium text-text" : "text-text/90 hover:bg-surface-hover hover:text-text")}>
+    <button onClick={handleClick} onPointerEnter={preloadSettingsContent} onFocus={preloadSettingsContent} className={cn("flex h-nav min-h-0 w-full items-center gap-2 rounded-input px-2 text-left text-ui-label transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40", settingsOpen ? "bg-surface-selected font-medium text-text" : "text-text/90 hover:bg-surface-hover hover:text-text")}>
       <Icon icon={Settings} size="md" className="shrink-0 text-muted" />
       <span className="min-w-0 flex-1 truncate">{t("nav.settings")}</span>
     </button>
