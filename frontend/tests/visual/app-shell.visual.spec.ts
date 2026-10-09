@@ -6,8 +6,8 @@ import { VISUAL_CWD, VISUAL_LANDING_CWD } from "./fixtures/data.mjs";
 
 test("projects page renders workspace cards", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Visual Demo", { exact: true })).toBeVisible();
-  await expect(page.getByText("Shikimate Project", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Your projects" }).getByRole("link", { name: "Open Visual Demo", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Your projects" }).getByRole("link", { name: "Open Shikimate Project", exact: true })).toBeVisible();
   await screenshot(page, "projects.png");
 });
 

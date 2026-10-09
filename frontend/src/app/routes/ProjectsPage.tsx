@@ -295,7 +295,7 @@ export function ProjectsPage() {
               <div className="pointer-events-none absolute -right-14 -top-24 h-64 w-64 rounded-full border-[35px] border-accent/5" />
               <div className="pointer-events-none absolute -bottom-28 right-20 h-52 w-52 rounded-full border-[26px] border-accent/5" />
               <div className="relative">
-                <span className="mb-3 inline-flex items-center gap-2 rounded-full border border-accent/15 bg-accent/5 px-3 py-1 text-ui-caption font-medium text-accent">
+                <span className="mb-3 inline-flex items-center gap-2 rounded-full border border-accent/15 bg-accent/5 px-3 py-1 text-ui-caption font-medium text-text">
                   <Sparkles size={13} /> {t("projects.overview")}
                 </span>
                 <h2 className="max-w-lg text-xl font-semibold leading-snug tracking-tight text-text sm:text-2xl">{t("projects.overviewTitle")}</h2>
