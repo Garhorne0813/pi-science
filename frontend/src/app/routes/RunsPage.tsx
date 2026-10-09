@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Braces, FileSearch, Loader2, Play, Search } from "lucide-react";
+import { Activity, AlertTriangle, Braces, CheckCircle2, FileSearch, Layers3, Loader2, Play, Search } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { ExecutionRecord } from "@pi-science/contracts";
 import { cn, useUiStore } from "../../lib/ui";
@@ -37,6 +37,7 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<KindFilter>("all");
   const [status, setStatus] = useState<StatusFilter>("all");
+  const [timeRange, setTimeRange] = useState<"all" | "day" | "week" | "month">("all");
   const [detailTab, setDetailTab] = useState<DetailTab>("summary");
   const [compactDetailOpen, setCompactDetailOpen] = useState(() => searchParams.has("execution"));
   const [logs, setLogs] = useState<Record<string, DisplayLog>>({});
@@ -56,9 +57,18 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
     return runs.filter((run) => {
       if (kind !== "all" && run.kind !== kind) return false;
       if (status !== "all" && run.status !== status) return false;
+      if (timeRange !== "all") {
+        const cutoff = Date.now() - ({ day: 1, week: 7, month: 30 }[timeRange] * 86_400_000);
+        const timestamp = Date.parse(run.started_at ?? run.created_at);
+        if (!Number.isFinite(timestamp) || timestamp < cutoff) return false;
+      }
       return !needle || executionSearchText(run).toLocaleLowerCase().includes(needle);
     });
-  }, [kind, runs, search, status]);
+  }, [kind, runs, search, status, timeRange]);
+
+  const activeCount = runs.filter(isActiveExecution).length;
+  const succeededCount = runs.filter((run) => run.status === "succeeded").length;
+  const problemCount = runs.filter((run) => !isActiveExecution(run) && run.status !== "succeeded").length;
 
   const selected = filteredRuns.find((run) => run.execution_id === selectedId);
 
@@ -166,7 +176,16 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
         </>}
       />
 
-      <div className="runs-toolbar mt-5 flex flex-wrap items-center gap-2 rounded-card border border-border p-2">
+      <div className="mt-5 grid grid-cols-2 gap-2 lg:grid-cols-4" aria-label={t("runs.overview")}>
+        {[
+          { label: t("runs.totalLoaded"), value: runs.length, icon: Layers3, tone: "text-text" },
+          { label: t("runs.activeCount"), value: activeCount, icon: Activity, tone: "text-accent" },
+          { label: t("runs.successCount"), value: succeededCount, icon: CheckCircle2, tone: "text-ok-text" },
+          { label: t("runs.problemCount"), value: problemCount, icon: AlertTriangle, tone: "text-error-text" },
+        ].map(({ label, value, icon: Icon, tone }) => <div key={label} className="rounded-card border border-border bg-surface p-3"><div className="flex items-center gap-2 text-xs text-muted"><Icon size={14} className={tone} />{label}</div><div className="mt-2 text-2xl font-semibold tabular-nums text-text">{value}</div></div>)}
+      </div>
+
+      <div className="runs-toolbar mt-4 flex flex-wrap items-center gap-2 rounded-card border border-border p-2">
         <label className="relative min-w-[220px] flex-1">
           <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
           <input
@@ -184,6 +203,9 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
         <select aria-label={t("runs.statusFilter")} value={status} onChange={(event) => setStatus(event.target.value as StatusFilter)} className="min-h-9 rounded-input border border-border bg-surface px-3 text-xs text-text outline-none focus:border-accent">
           <option value="all">{t("runs.allStatuses")}</option>
           {STATUSES.map((item) => <option key={item} value={item}>{t(`runs.status.${item}`)}</option>)}
+        </select>
+        <select aria-label={t("runs.timeFilter")} value={timeRange} onChange={(event) => setTimeRange(event.target.value as typeof timeRange)} className="min-h-9 rounded-input border border-border bg-surface px-3 text-xs text-text outline-none focus:border-accent">
+          <option value="all">{t("runs.allTime")}</option><option value="day">{t("runs.lastDay")}</option><option value="week">{t("runs.lastWeek")}</option><option value="month">{t("runs.lastMonth")}</option>
         </select>
         <span className="flex items-center gap-1.5 px-1.5 text-[10px] font-medium text-muted" title={t("runs.liveHint")}>
           <span className={cn("h-1.5 w-1.5 rounded-full", liveConnected ? (runs.some(isActiveExecution) ? "animate-pulse bg-accent" : "bg-ok") : "animate-pulse bg-muted")} />
