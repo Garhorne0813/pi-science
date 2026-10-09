@@ -90,7 +90,7 @@ export function LiveSessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const workspaceCwd = useRequiredWorkspaceCwd();
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const showRuns = searchParams.get("view") === "runs";
   const focusedBlockId = searchParams.get("focus");
   // Field-level selectors, not a whole-store subscription: a streamed token only
