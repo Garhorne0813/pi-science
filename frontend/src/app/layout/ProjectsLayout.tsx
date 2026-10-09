@@ -5,14 +5,14 @@ import { useUiStore } from "../../lib/ui";
 import { RightPane } from "../../components/inspector/RightPane";
 import { PreviewPaneControls } from "../../components/inspector/PreviewPaneControls";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
-import { SidebarMainArea } from "../../components/sidebar/SidebarMainArea";
-import { WorkspaceSessionList } from "../../components/sidebar/WorkspaceSessionList";
-import { useNewWorkspaceConversation } from "../../components/sidebar/workspace-navigation";
-export { WorkspaceSessionList } from "../../components/sidebar/WorkspaceSessionList";
+import { useNewWorkspaceConversation, useWorkspaceSidebar } from "../../components/sidebar/workspace-navigation";
 import { useWorkspaceCwd } from "../../lib/workspace";
 import { usePendingProposalCount } from "../../lib/knowledge";
 import { cn } from "../../lib/ui";
 import { preloadSettingsContent } from "../../components/settings/settings-loading";
+
+// Load workspace-only tabs and menus without adding them to the initial page graph.
+const SidebarMainArea = lazy(() => import("../../components/sidebar/SidebarMainArea").then(module => ({ default: module.SidebarMainArea })));
 
 // The settings bundle (dialog + tabs) only loads on first open.
 const SettingsDialog = lazy(() => import("../../components/settings/SettingsDialog").then((m) => ({ default: m.SettingsDialog })));
@@ -169,7 +169,7 @@ export function ProjectsLayout() {
           {isWorkspace && (
             <>
               <IconButton icon={Plus} label={t("conversation.newSession")} size="standard" className="h-11 w-11" onClick={newConversation} />
-              <CollapsedNavItem to={workspaceRoot} icon={MessageSquare} label={t("sidebar.conversations")} active={isConversationRoute} />
+              <CollapsedNavItem to={workspaceRoot} icon={MessageSquare} label={t("sidebar.conversations")} active={isConversationRoute} onNavigate={() => useWorkspaceSidebar.getState().showConversations(activeCwd!)} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} icon={FileText} label={t("nav.files")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/knowledge`} icon={Inbox} label={t("nav.knowledge")} />
               <CollapsedNavItem to={`${workspaceRoot}/research`} icon={FlaskConical} label={t("nav.research")} />
@@ -208,7 +208,7 @@ export function ProjectsLayout() {
                 prominent={isWorkspace}
               />
             </nav>
-            {isWorkspace && <SidebarMainArea key={activeCwd!} cwd={activeCwd!} renderSessions={query => <WorkspaceSessionList cwd={activeCwd!} query={query} />} />}
+            {isWorkspace && <Suspense fallback={<div role="status" className="min-h-0 flex-1 p-2 text-ui-label text-muted">{t("inspector.loading")}</div>}><SidebarMainArea key={activeCwd!} cwd={activeCwd!} /></Suspense>}
             {isWorkspace && <nav className="mt-2 shrink-0 border-t border-faint pt-2">
               <KnowledgeNavItem cwd={activeCwd!} active={location.pathname.endsWith("/knowledge")} />
               <SidebarNavItem to={`${workspaceRoot}/research`} label={t("nav.research")} icon={FlaskConical} active={location.pathname.endsWith("/research")} />
@@ -310,7 +310,7 @@ export function ProjectsLayout() {
 /* ── Workspace Session List ── */
 
 /** Icon-only nav item for the collapsed sidebar strip. */
-function CollapsedNavItem({ to, icon, label, active: explicitActive }: { to: string; icon: LucideIcon; label: string; active?: boolean }) {
+function CollapsedNavItem({ to, icon, label, active: explicitActive, onNavigate }: { to: string; icon: LucideIcon; label: string; active?: boolean; onNavigate?: () => void }) {
   const navigate = useNavigate();
   const location = useLocation();
   const active = explicitActive ?? (to !== "/" && (location.pathname === to || location.pathname.startsWith(`${to}/`)));
@@ -320,7 +320,7 @@ function CollapsedNavItem({ to, icon, label, active: explicitActive }: { to: str
       label={label}
       size="standard"
       aria-current={active ? "page" : undefined}
-      onClick={() => navigate(to)}
+      onClick={() => { onNavigate?.(); navigate(to); }}
       className={cn("h-11 w-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40", active && "bg-surface-selected text-accent")}
     />
   );
