@@ -1,9 +1,10 @@
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import type { ExecutionRecord } from "@pi-science/contracts";
 import { cn } from "../../lib/ui";
 import { timeAgo } from "../../lib/shared";
 import { ExecutionStatusIcon } from "./ExecutionStatusIcon";
-import { executionDuration, executionLabel, outputCount } from "./run-formatters";
+import { executionDuration, executionError, executionLabel, isProblemExecution, outputCount } from "./run-formatters";
 
 export interface ExecutionLedgerProps {
   runs: ExecutionRecord[];
@@ -13,13 +14,24 @@ export interface ExecutionLedgerProps {
 
 export function ExecutionLedger({ runs, selectedId, onSelect }: ExecutionLedgerProps) {
   const { t } = useTranslation();
+  const grouped = useMemo(() => {
+    const groups: { label: string; records: ExecutionRecord[] }[] = [];
+    for (const run of runs) {
+      const date = new Date(run.started_at ?? run.created_at);
+      const label = Number.isNaN(date.getTime()) ? "—" : date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+      const last = groups[groups.length - 1];
+      if (last?.label === label) last.records.push(run);
+      else groups.push({ label, records: [run] });
+    }
+    return groups;
+  }, [runs]);
   return (
     <section aria-label={t("runs.ledger")} className="runs-ledger-pane min-w-0">
       <div className="runs-ledger-columns grid items-center gap-2 border-b border-border bg-surface-2/60 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
         <span>#</span><span>{t("runs.execution")}</span><span>{t("runs.duration")}</span>
       </div>
       <div className="max-h-[620px] overflow-y-auto">
-        {runs.map((run, index) => <ExecutionRow key={run.execution_id} run={run} index={index + 1} selected={run.execution_id === selectedId} onClick={() => onSelect(run.execution_id)} />)}
+        {grouped.map((group) => <div key={group.label}><div className="sticky top-0 z-10 border-b border-border bg-surface-2 px-3 py-2 text-[11px] font-semibold text-muted">{group.label}</div>{group.records.map((run) => <ExecutionRow key={run.execution_id} run={run} index={runs.indexOf(run) + 1} selected={run.execution_id === selectedId} onClick={() => onSelect(run.execution_id)} />)}</div>)}
       </div>
     </section>
   );
