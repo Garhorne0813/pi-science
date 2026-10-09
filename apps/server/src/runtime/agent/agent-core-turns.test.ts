@@ -1,5 +1,5 @@
 import { createServer, type ServerResponse } from "node:http";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -29,14 +29,22 @@ function response(stream: ServerResponse, tools = false): void {
   stream.end("data: [DONE]\n\n");
 }
 
-async function fixture(mode: "write" | "hold-first" | "stall-stream" | "stall-until-released" = "write") {
+async function fixture(mode: "reply" | "write" | "hold-first" | "stall-stream" | "stall-until-released" = "write",
+  files: { skills?: Record<string, string>; prompts?: Record<string, string> } = {}) {
   const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-turns-"));
   cleanup.push(() => rm(cwd, { recursive: true, force: true }));
   await mkdir(join(cwd, ".pi-science"));
+  // Resources landed before the session exists, which is when the worker loads them.
+  for (const [name, content] of Object.entries(files.skills ?? {})) {
+    await mkdir(join(cwd, ".pi", "skills", name), { recursive: true });
+    await writeFile(join(cwd, ".pi", "skills", name, "SKILL.md"), content);
+  }
+  if (files.prompts) await mkdir(join(cwd, ".pi", "prompts"), { recursive: true });
+  for (const [name, content] of Object.entries(files.prompts ?? {})) await writeFile(join(cwd, ".pi", "prompts", `${name}.md`), content);
   vi.stubEnv("PI_SCIENCE_HOME", join(cwd, ".test-settings"));
   vi.stubEnv("PI_SCIENCE_AGENT_RUNTIME", "agent-core");
   vi.stubEnv("PI_SCIENCE_EVENT_WATCHDOG_MS", "100");
-  const requests: Array<{ messages: Array<{ role: string }> }> = [];
+  const requests: Array<{ messages: Array<{ role: string; content?: unknown }> }> = [];
   let streamStallReleased = false;
   const server = createServer(async (request, stream) => {
     const chunks: Buffer[] = [];
@@ -123,6 +131,39 @@ describe("agent-core product turns", () => {
     await vi.waitFor(async () => expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }), { timeout: 15000 });
     expect((await new SessionRepository().messages(cwd, id)).filter((message) => message.client_message_id === "repeated-stall"))
       .toHaveLength(1);
+  }, 45000);
+
+  it("expands a prompt template invocation into the template message it sends", async () => {
+    const { cwd, id, service, requests } = await fixture("reply", {
+      prompts: { summarize: "---\ndescription: Summarize text\n---\nSummarize the following text: $ARGUMENTS" },
+    });
+    expect(await service.command(id, cwd, "prompt", { message: "/summarize protein folding", client_message_id: "template-once" }))
+      .toMatchObject({ success: true });
+    await vi.waitFor(() => expect(requests).toHaveLength(1), { timeout: 15000 });
+    expect(JSON.stringify(requests[0]!.messages)).toContain("Summarize the following text: protein folding");
+    await vi.waitFor(async () => expect(String((await new SessionRepository().messages(cwd, id))[0]?.content[0]?.text))
+      .toBe("Summarize the following text: protein folding"), { timeout: 15000 });
+  }, 45000);
+
+  it("expands a skill invocation and sends unknown slash text down the normal path", async () => {
+    const { cwd, id, service, requests } = await fixture("reply", {
+      skills: { review: "---\nname: review\ndescription: Review evidence\n---\nFollow the evidence protocol." },
+    });
+    expect(await service.command(id, cwd, "prompt", { message: "/skill:review check the statistics", client_message_id: "skill-once" }))
+      .toMatchObject({ success: true });
+    await vi.waitFor(() => expect(requests).toHaveLength(1), { timeout: 15000 });
+    expect(JSON.stringify(requests[0]!.messages)).toContain("Follow the evidence protocol.");
+    const repository = new SessionRepository();
+    await vi.waitFor(async () => expect(String((await repository.messages(cwd, id))[0]?.content[0]?.text))
+      .toContain('<skill name="review"'), { timeout: 15000 });
+    await vi.waitFor(async () => expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }), { timeout: 15000 });
+    // A slash word that matches no skill and no template keeps its own text.
+    expect(await service.command(id, cwd, "prompt", { message: "/notacommand keep this text", client_message_id: "plain-slash" }))
+      .toMatchObject({ success: true });
+    await vi.waitFor(() => expect(requests).toHaveLength(2), { timeout: 15000 });
+    expect(JSON.stringify(requests[1]!.messages)).toContain("/notacommand keep this text");
+    await vi.waitFor(async () => expect(String((await repository.messages(cwd, id)).find((message) => message.client_message_id === "plain-slash")?.content[0]?.text))
+      .toBe("/notacommand keep this text"), { timeout: 15000 });
   }, 45000);
 
   it("captures a fast tool write and publishes final stats and one automatic review", async () => {

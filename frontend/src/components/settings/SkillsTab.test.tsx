@@ -33,6 +33,9 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   if (url.startsWith("/api/settings/skills/project-1?cwd=") && method === "PUT") {
     return Promise.resolve(jsonResponse({ ok: true, skill: { name: "beta", source: "project" } }));
   }
+  if (url === "/api/settings/skills/toggle" && method === "PUT") {
+    return Promise.resolve(jsonResponse({ ok: true, configured: false }));
+  }
   if (url.startsWith("/api/settings/skills/upload/preview?cwd=")) {
     return Promise.resolve(jsonResponse({
       ok: true,
@@ -137,6 +140,17 @@ describe("SkillsTab", () => {
     await waitFor(() => {
       expect(calls.some((call) => call.method === "DELETE" && call.url.includes("/api/settings/skills/project-1"))).toBe(true);
     });
+  });
+
+  it("marks the command catalogue stale once a skill is disabled", async () => {
+    renderTab("/tmp/ws");
+    await screen.findByText("beta");
+    queryClient.setQueryData(["slash-commands", "/tmp/ws", "session-1"], [{ name: "skill:beta", description: "Project beta", group: "skill" }]);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Enable beta" }));
+    await waitFor(() => {
+      expect(queryClient.getQueryState(["slash-commands", "/tmp/ws", "session-1"])?.isInvalidated).toBe(true);
+    });
+    expect(calls.some((call) => call.method === "PUT" && call.url === "/api/settings/skills/toggle")).toBe(true);
   });
 
   it("opens the editor for a project skill", async () => {

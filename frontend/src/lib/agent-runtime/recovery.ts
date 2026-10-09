@@ -1,7 +1,7 @@
 /** Recovery paths: authoritative REST re-reads after a stream gap, a late
  *  stream attach or a transport failure, and the missing-session reset. */
 
-import { clearCachedMessages, clearAiTitle, clearSessionName, getClient, type PiScienceClient, type SessionState } from "../client/pi-science-client";
+import { clearCachedMessages, clearAiTitle, clearSessionName, getClient, type PiScienceClient, type SessionMessagePage, type SessionState, type TurnArtifactTurn } from "../client/pi-science-client";
 import { isMissingSessionError } from "./errors";
 import { attachTurnArtifacts, emptyThread, resetTurnBuffer, type Thread } from "./event-fold";
 import { markWorkspaceFilesChanged } from "./file-revision";
@@ -12,17 +12,32 @@ import { loadSessionsInternal } from "./sessions";
 import { useRuntimeStore } from "./store";
 import { applyTransportEvent } from "./transport-status";
 import { fetchPersistedTurnArtifacts, refetchPersistedTurnArtifacts } from "./turn-artifacts";
-import { hasActivePendingInteraction, hasPendingInteractionData } from "./types";
+import { hasActivePendingInteraction, hasPendingInteractionData, type RuntimeState } from "./types";
+import { buildTurnPresentations, type TurnLifecycle } from "../conversation/turn-presentation";
 
 const WORKING_STATE_MAX_ATTEMPTS = 3;
 const WORKING_STATE_BACKOFF_MS = [0, 100, 250] as const;
 const CONNECTION_RECOVERY_MAX_ATTEMPTS = 4;
 const CONNECTION_RECOVERY_BACKOFF_MS = [0, 100, 250, 500] as const;
+const RESTORE_RECOVERY_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000] as const;
 const MAX_GAP_RECOVERY_ROUNDS = 3;
 const GAP_RECOVERY_BACKOFF_MS = [0, 100, 250] as const;
 
 type KnownRuntimeState = { busy: boolean; activityGeneration: number };
-type ConnectionRecoveryRun = { connectionGeneration: number; activityGeneration: number; promise: Promise<void> };
+/** What a recovery run has been asked to do. A transport loss is verified at
+ *  once, while a restore keeps watching an authoritative busy snapshot until
+ *  the composer is free. Both can be outstanding at once, because a loss does
+ *  not retire the restore's duty, and the run ends only when the set empties. */
+type RecoveryKind = "restore" | "connection-loss";
+type ConnectionRecoveryRun = {
+  connectionGeneration: number;
+  activityGeneration: number;
+  localMutationGeneration: number;
+  demands: Set<RecoveryKind>;
+  /** Set while the worker sleeps, so a demand joining mid-run cuts the wait. */
+  wake: (() => void) | null;
+  promise: Promise<void>;
+};
 type GapRecoveryResult = "completed" | "superseded" | "aborted" | "retryable-failure";
 interface GapRecoveryRun {
   promise: Promise<void>;
@@ -46,11 +61,6 @@ function runtimeBusy(runtimeState: SessionState): boolean {
     || runtimeState.pending_message_count > 0;
 }
 
-function pendingWorkingState(runtimeStateBusy: boolean, current: ReturnType<typeof useRuntimeStore.getState>): boolean {
-  const pendingInteraction = hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire);
-  const awaitingUserInput = hasActivePendingInteraction(current.pendingInteraction, current.pendingQuestionnaire);
-  return pendingInteraction ? !awaitingUserInput : runtimeStateBusy;
-}
 
 export function rememberRuntimeState(
   client: PiScienceClient,
@@ -81,11 +91,31 @@ export function consumeSuppressedConnectionRecovery(client: PiScienceClient, ses
   return true;
 }
 
+/** Idle confirms availability, not success. Keep the owned turn's explicit
+ * outcome, or a terminal result already observed before the REST snapshot. */
+export function confirmedIdleLifecycle(thread: Thread, previous: TurnLifecycle): TurnLifecycle {
+  const turns = buildTurnPresentations(thread.blocks);
+  const owner = thread.foldState?.activeTurnId;
+  const turn = (owner ? turns.find((candidate) => candidate.blocks.some((block) => "turnId" in block && block.turnId === owner)) : undefined) ?? turns.at(-1);
+  if (turn?.lifecycle === "failed" || turn?.lifecycle === "aborted") return turn.lifecycle;
+  return previous === "failed" || previous === "aborted" ? previous : "settled";
+}
+
+export function restoredActivityState(runtimeState: SessionState, current: RuntimeState, thread = current.thread): Pick<RuntimeState, "working" | "turnLifecycle"> {
+  if (hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
+    return { working: !hasActivePendingInteraction(current.pendingInteraction, current.pendingQuestionnaire), turnLifecycle: "waiting" };
+  }
+  const streaming = runtimeState.is_streaming || runtimeState.is_compacting;
+  const queued = runtimeState.pending_message_count > 0;
+  return {
+    working: streaming || queued,
+    turnLifecycle: streaming ? "active" : queued ? "queued" : confirmedIdleLifecycle(thread, current.turnLifecycle),
+  };
+}
+
 function applyRuntimeState(runtimeState: SessionState, current = useRuntimeStore.getState()): void {
-  const working = pendingWorkingState(runtimeBusy(runtimeState), current);
   useRuntimeStore.setState({
-    working,
-    turnLifecycle: working ? (hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire) ? "waiting" : "active") : current.turnLifecycle,
+    ...restoredActivityState(runtimeState, current),
     model: runtimeState.model ?? current.model,
     thinking: runtimeState.thinking ?? current.thinking,
     contextTokens: runtimeState.context_tokens ?? current.contextTokens,
@@ -96,8 +126,13 @@ function applyRuntimeState(runtimeState: SessionState, current = useRuntimeStore
   });
 }
 
-function waitForRecovery(ms: number): Promise<void> {
-  return ms > 0 ? new Promise((resolve) => globalThis.setTimeout(resolve, ms)) : Promise.resolve();
+function waitForRecovery(ms: number, run?: ConnectionRecoveryRun): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  if (!run) return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    const timer = globalThis.setTimeout(() => { run.wake = null; resolve(); }, ms);
+    run.wake = () => { globalThis.clearTimeout(timer); run.wake = null; resolve(); };
+  });
 }
 
 export async function resyncCompletedHistory(sessionId: string, cwd: string): Promise<void> {
@@ -238,6 +273,7 @@ export async function reconcileWorkingState(
   connectionGeneration: number,
   activityGeneration: number,
 ): Promise<void> {
+  const localMutationGeneration = generations.localMutation;
   for (let attempt = 0; attempt < WORKING_STATE_MAX_ATTEMPTS; attempt += 1) {
     try {
       const runtimeState = await client.getSessionState(sessionId, cwd);
@@ -245,6 +281,8 @@ export async function reconcileWorkingState(
       if (
         connectionGeneration !== generations.connection
         || activityGeneration !== generations.activity
+        || localMutationGeneration !== generations.localMutation
+        || getClient() !== client
         || current.activeSessionId !== sessionId
         || current.cwd !== cwd
       ) return;
@@ -266,6 +304,8 @@ export async function reconcileWorkingState(
   if (
     connectionGeneration !== generations.connection
     || activityGeneration !== generations.activity
+    || localMutationGeneration !== generations.localMutation
+    || getClient() !== client
     || current.activeSessionId !== sessionId
     || current.cwd !== cwd
   ) return;
@@ -284,42 +324,88 @@ export async function reconcileWorkingState(
   } else if (!hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
     // Only an authoritative idle snapshot from this activity generation may
     // settle a failed probe. An unknown state must remain conservatively busy.
-        useRuntimeStore.setState({ working: false, turnLifecycle: "settled" });
+    useRuntimeStore.setState({ working: false, turnLifecycle: confirmedIdleLifecycle(current.thread, current.turnLifecycle) });
     markWorkspaceFilesChanged();
   }
 }
 
-/** Recover the authoritative conversation snapshot after a connection loss.
- *  Each bounded round reads messages and runtime state together. The history
- *  read repairs a missed terminal event while the state read is the sole
- *  authority for the composer guard; failures back off instead of treating an
- *  unavailable endpoint as idle. */
+/** Recover the authoritative conversation snapshot. The state read is the sole
+ *  authority for the composer guard and the history read repairs a terminal
+ *  event no live event carried; failures back off instead of treating an
+ *  unavailable endpoint as idle. Each round serves the most urgent demand
+ *  still outstanding, and the run ends only when none is left. */
 async function runConnectionRecovery(
   client: PiScienceClient,
   sessionId: string,
   cwd: string,
-  connectionGeneration: number,
-  activityGeneration: number,
+  run: ConnectionRecoveryRun,
 ): Promise<void> {
+  const { connectionGeneration, activityGeneration, localMutationGeneration, demands } = run;
   let lastState: SessionState | undefined;
-  let historySucceeded = false;
   let stateSucceeded = false;
+  /** A restore round that saw an authoritative busy snapshot with its history
+   *  applied. Later busy rounds watch the runtime state alone, because from
+   *  then on the live stream owns history and only the settle round reads it. */
+  let busySnapshotReady = false;
 
+  const ownsFence = () => {
+    const current = useRuntimeStore.getState();
+    return connectionGeneration === generations.connection
+      && activityGeneration === generations.activity
+      && localMutationGeneration === generations.localMutation
+      && getClient() === client && current.activeSessionId === sessionId && current.cwd === cwd;
+  };
+  const ownsRecovery = (kind: RecoveryKind) => ownsFence() && (kind === "connection-loss" || useRuntimeStore.getState().working);
+  // A loss is verified even when the composer looks free, because a stale idle
+  // is exactly what it is there to disprove.
+  const urgentDemand = (): RecoveryKind => demands.has("connection-loss") ? "connection-loss" : "restore";
   for (let attempt = 0; attempt < CONNECTION_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
-    const [historyResult, stateResult, artifactsResult] = await Promise.allSettled([
-      client.getMessagesPage(sessionId, cwd),
-      client.getSessionState(sessionId, cwd),
-      fetchPersistedTurnArtifacts(sessionId, cwd),
-    ]);
+    if (demands.size === 0) return;
+    // One retry budget for both kinds. A loss probes at once; jitter spreads
+    // the slower restore probes from tabs that were restored at the same time.
+    const scheduled = urgentDemand();
+    if (!ownsRecovery(scheduled)) return;
+    const delay = scheduled === "restore"
+      ? RESTORE_RECOVERY_BACKOFF_MS[attempt]! * (0.8 + Math.random() * 0.4)
+      : CONNECTION_RECOVERY_BACKOFF_MS[attempt]!;
+    if (delay > 0) await waitForRecovery(delay, run);
+    // A demand that joined during the wait takes this round when it is more
+    // urgent, and a restore whose gate closed while waiting must not run it.
+    const kind = urgentDemand();
+    if (!ownsRecovery(kind)) return;
+    // A loss and the first restore round rebuild the whole snapshot, because
+    // the connect-time read may have failed. A later busy restore round reads
+    // the state first, since that read alone decides whether history is due.
+    let stateResult: PromiseSettledResult<SessionState>;
+    let historyResult: PromiseSettledResult<SessionMessagePage> | null = null;
+    let artifactsResult: PromiseSettledResult<TurnArtifactTurn[]> | null = null;
+    if (kind === "connection-loss" || !busySnapshotReady) {
+      [historyResult, stateResult, artifactsResult] = await Promise.allSettled([
+        client.getMessagesPage(sessionId, cwd),
+        client.getSessionState(sessionId, cwd),
+        fetchPersistedTurnArtifacts(sessionId, cwd),
+      ]);
+    } else {
+      [stateResult] = await Promise.allSettled([client.getSessionState(sessionId, cwd)]);
+      // The snapshot turned idle: this is when a terminal outcome that no live
+      // event carried becomes visible, so read the history one last time.
+      if (stateResult.status === "fulfilled" && !runtimeBusy(stateResult.value)) {
+        [historyResult, artifactsResult] = await Promise.allSettled([
+          client.getMessagesPage(sessionId, cwd),
+          fetchPersistedTurnArtifacts(sessionId, cwd),
+        ]);
+      }
+    }
     const current = useRuntimeStore.getState();
     if (
       connectionGeneration !== generations.connection
       || activityGeneration !== generations.activity
+      || localMutationGeneration !== generations.localMutation
+      || getClient() !== client
       || current.activeSessionId !== sessionId
       || current.cwd !== cwd
     ) return;
 
-    historySucceeded = historyResult.status === "fulfilled";
     stateSucceeded = stateResult.status === "fulfilled";
     if (stateResult.status === "fulfilled") {
       const runtimeState = stateResult.value;
@@ -327,15 +413,17 @@ async function runConnectionRecovery(
       rememberRuntimeState(client, sessionId, cwd, runtimeState, activityGeneration);
       applyRuntimeState(runtimeState, useRuntimeStore.getState());
     }
-    if (historyResult.status === "fulfilled") {
+    if (historyResult?.status === "fulfilled") {
       const history = historyResult.value;
-      const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
+      const turns = artifactsResult?.status === "fulfilled" ? artifactsResult.value : [];
       const historyWindowGeneration = generations.historyWindow;
       const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, useRuntimeStore.getState().thread, history, { keepLiveExtras: true });
       const latest = useRuntimeStore.getState();
       if (
         connectionGeneration !== generations.connection
         || activityGeneration !== generations.activity
+        || localMutationGeneration !== generations.localMutation
+        || getClient() !== client
         || historyWindowGeneration !== generations.historyWindow
         || latest.activeSessionId !== sessionId
         || latest.cwd !== cwd
@@ -351,7 +439,12 @@ async function runConnectionRecovery(
       });
       backfillSessionName(cwd, sessionId, useRuntimeStore.getState().thread);
     }
-    if (historySucceeded && stateSucceeded) {
+    // A watch round needs no history: the state read alone decides whether the
+    // demand this round serves is answered.
+    const roundAnswered = stateSucceeded && (historyResult === null || historyResult.status === "fulfilled");
+    if (roundAnswered) {
+      // History may carry an explicit failed/aborted result absent before merge.
+      if (lastState) applyRuntimeState(lastState, useRuntimeStore.getState());
       // Authoritative recovery succeeded: the session is usable again, so the
       // foreground returns to ready without ever having shown a repair phase.
       applyTransportEvent({ transport: "open", reason: "recovery", foreground: "ready", sessionId });
@@ -359,10 +452,11 @@ async function runConnectionRecovery(
       // while the stream was down and no terminal event reached the tree.
       markWorkspaceFilesChanged();
       void loadSessionsInternal();
-      return;
-    }
-    if (attempt + 1 < CONNECTION_RECOVERY_MAX_ATTEMPTS) {
-      await waitForRecovery(CONNECTION_RECOVERY_BACKOFF_MS[attempt + 1] ?? CONNECTION_RECOVERY_BACKOFF_MS.at(-1)!);
+      if (kind === "restore" && lastState && runtimeBusy(lastState)) busySnapshotReady = true;
+      // A busy restore keeps its demand: only an authoritatively free composer
+      // retires it. Every other round answers the demand that ordered it.
+      if (kind === "connection-loss" || !useRuntimeStore.getState().working) demands.delete(kind);
+      if (demands.size === 0 || attempt + 1 === CONNECTION_RECOVERY_MAX_ATTEMPTS) return;
     }
   }
 
@@ -370,6 +464,8 @@ async function runConnectionRecovery(
   if (
     connectionGeneration !== generations.connection
     || activityGeneration !== generations.activity
+      || localMutationGeneration !== generations.localMutation
+      || getClient() !== client
     || current.activeSessionId !== sessionId
     || current.cwd !== cwd
   ) return;
@@ -378,17 +474,58 @@ async function runConnectionRecovery(
   // endpoint stayed unavailable. If state never succeeded, preserve working.
   if (lastState) applyRuntimeState(lastState, current);
   if (lastState && !runtimeBusy(lastState) && !hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
-    useRuntimeStore.setState({ working: false, turnLifecycle: "settled" });
+    useRuntimeStore.setState({ working: false, turnLifecycle: confirmedIdleLifecycle(current.thread, current.turnLifecycle) });
     markWorkspaceFilesChanged();
   } else if (!stateSucceeded) {
     const known = knownRuntimeState(client, sessionId, cwd);
     if (known?.activityGeneration === activityGeneration && !known.busy && !hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
-      useRuntimeStore.setState({ working: false, turnLifecycle: "settled" });
+      useRuntimeStore.setState({ working: false, turnLifecycle: confirmedIdleLifecycle(current.thread, current.turnLifecycle) });
       markWorkspaceFilesChanged();
     }
   }
   // Bounded recovery gave up: only now is the session advertised as unusable.
   applyTransportEvent({ transport: "error", reason: "recovery", foreground: "error", sessionId });
+}
+
+function startConnectionRecovery(
+  client: PiScienceClient,
+  sessionId: string,
+  cwd: string,
+  connectionGeneration: number,
+  activityGeneration: number,
+  localMutationGeneration = generations.localMutation,
+  request: RecoveryKind = "connection-loss",
+): Promise<void> {
+  const key = runtimeKey(sessionId, cwd);
+  const runs = connectionRecoveryRuns.get(client) ?? new Map<string, ConnectionRecoveryRun>();
+  const existing = runs.get(key);
+  if (
+    existing
+    && existing.connectionGeneration === connectionGeneration
+    && existing.activityGeneration === activityGeneration
+    && existing.localMutationGeneration === localMutationGeneration
+  ) {
+    existing.demands.add(request);
+    existing.wake?.();
+    return existing.promise;
+  }
+  const run: ConnectionRecoveryRun = {
+    connectionGeneration,
+    activityGeneration,
+    localMutationGeneration,
+    demands: new Set([request]),
+    wake: null,
+    promise: Promise.resolve(),
+  };
+  const promise = runConnectionRecovery(client, sessionId, cwd, run);
+  run.promise = promise;
+  runs.set(key, run);
+  connectionRecoveryRuns.set(client, runs);
+  void promise.finally(() => {
+    if (runs.get(key)?.promise === promise) runs.delete(key);
+    if (runs.size === 0) connectionRecoveryRuns.delete(client);
+  }).catch(() => undefined);
+  return promise;
 }
 
 export function reconcileAfterConnectionLoss(
@@ -398,22 +535,7 @@ export function reconcileAfterConnectionLoss(
   connectionGeneration: number,
   activityGeneration: number,
 ): Promise<void> {
-  const key = runtimeKey(sessionId, cwd);
-  const runs = connectionRecoveryRuns.get(client) ?? new Map<string, ConnectionRecoveryRun>();
-  const existing = runs.get(key);
-  if (
-    existing
-    && existing.connectionGeneration === connectionGeneration
-    && existing.activityGeneration === activityGeneration
-  ) return existing.promise;
-  const promise = runConnectionRecovery(client, sessionId, cwd, connectionGeneration, activityGeneration);
-  runs.set(key, { connectionGeneration, activityGeneration, promise });
-  connectionRecoveryRuns.set(client, runs);
-  void promise.finally(() => {
-    if (runs.get(key)?.promise === promise) runs.delete(key);
-    if (runs.size === 0) connectionRecoveryRuns.delete(client);
-  }).catch(() => undefined);
-  return promise;
+  return startConnectionRecovery(client, sessionId, cwd, connectionGeneration, activityGeneration);
 }
 
 /** Recover the authoritative conversation snapshot after a `stream.gap`:
@@ -610,6 +732,20 @@ export function reconcileAfterGap(
   return promise;
 }
 
+/** Restore uses the shared recovery worker with a single four-probe budget.
+ * Busy and unavailable snapshots back off; only authoritative idle unlocks.
+ * Ownership fences cancel retries after live activity or user mutations. */
+export function reconcileRestoredSession(
+  client: PiScienceClient,
+  sessionId: string,
+  cwd: string,
+  connectionGeneration: number,
+  activityGeneration: number,
+  localMutationGeneration: number,
+): Promise<void> {
+  return startConnectionRecovery(client, sessionId, cwd, connectionGeneration, activityGeneration, localMutationGeneration, "restore");
+}
+
 /** How many consecutive one-second idle REST rounds with no confirmed reply
  *  before the late-stream monitor gives up and settles the UI anyway. Each
  *  idle round performs a state read and, when idle, an additional messages
@@ -708,7 +844,7 @@ export async function reconcilePromptAfterLateStream(
           || !recheck.working
         ) return;
         ++generations.activity;
-        useRuntimeStore.setState({ working: false, turnLifecycle: "settled", status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
+        useRuntimeStore.setState({ working: false, turnLifecycle: confirmedIdleLifecycle(recheck.thread, recheck.turnLifecycle), status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
         void resyncCompletedHistory(sessionId, cwd);
         void loadSessionsInternal();
         return;

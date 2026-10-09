@@ -104,6 +104,16 @@ export class AgentCoreEventAdapter {
       this.earlyEvents = [];
       return [{ type: "operation.started", runId: event.runId, turnId: event.runId }, ...early];
     }
+    // A manual compaction is its own durable operation. Core reports it with
+    // compaction_start and compaction_end rather than run_start and run_end, so
+    // without this boundary it would never be supervised: no expected operation,
+    // no watchdog, and a settings reload would treat the worker as idle.
+    if ((event.type === "compaction_start" || event.type === "compaction_end") && event.reason === "manual" && this.pendingRunId === null) {
+      const compaction = adaptHarnessEvent(event);
+      return event.type === "compaction_start"
+        ? [{ type: "operation.started", runId: event.runId, turnId: event.runId }, ...compaction]
+        : [...compaction, { type: "operation.settled", runId: event.runId, status: event.status, handledWithoutTurn: true }];
+    }
     const mapped = toolEnd ?? adaptHarnessEvent(event);
     if (event.type === "run_end" && this.pendingRunId === event.runId) {
       const early = this.earlyEvents;

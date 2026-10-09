@@ -51,6 +51,7 @@ async function writeSkill<T>(url: string, init: RequestInit, fallback: string): 
 }
 
 function invalidateAfterWrite(): void {
+  void queryClient.invalidateQueries({ queryKey: ["slash-commands"] });
   void queryClient.invalidateQueries({ queryKey: settingsKey("skills") });
   void queryClient.invalidateQueries({ queryKey: settingsKey() });
 }

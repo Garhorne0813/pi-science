@@ -37,6 +37,7 @@ export function sessionRuntimeStatus(code: unknown): number {
     case "invalid_request": return 400;
     case "environment_failed": return 500;
     case "spawn_failed":
+    case "configuration_reload_failed":
     case "process_closed":
     case "process_exit": return 503;
     case "timeout": return 504;
@@ -122,7 +123,6 @@ export function registerNodeSessionRoutes(
       const errorCode = typeof result.code === "string" ? result.code : "runtime_command_failed";
       const state = isPromptDeliveryIndeterminate(errorCode) ? "indeterminate" as const : "rejected" as const;
       const delivery = await promptRequests.update(workspace, sessionId, requestId, state, { error_code: errorCode });
-      if (state === "rejected") await promptRequests.clearAssociation(workspace, sessionId, requestId);
       return reply.code(sessionRuntimeStatus(result.code)).send({ ok: false, ...result, ...(delivery ?? {}) });
     });
   });

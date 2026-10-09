@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useRuntimeStore } from "./index";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
@@ -6,6 +6,7 @@ import * as fileRevision from "./file-revision";
 
 
 installRuntimeTestEnvironment();
+afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 
 
 describe("runtime event subscription", () => {
@@ -119,6 +120,8 @@ describe("runtime event subscription", () => {
   });
 
   it("retries a failed transport state probe before settling an idle turn", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     let stateReads = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -137,7 +140,8 @@ describe("runtime event subscription", () => {
     source.readyState = FakeEventSource.CLOSED;
     source.onerror?.({} as Event);
 
-    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false));
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(useRuntimeStore.getState().working).toBe(false);
     expect(stateReads).toBeGreaterThanOrEqual(3);
   });
 

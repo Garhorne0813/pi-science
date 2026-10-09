@@ -196,6 +196,11 @@ function handleApi(req, res, url) {
     return json(res, 404, { error: "fixture file not found", file: filePath });
   }
 
+  if (method === "GET" && pathname === "/api/project-memory/research-events") {
+    log();
+    return sendSse(res, "research");
+  }
+
   // Knowledge badge + research-loop landing probe.
   if (method === "GET" && pathname === "/api/project-knowledge/proposals/count") {
     log();
