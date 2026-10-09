@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNewWorkspaceConversation } from "../sidebar/workspace-navigation";
 import { Loader2, MessageSquarePlus, Upload } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useUiStore } from "../../lib/ui";
@@ -287,17 +287,14 @@ export function SkillGithubDialog({ open, cwd, onClose }: { open: boolean; cwd: 
 
 export function SkillChatDialog({ open, cwd, onClose }: { open: boolean; cwd: string | null; onClose: () => void }) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
+  const newConversation = useNewWorkspaceConversation(cwd);
   const prompt = t("skills.chatPrompt");
   if (!open) return null;
   const openNewChat = () => {
     if (!cwd) return;
-    useUiStore.getState().setSuppressAutoSessionNav(true);
+    newConversation({ draft: prompt });
     useUiStore.getState().closeSettings();
     onClose();
-    navigate(`/workspace/${encodeURIComponent(cwd)}`, {
-      state: { suppressAutoSessionNavFor: cwd, initialDraft: prompt },
-    });
   };
   return (
     <DialogShell title={t("skills.chatTitle")} onClose={onClose}>

@@ -5,6 +5,9 @@ import { useUiStore } from "@/lib/ui";
 import i18n from "@/i18n";
 import type { FileListEntry } from "./FileContextMenu";
 import { FileBrowser } from "./FileBrowser";
+import { SidebarMainArea } from "./SidebarMainArea";
+import { useWorkspaceSidebar } from "./workspace-navigation";
+import { MemoryRouter } from "react-router-dom";
 
 const sidebarEntries = (names: string[]): FileListEntry[] => names.map((name) => ({
   name,
@@ -177,17 +180,30 @@ describe("FileBrowser", () => {
     await screen.findByText("new.csv");
   });
 
-  it("polls while expanded and the tab is visible, and stops when hidden", async () => {
-    render(<FileBrowser cwd="proj" />);
-    fireEvent.click(screen.getByText("Files"));
+  it("panel visibility stops polling and restores an immediate read before the next tick", async () => {
+    useWorkspaceSidebar.setState({ cwd: "proj", tab: "files", query: "" });
+    useUiStore.setState({ contextPanelCollapsed: false });
+    render(<MemoryRouter><SidebarMainArea cwd="proj" renderSessions={() => null} /></MemoryRouter>);
     await screen.findByText("data.csv");
-    vi.mocked(files.sidebar).mockClear();
-    // Visible tab: the 2s polling fallback fires on its own.
-    await vi.waitFor(() => expect(files.sidebar).toHaveBeenCalled(), { timeout: 3_000 });
-    const callsBefore = files.sidebar.mock.calls.length;
-    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
-    await new Promise((resolve) => setTimeout(resolve, 2_500));
-    expect(files.sidebar.mock.calls.length).toBe(callsBefore);
+    expect(files.sidebar).toHaveBeenCalledTimes(1);
+    vi.useFakeTimers();
+    act(() => { Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+    expect(files.sidebar).toHaveBeenCalledTimes(1);
+    await act(async () => { Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
+    expect(files.sidebar).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(files.sidebar).toHaveBeenCalledTimes(3);
+    act(() => useUiStore.getState().setContextPanelCollapsed(true));
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+    expect(files.sidebar).toHaveBeenCalledTimes(3);
+    await act(async () => useUiStore.getState().setContextPanelCollapsed(false));
+    expect(files.sidebar).toHaveBeenCalledTimes(4);
+    act(() => useWorkspaceSidebar.getState().setTab("proj", "sessions"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+    expect(files.sidebar).toHaveBeenCalledTimes(4);
+    await act(async () => useWorkspaceSidebar.getState().setTab("proj", "files"));
+    expect(files.sidebar).toHaveBeenCalledTimes(5);
   });
 
   it("does not poll when collapsed", async () => {
@@ -199,7 +215,7 @@ describe("FileBrowser", () => {
   });
 
   it("stops the loading indicator when a quiet poll supersedes a visible load", async () => {
-    render(<FileBrowser cwd="proj" />);
+    render(<FileBrowser cwd="proj" embedded />);
     const refresh = screen.getByRole("button", { name: "Refresh files" });
     await vi.waitFor(() => expect(refresh.querySelector("svg")).not.toHaveClass("animate-spin"));
 
@@ -208,7 +224,7 @@ describe("FileBrowser", () => {
       .mockImplementationOnce(() => new Promise<FileListEntry[]>((resolve) => { resolveVisibleLoad = resolve; }))
       .mockResolvedValue(sidebarEntries(["work", "reports"]));
 
-    fireEvent.click(screen.getByRole("button", { name: "Files" }));
+    fireEvent.click(refresh);
     expect(refresh.querySelector("svg")).toHaveClass("animate-spin");
 
     const callsBeforePoll = files.sidebar.mock.calls.length;

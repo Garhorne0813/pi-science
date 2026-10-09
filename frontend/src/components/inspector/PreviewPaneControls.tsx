@@ -4,7 +4,7 @@ import { cn, useUiStore } from "@/lib/ui";
 import { notifyInspectorLayoutChange } from "@/lib/ui/inspector-layout";
 import { IconButton } from "../ui/Icon";
 
-export function PreviewPaneControls({ embedded = false }: { embedded?: boolean }) {
+export function PreviewPaneControls({ embedded = false, inert = false }: { embedded?: boolean; inert?: boolean }) {
   const { t } = useTranslation();
   const inspectorOpen = useUiStore((state) => state.inspectorOpen);
   const inspectorMaximized = useUiStore((state) => state.inspectorMaximized);
@@ -17,7 +17,7 @@ export function PreviewPaneControls({ embedded = false }: { embedded?: boolean }
     : (inspectorOpen ? PanelRightClose : PanelRightOpen);
 
   return (
-    <div className={cn(
+    <div inert={inert} aria-hidden={inert || undefined} className={cn(
       "right-card top-0 z-30 hidden h-control items-center gap-2 lg:flex",
       embedded ? "absolute" : "fixed",
     )}>

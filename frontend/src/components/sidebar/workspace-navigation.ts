@@ -1,10 +1,12 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import { create } from "zustand";
 import { useUiStore } from "../../lib/ui";
+import { isNarrowViewport } from "../../lib/ui/viewport";
+import { explicitNewLandingState } from "./blank-landing";
 
 type SidebarTab = "sessions" | "files";
 
-// Transient workspace state shared by the expanded sidebar and collapsed rail.
+// Transient workspace state shared by the Context Panel and Rail.
 // A different cwd starts with an empty Conversations view; nothing is persisted.
 export const useWorkspaceSidebar = create<{
   cwd: string | null;
@@ -21,23 +23,18 @@ export const useWorkspaceSidebar = create<{
 }));
 
 export function closeSidebarOnNarrow() {
-  if (window.innerWidth < 768) useUiStore.getState().setSidebarCollapsed(true);
+  if (isNarrowViewport()) useUiStore.getState().setContextPanelCollapsed(true);
 }
 
-// Both sidebar forms share the lazy-create landing contract.
+// All entry points share the lazy-create landing contract.
 export function useNewWorkspaceConversation(cwd: string | null) {
   const navigate = useNavigate();
   const location = useLocation();
-  return () => {
+  return (options?: { draft?: string }) => {
     if (!cwd) return;
     useWorkspaceSidebar.getState().showConversations(cwd);
     const root = `/workspace/${encodeURIComponent(cwd)}`;
-    if (location.pathname === root) {
-      useUiStore.getState().setSuppressAutoSessionNav(false);
-    } else {
-      useUiStore.getState().setSuppressAutoSessionNav(true);
-      navigate(root, { state: { suppressAutoSessionNavFor: cwd } });
-    }
+    navigate(root, { replace: location.pathname === root, state: explicitNewLandingState(cwd, options?.draft) });
     closeSidebarOnNarrow();
   };
 }

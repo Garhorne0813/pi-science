@@ -1,15 +1,13 @@
-import { Outlet, useNavigate, useLocation } from "react-router-dom";
+import { Link, Outlet, useLocation } from "react-router-dom";
 import { lazy, Suspense, useState, useEffect, useRef } from "react";
-import { PanelLeft, Settings, Plus, Activity, MessageSquare, FolderOpen, ArrowLeft, FileText, Inbox, FlaskConical, type LucideIcon } from "lucide-react";
 import { useUiStore } from "../../lib/ui";
 import { RightPane } from "../../components/inspector/RightPane";
 import { PreviewPaneControls } from "../../components/inspector/PreviewPaneControls";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
-import { useNewWorkspaceConversation, useWorkspaceSidebar } from "../../components/sidebar/workspace-navigation";
+import { WorkspaceRail } from "../../components/sidebar/WorkspaceRail";
 import { useWorkspaceCwd } from "../../lib/workspace";
-import { usePendingProposalCount } from "../../lib/knowledge";
 import { cn } from "../../lib/ui";
-import { preloadSettingsContent } from "../../components/settings/settings-loading";
+import { NARROW_MEDIA_QUERY, isNarrowViewport } from "../../lib/ui/viewport";
 
 // Load workspace-only tabs and menus without adding them to the initial page graph.
 const SidebarMainArea = lazy(() => import("../../components/sidebar/SidebarMainArea").then(module => ({ default: module.SidebarMainArea })));
@@ -55,7 +53,6 @@ function loadInspectorTabs(): Promise<InspectorTabsModule> {
 const InitialInspectorTabs = lazy(loadInspectorTabs);
 import { useTranslation } from "react-i18next";
 import { workspacePathLeaf } from "../../lib/workspace";
-import { Icon, IconButton } from "../../components/ui/Icon";
 import { conversationSessionId } from "../../lib/conversation/session-route";
 
 const SIDEBAR_MIN_WIDTH = 220;
@@ -63,10 +60,10 @@ const SIDEBAR_MAX_WIDTH = 420;
 
 export function ProjectsLayout() {
   const { t } = useTranslation();
-  const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed);
+  const contextPanelCollapsed = useUiStore((s) => s.contextPanelCollapsed);
   const sidebarWidth = useUiStore((s) => s.sidebarWidth);
   const previewPaneSide = useUiStore((s) => s.previewPaneSide);
-  const setSidebarCollapsed = useUiStore((s) => s.setSidebarCollapsed);
+  const setContextPanelCollapsed = useUiStore((s) => s.setContextPanelCollapsed);
   const inspectorOpen = useUiStore((s) => s.inspectorOpen);
   const inspectorTabs = useUiStore((s) => s.inspectorTabs);
   const activeInspectorTabId = useUiStore((s) => s.activeInspectorTabId);
@@ -81,10 +78,14 @@ export function ProjectsLayout() {
   const [sidebarDragWidth, setSidebarDragWidth] = useState<number | null>(null);
   const [sidebarDragging, setSidebarDragging] = useState(false);
   const sidebarDragWidthRef = useRef<number | null>(null);
+  const panelRef = useRef<HTMLElement | null>(null);
+  const toggleRef = useRef<HTMLButtonElement | null>(null);
+  const drawerWasOpen = useRef(false);
+  const [narrowViewport, setNarrowViewport] = useState(isNarrowViewport);
   const location = useLocation();
   const activeCwd = useWorkspaceCwd();
   const isWorkspace = !!activeCwd;
-  const newConversation = useNewWorkspaceConversation(activeCwd);
+  const drawerOpen = isWorkspace && narrowViewport && !contextPanelCollapsed;
   const workspaceRoot = activeCwd ? `/workspace/${encodeURIComponent(activeCwd)}` : "";
   const activeConversationSessionId = conversationSessionId(location.pathname);
   const isConversationRoute = isWorkspace && (
@@ -140,87 +141,52 @@ export function ProjectsLayout() {
   // the mobile breakpoint. Close it during that transition so it cannot cover
   // project cards or other primary content.
   useEffect(() => {
-    const narrow = window.matchMedia("(max-width: 767px)");
+    const narrow = window.matchMedia(NARROW_MEDIA_QUERY);
     const collapseOnNarrow = (event: MediaQueryListEvent | MediaQueryList) => {
-      if (event.matches) setSidebarCollapsed(true);
+      setNarrowViewport(event.matches);
+      if (event.matches) setContextPanelCollapsed(true);
     };
     collapseOnNarrow(narrow);
     narrow.addEventListener("change", collapseOnNarrow);
     return () => narrow.removeEventListener("change", collapseOnNarrow);
-  }, [setSidebarCollapsed]);
+  }, [setContextPanelCollapsed]);
+
+  useEffect(() => {
+    if (isNarrowViewport()) setContextPanelCollapsed(true);
+  }, [location.pathname, setContextPanelCollapsed]);
+
+  useEffect(() => {
+    if (drawerOpen) panelRef.current?.focus();
+    else if (drawerWasOpen.current) toggleRef.current?.focus();
+    drawerWasOpen.current = drawerOpen;
+  }, [drawerOpen]);
+
+  useEffect(() => {
+    if (!drawerOpen) return;
+    // Listen on window, not document: a modal dialog (the delete confirmation,
+    // Settings) registers its own window-level Escape handler and calls
+    // preventDefault. Registration order then puts the dialog first, and this
+    // handler skips an Escape the dialog already consumed instead of closing
+    // the drawer out from under it.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.defaultPrevented) { event.preventDefault(); setContextPanelCollapsed(true); }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [drawerOpen, setContextPanelCollapsed]);
 
   return (
-    <div className="flex h-dvh w-screen overflow-hidden bg-bg text-text">
-      <a href="#main-content" className="fixed left-3 top-3 z-[200] -translate-y-20 rounded-input bg-accent-fill px-3 py-2 text-sm text-accent-fg transition-transform focus:translate-y-0">
+    <div className="relative flex h-dvh w-screen overflow-hidden bg-bg text-text">
+      <a href="#main-content" inert={drawerOpen} aria-hidden={drawerOpen || undefined} className="fixed left-3 top-3 z-[200] -translate-y-20 rounded-input bg-accent-fill px-3 py-2 text-sm text-accent-fg transition-transform focus:translate-y-0">
         {t("common.skipToContent", { defaultValue: "Skip to content" })}
       </a>
-      {/* Sidebar */}
-      {sidebarCollapsed && (
-        <aside className="app-sidebar rail-enter flex h-full w-[var(--sidebar-collapsed-width)] shrink-0 flex-col items-center gap-1.5 overflow-hidden border-r border-border px-1.5 py-[18px]">
-          <IconButton
-            icon={PanelLeft}
-            label={t("shell.expandSidebar")}
-            size="standard"
-            className="h-11 w-11"
-            onClick={() => setSidebarCollapsed(false)}
-          />
-          {/* Icon-only nav */}
-          <CollapsedNavItem to="/" icon={isWorkspace ? ArrowLeft : FolderOpen} label={t("nav.projects")} />
-          {isWorkspace && (
-            <>
-              <IconButton icon={Plus} label={t("conversation.newSession")} size="standard" className="h-11 w-11" onClick={newConversation} />
-              <CollapsedNavItem to={workspaceRoot} icon={MessageSquare} label={t("sidebar.conversations")} active={isConversationRoute} onNavigate={() => useWorkspaceSidebar.getState().showConversations(activeCwd!)} />
-              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} icon={FileText} label={t("nav.files")} />
-              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/knowledge`} icon={Inbox} label={t("nav.knowledge")} />
-              <CollapsedNavItem to={`${workspaceRoot}/research`} icon={FlaskConical} label={t("nav.research")} />
-              <CollapsedNavItem to={`${workspaceRoot}/runs`} icon={Activity} label={t("sidebar.runs")} />
-            </>
-          )}
-          <div className="flex-1" />
-          <SettingsNavItem cwd={activeCwd} collapsed />
-        </aside>
-      )}
-        <button type="button" aria-label={t("shell.closeSidebar")} onClick={() => setSidebarCollapsed(true)} hidden={sidebarCollapsed} className="fixed inset-0 z-20 bg-black/45 md:hidden" />
-        <aside hidden={sidebarCollapsed} className={cn(sidebarCollapsed && "!hidden", "app-sidebar sidebar-enter absolute z-30 flex h-full shrink-0 flex-col overflow-hidden border-r border-border md:relative")} style={{ width: sidebarDragWidth ?? sidebarWidth, maxWidth: "86vw" }}>
-          <div className="flex h-full flex-col px-panel py-card">
-            {/* Header */}
-            <div className="mb-card flex shrink-0 items-center justify-between px-2">
-              <h1 className="text-ui-title font-semibold tracking-tight text-text">
-                Pi-Science
-              </h1>
-              <IconButton
-                icon={PanelLeft}
-                label={t("shell.closeSidebar")}
-                size="touch"
-                className="translate-x-1"
-                onClick={() => setSidebarCollapsed(true)}
-              />
-            </div>
-
-            {/* Projects / Back to workspace list */}
-            <nav className="mb-2 flex shrink-0 flex-col gap-px">
-              <SidebarNavItem
-                to="/"
-                label={isWorkspace ? (workspacePathLeaf(activeCwd!) || t("nav.projects")) : t("nav.projects")}
-                icon={isWorkspace ? ArrowLeft : FolderOpen}
-                active={false}
-              />
-            </nav>
-            {isWorkspace && <Suspense fallback={<div role="status" className="min-h-0 flex-1 p-2 text-ui-label text-muted">{t("inspector.loading")}</div>}><SidebarMainArea key={activeCwd!} cwd={activeCwd!} /></Suspense>}
-            {isWorkspace && <nav className="mt-2 shrink-0 border-t border-faint pt-2">
-              <KnowledgeNavItem cwd={activeCwd!} active={location.pathname.endsWith("/knowledge")} />
-              <SidebarNavItem to={`${workspaceRoot}/research`} label={t("nav.research")} icon={FlaskConical} active={location.pathname.endsWith("/research")} />
-              <SidebarNavItem to={`${workspaceRoot}/runs`} label={t("sidebar.runs")} icon={Activity} active={location.pathname.endsWith("/runs")} />
-            </nav>}
-
-            {/* Bottom */}
-            <div className="mt-auto shrink-0">
-              <div className="my-panel border-t border-faint" />
-              <div className="mt-2">
-                <SettingsNavItem cwd={activeCwd} />
-              </div>
-            </div>
-          </div>
+      <WorkspaceRail cwd={activeCwd} toggleRef={toggleRef} />
+      <div data-context-panel-shade aria-hidden="true" hidden={!drawerOpen} onPointerDown={() => setContextPanelCollapsed(true)} onMouseDown={(event) => event.preventDefault()} className={cn(!drawerOpen && "!hidden", "absolute inset-y-0 left-[var(--rail-width-mobile)] right-0 z-50 bg-black/45 md:hidden")} />
+      <aside ref={panelRef} tabIndex={-1} id="workspace-context-panel" aria-label={t("sidebar.workspaceContent")} hidden={contextPanelCollapsed || !isWorkspace} className={cn((contextPanelCollapsed || !isWorkspace) && "!hidden", "app-sidebar sidebar-enter absolute inset-y-0 left-[var(--rail-width-mobile)] z-[60] flex h-full shrink-0 flex-col overflow-hidden border-r border-faint md:relative md:left-auto md:z-auto")} style={{ width: sidebarDragWidth ?? sidebarWidth, maxWidth: "calc(100vw - var(--rail-width-mobile))" }}>
+        <div className="flex h-full min-h-0 flex-col px-panel py-card">
+          <header className="mb-2 flex h-header shrink-0 items-center px-2"><Link to="/" title={activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")} className="min-w-0 truncate text-ui-label font-semibold text-text">{activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")}</Link></header>
+          {isWorkspace && <Suspense fallback={<div role="status" className="min-h-0 flex-1 p-2 text-ui-label text-muted">{t("inspector.loading")}</div>}><SidebarMainArea key={activeCwd!} cwd={activeCwd!} /></Suspense>}
+        </div>
           <div
             role="separator"
             aria-orientation="vertical"
@@ -249,20 +215,20 @@ export function ProjectsLayout() {
         </aside>
 
       {/* Main */}
-      <main id="main-content" tabIndex={-1} className={cn(
+      <main id="main-content" tabIndex={-1} inert={drawerOpen} aria-hidden={drawerOpen || undefined} className={cn(
         "relative flex min-w-0 flex-1 flex-col overflow-hidden [container-type:inline-size]",
-        sidebarCollapsed && "pt-12 md:pt-0",
         inspectorMaximized && "hidden",
         previewOnLeft && "order-2",
       )}>
         <Outlet />
       </main>
 
-      {isConversationRoute && !inspectorOpen && <PreviewPaneControls />}
+      {isConversationRoute && !inspectorOpen && <PreviewPaneControls inert={drawerOpen} />}
 
       {/* Inspector — only in workspace context */}
       {isWorkspace && inspectorOpen && activeInspectorTabId && inspectorTabs.length > 0 && (
         <RightPane
+          inert={drawerOpen}
           side={previewOnLeft ? "left" : "right"}
           onMinimize={() => setInspectorVisible(false)}
         >
@@ -306,73 +272,4 @@ export function ProjectsLayout() {
       )}
     </div>
   );
-}
-
-/* ── Workspace Session List ── */
-
-/** Icon-only nav item for the collapsed sidebar strip. */
-function CollapsedNavItem({ to, icon, label, active: explicitActive, onNavigate }: { to: string; icon: LucideIcon; label: string; active?: boolean; onNavigate?: () => void }) {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const active = explicitActive ?? (to !== "/" && (location.pathname === to || location.pathname.startsWith(`${to}/`)));
-  return (
-    <IconButton
-      icon={icon}
-      label={label}
-      size="standard"
-      aria-current={active ? "page" : undefined}
-      onClick={() => { onNavigate?.(); navigate(to); }}
-      className={cn("h-11 w-11", active && "bg-surface-selected text-accent")}
-    />
-  );
-}
-
-function SidebarNavItem({ to, label, icon, active, badge }: { to: string; label: string; icon?: LucideIcon; active: boolean; badge?: number }) {
-  const navigate = useNavigate();
-  const setSidebarCollapsed = useUiStore((state) => state.setSidebarCollapsed);
-  return (
-    <button
-      onClick={() => {
-        navigate(to);
-        if (window.innerWidth < 768) setSidebarCollapsed(true);
-      }}
-      className={cn(
-        "flex h-nav min-h-0 w-full items-center gap-1.5 rounded-input px-2 text-left text-ui-label transition-colors",
-        active ? "bg-surface-selected font-medium text-text" : "text-text/90 hover:bg-surface-hover hover:text-text",
-      )}
-    >
-      {icon && <Icon icon={icon} size="md" className="shrink-0 text-muted" />}
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-      {!!badge && <span className="rounded-full bg-accent-fill px-1.5 py-0.5 text-[10px] leading-none text-accent-fg">{badge}</span>}
-    </button>
-  );
-}
-
-export function SettingsNavItem({ cwd, collapsed = false }: { cwd: string | null; collapsed?: boolean }) {
-  const { t } = useTranslation();
-  const settingsOpen = useUiStore((s) => s.settingsOpen);
-  const openSettings = useUiStore((s) => s.openSettings);
-  const handleClick = () => {
-    preloadSettingsContent();
-    openSettings(cwd);
-    if (window.innerWidth < 768) useUiStore.getState().setSidebarCollapsed(true);
-  };
-
-  if (collapsed) {
-    return (
-      <IconButton icon={Settings} label={t("nav.settings")} size="standard" onClick={handleClick} onPointerEnter={preloadSettingsContent} onFocus={preloadSettingsContent} className={cn("h-11 w-11", settingsOpen && "bg-surface-selected text-accent")} />
-    );
-  }
-  return (
-    <button onClick={handleClick} onPointerEnter={preloadSettingsContent} onFocus={preloadSettingsContent} className={cn("flex h-nav min-h-0 w-full items-center gap-1.5 rounded-input px-2 text-left text-ui-label transition-colors", settingsOpen ? "bg-surface-selected font-medium text-text" : "text-text/90 hover:bg-surface-hover hover:text-text")}>
-      <Icon icon={Settings} size="md" className="shrink-0 text-muted" />
-      <span className="min-w-0 flex-1 truncate">{t("nav.settings")}</span>
-    </button>
-  );
-}
-
-function KnowledgeNavItem({ cwd, active }: { cwd: string; active: boolean }) {
-  const { t } = useTranslation();
-  const { data } = usePendingProposalCount(cwd);
-  return <SidebarNavItem to={`/workspace/${encodeURIComponent(cwd)}/knowledge`} label={t("nav.knowledge")} icon={Inbox} active={active} badge={Number(data?.pending_count) || 0} />;
 }

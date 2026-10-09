@@ -21,10 +21,12 @@ export function RightPane({
   children,
   onMinimize,
   side = "right",
+  inert = false,
 }: {
   children: React.ReactNode;
   onMinimize: () => void;
   side?: "left" | "right";
+  inert?: boolean;
 }) {
   const { t } = useTranslation();
   // Field-level selectors so unrelated UI-store writes do not re-render the pane.
@@ -105,7 +107,7 @@ export function RightPane({
   const restoreFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
-    if (!mobileOverlay) return;
+    if (!mobileOverlay || inert) return;
     restoreFocusRef.current = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
@@ -114,7 +116,7 @@ export function RightPane({
       restoreFocusRef.current?.focus();
       restoreFocusRef.current = null;
     };
-  }, [mobileOverlay]);
+  }, [mobileOverlay, inert]);
 
   const onOverlayKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
@@ -203,14 +205,16 @@ export function RightPane({
   };
 
   if (inspectorMaximized) {
-    return <div className="relative h-full min-w-0 flex-1 bg-surface">{children}</div>;
+    return <div inert={inert} aria-hidden={inert || undefined} className="relative h-full min-w-0 flex-1 bg-surface">{children}</div>;
   }
 
   return (
     <div
       ref={paneRef}
+      inert={inert}
+      aria-hidden={inert || undefined}
       role={mobileOverlay ? "dialog" : undefined}
-      aria-modal={mobileOverlay || undefined}
+      aria-modal={(!inert && mobileOverlay) || undefined}
       aria-label={mobileOverlay ? t("filePreview.openFiles") : undefined}
       tabIndex={mobileOverlay ? -1 : undefined}
       onKeyDown={mobileOverlay ? onOverlayKeyDown : undefined}

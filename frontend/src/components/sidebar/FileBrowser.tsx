@@ -170,20 +170,18 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
   }, [cwd]);
 
   useEffect(() => {
-    if (!active) return;
+    if (!shouldPoll) return;
     const controller = new AbortController();
     void loadFiles(controller.signal);
     return () => controller.abort();
-  }, [active, fileRevision, loadFiles]);
+  }, [shouldPoll, fileRevision, loadFiles]);
 
   // Polling fallback while the browser tab is visible: catches files created
   // by kernels or external tools that never emitted a terminal event. Quiet so
   // repeated refreshes never flash the loading indicator.
   useEffect(() => {
     if (!shouldPoll) return;
-    const id = window.setInterval(() => {
-      if (document.visibilityState === "visible") void loadFiles(undefined, true);
-    }, 2_000);
+    const id = window.setInterval(() => void loadFiles(undefined, true), 2_000);
     return () => window.clearInterval(id);
   }, [shouldPoll, loadFiles]);
 

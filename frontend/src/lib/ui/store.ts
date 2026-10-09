@@ -14,10 +14,10 @@ interface UiState {
   setTheme: (t: ThemeChoice) => void;
   locale: string;
   setLocale: (l: string) => void;
-  sidebarCollapsed: boolean;
+  contextPanelCollapsed: boolean;
   sidebarWidth: number;
   sidebarFileBrowserHeight: number;
-  setSidebarCollapsed: (c: boolean) => void;
+  setContextPanelCollapsed: (c: boolean) => void;
   setSidebarWidth: (w: number) => void;
   setSidebarFileBrowserHeight: (height: number) => void;
   /** Which side of the conversation the preview occupies on desktop. */
@@ -54,12 +54,6 @@ interface UiState {
   settingsScope: string | null;
   openSettings: (scope: string | null) => void;
   closeSettings: () => void;
-  /** True right after the active session was deleted (or a new session was
-   *  requested): the workspace landing was just navigated to on purpose, so
-   *  the session list must not auto-open the most recent session. Consumed
-   *  once by the session-list effect; never persisted, never crosses workspaces. */
-  suppressAutoSessionNav: boolean;
-  setSuppressAutoSessionNav: (v: boolean) => void;
   /** True while the preview divider is being dragged. Never persisted — it is
    *  transient interaction state used for drag feedback only. */
   inspectorResizing: boolean;
@@ -200,12 +194,12 @@ export const useUiStore = create<UiState>((set) => ({
     set({ locale });
   },
 
-  sidebarCollapsed: loadFromStorage("sidebar.collapsed", false),
-  sidebarWidth: loadFromStorage("sidebar.width", 260),
+  contextPanelCollapsed: loadFromStorage("sidebar.collapsed", false),
+  sidebarWidth: loadFromStorage("sidebar.width", 299),
   sidebarFileBrowserHeight: loadFromStorage("sidebar.fileBrowserHeight", 288),
-  setSidebarCollapsed: (c) => {
+  setContextPanelCollapsed: (c) => {
     saveToStorage("sidebar.collapsed", c);
-    set({ sidebarCollapsed: c });
+    set({ contextPanelCollapsed: c });
   },
   setSidebarWidth: (w) => {
     saveToStorage("sidebar.width", w);
@@ -312,9 +306,6 @@ export const useUiStore = create<UiState>((set) => ({
   settingsScope: null,
   openSettings: (scope) => set({ settingsOpen: true, settingsScope: scope }),
   closeSettings: () => set({ settingsOpen: false }),
-
-  suppressAutoSessionNav: false,
-  setSuppressAutoSessionNav: (v) => set({ suppressAutoSessionNav: v }),
 
   inspectorResizing: false,
   setInspectorResizing: (r) => set({ inspectorResizing: r }),

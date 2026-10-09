@@ -174,10 +174,14 @@
   --conversation-content-width: clamp(748px, 52vw, 1100px);
   --conversation-composer-width: clamp(780px, 54vw, 1132px);
   --user-message-width: clamp(525px, 38vw, 800px);
-  --sidebar-collapsed-width: 56px;
   --composer-fade-height: 36px;
   --send-button-size: 34px;
   --new-session-height: 38px;
+  /* V4 workspace shell geometry recorded in docs/ui/deepseek-harness-reference.md. */
+  --rail-width: 68px;
+  --rail-width-mobile: 58px;
+  --context-tab-indicator-height: 2px;
+  --rail-badge-size: 17px;
   /* Radius scale. --radius-bubble/--radius-composer land with the chat phase. */
   --radius-small: 8px;
   --radius-control: 10px;
