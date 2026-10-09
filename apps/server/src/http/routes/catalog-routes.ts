@@ -17,6 +17,7 @@ import type { McpConnectorService } from "../../mcp/connector-service.js";
 import { resolveMcpConfig } from "../../catalog/mcp-config.js";
 import { findExecutable, pathIsInside, userHome } from "../../support/platform-utils.js";
 import { defaultPythonExecutable } from "../../runtime/workspace/workspace-environment.js";
+import { latestWorkspaceFileActivity } from "../../storage/workspace-activity.js";
 import { ensureProject, readProject, updateProject } from "../../project/project-registry.js";
 
 function q(request: { query: unknown }, key: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[key]; return typeof value === "string" && value ? value : fallback; }
@@ -83,12 +84,15 @@ async function workspaceInfo(path: string, workspaceRepository?: WorkspaceReposi
   const project = await ensureProject(path);
   await workspaceRepository?.rememberWorkspace(path, { managed: pathIsInside(rootDir(), path, true), preservePath: pathIsInside(rootDir(), path, true) });
   const [sessions, metadata] = await Promise.all([sessionRepository.list(path), stat(path)]);
+  const fileActivity = await latestWorkspaceFileActivity(path, metadata.mtimeMs);
+  const lastActivity = sessions.reduce((latest, session) => Math.max(latest, Date.parse(session.updated_at ?? session.created_at ?? "") || 0), fileActivity);
   return {
     name: project.name,
     path,
     project_id: project.id,
     session_count: sessions.length,
     last_modified: metadata.mtime.toISOString(),
+    last_activity_at: new Date(lastActivity).toISOString(),
   };
 }
 export function expandUserPath(path: string): string { if (path === "~") return resolve(userHome()); return path.startsWith("~/") || path.startsWith("~\\") ? resolve(userHome(), path.slice(2)) : resolve(path); }
@@ -366,7 +370,7 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
   });
 
   // ── Workspaces ──
-  app.get("/api/workspaces", async () => { const result = await Promise.all((await knownWorkspacePaths(workspaceRepository)).map((path) => workspaceInfo(path, workspaceRepository))); return result.sort((left, right) => String(right.last_modified).localeCompare(String(left.last_modified))); });
+  app.get("/api/workspaces", async () => { const result = await Promise.all((await knownWorkspacePaths(workspaceRepository)).map((path) => workspaceInfo(path, workspaceRepository))); return result.sort((left, right) => String(right.last_activity_at).localeCompare(String(left.last_activity_at))); });
   app.post("/api/workspaces", async (request, reply) => { const body = (request.body ?? {}) as { name?: unknown }; const name = String(body.name ?? "").trim().replace(/[\\/]/g, "-").slice(0, 100); if (!name) return reply.code(400).send({ error: "Invalid workspace name" }); const path = join(rootDir(), name); try { await stat(path); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* create */ } await mkdir(path, { recursive: true }); return await workspaceInfo(path, workspaceRepository); });
   app.post("/api/workspaces/open", async (request, reply) => { const requestedPath = expandUserPath(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); let path: string; try { if (!(await stat(requestedPath)).isDirectory()) return reply.code(400).send({ error: "Not a directory" }); path = await realpath(requestedPath); } catch { return reply.code(404).send({ error: "Folder not found" }); } await rememberExternalWorkspace(path, workspaceRepository); return await workspaceInfo(path, workspaceRepository); });
   app.post("/api/workspaces/demo", async (request, reply) => {

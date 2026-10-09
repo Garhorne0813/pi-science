@@ -18,10 +18,16 @@ interface Workspace {
   project_id: string;
   session_count: number;
   last_modified: string;
+  last_activity_at?: string;
 }
 
 const workspacesKey = ["workspaces"];
-const workspacesQuery = { queryKey: workspacesKey, queryFn: () => apiRequest<Workspace[]>("/api/workspaces") };
+const workspacesQuery = {
+  queryKey: workspacesKey,
+  queryFn: ({ signal }: { signal: AbortSignal }) => apiRequest<Workspace[]>("/api/workspaces", {
+    signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
+  }),
+};
 const pinnedQuery = { queryKey: ["workspaces", "pinned"], queryFn: () => apiRequest<{ paths?: string[] }>("/api/workspaces/pinned") };
 
 /** Every workspace write drops the whole list — the old invalidateApiCache("/api/workspaces").
@@ -37,15 +43,15 @@ function setPinnedPaths(paths: string[]) {
 
 export type ProjectSort = "recent" | "name" | "sessions";
 
-function modifiedAt(w: Workspace) {
-  return Date.parse(w.last_modified) || 0;
+function activityAt(w: Workspace) {
+  return Date.parse(w.last_activity_at ?? w.last_modified) || 0;
 }
 
 export function sortProjects<T extends Workspace>(items: T[], mode: ProjectSort): T[] {
   return [...items].sort((a, b) => {
     if (mode === "name") return a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || a.path.localeCompare(b.path);
-    if (mode === "sessions") return b.session_count - a.session_count || modifiedAt(b) - modifiedAt(a) || a.path.localeCompare(b.path);
-    return modifiedAt(b) - modifiedAt(a) || a.name.localeCompare(b.name);
+    if (mode === "sessions") return b.session_count - a.session_count || activityAt(b) - activityAt(a) || a.path.localeCompare(b.path);
+    return activityAt(b) - activityAt(a) || a.name.localeCompare(b.name);
   });
 }
 
@@ -73,13 +79,7 @@ export function ProjectsPage() {
   const workspacesFailed = workspacesResult.isError;
   useEffect(() => { if (workspacesFailed) toast(t("projects.loadError"), "error"); }, [workspacesFailed, t, toast]);
 
-  // Safety: stop showing the spinner after 10s even if the API never responds
-  const [loadTimedOut, setLoadTimedOut] = useState(false);
-  useEffect(() => {
-    const timer = setTimeout(() => setLoadTimedOut(true), 10000);
-    return () => clearTimeout(timer);
-  }, []);
-  const loading = workspacesResult.isPending && !loadTimedOut;
+  const loading = workspacesResult.isPending;
 
   const handleCreate = async () => {
     setCreating(true);
@@ -282,6 +282,14 @@ export function ProjectsPage() {
             </div>
           </header>
 
+          {workspacesFailed ? (
+            <div role="alert" className="rounded-2xl border border-border bg-surface-raised px-6 py-16 text-center">
+              <p className="text-ui-body text-muted">{t("projects.loadError")}</p>
+              <button type="button" onClick={() => void loadWorkspaces()} disabled={workspacesResult.isFetching}
+                className="mt-4 rounded-input bg-accent-fill px-4 py-2 text-ui-body text-accent-fg disabled:opacity-50">{t("common.refresh")}</button>
+            </div>
+          ) : (
+          <>
           <div className="mb-9 grid gap-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
             <section className="relative flex min-h-[215px] flex-col justify-between overflow-hidden rounded-2xl border border-border bg-surface-2 p-6 sm:p-7">
               <div className="pointer-events-none absolute -right-14 -top-24 h-64 w-64 rounded-full border-[35px] border-accent/5" />
@@ -305,7 +313,7 @@ export function ProjectsPage() {
                 <div className="mt-5 min-w-0">
                   <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-accent-soft text-accent"><FolderOpen size={20} /></div>
                   <h3 className="truncate text-lg font-semibold tracking-tight text-text" title={lastWorkspace.name}>{lastWorkspace.name}</h3>
-                  <p className="mt-1 text-ui-caption text-muted">{t("projects.editedAgo", { time: timeAgo(lastWorkspace.last_modified) })}</p>
+                  <p className="mt-1 text-ui-caption text-muted">{t("projects.editedAgo", { time: timeAgo(lastWorkspace.last_activity_at ?? lastWorkspace.last_modified) })}</p>
                   <Link to={"/workspace/" + encodeURIComponent(lastWorkspace.path)}
                     className="mt-4 inline-flex items-center gap-1.5 text-ui-body font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
                     {t("projects.continueProject")} <ArrowRight size={15} />
@@ -348,12 +356,7 @@ export function ProjectsPage() {
               </div>
             </div>
 
-            {workspacesResult.isError && workspaces.length === 0 ? (
-              <div className="rounded-2xl border border-border bg-surface-raised px-6 py-16 text-center">
-                <p className="text-ui-body text-muted">{t("projects.loadError")}</p>
-                <button type="button" onClick={() => void workspacesResult.refetch()} className="mt-4 rounded-input bg-accent-fill px-4 py-2 text-ui-body text-accent-fg">{t("common.refresh")}</button>
-              </div>
-            ) : workspaces.length === 0 ? (
+            {workspaces.length === 0 ? (
               <div className="flex flex-col items-center rounded-2xl border border-dashed border-border bg-surface/40 px-6 py-16 text-center">
                 <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-accent/10 text-accent"><FolderOpen size={26} /></div>
                 <h3 className="text-lg font-semibold text-text">{t("projects.emptyTitle")}</h3>
@@ -384,6 +387,8 @@ export function ProjectsPage() {
               </div>
             )}
           </section>
+          </>
+          )}
         </div>
       </div>
     </ErrorBoundary>
@@ -456,7 +461,7 @@ export function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingNam
         <p className="mt-1 truncate text-ui-caption text-muted/80" title={w.path}>{w.path}</p>
         <div className={cn("flex flex-wrap items-center gap-x-4 gap-y-1 text-ui-caption text-muted", isList ? "mt-1.5" : "mt-4")}>
           <span className="inline-flex items-center gap-1.5"><MessageSquare size={13} />{t("projects.sessionCount", { count: w.session_count })}</span>
-          <span className="inline-flex items-center gap-1.5"><Clock3 size={13} />{timeAgo(w.last_modified)}</span>
+          <span className="inline-flex items-center gap-1.5"><Clock3 size={13} />{timeAgo(w.last_activity_at ?? w.last_modified)}</span>
         </div>
       </div>
       <div className={cn("relative z-10 flex shrink-0 items-center gap-1", isList ? "ml-auto" : "absolute right-3 top-3")}>

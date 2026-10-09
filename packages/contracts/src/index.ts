@@ -225,6 +225,7 @@ export const workspaceInfoSchema = z.object({
   project_id: z.string().min(1).optional(),
   session_count: z.number().int().nonnegative().default(0),
   last_modified: z.string().default(""),
+  last_activity_at: z.string().optional(),
 });
 
 export const fileListEntrySchema = z.object({
