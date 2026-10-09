@@ -55,7 +55,9 @@ export default defineConfig({
             id.includes("node_modules/react-dom") ||
             id.includes("node_modules/react-router")
           ) return "vendor-react";
-          if (id.includes("node_modules/@radix-ui")) return "vendor-radix";
+          // Let the bundler follow Radix's import graph. Grouping every primitive
+          // together makes sidebar Tabs/Menu eagerly preload settings dialogs.
+          if (id.includes("node_modules/@radix-ui")) return undefined;
           if (
             id.includes("node_modules/react-markdown") ||
             id.includes("node_modules/remark-gfm") ||

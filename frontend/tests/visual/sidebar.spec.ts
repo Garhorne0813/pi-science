@@ -26,11 +26,15 @@ test("sidebar tabs preserve session lifecycle and collapsed New stays blank", as
   await expect(page.getByRole("menuitem", { name: "Delete conversation" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(trigger).toBeFocused();
+  await page.getByRole("searchbox").fill("Data");
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
   await page.getByRole("button", { name: "Close sidebar", exact: true }).last().click();
   await page.getByRole("button", { name: "New conversation", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`${root}$`));
   await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`${root}$`));
+  await expect(page.getByRole("tab", { name: "Conversations", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("searchbox")).toHaveValue("");
   expect(reloads).toBeLessThanOrEqual(1);
   await page.setViewportSize({ width: 1280, height: 600 });
   for (const name of ["Project Knowledge", "Research", "Run history", "Settings"]) {
@@ -125,4 +129,40 @@ test("embedded file polling stops while the sidebar or file tab is hidden", asyn
   await expect(files.getByRole("button", { name: "shikimate.csv", exact: true })).toBeVisible();
   await expect(files.getByRole("button", { name: "report.md", exact: true })).toBeVisible();
   await expect.poll(() => fileRequests).toBeGreaterThan(conversations);
+});
+
+
+test("collapsed Conversations restores the tab and clears search", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-light", "Desktop navigation coverage");
+  await page.goto(`${root}/session/${VISUAL_SESSION}`);
+  await page.getByRole("searchbox").fill("Data");
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
+  await page.getByRole("button", { name: "Close sidebar", exact: true }).last().click();
+  await page.getByRole("button", { name: "Conversations", exact: true }).click();
+  await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Conversations", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("searchbox")).toHaveValue("");
+});
+
+test("sidebar controls fit narrow widths and short light/dark windows", async ({ page }, testInfo) => {
+  test.skip(!["desktop-light", "desktop-dark"].includes(testInfo.project.name), "Desktop visual acceptance");
+  await page.setViewportSize({ width: 1280, height: 600 });
+  for (const width of [220, 260, 320, 420]) {
+    await page.addInitScript(({ width, theme }) => {
+      localStorage.setItem("pi-science.sidebar.width", JSON.stringify(width));
+      localStorage.setItem("pi-science.theme", JSON.stringify(theme));
+    }, { width, theme: testInfo.project.name === "desktop-dark" ? "dark" : "light" });
+    await page.goto(`${root}/session/${VISUAL_SESSION}`);
+    await expect(page.getByRole("searchbox")).toBeVisible();
+    for (const name of ["New conversation", "Project Knowledge", "Research", "Run history", "Settings"]) {
+      const box = await page.getByRole("button", { name, exact: true }).boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.y + box!.height).toBeLessThanOrEqual(600);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+    }
+    await page.getByRole("tab", { name: "Files", exact: true }).click();
+    await expect(page.getByRole("button", { name: "README.md", exact: true })).toBeVisible();
+    await page.getByRole("tab", { name: "Conversations", exact: true }).click();
+    await page.screenshot({ path: testInfo.outputPath(`sidebar-${width}.png`) });
+  }
 });

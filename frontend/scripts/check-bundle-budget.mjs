@@ -29,7 +29,7 @@ const initialBudget = Number(process.env.PI_SCIENCE_INITIAL_JS_BUDGET || 1_250_0
 const initialGzipBudget = Number(process.env.PI_SCIENCE_INITIAL_JS_GZIP_BUDGET || 400_000);
 const initialTotal = initial.reduce((total, entry) => total + entry.size, 0);
 const initialGzipTotal = initial.reduce((total, entry) => total + entry.gzipSize, 0);
-const lazyOnly = ["InspectorTabs-", "SettingsDialog-", "vendor-echarts", ...allowedLazyLarge, "molstar-", "vendor-three", "vendor-exceljs", "vendor-docx", "vendor-pptx", "vendor-openchemlib", "vendor-progress"];
+const lazyOnly = ["SidebarMainArea-", "FileBrowser-", "InspectorTabs-", "SettingsDialog-", "vendor-echarts", ...allowedLazyLarge, "molstar-", "vendor-three", "vendor-exceljs", "vendor-docx", "vendor-pptx", "vendor-openchemlib", "vendor-progress"];
 const eagerlyLoadedHeavyChunks = initial.filter((entry) => lazyOnly.some((prefix) => entry.file.startsWith(prefix)));
 // The animation runtime is one async chunk by design; a split means something
 // started reaching into its graph from a static import.
