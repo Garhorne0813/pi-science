@@ -369,10 +369,10 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
                     <button
                       onClick={() => handleClick(e)}
                       onContextMenu={(ev) => handleContextMenu(ev, e)}
-                      aria-expanded={e.isDir ? openFolders.has(e.path) : undefined}
                       className="flex h-icon w-full items-center gap-2 truncate rounded px-2 text-left text-ui-caption text-text/80 hover:bg-surface-hover"
                       title={e.path}
                       style={{ paddingLeft: `${8 + e.depth * 12}px` }}
+                      aria-expanded={e.isDir ? openFolders.has(e.path) : undefined}
                     >
                       {e.isDir
                         ? <Icon icon={openFolders.has(e.path) ? ChevronDown : ChevronRight} size="xs" className="shrink-0 text-muted" />
