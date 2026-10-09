@@ -17,7 +17,10 @@ async function openSettledConversation(page: import("@playwright/test").Page) {
 
 test("settled conversation with markdown, table, tool card and code block", async ({ page }) => {
   await openSettledConversation(page);
-  // Open the bash tool card so the captured baseline includes its output.
+  // The activity surface aggregates the turn's tool events behind one summary,
+  // so expanding the summary is what reveals the bash tool row; opening the row
+  // then shows its output in the baseline.
+  await page.getByRole("button", { name: /^Completed · 1m00s\. Total turn duration: 1m00s$/ }).click();
   await page.getByRole("button", { name: /bash/i }).click();
   await expect(page.getByText("condition,value", { exact: false })).toBeVisible();
   await screenshot(page, "conversation-settled.png");

@@ -26,15 +26,20 @@ test("workspace landing shows the hero composer", async ({ page }) => {
   await screenshot(page, "workspace-landing.png");
 });
 
-test("collapsed sidebar leaves a stable icon rail", async ({ page }, testInfo) => {
-  // On the mobile project the layout auto-collapses the sidebar at mount, so
-  // the "Close sidebar" affordance does not exist there.
-  test.skip(testInfo.project.name === "mobile", "mobile starts with the rail already collapsed");
+test("collapsed context panel leaves a stable primary rail", async ({ page }, testInfo) => {
+  // The mobile project starts with the context panel closed and has its own
+  // drawer coverage in sidebar.spec.ts, so this baseline only covers desktop.
+  test.skip(testInfo.project.name === "mobile", "mobile starts with the context panel closed");
   await page.goto(workspaceRoute(VISUAL_CWD));
   // The workspace root auto-navigates into the most recent session; wait for
   // the settled thread so the rail screenshot is not racing the message load.
   await waitForConversationSettled(page);
-  await page.getByRole("button", { name: "Close sidebar" }).click();
-  await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
+  const toggle = page.getByRole("button", { name: "Workspace context panel" });
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator("#workspace-context-panel")).toHaveAttribute("hidden");
+  // The Rail is permanent: collapsing the panel must not take navigation away.
+  await expect(page.locator('nav[aria-label="Primary navigation"]').getByRole("link", { name: "Conversations", exact: true })).toBeVisible();
   await screenshot(page, "sidebar-collapsed.png");
 });

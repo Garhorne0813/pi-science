@@ -15,6 +15,19 @@ async function expectNoSeriousViolations(
   page: import("@playwright/test").Page,
   label: string,
 ) {
+  // The workspace shell fades its context panel in over 200ms. While that
+  // transition runs, axe composites the reduced opacity into its contrast math
+  // and reports the settled text colour as a violation. Measure the settled
+  // frame, not one mid-fade. The race keeps a non-terminating animation from
+  // hanging the gate.
+  await page.evaluate(() => Promise.race([
+    Promise.all(
+      document.getAnimations()
+        .filter((animation) => animation.playState === "running")
+        .map((animation) => animation.finished.catch(() => undefined)),
+    ),
+    new Promise((resolve) => setTimeout(resolve, 1_000)),
+  ]));
   const results = await new AxeBuilder({ page }).analyze();
   const serious = results.violations.filter(
     (violation) => violation.impact === "critical" || violation.impact === "serious",
