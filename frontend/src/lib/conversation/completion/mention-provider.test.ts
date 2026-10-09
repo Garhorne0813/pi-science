@@ -89,7 +89,7 @@ describe("mentionProvider candidates", () => {
       value: "@reviewer ,notes.csv tail", end: caret,
     });
     expect(planAccept({ query, item: candidates[1], value })).toMatchObject({
-      value: " tail", end: value.indexOf(" "),
+      value: "@rev,notes.csv  tail", end: value.indexOf(" "),
       payload: { kind: "reference", reference: { path: "rev,notes.csv" } },
     });
   });
@@ -102,7 +102,7 @@ describe("mentionProvider candidates", () => {
         label: "protein_structure/",
         description: "data/protein_structure",
         group: "files",
-        insertText: "",
+        insertText: "@data/protein_structure ",
         payload: { kind: "reference", reference: { path: "data/protein_structure", name: "protein_structure", isDir: true } },
         size: 0,
       },
@@ -112,7 +112,7 @@ describe("mentionProvider candidates", () => {
         label: "protein.csv",
         description: "data/protein.csv",
         group: "files",
-        insertText: "",
+        insertText: "@data/protein.csv ",
         payload: { kind: "reference", reference: { path: "data/protein.csv", name: "protein.csv", isDir: false } },
         size: 2048,
       },
