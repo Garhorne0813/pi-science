@@ -392,7 +392,7 @@ export function ProjectsPage() {
 
 /* ── Workspace Card ── */
 
-export function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingName, editValue, setEditValue, handleRename, handleDelete, nameInputRef, navigate, timeAgo }: {
+export function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingName, editValue, setEditValue, handleRename, handleDelete, nameInputRef, navigate, timeAgo, viewMode = "grid" }: {
   w: Workspace;
   pinned: Set<string>;
   togglePin: (path: string) => void;
@@ -405,9 +405,11 @@ export function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingNam
   nameInputRef: React.RefObject<HTMLInputElement | null>;
   navigate: (to: string) => void;
   timeAgo: (d: string) => string;
+  viewMode?: "grid" | "list";
 }) {
   const { t } = useTranslation();
   const isPinned = pinned.has(w.path);
+  const isList = viewMode === "list";
 
   const startEdit = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -417,86 +419,60 @@ export function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingNam
   };
 
   return (
-    <div
-      className={cn(
-        "ui-card-interactive group relative rounded-card p-card text-left",
-        isPinned && "ring-1 ring-accent/30",
-      )}
-    >
+    <article className={cn(
+      "group relative min-w-0 overflow-hidden rounded-xl border border-border bg-surface-raised transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-accent/30 hover:shadow-card focus-within:border-accent/40",
+      isPinned && "border-accent/20",
+      isList ? "flex flex-wrap items-center gap-4 px-4 py-3 sm:px-5" : "flex min-h-[208px] flex-col p-5",
+    )}>
       <Link
-        to={`/workspace/${encodeURIComponent(w.path)}`}
+        to={"/workspace/" + encodeURIComponent(w.path)}
         aria-label={t("projects.open", { name: w.name })}
-        className="absolute inset-0 z-[1] cursor-pointer rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+        className="absolute inset-0 z-[1] cursor-pointer rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
       >
         <span className="sr-only">{t("projects.open", { name: w.name })}</span>
       </Link>
-      {/* Secondary workspace actions — revealed on hover or keyboard focus. */}
-      <div className="ui-popover absolute right-2 top-2 z-10 hidden items-center gap-0.5 rounded-input p-0.5 group-hover:flex group-focus-within:flex"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          onClick={() => togglePin(w.path)}
-          className={cn("rounded p-1.5 hover:bg-surface-2", isPinned ? "text-accent" : "text-muted hover:text-text")}
+      <div className={cn("flex shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent", isList ? "h-11 w-11" : "h-12 w-12")}>
+        <FolderOpen size={isList ? 21 : 23} strokeWidth={1.75} />
+      </div>
+      <div className={cn("min-w-0", isList ? "min-w-[110px] flex-1" : "mt-4 flex-1")}>
+        {editingName === w.path ? (
+          <input
+            ref={nameInputRef}
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); }
+              if (e.key === "Escape") { e.preventDefault(); setEditValue(""); setEditingName(null); }
+            }}
+            onBlur={() => handleRename(w.path)}
+            onClick={(e) => e.stopPropagation()}
+            placeholder={w.name}
+            aria-label={t("projects.rename")}
+            className="relative z-20 w-full rounded-input border border-accent bg-surface px-2 py-1 text-ui-body font-semibold text-text outline-none"
+          />
+        ) : (
+          <h4 className="truncate text-ui-body font-semibold text-text" title={w.name}>{w.name}</h4>
+        )}
+        <p className="mt-1 truncate text-ui-caption text-muted/80" title={w.path}>{w.path}</p>
+        <div className={cn("flex flex-wrap items-center gap-x-4 gap-y-1 text-ui-caption text-muted", isList ? "mt-1.5" : "mt-4")}>
+          <span className="inline-flex items-center gap-1.5"><MessageSquare size={13} />{t("projects.sessionCount", { count: w.session_count })}</span>
+          <span className="inline-flex items-center gap-1.5"><Clock3 size={13} />{timeAgo(w.last_modified)}</span>
+        </div>
+      </div>
+      <div className={cn("relative z-10 flex shrink-0 items-center gap-1", isList ? "ml-auto" : "absolute right-3 top-3")}>
+        <button type="button" onClick={() => togglePin(w.path)}
           title={isPinned ? t("projects.unpin") : t("projects.pin")}
-        >
-          {isPinned ? <Pin size={13} /> : <PinOff size={13} />}
+          aria-label={isPinned ? t("projects.unpin") : t("projects.pin")}
+          className={cn("flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-surface-2", isPinned ? "text-accent" : "text-muted hover:text-text")}>
+          {isPinned ? <Pin size={15} fill="currentColor" /> : <PinOff size={15} />}
         </button>
-        <button
-          onClick={startEdit}
-          className="rounded p-1.5 text-muted hover:text-text hover:bg-surface-2"
-          title={t("projects.rename")}
-        >
-          <Pencil size={13} />
-        </button>
-        <button
-          onClick={() => handleDelete(w.path)}
-          className="rounded p-1.5 text-muted hover:bg-error/10 hover:text-error-text"
-          title={t("projects.deleteTitle")}
-        >
-          <Trash2 size={13} />
-        </button>
+        <button type="button" onClick={startEdit} title={t("projects.rename")} aria-label={t("projects.rename")}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-text"><Pencil size={15} /></button>
+        <button type="button" onClick={() => handleDelete(w.path)} title={t("projects.deleteTitle")} aria-label={t("projects.deleteTitle")}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-error/10 hover:text-error-text"><Trash2 size={15} /></button>
+        <button type="button" onClick={() => navigate("/workspace/" + encodeURIComponent(w.path) + "/runs")} title={t("runs.viewAll")} aria-label={t("runs.viewAll")}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-accent"><Activity size={15} /></button>
       </div>
-
-      <div className="mb-panel flex items-start justify-between">
-        <FolderOpen size={22} className="text-accent/60" />
-        <span className="text-ui-caption text-muted">{timeAgo(w.last_modified)}</span>
-      </div>
-
-      {editingName === w.path ? (
-        <input
-          ref={nameInputRef}
-          value={editValue}
-          onChange={(e) => setEditValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); }
-            if (e.key === "Escape") setEditingName(null);
-          }}
-          onBlur={() => handleRename(w.path)}
-          onClick={(e) => e.stopPropagation()}
-          placeholder={w.name}
-          className="relative z-10 w-full rounded-input border border-accent bg-surface px-2 py-0.5 text-sm font-medium text-text outline-none"
-        />
-      ) : (
-        <h3 className="text-sm font-medium text-text truncate">{w.name}</h3>
-      )}
-
-      <div className="mt-2 flex items-center justify-between gap-compact text-ui-caption text-muted">
-        <span className="flex min-w-0 items-center gap-compact">
-          <MessageSquare size={12} /> <span>{t("projects.sessionCount", { count: w.session_count })}</span>
-        </span>
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            navigate(`/workspace/${encodeURIComponent(w.path)}/runs`);
-          }}
-          aria-label={t("runs.viewAll")}
-          title={t("runs.viewAll")}
-          className="relative z-10 -m-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted/70 transition-colors hover:bg-surface-2 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-        >
-          <Activity size={13} />
-        </button>
-      </div>
-    </div>
+    </article>
   );
 }
