@@ -3,12 +3,17 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { SidebarMainArea } from "../../components/sidebar/SidebarMainArea";
 import userEvent from "@testing-library/user-event";
-import { SettingsNavItem, WorkspaceSessionList } from "./ProjectsLayout";
+import { ProjectsLayout, SettingsNavItem } from "./ProjectsLayout";
+import { WorkspaceSessionList } from "../../components/sidebar/WorkspaceSessionList";
+import { useWorkspaceSidebar } from "../../components/sidebar/workspace-navigation";
+import { WorkspaceProvider } from "../../lib/workspace";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { FeedbackContext } from "../../components/feedback/feedback-context";
 import i18n from "../../i18n";
 import type { SessionInfo } from "../../lib/client/types";
+
+vi.mock("../../lib/knowledge", () => ({ usePendingProposalCount: () => ({ data: { pending_count: 0 } }) }));
 
 vi.mock("../../components/sidebar/FileBrowser", () => ({ FileBrowser: () => <span>Embedded file tree</span> }));
 
@@ -36,6 +41,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   cleanup();
+  useWorkspaceSidebar.setState({ cwd: null, tab: "sessions", query: "" });
   useUiStore.setState({ settingsOpen: false, settingsScope: null, suppressAutoSessionNav: false });
   useRuntimeStore.setState({
     sessions: [],
@@ -80,6 +86,44 @@ describe("SettingsNavItem", () => {
     expect(useUiStore.getState().settingsOpen).toBe(true);
     expect(useUiStore.getState().settingsScope).toBeNull();
   });
+});
+
+describe("collapsed workspace navigation", () => {
+  function renderLayout() {
+    useUiStore.setState({ sidebarCollapsed: false, inspectorOpen: false, inspectorTabs: [] });
+    useRuntimeStore.setState({ sessions: [session("s1", "Session A")], activeSessionId: "s1" });
+    return render(
+      <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
+        <MemoryRouter initialEntries={["/workspace/proj/session/s1"]}>
+          <Routes>
+            <Route path="/workspace/:cwd" element={<WorkspaceProvider><ProjectsLayout /></WorkspaceProvider>}>
+              <Route index element={<LocationProbe />} />
+              <Route path="session/:sessionId" element={<LocationProbe />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </FeedbackContext.Provider>,
+    );
+  }
+
+  for (const action of ["New conversation", "Conversations"]) {
+    it(`selects Conversations and clears search after Files → collapse → ${action} → expand`, async () => {
+      renderLayout();
+      const search = await screen.findByRole("searchbox");
+      fireEvent.change(search, { target: { value: "Session" } });
+      await userEvent.click(screen.getByRole("tab", { name: "Files" }));
+      fireEvent.click(screen.getAllByRole("button", { name: "Close sidebar" }).at(-1)!);
+      fireEvent.click(screen.getByRole("button", { name: action }));
+      fireEvent.click(screen.getByRole("button", { name: "Expand sidebar" }));
+      expect(screen.getByRole("tab", { name: "Conversations" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("searchbox")).toHaveValue("");
+      expect(screen.getByTestId("path")).toHaveTextContent("/workspace/proj");
+      expect(useRuntimeStore.getState().createNewSession).not.toHaveBeenCalled();
+      if (action === "New conversation") expect(useRuntimeStore.getState().loadSessions).not.toHaveBeenCalled();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(screen.getByTestId("path").textContent).toBe("/workspace/proj");
+    });
+  }
 });
 
 describe("WorkspaceSessionList", () => {
@@ -322,7 +366,7 @@ describe("WorkspaceSessionList", () => {
     await userEvent.click(screen.getByRole("tab", { name: "Files" }));
     expect(row).toBeInTheDocument();
     expect(row.closest('[role="tabpanel"]')).toHaveAttribute("hidden");
-    expect(screen.getByText("Embedded file tree")).toBeInTheDocument();
+    expect(await screen.findByText("Embedded file tree")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("tab", { name: "Conversations" }));
     expect(screen.getByRole("button", { name: "Protein study" })).toBe(row);
     expect(loadSessions).not.toHaveBeenCalled();
