@@ -58,9 +58,31 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
 });
 
 describe("FileBrowser", () => {
+  it("pauses embedded requests while inactive and refreshes immediately when shown again", async () => {
+    const view = render(<FileBrowser cwd="proj" embedded active={false} />);
+    await act(async () => {});
+    expect(files.sidebar).not.toHaveBeenCalled();
+    vi.useFakeTimers();
+    view.rerender(<FileBrowser cwd="proj" embedded active />);
+    await act(async () => {});
+    expect(files.sidebar).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(files.sidebar).toHaveBeenCalledTimes(2);
+    view.rerender(<FileBrowser cwd="proj" embedded active={false} />);
+    act(() => useRuntimeStore.setState({ fileRevision: 1 }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+    expect(files.sidebar).toHaveBeenCalledTimes(2);
+    view.rerender(<FileBrowser cwd="proj" embedded active />);
+    await act(async () => {});
+    expect(files.sidebar).toHaveBeenCalledTimes(3);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(files.sidebar).toHaveBeenCalledTimes(4);
+  });
+
   it("fills the embedded panel without resize or collapse controls and preserves refresh", async () => {
     render(<FileBrowser cwd="proj" embedded />);
     await screen.findByText("data.csv");

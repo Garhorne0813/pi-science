@@ -3,12 +3,14 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { FileText, MessageSquare, Plus, Search } from "lucide-react";
 import * as Tabs from "@radix-ui/react-tabs";
+import { useUiStore } from "../../lib/ui";
 import { FileBrowser } from "./FileBrowser";
 import { closeSidebarOnNarrow, useNewWorkspaceConversation } from "./workspace-navigation";
 
 export function SidebarMainArea({ cwd, renderSessions }: { cwd: string; renderSessions: (query: string) => ReactNode }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const sidebarCollapsed = useUiStore(state => state.sidebarCollapsed);
   const newConversation = useNewWorkspaceConversation(cwd);
   const [tab, setTab] = useState("sessions");
   const [query, setQuery] = useState("");
@@ -33,7 +35,7 @@ export function SidebarMainArea({ cwd, renderSessions }: { cwd: string; renderSe
         <div className="min-h-0 flex-1 overflow-hidden">{renderSessions(query)}</div>
       </Tabs.Content>
       <Tabs.Content value="files" className="flex min-h-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 overflow-hidden"><FileBrowser cwd={cwd} embedded /></div>
+        <div className="min-h-0 flex-1 overflow-hidden"><FileBrowser cwd={cwd} embedded active={tab === "files" && !sidebarCollapsed} /></div>
         <button type="button" onClick={() => { navigate(`/workspace/${encodeURIComponent(cwd)}/files`); closeSidebarOnNarrow(); }} className="mt-2 h-nav shrink-0 rounded-input px-2 text-left text-ui-label text-muted hover:bg-surface-hover hover:text-text">{t("sidebar.allFiles")} →</button>
       </Tabs.Content>
     </Tabs.Root>

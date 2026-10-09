@@ -169,7 +169,7 @@ export function ProjectsLayout() {
           {isWorkspace && (
             <>
               <IconButton icon={Plus} label={t("conversation.newSession")} size="standard" className="h-11 w-11" onClick={newConversation} />
-              <CollapsedNavItem to={workspaceRoot} icon={MessageSquare} label={t("sidebar.conversations")} />
+              <CollapsedNavItem to={workspaceRoot} icon={MessageSquare} label={t("sidebar.conversations")} active={isConversationRoute} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} icon={FileText} label={t("nav.files")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/knowledge`} icon={Inbox} label={t("nav.knowledge")} />
               <CollapsedNavItem to={`${workspaceRoot}/research`} icon={FlaskConical} label={t("nav.research")} />
@@ -311,15 +311,16 @@ export function ProjectsLayout() {
 /* ── Workspace Session List ── */
 
 /** Icon-only nav item for the collapsed sidebar strip. */
-function CollapsedNavItem({ to, icon, label }: { to: string; icon: LucideIcon; label: string }) {
+function CollapsedNavItem({ to, icon, label, active: explicitActive }: { to: string; icon: LucideIcon; label: string; active?: boolean }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const active = to !== "/" && (location.pathname === to || (icon === MessageSquare && location.pathname.startsWith(`${to}/session/`)));
+  const active = explicitActive ?? (to !== "/" && (location.pathname === to || location.pathname.startsWith(`${to}/`)));
   return (
     <IconButton
       icon={icon}
       label={label}
       size="standard"
+      aria-current={active ? "page" : undefined}
       onClick={() => navigate(to)}
       className={cn("h-11 w-11", active && "bg-surface-selected text-accent")}
     />

@@ -23,13 +23,14 @@ function clampFileBrowserHeight(height: number, containerHeight?: number) {
   return Math.min(FILE_BROWSER_MAX_HEIGHT, availableHeight, Math.max(FILE_BROWSER_MIN_HEIGHT, height));
 }
 
-export function FileBrowser({ cwd, embedded = false }: { cwd: string; embedded?: boolean }) {
+export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: string; embedded?: boolean; active?: boolean }) {
   const { t } = useTranslation();
   const { confirm, toast } = useFeedback();
   const [entries, setEntries] = useState<FileListEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const visible = embedded || expanded;
+  const shouldPoll = active && visible;
   const [contextMenu, setContextMenu] = useState<{ entry: FileListEntry; point: ContextPoint } | null>(null);
   const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
   const [folderStates, setFolderStates] = useState<Map<string, DirState>>(new Map());
@@ -169,21 +170,22 @@ export function FileBrowser({ cwd, embedded = false }: { cwd: string; embedded?:
   }, [cwd]);
 
   useEffect(() => {
+    if (!active) return;
     const controller = new AbortController();
     void loadFiles(controller.signal);
     return () => controller.abort();
-  }, [fileRevision, loadFiles]);
+  }, [active, fileRevision, loadFiles]);
 
   // Polling fallback while the browser tab is visible: catches files created
   // by kernels or external tools that never emitted a terminal event. Quiet so
   // repeated refreshes never flash the loading indicator.
   useEffect(() => {
-    if (!visible) return;
+    if (!shouldPoll) return;
     const id = window.setInterval(() => {
       if (document.visibilityState === "visible") void loadFiles(undefined, true);
     }, 2_000);
     return () => window.clearInterval(id);
-  }, [visible, loadFiles]);
+  }, [shouldPoll, loadFiles]);
 
   const handleClick = (entry: FileListEntry) => {
     if (entry.isDir) {

@@ -7,6 +7,7 @@ import type { SessionInfo } from "../../lib/client/types";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { cn, useUiStore } from "../../lib/ui";
 import { useFeedback } from "../feedback/feedback-context";
+import { useLocalDay } from "./use-local-day";
 import { closeSidebarOnNarrow } from "./workspace-navigation";
 
 export function groupSessions(sessions: SessionInfo[], query: string, now = new Date(), newTitle = "New Session") {
@@ -130,7 +131,8 @@ export function WorkspaceSessionList({ cwd, query = "" }: { cwd: string; query?:
     }
   };
 
-  const groups = useMemo(() => groupSessions(sessions, query, new Date(), t("conversation.newSession")), [sessions, query, t]);
+  const localDay = useLocalDay();
+  const groups = useMemo(() => groupSessions(sessions, query, new Date(localDay), t("conversation.newSession")), [sessions, query, localDay, t]);
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto" aria-label={t("sidebar.sessionList")}>
