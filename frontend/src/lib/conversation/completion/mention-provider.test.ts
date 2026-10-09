@@ -89,7 +89,8 @@ describe("mentionProvider candidates", () => {
       value: "@reviewer ,notes.csv tail", end: caret,
     });
     expect(planAccept({ query, item: candidates[1], value })).toMatchObject({
-      value: "@rev,notes.csv  tail", end: value.indexOf(" "),
+      // The token already ends at a space, so the accept keeps the single separator.
+      value: "@rev,notes.csv tail", end: value.indexOf(" "),
       payload: { kind: "reference", reference: { path: "rev,notes.csv" } },
     });
   });
