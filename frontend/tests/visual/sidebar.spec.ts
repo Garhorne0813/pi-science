@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { VISUAL_CWD, VISUAL_SESSION } from "./fixtures/data.mjs";
+import { FIXTURES, VISUAL_CWD, VISUAL_SESSION } from "./fixtures/data.mjs";
 
 const root = `/workspace/${encodeURIComponent(VISUAL_CWD)}`;
 
@@ -72,6 +72,17 @@ test("collapsed conversations only highlight conversation routes", async ({ page
 
 test("embedded file polling stops while the sidebar or file tab is hidden", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-light", "Desktop polling coverage");
+  // Return actual directory children so visible descendants prove folders stayed expanded.
+  await page.route("**/api/files**", route => {
+    const url = new URL(route.request().url());
+    if (url.pathname !== "/api/files") return route.continue();
+    const subdir = url.searchParams.get("subdir") || "";
+    const entries = FIXTURES.files.filter(entry => {
+      const slash = entry.path.lastIndexOf("/");
+      return (slash < 0 ? "" : entry.path.slice(0, slash)) === subdir;
+    });
+    return route.fulfill({ json: entries });
+  });
   await page.clock.install();
   let fileRequests = 0;
   page.on("request", request => {
@@ -80,6 +91,11 @@ test("embedded file polling stops while the sidebar or file tab is hidden", asyn
   await page.goto(`${root}/session/${VISUAL_SESSION}`);
   await page.getByRole("tab", { name: "Files", exact: true }).click();
   await expect(page.getByRole("button", { name: "README.md", exact: true })).toBeVisible();
+  const files = page.getByRole("tabpanel", { includeHidden: true }).filter({ has: page.getByRole("button", { name: /View all files/, includeHidden: true }) });
+  await files.getByRole("button", { name: "data", exact: true }).click();
+  await expect(files.getByRole("button", { name: "shikimate.csv", exact: true })).toBeVisible();
+  await files.getByRole("button", { name: "analysis", exact: true }).click();
+  await expect(files.getByRole("button", { name: "report.md", exact: true })).toBeVisible();
   const initial = fileRequests;
   await page.clock.runFor(4_000);
   await expect.poll(() => fileRequests).toBeGreaterThan(initial);
@@ -94,4 +110,11 @@ test("embedded file polling stops while the sidebar or file tab is hidden", asyn
   const conversations = fileRequests;
   await page.clock.runFor(6_000);
   expect(fileRequests).toBe(conversations);
+  // Hidden panels remain mounted, preserving both directory expansions.
+  await expect(files.getByRole("button", { name: "shikimate.csv", exact: true, includeHidden: true })).toHaveCount(1);
+  await expect(files.getByRole("button", { name: "report.md", exact: true, includeHidden: true })).toHaveCount(1);
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
+  await expect(files.getByRole("button", { name: "shikimate.csv", exact: true })).toBeVisible();
+  await expect(files.getByRole("button", { name: "report.md", exact: true })).toBeVisible();
+  await expect.poll(() => fileRequests).toBeGreaterThan(conversations);
 });

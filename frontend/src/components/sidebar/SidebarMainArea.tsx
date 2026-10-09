@@ -34,7 +34,8 @@ export function SidebarMainArea({ cwd, renderSessions }: { cwd: string; renderSe
         <span id={searchId} className="sr-only">{t("sidebar.searchScope")}</span>
         <div className="min-h-0 flex-1 overflow-hidden">{renderSessions(query)}</div>
       </Tabs.Content>
-      <Tabs.Content value="files" className="flex min-h-0 flex-1 flex-col">
+      {/* Preserve expanded folders while active controls background requests. */}
+      <Tabs.Content value="files" forceMount hidden={tab !== "files"} className="min-h-0 flex-1 flex-col data-[state=active]:flex data-[state=inactive]:hidden">
         <div className="min-h-0 flex-1 overflow-hidden"><FileBrowser cwd={cwd} embedded active={tab === "files" && !sidebarCollapsed} /></div>
         <button type="button" onClick={() => { navigate(`/workspace/${encodeURIComponent(cwd)}/files`); closeSidebarOnNarrow(); }} className="mt-2 h-nav shrink-0 rounded-input px-2 text-left text-ui-label text-muted hover:bg-surface-hover hover:text-text">{t("sidebar.allFiles")} →</button>
       </Tabs.Content>
