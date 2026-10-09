@@ -8,7 +8,7 @@ import { injectWorkspaceReferences } from "../lib/files";
 import { useFeedback } from "../components/feedback/feedback-context";
 import type { ResearchLoopDraft, ResearchStarter } from "../components/conversation/ResearchLoopControls";
 import { injectSubagentMentions } from "../lib/conversation";
-import { inlineWorkspaceReferences, type ComposerEntity } from "../lib/conversation/composer-document";
+import { inlineWorkspaceReferences, validComposerEntities, type ComposerEntity } from "../lib/conversation/composer-document";
 
 /**
  * Composer state and send pipeline: attachments, drag-and-drop, IME guards,
@@ -43,9 +43,10 @@ export function useComposer(params: {
   const setInput = useRuntimeStore((s) => s.setDraft);
   const [files, setFiles] = useState<File[]>([]);
   const [entities, setEntities] = useState<ComposerEntity[]>([]);
-  const mentions = useMemo(() => entities.flatMap((entity) => entity.kind === "mention"
-    ? [{ id: entity.id, name: entity.name, start: entity.start, end: entity.end }] : []), [entities]);
-  const inlineReferences = useMemo(() => inlineWorkspaceReferences(entities), [entities]);
+  const validEntities = useMemo(() => validComposerEntities(input, entities), [input, entities]);
+  const mentions = useMemo(() => validEntities.flatMap((entity) => entity.kind === "mention"
+    ? [{ id: entity.id, name: entity.name, start: entity.start, end: entity.end }] : []), [validEntities]);
+  const inlineReferences = useMemo(() => inlineWorkspaceReferences(validEntities), [validEntities]);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
