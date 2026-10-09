@@ -61,8 +61,8 @@ export class PiScienceClient {
 
   // ── REST ──
 
-  async createSession(cwd: string, model?: string): Promise<{ id: string; cwd?: string; project_id?: string }> {
-    return rest.createSession(this.baseUrl, cwd, model);
+  async createSession(cwd: string, model?: string, thinking?: string): Promise<{ id: string; cwd?: string; project_id?: string }> {
+    return rest.createSession(this.baseUrl, cwd, model, thinking);
   }
 
   async listSessions(cwd: string): Promise<SessionInfo[]> {

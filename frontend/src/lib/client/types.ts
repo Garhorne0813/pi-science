@@ -32,6 +32,10 @@ export interface AvailableModel {
   thinking_levels?: string[];
   context_window?: number | null;
   capability_source?: string;
+  max_output_tokens?: number | null;
+  input_formats?: string[];
+  vision?: boolean;
+  tools?: boolean;
 }
 
 export interface HistoryMessage {

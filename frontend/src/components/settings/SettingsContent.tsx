@@ -142,6 +142,7 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
     }
   };
 
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       {/* Settings navigation: a light rail on mobile (56px icon column) and a
@@ -200,12 +201,12 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
           </header>
           <div className="min-h-0 flex-1 px-card py-card md:px-0 md:py-6">
             <p className="mb-4 flex items-start gap-2 rounded-input bg-sidebar px-3 py-2 text-ui-caption leading-relaxed text-muted"><Icon icon={scope ? FolderOpen : Globe2} size={14} className="mt-0.5 shrink-0" /><span>{t(scope ? "settings.redesign.workspaceScopeHelp" : "settings.redesign.globalScopeHelp")}</span></p>
-            {needsModelConfig && error && <div role="alert" className="mb-card rounded-input bg-error/10 px-panel py-2 text-ui-caption text-error-text">{error}<button type="button" onClick={() => void loadConfig().catch(() => undefined)} className="ml-3 min-h-9 rounded-input px-3 text-link hover:bg-surface-hover">{t("settings.redesign.retryLoad")}</button></div>}
+            {tab === "models" && error && <div role="alert" className="mb-card rounded-input bg-error/10 px-panel py-2 text-ui-caption text-error-text">{error}<button type="button" onClick={() => void loadConfig().catch(() => undefined)} className="ml-3 min-h-9 rounded-input px-3 text-link hover:bg-surface-hover">{t("settings.redesign.retryLoad")}</button></div>}
             <Suspense fallback={<div role="status" className="py-4 text-sm text-muted">{t("common.loading")}</div>}>
-            {needsModelConfig && loading && !config && <div role="status" className="flex min-h-60 items-center justify-center text-sm text-muted"><Icon icon={Loader2} size={18} className="mr-2 animate-spin" />{t("common.loading")}</div>}
+            {tab === "models" && loading && !config && <div role="status" className="flex min-h-60 items-center justify-center text-sm text-muted"><Icon icon={Loader2} size={18} className="mr-2 animate-spin" />{t("common.loading")}</div>}
                 {tab === "general" && <GeneralTab />}
                 {tab === "models" && <AIModelsTab config={config} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} onConfigReload={loadConfig} />}
-                {tab === "agent" && <AgentTab config={config} saving={saving === "compaction"} onSave={saveCompaction} onOpenModels={() => { changeTab("models"); focusTab("models"); }} />}
+                {tab === "agent" && <AgentTab config={config} saving={saving === "compaction"} onSave={saveCompaction} scope={scope} loading={loading} error={error} onRefreshContext={loadConfig} onOpenModels={() => { changeTab("models"); focusTab("models"); }} />}
                 {tab === "progress" && <ProgressTab />}
                 {tab === "skills" && <SkillsTab workspaceCwd={scope} />}
                 {tab === "capabilities" && <CapabilitiesTab workspaceCwd={scope} onOpenMcp={() => { changeTab("mcp"); focusTab("mcp"); }} />}

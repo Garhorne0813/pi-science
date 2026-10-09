@@ -999,4 +999,30 @@ describe("runtime session actions", () => {
     expect(after.working).toBe(true);
     expect(after.thread.blocks.map((block) => block.id)).toEqual(["user-1"]);
   });
+  it("consumes an explicit workspace draft only when session creation succeeds", async () => {
+    let fail = true;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init: RequestInit = {}) => {
+      if (String(input) === "/api/sessions") return fail ? jsonResponse({ error: "temporarily unavailable" }, 503) : jsonResponse({ id: "draft-session", cwd: "/workspace" });
+      throw new Error(`Unexpected request: ${input}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const draft = { cwd: "/workspace", selection: { model: "deepseek/deepseek-flash", thinking: "high" as const } };
+    useRuntimeStore.setState({ cwd: "/workspace", activeSessionId: null, draftModelSelection: draft });
+    await expect(useRuntimeStore.getState().createNewSession()).rejects.toThrow();
+    expect(useRuntimeStore.getState().draftModelSelection).toBe(draft);
+    fail = false;
+    await expect(useRuntimeStore.getState().createNewSession()).resolves.toBe("draft-session");
+    expect(JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body))).toMatchObject({ cwd: "/workspace", config: draft.selection });
+    expect(useRuntimeStore.getState().draftModelSelection).toBeNull();
+  });
+  it("does not apply or consume another workspace's draft", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init: RequestInit = {}) => jsonResponse({ id: "default-session", cwd: "/workspace" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const draft = { cwd: "/other", selection: { model: "deepseek/deepseek-flash", thinking: "high" as const } };
+    useRuntimeStore.setState({ cwd: "/workspace", activeSessionId: null, draftModelSelection: draft });
+    await useRuntimeStore.getState().createNewSession();
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({ config: {} });
+    expect(useRuntimeStore.getState().draftModelSelection).toBe(draft);
+  });
+
 });

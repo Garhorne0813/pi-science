@@ -41,7 +41,7 @@ async function workspace(): Promise<string> {
 }
 
 describe("native control-plane business routes", () => {
-  it("connects official models and characterizes shared legacy selection ownership (v2 migration pending)", async () => {
+  it("separates default and durable session ownership through the compatibility adapter", async () => {
     const cwd = await workspace();
     delete process.env.PI_SCIENCE_AGENT_RUNTIME;
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
@@ -66,14 +66,11 @@ describe("native control-plane business routes", () => {
         payload: { model: "deepseek/deepseek-v4-pro", thinking: "high", session_id: created.id } });
       expect(switched.statusCode).toBe(200);
       expect(await modules.sessions.state(created.id, cwd)).toMatchObject({ model: "deepseek/deepseek-v4-pro", thinking: "high" });
-      // Transitional contract: the session composer also updates shared
-      // settings. Default/session separation must deliberately replace this
-      // regression when the ModelSelection v2 endpoints are introduced.
       const shared = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
-      expect(shared).toMatchObject({ model: "deepseek/deepseek-v4-pro", thinking: "high" });
+      expect(shared).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
       const nextSession = await modules.sessions.create({ cwd, config: { skills: [], extensions: [] } });
       if (!("id" in nextSession)) throw new Error(String(nextSession.error));
-      expect(await modules.sessions.state(nextSession.id, cwd)).toMatchObject({ model: "deepseek/deepseek-v4-pro", thinking: "high" });
+      expect(await modules.sessions.state(nextSession.id, cwd)).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
       await modules.sessions.resume(nextSession.id, cwd);
       const switchedAgain = await app.inject({ method: "PUT", url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
         payload: { model: "deepseek/deepseek-flash", thinking: "off", session_id: created.id } });
@@ -81,8 +78,6 @@ describe("native control-plane business routes", () => {
       await modules.sessions.resume(created.id, cwd);
       expect(await modules.sessions.state(created.id, cwd)).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
       expect((await app.inject({ method: "GET", url: "/api/settings/config" })).json()).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
-      // Legacy model reload also applies the shared selection to other loaded
-      // sessions; this is intentionally not independent session ownership.
       expect(await modules.sessions.state(nextSession.id, cwd)).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
       expect(JSON.stringify(listed)).not.toContain("catalog-test-key");
     } finally {
@@ -387,6 +382,8 @@ describe("native control-plane business routes", () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
+  // Several disk-backed round trips exceed 5s on Windows runners. Keep a
+  // functional integration timeout; benchmark tests enforce latency budgets.
   it("persists runtime capabilities into custom provider model hints on GET config", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
@@ -443,7 +440,7 @@ describe("native control-plane business routes", () => {
 
   }, 30000);
 
-  it("corrects the persisted thinking level to the runtime's actual levels after model PUT", async () => {
+  it("uses verified runtime levels when saving the legacy default selection", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
@@ -451,7 +448,7 @@ describe("native control-plane business routes", () => {
       success: true,
       data: { models: [{ provider: "deepseek", id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", reasoning: true, contextWindow: 1_000_000, thinkingLevelMap: { off: "off", low: "low", minimal: null, medium: null, high: null } }] },
     });
-    // The catalog only allows low, but the reloaded runtime reports high/max:
+    // The catalog only allows low, but runtime verification reports high/max:
     // the response AND the persisted config must both settle on high.
     vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({ success: true, data: { levels: ["high", "max"], model: "deepseek/deepseek-v4-flash" } });
     const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
@@ -462,7 +459,7 @@ describe("native control-plane business routes", () => {
     expect(stored).toMatchObject({ model: "deepseek/deepseek-v4-flash", thinking: "high" });
   });
 
-  it("keeps the catalog-clamped level when the reloaded runtime runs a different model", async () => {
+  it("keeps the catalog-clamped level when runtime verification returns a different model", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
@@ -470,7 +467,7 @@ describe("native control-plane business routes", () => {
       success: true,
       data: { models: [{ provider: "deepseek", id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", reasoning: true, contextWindow: 1_000_000, thinkingLevelMap: { off: "off", low: "low", minimal: null, medium: null, high: null } }] },
     });
-    // The reloaded runtime is running a DIFFERENT model: its levels must not
+    // Runtime verification describes a DIFFERENT model: its levels must not
     // be written back to the config or echoed in the response.
     vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({ success: true, data: { levels: ["high", "max"], model: "custom-other/provider-2" } });
     const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);

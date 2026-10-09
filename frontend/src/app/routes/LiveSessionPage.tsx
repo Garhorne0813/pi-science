@@ -238,6 +238,7 @@ export function LiveSessionPage() {
     cwd: workspaceCwd,
     conversationKey: sessionId ?? null,
     selectedModel: model.selectedModel,
+    configuringModel: model.configuringModel,
     reviewingProject,
     setReviewNotice,
     research: { mode: research.mode, draft: research.draft, intent: research.intent },

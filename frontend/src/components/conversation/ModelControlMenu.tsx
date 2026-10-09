@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState, type FocusEvent, type PointerEvent } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown, ChevronRight, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -65,7 +65,8 @@ export function ModelControlMenu({
   const { i18n, t } = useTranslation();
   const isChinese = i18n.resolvedLanguage?.startsWith("zh") ?? false;
   const [modelQuery, setModelQuery] = useState("");
-  const selectedModelInfo = models.find((model) => model.id === selectedModel);
+  const index = useMemo(() => ({ byId: new Map(models.map((model) => [model.id, model])), search: models.map((model) => ({ model, key: `${model.id} ${model.model} ${model.label}`.toLowerCase() })) }), [models]);
+  const selectedModelInfo = index.byId.get(selectedModel);
   const modelLabel = selectedModelInfo?.model || (needsModelSwitch ? t("conversation.switchModel") : selectedModel || (isChinese ? "选择模型" : "Select model"));
   const thinkingLabel = formatThinkingLabel(thinking, isChinese);
   const effectiveWindow = contextWindow || selectedModelInfo?.context_window || null;
@@ -80,24 +81,30 @@ export function ModelControlMenu({
   const roundedContextPercent = Math.round(contextPercent ?? 0);
   const contextRingLabel = `${labels.context}: ${contextSummary} · ${roundedContextPercent}%${nearCompaction ? ` · ${labels.threshold}: ${compactionThresholdPercent}%` : ""}`;
 
+  const [submenuOffset, setSubmenuOffset] = useState(4);
+  const fitSubmenu = (event: FocusEvent<HTMLDivElement> | PointerEvent<HTMLDivElement>) => {
+    // Below the sm breakpoint there is no room for two adjacent menus.
+    // Open the submenu over its parent instead of placing it offscreen.
+    setSubmenuOffset(window.innerWidth < 640 ? -event.currentTarget.getBoundingClientRect().width : 4);
+  };
   // Model list: filter by query, then group by provider preserving first-seen order.
-  const normalizedQuery = modelQuery.trim().toLowerCase();
-  const visibleModels = normalizedQuery
-    ? models.filter((model) =>
-        model.id.toLowerCase().includes(normalizedQuery)
-        || model.model.toLowerCase().includes(normalizedQuery)
-        || model.label.toLowerCase().includes(normalizedQuery),
-      )
-    : models;
-  const groups: Array<{ provider: string; models: AvailableModel[] }> = [];
-  for (const model of visibleModels) {
-    const group = groups.find((item) => item.provider === model.provider);
-    if (group) group.models.push(model);
-    else groups.push({ provider: model.provider, models: [model] });
-  }
+  const normalizedQuery = useDeferredValue(modelQuery.trim().toLowerCase());
+  const visibleModels = useMemo(() => normalizedQuery ? index.search.filter(({ key }) => key.includes(normalizedQuery)).map(({ model }) => model) : models, [index, models, normalizedQuery]);
+  const [modelPage, setModelPage] = useState(0);
+  const currentPage = Math.min(modelPage, Math.max(0, Math.ceil(visibleModels.length / 50) - 1));
+  useEffect(() => { setModelPage(0); }, [normalizedQuery]);
+  const groups = useMemo(() => {
+    const providers = new Map<string, AvailableModel[]>();
+    for (const model of visibleModels.slice(currentPage * 50, (currentPage + 1) * 50)) {
+      const entries = providers.get(model.provider) ?? [];
+      entries.push(model);
+      providers.set(model.provider, entries);
+    }
+    return [...providers].map(([provider, models]) => ({ provider, models }));
+  }, [visibleModels, currentPage]);
 
   return (
-    <DropdownMenu.Root onOpenChange={(open) => { if (!open) setModelQuery(""); }}>
+    <DropdownMenu.Root onOpenChange={(open) => { if (!open) { setModelQuery(""); setModelPage(0); } }}>
       <DropdownMenu.Trigger asChild disabled={disabled}>
         <button
           type="button"
@@ -141,13 +148,13 @@ export function ModelControlMenu({
           className={MENU_ROOT_CLASS}
         >
           <DropdownMenu.Sub>
-            <DropdownMenu.SubTrigger className={MENU_ITEM_CLASS}>
+            <DropdownMenu.SubTrigger onFocus={fitSubmenu} onPointerEnter={fitSubmenu} className={MENU_ITEM_CLASS}>
               <span className="font-medium">{labels.model}</span>
               <span className="ml-auto max-w-[120px] truncate text-muted">{modelLabel}</span>
               <ChevronRight size={13} className="shrink-0 text-muted" />
             </DropdownMenu.SubTrigger>
             <DropdownMenu.Portal>
-              <DropdownMenu.SubContent sideOffset={4} alignOffset={-6} collisionPadding={8} className={MENU_CONTENT_CLASS}>
+              <DropdownMenu.SubContent sideOffset={submenuOffset} alignOffset={-6} collisionPadding={8} className={MENU_CONTENT_CLASS}>
                 <div className="mb-1.5 border-b border-faint pb-1.5">
                   <div className="flex h-8 items-center gap-1.5 rounded-input bg-surface-2 px-2">
                     <Search size={12} className="shrink-0 text-muted" />
@@ -187,18 +194,23 @@ export function ModelControlMenu({
                   ))}
                   </DropdownMenu.RadioGroup>
                 </div>
+                {visibleModels.length > 50 && <div className="flex items-center justify-between border-t border-border pt-1">
+                  <DropdownMenu.Item disabled={currentPage === 0} onSelect={(event) => { event.preventDefault(); setModelPage(currentPage - 1); }} className={MENU_ITEM_CLASS}>{isChinese ? "上一页" : "Previous"}</DropdownMenu.Item>
+                  <span className="text-ui-meta text-muted">{currentPage * 50 + 1}–{Math.min((currentPage + 1) * 50, visibleModels.length)} / {visibleModels.length}</span>
+                  <DropdownMenu.Item disabled={(currentPage + 1) * 50 >= visibleModels.length} onSelect={(event) => { event.preventDefault(); setModelPage(currentPage + 1); }} className={MENU_ITEM_CLASS}>{isChinese ? "下一页" : "Next"}</DropdownMenu.Item>
+                </div>}
               </DropdownMenu.SubContent>
             </DropdownMenu.Portal>
           </DropdownMenu.Sub>
 
           <DropdownMenu.Sub>
-            <DropdownMenu.SubTrigger disabled={!selectedModel || thinkingLevels.length === 0} className={MENU_ITEM_CLASS}>
+            <DropdownMenu.SubTrigger onFocus={fitSubmenu} onPointerEnter={fitSubmenu} disabled={!selectedModel || thinkingLevels.length === 0} className={MENU_ITEM_CLASS}>
               <span className="font-medium">{labels.effort}</span>
               <span className="ml-auto text-muted">{thinkingLabel}</span>
               <ChevronRight size={13} className="shrink-0 text-muted" />
             </DropdownMenu.SubTrigger>
             <DropdownMenu.Portal>
-              <DropdownMenu.SubContent sideOffset={4} alignOffset={-6} collisionPadding={8} className={MENU_CONTENT_CLASS}>
+              <DropdownMenu.SubContent sideOffset={submenuOffset} alignOffset={-6} collisionPadding={8} className={MENU_CONTENT_CLASS}>
                 <div className="max-h-[min(320px,calc(100vh-120px))] overflow-y-auto overscroll-contain">
                   <DropdownMenu.RadioGroup value={thinking}>
                   {thinkingLevels.map((level) => (

@@ -24,7 +24,9 @@ function Harness({
   intent,
   researchMode,
   conversationKey = null,
+  configuringModel,
 }: {
+  configuringModel?: boolean;
   onSend?: () => void;
   intent?: (text: string) => Promise<{ kind: "draft" } | { kind: "conversation"; message: string } | null>;
   researchMode?: ResearchStarter | null;
@@ -34,6 +36,7 @@ function Harness({
     cwd: "/w",
     conversationKey,
     selectedModel: "m",
+    configuringModel,
     reviewingProject: false,
     setReviewNotice: () => undefined,
     research: {
@@ -63,6 +66,14 @@ afterEach(() => {
 });
 
 describe("useComposer onSend", () => {
+  it("retains the prompt while a session model change is still being committed", async () => {
+    const sendPrompt = vi.fn(async (): Promise<string | null> => null);
+    useRuntimeStore.setState({ draft: "hello", sendPrompt });
+    render(<Harness configuringModel />);
+    fireEvent.click(screen.getByRole("button", { name: "send" }));
+    expect(sendPrompt).not.toHaveBeenCalled();
+    expect(useRuntimeStore.getState().draft).toBe("hello");
+  });
   it("fires onSend once right before a real message is dispatched", async () => {
     const onSend = vi.fn();
     const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);

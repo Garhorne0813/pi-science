@@ -15,6 +15,11 @@ const putCalls: { url: string; body: unknown }[] = [];
 
 function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   const method = (init.method || "GET").toUpperCase();
+  if (url.startsWith("/api/model-selection/catalog")) return Promise.resolve(jsonResponse({ available_models: [{ id: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash", thinking_levels: ["off", "high", "max"], context_window: 1000000 }] }));
+  if (url === "/api/model-selection/default") {
+    if (method === "PUT") { putCalls.push({ url, body: JSON.parse(String(init.body)) }); return Promise.resolve(jsonResponse({ scope: "default", selection: JSON.parse(String(init.body)) })); }
+    return Promise.resolve(jsonResponse({ scope: "default", selection: { model: null, thinking: "off" } }));
+  }
   if (url.startsWith("/api/settings/config")) {
     return Promise.resolve(jsonResponse({
       ok: true,
@@ -230,9 +235,9 @@ describe("SettingsContent", () => {
     renderContent(null);
     fireEvent.click(await screen.findByRole("tab", { name: "Agent" }));
     expect(await screen.findByText("Control how Pi manages long-running work.")).toBeInTheDocument();
-    expect(screen.getByText("Context Management")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Configured model" })).toBeInTheDocument();
-    expect(screen.getByText(/They affect new conversations and are also applied to other open conversations/)).toBeInTheDocument();
+    expect(await screen.findByText("Context Management")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Default model for new conversations" })).toBeInTheDocument();
+    expect(screen.getByText(/Defaults apply to new conversations/)).toBeInTheDocument();
     expect(screen.queryByText(/Configured model defaults/)).not.toBeInTheDocument();
   });
   it("uses a single keyboard tab stop in the navigation and links Agent to model connections", async () => {
@@ -305,6 +310,26 @@ describe("SettingsContent", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry loading" }));
     expect(await screen.findByText("Configured services")).toBeInTheDocument();
     expect(attempts).toBe(3);
+  });
+
+  it("manages defaults while context loading is stalled and after it fails", async () => {
+    let release!: (response: Response) => void;
+    const context = new Promise<Response>((resolve) => { release = resolve; });
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => String(input).startsWith("/api/settings/config") ? context : defaultFetch(String(input), init));
+    renderContent(null);
+    fireEvent.click(screen.getByRole("tab", { name: "Agent" }));
+    const model = await screen.findByRole("button", { name: /^Default model:/ });
+    await waitFor(() => expect(model).toBeEnabled());
+    expect(screen.getByText("Loading context settings…")).toBeInTheDocument();
+    await act(async () => release(jsonResponse({ error: "context unavailable" }, 400)));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Context settings could not load: context unavailable");
+    expect(model).toBeEnabled();
+    fireEvent.pointerDown(model); fireEvent.click(model);
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "DeepSeek V4 Flash" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putCalls).toContainEqual({ url: "/api/model-selection/default", body: { model: "deepseek/deepseek-v4-flash", thinking: "off" } }));
+    expect(await screen.findByText(/Default model saved. Context settings could not refresh/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
   it.each(["save", "delete"])("propagates API key %s failures to the open maintenance dialog", async (operation) => {

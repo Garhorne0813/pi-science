@@ -1,219 +1,174 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
-import { QueryClientProvider } from "@tanstack/react-query";
+import type { ModelSelection } from "@pi-science/contracts";
 import { useModelConfig } from "./useModelConfig";
 import { queryClient } from "../lib/client/query-client";
-import { settingsApi } from "../lib/settings";
+import { modelSelectionApi, modelSelectionKeys } from "../lib/model-selection";
 import { useRuntimeStore } from "../lib/agent-runtime";
 import i18n from "../i18n";
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
-}
-
-let currentModel = "deepseek/deepseek-v4-flash";
-let currentThinking = "high";
-
-function defaultFetch(url: string, init: RequestInit): Promise<Response> {
-  const method = (init.method || "GET").toUpperCase();
-  if (url.startsWith("/api/settings/config")) {
-    return Promise.resolve(jsonResponse({
-      ok: true,
-      providers: [{ id: "deepseek", name: "DeepSeek", has_key: true }],
-      available_models: [
-        { id: "deepseek/deepseek-v4-flash", name: "V4 Flash", provider: "deepseek", reasoning: true, thinking_levels: ["high", "max"] },
-        { id: "deepseek/deepseek-v4-pro", name: "V4 Pro", provider: "deepseek", reasoning: true, thinking_levels: ["high", "max"] },
-      ],
-      model: currentModel,
-      thinking: currentThinking,
-    }));
+const flash = "deepseek/deepseek-flash";
+const pro = "deepseek/deepseek-v4-pro";
+const models = [flash, pro].map((id) => ({ id, provider: "deepseek", model: id.split("/")[1], label: id, reasoning: true, thinking_levels: ["off", "high", "max"] }));
+let defaults: ModelSelection;
+let sessions: Record<string, ModelSelection>;
+const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
+async function respond(input: RequestInfo | URL, init: RequestInit = {}) {
+  const path = new URL(String(input), "http://localhost");
+  if (path.pathname === "/api/model-selection/catalog") return json({ available_models: models });
+  if (path.pathname === "/api/model-selection/default") {
+    if (init.method === "PUT") defaults = JSON.parse(String(init.body));
+    return json({ scope: "default", selection: defaults });
   }
-  if (url.startsWith("/api/settings/model")) {
-    const body = JSON.parse(String(init.body)) as { model: string; thinking: string };
-    currentModel = body.model;
-    currentThinking = body.thinking;
-    return Promise.resolve(jsonResponse({ ok: true, model: body.model, thinking: body.thinking }));
+  const id = path.pathname.match(/^\/api\/sessions\/([^/]+)\/model-selection$/)?.[1];
+  if (id) {
+    if (!sessions[id]) return json({ error: "session not found" }, 404);
+    if (init.method === "PUT") sessions[id] = JSON.parse(String(init.body));
+    return json({ scope: "session", session_id: id, selection: sessions[id] });
   }
-  return Promise.resolve(jsonResponse({ error: `unhandled ${method} ${url}` }, 404));
+  return json({ error: `Unexpected request ${path.pathname}` }, 404);
 }
-
-const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => defaultFetch(String(input), init));
-
-function wrapper({ children }: { children: React.ReactNode }) {
-  return (
-    <MemoryRouter initialEntries={["/workspace/proj/session/s1"]}>
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    </MemoryRouter>
-  );
-}
-
-beforeAll(async () => {
-  await i18n.changeLanguage("en");
-});
-
+const fetchMock = vi.fn(respond);
+beforeAll(async () => { await i18n.changeLanguage("en"); });
 beforeEach(() => {
-  cleanup();
-  fetchMock.mockClear();
-  currentModel = "deepseek/deepseek-v4-flash";
-  currentThinking = "high";
+  cleanup(); queryClient.clear();
+  defaults = { model: flash, thinking: "high" };
+  sessions = { s1: { model: flash, thinking: "high" }, s2: { model: pro, thinking: "max" } };
+  fetchMock.mockReset().mockImplementation(respond);
   vi.stubGlobal("fetch", fetchMock);
-  queryClient.clear();
-  useRuntimeStore.setState({ model: null, thinking: null });
+  useRuntimeStore.setState({ cwd: "proj", activeSessionId: null, model: null, thinking: null, client: null, draftModelSelection: null });
 });
+afterEach(() => { cleanup(); queryClient.clear(); vi.unstubAllGlobals(); });
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
-describe("useModelConfig", () => {
-  it("tracks the shared settings config cache so dialog saves refresh the composer", async () => {
-    const { result } = renderHook(() => useModelConfig("proj", "s1"), { wrapper });
-    await waitFor(() => expect(result.current.selectedModel).toBe("deepseek/deepseek-v4-flash"));
-
-    // Simulate the settings dialog save flow: PUT succeeds, then the dialog
-    // reloads the config (loadConfig), which updates the shared cache that the
-    // composer now subscribes to while it stays mounted under the modal.
-    await act(async () => {
-      await settingsApi.saveModel("deepseek/deepseek-v4-pro", "high", "proj");
-      await settingsApi.config("proj");
+describe("ModelSelection composer ownership", () => {
+  it("keeps 10,000 model options stable through context updates and refreshes changed catalogs", async () => {
+    const large = Array.from({ length: 10000 }, (_, index) => ({ ...models[0], id: `deepseek/model-${index}`, model: `model-${index}` }));
+    queryClient.setQueryData(modelSelectionKeys.catalog("proj"), { available_models: large });
+    fetchMock.mockImplementation((url, init) => String(url).includes("/catalog") ? Promise.resolve(json({ available_models: large })) : respond(url, init));
+    const { result } = renderHook(() => {
+      useRuntimeStore((state) => state.contextTokens);
+      return useModelConfig("proj", "s1");
     });
-    await waitFor(() => expect(result.current.selectedModel).toBe("deepseek/deepseek-v4-pro"));
-    const putCall = fetchMock.mock.calls.find(([url, _init]) => String(url).startsWith("/api/settings/model"));
-    expect(putCall).toBeDefined();
-    expect(JSON.parse(String(putCall?.[1]?.body))).toMatchObject({ model: "deepseek/deepseek-v4-pro", thinking: "high" });
+    await waitFor(() => expect(result.current.models).toHaveLength(10000));
+    const first = result.current.models;
+    for (let index = 0; index < 20; index++) {
+      act(() => useRuntimeStore.setState({ contextTokens: index * 100 }));
+      expect(result.current.models).toBe(first);
+    }
+    act(() => queryClient.setQueryData(modelSelectionKeys.catalog("proj"), { available_models: [...large, models[1]] }));
+    await waitFor(() => expect(result.current.models).toHaveLength(10001));
+    expect(result.current.models).not.toBe(first);
   });
-
-  it("reflects the workspace-scoped config from the shared cache", async () => {
-    const { result } = renderHook(() => useModelConfig("proj", "s1"), { wrapper });
-    await waitFor(() => expect(result.current.selectedModel).toBe("deepseek/deepseek-v4-flash"));
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/settings/config?cwd=proj"), expect.anything());
-  });
-
-  it("prefers the saved settings config over a stale active-runtime model", async () => {
-    // The runtime store still reports the old model (the server restarts
-    // runtimes asynchronously after a settings save).
-    useRuntimeStore.setState({ model: "deepseek/deepseek-v4-flash", thinking: "high" });
-    const { result } = renderHook(() => useModelConfig("proj", "s1"), { wrapper });
-    await waitFor(() => expect(result.current.selectedModel).toBe("deepseek/deepseek-v4-flash"));
-
-    // The settings dialog saves a new model; the composer must follow the
-    // settings config, not the stale runtime snapshot.
-    await act(async () => {
-      await settingsApi.saveModel("deepseek/deepseek-v4-pro", "max", "proj");
-      await settingsApi.config("proj");
-    });
-    await waitFor(() => expect(result.current.selectedModel).toBe("deepseek/deepseek-v4-pro"));
+  it("uses the durable session selection and ignores the default and stale runtime", async () => {
+    useRuntimeStore.setState({ model: flash, thinking: "off" });
+    const { result } = renderHook(() => useModelConfig("proj", "s2"));
+    await waitFor(() => expect(result.current.selectedModel).toBe(pro));
+    expect(result.current.thinking).toBe("max");
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("settings/config"))).toBe(false);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("selection/default"))).toBe(false);
+    await act(async () => { await modelSelectionApi.saveDefault({ model: pro, thinking: "off" }); });
+    expect(result.current.selectedModel).toBe(pro);
     expect(result.current.thinking).toBe("max");
   });
+  it("writes only session A and preserves the default and session B", async () => {
+    const { result } = renderHook(() => useModelConfig("proj", "s1"));
+    await waitFor(() => expect(result.current.selectedModel).toBe(flash));
+    act(() => result.current.handleModelChange(pro));
+    await waitFor(() => expect(result.current.configuringModel).toBe(false));
+    expect(sessions.s1).toEqual({ model: pro, thinking: "high" });
+    expect(sessions.s2).toEqual({ model: pro, thinking: "max" });
+    expect(defaults).toEqual({ model: flash, thinking: "high" });
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT").map(([url]) => String(url))).toEqual(["/api/sessions/s1/model-selection?cwd=proj"]);
+  });
+  it("unblocks sending after the session PUT even when the subsequent state read hangs", async () => {
+    const releases: Array<(value: { model: string; thinking: string }) => void> = [];
+    const getSessionState = vi.fn(() => new Promise<{ model: string; thinking: string }>((resolve) => releases.push(resolve)));
+    useRuntimeStore.setState({ cwd: "proj", activeSessionId: "s1",
+      client: { getSessionState } as unknown as NonNullable<ReturnType<typeof useRuntimeStore.getState>["client"]> });
+    const { result } = renderHook(() => useModelConfig("proj", "s1"));
+    await waitFor(() => expect(result.current.selectedModel).toBe(flash));
+    act(() => result.current.handleModelChange(pro));
+    await waitFor(() => expect(getSessionState).toHaveBeenCalledTimes(1));
+    // A state GET which never resolves must not hold configuringModel=true.
+    await waitFor(() => expect(result.current.configuringModel).toBe(false));
+    expect(result.current.selectedModel).toBe(pro);
+    expect(useRuntimeStore.getState().model).toBe(pro);
 
-  it("does not let a late runtime state update override the settings config", async () => {
-    const { result } = renderHook(() => useModelConfig("proj", "s1"), { wrapper });
-    await waitFor(() => expect(result.current.selectedModel).toBe("deepseek/deepseek-v4-flash"));
-
-    // A stale/racing session-state event lands after the config was applied.
-    await act(async () => {
-      useRuntimeStore.setState({ model: "deepseek/deepseek-v4-pro", thinking: "max" });
-    });
-    expect(result.current.selectedModel).toBe("deepseek/deepseek-v4-flash");
+    // A second selection can commit while the first state GET is in flight.
+    act(() => result.current.handleThinkingChange("max"));
+    await waitFor(() => expect(getSessionState).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.configuringModel).toBe(false));
+    await act(async () => { releases[0]!({ model: flash, thinking: "off" }); });
+    expect(useRuntimeStore.getState()).toMatchObject({ model: pro, thinking: "max" });
+    await act(async () => { releases[1]!({ model: pro, thinking: "max" }); });
+    expect(useRuntimeStore.getState()).toMatchObject({ model: pro, thinking: "max" });
+  });
+  it("switches ownership when navigating between sessions in one workspace", async () => {
+    const { result, rerender } = renderHook(({ id }) => useModelConfig("proj", id), { initialProps: { id: "s1" } });
+    await waitFor(() => expect(result.current.selectedModel).toBe(flash));
+    rerender({ id: "s2" });
+    await waitFor(() => expect(result.current.selectedModel).toBe(pro));
+    expect(result.current.thinking).toBe("max");
+  });
+  it("keeps a blank conversation's selection as a draft without writing defaults", async () => {
+    const { result } = renderHook(() => useModelConfig("proj", undefined));
+    await waitFor(() => expect(result.current.selectedModel).toBe(flash));
+    act(() => result.current.handleModelChange(pro));
+    expect(result.current.selectedModel).toBe(pro);
+    expect(useRuntimeStore.getState().draftModelSelection).toEqual({ cwd: "proj", selection: { model: pro, thinking: "high" } });
+    await act(async () => { await modelSelectionApi.saveDefault({ model: flash, thinking: "off" }); });
+    expect(result.current.selectedModel).toBe(pro);
+    expect(result.current.thinking).toBe("high");
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT")).toHaveLength(1);
+  });
+  it("does not leak a draft or runtime selection into another workspace", async () => {
+    useRuntimeStore.setState({ draftModelSelection: { cwd: "proj", selection: { model: pro, thinking: "max" } }, activeSessionId: "s2", model: pro });
+    const { result } = renderHook(() => useModelConfig("other", undefined));
+    await waitFor(() => expect(result.current.selectedModel).toBe(flash));
     expect(result.current.thinking).toBe("high");
   });
-
-  it("falls back to the active runtime model when settings carry none", async () => {
-    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      const url = String(input);
-      if (url.startsWith("/api/settings/config")) {
-        return Promise.resolve(jsonResponse({ ok: true, providers: [], available_models: [
-          { id: "deepseek/deepseek-v4-pro", provider: "deepseek", model: "deepseek-v4-pro", label: "V4 Pro" },
-        ], model: undefined, thinking: undefined }));
-      }
-      if (url.startsWith("/api/settings/model")) {
-        return Promise.resolve(jsonResponse({ ok: true }));
-      }
-      return Promise.resolve(jsonResponse({ error: `unhandled ${init.method || "GET"} ${url}` }, 404));
-    });
-    useRuntimeStore.setState({ model: "deepseek/deepseek-v4-pro", thinking: "max" });
-
-    const { result } = renderHook(() => useModelConfig("proj", "s1"), { wrapper });
-    await waitFor(() => expect(result.current.selectedModel).toBe("deepseek/deepseek-v4-pro"));
-    expect(result.current.thinking).toBe("max");
-  });
-
-  it("requires a model switch when the saved model is absent from the runtime catalog", async () => {
-    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      const url = String(input);
-      if (url.startsWith("/api/settings/config")) return jsonResponse({
-        available_models: [{ id: "deepseek/deepseek-v4-pro", provider: "deepseek", model: "deepseek-v4-pro", label: "V4 Pro" }],
-        model: "", unavailable_model: "deepseek/deepseek-v4-flash", thinking: "high",
-      });
-      return defaultFetch(url, init);
-    });
-    useRuntimeStore.setState({ model: "deepseek/deepseek-v4-pro", thinking: "high" });
-    const { result } = renderHook(() => useModelConfig("proj", "s1"), { wrapper });
+  it("reports an unavailable durable model without substituting defaults", async () => {
+    sessions.s1 = { model: "user-missing/model", thinking: "off" };
+    const { result } = renderHook(() => useModelConfig("proj", "s1"));
     await waitFor(() => expect(result.current.needsModelSwitch).toBe(true));
     expect(result.current.selectedModel).toBe("");
-    expect(result.current.modelError).toContain("deepseek/deepseek-v4-flash");
+    expect(result.current.modelError).toContain("user-missing/model");
   });
-
-  it("does not let a previous workspace's saved config block this workspace's runtime model", async () => {
-    // Workspace "proj2" config cannot be loaded (offline/error), so the
-    // runtime store is the only model source there — and it must not be
-    // shadowed by the stale saved config of the previously viewed workspace.
-    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      const url = String(input);
-      if (url.startsWith("/api/settings/config")) {
-        const cwd = new URL(url, "http://localhost").searchParams.get("cwd");
-        if (cwd === "proj2") return Promise.reject(new Error("config unavailable"));
-      }
-      return defaultFetch(url, init);
-    });
-
-    // Workspace "proj" has a saved config, so the hook remembers it.
-    const { result, rerender } = renderHook(({ cwd, sessionId }: { cwd: string; sessionId: string }) => useModelConfig(cwd, sessionId), {
-      initialProps: { cwd: "proj", sessionId: "s1" },
-      wrapper,
-    });
-    await waitFor(() => expect(result.current.selectedModel).toBe("deepseek/deepseek-v4-flash"));
-
-    // Navigate to "proj2" (no reachable config): the late runtime state must
-    // fill the composer instead of being blocked by proj's stale saved config.
-    rerender({ cwd: "proj2", sessionId: "s2" });
-    await act(async () => {
-      useRuntimeStore.setState({ model: "deepseek/deepseek-v4-pro", thinking: "max" });
-    });
-    expect(result.current.selectedModel).toBe("deepseek/deepseek-v4-pro");
+  it("does not substitute a default when the session read fails", async () => {
+    delete sessions.s1;
+    const { result } = renderHook(() => useModelConfig("proj", "s1"));
+    await waitFor(() => expect(result.current.modelError).toContain("session not found"));
+    expect(result.current.selectedModel).toBe("");
+  });
+  it("retains the committed choice after a failed session write", async () => {
+    fetchMock.mockImplementation((url, init) => init?.method === "PUT" ? Promise.resolve(json({ error: "agent is busy" }, 409)) : respond(url, init));
+    const { result } = renderHook(() => useModelConfig("proj", "s1"));
+    await waitFor(() => expect(result.current.selectedModel).toBe(flash));
+    act(() => result.current.handleModelChange(pro));
+    await waitFor(() => expect(result.current.modelError).toBe("agent is busy"));
+    expect(result.current.selectedModel).toBe(flash);
+    expect(defaults.model).toBe(flash);
+  });
+  it("isolates late writes and failures from a newly viewed session", async () => {
+    let release!: (response: Response) => void;
+    fetchMock.mockImplementation((url, init) => init?.method === "PUT" ? new Promise((resolve) => { release = resolve; }) : respond(url, init));
+    const { result, rerender } = renderHook(({ id }) => useModelConfig("proj", id), { initialProps: { id: "s1" } });
+    await waitFor(() => expect(result.current.selectedModel).toBe(flash));
+    act(() => result.current.handleModelChange(pro));
+    await waitFor(() => expect(release).toBeDefined());
+    rerender({ id: "s2" });
+    await waitFor(() => expect(result.current.selectedModel).toBe(pro));
+    await act(async () => { release(json({ error: "old request failed" }, 409)); });
+    expect(result.current.modelError).toBeNull();
     expect(result.current.thinking).toBe("max");
+    rerender({ id: "s1" });
+    await waitFor(() => expect(result.current.selectedModel).toBe(flash));
+    expect(result.current.configuringModel).toBe(false);
   });
-
-  it("does not retain the previous workspace's model when the new workspace's config fails and the runtime store never updates", async () => {
-    // Workspace "proj2" config cannot be loaded (offline/error) and no runtime
-    // state ever arrives for it: the store keeps the value "proj"'s session
-    // left behind. Since that value never changes after the switch, neither it
-    // nor "proj"'s saved config may leak into the new workspace.
-    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      const url = String(input);
-      if (url.startsWith("/api/settings/config")) {
-        const cwd = new URL(url, "http://localhost").searchParams.get("cwd");
-        if (cwd === "proj2") return Promise.reject(new Error("config unavailable"));
-      }
-      return defaultFetch(url, init);
-    });
-
-    // Workspace "proj" has a saved config; its session state also lands in the
-    // runtime store before the switch.
-    const { result, rerender } = renderHook(({ cwd, sessionId }: { cwd: string; sessionId: string }) => useModelConfig(cwd, sessionId), {
-      initialProps: { cwd: "proj", sessionId: "s1" },
-      wrapper,
-    });
-    await waitFor(() => expect(result.current.selectedModel).toBe("deepseek/deepseek-v4-flash"));
-    await act(async () => {
-      useRuntimeStore.setState({ model: "deepseek/deepseek-v4-pro", thinking: "max" });
-    });
-
-    // Navigate to "proj2": the stale store value is not applied (it describes
-    // "proj" and never changes), so the composer shows no model at all.
-    rerender({ cwd: "proj2", sessionId: "s2" });
-    await waitFor(() => expect(result.current.selectedModel).toBe(""));
-    expect(result.current.thinking).toBe("high");
+  it("validates session identity in the server response", async () => {
+    fetchMock.mockImplementation((url, init) => String(url).includes("/sessions/") ? Promise.resolve(json({ scope: "session", session_id: "wrong", selection: defaults })) : respond(url, init));
+    const { result } = renderHook(() => useModelConfig("proj", "s1"));
+    await waitFor(() => expect(result.current.modelError).toContain("different session"));
+    expect(result.current.selectedModel).toBe("");
   });
 });

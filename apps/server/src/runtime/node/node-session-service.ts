@@ -41,10 +41,6 @@ function effectiveConfig(requested?: Partial<PiConfig>): PiConfig {
   };
 }
 
-/** Commands a person is waiting on. They skip the conversion wait once the
- *  session is genuinely ready, so they never queue behind an unrelated mutation. */
-const CONTROL_COMMANDS = new Set(["abort", "steer", "follow_up"]);
-
 /** The product session facade uses Agent Core exclusively. Legacy JSONL is data, never a runtime fallback. */
 export class NodeSessionService {
   private readonly agentCore: AgentCoreSessionService;
@@ -89,17 +85,12 @@ export class NodeSessionService {
     return "error" in created ? created : { id: created.id, cwd, project_id: project.id };
   }
 
-  private async prepare(cwdValue: string, sessionId: string, waitForConversion = true): Promise<{ cwd: string } | RuntimeResult> {
+  private async prepare(cwdValue: string, sessionId: string): Promise<{ cwd: string } | RuntimeResult> {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, error: String(error), code: "workspace_invalid" }; }
     const migration = await this.ensureModelResources();
     if (migration) return { success: false, ...migration };
-    // A conversion registers ownership before it finishes, so an owned session
-    // can still be mid-conversion. Reads must wait for it, and so must a control
-    // command: opening a worker on a half-converted transcript would race the
-    // conversion. Only a session that is genuinely ready skips the wait.
-    if (!waitForConversion && await this.agentCore.ready(cwd, sessionId)) return { cwd };
     await this.agentCore.waitForMutation(cwd, sessionId);
     if (await this.agentCore.owns(cwd, sessionId)) return { cwd };
     const source = await this.repository.findPath(cwd, sessionId);
@@ -114,14 +105,14 @@ export class NodeSessionService {
   }
 
   async command(sessionId: string, cwdValue: string, type: string, params: Record<string, unknown> = {}): Promise<RuntimeResult> {
-    const prepared = await this.prepare(cwdValue, sessionId, !CONTROL_COMMANDS.has(type));
+    const prepared = await this.prepare(cwdValue, sessionId);
     if ("success" in prepared) return prepared;
     const result = await this.agentCore.command(prepared.cwd, sessionId, type, params, effectiveConfig());
     return result.success && (result.data as { cancelled?: boolean } | undefined)?.cancelled
       ? { ...result, success: false, code: "cancelled", error: "operation cancelled" } : result;
   }
   async notify(sessionId: string, cwdValue: string, type: string, params: Record<string, unknown>): Promise<RuntimeResult> {
-    const prepared = await this.prepare(cwdValue, sessionId, false);
+    const prepared = await this.prepare(cwdValue, sessionId);
     return "success" in prepared ? prepared : this.agentCore.notify(prepared.cwd, sessionId, type, params);
   }
   async fork(sessionId: string, cwdValue: string, entryId?: string): Promise<RuntimeResult> {
@@ -175,8 +166,8 @@ export class NodeSessionService {
     const runtime = this.agentCore.liveRuntime(resolve(cwdValue));
     return runtime ? runtime.sendCommand("get_available_thinking_levels") : { success: false, code: "not_found", error: "no live agent runtime" };
   }
-  async reloadConfiguration(modelChange?: { model: string; thinking: string }): Promise<Array<{ cwd: string; oldId: string; newId: string }>> {
-    await this.agentCore.reloadConfiguration(modelChange); return [];
+  async reloadConfiguration(): Promise<Array<{ cwd: string; oldId: string; newId: string }>> {
+    await this.agentCore.reloadConfiguration(); return [];
   }
   setGlobalSkillPolicy(policy: RuntimeSkillPolicy): Promise<void> { return this.agentCore.setGlobalSkillPolicy(policy); }
   refreshAllRuntimeSkills(): Promise<void> { return this.agentCore.refreshAllSkills(); }

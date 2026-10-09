@@ -19,6 +19,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   sessionsHasMore: false,
   sessionsLoading: false,
   activeSessionId: null,
+  draftModelSelection: null,
   cwd: ".",
   thread: emptyThread(),
   historyCursor: null,

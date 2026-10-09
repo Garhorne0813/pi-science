@@ -1,3 +1,8 @@
+> Follow-up: [ModelSelection v2](model-selection-v2-design.md) supersedes the
+> transitional shared-selection behavior described below. Defaults and durable
+> session selections now have separate APIs and ownership. The Settings DTO
+> remains a compatibility projection, not the long-term model-domain contract.
+
 # Settings with Agent Core
 
 This change branches from PR #115 at `6b4a8480`. The supplied

@@ -90,7 +90,7 @@ let overrides: Array<(url: string, init: RequestInit) => Promise<Response> | nul
 
 function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   const method = (init.method || "GET").toUpperCase();
-  if (url.startsWith("/api/settings/config")) {
+  if (url.startsWith("/api/model-selection/catalog")) {
     return Promise.resolve(jsonResponse({ ok: true, available_models: MODELS, model: "prov/m1", thinking: "high" }));
   }
   if (url.startsWith("/api/settings/subagents/discovery")) {
@@ -119,8 +119,10 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   }
   if (url.includes("/commands?")) return Promise.resolve(jsonResponse({ commands: [] }));
   if (url.startsWith("/api/project-memory/research-loops")) return Promise.resolve(jsonResponse({ loops: [] }));
-  if (method === "PUT" && url.startsWith("/api/settings/model")) {
-    return Promise.resolve(jsonResponse({ ok: true, model: "prov/m2", thinking: "medium" }));
+  if (url.startsWith("/api/model-selection/default")) return Promise.resolve(jsonResponse({ scope: "default", selection: { model: "prov/m1", thinking: "high" } }));
+  if (url.includes("/model-selection?")) {
+    const sessionId = url.match(/sessions\/([^/]+)/)?.[1];
+    return Promise.resolve(jsonResponse({ scope: "session", session_id: sessionId, selection: method === "PUT" ? JSON.parse(String(init.body)) : { model: "prov/m1", thinking: "high" } }));
   }
   if (method === "POST" && url.includes("/compact")) return Promise.resolve(jsonResponse({ ok: true }));
   return Promise.resolve(jsonResponse({ error: `unhandled ${method} ${url}` }, 404));
@@ -759,11 +761,11 @@ describe("stable Virtuoso footer", () => {
 });
 
 describe("model change optimistic rollback", () => {
-  it("rolls back both model and thinking when the settings save fails", async () => {
+  it("rolls back both model and thinking when the session selection save fails", async () => {
     let rejectSave: (error: Error) => void = () => undefined;
     const savePending = new Promise<Response>((_resolve, reject) => { rejectSave = reject; });
     overrides.push((url, init) => (
-      (init.method || "GET").toUpperCase() === "PUT" && url.startsWith("/api/settings/model") ? savePending : null
+      (init.method || "GET").toUpperCase() === "PUT" && url.includes("/model-selection?") ? savePending : null
     ));
     await renderReady();
 
@@ -789,7 +791,7 @@ describe("model change optimistic rollback", () => {
 
   it("rolls back a failed thinking-level change", async () => {
     overrides.push((url, init) => (
-      (init.method || "GET").toUpperCase() === "PUT" && url.startsWith("/api/settings/model")
+      (init.method || "GET").toUpperCase() === "PUT" && url.includes("/model-selection?")
         ? Promise.resolve(jsonResponse({ error: "thinking rejected" }, 500))
         : null
     ));
@@ -1486,20 +1488,26 @@ describe("route-level completion lifecycle", () => {
   describe("slash discovery waits for a usable model (AC-20)", () => {
     /** A cold workspace landing route where the config answers `config`, with the runtime store
      *  patched before mount (useModelConfig reads the store on its first effect pass). */
-    function renderColdLanding(config: Record<string, unknown>, storeModel = "prov/m1") {
-      overrides.push((url) => (url.startsWith("/api/settings/config")
-        ? Promise.resolve(jsonResponse({ ok: true, available_models: MODELS, thinking: "high", ...config }))
-        : null));
+    function renderColdLanding(selection: { model: string; thinking?: string }) {
+      overrides.push((url) => {
+        if (url.startsWith("/api/model-selection/catalog")) {
+          return Promise.resolve(jsonResponse({ ok: true, available_models: MODELS }));
+        }
+        if (url.startsWith("/api/model-selection/default")) {
+          return Promise.resolve(jsonResponse({ scope: "default", selection: { thinking: "high", ...selection } }));
+        }
+        return null;
+      });
       // createNewSession is the page's only path to a session-create request, so the stubbed
       // runtime action counts those requests exactly.
       const create = vi.fn(async (): Promise<string> => "s2");
-      useRuntimeStore.setState({ sessions: [], activeSessionId: null, model: storeModel, createNewSession: create });
+      useRuntimeStore.setState({ sessions: [], activeSessionId: null, model: selection.model, createNewSession: create });
       renderWorkspaceLanding();
       return create;
     }
 
     it("does not create a session for a slash draft when no model is configured", async () => {
-      const create = renderColdLanding({ model: "" }, "");
+      const create = renderColdLanding({ model: "", thinking: "high" });
       const control = await screen.findByTestId("model-control");
       expect(control).toHaveAttribute("data-model", "");
 
@@ -1511,7 +1519,7 @@ describe("route-level completion lifecycle", () => {
     });
 
     it("does not create a session for a slash draft when the configured model is unavailable", async () => {
-      const create = renderColdLanding({ model: "prov/m9", unavailable_model: "prov/m9" });
+      const create = renderColdLanding({ model: "prov/m9", thinking: "high" });
       const control = await screen.findByTestId("model-control");
       await waitFor(() => expect(control).toHaveAttribute("data-needs-model-switch", "true"));
       expect(control).toHaveAttribute("data-model", "");
@@ -1523,61 +1531,21 @@ describe("route-level completion lifecycle", () => {
       expect(create).not.toHaveBeenCalled();
     });
 
-    it("does not create a session while the switch prompt is up for a still-selected model", async () => {
-      let saves = 0;
-      overrides.push((url, init) => {
-        if (!url.startsWith("/api/settings/model") || (init.method || "GET").toUpperCase() !== "PUT") return null;
-        saves += 1;
-        return Promise.resolve(saves === 1
-          ? jsonResponse({ ok: true, model: "prov/m9", thinking: "medium" })
-          : jsonResponse({ error: "save rejected" }, 500));
-      });
-      const create = vi.fn(async (): Promise<string> => "s2");
-      useRuntimeStore.setState({ sessions: [], activeSessionId: null, createNewSession: create });
-      renderWorkspaceLanding();
+    it("keeps a new-conversation model choice as a draft without saving the default", async () => {
+      const create = renderColdLanding({ model: "prov/m1", thinking: "high" });
       const control = await screen.findByTestId("model-control");
-      expect(control).toHaveAttribute("data-model", "prov/m1");
-
-      // A save that reports a model the workspace does not list leaves the selection on it. The
-      // retry then fails and rolls back to that same model, which is the state the menu warns
-      // about: a model is still selected and the switch flag is set.
       fireEvent.click(screen.getByRole("button", { name: "pick prov/m2" }));
-      await waitFor(() => expect(control).toHaveAttribute("data-model", "prov/m9"));
-      fireEvent.click(screen.getByRole("button", { name: "pick prov/m2" }));
-      await waitFor(() => expect(control).toHaveAttribute("data-needs-model-switch", "true"));
-      expect(control).toHaveAttribute("data-model", "prov/m9");
 
-      await typeDraft("/");
-
-      expectBuiltinMenu();
-      expect(create).not.toHaveBeenCalled();
-      // A model is still selected, so the send control is not what refuses here: the discovery
-      // guard is the only thing between the slash draft and a session create.
-      expect(sendButton()).toBeEnabled();
-    });
-
-    it("does not create a session while a model switch is saving", async () => {
-      const save = deferred<Response>();
-      overrides.push((url, init) => {
-        if (!url.startsWith("/api/settings/model") || (init.method || "GET").toUpperCase() !== "PUT") return null;
-        return save.promise;
+      await waitFor(() => expect(control).toHaveAttribute("data-model", "prov/m2"));
+      expect(useRuntimeStore.getState().draftModelSelection).toMatchObject({
+        cwd: CWD,
+        selection: { model: "prov/m2" },
       });
-      const create = vi.fn(async (): Promise<string> => "s2");
-      useRuntimeStore.setState({ sessions: [], activeSessionId: null, createNewSession: create });
-      renderWorkspaceLanding();
-      const control = await screen.findByTestId("model-control");
-
-      fireEvent.click(screen.getByRole("button", { name: "pick prov/m2" }));
-      await waitFor(() => expect(control).toHaveAttribute("data-disabled", "true"));
-      expect(control).toHaveAttribute("data-model", "prov/m2");
-
-      await typeDraft("/");
-
-      expectBuiltinMenu();
+      expect(fetchMock.mock.calls.filter(([input, init]) =>
+        String(input).startsWith("/api/model-selection/default")
+        && (init?.method || "GET").toUpperCase() === "PUT",
+      )).toHaveLength(0);
       expect(create).not.toHaveBeenCalled();
-      // The optimistic selection already satisfies the send control; only the in-flight save
-      // holds discovery back.
-      expect(sendButton()).toBeEnabled();
     });
   });
 

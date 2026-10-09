@@ -22,6 +22,18 @@ beforeAll(async () => {
 });
 
 describe("ModelControlMenu", () => {
+  it("does not rebuild its 10,000-model indexes on context-only rerenders", () => {
+    const models = Array.from({ length: 10000 }, (_, index) => ({ ...model, id: `test/model-${index}`, model: `model-${index}` }));
+    const map = vi.spyOn(models, "map");
+    const props = { models, selectedModel: models[0].id, thinking: "off", thinkingLevels: ["off"], onModelChange: vi.fn(), onThinkingChange: vi.fn() };
+    const { rerender } = render(<ModelControlMenu {...props} contextTokens={0} />);
+    expect(map).toHaveBeenCalledTimes(2);
+    map.mockClear();
+    for (let index = 1; index <= 20; index++) rerender(<ModelControlMenu {...props} contextTokens={index * 100} contextPercent={index} />);
+    expect(map).not.toHaveBeenCalled();
+    rerender(<ModelControlMenu {...props} models={[...models, { ...model, id: "test/new" }]} />);
+    map.mockRestore();
+  });
   it("prompts to switch when the saved model is unavailable", () => {
     render(
       <ModelControlMenu
@@ -162,6 +174,23 @@ describe("ModelControlMenu", () => {
     expect(low.querySelector("svg")).not.toBeNull(); // current level checked
     fireEvent.click(high);
     expect(onThinkingChange).toHaveBeenCalledWith("high");
+  });
+
+  it("bounds a 10,000-model catalog, pages without closing, and reaches its last model by search", async () => {
+    const models = Array.from({ length: 10000 }, (_, index) => ({ id: `provider-${index % 100}/model-${index}`, provider: `provider-${index % 100}`, model: `model-${index}`, label: `Model ${index}` }));
+    const onModelChange = vi.fn();
+    render(<ModelControlMenu models={models} selectedModel={models[0].id} thinking="off" thinkingLevels={["off"]} onModelChange={onModelChange} onThinkingChange={vi.fn()} />);
+    const trigger = screen.getByRole("button", { name: "Select model and thinking level and view context" });
+    fireEvent.pointerDown(trigger); fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("menuitem", { name: /Model/ }));
+    expect(await screen.findAllByRole("menuitemradio")).toHaveLength(50);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Next" }));
+    await waitFor(() => expect(screen.getByRole("menuitemradio", { name: "model-50" })).toBeInTheDocument());
+    expect(screen.getAllByRole("menuitemradio")).toHaveLength(50);
+    fireEvent.change(screen.getByLabelText("Search models"), { target: { value: "model-9999" } });
+    await waitFor(() => expect(screen.getAllByRole("menuitemradio")).toHaveLength(1));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "model-9999" }));
+    expect(onModelChange).toHaveBeenCalledWith(models[9999].id);
   });
 
   it("caps the submenu height so long lists scroll inside the viewport", async () => {
