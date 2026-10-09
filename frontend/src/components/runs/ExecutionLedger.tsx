@@ -4,7 +4,7 @@ import type { ExecutionRecord } from "@pi-science/contracts";
 import { cn } from "../../lib/ui";
 import { timeAgo } from "../../lib/shared";
 import { ExecutionStatusIcon } from "./ExecutionStatusIcon";
-import { executionDuration, executionError, executionLabel, isProblemExecution, outputCount } from "./run-formatters";
+import { executionDuration, executionLabel, outputCount } from "./run-formatters";
 
 export interface ExecutionLedgerProps {
   runs: ExecutionRecord[];
