@@ -83,6 +83,7 @@ export function ProjectsLayout() {
   const location = useLocation();
   const activeCwd = useWorkspaceCwd();
   const isWorkspace = !!activeCwd;
+  const isProjectsHome = !isWorkspace && location.pathname === "/";
   const workspaceRoot = activeCwd ? `/workspace/${encodeURIComponent(activeCwd)}` : "";
   const activeConversationSessionId = conversationSessionId(location.pathname);
   const isConversationRoute = isWorkspace && (
@@ -152,8 +153,8 @@ export function ProjectsLayout() {
       <a href="#main-content" className="fixed left-3 top-3 z-[200] -translate-y-20 rounded-input bg-accent-fill px-3 py-2 text-sm text-accent-fg transition-transform focus:translate-y-0">
         {t("common.skipToContent", { defaultValue: "Skip to content" })}
       </a>
-      {/* Sidebar */}
-      {sidebarCollapsed ? (
+      {/* Project library is a full-width landing page; workspace routes keep the sidebar. */}
+      {!isProjectsHome && (sidebarCollapsed ? (
         <aside className="app-sidebar rail-enter flex h-full w-[var(--sidebar-collapsed-width)] shrink-0 flex-col items-center gap-1.5 overflow-hidden border-r border-border px-1.5 py-[18px]">
           <IconButton
             icon={PanelLeft}
@@ -251,15 +252,24 @@ export function ProjectsLayout() {
           </div>
         </aside>
         </>
-      )}
+      ))}
 
       {/* Main */}
       <main id="main-content" tabIndex={-1} className={cn(
         "relative flex min-w-0 flex-1 flex-col overflow-hidden [container-type:inline-size]",
-        sidebarCollapsed && "pt-12 md:pt-0",
+        !isProjectsHome && sidebarCollapsed && "pt-12 md:pt-0",
         inspectorMaximized && "hidden",
         previewOnLeft && "order-2",
       )}>
+        {isProjectsHome && (
+          <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-card sm:px-page lg:px-10">
+            <div className="flex items-center gap-2.5 text-ui-body font-semibold tracking-tight text-text">
+              <FlaskConical size={19} className="text-accent" aria-hidden="true" />
+              <span>Pi-Science</span>
+            </div>
+            <SettingsNavItem cwd={null} collapsed />
+          </div>
+        )}
         <Outlet />
       </main>
 
