@@ -46,9 +46,20 @@ try {
     assert.equal(payload.providers.filter((provider) => provider.custom).length, 100);
     return performance.now() - start;
   }
+  async function providerViewRead() {
+    const start = performance.now();
+    const response = await fetch(`${base}/api/provider-views`);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    const providers = payload.providers.filter((provider) => provider.source === "user");
+    assert.equal(providers.length, 100);
+    assert.equal(providers.reduce((sum, provider) => sum + provider.routing.selectable_model_count, 0), 10000);
+    assert.ok(providers.every((provider) => provider.last_verification.state === "never"));
+    return performance.now() - start;
+  }
   // Exclude server/module cold imports and one legitimate capability repair.
   await configRead();
-  const paths = [join(root, "config.json"), join(root, "model-resources.json")];
+  const paths = [join(root, "config.json"), join(root, "model-resources.json"), join(root, "credentials.json")];
   const fingerprints = async () => Promise.all(paths.map(async (path) => ({ contents: await readFile(path, "utf8"), mtime: (await stat(path, { bigint: true })).mtimeNs.toString() })));
   const before = await fingerprints();
   const catalogSamples = [];
@@ -58,6 +69,7 @@ try {
     catalogSamples.push(performance.now() - start);
   }
   const requestSamples = [];
+  const providerViewSamples = [];
   const eventLoopSamples = [];
   const pending = new Set();
   let previousTick = performance.now();
@@ -74,16 +86,16 @@ try {
     });
     pending.add(task);
   }, 5);
-  try { for (let sample = 0; sample < 3; sample++) requestSamples.push(await configRead()); }
+  try { for (let sample = 0; sample < 3; sample++) { requestSamples.push(await configRead()); providerViewSamples.push(await providerViewRead()); } }
   finally { clearInterval(probe); }
   const healthSamples = await Promise.all(pending);
   assert.ok(healthSamples.length > 0 && eventLoopSamples.length > 0, "Concurrent health/timer probes must produce samples");
   const after = await fingerprints();
   const metrics = { providers: 100, models: 10000,
-    catalogMedianMs: median(catalogSamples), configMedianMs: median(requestSamples),
+    catalogMedianMs: median(catalogSamples), configMedianMs: median(requestSamples), providerViewMedianMs: median(providerViewSamples),
     eventLoopMaxDelayMs: Math.max(0, ...eventLoopSamples), healthP95Ms: [...healthSamples].sort((a, b) => a - b)[Math.floor(healthSamples.length * 0.95)] ?? 0,
-    unchangedFiles: JSON.stringify(before) === JSON.stringify(after), catalogSamples, requestSamples };
-  const budgets = { catalogMedianMs: 500, configMedianMs: 2000, eventLoopMaxDelayMs: 500, healthP95Ms: 750 };
+    unchangedFiles: JSON.stringify(before) === JSON.stringify(after), catalogSamples, requestSamples, providerViewSamples };
+  const budgets = { catalogMedianMs: 500, configMedianMs: 2000, providerViewMedianMs: 2000, eventLoopMaxDelayMs: 500, healthP95Ms: 750 };
   console.log(JSON.stringify({ metrics, budgets, node: process.version, platform: process.platform }, null, 2));
   if (!recordOnly) {
     assert.equal(metrics.unchangedFiles, true, "Repeated Settings GET must not rewrite config/resource files");

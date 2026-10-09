@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "./fixtures/app.fixture";
+import { providerViewsFixture } from "../fixtures/provider-views";
 import { FIXTURES } from "./fixtures/data.mjs";
 
 test("settings navigation, model facts and saved compaction across viewports", async ({ page }, testInfo) => {
@@ -7,8 +8,9 @@ test("settings navigation, model facts and saved compaction across viewports", a
   let enabled = true;
   await page.route("**/api/settings/config*", (route) => route.fulfill({ json: {
     ...FIXTURES.config, compaction_threshold_percent: threshold, compaction_enabled: enabled,
-    providers: [...FIXTURES.config.providers, { id: "subscription", name: "Subscription service", models: [], has_key: true, credential_status: "connected", auth: { kind: "oauth", api_key_supported: false, oauth_supported: true, login_supported: false } }],
+    providers: [...FIXTURES.config.providers, { id: "subscription", name: "Subscription service", models: [], has_key: true, credential_status: "connected" as const, auth: { kind: "oauth" as const, api_key_supported: false, oauth_supported: true, login_supported: false } }],
   } }));
+  await page.route("**/api/provider-views*", (route) => route.fulfill({ json: providerViewsFixture({ ...FIXTURES.config, providers: [...FIXTURES.config.providers, { id: "subscription", name: "Subscription service", models: [], has_key: true, credential_status: "connected" as const, auth: { kind: "oauth" as const, api_key_supported: false, oauth_supported: true, login_supported: false } }] }) }));
   await page.route("**/api/settings/compaction*", async (route) => {
     const body = route.request().postDataJSON();
     threshold = body.threshold_percent;
@@ -49,6 +51,114 @@ test("settings navigation, model facts and saved compaction across viewports", a
   await expect(dialog.getByRole("button", { name: "Save context settings", exact: true })).toBeDisabled();
   await dialog.getByRole("button", { name: "Manage models", exact: true }).click();
   await expect(dialog.getByRole("tab", { name: "AI Models", exact: true })).toHaveAttribute("aria-selected", "true");
+});
+
+test("repairs a provider with a lost binding without replacing its credential", async ({ page }) => {
+  const inventory = providerViewsFixture(FIXTURES.config);
+  const lab = structuredClone(inventory.providers.find((provider) => provider.credential.configured && provider.auth.api_key_supported)!);
+  lab.id = "user-lab";
+  lab.name = "Lab";
+  lab.source = "user";
+  lab.status = "unavailable";
+  lab.allowed_actions = ["edit", "disable", "delete", "discover", "replace_credential"];
+  lab.models = lab.models.slice(0, 1).map((model) => ({ ...model, id: `user-lab/${model.model_id}`, provider_id: "user-lab", available: false, availability_reason: "no_binding" }));
+  lab.routing = { configured_model_count: 1, selectable_model_count: 0, issues: [{ code: "no_binding" }] };
+  inventory.providers.push(lab);
+  let repaired = false;
+  await page.route("**/api/provider-views*", (route) => route.fulfill({ json: inventory }));
+  await page.route("**/api/endpoints", (route) => route.fulfill({ json: { endpoints: [{ id: "endpoint-lab", owner_provider_id: "user-lab", name: "Lab endpoint", base_url: "https://lab.example/v1", credential_ref: "cred-lab", protocol: "openai" }] } }));
+  await page.route("**/api/provider-endpoint-bindings", (route) => route.fulfill({ json: { bindings: repaired ? [{ id: "repaired-binding", provider_id: "user-lab", endpoint_id: "endpoint-lab" }] : [] } }));
+  await page.route("**/api/custom-providers/user-lab", async (route) => {
+    expect(route.request().method()).toBe("PUT");
+    expect(route.request().postDataJSON()).toEqual({ name: "Lab", base_url: "https://lab.example/v1" });
+    repaired = true;
+    lab.status = "ready";
+    lab.routing = { configured_model_count: 1, selectable_model_count: 1, issues: [] };
+    lab.models[0].available = true;
+    delete lab.models[0].availability_reason;
+    await route.fulfill({ json: { ok: true } });
+  });
+  await page.goto("/settings");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("tab", { name: "AI Models", exact: true }).click();
+  await expect(settings.getByRole("heading", { name: "Model services", exact: true })).toBeVisible();
+  await settings.getByRole("button", { name: /^Lab 1 models/ }).click();
+  await expect(settings.getByRole("region", { name: "Lab models", exact: true }).getByText("No enabled binding.", { exact: true })).toBeVisible();
+  await settings.getByRole("button", { name: "Configure connection", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "Edit connection" });
+  await expect(editor.getByLabel("Base URL", { exact: true })).toHaveValue("https://lab.example/v1");
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(editor).not.toBeVisible();
+  expect(repaired).toBe(true);
+  await expect(settings.getByText("No enabled binding.", { exact: true })).toHaveCount(0);
+  await settings.getByRole("button", { name: "Available", exact: true }).click();
+  await expect(settings.getByText("Lab", { exact: true })).toBeVisible();
+  await settings.getByRole("button", { name: "+ Connect", exact: true }).click();
+  const connect = page.getByRole("dialog", { name: "Connect a model service" });
+  for (const provider of inventory.providers.filter((provider) => provider.source === "builtin" && provider.credential.configured)) {
+    await expect(connect.getByRole("button", { name: provider.name, exact: true })).toHaveCount(0);
+  }
+});
+
+
+test("maintains a configured builtin key through its card while excluding it from Connect", async ({ page }) => {
+  const inventory = providerViewsFixture(FIXTURES.config);
+  const provider = inventory.providers.find((item) => item.source === "builtin" && item.credential.configured && item.allowed_actions.includes("replace_credential"))!;
+  let saved = false;
+  await page.route("**/api/provider-views*", (route) => route.fulfill({ json: { providers: [provider] } }));
+  await page.route("**/api/settings/api-key", async (route) => {
+    expect(route.request().method()).toBe("PUT");
+    expect(route.request().postDataJSON()).toEqual({ provider: provider.id, api_key: "synthetic-replacement-key" });
+    saved = true;
+    await route.fulfill({ json: { ok: true } });
+  });
+  await page.goto("/settings");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("tab", { name: "AI Models", exact: true }).click();
+  await settings.getByRole("button", { name: "Connection settings", exact: true }).click();
+  await expect(settings.getByRole("menuitem", { name: "Disconnect", exact: true })).toHaveCount(0);
+  await settings.getByRole("menuitem", { name: "Replace", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "Replace API key" });
+  await editor.getByLabel(`${provider.name} API key`, { exact: false }).fill("synthetic-replacement-key");
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(editor).not.toBeVisible();
+  expect(saved).toBe(true);
+  await settings.getByRole("button", { name: "+ Connect", exact: true }).click();
+  const connect = page.getByRole("dialog", { name: "Connect a model service" });
+  await expect(connect.getByRole("button", { name: provider.name, exact: true })).toHaveCount(0);
+});
+
+
+test("explicitly enables a disabled endpoint without committing connection drafts", async ({ page }) => {
+  const inventory = providerViewsFixture(FIXTURES.config);
+  const lab = structuredClone(inventory.providers.find((provider) => provider.credential.configured && provider.auth.api_key_supported)!);
+  lab.id = "user-lab"; lab.name = "Lab"; lab.source = "user"; lab.status = "unavailable";
+  lab.allowed_actions = ["edit", "disable", "delete", "discover", "replace_credential"];
+  lab.models = lab.models.slice(0, 1).map((model) => ({ ...model, id: `user-lab/${model.model_id}`, provider_id: "user-lab", available: false, availability_reason: "disabled_endpoint" }));
+  lab.routing = { configured_model_count: 1, selectable_model_count: 0, issues: [{ code: "disabled_endpoint" }] };
+  let enabled = false;
+  await page.route("**/api/provider-views*", (route) => route.fulfill({ json: { providers: [lab] } }));
+  await page.route("**/api/endpoints", (route) => route.fulfill({ json: { endpoints: [{ id: "endpoint-lab", owner_provider_id: "user-lab", name: "Lab endpoint", base_url: "https://lab.example/v1", credential_ref: "cred-lab", protocol: "openai", enabled }] } }));
+  await page.route("**/api/provider-endpoint-bindings", (route) => route.fulfill({ json: { bindings: [{ id: "binding-lab", provider_id: "user-lab", endpoint_id: "endpoint-lab" }] } }));
+  await page.route("**/api/endpoints/endpoint-lab/enabled?enabled=true", async (route) => {
+    expect(route.request().method()).toBe("PUT");
+    enabled = true; lab.status = "ready"; lab.routing.selectable_model_count = 1; lab.routing.issues = [];
+    lab.models[0].available = true; delete lab.models[0].availability_reason;
+    await route.fulfill({ json: { ok: true } });
+  });
+  await page.goto("/settings");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("tab", { name: "AI Models", exact: true }).click();
+  await settings.getByRole("button", { name: "Configure connection", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "Edit connection" });
+  await editor.getByLabel("Provider name", { exact: true }).fill("Unsaved lab name");
+  await editor.getByRole("button", { name: "Enable endpoint", exact: true }).click();
+  await expect(editor.getByRole("button", { name: "Enable endpoint", exact: true })).toHaveCount(0);
+  await expect(editor.getByLabel("Provider name", { exact: true })).toHaveValue("Unsaved lab name");
+  expect(enabled).toBe(true);
+  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+  await settings.getByRole("button", { name: "Available", exact: true }).click();
+  await expect(settings.getByText("Lab", { exact: true })).toBeVisible();
 });
 
 test("Core capabilities replace extension installation controls", async ({ page }, testInfo) => {

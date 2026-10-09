@@ -64,6 +64,7 @@ export interface CustomProviderResult {
 
 export interface ModelEndpointResource {
   id: string;
+  owner_provider_id?: string;
   endpoint_id?: string;
   name: string;
   base_url: string;

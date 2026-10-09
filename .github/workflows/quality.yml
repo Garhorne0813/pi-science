@@ -67,14 +67,18 @@ jobs:
 
       - name: Enforce Settings backend performance budgets
         if: runner.os == 'Linux'
-        run: node scripts/benchmark-settings.mjs > settings-performance.json
+        run: |
+          node scripts/benchmark-settings.mjs > settings-performance.json
+          node scripts/benchmark-provider-credentials.mjs > provider-credential-performance.json
 
       - name: Upload Settings backend performance metrics
         if: always() && runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: settings-backend-performance
-          path: settings-performance.json
+          path: |
+            settings-performance.json
+            provider-credential-performance.json
           if-no-files-found: ignore
 
       - name: Enforce frontend bundle budget

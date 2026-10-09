@@ -11,6 +11,7 @@ import {
   type ModelCapabilities,
   type ModelRead,
   type Provider,
+  type ProviderView,
   type ProviderEndpointBinding,
   type UpdateBindingRequest,
   type UpdateEndpointRequest,
@@ -20,7 +21,7 @@ import type { RuntimeCatalog, RuntimeCatalogService } from "../runtime/agent/run
 import { egressAuditEnabled, recordEgress } from "../security/egress-audit.js";
 import { safeConnectorFetch, validateOutboundHttpUrl } from "../security/outbound-security.js";
 import { SettingsStore } from "../storage/settings-store.js";
-import { CredentialStore } from "./credential-store.js";
+import { CredentialStore, type CredentialReader } from "./credential-store.js";
 import { resolveCapabilities, normalizeContextWindow, normalizeThinkingLevels, type CapabilityPatch } from "./capability-resolver.js";
 import { migrateLegacyModelResources, type MigrationResult } from "./migration/migrate-custom-providers.js";
 import { ModelResourceRepository } from "./model-resource-repository.js";
@@ -45,6 +46,11 @@ export type HealthResult = Endpoint & { error?: string | null };
 
 function resourceError(code: string, message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code });
+}
+
+function defaultDataEgress(baseUrl: string): Endpoint["data_egress"] {
+  const hostname = new URL(normalizeBaseUrl(baseUrl)).hostname;
+  return hostname === "localhost" || /^127\./.test(hostname) || hostname === "[::1]" ? "local" : "remote";
 }
 
 function slug(value: string): string {
@@ -290,6 +296,70 @@ export class ModelResourceService {
     return result.sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  /** One management snapshot; selection comes from Core, never credential heuristics. */
+  async providerViews(selectable: Set<string>, inputFormats: Map<string, string[]> = new Map(), catalogAvailable = true): Promise<ProviderView[]> {
+    await this.ensureMigrated();
+    const [state, catalog] = await Promise.all([this.repository.read(), this.readRuntimeCatalog()]);
+    const providers = new Map<string, Provider>();
+    const builtinConfigured = new Set(catalog.providers.filter((provider) => provider.auth.configured).map((provider) => provider.id));
+    for (const entry of catalog.providers) providers.set(entry.id, { id: entry.id, name: entry.name, kind: "system", source: "pi-ai", adapter: "pi-ai", enabled: true, catalog_mode: "runtime", auth_kind: entry.auth.apiKey && entry.auth.oauth ? "api_key_or_oauth" : entry.auth.oauth ? "oauth" : entry.auth.apiKey ? "api_key" : "none" });
+    for (const provider of state.providers) providers.set(provider.id, provider);
+    const credentialRead = await this.credentials.readSnapshot();
+    const declaredFormats = new Map(catalog.providers.flatMap((provider) => provider.models.map((model) => [canonicalModelRef(provider.id, model.id), model.input] as const)));
+    const modelsByProvider = new Map<string, Map<string, ModelRead>>();
+    const add = (model: ModelRead) => {
+      const rows = modelsByProvider.get(model.provider_id) ?? new Map<string, ModelRead>();
+      rows.set(model.id, model); modelsByProvider.set(model.provider_id, rows);
+    };
+    for (const model of await this.systemModelReads(state, catalog, credentialRead)) add(model);
+    const sourceModels = new Map(state.models.map((model) => [canonicalModelRef(model.provider_id, model.model_id), model]));
+    for (const model of await new RuntimeModelResolver(this.repository, credentialRead).resolveState(state)) add(resolvedModelToRead(model, sourceModels.get(model.id)));
+    const refs = new Map<string, Set<string>>();
+    const endpoints = new Map(state.endpoints.map((endpoint) => [endpoint.id, endpoint]));
+    for (const [id, ref] of Object.entries(state.credential_refs)) refs.set(id, new Set([ref]));
+    for (const binding of state.bindings) {
+      const ref = endpoints.get(binding.endpoint_id)?.credential_ref;
+      if (ref) { const ids = refs.get(binding.provider_id) ?? new Set<string>(); ids.add(ref); refs.set(binding.provider_id, ids); }
+    }
+    // Owned credentials remain configured when their binding/endpoint needs
+    // repair. Ownership is canonical metadata, not a guessed route association.
+    for (const endpoint of state.endpoints) if (endpoint.owner_provider_id && endpoint.credential_ref) {
+      const ids = refs.get(endpoint.owner_provider_id) ?? new Set<string>(); ids.add(endpoint.credential_ref); refs.set(endpoint.owner_provider_id, ids);
+    }
+    for (const credential of await credentialRead.listMetadata()) if (credential.owner_provider_id && credential.owner_kind !== "mcp") {
+      const ids = refs.get(credential.owner_provider_id) ?? new Set<string>(); ids.add(credential.id); refs.set(credential.owner_provider_id, ids);
+    }
+    const endpointCredentialRefs = new Set(state.endpoints.map((endpoint) => endpoint.credential_ref).filter(Boolean));
+    const credentials = new Map(await Promise.all([...new Set([...refs.values()].flatMap((ids) => [...ids]))].map(async (ref) => [ref, await credentialRead.getForRuntime(ref)] as const)));
+    return [...providers.values()].map((provider): ProviderView => {
+      const values = [...(refs.get(provider.id) ?? [])].map((ref) => credentials.get(ref));
+      const configured = provider.auth_kind === "none" || provider.kind === "system" && builtinConfigured.has(provider.id) || values.some((value) => Boolean(value?.secret) && ["configured", "connected"].includes(value!.metadata.status));
+      const credentialState = configured ? "ready" : values.some((value) => value?.metadata.status === "invalid") ? "invalid" : provider.auth_kind === "oauth" ? "needs_login" : "needs_key";
+      const models = [...(modelsByProvider.get(provider.id)?.values() ?? [])].map((model) => {
+        const available = provider.enabled && catalogAvailable && selectable.has(model.id);
+        const formats = inputFormats.get(model.id) ?? declaredFormats.get(model.id);
+        return { ...model, available, ...(formats ? { input_formats: formats } : {}), ...(available ? { availability_reason: undefined } : { availability_reason: !provider.enabled ? "provider_disabled" : model.availability_reason ?? (catalogAvailable ? "core_unavailable" : "catalog_unavailable") }) };
+      });
+      const count = models.filter((model) => model.available).length;
+      const issues = [...new Set(models.filter((model) => !model.available).map((model) => model.availability_reason!))].map((code) => ({ code }));
+      if (!models.length) issues.push({ code: "no_models" });
+      if (!catalogAvailable && !issues.some((issue) => issue.code === "catalog_unavailable")) issues.push({ code: "catalog_unavailable" });
+      if (provider.auth_kind === "oauth" && !count) issues.push({ code: "unsupported_login" });
+      const status = !provider.enabled ? "disabled" : count ? "ready" : provider.auth_kind === "oauth" ? "needs_login" : credentialState !== "ready" ? credentialState : "unavailable";
+      const custom = provider.kind === "user";
+      const credentialRef = state.credential_refs[provider.id] ?? "";
+      const removable = credentials.get(credentialRef)?.metadata.backend === "managed" && !endpointCredentialRefs.has(credentialRef);
+      const apiKey = provider.auth_kind === "api_key" || provider.auth_kind === "api_key_or_oauth";
+      return { id: provider.id, name: provider.name, source: custom ? "user" : "builtin", enabled: provider.enabled, status,
+        auth: { kind: provider.auth_kind, api_key_supported: apiKey, login_supported: false },
+        credential: { state: credentialState, configured },
+        routing: { selectable_model_count: count, configured_model_count: models.length, issues }, models,
+        // Endpoint probes and discovered capabilities are not inference verification.
+        last_verification: { state: "never", checked_at: null },
+        allowed_actions: [...(custom ? ["edit", provider.enabled ? "disable" : "enable", "delete", "discover"] as const : []), ...(apiKey ? ["replace_credential"] as const : []), ...(!custom && apiKey && removable ? ["remove_credential"] as const : [])] };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   async getProvider(id: string): Promise<ProviderRead> {
     const provider = (await this.listProviders()).find((item) => item.id === id);
     if (!provider) throw resourceError("resource_not_found", `Provider '${id}' was not found`);
@@ -479,7 +549,7 @@ export class ModelResourceService {
         api: input.api,
         credential_ref: credential?.id ?? null,
         enabled: true,
-        data_egress: input.data_egress ?? (input.base_url.startsWith("http://127.") || input.base_url.includes("localhost") ? "local" : "remote"),
+        data_egress: input.data_egress ?? defaultDataEgress(input.base_url),
         owner_provider_id: providerId,
       });
       provider = await this.createProvider({ name: input.name, adapter: adapterForEndpoint(protocol), catalog_mode: "hybrid", auth_kind: input.auth?.kind ?? "none", enabled: true });
@@ -513,12 +583,48 @@ export class ModelResourceService {
     const state = await this.repository.read();
     const provider = state.providers.find((item) => item.id === id);
     if (!provider || provider.kind !== "user") throw resourceError("resource_not_found", `Custom provider '${id}' was not found`);
-    const binding = state.bindings.find((item) => item.provider_id === id);
-    if (!binding) throw resourceError("resource_not_found", `Provider '${id}' has no connection`);
-    const endpoint = state.endpoints.find((item) => item.id === binding.endpoint_id);
-    if (!endpoint) throw resourceError("resource_not_found", `Provider '${id}' connection endpoint was not found`);
-    await this.updateProvider(id, { ...(input.name ? { name: input.name } : {}) });
-    await this.updateEndpoint(endpoint.id, { ...(input.base_url ? { base_url: input.base_url } : {}), ...(input.api ? { api: input.api } : {}) });
+    const baseUrl = input.base_url ? normalizeBaseUrl(input.base_url) : undefined;
+    let binding = state.bindings.find((item) => item.provider_id === id);
+    let endpoint = state.endpoints.find((item) => item.id === binding?.endpoint_id);
+    let repairCredential: CredentialMetadata | undefined;
+    if (!binding) {
+      const owned = state.endpoints.filter((item) => item.owner_provider_id === id);
+      if (owned.length > 1) throw resourceError("invalid_resource", "Multiple owned endpoints exist; repair the binding explicitly");
+      endpoint = owned[0];
+      if (!endpoint) {
+        if (!baseUrl) throw resourceError("invalid_resource", "A base URL is required to rebuild this connection");
+        if (!["openai-compatible", "anthropic-compatible", "ollama"].includes(provider.adapter)) throw resourceError("invalid_resource", "This adapter requires an explicit endpoint repair");
+        const credentials = (await this.credentials.listMetadata()).filter((item) => item.owner_provider_id === id && item.owner_kind !== "mcp");
+        if (provider.auth_kind !== "none" && credentials.length > 1) throw resourceError("invalid_resource", "Multiple owned credentials exist; repair the connection explicitly");
+        repairCredential = provider.auth_kind === "none" ? undefined : credentials[0];
+      }
+    } else if (!endpoint) throw resourceError("resource_not_found", `Provider '${id}' connection endpoint was not found`);
+
+    const replacingKey = input.auth?.kind === "api_key" && Boolean(input.auth.secret);
+    const changesConnection = endpoint && (
+      baseUrl !== undefined && baseUrl !== endpoint.base_url ||
+      input.api !== undefined && input.api !== endpoint.api ||
+      replacingKey || input.auth?.kind === "none" && Boolean(endpoint.credential_ref)
+    );
+    // Preflight the entire aggregate before changing provider metadata, endpoint
+    // configuration, or secrets (including a missing-binding repair).
+    const endpointId = endpoint?.id;
+    if (endpoint && changesConnection && state.bindings.some((item) => item.endpoint_id === endpointId && item.provider_id !== id)) {
+      throw resourceError("resource_in_use", `Endpoint '${endpoint.id}' is shared with another provider`);
+    }
+    const credentialRef = endpoint?.credential_ref ?? repairCredential?.id;
+    if (replacingKey && credentialRef && (
+      state.endpoints.some((item) => item.id !== endpoint?.id && item.credential_ref === credentialRef) ||
+      Object.values(state.credential_refs).includes(credentialRef)
+    )) throw resourceError("resource_in_use", `Credential '${credentialRef}' is shared with another connection or builtin provider`);
+
+    if (!endpoint) {
+      endpoint = await this.createEndpoint({ name: `${provider.name} endpoint`, base_url: baseUrl!, protocol: provider.adapter === "anthropic-compatible" ? "anthropic" : provider.adapter === "ollama" ? "ollama" : "openai", ...(input.api ? { api: input.api } : {}), credential_ref: repairCredential?.id ?? null, enabled: true, data_egress: defaultDataEgress(baseUrl!), owner_provider_id: id });
+    }
+    if (input.name) await this.updateProvider(id, { name: input.name });
+    if (baseUrl !== undefined && baseUrl !== endpoint.base_url || input.api !== undefined && input.api !== endpoint.api) {
+      await this.updateEndpoint(endpoint.id, { ...(baseUrl ? { base_url: baseUrl } : {}), ...(input.api ? { api: input.api } : {}) });
+    }
     if (input.auth?.kind === "api_key" && input.auth.secret) {
       if (endpoint.credential_ref) {
         await this.credentials.put({ id: endpoint.credential_ref, kind: "api_key", backend: "managed", secret: input.auth.secret, owner_provider_id: provider.id });
@@ -540,6 +646,10 @@ export class ModelResourceService {
       }
     }
     if (input.auth?.kind) await this.updateProvider(id, { auth_kind: input.auth.kind });
+    if (!binding) {
+      try { binding = await this.createBinding({ provider_id: id, endpoint_id: endpoint.id, enabled: true, priority: 100 }); }
+      catch { throw resourceError("connection_repair_incomplete", "Connection changes were saved, but the endpoint binding could not be created. Review the saved connection and retry to complete the repair."); }
+    }
     const updated = await this.repository.read();
     return { provider: structuredClone(updated.providers.find((item) => item.id === id)!), endpoint: structuredClone(updated.endpoints.find((item) => item.id === endpoint.id)!), binding: structuredClone(updated.bindings.find((item) => item.id === binding.id)!) };
   }
@@ -674,7 +784,13 @@ export class ModelResourceService {
       const endpoint = state.endpoints.find((item) => item.id === id);
       if (!endpoint) throw resourceError("resource_not_found", `Endpoint '${id}' was not found`);
       if (input.name !== undefined) endpoint.name = input.name.trim();
-      if (input.base_url !== undefined) endpoint.base_url = normalizeBaseUrl(input.base_url);
+      if (input.base_url !== undefined) {
+        const baseUrl = normalizeBaseUrl(input.base_url);
+        // Preserve an explicit classification, but never carry an inferred
+        // local/remote label across an address change.
+        if (baseUrl !== endpoint.base_url && input.data_egress === undefined) endpoint.data_egress = defaultDataEgress(baseUrl);
+        endpoint.base_url = baseUrl;
+      }
       if (input.protocol !== undefined) endpoint.protocol = normalizeProtocol(input.protocol);
       if (input.api !== undefined) endpoint.api = input.api;
       if (input.credential_ref !== undefined) endpoint.credential_ref = input.credential_ref;
@@ -981,11 +1097,11 @@ export class ModelResourceService {
     }
   }
 
-  private async systemModelReads(state: Awaited<ReturnType<ModelResourceRepository["read"]>>, catalog: RuntimeCatalog): Promise<ModelRead[]> {
+  private async systemModelReads(state: Awaited<ReturnType<ModelResourceRepository["read"]>>, catalog: RuntimeCatalog, credentials: CredentialReader = this.credentials): Promise<ModelRead[]> {
     const result: ModelRead[] = [];
     for (const provider of catalog.providers) {
       const ref = state.credential_refs[provider.id];
-      const hasCredential = Boolean(ref && await this.credentials.getForRuntime(ref)?.then((value) => value?.secret)) || provider.auth.configured;
+      const hasCredential = Boolean(ref && await credentials.getForRuntime(ref)?.then((value) => value?.secret)) || provider.auth.configured;
       const available = hasCredential || (!provider.auth.apiKey && !provider.auth.oauth);
       for (const entry of provider.models) {
         const modelId = entry.id;

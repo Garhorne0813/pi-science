@@ -15,6 +15,9 @@ export type CredentialRuntimeValue = {
   secret: string | null;
 };
 
+export type CredentialReader = Pick<CredentialStore, "getForRuntime" | "metadata" | "readSync">;
+export type CredentialReadSnapshot = CredentialReader & Pick<CredentialStore, "listMetadata">;
+
 type StoredCredential = {
   metadata: CredentialMetadata;
   /** This is the only ordinary JSON file allowed to contain a managed secret. */
@@ -141,12 +144,32 @@ export class CredentialStore {
     const state = parseState(await readJson<unknown>(credentialPath(), emptyState()));
     const record = state.credentials[id];
     if (!record) return null;
+    return this.runtimeValue(record);
+  }
+
+  /** One projection-scoped read; runtime values never enter the public DTO. */
+  async readSnapshot(): Promise<CredentialReadSnapshot> {
+    return this.snapshot(parseState(await readJson<unknown>(credentialPath(), emptyState())));
+  }
+
+  readSnapshotSync(): CredentialReadSnapshot {
+    try { return this.snapshot(parseState(JSON.parse(readFileSync(credentialPath(), "utf8")))); }
+    catch { return this.snapshot(emptyState()); }
+  }
+
+  private snapshot(state: CredentialState): CredentialReadSnapshot {
+    const values = new Map(Object.entries(state.credentials).map(([id, record]) => [id, this.runtimeValue(record)]));
+    const value = (id: string) => { const result = values.get(id); return result ? clone(result) : null; };
+    return { getForRuntime: async (id) => value(id), readSync: value, metadata: async (id) => value(id)?.metadata ?? null,
+      listMetadata: async () => [...values.values()].map((value) => clone(value.metadata)).sort((a, b) => a.id.localeCompare(b.id)) };
+  }
+
+  private runtimeValue(record: StoredCredential): CredentialRuntimeValue {
     const metadata = this.refreshEnvironmentStatus(record.metadata, record.secret);
     let secret: string | null = null;
     if (metadata.kind !== "none") {
       if (metadata.backend === "managed" || metadata.backend === "oauth") secret = record.secret || null;
       else if (metadata.backend === "environment" && metadata.environment_variable) secret = process.env[metadata.environment_variable] || null;
-      // external is deliberately unresolved until an external adapter is supplied.
     }
     return { metadata, secret };
   }
@@ -234,11 +257,7 @@ export class CredentialStore {
       const state = parseState(JSON.parse(readFileSync(credentialPath(), "utf8")));
       const record = state.credentials[id];
       if (!record) return null;
-      const metadata = this.refreshEnvironmentStatus(record.metadata, record.secret);
-      const secret = metadata.backend === "environment" && metadata.environment_variable
-        ? process.env[metadata.environment_variable] || null
-        : record.secret || null;
-      return { metadata, secret };
+      return this.runtimeValue(record);
     } catch { return null; }
   }
 

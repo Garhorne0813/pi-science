@@ -9,7 +9,7 @@ import type {
   ResolvedRuntimeModel,
 } from "@pi-science/contracts";
 import { CredentialResolver } from "./credential-resolver.js";
-import { CredentialStore, type CredentialRuntimeValue } from "./credential-store.js";
+import { type CredentialReader, type CredentialRuntimeValue } from "./credential-store.js";
 import { ModelResourceRepository } from "./model-resource-repository.js";
 import { resolveCapabilities } from "./capability-resolver.js";
 
@@ -74,7 +74,7 @@ export class RuntimeModelResolver {
 
   constructor(
     private readonly repository: ModelResourceRepository,
-    credentials: CredentialStore | CredentialResolver,
+    credentials: CredentialReader | CredentialResolver,
     private readonly policy: RuntimeRoutePolicy = {},
   ) {
     this.credentials = credentials instanceof CredentialResolver ? credentials : new CredentialResolver(credentials);

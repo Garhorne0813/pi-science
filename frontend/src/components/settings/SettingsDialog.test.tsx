@@ -14,6 +14,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   const method = (init.method || "GET").toUpperCase();
+  if (url.startsWith("/api/provider-views")) return Promise.resolve(jsonResponse({ providers: [] }));
   if (url.startsWith("/api/settings/config")) {
     return Promise.resolve(jsonResponse({ ok: true, providers: [], available_models: [], model: "", thinking: "high" }));
   }
@@ -125,7 +126,7 @@ describe("SettingsDialog", () => {
     await screen.findByRole("dialog");
     const modelsTab = await screen.findByRole("tab", { name: "AI Models" });
     fireEvent.click(modelsTab);
-    expect(await screen.findByText("Configured services")).toBeInTheDocument();
+    expect(await screen.findByText("Model services")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "false");
   });

@@ -60,6 +60,20 @@ describe("credential store", () => {
     delete process.env.PI_SCIENCE_EXPLICIT_KEY;
   });
 
+  it("keeps credential snapshots private, immutable and fresh between projections", async () => {
+    const store = new CredentialStore();
+    await store.put({ id: "snapshot-key", kind: "api_key", backend: "managed", secret: "before-snapshot" });
+    const first = await store.readSnapshot();
+    const value = await first.getForRuntime("snapshot-key");
+    value!.metadata.status = "invalid";
+    value!.secret = "mutated-copy";
+    await store.put({ id: "snapshot-key", secret: "after-snapshot" });
+    expect(first.readSync("snapshot-key")).toMatchObject({ metadata: { status: "configured" }, secret: "before-snapshot" });
+    expect(await (await store.readSnapshot()).getForRuntime("snapshot-key")).toMatchObject({ secret: "after-snapshot" });
+    expect(await first.listMetadata()).not.toEqual(expect.arrayContaining([expect.objectContaining({ secret: expect.anything() })]));
+    expect(JSON.stringify(first)).not.toContain("before-snapshot");
+  });
+
   it("creates credentials.json with 0600 permissions on POSIX", async () => {
     await new CredentialStore().put({ id: "cred-mode", kind: "api_key", backend: "managed", secret: "mode-secret" });
     const mode = (await stat(join(process.env.PI_SCIENCE_HOME!, "credentials.json"))).mode & 0o777;
@@ -396,6 +410,35 @@ describe("resource service", () => {
     expect(await service.credentials.metadata(created.credential!.id)).toBeNull();
   });
 
+  it("shares one credential-file read across builtin facts, routes and provider statuses", async () => {
+    const catalog = { schemaVersion: 1 as const, providers: Array.from({ length: 10 }, (_, index) => ({ id: `builtin-${index}`, name: `Builtin ${index}`, baseUrl: null, auth: { apiKey: true, oauth: false, subscription: false, configured: false }, models: [{ id: "model", name: "Model", api: "openai-completions", reasoning: false, input: ["text"], contextWindow: 8192, maxTokens: 1024 }] })) };
+    const service = new ModelResourceService({ runtimeCatalog: { getCatalog: async () => catalog } });
+    await service.ensureMigrated();
+    const state = emptyModelResourceState();
+    state.migration = { version: 1, completed_at: "2026-01-01T00:00:00.000Z" };
+    const selectable = new Set<string>();
+    for (let index = 0; index < 10; index++) {
+      const id = `user-lab${index}`;
+      const credential = await service.credentials.put({ id: `snapshot-${index}`, kind: "api_key", backend: "managed", secret: `snapshot-secret-${index}`, owner_provider_id: id });
+      state.credential_refs[`builtin-${index}`] = credential.id;
+      state.providers.push({ id, name: id, kind: "user", adapter: "openai-compatible", enabled: true, catalog_mode: "manual", auth_kind: "api_key", source: "user" });
+      state.endpoints.push({ id: `ep-${index}`, name: id, base_url: "http://127.0.0.1:9/v1", protocol: "openai", credential_ref: credential.id, enabled: true, health: "unknown", data_egress: "local", owner_provider_id: id });
+      state.bindings.push({ id: `bind-${index}`, provider_id: id, endpoint_id: `ep-${index}`, enabled: true, priority: 1 });
+      state.models.push({ provider_id: id, model_id: "model", display_name: "Model", enabled: true, capabilities: { reasoning: false, thinking_levels: ["off"], context_window: 8192, max_output_tokens: 1024 }, capability_source: "manual" });
+      selectable.add(`${id}/model`); selectable.add(`builtin-${index}/model`);
+    }
+    await service.repository.replace(state);
+    const reads = vi.spyOn(persistence, "readJson");
+    const repeated = vi.spyOn(service.credentials, "getForRuntime");
+    const views = await service.providerViews(selectable);
+    expect(views).toHaveLength(20);
+    expect(views.every((view) => view.credential.configured && view.status === "ready")).toBe(true);
+    expect(JSON.stringify(views)).not.toContain("snapshot-secret");
+    expect(repeated).not.toHaveBeenCalled();
+    expect(reads.mock.calls.filter(([path]) => path === join(process.env.PI_SCIENCE_HOME!, "credentials.json"))).toHaveLength(1);
+    reads.mockRestore(); repeated.mockRestore();
+  });
+
   it("updates a custom provider connection base URL and key", async () => {
     const service = new ModelResourceService();
     await service.createCustomProvider({ name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "api_key", secret: "old-secret" } });
@@ -406,6 +449,94 @@ describe("resource service", () => {
     expect(after.endpoints.find((item) => item.id === endpointId)?.base_url).toBe("http://127.0.0.1:9000/v1");
     expect(await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8")).not.toContain("old-secret");
     expect(await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8")).toContain("new-secret");
+  });
+
+  it.each([
+    ["http://127.0.0.1:8000/v1", "https://public.example/v1", "local", "remote"],
+    ["https://public.example/v1", "http://localhost:8000/v1", "remote", "local"],
+    ["https://public.example/v1", "http://[::1]:8000/v1", "remote", "local"],
+    ["http://localhost:8000/v1", "https://localhost.example/v1", "local", "remote"],
+  ] as const)("reclassifies existing provider endpoints from %s to %s", async (oldUrl, newUrl, oldEgress, newEgress) => {
+    const service = new ModelResourceService();
+    const provider = await service.createProvider({ name: "Lab", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "none", enabled: true });
+    const endpoint = await service.createEndpoint({ name: "Lab connection", base_url: oldUrl, protocol: "openai", enabled: true, data_egress: oldEgress });
+    await service.createBinding({ priority: 100, provider_id: provider.id, endpoint_id: endpoint.id, enabled: true });
+    const updated = await service.updateCustomProvider(provider.id, { base_url: newUrl });
+    expect(updated.endpoint).toMatchObject({ id: endpoint.id, base_url: newUrl, data_egress: newEgress });
+    expect(await service.getEndpoint(endpoint.id)).toMatchObject({ base_url: newUrl, data_egress: newEgress });
+  });
+
+  it("allows name-only or identical-address edits without rewriting a shared endpoint", async () => {
+    const service = new ModelResourceService();
+    const a = await service.createProvider({ name: "A", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "none", enabled: true });
+    const b = await service.createProvider({ name: "B", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "none", enabled: true });
+    const endpoint = await service.createEndpoint({ name: "Shared", base_url: "https://old.example/v1", protocol: "openai", data_egress: "remote", enabled: true });
+    await service.createBinding({ priority: 100, provider_id: a.id, endpoint_id: endpoint.id, enabled: true });
+    await service.createBinding({ priority: 100, provider_id: b.id, endpoint_id: endpoint.id, enabled: true });
+    const updated = await service.updateCustomProvider(a.id, { name: "Renamed", base_url: "https://old.example/v1/" });
+    expect(updated.provider.name).toBe("Renamed");
+    expect(updated.endpoint).toEqual(endpoint);
+    expect((await service.repository.read()).providers.find((item) => item.id === b.id)).toEqual(b);
+  });
+
+  it("detaches a private endpoint without deleting or replacing its shared credential", async () => {
+    const service = new ModelResourceService();
+    const a = await service.createProvider({ name: "A", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
+    const key = await service.credentials.put({ kind: "api_key", backend: "managed", secret: "preserved-secret", owner_provider_id: a.id });
+    const endpoint = await service.createEndpoint({ name: "A connection", base_url: "https://a.example/v1", protocol: "openai", data_egress: "remote", credential_ref: key.id, enabled: true });
+    const other = await service.createEndpoint({ name: "Other connection", base_url: "https://b.example/v1", protocol: "openai", data_egress: "remote", credential_ref: key.id, enabled: true });
+    await service.createBinding({ priority: 100, provider_id: a.id, endpoint_id: endpoint.id, enabled: true });
+    const credentialBefore = await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8");
+    const updated = await service.updateCustomProvider(a.id, { auth: { kind: "none" } });
+    expect(updated.endpoint.credential_ref).toBeNull();
+    expect(updated.provider.auth_kind).toBe("none");
+    expect(await service.getEndpoint(other.id)).toEqual(other);
+    expect(await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8")).toBe(credentialBefore);
+  });
+
+  it("preserves explicit egress on direct endpoint updates and unchanged addresses", async () => {
+    const service = new ModelResourceService();
+    const endpoint = await service.createEndpoint({ name: "Connection", base_url: "https://old.example/v1", protocol: "openai", data_egress: "remote", enabled: true });
+    expect(await service.updateEndpoint(endpoint.id, { base_url: "http://localhost:8000/v1", data_egress: "remote" })).toMatchObject({ data_egress: "remote" });
+    expect(await service.updateEndpoint(endpoint.id, { base_url: "http://localhost:8000/v1/" })).toMatchObject({ data_egress: "remote" });
+    expect(await service.updateEndpoint(endpoint.id, { base_url: "http://127.0.0.1:8000/v1" })).toMatchObject({ data_egress: "local" });
+  });
+
+  it.each([false, true])("repairs a lost binding (endpoint deleted: %s) without replacing the owned secret", async (deleteEndpoint) => {
+    const service = new ModelResourceService();
+    const created = await service.createCustomProvider({ name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "api_key", secret: "preserved-repair-secret" }, models: ["lab-model"] });
+    await service.deleteBinding(created.binding.id);
+    if (deleteEndpoint) await service.deleteEndpoint(created.endpoint.id);
+    const credentialBefore = await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8");
+    const repaired = await service.updateCustomProvider(created.provider.id, { base_url: "http://127.0.0.1:9000/v1" });
+    expect(repaired.endpoint).toMatchObject({ credential_ref: created.credential!.id, owner_provider_id: created.provider.id, base_url: "http://127.0.0.1:9000/v1", data_egress: "local" });
+    if (!deleteEndpoint) expect(repaired.endpoint.id).toBe(created.endpoint.id);
+    expect(repaired.binding).toMatchObject({ provider_id: created.provider.id, endpoint_id: repaired.endpoint.id, enabled: true });
+    expect(await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8")).toBe(credentialBefore);
+    expect((await service.repository.read()).bindings.filter((item) => item.provider_id === created.provider.id)).toHaveLength(1);
+  });
+
+  it.each(["http://localhost:8000/v1", "https://127.0.0.2:8000/v1", "http://[::1]:8000/v1", "https://localhost.example/v1"])("uses the same data egress for creating and rebuilding %s", async (baseUrl) => {
+    const service = new ModelResourceService();
+    const discovery = vi.spyOn(service, "discover").mockRejectedValue(new Error("Discovery is outside this metadata test"));
+    const created = await service.createCustomProvider({ name: "Lab", base_url: baseUrl, protocol: "openai", auth: { kind: "none" }, models: ["lab-model"] });
+    await service.deleteBinding(created.binding.id);
+    await service.deleteEndpoint(created.endpoint.id);
+    const repaired = await service.updateCustomProvider(created.provider.id, { base_url: baseUrl });
+    const expected = baseUrl.includes("localhost.example") ? "remote" : "local";
+    expect(created.endpoint.data_egress).toBe(expected);
+    expect(repaired.endpoint.data_egress).toBe(expected);
+    discovery.mockRestore();
+  });
+
+  it("does not choose between multiple owned endpoints when repairing a lost binding", async () => {
+    const service = new ModelResourceService();
+    const created = await service.createCustomProvider({ name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "none" }, models: ["lab-model"] });
+    await service.deleteBinding(created.binding.id);
+    await service.createEndpoint({ name: "Other", base_url: "http://127.0.0.1:9000/v1", protocol: "openai", enabled: true, data_egress: "local", owner_provider_id: created.provider.id });
+    const before = await service.repository.read();
+    await expect(service.updateCustomProvider(created.provider.id, { name: "Changed", base_url: "http://127.0.0.1:9001/v1" })).rejects.toThrow("Multiple owned endpoints");
+    expect(await service.repository.read()).toEqual(before);
   });
 
   it("retries credential cleanup when switching a custom provider to no authentication", async () => {

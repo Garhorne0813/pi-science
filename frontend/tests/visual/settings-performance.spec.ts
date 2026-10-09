@@ -1,17 +1,18 @@
 import { expect, test } from "./fixtures/app.fixture";
+import { providerViewsFixture } from "../fixtures/provider-views";
 import { FIXTURES } from "./fixtures/data.mjs";
 import { writeFile } from "node:fs/promises";
 
 test("Settings isolates delayed model loading and bounds a 10,000-model catalog", async ({ page }, testInfo) => {
-  const providers = Array.from({ length: 100 }, (_, index) => ({ id: `user-lab${index}`, name: `Lab ${index}`, custom: true, enabled: true, has_key: true, credential_status: "configured", models: Array.from({ length: 100 }, (_, model) => `model-${index}-${model}`) }));
+  const providers = Array.from({ length: 100 }, (_, index) => ({ id: `user-lab${index}`, name: `Lab ${index}`, custom: true, enabled: true, has_key: true, credential_status: "configured" as const, models: Array.from({ length: 100 }, (_, model) => `model-${index}-${model}`) }));
   const models = providers.flatMap((provider, index) => provider.models.map((model, position) => ({ ...FIXTURES.config.available_models[0], id: `${provider.id}/${model}`, provider: provider.id, model, label: `Model ${index}-${position}`, custom: true })));
   let requests = 0;
   let release!: () => void;
   const delay = new Promise<void>((resolve) => { release = resolve; });
-  await page.route("**/api/settings/config*", async (route) => {
+  await page.route("**/api/provider-views*", async (route) => {
     requests++;
     await delay;
-    await route.fulfill({ json: { ...FIXTURES.config, providers, available_models: models, custom_providers: [] } });
+    await route.fulfill({ json: providerViewsFixture({ ...FIXTURES.config, providers, available_models: models, custom_providers: [] }) });
   });
   const opened = Date.now();
   await page.goto("/settings");
@@ -54,7 +55,7 @@ test("Settings isolates delayed model loading and bounds a 10,000-model catalog"
   await expect(dialog.getByText("Lab 99", { exact: true })).toBeVisible();
   const searchReadyMs = Date.now() - searchStart;
   await expect(dialog.getByRole("button", { name: "Connection settings" })).toHaveCount(1);
-  await dialog.getByRole("button", { name: /Lab 99.*Connected/ }).click();
+  await dialog.getByRole("button", { name: /Lab 99.*Available/ }).click();
   await expect(dialog.getByText("Model 99-99", { exact: false })).toBeVisible();
   await dialog.getByRole("button", { name: "Clear", exact: true }).click();
   await expect(dialog.getByText("Model 0-0", { exact: false })).toBeVisible();

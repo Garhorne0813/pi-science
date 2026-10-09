@@ -1,7 +1,9 @@
+import type { ProviderView } from "@pi-science/contracts";
 import { apiRequest } from "../client/api";
 import type { CredentialMetadata, CustomProviderResult, ModelEndpointResource, ModelPreferences, ModelProvider, ModelResource, ProviderEndpointBinding } from "./types";
 
 export const modelResourceKeys = {
+  providerViews: (cwd: string | null = null) => ["settings", "provider-views", cwd] as const,
   providers: ["model-resources", "providers"] as const,
   models: (providerId?: string | null, available?: boolean) => ["model-resources", "models", providerId ?? null, available ?? null] as const,
   endpoints: ["model-resources", "endpoints"] as const,
@@ -22,6 +24,9 @@ function query(params: Record<string, string | boolean | undefined>): string {
 }
 
 export const modelResourcesApi = {
+  providerViews(cwd: string | null = null, signal?: AbortSignal): Promise<{ providers: ProviderView[]; catalog_status?: "ready" | "unavailable" }> {
+    return apiRequest(`/api/provider-views${query({ cwd: cwd ?? undefined })}`, { signal });
+  },
   providers(): Promise<{ providers: ModelProvider[] }> {
     return apiRequest("/api/providers");
   },

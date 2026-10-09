@@ -1,3 +1,5 @@
+import { agentModelCatalog } from "../../runtime/agent/worker/agent-models.js";
+import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import {
   createBindingRequestSchema,
@@ -11,6 +13,7 @@ import type { NodeSessionService } from "../../runtime/node/node-session-service
 import { ModelResourceService } from "../../model-resources/model-resource-service.js";
 
 function errorStatus(code: string): number {
+  if (code === "connection_repair_incomplete") return 500;
   if (code === "resource_not_found") return 404;
   if (code === "resource_in_use" || code === "provider_id_conflict") return 409;
   if (code === "discovery_empty" || code === "no_routable_endpoint") return 422;
@@ -21,7 +24,7 @@ function errorStatus(code: string): number {
 function routeError(reply: FastifyReply, error: unknown): FastifyReply {
   const code = typeof error === "object" && error && "code" in error ? String(error.code) : "invalid_resource";
   const message = error instanceof Error ? error.message : String(error);
-  return reply.code(errorStatus(code)).send({ code, error: message });
+  return reply.code(errorStatus(code)).send({ code, error: message, ...(code === "connection_repair_incomplete" ? { partial_commit: true, failed_step: "create_binding" } : {}) });
 }
 
 async function reload<T extends Record<string, unknown>>(service: NodeSessionService, reply: FastifyReply, payload: T): Promise<T | FastifyReply> {
@@ -38,6 +41,39 @@ function queryValue(request: { query: unknown }, name: string): string | undefin
  * kept in model-endpoint-routes.ts so its old response aliases can remain
  * available during the migration window. */
 export function registerModelResourceRoutes(app: FastifyInstance, resources: ModelResourceService, nodeSessionService: NodeSessionService): void {
+  app.get("/api/provider-views", async (request, reply) => {
+    try {
+      const raw = (request.query as { cwd?: unknown }).cwd;
+      if (raw !== undefined && (typeof raw !== "string" || !raw)) return reply.code(400).send({ code: "invalid_resource", error: "cwd must be a nonempty string" });
+      const cwd = raw ? await validateWorkspaceCwd(raw as string) : "";
+      await resources.ensureMigrated();
+      // Management must remain available when Core cannot list selectable
+      // models. An unavailable catalog is unknown, not an empty catalog.
+      let models: Array<{ provider?: string; id: string; input?: string[] }> = [];
+      let catalogAvailable = true;
+      try {
+        if (cwd) {
+          const result = await nodeSessionService.availableModels(cwd);
+          const listed = (result.data as { models?: unknown } | undefined)?.models;
+          if (!result.success || !Array.isArray(listed)) catalogAvailable = false;
+          else models = listed as typeof models;
+        } else models = await agentModelCatalog();
+      } catch {
+        catalogAvailable = false;
+      }
+      const aliases = (await resources.repository.read()).aliases;
+      const inputFormats = new Map<string, string[]>();
+      const ids = new Set(models.map((model) => {
+        const id = model.provider && !model.id.startsWith(`${model.provider}/`) ? `${model.provider}/${model.id}` : model.id;
+        const canonical = aliases[id] ?? id;
+        if (Array.isArray(model.input)) inputFormats.set(canonical, model.input.filter((format) => typeof format === "string"));
+        return canonical;
+      }));
+      return { providers: await resources.providerViews(ids, inputFormats, catalogAvailable),
+        catalog_status: catalogAvailable ? "ready" : "unavailable" };
+    } catch (error) { return routeError(reply, error); }
+  });
+
   app.get("/api/providers", async (_request, reply) => {
     try { return { providers: await resources.listProviders() }; }
     catch (error) { return routeError(reply, error); }
