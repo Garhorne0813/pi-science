@@ -164,6 +164,8 @@ export function KnowledgePage() {
               document={projectDocument}
               summary={summary}
               memorySummary={memorySummary}
+              items={items}
+              onNavigate={setTab}
             />
           )}
           {tab === "inbox" && (
