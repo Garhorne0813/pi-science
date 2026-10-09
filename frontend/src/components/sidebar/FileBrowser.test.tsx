@@ -62,6 +62,33 @@ afterEach(() => {
 });
 
 describe("FileBrowser", () => {
+  it("sorts siblings naturally at each depth without moving files out of their parent", async () => {
+    const entry = (path: string, isDir: boolean): FileListEntry => ({
+      path, name: path.split("/").at(-1)!, isDir, size: 0, modified: 1,
+    });
+    files.sidebar.mockResolvedValueOnce([
+      entry("file10.csv", false), entry("dir10", true), entry("file2.csv", false), entry("dir2", true),
+    ]);
+    files.directory.mockResolvedValueOnce({
+      entries: [
+        entry("dir2/plot10.png", false), entry("dir2/sub10", true),
+        entry("dir2/plot2.png", false), entry("dir2/sub2", true),
+      ],
+      breadcrumbs: [{ name: "dir2", path: "dir2" }],
+    });
+    render(<FileBrowser cwd="proj" embedded />);
+    await screen.findByRole("button", { name: "dir2" });
+    const names = () => screen.getAllByRole("button").map(button => button.textContent?.trim()).filter(Boolean);
+    expect(names()).toEqual(["dir2", "dir10", "file2.csv", "file10.csv"]);
+    fireEvent.click(screen.getByRole("button", { name: "dir2" }));
+    await screen.findByRole("button", { name: "sub2" });
+    expect(names()).toEqual([
+      "dir2", "sub2", "sub10", "plot2.png", "plot10.png",
+      "dir10", "file2.csv", "file10.csv",
+    ]);
+    expect(screen.getByRole("button", { name: "dir2" })).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("pauses embedded requests while inactive and refreshes immediately when shown again", async () => {
     const view = render(<FileBrowser cwd="proj" embedded active={false} />);
     await act(async () => {});
