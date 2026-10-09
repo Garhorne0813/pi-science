@@ -531,6 +531,32 @@ describe("composer completion keyboard paths", () => {
     expect(input().parentElement?.querySelector("[aria-hidden='true']")?.textContent).toContain("@data/protein.csv");
   });
 
+  it("removes an inline file and its highlighted binding with Backspace", async () => {
+    const { container } = renderComposer();
+    await type("@data/pro");
+    await press("Tab");
+    const token = "@data/protein.csv";
+    expect(input()).toHaveValue(token + " ");
+    expect(container.querySelector("div[aria-hidden='true'] span")?.textContent).toBe(token);
+    input().setSelectionRange(token.length, token.length);
+    fireEvent.select(input());
+    await press("Backspace");
+    expect(input()).toHaveValue(" ");
+    expect(container.querySelector("div[aria-hidden='true'] span")).toBeNull();
+  });
+
+  it("keeps two independent occurrences of the same file in the text", async () => {
+    const { container } = renderComposer();
+    await type("@data/pro");
+    await press("Tab");
+    await type("@data/protein.csv and @data/pro");
+    await press("Tab");
+    expect(input()).toHaveValue("@data/protein.csv and @data/protein.csv ");
+    expect([...container.querySelectorAll("div[aria-hidden='true'] span")].map((node) => node.textContent)).toEqual([
+      "@data/protein.csv", "@data/protein.csv",
+    ]);
+  });
+
   it("lets Enter send when the list is closed", async () => {
     renderComposer();
     await type("hello");
