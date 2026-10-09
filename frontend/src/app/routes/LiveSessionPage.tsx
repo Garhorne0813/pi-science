@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, ReactNode, Ref } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -12,7 +12,7 @@ import { useUiStore } from "../../lib/ui";
 import { cn } from "../../lib/ui";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace";
 import { projectKnowledgeApi, useReviewPolicy } from "../../lib/knowledge";
-import { agentActionTextByBlock, fetchDynamicCommands, resetDynamicCommands } from "../../lib/conversation";
+import { agentActionTextByBlock } from "../../lib/conversation";
 import { ConversationComposer } from "../../components/conversation/ConversationComposer";
 import { ConversationWelcome } from "../../components/conversation/ConversationWelcome";
 import { InteractionPrompt } from "../../components/conversation/InteractionPrompt";
@@ -114,6 +114,8 @@ export function LiveSessionPage() {
   const disconnect = useRuntimeStore((s) => s.disconnect);
   const abort = useRuntimeStore((s) => s.abort);
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
+  const draft = useRuntimeStore((s) => s.draft);
+  const createNewSession = useRuntimeStore((s) => s.createNewSession);
   const contextTokens = useRuntimeStore((s) => s.contextTokens);
   const contextWindow = useRuntimeStore((s) => s.contextWindow);
   const contextPercent = useRuntimeStore((s) => s.contextPercent);
@@ -203,13 +205,33 @@ export function LiveSessionPage() {
     return () => { cancelled = true; };
   }, [activeSessionId, workspaceCwd]);
 
+  // A draft belongs to the workspace it was typed in. After a workspace switch the store
+  // still holds the previous workspace's draft for one commit, because the composer's own
+  // clearing effect runs later, so that commit must not initialize the new workspace.
+  const discoveryWorkspaceRef = useRef(workspaceCwd);
   useEffect(() => {
-    if (activeSessionId) {
-      void fetchDynamicCommands(activeSessionId, workspaceCwd);
-    } else {
-      resetDynamicCommands();
+    const workspaceChanged = discoveryWorkspaceRef.current !== workspaceCwd;
+    discoveryWorkspaceRef.current = workspaceCwd;
+    if (workspaceChanged) return;
+    // Navigation alone stays lazy. Explicitly asking for slash commands prepares the
+    // runtime that will also receive the first prompt, so discovery reflects its skill policy.
+    // A runtime that cannot accept a prompt has nothing to discover for: the built-in
+    // commands still complete, and the send control already refuses.
+    if (!model.selectedModel || model.needsModelSwitch || model.configuringModel) return;
+    const current = useRuntimeStore.getState();
+    if (!sessionId && !activeSessionId && draft.startsWith("/") && current.cwd === workspaceCwd) {
+      void createNewSession().catch(() => undefined);
     }
-  }, [activeSessionId, workspaceCwd]);
+  }, [
+    activeSessionId,
+    createNewSession,
+    draft,
+    model.configuringModel,
+    model.needsModelSwitch,
+    model.selectedModel,
+    sessionId,
+    workspaceCwd,
+  ]);
 
   const research = useResearchLoop(workspaceCwd);
   const composer = useComposer({

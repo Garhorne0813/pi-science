@@ -537,7 +537,9 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           updateLocalPromptRequest(requestId, { sessionId: activeSessionId });
         } catch (error) {
           const current = get();
-          if (current.cwd === cwd) set({ working: false, turnLifecycle: "failed" });
+          // The failure belongs to the conversation that sent the prompt. Once the user has
+          // opened another one, this late result must not mark it failed.
+          if (current.cwd === cwd && current.activeSessionId === activeSessionId) set({ working: false, turnLifecycle: "failed" });
           throw error;
         }
       }
@@ -909,13 +911,24 @@ export function createRuntimeActions(set: SetState, get: GetState) {
 
     createNewSession: async () => {
       const requestCwd = get().cwd;
-      const existing = _createSessionPromises.get(requestCwd);
+      const requestSessionId = get().activeSessionId;
+      const requestGeneration = generations.connection;
+      const requestKey = `${requestCwd}\0${requestGeneration}`;
+      const existing = _createSessionPromises.get(requestKey);
       if (existing) return existing;
       const promise = (async () => {
         const client = getClient();
         const result = await client.createSession(requestCwd);
-        if (get().cwd !== requestCwd) {
-          throw new Error("Workspace changed while the conversation was being created");
+        if (get().cwd !== requestCwd || generations.connection !== requestGeneration) {
+          // A late blank runtime must neither replace a newer conversation nor leak capacity.
+          // Deleting it is only safe while nobody has opened it: the server lists a session as
+          // soon as it exists, so this one can already be the conversation on screen.
+          const current = get();
+          const inUse = current.activeSessionId === result.id || current.sessions.some((session) => session.id === result.id);
+          if (!inUse) void client.deleteSession(result.id, requestCwd).catch(() => undefined);
+          throw new Error(get().cwd !== requestCwd
+            ? "Workspace changed while the conversation was being created"
+            : "Conversation changed while the conversation was being created");
         }
         ++generations.connection;
         ++generations.activity;
@@ -953,7 +966,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         }));
         return result.id;
       })();
-      _createSessionPromises.set(requestCwd, promise);
+      _createSessionPromises.set(requestKey, promise);
 
       try {
         return await promise;
@@ -966,7 +979,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           level: "error",
         };
         const nextBlocks = [...current.thread.blocks, errorBlock];
-        if (current.cwd === requestCwd) {
+        if (current.cwd === requestCwd && current.activeSessionId === requestSessionId && generations.connection === requestGeneration) {
           set({
             thread: {
               blocks: nextBlocks,
@@ -980,8 +993,8 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         }
         throw error;
       } finally {
-        if (_createSessionPromises.get(requestCwd) === promise) {
-          _createSessionPromises.delete(requestCwd);
+        if (_createSessionPromises.get(requestKey) === promise) {
+          _createSessionPromises.delete(requestKey);
         }
       }
     },

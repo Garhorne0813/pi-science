@@ -1,13 +1,15 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useComposer } from "./useComposer";
 import { useRuntimeStore } from "../lib/agent-runtime";
 import { apiRequest } from "../lib/client/api";
 import type { ResearchStarter } from "../components/conversation/ResearchLoopControls";
 
+const { navigateMock } = vi.hoisted(() => ({ navigateMock: vi.fn() }));
+
 vi.mock("react-router-dom", () => ({
   useLocation: () => ({ pathname: "/workspace/w" }),
-  useNavigate: () => vi.fn(),
+  useNavigate: () => navigateMock,
 }));
 vi.mock("react-i18next", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react-i18next")>();
@@ -21,13 +23,16 @@ function Harness({
   onSend,
   intent,
   researchMode,
+  conversationKey = null,
 }: {
   onSend?: () => void;
   intent?: (text: string) => Promise<{ kind: "draft" } | { kind: "conversation"; message: string } | null>;
   researchMode?: ResearchStarter | null;
+  conversationKey?: string | null;
 }) {
   const composer = useComposer({
     cwd: "/w",
+    conversationKey,
     selectedModel: "m",
     reviewingProject: false,
     setReviewNotice: () => undefined,
@@ -43,6 +48,7 @@ function Harness({
 
 beforeEach(() => {
   vi.mocked(apiRequest).mockClear();
+  navigateMock.mockClear();
   useRuntimeStore.setState({
     working: false,
     activeSessionId: null,
@@ -126,5 +132,36 @@ describe("useComposer onSend", () => {
     await vi.waitFor(() => expect(useRuntimeStore.getState().draft).toBe(""));
     expect(onSend).not.toHaveBeenCalled();
     expect(sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it("does not refill the composer after the user moves to another conversation", async () => {
+    let fail!: (error: Error) => void;
+    const sendPrompt = vi.fn(() => new Promise<string | null>((_resolve, reject) => { fail = reject; }));
+    useRuntimeStore.setState({ cwd: "/w", draft: "hello", sendPrompt });
+    const { rerender } = render(<Harness conversationKey={null} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "send" }));
+    await vi.waitFor(() => expect(sendPrompt).toHaveBeenCalledWith("hello"));
+
+    // The user opens another conversation while the send is in flight. Its clearing effect
+    // empties the composer, and the late failure must not put the old draft back.
+    rerender(<Harness conversationKey="s2" />);
+    await vi.waitFor(() => expect(useRuntimeStore.getState().draft).toBe(""));
+    await act(async () => { fail(new Error("prompt rejected")); });
+    await vi.waitFor(() => expect(useRuntimeStore.getState().draft).toBe(""));
+  });
+
+  it("does not pull the user back to a session created for a send they left", async () => {
+    let finish!: (value: string) => void;
+    const sendPrompt = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+    useRuntimeStore.setState({ cwd: "/w", draft: "hello", sendPrompt });
+    const { rerender } = render(<Harness conversationKey={null} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "send" }));
+    await vi.waitFor(() => expect(sendPrompt).toHaveBeenCalledWith("hello"));
+
+    rerender(<Harness conversationKey="s2" />);
+    await act(async () => { finish("created-session"); });
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 });

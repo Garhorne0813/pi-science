@@ -22,6 +22,9 @@ const directoryQuery = (cwd: string, subdir: string) => ({
   },
 });
 
+// Exposed so the composer's completion hook shares the sidebar's cache entry for a directory.
+export const workspaceFilesQuery = (cwd: string, subdir: string) => directoryQuery(cwd, subdir);
+
 export const workspaceFiles = {
   invalidate(): void {
     void queryClient.invalidateQueries({ queryKey: workspaceFilesKey() });

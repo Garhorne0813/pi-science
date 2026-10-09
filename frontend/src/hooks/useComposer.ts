@@ -54,13 +54,17 @@ export function useComposer(params: {
     [allWorkspaceReferences, cwd],
   );
   const clearWorkspaceReferences = useUiStore((state) => state.clearWorkspaceReferences);
-  const composerContextRef = useRef<string | null>(null);
+  const composerContextRef = useRef<{ cwd: string; conversationKey: string | null; sessionId: string | null } | null>(null);
 
   useEffect(() => {
-    const composerContext = `${cwd}\0${conversationKey ?? ""}\0${activeSessionId ?? ""}`;
+    const composerContext = { cwd, conversationKey, sessionId: activeSessionId };
     const previousContext = composerContextRef.current;
     composerContextRef.current = composerContext;
-    if (previousContext !== null && previousContext !== composerContext) {
+    const sameDraft = previousContext?.cwd === cwd && previousContext.conversationKey === conversationKey;
+    // Attaching a runtime to the current blank draft is not switching conversations.
+    // Keep text, mentions, references and attachments while slash discovery initializes it.
+    const adoptedDraft = sameDraft && previousContext?.sessionId === null && activeSessionId !== null;
+    if (previousContext && (!sameDraft || previousContext.sessionId !== activeSessionId) && !adoptedDraft) {
       setInput("");
       setMentions([]);
       setFiles([]);
@@ -148,6 +152,9 @@ export function useComposer(params: {
     setFiles([]);
     clearWorkspaceReferences(cwd);
     onSend?.();
+    // A late result belongs to the conversation that sent the prompt. The composer records
+    // that context, so a user who opened another conversation meanwhile is left alone.
+    const sentFrom = conversationKey;
     void sendPrompt(message)
       .then((sentSessionId) => {
         // A first prompt on a workspace landing route (no :sessionId segment)
@@ -155,13 +162,16 @@ export function useComposer(params: {
         // otherwise the route stays on the bare
         // workspace path and a later connect() without a sessionId clears the
         // thread back to the blank composer.
-        if (sentSessionId && !location.pathname.match(/\/session\/[^/]+$/)) {
+        if (!sentSessionId || composerContextRef.current?.conversationKey !== sentFrom) return;
+        if (!window.location.pathname.match(/\/session\/[^/]+$/)) {
           navigate(`/workspace/${encodeURIComponent(cwd)}/session/${sentSessionId}`, { replace: true });
         }
       })
       .catch(() => {
         // Keep the failed message visible with its inline error, but restore the
         // original draft/attachments so retrying does not require retyping.
+        const composer = composerContextRef.current;
+        if (composer?.cwd !== cwd || composer.conversationKey !== sentFrom) return;
         if (!useRuntimeStore.getState().draft) setInput(originalDraft);
         setMentions((current) => current.length > 0 ? current : sentMentions);
         setFiles((current) => current.length > 0 ? current : sentFiles);
