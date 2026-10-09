@@ -20,7 +20,6 @@ import { QuestionnairePrompt } from "../../components/conversation/Questionnaire
 import { renderTurn } from "../../components/conversation/ConversationBlocks";
 import { buildTurnPresentations, type TurnPresentation } from "../../lib/conversation/turn-presentation";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
-import { SessionExecutionButton } from "../../components/conversation/SessionExecutionButton";
 import { ThinkingActivity } from "../../components/conversation/AgentActivity";
 import { visibleUserMessage } from "../../lib/files";
 import { useTranslation } from "react-i18next";
@@ -91,7 +90,7 @@ export function LiveSessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const workspaceCwd = useRequiredWorkspaceCwd();
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const showRuns = searchParams.get("view") === "runs";
   const focusedBlockId = searchParams.get("focus");
   // Field-level selectors, not a whole-store subscription: a streamed token only
@@ -331,22 +330,6 @@ export function LiveSessionPage() {
             status === "ready" ? "bg-ok" : status === "connecting" ? "bg-warn animate-pulse" : status === "error" ? "bg-error" : "bg-muted"
           )} title={status} />
           <h1 className="min-w-0 truncate text-[13px] font-medium text-text">{title}</h1>
-          <SessionExecutionButton
-            cwd={workspaceCwd}
-            sessionId={sessionId ?? activeSessionId ?? undefined}
-            active={showRuns}
-            onToggle={() => {
-              const next = new URLSearchParams(searchParams);
-              if (showRuns) {
-                next.delete("view");
-                next.delete("execution");
-              } else {
-                next.delete("focus");
-                next.set("view", "runs");
-              }
-              setSearchParams(next);
-            }}
-          />
         </div>
       </header>
 
