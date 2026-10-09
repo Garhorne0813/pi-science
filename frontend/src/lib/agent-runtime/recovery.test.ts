@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { getClient } from "../client/pi-science-client";
 import { queryClient } from "../client/query-client";
@@ -11,6 +11,7 @@ import type { ThreadBlock } from "../../types/thread";
 
 
 installRuntimeTestEnvironment();
+afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 
 
 describe("runtime conversation recovery", () => {
@@ -250,6 +251,8 @@ describe("runtime conversation recovery", () => {
   });
 
   it("settles stale working after a closed stream from the authoritative idle state", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     let stateReads = 0;
     let messageReads = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -272,7 +275,8 @@ describe("runtime conversation recovery", () => {
     // action, so the listener must perform bounded authoritative recovery.
     useRuntimeStore.getState().client?.disconnect();
 
-    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(useRuntimeStore.getState().working).toBe(false);
     expect(messageReads).toBeGreaterThanOrEqual(2);
     expect(stateReads).toBeGreaterThanOrEqual(2);
   });
@@ -345,6 +349,8 @@ describe("runtime conversation recovery", () => {
   });
 
   it("retries a failed reconnect state read before settling idle", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     let stateReads = 0;
     let recoveryStateFailures = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -368,12 +374,15 @@ describe("runtime conversation recovery", () => {
     source.readyState = FakeEventSource.CONNECTING;
     source.onerror?.({} as Event);
 
-    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false));
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(useRuntimeStore.getState().working).toBe(false);
     expect(recoveryStateFailures).toBe(1);
     expect(stateReads).toBeGreaterThanOrEqual(3);
   });
 
   it("does not clear working when every recovery state read fails", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     let stateReads = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -392,12 +401,15 @@ describe("runtime conversation recovery", () => {
     source.readyState = FakeEventSource.CONNECTING;
     source.onerror?.({} as Event);
 
-    await vi.waitFor(() => expect(useRuntimeStore.getState().status).toBe("error"), { timeout: 5_000 });
-    expect(stateReads).toBeGreaterThanOrEqual(5);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(useRuntimeStore.getState().status).toBe("error");
+    expect(stateReads).toBe(5);
     expect(useRuntimeStore.getState().working).toBe(true);
   });
 
   it("uses state idle to settle a turn when operation.settled was missed", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     let stateReads = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -421,13 +433,16 @@ describe("runtime conversation recovery", () => {
     source.readyState = FakeEventSource.CONNECTING;
     source.onerror?.({} as Event);
 
-    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(useRuntimeStore.getState().working).toBe(false);
     expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
       expect.objectContaining({ kind: "agent", id: "assistant-1" }),
     );
   });
 
   it("keeps working and rejects a prompt when reconnect state is explicitly busy", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/messages")) return jsonResponse({ messages: [] });
@@ -440,7 +455,8 @@ describe("runtime conversation recovery", () => {
     const source = FakeEventSource.instances[0];
     source.readyState = FakeEventSource.CONNECTING;
     source.onerror?.({} as Event);
-    await vi.waitFor(() => expect(useRuntimeStore.getState().status).toBe("ready"));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(useRuntimeStore.getState().status).toBe("ready");
 
     expect(useRuntimeStore.getState().working).toBe(true);
     await expect(useRuntimeStore.getState().sendPrompt("must not overlap")).rejects.toThrow(
@@ -1124,6 +1140,8 @@ describe("runtime conversation recovery", () => {
   });
 
   it("marks workspace files changed once when recovery confirms an idle runtime", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     const invalidateSpy = vi.spyOn(workspaceFiles, "invalidate");
     let stateReads = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -1142,11 +1160,12 @@ describe("runtime conversation recovery", () => {
     expect(useRuntimeStore.getState().working).toBe(true);
     useRuntimeStore.getState().client?.disconnect();
 
-    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(useRuntimeStore.getState().working).toBe(false);
     expect(useRuntimeStore.getState().fileRevision).toBe(1);
     expect(invalidateSpy).toHaveBeenCalled();
     // A second pass over the same idle confirmation must not bump again.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await vi.advanceTimersByTimeAsync(50);
     expect(useRuntimeStore.getState().fileRevision).toBe(1);
     invalidateSpy.mockRestore();
   });

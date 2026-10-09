@@ -76,6 +76,24 @@ afterEach(() => {
 });
 
 describe("turn-level activity through the live event path", () => {
+  it("restores the elapsed status from the turn's user timestamp", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-24T12:00:30.000Z"));
+      const thread = threadFromMessages([
+        { id: "user-live", role: "user", content: [{ type: "text", text: "still running" }], timestamp: "2026-09-24T12:00:00.000Z" },
+      ]);
+      const [turn] = buildTurnPresentations(thread.blocks, { lastTurnLifecycle: "active" });
+      render(renderTurn(turn!, codeRunner));
+
+      expect(screen.getByText("30s")).toBeInTheDocument();
+      act(() => { vi.advanceTimersByTime(5_000); });
+      expect(screen.getByText("35s")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("renders one activity row, hides narration, and keeps the todo plan alive", async () => {
     stubWorkspace();
     await useRuntimeStore.getState().connect("/workspace", SESSION);

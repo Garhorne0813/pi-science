@@ -3,6 +3,8 @@
 
 import type { PiScienceClient, PiScienceEvent, SessionStats } from "../client/pi-science-client";
 import { aiTitleAttemptedAt, hasAiTitle, markAiTitleAttempted } from "../client/pi-science-client";
+import { queryClient } from "../client/query-client";
+import { runsKey } from "../runs";
 import { appendRuntimeError, isMissingSessionError } from "./errors";
 import { markWorkspaceFilesChanged } from "./file-revision";
 import { foldEvent, resetTurnBuffer } from "./event-fold";
@@ -30,6 +32,38 @@ function reconnectReason(event: PiScienceEvent, fallback: ReconnectReason): Reco
 
 function interactionKind(value: unknown): InteractionKind | undefined {
   return value === "permission" || value === "confirmation" || value === "question" ? value : undefined;
+}
+
+const RUNS_SIGNAL_DEBOUNCE_MS = 150;
+let runsSignalTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Executions stay a REST surface, so this stream can only invalidate them.
+ *  Coalesce the burst a parallel tool fan-out produces into one refetch. */
+function signalRunsForCurrentWorkspace(): void {
+  runsSignalTimer ??= setTimeout(() => {
+    runsSignalTimer = null;
+    void queryClient.invalidateQueries({ queryKey: runsKey(useRuntimeStore.getState().cwd) });
+  }, RUNS_SIGNAL_DEBOUNCE_MS);
+}
+
+/** SSE v3 names operation/tool boundaries explicitly. Output deltas never
+ *  invalidate runs, even when a replayed tool.updated carries old metadata. */
+function isExecutionBoundary(event: PiScienceEvent): boolean {
+  switch (event.type) {
+    case "operation.started":
+    case "operation.settled":
+    case "tool.started":
+    case "tool.completed":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/** A stream that resumed after being hidden or dropped missed whatever ran in
+ *  the meantime; the re-attach is the only signal for those executions. */
+function isRecoveryAttach(event: PiScienceEvent): boolean {
+  return event.type === "connection.open" && event.reason !== "initial_attach";
 }
 
 /** The client whose stream is currently folded into the store, and the
@@ -238,6 +272,9 @@ export function registerEventListener(client: PiScienceClient) {
   disarmTurnWatchdog();
   clearOptimisticRetry();
   optimisticRetries.clear();
+  // A signal queued by the previous client must not land after the switch.
+  if (runsSignalTimer !== null) clearTimeout(runsSignalTimer);
+  runsSignalTimer = null;
   _listenerUnsubscribe?.();
   _listenerClient = client;
   _listenerUnsubscribe = client.onEvent((event) => {
@@ -249,6 +286,13 @@ export function registerEventListener(client: PiScienceClient) {
     // not count as turn activity: the watchdog's reconnect emits one and
     // must not reset its own silence clock.
     if (!event.type.startsWith("connection.")) noteTurnEvent();
+
+    // Runs own no subscription of their own on this page, so the conversation
+    // stream is what keeps the session's execution badge event-driven instead
+    // of waiting out the REST poll interval.
+    if (isExecutionBoundary(event) || isRecoveryAttach(event) || event.type === "stream.gap") {
+      signalRunsForCurrentWorkspace();
+    }
 
     if (event.type === "session.replaced") {
       const replacementSessionId = String(event.replacementSessionId || "");
