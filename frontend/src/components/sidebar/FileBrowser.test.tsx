@@ -61,6 +61,17 @@ afterEach(() => {
 });
 
 describe("FileBrowser", () => {
+  it("fills the embedded panel without resize or collapse controls and preserves refresh", async () => {
+    render(<FileBrowser cwd="proj" embedded />);
+    await screen.findByText("data.csv");
+    expect(screen.queryByRole("separator")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
+    const before = files.sidebar.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh files" }));
+    await vi.waitFor(() => expect(files.sidebar.mock.calls.length).toBeGreaterThan(before));
+    expect(files.invalidate).toHaveBeenCalledTimes(1);
+  });
+
   it("loads the root and auto-opens work/ on first load", async () => {
     render(<FileBrowser cwd="proj" />);
     fireEvent.click(screen.getByText("Files"));

@@ -1,12 +1,20 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { SidebarMainArea } from "../../components/sidebar/SidebarMainArea";
+import userEvent from "@testing-library/user-event";
 import { SettingsNavItem, WorkspaceSessionList } from "./ProjectsLayout";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { FeedbackContext } from "../../components/feedback/feedback-context";
 import i18n from "../../i18n";
 import type { SessionInfo } from "../../lib/client/types";
+
+vi.mock("../../components/sidebar/FileBrowser", () => ({ FileBrowser: () => <span>Embedded file tree</span> }));
+
+function SidebarFixture() {
+  return <SidebarMainArea cwd="proj" renderSessions={query => <WorkspaceSessionList cwd="proj" query={query} />} />;
+}
 
 function LocationProbe() {
   const location = useLocation();
@@ -86,15 +94,15 @@ describe("WorkspaceSessionList", () => {
           <Routes>
             <Route
               path="/workspace/:cwd"
-              element={<><WorkspaceSessionList cwd="proj" /><LocationProbe /></>}
+              element={<><SidebarFixture /><LocationProbe /></>}
             />
             <Route
               path="/workspace/:cwd/session/:sessionId"
-              element={<><WorkspaceSessionList cwd="proj" /><LocationProbe /></>}
+              element={<><SidebarFixture /><LocationProbe /></>}
             />
             <Route
               path="/workspace/:cwd/files"
-              element={<><WorkspaceSessionList cwd="proj" /><LocationProbe /></>}
+              element={<><SidebarFixture /><LocationProbe /></>}
             />
           </Routes>
         </MemoryRouter>
@@ -103,28 +111,28 @@ describe("WorkspaceSessionList", () => {
   }
 
   function rowFor(name: string): HTMLElement {
-    const button = screen.getByRole("button", { name: new RegExp(name) });
+    const button = screen.getByRole("button", { name });
     const row = button.closest("div.group");
     if (!row) throw new Error(`session row for ${name} not found`);
     return row as HTMLElement;
   }
 
-  function deleteButtonOf(name: string): HTMLButtonElement {
-    const buttons = rowFor(name).querySelectorAll("button");
-    const deleteButton = buttons[buttons.length - 1];
-    if (!(deleteButton instanceof HTMLButtonElement)) throw new Error(`delete button for ${name} not found`);
-    return deleteButton;
+  async function deleteConversation(name: string) {
+    await userEvent.click(screen.getByRole("button", { name: `Manage conversation: ${name}` }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Delete conversation" }));
   }
 
   it("marks the active session with an accent dot and hides the placeholder dots", () => {
     useRuntimeStore.setState({ sessions: [session("s1", "Session A"), session("s2", "Session B")], activeSessionId: "s1" });
     renderList();
 
-    const activeDot = rowFor("Session A").firstElementChild;
+    const activeDot = rowFor("Session A").querySelector("span[aria-hidden]");
     expect(activeDot?.className).toContain("bg-accent");
-    const inactiveDot = rowFor("Session B").firstElementChild;
+    const inactiveDot = rowFor("Session B").querySelector("span[aria-hidden]");
     expect(inactiveDot?.className).not.toContain("bg-accent");
-    expect((inactiveDot as HTMLElement).style.visibility).toBe("hidden");
+    expect(inactiveDot?.className).toContain("bg-transparent");
+    expect(rowFor("Session A")).toHaveClass("bg-surface-selected");
+    expect(screen.getByRole("button", { name: "Session A" })).toHaveAttribute("aria-current", "page");
   });
 
   it("renders every loaded page and offers loading for older conversations", () => {
@@ -137,7 +145,7 @@ describe("WorkspaceSessionList", () => {
     });
     renderList();
 
-    expect(screen.getByRole("button", { name: /Session 34/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Session 34" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Load older conversations" }));
     expect(loadMoreSessions).toHaveBeenCalledTimes(1);
   });
@@ -168,11 +176,11 @@ describe("WorkspaceSessionList", () => {
           <Routes>
             <Route
               path="/workspace/:cwd"
-              element={<><WorkspaceSessionList cwd="proj" /><NavigationButton to="/workspace/proj/files" label="Go files" /><LocationProbe /></>}
+              element={<><SidebarFixture /><NavigationButton to="/workspace/proj/files" label="Go files" /><LocationProbe /></>}
             />
             <Route
               path="/workspace/:cwd/files"
-              element={<><WorkspaceSessionList cwd="proj" /><LocationProbe /></>}
+              element={<><SidebarFixture /><LocationProbe /></>}
             />
           </Routes>
         </MemoryRouter>
@@ -197,7 +205,7 @@ describe("WorkspaceSessionList", () => {
     });
     renderList();
 
-    fireEvent.click(deleteButtonOf("Session A"));
+    await deleteConversation("Session A");
 
     await waitFor(() => expect(screen.getByTestId("path").textContent).toBe("/workspace/proj"));
     const createNewSession = useRuntimeStore.getState().createNewSession as ReturnType<typeof vi.fn>;
@@ -207,7 +215,7 @@ describe("WorkspaceSessionList", () => {
     // (no auto-nav pull-back into the most recent session).
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(screen.getByTestId("path").textContent).toBe("/workspace/proj");
-    expect(screen.getByRole("button", { name: /Session B/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Session B" })).toBeInTheDocument();
     expect(useUiStore.getState().suppressAutoSessionNav).toBe(false);
   });
 
@@ -221,8 +229,8 @@ describe("WorkspaceSessionList", () => {
       <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
         <MemoryRouter initialEntries={["/workspace/proj"]}>
           <Routes>
-            <Route path="/workspace/:cwd" element={<><WorkspaceSessionList cwd="proj" /><LocationProbe /></>} />
-            <Route path="/workspace/:cwd/session/:sessionId" element={<><WorkspaceSessionList cwd="proj" /><LocationProbe /></>} />
+            <Route path="/workspace/:cwd" element={<><SidebarFixture /><LocationProbe /></>} />
+            <Route path="/workspace/:cwd/session/:sessionId" element={<><SidebarFixture /><LocationProbe /></>} />
           </Routes>
         </MemoryRouter>
       </FeedbackContext.Provider>,
@@ -266,8 +274,8 @@ describe("WorkspaceSessionList", () => {
 
     const row = rowFor("Session A");
     expect(row.className).toContain("focus-within:bg-surface-hover");
-    const deleteButton = deleteButtonOf("Session A");
-    expect(deleteButton.className).toContain("group-focus-within:!inline-flex");
+    const menuButton = screen.getByRole("button", { name: "Manage conversation: Session A" });
+    expect(menuButton.className).toContain("group-focus-within:opacity-100");
   });
 
   it("does not let a repeated New Session click at root suppress the next normal root entry", async () => {
@@ -284,7 +292,7 @@ describe("WorkspaceSessionList", () => {
           <NavigationButton to="/workspace/proj" label="Go workspace" />
           <Routes>
             <Route path="/" element={<LocationProbe />} />
-            <Route path="/workspace/:cwd" element={<><WorkspaceSessionList cwd="proj" /><LocationProbe /></>} />
+            <Route path="/workspace/:cwd" element={<><SidebarFixture /><LocationProbe /></>} />
           </Routes>
         </MemoryRouter>
       </FeedbackContext.Provider>,
@@ -303,6 +311,52 @@ describe("WorkspaceSessionList", () => {
     expect(useUiStore.getState().suppressAutoSessionNav).toBe(false);
   });
 
+  it("keeps sessions mounted while switching tabs and applies search to loaded pages", async () => {
+    const loadSessions = vi.fn(async () => []);
+    useRuntimeStore.setState({ sessions: [session("s1", "Protein study"), session("s2", "Genome study")], activeSessionId: "s1", sessionsHasMore: true, loadSessions });
+    renderList();
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "Protein" } });
+    expect(screen.queryByRole("button", { name: "Genome study" })).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Search covers loaded conversations only;/)).toHaveLength(2);
+    const row = screen.getByRole("button", { name: "Protein study" });
+    await userEvent.click(screen.getByRole("tab", { name: "Files" }));
+    expect(row).toBeInTheDocument();
+    expect(row.closest('[role="tabpanel"]')).toHaveAttribute("hidden");
+    expect(screen.getByText("Embedded file tree")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "Conversations" }));
+    expect(screen.getByRole("button", { name: "Protein study" })).toBe(row);
+    expect(loadSessions).not.toHaveBeenCalled();
+    act(() => useRuntimeStore.setState({ sessions: [...useRuntimeStore.getState().sessions, session("s3", "Protein follow-up")] }));
+    expect(screen.getByRole("button", { name: "Protein follow-up" })).toBeInTheDocument();
+  });
+
+  it("navigates from the file tab and closes the narrow drawer", async () => {
+    vi.stubGlobal("innerWidth", 375);
+    useUiStore.setState({ sidebarCollapsed: false });
+    renderList();
+    await userEvent.click(screen.getByRole("tab", { name: "Files" }));
+    fireEvent.click(screen.getByRole("button", { name: /View all files/ }));
+    expect(screen.getByTestId("path")).toHaveTextContent("/workspace/proj/files");
+    expect(useUiStore.getState().sidebarCollapsed).toBe(true);
+  });
+
+  it("supports keyboard menu navigation, Escape focus return, and fork", async () => {
+    useRuntimeStore.setState({ sessions: [session("s1", "Session A")], activeSessionId: "s1" });
+    renderList();
+    const trigger = screen.getByRole("button", { name: "Manage conversation: Session A" });
+    trigger.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(await screen.findByRole("menuitem", { name: "Fork conversation" })).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "Delete conversation" })).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    await userEvent.keyboard("{Enter}{Enter}");
+    await waitFor(() => expect(useRuntimeStore.getState().forkSession).toHaveBeenCalledWith("s1"));
+    expect(screen.getByTestId("path")).toHaveTextContent("/workspace/proj/session/forked");
+  });
+
   it("does not kick the user out of a session they opened while the delete was in flight", async () => {
     let releaseDelete!: () => void;
     const gate = new Promise<void>((resolve) => { releaseDelete = resolve; });
@@ -316,9 +370,9 @@ describe("WorkspaceSessionList", () => {
     });
     renderList();
 
-    fireEvent.click(deleteButtonOf("Session A"));
+    await deleteConversation("Session A");
     // The delete is in flight; the user switches to the other session.
-    fireEvent.click(screen.getByRole("button", { name: /Session B/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Session B" }));
     expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/session/s2");
 
     await act(async () => {

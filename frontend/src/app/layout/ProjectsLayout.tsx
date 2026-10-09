@@ -1,12 +1,14 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { lazy, Suspense, useState, useEffect, useRef } from "react";
-import { PanelLeft, Settings, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, FileText, Inbox, FlaskConical, type LucideIcon } from "lucide-react";
+import { PanelLeft, Settings, Plus, Activity, MessageSquare, FolderOpen, ArrowLeft, FileText, Inbox, FlaskConical, type LucideIcon } from "lucide-react";
 import { useUiStore } from "../../lib/ui";
-import { useRuntimeStore } from "../../lib/agent-runtime";
 import { RightPane } from "../../components/inspector/RightPane";
 import { PreviewPaneControls } from "../../components/inspector/PreviewPaneControls";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
-import { FileBrowser } from "../../components/sidebar/FileBrowser";
+import { SidebarMainArea } from "../../components/sidebar/SidebarMainArea";
+import { WorkspaceSessionList } from "../../components/sidebar/WorkspaceSessionList";
+import { useNewWorkspaceConversation } from "../../components/sidebar/workspace-navigation";
+export { WorkspaceSessionList } from "../../components/sidebar/WorkspaceSessionList";
 import { useWorkspaceCwd } from "../../lib/workspace";
 import { usePendingProposalCount } from "../../lib/knowledge";
 import { cn } from "../../lib/ui";
@@ -52,7 +54,6 @@ function loadInspectorTabs(): Promise<InspectorTabsModule> {
 
 const InitialInspectorTabs = lazy(loadInspectorTabs);
 import { useTranslation } from "react-i18next";
-import { useFeedback } from "../../components/feedback/feedback-context";
 import { workspacePathLeaf } from "../../lib/workspace";
 import { Icon, IconButton } from "../../components/ui/Icon";
 import { conversationSessionId } from "../../lib/conversation/session-route";
@@ -83,6 +84,7 @@ export function ProjectsLayout() {
   const location = useLocation();
   const activeCwd = useWorkspaceCwd();
   const isWorkspace = !!activeCwd;
+  const newConversation = useNewWorkspaceConversation(activeCwd);
   const workspaceRoot = activeCwd ? `/workspace/${encodeURIComponent(activeCwd)}` : "";
   const activeConversationSessionId = conversationSessionId(location.pathname);
   const isConversationRoute = isWorkspace && (
@@ -153,7 +155,7 @@ export function ProjectsLayout() {
         {t("common.skipToContent", { defaultValue: "Skip to content" })}
       </a>
       {/* Sidebar */}
-      {sidebarCollapsed ? (
+      {sidebarCollapsed && (
         <aside className="app-sidebar rail-enter flex h-full w-[var(--sidebar-collapsed-width)] shrink-0 flex-col items-center gap-1.5 overflow-hidden border-r border-border px-1.5 py-[18px]">
           <IconButton
             icon={PanelLeft}
@@ -166,21 +168,23 @@ export function ProjectsLayout() {
           <CollapsedNavItem to="/" icon={isWorkspace ? ArrowLeft : FolderOpen} label={t("nav.projects")} />
           {isWorkspace && (
             <>
+              <IconButton icon={Plus} label={t("conversation.newSession")} size="standard" className="h-11 w-11" onClick={newConversation} />
+              <CollapsedNavItem to={workspaceRoot} icon={MessageSquare} label={t("sidebar.conversations")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} icon={FileText} label={t("nav.files")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/knowledge`} icon={Inbox} label={t("nav.knowledge")} />
-              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/research`} icon={FlaskConical} label={t("nav.research")} />
+              <CollapsedNavItem to={`${workspaceRoot}/research`} icon={FlaskConical} label={t("nav.research")} />
+              <CollapsedNavItem to={`${workspaceRoot}/runs`} icon={Activity} label={t("sidebar.runs")} />
             </>
           )}
           <div className="flex-1" />
           <SettingsNavItem cwd={activeCwd} collapsed />
         </aside>
-      ) : (
-        <>
-        <button type="button" aria-label={t("shell.closeSidebar")} onClick={() => setSidebarCollapsed(true)} className="fixed inset-0 z-20 bg-black/45 md:hidden" />
-        <aside className="app-sidebar sidebar-enter absolute z-30 flex h-full shrink-0 flex-col overflow-hidden border-r border-border md:relative" style={{ width: sidebarDragWidth ?? sidebarWidth, maxWidth: "86vw" }}>
+      )}
+        <button type="button" aria-label={t("shell.closeSidebar")} onClick={() => setSidebarCollapsed(true)} hidden={sidebarCollapsed} className="fixed inset-0 z-20 bg-black/45 md:hidden" />
+        <aside hidden={sidebarCollapsed} className={cn(sidebarCollapsed && "!hidden", "app-sidebar sidebar-enter absolute z-30 flex h-full shrink-0 flex-col overflow-hidden border-r border-border md:relative")} style={{ width: sidebarDragWidth ?? sidebarWidth, maxWidth: "86vw" }}>
           <div className="flex h-full flex-col px-panel py-card">
             {/* Header */}
-            <div className="mb-card flex items-center justify-between px-2">
+            <div className="mb-card flex shrink-0 items-center justify-between px-2">
               <h1 className="text-ui-title font-semibold tracking-tight text-text">
                 Pi-Science
               </h1>
@@ -194,30 +198,23 @@ export function ProjectsLayout() {
             </div>
 
             {/* Projects / Back to workspace list */}
-            <nav className="flex flex-col gap-px mb-2">
+            <nav className="mb-2 flex shrink-0 flex-col gap-px">
               <SidebarNavItem
                 to="/"
                 label={isWorkspace ? (workspacePathLeaf(activeCwd!) || t("nav.projects")) : t("nav.projects")}
                 icon={isWorkspace ? ArrowLeft : FolderOpen}
                 active={false}
               />
-              {isWorkspace && (
-                <>
-                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} label={t("nav.files")} icon={FileText} active={location.pathname.endsWith("/files")} />
-                  <KnowledgeNavItem cwd={activeCwd!} active={location.pathname.endsWith("/knowledge")} />
-                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/research`} label={t("nav.research")} icon={FlaskConical} active={location.pathname.endsWith("/research")} />
-                </>
-              )}
             </nav>
-
-            {/* Session list (only in workspace context) */}
-            {isWorkspace && <WorkspaceSessionList cwd={activeCwd!} />}
-
-            {/* File browser */}
-            {isWorkspace && <FileBrowser cwd={activeCwd!} />}
+            {isWorkspace && <SidebarMainArea key={activeCwd!} cwd={activeCwd!} renderSessions={query => <WorkspaceSessionList cwd={activeCwd!} query={query} />} />}
+            {isWorkspace && <nav className="mt-2 shrink-0 border-t border-faint pt-2">
+              <KnowledgeNavItem cwd={activeCwd!} active={location.pathname.endsWith("/knowledge")} />
+              <SidebarNavItem to={`${workspaceRoot}/research`} label={t("nav.research")} icon={FlaskConical} active={location.pathname.endsWith("/research")} />
+              <SidebarNavItem to={`${workspaceRoot}/runs`} label={t("sidebar.runs")} icon={Activity} active={location.pathname.endsWith("/runs")} />
+            </nav>}
 
             {/* Bottom */}
-            <div className="mt-auto">
+            <div className="mt-auto shrink-0">
               <div className="my-panel border-t border-faint" />
               <div className="mt-2">
                 <SettingsNavItem cwd={activeCwd} />
@@ -250,8 +247,6 @@ export function ProjectsLayout() {
             <div className="absolute inset-y-0 right-0 w-px bg-transparent transition-colors group-hover:bg-accent/50" />
           </div>
         </aside>
-        </>
-      )}
 
       {/* Main */}
       <main id="main-content" tabIndex={-1} className={cn(
@@ -315,222 +310,11 @@ export function ProjectsLayout() {
 
 /* ── Workspace Session List ── */
 
-export function WorkspaceSessionList({ cwd }: { cwd: string }) {
-  const { t } = useTranslation();
-  const { toast } = useFeedback();
-  const sessions = useRuntimeStore((s) => s.sessions);
-  const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
-  const forkSession = useRuntimeStore((s) => s.forkSession);
-  const loadSessions = useRuntimeStore((s) => s.loadSessions);
-  const loadMoreSessions = useRuntimeStore((s) => s.loadMoreSessions);
-  const sessionsHasMore = useRuntimeStore((s) => s.sessionsHasMore);
-  const sessionsLoading = useRuntimeStore((s) => s.sessionsLoading);
-  const deleteSession = useRuntimeStore((s) => s.deleteSession);
-  const navigate = useNavigate();
-  const location = useLocation();
-  const workspaceRoot = `/workspace/${encodeURIComponent(cwd)}`;
-  const isWorkspaceRoot = location.pathname === workspaceRoot;
-  // The store marker carries the suppression across a layout remount; the
-  // route-state target prevents a fast workspace switch from consuming it in
-  // the wrong workspace.
-  const intentionalRootLanding = location.state?.suppressAutoSessionNavFor === cwd;
-  const [deleting, setDeleting] = useState<string | null>(null);
-  const [forking, setForking] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    // Load metadata for a direct conversation link when the store starts
-    // empty. Do not reload the list for files, runs, settings, or a session
-    // route that already has session metadata.
-    const isConversationRoute = location.pathname.startsWith(`${workspaceRoot}/session/`);
-    if (!isWorkspaceRoot && (!isConversationRoute || sessions.length > 0)) return () => { cancelled = true; };
-
-    // Consume suppression only for the intentional root landing that set it.
-    // A stale marker from an interrupted/other-workspace navigation is cleared,
-    // but a normal first root entry still loads and may auto-open a session.
-    const suppressAutoNav = useUiStore.getState().suppressAutoSessionNav;
-    if (suppressAutoNav && intentionalRootLanding) {
-      useUiStore.getState().setSuppressAutoSessionNav(false);
-      return () => { cancelled = true; };
-    }
-    if (suppressAutoNav) useUiStore.getState().setSuppressAutoSessionNav(false);
-
-    loadSessions(cwd)
-      .then((merged) => {
-        if (cancelled) return;
-        // Auto-load most recent session if none active
-        const state = useRuntimeStore.getState();
-        if (isWorkspaceRoot && merged.length > 0 && !state.activeSessionId) {
-          const latest = merged[0];
-          navigate(`/workspace/${encodeURIComponent(cwd)}/session/${latest.id}`);
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) toast(error instanceof Error ? error.message : "Unable to load workspace sessions", "error");
-      });
-    return () => { cancelled = true; };
-  }, [cwd, intentionalRootLanding, isWorkspaceRoot, loadSessions, location.pathname, navigate, sessions.length, toast, workspaceRoot]);
-
-  const handleDelete = async (e: React.MouseEvent, sessionId: string) => {
-    e.stopPropagation();
-    if (deleting) return;
-    setDeleting(sessionId);
-    // Read freshness after the await: the user may have switched sessions
-    // while the delete was in flight, and we must not kick them out of the
-    // session they are now viewing.
-    const wasActive = useRuntimeStore.getState().activeSessionId === sessionId;
-    try {
-      await deleteSession(sessionId);
-      // Only the active-session delete lands on the blank workspace, and only
-      // when the store agrees the session is really gone (deleteSession
-      // detaches the stream and clears activeSessionId). The user could have
-      // opened another session meanwhile, or switched workspaces.
-      const state = useRuntimeStore.getState();
-      if (wasActive && state.activeSessionId === null && state.cwd === cwd) {
-        // deleteSession already detached the stream and blanked the thread.
-        // Return to the workspace landing (blank composer) instead of creating
-        // a fresh session — the first prompt creates one lazily. Set a flag so
-        // the session-list auto-nav effect does not yank the user straight
-        // back into the most recent session. replace: true keeps the landing
-        // as the entry point instead of stacking history entries.
-        useUiStore.getState().setSuppressAutoSessionNav(true);
-        navigate(workspaceRoot, { replace: true, state: { suppressAutoSessionNavFor: cwd } });
-      }
-    } catch (err) {
-      toast(err instanceof Error ? err.message : "Unable to delete session", "error");
-    } finally {
-      setDeleting(null);
-    }
-  };
-
-  const handleNew = async () => {
-    // Session creation is lazy: the first prompt creates the server-side
-    // session, avoiding an empty agent worker for every click. A repeated click
-    // at the root is already on the intended landing, so it must not leave a
-    // suppression marker behind for the next normal root entry.
-    if (isWorkspaceRoot) {
-      useUiStore.getState().setSuppressAutoSessionNav(false);
-      return;
-    }
-    useUiStore.getState().setSuppressAutoSessionNav(true);
-    navigate(workspaceRoot, { state: { suppressAutoSessionNavFor: cwd } });
-  };
-
-  const handleFork = async (e: React.MouseEvent, sessionId: string) => {
-    e.stopPropagation();
-    if (forking) return;
-    setForking(sessionId);
-    try {
-      const newId = await forkSession(sessionId);
-      navigate(`/workspace/${encodeURIComponent(cwd)}/session/${newId}`);
-    } catch (err) {
-      toast(err instanceof Error ? err.message : "Unable to fork session", "error");
-    } finally {
-      setForking(null);
-    }
-  };
-
-  return (
-    <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
-      <div className="mb-1 px-2">
-        <span className="text-ui-caption font-medium uppercase tracking-wider text-muted">{t("conversation.sessions")}</span>
-      </div>
-      <button
-        type="button"
-        onClick={handleNew}
-        title={t("conversation.newSession")}
-        className="mb-1 flex h-new-session w-full items-center gap-1.5 rounded-card border border-border bg-surface-raised px-3 text-left text-ui-label font-medium text-text transition-colors hover:bg-surface-hover"
-      >
-        <Icon icon={Plus} size="md" className="shrink-0 text-muted" />
-        <span className="min-w-0 flex-1 truncate">{t("conversation.newSession")}</span>
-      </button>
-      <div className="flex flex-col gap-0.5 overflow-y-auto">
-        {sessions.length === 0 ? (
-          <p className="px-2 text-ui-meta italic text-muted/60">{t("conversation.noSessions")}</p>
-        ) : (
-          sessions.map((s) => (
-            <div key={s.id} className="group relative flex items-center rounded-input hover:bg-surface-hover focus-within:bg-surface-hover">
-              {/* Current-conversation indicator: a dot on the left edge; other
-                  sessions keep an invisible dot so the list does not jump. */}
-              <span
-                aria-hidden
-                className={cn("ml-1.5 h-1.5 w-1.5 shrink-0 rounded-full", activeSessionId === s.id && "bg-accent")}
-                style={activeSessionId === s.id ? undefined : { visibility: "hidden" }}
-              />
-              <button
-                onClick={() => {
-                  navigate(`/workspace/${encodeURIComponent(cwd)}/session/${s.id}`);
-                }}
-                className={cn(
-                  "flex h-tool min-w-0 flex-1 items-center gap-2 pr-1 pl-2 text-left text-ui-label",
-                  activeSessionId === s.id ? "text-text font-medium" : "text-text/90",
-                )}
-              >
-                <span className="truncate flex-1">{s.name === "New Session" ? t("conversation.newSession") : s.name || s.id.slice(0, 8)}</span>
-                {(s.updated_at || s.created_at) && (
-                  <span className="mr-1 shrink-0 text-ui-micro text-muted group-hover:hidden group-focus-within:hidden">
-                    {relativeTime(s.updated_at || s.created_at!)}
-                  </span>
-                )}
-              </button>
-              <IconButton
-                icon={GitFork}
-                label="Fork session"
-                title={`Fork ${s.name || s.id.slice(0, 8)}`}
-                size="compact"
-                onClick={(e) => handleFork(e, s.id)}
-                className={cn(
-                  "hover:bg-accent/10 hover:text-accent",
-                  "hidden group-hover:!inline-flex group-focus-within:!inline-flex", forking === s.id && "!inline-flex",
-                )}
-              />
-              <IconButton
-                icon={Trash2}
-                label="Delete session"
-                title={`Delete ${s.name || s.id.slice(0, 8)}`}
-                size="compact"
-                onClick={(e) => handleDelete(e, s.id)}
-                className={cn(
-                  "mr-0.5 hover:bg-error/10 hover:text-error-text",
-                  "hidden group-hover:!inline-flex group-focus-within:!inline-flex", deleting === s.id && "!inline-flex",
-                )}
-              />
-            </div>
-          ))
-        )}
-        {sessionsHasMore && (
-          <button
-            type="button"
-            disabled={sessionsLoading}
-            onClick={() => void loadMoreSessions()}
-            className="mx-2 mt-1 rounded-input px-2 py-1.5 text-ui-meta text-muted transition-colors hover:bg-surface-hover hover:text-text disabled:opacity-60"
-          >
-            {sessionsLoading ? t("conversation.loadingSessions") : t("conversation.loadMoreSessions")}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ── Helpers ── */
-
-function relativeTime(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "now";
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
-}
-
 /** Icon-only nav item for the collapsed sidebar strip. */
 function CollapsedNavItem({ to, icon, label }: { to: string; icon: LucideIcon; label: string }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const active = location.pathname.startsWith(to) && to !== "/";
+  const active = to !== "/" && (location.pathname === to || (icon === MessageSquare && location.pathname.startsWith(`${to}/session/`)));
   return (
     <IconButton
       icon={icon}
