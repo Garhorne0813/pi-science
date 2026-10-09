@@ -52,10 +52,10 @@ export function MentionComposer({ cwd, value, mentions = [], entities, onChange,
   const mirrorRef = useRef<HTMLDivElement>(null);
   const selectionDirectionRef = useRef<"forward" | "backward" | "none">("none");
   const activeEntities: ComposerEntity[] = entities ?? mentions.map((mention) => ({ ...mention, kind: "mention" as const }));
-  const emitChange = (nextValue: string, nextEntities: ComposerEntity[]) => {
+  const emitChange = useCallback((nextValue: string, nextEntities: ComposerEntity[]) => {
     const valid = validComposerEntities(nextValue, nextEntities);
     onChange(nextValue, valid.filter((entity) => entity.kind === "mention").map(({ id, name, start, end }) => ({ id, name, start, end })), valid);
-  };
+  }, [onChange]);
 
   useEffect(() => {
     const element = inputRef.current;
@@ -125,7 +125,7 @@ export function MentionComposer({ cwd, value, mentions = [], entities, onChange,
     }
     emitChange(apply.value, nextEntities);
     placeCaret(apply.caret);
-  }, [activeEntities, cwd, onChange, placeCaret, value]);
+  }, [activeEntities, cwd, emitChange, placeCaret, value]);
 
   const completion = useComposerCompletion({ cwd, value, caret, composing, composingRef, onApply: applyCompletion });
 
