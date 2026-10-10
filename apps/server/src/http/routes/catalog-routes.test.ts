@@ -187,7 +187,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 describe("workspace activity", () => {
-  it("keeps the whole project list available when a background scan encounters EIO", async () => {
+  it.each([false, true])("keeps the whole project list available when a background scan encounters EIO (reverse registration: %s)", async (reverseRegistration) => {
     const app = Fastify();
     const warn = vi.spyOn(app.log, "warn");
     registerCatalogRoutes(app);
@@ -198,9 +198,13 @@ describe("workspace activity", () => {
       // Node rounds Stats.mtime, while new Date(mtimeMs) truncates fractional ms.
       await utimes(path, 1000.1239, 1000.1239);
     }
-    await writeFile(join(home, "registered-workspaces.json"), JSON.stringify(paths));
+    await writeFile(join(home, "registered-workspaces.json"), JSON.stringify(reverseRegistration ? [...paths].reverse() : paths));
     const error = Object.assign(new Error("Disk unavailable"), { code: "EIO" });
-    vi.mocked(opendir).mockRejectedValueOnce(error);
+    const openDirectory = vi.mocked(opendir).getMockImplementation()!;
+    // Workspace preparation is concurrent; inject by identity, not call order.
+    vi.mocked(opendir).mockImplementation((path, options) => String(path) === paths[0]
+      ? Promise.reject(error)
+      : openDirectory(path, options));
     try {
       const response = await app.inject({ method: "GET", url: "/api/workspaces" });
       expect(response.statusCode).toBe(200);
