@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SubagentMention } from "../../lib/conversation";
+import type { ComposerEntity } from "../../lib/conversation/composer-document";
 import { queryClient } from "../../lib/client/query-client";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
@@ -63,7 +63,7 @@ const onKeyDown = vi.fn();
 
 function Harness({ initialValue = "" }: { initialValue?: string }) {
   const [value, setValue] = useState(initialValue);
-  const [mentions, setMentions] = useState<SubagentMention[]>([]);
+  const [entities, setEntities] = useState<ComposerEntity[]>([]);
   const [composing, setComposing] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
@@ -71,8 +71,8 @@ function Harness({ initialValue = "" }: { initialValue?: string }) {
     <MentionComposer
       cwd="project"
       value={value}
-      mentions={mentions}
-      onChange={(next, nextMentions) => { setValue(next); setMentions(nextMentions); }}
+      entities={entities}
+      onChange={(next, _mentions, nextEntities) => { setValue(next); setEntities(nextEntities); }}
       onKeyDown={onKeyDown}
       onCompositionStart={() => { composingRef.current = true; setComposing(true); }}
       onCompositionEnd={() => { setTimeout(() => { composingRef.current = false; setComposing(false); }, 0); }}
@@ -522,14 +522,39 @@ describe("composer completion keyboard paths", () => {
     expect(screen.getByRole("listbox", { name: "Subagents" })).toBeInTheDocument();
   });
 
-  it("turns an @file candidate into a workspace reference instead of text", async () => {
+  it("keeps an @file candidate inline as a structured reference", async () => {
     renderComposer();
     await type("@data/pro");
     await press("Tab");
-    await waitFor(() => expect(useUiStore.getState().workspaceReferences).toEqual([
-      { cwd: "project", path: "data/protein.csv", name: "protein.csv", isDir: false },
-    ]));
-    expect(input()).toHaveValue("");
+    await waitFor(() => expect(input()).toHaveValue("@data/protein.csv "));
+    expect(useUiStore.getState().workspaceReferences).toEqual([]);
+    expect(input().parentElement?.querySelector("[aria-hidden='true']")?.textContent).toContain("@data/protein.csv");
+  });
+
+  it("removes an inline file and its highlighted binding with Backspace", async () => {
+    const { container } = renderComposer();
+    await type("@data/pro");
+    await press("Tab");
+    const token = "@data/protein.csv";
+    expect(input()).toHaveValue(token + " ");
+    expect(container.querySelector("div[aria-hidden='true'] span")?.textContent).toBe(token);
+    input().setSelectionRange(token.length, token.length);
+    fireEvent.select(input());
+    await press("Backspace");
+    expect(input()).toHaveValue(" ");
+    expect(container.querySelector("div[aria-hidden='true'] span")).toBeNull();
+  });
+
+  it("keeps two independent occurrences of the same file in the text", async () => {
+    const { container } = renderComposer();
+    await type("@data/pro");
+    await press("Tab");
+    await type("@data/protein.csv and @data/pro");
+    await press("Tab");
+    expect(input()).toHaveValue("@data/protein.csv and @data/protein.csv ");
+    expect([...container.querySelectorAll("div[aria-hidden='true'] span")].map((node) => node.textContent)).toEqual([
+      "@data/protein.csv", "@data/protein.csv",
+    ]);
   });
 
   it("lets Enter send when the list is closed", async () => {
