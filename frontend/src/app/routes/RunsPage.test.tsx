@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
 import i18n from "../../i18n";
@@ -7,7 +7,8 @@ import { queryClient } from "../../lib/client/query-client";
 import type { ExecutionRecord } from "@pi-science/contracts";
 import { RunsPage } from "./RunsPage";
 
-const { toastMock, openInspectorMock, setDraftMock } = vi.hoisted(() => ({
+const { toastMock, openInspectorMock, setDraftMock, connection } = vi.hoisted(() => ({
+  connection: { live: false },
   toastMock: vi.fn(),
   openInspectorMock: vi.fn(),
   setDraftMock: vi.fn(),
@@ -23,7 +24,10 @@ vi.mock("../../lib/agent-runtime", () => ({
 }));
 
 vi.mock("../../lib/runs/execution-events", () => ({
-  subscribeExecutionInvalidation: () => () => undefined,
+  subscribeExecutionInvalidation: (_cwd: string, options: { onConnectionChange: (live: boolean) => void }) => {
+    options.onConnectionChange(connection.live);
+    return () => undefined;
+  },
 }));
 
 vi.mock("../../lib/workspace", async (importOriginal) => {
@@ -154,6 +158,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  connection.live = false;
   queryClient.clear();
   fetchMock.mockClear();
   toastMock.mockClear();
@@ -165,6 +170,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  queryClient.clear();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -208,6 +215,63 @@ describe("RunsPage execution ledger", () => {
 
     fireEvent.change(screen.getByLabelText("Filter by status"), { target: { value: "succeeded" } });
     expect(await screen.findByText("No matching executions")).toBeInTheDocument();
+  });
+
+  it("shows summary file counts and artifacts without false empty-file messages", async () => {
+    renderPage("/workspace/project/runs?execution=exec_kernel");
+    await screen.findByText("node-kernel-gateway");
+
+    expect(screen.getByText("Files read").parentElement).toHaveTextContent("1");
+    expect(screen.getByText("Files written").parentElement).toHaveTextContent("1");
+    expect(screen.queryByText("No file reads were recorded.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No file writes were recorded.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /artifact-result/ }));
+    await waitFor(() => expect(openInspectorMock).toHaveBeenCalledWith(expect.objectContaining({ path: "outputs/result.csv" })));
+  });
+
+  it.each([ ["day", 1], ["week", 7], ["month", 30] ] as const)("expires %s-filtered records while SSE is connected without refetching", async (range, days) => {
+    connection.live = true;
+    const timestamp = Date.parse(toolExecution.started_at!);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(timestamp + days * 86_400_000 - 30_000);
+    renderPage();
+    await screen.findByText("agent-event-observer");
+    vi.useFakeTimers();
+    fireEvent.change(screen.getByLabelText("Filter by time"), { target: { value: range } });
+    expect(screen.getByRole("button", { name: /write.*pi/i })).toBeInTheDocument();
+    const requests = fetchMock.mock.calls.length;
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+
+    expect(screen.queryByRole("button", { name: /write.*pi/i })).not.toBeInTheDocument();
+    expect(screen.getByText("No matching executions")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(requests);
+    fireEvent.change(screen.getByLabelText("Filter by time"), { target: { value: "all" } });
+    expect(screen.getByRole("button", { name: /write.*pi/i })).toBeInTheDocument();
+  });
+
+  it("updates date groups when the application language changes", async () => {
+    renderPage();
+    await screen.findByText("agent-event-observer");
+    const date = new Date(toolExecution.started_at!);
+    expect(screen.getByText(date.toLocaleDateString("en", { year: "numeric", month: "short", day: "numeric" }))).toBeInTheDocument();
+    try {
+      await act(async () => { await i18n.changeLanguage("zh-Hans"); });
+      expect(screen.getByText(date.toLocaleDateString("zh-Hans", { year: "numeric", month: "short", day: "numeric" }))).toBeInTheDocument();
+      expect(screen.queryByText(date.toLocaleDateString("en", { year: "numeric", month: "short", day: "numeric" }))).not.toBeInTheDocument();
+    } finally {
+      await act(async () => { await i18n.changeLanguage("en"); });
+    }
+  });
+
+  it("shows failure evidence in the ledger before selecting the failed record", async () => {
+    renderPage("/workspace/project/runs?execution=exec_kernel");
+    await screen.findByText("node-kernel-gateway");
+    const row = screen.getByRole("button", { name: /node train\.js/ });
+    expect(within(row).getByText("training failed")).toBeInTheDocument();
+    expect(within(row).getByText(/exit code 1/)).toBeInTheDocument();
+    expect(row).not.toHaveAttribute("aria-current");
+    expect(screen.queryByText("Execution problem")).not.toBeInTheDocument();
   });
 
   it("shows input, files, artifacts, timing, and lazily loaded output", async () => {
@@ -285,7 +349,7 @@ describe("RunsPage execution ledger", () => {
   it("surfaces failure evidence without requiring the output tab", async () => {
     renderPage("/workspace/project/runs?execution=exec_job");
     expect(await screen.findByText("Execution problem")).toBeInTheDocument();
-    expect(screen.getByText("training failed")).toBeInTheDocument();
-    expect(screen.getByText(/exit code 1/)).toBeInTheDocument();
+    expect(screen.getAllByText("training failed")).toHaveLength(2);
+    expect(screen.getAllByText(/exit code 1/)).toHaveLength(2);
   });
 });
