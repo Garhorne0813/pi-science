@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { ArrowUpRight, BookOpen, CheckCircle2, Clock3, FileText, FlaskConical, HelpCircle, Inbox, Lightbulb } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
-import type { KnowledgeItem, ProjectSummary } from "../../lib/knowledge";
+import type { KnowledgeItem, KnowledgeType, ProjectSummary } from "../../lib/knowledge";
 import type { ProjectMemoryOverview } from "../../lib/knowledge";
 
 export function OverviewTab({ document, summary, memorySummary, items = [], onNavigate }: {
@@ -10,7 +10,7 @@ export function OverviewTab({ document, summary, memorySummary, items = [], onNa
   summary: ProjectSummary | null;
   memorySummary: ProjectMemoryOverview | null;
   items?: KnowledgeItem[];
-  onNavigate?: (tab: "knowledge" | "inbox" | "research" | "history") => void;
+  onNavigate?: (tab: "knowledge" | "inbox" | "research" | "history", types?: KnowledgeType[]) => void;
 }) {
   const { t } = useTranslation();
   const [showDocument, setShowDocument] = useState(false);
@@ -28,11 +28,11 @@ export function OverviewTab({ document, summary, memorySummary, items = [], onNa
       </section>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {[
-          { label: t("knowledge.acceptedKnowledge"), value: summary?.knowledge_count ?? 0, icon: CheckCircle2, target: "knowledge" as const },
+          { label: t("knowledge.acceptedKnowledge"), value: items.filter(item => item.status === "active").length, icon: CheckCircle2, target: "knowledge" as const },
           { label: t("knowledge.pendingReview"), value: summary?.pending_count ?? 0, icon: Inbox, target: "inbox" as const },
           { label: t("knowledge.researchLoops"), value: memorySummary?.research_loop_count ?? 0, icon: FlaskConical, target: "research" as const },
-          { label: t("knowledge.openQuestions", { defaultValue: "假设与开放问题" }), value: questions, icon: HelpCircle, target: "knowledge" as const },
-        ].map(metric => <button key={metric.label} type="button" onClick={() => onNavigate?.(metric.target)} className="rounded-card border border-border bg-surface p-4 text-left transition-colors hover:border-accent/40 hover:bg-surface-2"><div className="flex items-center justify-between text-muted"><span className="text-xs">{metric.label}</span><metric.icon size={16}/></div><div className="mt-3 font-mono text-3xl tabular-nums text-text">{metric.value}</div></button>)}
+          { label: t("knowledge.openQuestions", { defaultValue: "假设与开放问题" }), value: questions, icon: HelpCircle, target: "knowledge" as const, types: ["question", "hypothesis"] as KnowledgeType[] },
+        ].map(metric => <button key={metric.label} type="button" onClick={() => onNavigate?.(metric.target, metric.types)} className="rounded-card border border-border bg-surface p-4 text-left transition-colors hover:border-accent/40 hover:bg-surface-2"><div className="flex items-center justify-between text-muted"><span className="text-xs">{metric.label}</span><metric.icon size={16}/></div><div className="mt-3 font-mono text-3xl tabular-nums text-text">{metric.value}</div></button>)}
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="rounded-card border border-border bg-surface p-5">

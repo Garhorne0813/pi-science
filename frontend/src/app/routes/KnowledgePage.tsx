@@ -7,6 +7,7 @@ import {
   projectKnowledgeApi,
   projectKnowledgeKey,
   type KnowledgeItem,
+  type KnowledgeType,
   type ProjectPolicy,
   type ProjectSummary,
   type Proposal,
@@ -29,6 +30,7 @@ export function KnowledgePage() {
   const cwd = useRequiredWorkspaceCwd();
   const activeSessionId = useRuntimeStore((state) => state.activeSessionId);
   const [tab, setTab] = useState<KnowledgePageTab>("overview");
+  const [knowledgeTypes, setKnowledgeTypes] = useState<KnowledgeType[]>([]);
   const [summary, setSummary] = useState<ProjectSummary | null>(null);
   const [memorySummary, setMemorySummary] = useState<ProjectMemoryOverview | null>(null);
   const [projectDocument, setProjectDocument] = useState("");
@@ -156,7 +158,7 @@ export function KnowledgePage() {
           </div>
         )}
 
-        <KnowledgePageTabs tab={tab} pendingCount={pending.length} onChange={setTab} onRefresh={refresh} />
+        <KnowledgePageTabs tab={tab} pendingCount={pending.length} onChange={(next) => { setKnowledgeTypes([]); setTab(next); }} onRefresh={refresh} />
 
         <main className="py-6">
           {tab === "overview" && (
@@ -165,7 +167,7 @@ export function KnowledgePage() {
               summary={summary}
               memorySummary={memorySummary}
               items={items}
-              onNavigate={setTab}
+              onNavigate={(next, types = []) => { setKnowledgeTypes(types); setTab(next); }}
             />
           )}
           {tab === "inbox" && (
@@ -179,7 +181,7 @@ export function KnowledgePage() {
               onError={setError}
             />
           )}
-          {tab === "knowledge" && <KnowledgeTab items={items} />}
+          {tab === "knowledge" && <KnowledgeTab key={knowledgeTypes.join(",")} items={items} initialTypes={knowledgeTypes} />}
           {tab === "research" && (
             <ResearchTab
               cwd={cwd}

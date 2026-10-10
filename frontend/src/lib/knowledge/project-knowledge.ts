@@ -16,12 +16,22 @@ export type KnowledgeType =
 
 export type ProposalStatus = "pending" | "accepted" | "rejected" | "failed" | "undone";
 
+export interface SourceEvidence {
+  id: string;
+  kind: "message" | "file" | "artifact" | "run" | "citation" | "research_record";
+  locator: string;
+  excerpt?: string | null;
+  line_start?: number | null;
+  line_end?: number | null;
+}
+
 export interface SourceReference {
   session_id?: string | null;
   message_ids: string[];
   files: string[];
   run_ids: string[];
   citations: string[];
+  evidence?: SourceEvidence[];
 }
 
 export interface FileOperation {
