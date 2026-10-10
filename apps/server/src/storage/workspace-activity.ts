@@ -91,7 +91,7 @@ export class WorkspaceActivityCache {
             try {
               const info = await lstat(path);
               if (info.isSymbolicLink() || (!info.isDirectory() && !info.isFile())) continue;
-              latest = Math.max(latest, info.mtimeMs);
+              latest = Math.max(latest, info.mtime.getTime());
               if (info.isDirectory()) directories.push(path);
             } catch (error) {
               if (!["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;

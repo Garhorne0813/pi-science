@@ -84,7 +84,7 @@ async function workspaceInfo(path: string, workspaceRepository: WorkspaceReposit
   const project = await ensureProject(path);
   await workspaceRepository?.rememberWorkspace(path, { managed: pathIsInside(rootDir(), path, true), preservePath: pathIsInside(rootDir(), path, true) });
   const [sessions, metadata] = await Promise.all([sessionRepository.list(path), stat(path)]);
-  const fileActivity = activity.get(path, metadata.mtimeMs);
+  const fileActivity = activity.get(path, metadata.mtime.getTime());
   const lastActivity = sessions.reduce((latest, session) => Math.max(latest, Date.parse(session.updated_at ?? session.created_at ?? "") || 0), fileActivity);
   return {
     name: project.name,

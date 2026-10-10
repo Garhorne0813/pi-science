@@ -192,7 +192,12 @@ describe("workspace activity", () => {
     const warn = vi.spyOn(app.log, "warn");
     registerCatalogRoutes(app);
     const paths = [join(home, "broken-workspace"), join(home, "healthy-workspace")];
-    for (const path of paths) { await mkdir(path); await ensureProject(path); }
+    for (const path of paths) {
+      await mkdir(path);
+      await ensureProject(path);
+      // Node rounds Stats.mtime, while new Date(mtimeMs) truncates fractional ms.
+      await utimes(path, 1000.1239, 1000.1239);
+    }
     await writeFile(join(home, "registered-workspaces.json"), JSON.stringify(paths));
     const error = Object.assign(new Error("Disk unavailable"), { code: "EIO" });
     vi.mocked(opendir).mockRejectedValueOnce(error);

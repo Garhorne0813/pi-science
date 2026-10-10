@@ -21,7 +21,7 @@ function directory(names = ["notes.md"], isDirectory = false): Dir {
   } as unknown as Dir;
 }
 function info(modified = 2_000): Stats {
-  return { mtimeMs: modified, isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false } as Stats;
+  return { mtime: new Date(modified), mtimeMs: modified, isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false } as Stats;
 }
 function cache(limits: ConstructorParameters<typeof WorkspaceActivityCache>[1] = {}) {
   const diagnostic = vi.fn();
@@ -51,6 +51,16 @@ describe("bounded background workspace activity", () => {
     await vi.waitFor(() => expect(value.get("/b", 1_000)).toBe(2_000));
     expect(value.get("/a", 1_000)).toBe(2_000);
     expect(opendir).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the same millisecond timestamp as the file metadata Date", async () => {
+    const stats = info();
+    stats.mtimeMs = 2000.9;
+    stats.mtime = new Date(2001);
+    vi.mocked(lstat).mockResolvedValue(stats);
+    const { value } = cache();
+    value.get("/fractional", 1_000);
+    await vi.waitFor(() => expect(value.get("/fractional", 1_000)).toBe(2001));
   });
 
   it("uses cached activity until TTL expires, then refreshes without delaying the read", async () => {
