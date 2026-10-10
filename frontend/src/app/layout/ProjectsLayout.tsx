@@ -85,6 +85,7 @@ export function ProjectsLayout() {
   const location = useLocation();
   const activeCwd = useWorkspaceCwd();
   const isWorkspace = !!activeCwd;
+  const isProjectsHome = !isWorkspace && location.pathname === "/";
   const drawerOpen = isWorkspace && narrowViewport && !contextPanelCollapsed;
   const workspaceRoot = activeCwd ? `/workspace/${encodeURIComponent(activeCwd)}` : "";
   const activeConversationSessionId = conversationSessionId(location.pathname);
@@ -180,44 +181,47 @@ export function ProjectsLayout() {
       <a href="#main-content" inert={drawerOpen} aria-hidden={drawerOpen || undefined} className="fixed left-3 top-3 z-[200] -translate-y-20 rounded-input bg-accent-fill px-3 py-2 text-sm text-accent-fg transition-transform focus:translate-y-0">
         {t("common.skipToContent", { defaultValue: "Skip to content" })}
       </a>
-      <WorkspaceRail cwd={activeCwd} toggleRef={toggleRef} />
-      <div data-context-panel-shade aria-hidden="true" hidden={!drawerOpen} onPointerDown={() => setContextPanelCollapsed(true)} onMouseDown={(event) => event.preventDefault()} className={cn(!drawerOpen && "!hidden", "absolute inset-y-0 left-[var(--rail-width-mobile)] right-0 z-50 bg-black/45 md:hidden")} />
-      <aside ref={panelRef} tabIndex={-1} id="workspace-context-panel" aria-label={t("sidebar.workspaceContent")} hidden={contextPanelCollapsed || !isWorkspace} className={cn((contextPanelCollapsed || !isWorkspace) && "!hidden", "app-sidebar sidebar-enter absolute inset-y-0 left-[var(--rail-width-mobile)] z-[60] flex h-full shrink-0 flex-col overflow-hidden border-r border-faint md:relative md:left-auto md:z-auto")} style={{ width: sidebarDragWidth ?? sidebarWidth, maxWidth: "calc(100vw - var(--rail-width-mobile))" }}>
-        <div className="flex h-full min-h-0 flex-col px-panel py-card">
-          <header className="mb-2 shrink-0 px-2 py-1">
-            <Link to="/" title={activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")} className="flex min-w-0 flex-col text-text">
-              <span className="text-[18px] font-semibold leading-6 tracking-[-0.03em]">pi-science</span>
-              <span className="truncate text-xs font-normal leading-4 text-muted">{activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")}</span>
-            </Link>
-          </header>
-          {isWorkspace && <Suspense fallback={<div role="status" className="min-h-0 flex-1 p-2 text-ui-label text-muted">{t("inspector.loading")}</div>}><SidebarMainArea key={activeCwd!} cwd={activeCwd!} /></Suspense>}
-        </div>
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label={t("shell.resizeSidebar")}
-            aria-valuemin={SIDEBAR_MIN_WIDTH}
-            aria-valuemax={SIDEBAR_MAX_WIDTH}
-            aria-valuenow={sidebarDragWidth ?? sidebarWidth}
-            tabIndex={0}
-            onPointerDown={beginSidebarResize}
-            onPointerMove={resizeSidebar}
-            onPointerUp={finishSidebarResize}
-            onPointerCancel={finishSidebarResize}
-            onKeyDown={(event) => {
-              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-              event.preventDefault();
-              const delta = event.key === "ArrowRight" ? 16 : -16;
-              setSidebarWidth(clampSidebarWidth(sidebarWidth + delta));
-            }}
-            className={cn(
-              "group absolute inset-y-0 right-0 z-40 hidden w-1.5 cursor-col-resize md:block",
-              sidebarDragging && "bg-accent/10",
-            )}
-          >
-            <div className="absolute inset-y-0 right-0 w-px bg-transparent transition-colors group-hover:bg-accent/50" />
+      {/* The project workbench is full-width; workspace routes retain navigation. */}
+      {!isProjectsHome && <>
+        <WorkspaceRail cwd={activeCwd} toggleRef={toggleRef} />
+        <div data-context-panel-shade aria-hidden="true" hidden={!drawerOpen} onPointerDown={() => setContextPanelCollapsed(true)} onMouseDown={(event) => event.preventDefault()} className={cn(!drawerOpen && "!hidden", "absolute inset-y-0 left-[var(--rail-width-mobile)] right-0 z-50 bg-black/45 md:hidden")} />
+        <aside ref={panelRef} tabIndex={-1} id="workspace-context-panel" aria-label={t("sidebar.workspaceContent")} hidden={contextPanelCollapsed || !isWorkspace} className={cn((contextPanelCollapsed || !isWorkspace) && "!hidden", "app-sidebar sidebar-enter absolute inset-y-0 left-[var(--rail-width-mobile)] z-[60] flex h-full shrink-0 flex-col overflow-hidden border-r border-faint md:relative md:left-auto md:z-auto")} style={{ width: sidebarDragWidth ?? sidebarWidth, maxWidth: "calc(100vw - var(--rail-width-mobile))" }}>
+          <div className="flex h-full min-h-0 flex-col px-panel py-card">
+            <header className="mb-2 shrink-0 px-2 py-1">
+              <Link to="/" title={activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")} className="flex min-w-0 flex-col text-text">
+                <span className="text-[18px] font-semibold leading-6 tracking-[-0.03em]">pi-science</span>
+                <span className="truncate text-xs font-normal leading-4 text-muted">{activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")}</span>
+              </Link>
+            </header>
+            {isWorkspace && <Suspense fallback={<div role="status" className="min-h-0 flex-1 p-2 text-ui-label text-muted">{t("inspector.loading")}</div>}><SidebarMainArea key={activeCwd!} cwd={activeCwd!} /></Suspense>}
           </div>
-        </aside>
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label={t("shell.resizeSidebar")}
+              aria-valuemin={SIDEBAR_MIN_WIDTH}
+              aria-valuemax={SIDEBAR_MAX_WIDTH}
+              aria-valuenow={sidebarDragWidth ?? sidebarWidth}
+              tabIndex={0}
+              onPointerDown={beginSidebarResize}
+              onPointerMove={resizeSidebar}
+              onPointerUp={finishSidebarResize}
+              onPointerCancel={finishSidebarResize}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                event.preventDefault();
+                const delta = event.key === "ArrowRight" ? 16 : -16;
+                setSidebarWidth(clampSidebarWidth(sidebarWidth + delta));
+              }}
+              className={cn(
+                "group absolute inset-y-0 right-0 z-40 hidden w-1.5 cursor-col-resize md:block",
+                sidebarDragging && "bg-accent/10",
+              )}
+            >
+              <div className="absolute inset-y-0 right-0 w-px bg-transparent transition-colors group-hover:bg-accent/50" />
+            </div>
+          </aside>
+      </>}
 
       {/* Main */}
       <main id="main-content" tabIndex={-1} inert={drawerOpen} aria-hidden={drawerOpen || undefined} className={cn(

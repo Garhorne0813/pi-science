@@ -7,10 +7,10 @@ import { ProjectsLayout } from "./ProjectsLayout";
 import { WorkspaceRail } from "../../components/sidebar/WorkspaceRail";
 import { WorkspaceSessionList } from "../../components/sidebar/WorkspaceSessionList";
 import { useWorkspaceSidebar } from "../../components/sidebar/workspace-navigation";
-import { WorkspaceProvider } from "../../lib/workspace";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { FeedbackContext } from "../../components/feedback/feedback-context";
+import { WorkspaceProvider } from "../../lib/workspace";
 import i18n from "../../i18n";
 import type { SessionInfo } from "../../lib/client/types";
 
@@ -518,5 +518,34 @@ describe("WorkspaceSessionList", () => {
     await waitFor(() => expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/session/s2"));
     const createNewSession = useRuntimeStore.getState().createNewSession as ReturnType<typeof vi.fn>;
     expect(createNewSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("ProjectsLayout workbench navigation", () => {
+  it("hides the sidebar on the home page and restores it when entering a workspace", async () => {
+    useUiStore.setState({ contextPanelCollapsed: false, inspectorOpen: false, inspectorTabs: [] });
+    const { container } = render(
+      <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route path="/" element={<WorkspaceProvider><ProjectsLayout /></WorkspaceProvider>}>
+              <Route index element={<NavigationButton to="/workspace/proj" label="Enter workspace" />} />
+            </Route>
+            <Route path="/workspace/:cwd" element={<WorkspaceProvider><ProjectsLayout /></WorkspaceProvider>}>
+              <Route index element={<NavigationButton to="/" label="Return home" />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </FeedbackContext.Provider>,
+    );
+    expect(container.querySelector("aside")).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Primary navigation" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Enter workspace" }));
+    await waitFor(() => expect(container.querySelector("aside")).toBeInTheDocument());
+    expect(await screen.findByRole("tab", { name: i18n.t("nav.files") })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Primary navigation" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Return home" }));
+    expect(container.querySelector("aside")).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Primary navigation" })).toBeNull();
   });
 });

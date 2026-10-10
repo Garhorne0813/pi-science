@@ -1,10 +1,12 @@
 import { resolve } from "node:path";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, opendir, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Fastify from "fastify";
 import { catalogToolCommands, expandUserPath, registerCatalogRoutes } from "./catalog-routes.js";
+import { ensureProject } from "../../project/project-registry.js";
+import { sessionRepository } from "../../runtime/node/session-repository.js";
 import { userHome } from "../../support/platform-utils.js";
 
 describe("catalog route platform defaults", () => {
@@ -176,5 +178,80 @@ describe("skill readiness route", () => {
     const response = await app.inject({ method: "GET", url: `/api/skills/no-such-skill/readiness?cwd=${encodeURIComponent(cwd)}` });
     expect(response.statusCode).toBe(404);
     await app.close();
+  });
+});
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...original, opendir: vi.fn(original.opendir) };
+});
+
+describe("workspace activity", () => {
+  it.each([false, true])("keeps the whole project list available when a background scan encounters EIO (reverse registration: %s)", async (reverseRegistration) => {
+    const app = Fastify();
+    const warn = vi.spyOn(app.log, "warn");
+    registerCatalogRoutes(app);
+    const paths = [join(home, "broken-workspace"), join(home, "healthy-workspace")];
+    for (const path of paths) {
+      await mkdir(path);
+      await ensureProject(path);
+      // Node rounds Stats.mtime, while new Date(mtimeMs) truncates fractional ms.
+      await utimes(path, 1000.1239, 1000.1239);
+    }
+    await writeFile(join(home, "registered-workspaces.json"), JSON.stringify(reverseRegistration ? [...paths].reverse() : paths));
+    const error = Object.assign(new Error("Disk unavailable"), { code: "EIO" });
+    const openDirectory = vi.mocked(opendir).getMockImplementation()!;
+    // Workspace preparation is concurrent; inject by identity, not call order.
+    vi.mocked(opendir).mockImplementation((path, options) => String(path) === paths[0]
+      ? Promise.reject(error)
+      : openDirectory(path, options));
+    try {
+      const response = await app.inject({ method: "GET", url: "/api/workspaces" });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toHaveLength(2);
+      await vi.waitFor(() => expect(warn).toHaveBeenCalledWith({ err: error, workspace: paths[0] }, expect.any(String)));
+      const refreshed = await app.inject({ method: "GET", url: "/api/workspaces" });
+      expect(refreshed.statusCode).toBe(200);
+      expect(refreshed.json()).toHaveLength(2);
+      expect(refreshed.json()).toEqual(expect.arrayContaining([expect.objectContaining({ path: paths[0], last_activity_at: (await stat(paths[0]!)).mtime.toISOString() })]));
+    } finally { vi.mocked(opendir).mockRestore(); warn.mockRestore(); await app.close(); }
+  });
+  it("includes nested file activity and relocated session activity without changing last_modified", async () => {
+    const app = Fastify();
+    registerCatalogRoutes(app);
+    const cwd = join(home, "activity-workspace");
+    await mkdir(join(cwd, "research"), { recursive: true });
+    const file = join(cwd, "research", "notes.md");
+    await writeFile(file, "initial");
+    await writeFile(join(home, "registered-workspaces.json"), JSON.stringify([cwd]));
+    // Initialize project metadata before freezing directory mtimes.
+    await ensureProject(cwd);
+    const external = join(home, "external");
+    await mkdir(external);
+    await writeFile(join(external, "unrelated.md"), "not this workspace");
+    await symlink(external, join(cwd, "linked"), "dir");
+    await mkdir(join(cwd, "node_modules"));
+    await writeFile(join(cwd, "node_modules", "dependency.js"), "dependency");
+    const old = new Date("2026-09-01T00:00:00Z");
+    await utimes(file, old, old);
+    await utimes(join(cwd, "research"), old, old);
+    await utimes(cwd, old, old);
+    const rootTime = (await stat(cwd)).mtime.toISOString();
+    const recent = new Date("2026-09-15T00:00:00Z");
+    await writeFile(file, "continued research");
+    await utimes(file, recent, recent);
+    const sessions = vi.spyOn(sessionRepository, "list").mockResolvedValue([]);
+    try {
+      const response = await app.inject({ method: "GET", url: "/api/workspaces" });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual([expect.objectContaining({ last_modified: rootTime, last_activity_at: rootTime })]);
+      await vi.waitFor(async () => {
+        const refreshed = await app.inject({ method: "GET", url: "/api/workspaces" });
+        expect(refreshed.json()).toEqual([expect.objectContaining({ last_modified: rootTime, last_activity_at: recent.toISOString() })]);
+      });
+      sessions.mockResolvedValue([{ id: "s1", cwd, project_id: null, name: null, created_at: old.toISOString(), updated_at: "2026-09-20T00:00:00Z" }]);
+      const updated = await app.inject({ method: "GET", url: "/api/workspaces" });
+      expect(updated.json()).toEqual([expect.objectContaining({ last_modified: rootTime, last_activity_at: "2026-09-20T00:00:00.000Z", session_count: 1 })]);
+    } finally { sessions.mockRestore(); await app.close(); }
   });
 });

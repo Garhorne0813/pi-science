@@ -41,7 +41,7 @@ async function expectNoSeriousViolations(
 
 test("projects page has no serious axe violations @accessibility", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Visual Demo", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Your projects" }).getByRole("link", { name: "Open Visual Demo", exact: true })).toBeVisible();
   await expectNoSeriousViolations(page, "projects page");
 });
 

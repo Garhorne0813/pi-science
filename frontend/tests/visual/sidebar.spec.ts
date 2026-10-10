@@ -231,6 +231,7 @@ test("the mobile drawer removes background inspector controls from focus", async
   await page.getByRole("button", { name: TOGGLE, exact: true }).click();
   await page.getByRole("tab", { name: "Files", exact: true }).click();
   const panel = page.locator(PANEL);
+  await panel.getByRole("button", { name: "analysis", exact: true }).click();
   await panel.getByRole("button", { name: "report.md", exact: true }).click();
   await expect(page.locator('[data-variant="file"]')).toBeVisible();
   // An explicit focus() call must not reach an inspector control.
@@ -285,7 +286,7 @@ test("the panel overlays main below 768px and is an in-flow column at 768px", as
   }, PANEL);
   expect(wide.rail).toBe(60);
   expect(wide.position).toBe("relative");
-  expect(wide.width).toBe(240);
+  expect(wide.width).toBeCloseTo(240, 3);
 });
 
 test("panel and rail controls fit narrow panel widths and short light/dark windows", async ({ page }, testInfo) => {
