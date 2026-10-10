@@ -43,6 +43,7 @@ async function waitForPath(filePath, exists) {
 
 async function seedWorkspace() {
   await mkdir(workspace, { recursive: true });
+  await mkdir(path.join(workspace, ".pi-science"), { recursive: true });
   await api(`/api/project-knowledge/initialize?cwd=${encodeURIComponent(workspace)}`, { method: "POST" });
   await writeFile(path.join(workspace, "result.csv"), "condition,value\nA,12.4\nB,14.1\n");
   const proposals = [
@@ -93,8 +94,9 @@ async function seedWorkspace() {
       applied_history_id: null,
     },
   ];
-  await mkdir(path.join(workspace, ".pi-science", "inbox"), { recursive: true });
-  await writeFile(path.join(workspace, ".pi-science", "inbox", "proposals.json"), `${JSON.stringify(proposals, null, 2)}\n`);
+  const ledgerPath = path.join(workspace, ".pi-science", "memory", "ledger.json");
+  const ledger = JSON.parse(await readFile(ledgerPath, "utf8"));
+  await writeFile(ledgerPath, `${JSON.stringify({ ...ledger, proposals }, null, 2)}\n`);
 }
 
 
@@ -105,7 +107,7 @@ async function run() {
   try {
     const route = `/workspace/${encodeURIComponent(workspace)}/knowledge`;
     await page.goto(`${frontend}${route}`, { waitUntil: "networkidle" });
-    await page.getByRole("heading", { name: "Project Knowledge", exact: true }).waitFor();
+    await page.getByRole("heading", { name: "Project Memory", exact: true }).waitFor();
     if (await page.getByText("pi-science:project-knowledge:start").count()) {
       throw new Error("Internal managed markers are visible in PROJECT.md preview");
     }
@@ -122,7 +124,10 @@ async function run() {
     await knowledgeCard.getByRole("button", { name: "Accept", exact: true }).click();
     await page.getByText("Proposal accepted").waitFor();
     await page.getByRole("tab", { name: "Overview" }).click();
-    await page.getByText("Use Reviewer approval before project updates").waitFor();
+    await page.getByText("Use Reviewer approval before project updates", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Accepted knowledge 1", exact: true }).click();
+    await page.getByText("1 Knowledge", { exact: true }).waitFor();
+    await page.getByText("uat-message-1", { exact: true }).first().waitFor();
 
     await page.getByRole("tab", { name: /Inbox/ }).click();
     const remainingFileCard = page.locator("article").filter({ hasText: "Move result into processed data" });
@@ -135,6 +140,8 @@ async function run() {
     await fileHistory.waitFor();
     await fileHistory.getByRole("button", { name: "Undo" }).click();
     await waitForPath(path.join(workspace, "result.csv"), true);
+
+    await page.getByRole("tab", { name: "Knowledge", exact: true }).click();
 
     // Theme switching moved into the Settings dialog: the sidebar no longer
     // has a "Toggle theme" button. Open Settings, switch the Appearance
@@ -169,6 +176,7 @@ async function run() {
     console.log("PASS project overview and managed-marker hiding");
     console.log("PASS inbox cards and file safety preview");
     console.log("PASS knowledge approval writes PROJECT.md");
+    console.log("PASS active knowledge count, metric navigation, and message evidence");
     console.log("PASS file move transaction and undo");
     console.log("PASS dark theme and 375px no-overflow layout");
     console.log(`SCREENSHOT ${desktopScreenshot}`);
