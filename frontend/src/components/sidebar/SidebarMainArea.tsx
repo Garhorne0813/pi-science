@@ -36,7 +36,7 @@ export function SidebarMainArea({ cwd, renderSessions }: { cwd: string; renderSe
       </Tabs.List>
       {/* Keep session lifecycle effects mounted across tabs and collapse. */}
       <Tabs.Content value="sessions" forceMount hidden={tab !== "sessions"} className="min-h-0 flex-1 flex-col data-[state=active]:flex data-[state=inactive]:hidden">
-        <label className="mb-2 flex h-nav shrink-0 items-center gap-2 rounded-input border border-border px-2 text-muted focus-within:border-accent">
+        <label className="mb-2 flex h-control shrink-0 items-center gap-2 rounded-input border border-transparent bg-surface-2 px-2 text-muted transition-colors focus-within:border-accent/40 focus-within:bg-surface-raised">
           <Search size={15} aria-hidden="true" />
           <input type="search" aria-label={t("sidebar.search")} aria-describedby={searchId} placeholder={t("sidebar.searchPlaceholder")} value={query} onChange={event => setQuery(cwd, event.target.value)} className="min-w-0 flex-1 bg-transparent text-ui-label text-text outline-none placeholder:text-muted" />
         </label>

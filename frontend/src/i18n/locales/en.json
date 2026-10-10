@@ -1486,7 +1486,7 @@
   "sidebar.conversations": "Conversations",
   "sidebar.sessionList": "Project conversations",
   "sidebar.search": "Search loaded conversations",
-  "sidebar.searchPlaceholder": "Search loaded conversations…",
+  "sidebar.searchPlaceholder": "Search conversations…",
   "sidebar.searchScope": "Search covers loaded conversations only; load older conversations to include more.",
   "sidebar.allFiles": "View all files",
   "sidebar.runs": "Run history",
