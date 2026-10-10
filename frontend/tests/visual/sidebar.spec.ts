@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { FIXTURES, VISUAL_CWD, VISUAL_SESSION } from "./fixtures/data.mjs";
+import { VISUAL_CWD, VISUAL_SESSION } from "./fixtures/data.mjs";
 
 const root = `/workspace/${encodeURIComponent(VISUAL_CWD)}`;
 const RAIL = 'nav[aria-label="Primary navigation"]';
@@ -114,19 +114,27 @@ test("research with files and runs with conversations stay simultaneously curren
   await expect(page).toHaveURL(new RegExp(`${root}/runs$`));
 });
 
+test("file tree sorts direct children and keeps files inside their parent folders", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-light", "Desktop tree coverage");
+  await page.goto(`${root}/session/${VISUAL_SESSION}`);
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
+  const panel = page.getByRole("tabpanel", { name: "Files" });
+  const labels = async () => (await panel.locator("button[title]").allTextContents()).map(text => text.trim()).filter(Boolean);
+
+  await expect(panel.getByRole("button", { name: "README.md", exact: true })).toBeVisible();
+  expect(await labels()).toEqual(["analysis", "data", "README.md"]);
+  await expect(panel.getByRole("button", { name: "report.md", exact: true })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "shikimate.csv", exact: true })).toHaveCount(0);
+
+  await panel.getByRole("button", { name: "analysis", exact: true }).click();
+  await panel.getByRole("button", { name: "data", exact: true }).click();
+  await expect(panel.getByRole("button", { name: "report.md", exact: true })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "shikimate.csv", exact: true })).toBeVisible();
+  expect(await labels()).toEqual(["analysis", "report.md", "data", "shikimate.csv", "README.md"]);
+});
+
 test("embedded file polling stops while the panel or file tab is hidden", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-light", "Desktop polling coverage");
-  // Return actual directory children so visible descendants prove folders stayed expanded.
-  await page.route("**/api/files**", route => {
-    const url = new URL(route.request().url());
-    if (url.pathname !== "/api/files") return route.continue();
-    const subdir = url.searchParams.get("subdir") || "";
-    const entries = FIXTURES.files.filter(entry => {
-      const slash = entry.path.lastIndexOf("/");
-      return (slash < 0 ? "" : entry.path.slice(0, slash)) === subdir;
-    });
-    return route.fulfill({ json: entries });
-  });
   await page.clock.install();
   let fileRequests = 0;
   page.on("request", request => {

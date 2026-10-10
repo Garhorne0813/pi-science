@@ -1,16 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FolderOpen, File, ChevronRight, ChevronDown, RefreshCw, Loader2 } from "lucide-react";
+import { Folder, FolderOpen, File, FileSpreadsheet, FileText, Image, BookOpen, ChevronRight, ChevronDown, RefreshCw, Loader2, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn, copyTextToClipboard, useUiStore } from "../../lib/ui";
 import { fileInspectorForPath } from "../../lib/artifacts";
 import { absoluteWorkspacePath } from "../../lib/files/workspace-path";
-import { workspaceFiles } from "../../lib/workspace";
+import { sortFileEntries, workspaceFiles } from "../../lib/workspace";
 import { useFeedback } from "../feedback/feedback-context";
 import { FileContextMenu, type ContextPoint, type FileListEntry } from "./FileContextMenu";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { Icon } from "../ui/Icon";
 
 interface DirState { entries: FileListEntry[]; loading: boolean; error: string | null }
+
+// A compact icon vocabulary for common research output formats.
+function iconForFile(name: string): LucideIcon {
+  const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
+  if ([".csv", ".tsv", ".xlsx"].includes(ext)) return FileSpreadsheet;
+  if ([".md", ".txt", ".pdf"].includes(ext)) return FileText;
+  if (ext === ".ipynb") return BookOpen;
+  if ([".png", ".jpg", ".jpeg", ".webp", ".svg"].includes(ext)) return Image;
+  return File;
+}
 
 const FILE_BROWSER_MIN_HEIGHT = 112;
 const FILE_BROWSER_MAX_HEIGHT = 560;
@@ -235,7 +245,8 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
     const seen = new Set<string>();
     const build = (items: FileListEntry[], depth: number): (FileListEntry & { depth: number })[] => {
       const row: (FileListEntry & { depth: number })[] = [];
-      for (const entry of items) {
+      // Directories first in each level; sorting the flattened result would break nesting.
+      for (const entry of sortFileEntries(items)) {
         if (seen.has(entry.path)) continue;
         seen.add(entry.path);
         row.push({ ...entry, depth });
@@ -359,9 +370,12 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
                       className="flex h-tool w-full items-center gap-2 truncate rounded-input px-2 text-left text-ui-caption text-text/80 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                       title={e.path}
                       style={{ paddingLeft: `${8 + e.depth * 12}px` }}
+                      aria-expanded={e.isDir ? openFolders.has(e.path) : undefined}
                     >
-                      {e.isDir ? <Icon icon={openFolders.has(e.path) ? ChevronDown : ChevronRight} size="xs" className="shrink-0 text-muted" /> : null}
-                      <Icon icon={e.isDir ? FolderOpen : File} size="sm" className="shrink-0 text-muted" />
+                      {e.isDir
+                        ? <Icon icon={openFolders.has(e.path) ? ChevronDown : ChevronRight} size="xs" className="shrink-0 text-muted" />
+                        : <span aria-hidden="true" className="w-3 shrink-0" />}
+                      <Icon icon={e.isDir ? (openFolders.has(e.path) ? FolderOpen : Folder) : iconForFile(e.name)} size="sm" className="shrink-0 text-muted" />
                       <span className="truncate">{e.name}</span>
                       {isLoading && <Icon icon={Loader2} size="xs" className="ml-auto shrink-0 animate-spin text-muted" />}
                     </button>
