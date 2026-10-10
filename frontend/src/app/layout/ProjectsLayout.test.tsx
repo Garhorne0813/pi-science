@@ -141,6 +141,7 @@ describe("WorkspaceRail Settings", () => {
     expect(useUiStore.getState().settingsOpen).toBe(true);
     expect(useUiStore.getState().settingsScope).toBeNull();
     expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Projects" })).toHaveClass("text-text");
     expect(screen.queryByRole("button", { name: "Workspace context panel" })).toBeNull();
     expect(screen.queryByRole("button", { name: "New conversation" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Research" })).toBeNull();
