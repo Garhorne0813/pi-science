@@ -1,5 +1,22 @@
+import type { Locator, Page } from "@playwright/test";
 import { expect, test, workspaceRoute } from "./fixtures/app.fixture";
 import { FIXTURES, VISUAL_CWD, VISUAL_SESSION } from "./fixtures/data.mjs";
+
+/** Select an item inside a hover-driven Radix submenu.
+ *
+ *  The submenu tracks the pointer through a grace area between its trigger and
+ *  its content. `locator.click()` jumps the pointer in one step and re-checks
+ *  actionability, which closes the submenu and then fails its hit test against
+ *  the detached content. Moving the pointer the way a user does and pressing at
+ *  the destination exercises the same code path without the artificial jump. */
+async function selectInSubmenu(page: Page, item: Locator, trigger: Locator) {
+  const triggerBox = (await trigger.boundingBox())!;
+  await page.mouse.move(triggerBox.x + triggerBox.width / 2, triggerBox.y + triggerBox.height / 2, { steps: 5 });
+  const itemBox = (await item.boundingBox())!;
+  await page.mouse.move(itemBox.x + itemBox.width / 2, itemBox.y + itemBox.height / 2, { steps: 20 });
+  await page.mouse.down();
+  await page.mouse.up();
+}
 
 test("Settings defaults and Composer session selection remain independent", async ({ page }, testInfo) => {
   let defaults = { model: "deepseek/deepseek-chat", thinking: "off" };
@@ -41,7 +58,8 @@ test("Settings defaults and Composer session selection remain independent", asyn
   expect(bounds!.x).toBeGreaterThanOrEqual(0);
   expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
   await page.screenshot({ path: testInfo.outputPath("composer-model-menu.png"), animations: "disabled" });
-  await page.getByRole("menuitemradio", { name: "deepseek-reasoner", exact: true }).click();
+  await page.getByRole("textbox", { name: "Search models", exact: true }).fill("reasoner");
+  await selectInSubmenu(page, page.getByRole("menuitemradio", { name: "deepseek-reasoner", exact: true }), page.getByRole("menuitem", { name: /^Model/ }));
   await expect(composer).toContainText("deepseek-reasoner");
   await expect.poll(() => sessionWrites).toBe(1);
   await expect.poll(() => defaultWrites).toBe(1);
@@ -50,7 +68,7 @@ test("Settings defaults and Composer session selection remain independent", asyn
   // model IDs now matching.
   await composer.click();
   await page.getByRole("menuitem", { name: /^Effort/ }).click();
-  await page.getByRole("menuitemradio", { name: "High", exact: true }).click();
+  await selectInSubmenu(page, page.getByRole("menuitemradio", { name: "High", exact: true }), page.getByRole("menuitem", { name: /^Effort/ }));
   await expect(composer).toContainText("High");
   await expect.poll(() => session.thinking).toBe("high");
   expect(defaults.thinking).toBe("off");

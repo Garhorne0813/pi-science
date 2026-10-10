@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderOpen, File, ChevronRight, ChevronDown, RefreshCw, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { copyTextToClipboard, useUiStore } from "../../lib/ui";
+import { cn, copyTextToClipboard, useUiStore } from "../../lib/ui";
 import { fileInspectorForPath } from "../../lib/artifacts";
 import { absoluteWorkspacePath } from "../../lib/files/workspace-path";
 import { workspaceFiles } from "../../lib/workspace";
@@ -23,12 +23,14 @@ function clampFileBrowserHeight(height: number, containerHeight?: number) {
   return Math.min(FILE_BROWSER_MAX_HEIGHT, availableHeight, Math.max(FILE_BROWSER_MIN_HEIGHT, height));
 }
 
-export function FileBrowser({ cwd }: { cwd: string }) {
+export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: string; embedded?: boolean; active?: boolean }) {
   const { t } = useTranslation();
   const { confirm, toast } = useFeedback();
   const [entries, setEntries] = useState<FileListEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
+  const visible = embedded || expanded;
+  const shouldPoll = active && visible;
   const [contextMenu, setContextMenu] = useState<{ entry: FileListEntry; point: ContextPoint } | null>(null);
   const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
   const [folderStates, setFolderStates] = useState<Map<string, DirState>>(new Map());
@@ -168,21 +170,20 @@ export function FileBrowser({ cwd }: { cwd: string }) {
   }, [cwd]);
 
   useEffect(() => {
+    if (!shouldPoll) return;
     const controller = new AbortController();
     void loadFiles(controller.signal);
     return () => controller.abort();
-  }, [fileRevision, loadFiles]);
+  }, [shouldPoll, fileRevision, loadFiles]);
 
   // Polling fallback while the browser tab is visible: catches files created
   // by kernels or external tools that never emitted a terminal event. Quiet so
   // repeated refreshes never flash the loading indicator.
   useEffect(() => {
-    if (!expanded) return;
-    const id = window.setInterval(() => {
-      if (document.visibilityState === "visible") void loadFiles(undefined, true);
-    }, 2_000);
+    if (!shouldPoll) return;
+    const id = window.setInterval(() => void loadFiles(undefined, true), 2_000);
     return () => window.clearInterval(id);
-  }, [expanded, loadFiles]);
+  }, [shouldPoll, loadFiles]);
 
   const handleClick = (entry: FileListEntry) => {
     if (entry.isDir) {
@@ -288,10 +289,10 @@ export function FileBrowser({ cwd }: { cwd: string }) {
   return (
     <div
       ref={rootRef}
-      className="mt-2 flex min-h-0 shrink-0 flex-col"
-      style={expanded ? { height: displayedHeight, maxHeight: "calc(100dvh - 240px)" } : undefined}
+      className={cn("flex min-h-0 flex-col", embedded ? "h-full flex-1" : "mt-2 shrink-0")}
+      style={!embedded && expanded ? { height: displayedHeight, maxHeight: "calc(100dvh - 240px)" } : undefined}
     >
-      {expanded ? (
+      {!embedded && (expanded ? (
         <div
           role="separator"
           aria-orientation="horizontal"
@@ -318,17 +319,17 @@ export function FileBrowser({ cwd }: { cwd: string }) {
         </div>
       ) : (
         <div className="h-px shrink-0 bg-faint" />
-      )}
+      ))}
       <div className="flex min-h-0 flex-1 flex-col pt-2">
         <div className="flex items-center">
-          <button
+          {embedded ? <span className="flex-1 px-2 text-ui-caption text-muted">{t("nav.files")}</span> : <button
             type="button"
             onClick={() => { setExpanded(!expanded); if (!expanded) void loadFiles(); }}
             className="flex h-tool min-w-0 flex-1 items-center gap-1.5 px-2 text-ui-caption font-medium uppercase tracking-wider text-muted hover:text-text"
           >
             <Icon icon={expanded ? ChevronDown : ChevronRight} size="xs" />
             <span className="truncate">{t("nav.files")}</span>
-          </button>
+          </button>}
           <button
             type="button"
             aria-label={t("files.refresh", { defaultValue: "Refresh files" })}
@@ -339,7 +340,7 @@ export function FileBrowser({ cwd }: { cwd: string }) {
             <Icon icon={RefreshCw} size="xs" className={loading ? "animate-spin" : ""} />
           </button>
         </div>
-        {expanded && (
+        {visible && (
           <div className="mt-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
             {loading && entries.length === 0 ? (
               <p className="px-2 text-ui-meta italic text-muted/60">{t("common.loading")}</p>

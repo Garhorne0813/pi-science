@@ -13,15 +13,14 @@ async function openSidebarFile(page: import("@playwright/test").Page, testInfo: 
   // thread must be fully settled before the sidebar interaction so the
   // captured baseline never shows a half-loaded conversation.
   await waitForConversationSettled(page);
-  // Expand the sidebar's file browser section, then open the fixture file
-  // from the sidebar tree. Scoping to the <aside> guarantees the click lands
-  // on the real file browser row, not on the conversation's artifact strip
-  // (which would render report.md without the sidebar being involved).
-  const sidebar = page.locator("aside");
-  // Two buttons read "Files" in the sidebar: the navigation item and the
-  // file-browser section header (nav renders first). Click the section header
-  // to expand the browser, then open the fixture file from the sidebar tree.
-  await sidebar.getByRole("button", { name: "Files", exact: true }).nth(1).click();
+  // Show the Context Panel's Files tab, then open the fixture file from its
+  // embedded tree. Scoping to the panel element guarantees the click lands on
+  // the real file browser row, not on the conversation's artifact strip
+  // (which would render report.md without the panel being involved).
+  const sidebar = page.locator("#workspace-context-panel");
+  // The Files entry is a Context Panel tab, not a navigation button, and the
+  // embedded tree replaced the old collapsible section header.
+  await sidebar.getByRole("tab", { name: "Files", exact: true }).click();
   const fileRow = sidebar.getByRole("button", { name: "report.md" });
   await expect(fileRow).toBeVisible();
   await fileRow.click();

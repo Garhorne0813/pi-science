@@ -1,0 +1,10 @@
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { afterEach, expect, it, vi } from "vitest";
+import { SkillChatDialog } from "./SkillDialogs";
+import { useUiStore } from "../../lib/ui";
+import { useRuntimeStore } from "../../lib/agent-runtime";
+import { useWorkspaceSidebar } from "../sidebar/workspace-navigation";
+import i18n from "../../i18n";
+afterEach(() => { cleanup(); useUiStore.getState().closeSettings(); });
+it("skill chat uses the shared blank landing action and preserves its literal initial draft", async () => { await i18n.changeLanguage("en"); useWorkspaceSidebar.setState({ cwd: "proj", tab: "files", query: "old" }); useUiStore.setState({ settingsOpen: true, settingsScope: "proj" }); const createNewSession = vi.fn(async () => "created"); useRuntimeStore.setState({ createNewSession }); const onClose = vi.fn(); const router = createMemoryRouter([{ path: "*", element: <SkillChatDialog open cwd="proj" onClose={onClose} /> }], { initialEntries: ["/workspace/proj/research"] }); render(<RouterProvider router={router} />); fireEvent.click(screen.getByRole("button", { name: "Open new conversation" })); expect(router.state.location.pathname).toBe("/workspace/proj"); expect(router.state.location.state).toEqual({ landingIntent: { kind: "explicit-new", cwd: "proj" }, initialDraft: "I'd like to create a new project-level skill. Please ask me for the skill name, when it should trigger, and the expected output, then follow docs/skill-authoring.md and write the skill to .pi/skills/<skill-name>/SKILL.md in the current project (with complete frontmatter and clear instructions)." }); expect(useWorkspaceSidebar.getState().tab).toBe("sessions"); expect(useWorkspaceSidebar.getState().query).toBe(""); expect(useUiStore.getState().settingsOpen).toBe(false); expect(onClose).toHaveBeenCalledTimes(1); expect(createNewSession).toHaveBeenCalledTimes(0); });

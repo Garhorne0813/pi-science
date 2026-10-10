@@ -1,0 +1,6 @@
+import { expect, it } from "vitest";
+import { blocksRootAutoNavigation, deletedSessionLandingState, explicitNewLandingState } from "./blank-landing";
+it("builds explicit-new history state with an optional draft", () => { expect(explicitNewLandingState("proj")).toEqual({ landingIntent: { kind: "explicit-new", cwd: "proj" } }); expect(explicitNewLandingState("proj", "hello")).toEqual({ landingIntent: { kind: "explicit-new", cwd: "proj" }, initialDraft: "hello" }); });
+it("builds active-session-deleted history state", () => { expect(deletedSessionLandingState("proj")).toEqual({ landingIntent: { kind: "active-session-deleted", cwd: "proj" } }); });
+it.each([null, undefined, true, "explicit-new", {}, { landingIntent: null }, { landingIntent: { kind: "normal", cwd: "proj" } }, { landingIntent: { kind: "explicit-new", cwd: 1 } }, { landingIntent: { kind: "explicit-new", cwd: "other" } }])("rejects malformed or other-workspace history state %j", state => { expect(blocksRootAutoNavigation(state, "proj")).toBe(false); });
+it.each(["explicit-new", "active-session-deleted"])("holds %s without consuming it", kind => { const state = { landingIntent: { kind, cwd: "proj" } }; expect(blocksRootAutoNavigation(state, "proj")).toBe(true); expect(blocksRootAutoNavigation(state, "proj")).toBe(true); });

@@ -43,9 +43,14 @@ export async function screenshot(page: import("@playwright/test").Page, name: st
 }
 
 /** Wait until the settled conversation thread of the populated demo
- *  workspace has fully rendered: the fixture user message, the bash tool
- *  card, the assistant markdown (heading, table, code block), the artifact
+ *  workspace has fully rendered: the fixture user message, the completed turn
+ *  summary, the assistant markdown (heading, table, code block), the artifact
  *  strip and the composer out of the "settling" phase.
+ *
+ *  The turn summary replaces the earlier standalone bash tool-card probe. The
+ *  activity surface aggregates tool events, so a per-tool button is no longer
+ *  rendered; the completed duration is a stronger settling signal because it
+ *  only appears once the turn has a final duration.
  *
  *  Workspace-root routes auto-navigate into the most recent session, so the
  *  sidebar/inspector specs would otherwise race the message load and capture
@@ -53,7 +58,7 @@ export async function screenshot(page: import("@playwright/test").Page, name: st
  *  cwd is session-free and must never wait for a session here. */
 export async function waitForConversationSettled(page: import("@playwright/test").Page) {
   await expect(page.getByRole("heading", { name: "Shikimate pathway analysis" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /bash/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Completed · 1m00s\. Total turn duration: 1m00s$/ })).toBeVisible();
   await expect(page.getByRole("table")).toBeVisible();
   await expect(page.locator("pre code").first()).toBeVisible();
   await expect(page.getByRole("button", { name: /report\.md/ }).first()).toBeVisible();

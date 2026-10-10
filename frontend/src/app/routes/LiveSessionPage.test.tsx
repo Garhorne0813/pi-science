@@ -53,12 +53,6 @@ vi.mock("../../components/conversation/ModelControlMenu", () => ({
   ),
 }));
 
-vi.mock("../../components/conversation/SessionExecutionButton", () => ({
-  SessionExecutionButton: ({ active, onToggle }: { active: boolean; onToggle: () => void }) => (
-    <button type="button" aria-label="Session executions" aria-pressed={active} onClick={onToggle} />
-  ),
-}));
-
 vi.mock("./RunsPage", () => ({
   RunsPage: () => <div>Execution ledger</div>,
 }));
@@ -1177,19 +1171,17 @@ describe("header settings entry", () => {
     expect(screen.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
   });
 
-  it("toggles the execution ledger in place and exposes the selected state", async () => {
+  it("does not render the duplicate execution history button in the header", async () => {
     await renderReady();
-    const button = screen.getByRole("button", { name: "Session executions" });
+    expect(within(screen.getByRole("banner")).queryByRole("button", { name: "Session executions" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Execution ledger")).not.toBeInTheDocument();
+  });
 
-    expect(button.previousElementSibling).toBe(screen.getByRole("heading", { level: 1 }));
-    expect(button).toHaveAttribute("aria-pressed", "false");
-    fireEvent.click(button);
+  it("still opens the execution ledger from the view query parameter", async () => {
+    renderPage("?view=runs");
     expect(await screen.findByText("Execution ledger")).toBeInTheDocument();
-    expect(button).toHaveAttribute("aria-pressed", "true");
-
-    fireEvent.click(button);
-    await waitFor(() => expect(screen.queryByText("Execution ledger")).not.toBeInTheDocument());
-    expect(button).toHaveAttribute("aria-pressed", "false");
+    expect(within(screen.getByRole("banner")).queryByRole("button", { name: "Session executions" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Send message")).not.toBeInTheDocument();
   });
 });
 
