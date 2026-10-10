@@ -38,6 +38,7 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
   const [kind, setKind] = useState<KindFilter>("all");
   const [status, setStatus] = useState<StatusFilter>("all");
   const [timeRange, setTimeRange] = useState<"all" | "day" | "week" | "month">("all");
+  const [now, setNow] = useState(Date.now);
   const [detailTab, setDetailTab] = useState<DetailTab>("summary");
   const [compactDetailOpen, setCompactDetailOpen] = useState(() => searchParams.has("execution"));
   const [logs, setLogs] = useState<Record<string, DisplayLog>>({});
@@ -52,19 +53,31 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
 
   useEffect(() => subscribeExecutionInvalidation(workspaceCwd, { onConnectionChange: setLiveConnected }), [workspaceCwd]);
 
+  useEffect(() => {
+    if (timeRange === "all") return;
+    const updateNow = () => setNow(Date.now());
+    updateNow();
+    const interval = window.setInterval(updateNow, 60_000);
+    document.addEventListener("visibilitychange", updateNow);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", updateNow);
+    };
+  }, [timeRange]);
+
   const filteredRuns = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase();
     return runs.filter((run) => {
       if (kind !== "all" && run.kind !== kind) return false;
       if (status !== "all" && run.status !== status) return false;
       if (timeRange !== "all") {
-        const cutoff = Date.now() - ({ day: 1, week: 7, month: 30 }[timeRange] * 86_400_000);
+        const cutoff = now - ({ day: 1, week: 7, month: 30 }[timeRange] * 86_400_000);
         const timestamp = Date.parse(run.started_at ?? run.created_at);
         if (!Number.isFinite(timestamp) || timestamp < cutoff) return false;
       }
       return !needle || executionSearchText(run).toLocaleLowerCase().includes(needle);
     });
-  }, [kind, runs, search, status, timeRange]);
+  }, [kind, now, runs, search, status, timeRange]);
 
   const activeCount = runs.filter(isActiveExecution).length;
   const succeededCount = runs.filter((run) => run.status === "succeeded").length;
