@@ -6,6 +6,16 @@ export interface Breadcrumb { name: string; path: string }
 
 export const workspaceFilesKey = (...selector: string[]) => ["workspace-files", ...selector];
 
+// Sort at the directory level, not after flattening the tree. Natural sorting
+// keeps file2 before file10 regardless of the API/fixture enumeration order.
+const fileNameOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+export function sortFileEntries<T extends Pick<FileListEntry, "name" | "isDir">>(entries: readonly T[]): T[] {
+  return [...entries].sort((left, right) =>
+    Number(right.isDir) - Number(left.isDir) || fileNameOrder.compare(left.name, right.name),
+  );
+}
+
 // Entries and breadcrumbs are always read together and always shown together, so
 // they are one cache entry — that is also what shares the request between the
 // sidebar and the files page (the role the old directoryLoads map played).
@@ -18,7 +28,7 @@ const directoryQuery = (cwd: string, subdir: string) => ({
       apiRequest<FileListEntry[]>(`/api/files?${params}`),
       apiRequest<Breadcrumb[]>(`/api/files/breadcrumbs?cwd=${encodeURIComponent(cwd)}&subdir=${encodeURIComponent(subdir)}`),
     ]);
-    return { entries, breadcrumbs };
+    return { entries: sortFileEntries(entries), breadcrumbs };
   },
 });
 
@@ -49,7 +59,8 @@ export const workspaceFiles = {
 
   async sidebar(cwd: string, signal?: AbortSignal): Promise<FileListEntry[]> {
     const { entries } = await this.directory(cwd, "", signal);
-    return entries.filter((entry) => !entry.name.startsWith(".")).slice(0, 30);
+    // Sort before applying the limit so folders cannot be excluded by an unordered response.
+    return sortFileEntries(entries.filter((entry) => !entry.name.startsWith("."))).slice(0, 30);
   },
 
   async remove(cwd: string, path: string): Promise<void> {

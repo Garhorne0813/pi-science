@@ -149,8 +149,8 @@ async function run() {
     await page.screenshot({ path: desktopScreenshot, fullPage: true });
 
     await page.setViewportSize({ width: 375, height: 812 });
-    const closeSidebar = page.getByRole("button", { name: "Close sidebar" }).last();
-    if (await closeSidebar.isVisible()) await closeSidebar.click();
+    const contextPanelToggle = page.getByRole("button", { name: "Workspace context panel" });
+    if (await contextPanelToggle.getAttribute("aria-expanded") === "true") await contextPanelToggle.click();
     await page.waitForTimeout(200);
     const dimensions = await page.evaluate(() => ({
       scrollWidth: document.documentElement.scrollWidth,

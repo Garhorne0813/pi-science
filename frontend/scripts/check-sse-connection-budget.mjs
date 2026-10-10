@@ -245,7 +245,7 @@ try {
   await knowledgePage.route("**/api/project-knowledge/proposals/count**", (route) =>
     route.fulfill({ json: { pending_count: pendingCount } }));
   await openSession(knowledgePage);
-  const badge = knowledgePage.getByRole("button", { name: /Project Knowledge/ });
+  const badge = knowledgePage.getByRole("link", { name: /Project Knowledge/ });
   await badge.getByText("1", { exact: true }).waitFor();
   await setHidden(knowledgePage, true);
   await waitForNoActiveSources(knowledgePage, "Knowledge hidden");
