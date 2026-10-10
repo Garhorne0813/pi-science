@@ -17,7 +17,7 @@ import type { McpConnectorService } from "../../mcp/connector-service.js";
 import { resolveMcpConfig } from "../../catalog/mcp-config.js";
 import { findExecutable, pathIsInside, userHome } from "../../support/platform-utils.js";
 import { defaultPythonExecutable } from "../../runtime/workspace/workspace-environment.js";
-import { latestWorkspaceFileActivity } from "../../storage/workspace-activity.js";
+import { WorkspaceActivityCache } from "../../storage/workspace-activity.js";
 import { ensureProject, readProject, updateProject } from "../../project/project-registry.js";
 
 function q(request: { query: unknown }, key: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[key]; return typeof value === "string" && value ? value : fallback; }
@@ -80,11 +80,11 @@ export async function knownWorkspacePaths(workspaceRepository?: WorkspaceReposit
   }
   return [...paths];
 }
-async function workspaceInfo(path: string, workspaceRepository?: WorkspaceRepository): Promise<Record<string, unknown>> {
+async function workspaceInfo(path: string, workspaceRepository: WorkspaceRepository | undefined, activity: WorkspaceActivityCache): Promise<Record<string, unknown>> {
   const project = await ensureProject(path);
   await workspaceRepository?.rememberWorkspace(path, { managed: pathIsInside(rootDir(), path, true), preservePath: pathIsInside(rootDir(), path, true) });
   const [sessions, metadata] = await Promise.all([sessionRepository.list(path), stat(path)]);
-  const fileActivity = await latestWorkspaceFileActivity(path, metadata.mtimeMs);
+  const fileActivity = activity.get(path, metadata.mtimeMs);
   const lastActivity = sessions.reduce((latest, session) => Math.max(latest, Date.parse(session.updated_at ?? session.created_at ?? "") || 0), fileActivity);
   return {
     name: project.name,
@@ -247,6 +247,8 @@ const DEMOS: Record<string, { source: string; workspace: string }> = {
 };
 
 export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinator, research?: ResearchLoopCoordinator, workspaceRepository?: WorkspaceRepository, mcp?: McpConnectorService): void {
+  const activity = new WorkspaceActivityCache((workspace, err) => app.log.warn({ err, workspace }, "Workspace file activity refresh failed or was limited"));
+  app.addHook("onClose", async () => { activity.close(); });
   // ── Skills (delegated to skill-catalog service) ──
   app.get("/api/skills", async (request, reply) => {
     const root = await ws(request, reply);
@@ -370,9 +372,9 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
   });
 
   // ── Workspaces ──
-  app.get("/api/workspaces", async () => { const result = await Promise.all((await knownWorkspacePaths(workspaceRepository)).map((path) => workspaceInfo(path, workspaceRepository))); return result.sort((left, right) => String(right.last_activity_at).localeCompare(String(left.last_activity_at))); });
-  app.post("/api/workspaces", async (request, reply) => { const body = (request.body ?? {}) as { name?: unknown }; const name = String(body.name ?? "").trim().replace(/[\\/]/g, "-").slice(0, 100); if (!name) return reply.code(400).send({ error: "Invalid workspace name" }); const path = join(rootDir(), name); try { await stat(path); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* create */ } await mkdir(path, { recursive: true }); return await workspaceInfo(path, workspaceRepository); });
-  app.post("/api/workspaces/open", async (request, reply) => { const requestedPath = expandUserPath(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); let path: string; try { if (!(await stat(requestedPath)).isDirectory()) return reply.code(400).send({ error: "Not a directory" }); path = await realpath(requestedPath); } catch { return reply.code(404).send({ error: "Folder not found" }); } await rememberExternalWorkspace(path, workspaceRepository); return await workspaceInfo(path, workspaceRepository); });
+  app.get("/api/workspaces", async () => { const result = await Promise.all((await knownWorkspacePaths(workspaceRepository)).map((path) => workspaceInfo(path, workspaceRepository, activity))); return result.sort((left, right) => String(right.last_activity_at).localeCompare(String(left.last_activity_at))); });
+  app.post("/api/workspaces", async (request, reply) => { const body = (request.body ?? {}) as { name?: unknown }; const name = String(body.name ?? "").trim().replace(/[\\/]/g, "-").slice(0, 100); if (!name) return reply.code(400).send({ error: "Invalid workspace name" }); const path = join(rootDir(), name); try { await stat(path); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* create */ } await mkdir(path, { recursive: true }); return await workspaceInfo(path, workspaceRepository, activity); });
+  app.post("/api/workspaces/open", async (request, reply) => { const requestedPath = expandUserPath(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); let path: string; try { if (!(await stat(requestedPath)).isDirectory()) return reply.code(400).send({ error: "Not a directory" }); path = await realpath(requestedPath); } catch { return reply.code(404).send({ error: "Folder not found" }); } await rememberExternalWorkspace(path, workspaceRepository); return await workspaceInfo(path, workspaceRepository, activity); });
   app.post("/api/workspaces/demo", async (request, reply) => {
     const demo = DEMOS[String((request.query as { name?: unknown }).name ?? "")];
     if (!demo) return reply.code(400).send({ error: "Unknown demo" });
@@ -398,7 +400,7 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
     await ensureProject(target);
     await mkdir(metadataRoot(target), { recursive: true });
     await writeFile(sentinel, `${demo.source}\n`, "utf8");
-    return await workspaceInfo(target, workspaceRepository);
+    return await workspaceInfo(target, workspaceRepository, activity);
   });
   app.post("/api/workspaces/rename", async (request, reply) => {
     const body = (request.body ?? {}) as { path?: unknown; name?: unknown };
@@ -427,7 +429,7 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
       await updateProject(destination, { name });
       await updateWorkspaceLocation(source, destination, workspaceRepository, sourceProject.id);
       registryMoved = true;
-      return await workspaceInfo(destination, workspaceRepository);
+      return await workspaceInfo(destination, workspaceRepository, activity);
     } catch (error) {
       if (registryMoved) await updateWorkspaceLocation(destination, source, workspaceRepository, sourceProject.id).catch(() => undefined);
       if (stateMoved) await moveWorkspaceMetadata(destination, source).catch(() => undefined);

@@ -1,10 +1,11 @@
 import { resolve } from "node:path";
-import { mkdtemp, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, opendir, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Fastify from "fastify";
 import { catalogToolCommands, expandUserPath, registerCatalogRoutes } from "./catalog-routes.js";
+import { ensureProject } from "../../project/project-registry.js";
 import { sessionRepository } from "../../runtime/node/session-repository.js";
 import { userHome } from "../../support/platform-utils.js";
 
@@ -180,7 +181,32 @@ describe("skill readiness route", () => {
   });
 });
 
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...original, opendir: vi.fn(original.opendir) };
+});
+
 describe("workspace activity", () => {
+  it("keeps the whole project list available when a background scan encounters EIO", async () => {
+    const app = Fastify();
+    const warn = vi.spyOn(app.log, "warn");
+    registerCatalogRoutes(app);
+    const paths = [join(home, "broken-workspace"), join(home, "healthy-workspace")];
+    for (const path of paths) { await mkdir(path); await ensureProject(path); }
+    await writeFile(join(home, "registered-workspaces.json"), JSON.stringify(paths));
+    const error = Object.assign(new Error("Disk unavailable"), { code: "EIO" });
+    vi.mocked(opendir).mockRejectedValueOnce(error);
+    try {
+      const response = await app.inject({ method: "GET", url: "/api/workspaces" });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toHaveLength(2);
+      await vi.waitFor(() => expect(warn).toHaveBeenCalledWith({ err: error, workspace: paths[0] }, expect.any(String)));
+      const refreshed = await app.inject({ method: "GET", url: "/api/workspaces" });
+      expect(refreshed.statusCode).toBe(200);
+      expect(refreshed.json()).toHaveLength(2);
+      expect(refreshed.json()).toEqual(expect.arrayContaining([expect.objectContaining({ path: paths[0], last_activity_at: (await stat(paths[0]!)).mtime.toISOString() })]));
+    } finally { vi.mocked(opendir).mockRestore(); warn.mockRestore(); await app.close(); }
+  });
   it("includes nested file activity and relocated session activity without changing last_modified", async () => {
     const app = Fastify();
     registerCatalogRoutes(app);
@@ -190,7 +216,7 @@ describe("workspace activity", () => {
     await writeFile(file, "initial");
     await writeFile(join(home, "registered-workspaces.json"), JSON.stringify([cwd]));
     // Initialize project metadata before freezing directory mtimes.
-    await app.inject({ method: "GET", url: "/api/workspaces" });
+    await ensureProject(cwd);
     const external = join(home, "external");
     await mkdir(external);
     await writeFile(join(external, "unrelated.md"), "not this workspace");
@@ -209,7 +235,11 @@ describe("workspace activity", () => {
     try {
       const response = await app.inject({ method: "GET", url: "/api/workspaces" });
       expect(response.statusCode).toBe(200);
-      expect(response.json()).toEqual([expect.objectContaining({ last_modified: rootTime, last_activity_at: recent.toISOString() })]);
+      expect(response.json()).toEqual([expect.objectContaining({ last_modified: rootTime, last_activity_at: rootTime })]);
+      await vi.waitFor(async () => {
+        const refreshed = await app.inject({ method: "GET", url: "/api/workspaces" });
+        expect(refreshed.json()).toEqual([expect.objectContaining({ last_modified: rootTime, last_activity_at: recent.toISOString() })]);
+      });
       sessions.mockResolvedValue([{ id: "s1", cwd, project_id: null, name: null, created_at: old.toISOString(), updated_at: "2026-09-20T00:00:00Z" }]);
       const updated = await app.inject({ method: "GET", url: "/api/workspaces" });
       expect(updated.json()).toEqual([expect.objectContaining({ last_modified: rootTime, last_activity_at: "2026-09-20T00:00:00.000Z", session_count: 1 })]);
