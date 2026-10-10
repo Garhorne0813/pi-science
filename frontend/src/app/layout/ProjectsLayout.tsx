@@ -184,7 +184,12 @@ export function ProjectsLayout() {
       <div data-context-panel-shade aria-hidden="true" hidden={!drawerOpen} onPointerDown={() => setContextPanelCollapsed(true)} onMouseDown={(event) => event.preventDefault()} className={cn(!drawerOpen && "!hidden", "absolute inset-y-0 left-[var(--rail-width-mobile)] right-0 z-50 bg-black/45 md:hidden")} />
       <aside ref={panelRef} tabIndex={-1} id="workspace-context-panel" aria-label={t("sidebar.workspaceContent")} hidden={contextPanelCollapsed || !isWorkspace} className={cn((contextPanelCollapsed || !isWorkspace) && "!hidden", "app-sidebar sidebar-enter absolute inset-y-0 left-[var(--rail-width-mobile)] z-[60] flex h-full shrink-0 flex-col overflow-hidden border-r border-faint md:relative md:left-auto md:z-auto")} style={{ width: sidebarDragWidth ?? sidebarWidth, maxWidth: "calc(100vw - var(--rail-width-mobile))" }}>
         <div className="flex h-full min-h-0 flex-col px-panel py-card">
-          <header className="mb-2 flex h-header shrink-0 items-center px-2"><Link to="/" title={activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")} className="min-w-0 truncate text-ui-label font-semibold text-text">{activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")}</Link></header>
+          <header className="mb-2 shrink-0 px-2 py-1">
+            <Link to="/" title={activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")} className="flex min-w-0 flex-col text-text">
+              <span className="text-[18px] font-semibold leading-6 tracking-[-0.03em]">pi-science</span>
+              <span className="truncate text-xs font-normal leading-4 text-muted">{activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")}</span>
+            </Link>
+          </header>
           {isWorkspace && <Suspense fallback={<div role="status" className="min-h-0 flex-1 p-2 text-ui-label text-muted">{t("inspector.loading")}</div>}><SidebarMainArea key={activeCwd!} cwd={activeCwd!} /></Suspense>}
         </div>
           <div

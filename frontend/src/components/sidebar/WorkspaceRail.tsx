@@ -1,7 +1,7 @@
 import type { Ref } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Activity, FlaskConical, Inbox, MessageSquare, PanelLeft, Plus, Settings, type LucideIcon } from "lucide-react";
+import { Activity, FlaskConical, Inbox, MessageSquare, PanelLeft, Settings, SquarePen, type LucideIcon } from "lucide-react";
 import { cn, useUiStore } from "../../lib/ui";
 import { usePendingProposalCount } from "../../lib/knowledge";
 import { Icon, IconButton } from "../ui/Icon";
@@ -31,10 +31,10 @@ export function WorkspaceRail({ cwd, toggleRef }: { cwd: string | null; toggleRe
   const newConversation = useNewWorkspaceConversation(cwd);
   const root = cwd ? `/workspace/${encodeURIComponent(cwd)}` : "";
   return <nav aria-label={t("shell.primaryNav")} className="app-sidebar rail-enter z-[60] flex h-full w-[var(--rail-width-mobile)] shrink-0 flex-col items-center gap-1.5 border-r border-faint py-panel md:w-[var(--rail-width)]">
-    <Link to="/" title={t("nav.projects")} aria-label={t("nav.projects")} aria-current={section === "projects" ? "page" : undefined} onClick={closeSidebarOnNarrow} className={cn(railBox, "bg-surface-2 text-ui-title font-semibold", section === "projects" && currentBox)}>P</Link>
+    <Link to="/" title={t("nav.projects")} aria-label={t("nav.projects")} aria-current={section === "projects" ? "page" : undefined} onClick={closeSidebarOnNarrow} className={cn(railBox, "bg-surface-2 text-ui-title font-semibold", section === "projects" && currentBox)}>pi</Link>
     {cwd && <IconButton ref={toggleRef} icon={PanelLeft} label={t("shell.toggleContextPanel")} aria-controls="workspace-context-panel" aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)} className="h-header w-header" />}
-    <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1.5 overflow-y-auto overflow-x-hidden md:px-panel">
-      {cwd && <><IconButton icon={Plus} label={t("conversation.newSession")} onClick={() => newConversation()} className="h-header w-header bg-accent-fill text-accent-fg hover:bg-accent-fill hover:text-accent-fg" /><RailLink to={root} icon={MessageSquare} label={t("sidebar.conversations")} current={section === "conversations"} onNavigate={() => useWorkspaceSidebar.getState().showConversations(cwd)} /><KnowledgeRailLink cwd={cwd} current={section === "knowledge"} /><RailLink to={`${root}/research`} icon={FlaskConical} label={t("nav.research")} current={section === "research"} /><RailLink to={`${root}/runs`} icon={Activity} label={t("sidebar.runs")} current={section === "runs"} /></>}
+    <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1.5 overflow-y-auto overflow-x-hidden md:px-2">
+      {cwd && <><IconButton icon={SquarePen} label={t("conversation.newSession")} onClick={() => newConversation()} className="h-header w-header border border-accent-border bg-accent-soft text-accent hover:bg-surface-selected hover:text-accent" /><RailLink to={root} icon={MessageSquare} label={t("sidebar.conversations")} current={section === "conversations"} onNavigate={() => useWorkspaceSidebar.getState().showConversations(cwd)} /><KnowledgeRailLink cwd={cwd} current={section === "knowledge"} /><RailLink to={`${root}/research`} icon={FlaskConical} label={t("nav.research")} current={section === "research"} /><RailLink to={`${root}/runs`} icon={Activity} label={t("sidebar.runs")} current={section === "runs"} /></>}
     </div>
     <IconButton icon={Settings} label={t("nav.settings")} aria-expanded={settingsOpen} onClick={() => { preloadSettingsContent(); useUiStore.getState().openSettings(cwd); closeSidebarOnNarrow(); }} onPointerEnter={preloadSettingsContent} onFocus={preloadSettingsContent} className={cn("h-header w-header", settingsOpen && "bg-surface-selected text-accent")} />
   </nav>;

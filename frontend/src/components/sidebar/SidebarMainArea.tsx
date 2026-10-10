@@ -30,9 +30,9 @@ export function SidebarMainArea({ cwd, renderSessions }: { cwd: string; renderSe
   const tabClass = "relative flex h-nav min-w-0 flex-1 items-center justify-center gap-1.5 text-ui-label text-muted transition-colors hover:text-text data-[state=active]:font-medium data-[state=active]:text-accent data-[state=active]:after:absolute data-[state=active]:after:inset-x-[5px] data-[state=active]:after:bottom-0 data-[state=active]:after:h-[var(--context-tab-indicator-height)] data-[state=active]:after:bg-accent data-[state=active]:after:content-['']";
   return <section className="flex min-h-0 flex-1 flex-col">
     <Tabs.Root value={tab} onValueChange={value => { if (value !== "sessions" && value !== "files") return; if (value === "files") setFilesVisited(true); setTab(cwd, value); }} className="flex min-h-0 flex-1 flex-col">
-      <Tabs.List aria-label={t("sidebar.views")} className="mb-2 flex shrink-0 border-b border-faint">
-        <Tabs.Trigger value="sessions" className={tabClass}><MessageSquare size={14} />{t("sidebar.conversations")}</Tabs.Trigger>
-        <Tabs.Trigger value="files" className={tabClass}><FileText size={14} />{t("nav.files")}</Tabs.Trigger>
+      <Tabs.List aria-label={t("sidebar.views")} className="sidebar-tab-list mb-2 flex shrink-0 border-b border-faint">
+        <Tabs.Trigger value="sessions" className={tabClass}><MessageSquare className="sidebar-tab-icon" size={14} />{t("sidebar.conversations")}</Tabs.Trigger>
+        <Tabs.Trigger value="files" className={tabClass}><FileText className="sidebar-tab-icon" size={14} />{t("nav.files")}</Tabs.Trigger>
       </Tabs.List>
       {/* Keep session lifecycle effects mounted across tabs and collapse. */}
       <Tabs.Content value="sessions" forceMount hidden={tab !== "sessions"} className="min-h-0 flex-1 flex-col data-[state=active]:flex data-[state=inactive]:hidden">

@@ -275,15 +275,15 @@ test("the panel overlays main below 768px and is an in-flow column at 768px", as
     const aside = document.querySelector(selector) as HTMLElement;
     return { rail: rail.width, position: getComputedStyle(aside).position, width: aside.getBoundingClientRect().width };
   }, PANEL);
-  expect(wide.rail).toBe(68);
+  expect(wide.rail).toBe(60);
   expect(wide.position).toBe("relative");
-  expect(wide.width).toBe(299);
+  expect(wide.width).toBe(240);
 });
 
 test("panel and rail controls fit narrow panel widths and short light/dark windows", async ({ page }, testInfo) => {
   test.skip(!["desktop-light", "desktop-dark"].includes(testInfo.project.name), "Desktop visual acceptance");
   await page.setViewportSize({ width: 1280, height: 600 });
-  for (const width of [220, 260, 320, 420]) {
+  for (const width of [220, 240, 320, 420]) {
     await page.addInitScript(({ width, theme }) => {
       localStorage.setItem("pi-science.sidebar.width", JSON.stringify(width));
       localStorage.setItem("pi-science.theme", JSON.stringify(theme));

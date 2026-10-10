@@ -46,7 +46,7 @@ beforeEach(() => {
   cleanup();
   pendingKnowledge.count = 0;
   useWorkspaceSidebar.setState({ cwd: null, tab: "sessions", query: "" });
-  useUiStore.setState({ settingsOpen: false, settingsScope: null, contextPanelCollapsed: false, sidebarWidth: 299 });
+  useUiStore.setState({ settingsOpen: false, settingsScope: null, contextPanelCollapsed: false, sidebarWidth: 240 });
   useRuntimeStore.setState({
     sessions: [],
     sessionsHasMore: false,
@@ -70,8 +70,19 @@ function renderWorkspaceShell(initialEntry = "/workspace/proj/research") {
 }
 
 describe("V4 independent primary navigation and context", () => {
-  it("Research and Files are simultaneously active without changing Main", async () => { const { container } = renderWorkspaceShell(); await userEvent.click(await screen.findByRole("tab", { name: "Files" })); expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/research"); expect(screen.getByRole("link", { name: "Research" })).toHaveAttribute("aria-current", "page"); expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true"); expect(container.querySelector("aside")?.style.width).toBe("299px"); expect(container.querySelectorAll("nav[aria-label='Primary navigation']")).toHaveLength(1); });
+  it("Research and Files are simultaneously active without changing Main", async () => { const { container } = renderWorkspaceShell(); await userEvent.click(await screen.findByRole("tab", { name: "Files" })); expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/research"); expect(screen.getByRole("link", { name: "Research" })).toHaveAttribute("aria-current", "page"); expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true"); expect(container.querySelector("aside")?.style.width).toBe("240px"); expect(container.querySelectorAll("nav[aria-label='Primary navigation']")).toHaveLength(1); });
   it("Runs and Conversations are simultaneously active without changing Main", async () => { renderWorkspaceShell("/workspace/proj/runs"); expect(await screen.findByRole("tab", { name: "Conversations" })).toHaveAttribute("aria-selected", "true"); expect(screen.getByRole("link", { name: "Run history" })).toHaveAttribute("aria-current", "page"); expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/runs"); });
+  it("shows brand and project name in one Projects link in the panel", async () => {
+    const { container } = renderWorkspaceShell();
+    await screen.findByRole("searchbox");
+    const header = container.querySelector("aside header")!;
+    const link = header.querySelector("a")!;
+    expect(link).toHaveAttribute("href", "/");
+    expect(link).toHaveAttribute("title", "proj");
+    expect(link.textContent).toBe("pi-scienceproj");
+    expect(header.querySelectorAll("a")).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "Projects" })).toHaveTextContent("pi");
+  });
   it("has one toggle and no duplicate primary links or panel New action", async () => { const { container } = renderWorkspaceShell(); await screen.findByRole("searchbox"); for (const name of ["Project Knowledge", "Research", "Run history"]) expect(screen.getAllByRole("link", { name })).toHaveLength(1); expect(screen.getAllByRole("button", { name: "Settings" })).toHaveLength(1); expect(screen.getAllByRole("button", { name: "New conversation" })).toHaveLength(1); expect(screen.getAllByRole("button", { name: "Workspace context panel" })).toHaveLength(1); expect(container.querySelector("aside")?.querySelectorAll("nav, button[title='New conversation']")).toHaveLength(0); });
   it("exposes the Knowledge pending count once in the Rail accessible name", async () => { pendingKnowledge.count = 2; const { container } = renderWorkspaceShell(); await screen.findByRole("searchbox"); const item = screen.getByRole("link", { name: "Project Knowledge (2 pending proposals)" }); expect(item).toHaveAttribute("href", "/workspace/proj/knowledge"); expect(item.querySelector("span[aria-hidden='true']")?.textContent).toBe("2"); expect(container.querySelector("aside")?.textContent).not.toContain("pending proposals"); expect(screen.getAllByRole("link", { name: "Project Knowledge (2 pending proposals)" })).toHaveLength(1); });
   it("full Files route claims no current Rail item and Settings only expands", async () => { const { container } = renderWorkspaceShell("/workspace/proj/files"); await screen.findByRole("searchbox"); expect(container.querySelectorAll("nav [aria-current]")).toHaveLength(0); const settings = screen.getByRole("button", { name: "Settings" }); expect(settings).toHaveAttribute("aria-expanded", "false"); expect(settings).not.toHaveAttribute("aria-current"); });
@@ -129,6 +140,10 @@ describe("WorkspaceRail Settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(useUiStore.getState().settingsOpen).toBe(true);
     expect(useUiStore.getState().settingsScope).toBeNull();
+    expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("button", { name: "Workspace context panel" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "New conversation" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Research" })).toBeNull();
   });
 });
 
@@ -366,12 +381,13 @@ describe("WorkspaceSessionList", () => {
     expect(screen.getByTestId("path").textContent).toBe("/workspace/proj");
   });
 
-  it("renders New conversation only once in the Rail with primary styling", () => {
+  it("renders New conversation only once in the Rail with secondary styling", () => {
     useRuntimeStore.setState({ sessions: [session("s1", "Session A")], activeSessionId: "s1" });
     renderList();
 
     const button = screen.getByRole("button", { name: "New conversation" });
-    expect(button).toHaveClass("h-header", "w-header", "bg-accent-fill");
+    expect(button).toHaveClass("h-header", "w-header", "bg-accent-soft", "border-accent-border");
+    expect(button).not.toHaveClass("bg-accent-fill");
     expect(screen.getAllByRole("button", { name: "New conversation" })).toHaveLength(1);
     expect(button.closest("nav")).toHaveAttribute("aria-label", "Primary navigation");
   });

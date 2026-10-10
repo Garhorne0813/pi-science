@@ -186,27 +186,31 @@ Every future frontend UI change must follow this reference:
 These keep our app readable without an exact upstream counterpart; a design
 owner should confirm or revise them:
 
-- V4 workspace shell: context panel default width `299px`, owned by
+- V4 workspace shell: context panel default width `240px`, owned by
   `useUiStore.sidebarWidth`. The panel collapses independently of the rail, and the
-  branch keeps its drag-resize with a `220px` to `420px` clamp. V4 Pi-Science
-  proposal citing PRD `docs/prd-sidebar-v4/pi_science_sidebar_v4_PRD.md` §4.1
-  "Context Panel | 默认 299px" row and the prototype `.context` rule
-  (`width:299px`); no upstream selector. OQ-05 keeps drag-resize as P1.
-- Workspace primary navigation rail width `68px` on desktop and `58px` below
-  `768px`; tokens `--rail-width` and `--rail-width-mobile`. V4 Pi-Science
-  proposal citing PRD §4.1 "Rail | 68px 固定宽（移动端原型约 58px）" row and the
-  prototype `.rail` rule (`width:68px`) plus `@media(max-width:720px) .rail`
-  (`width:58px`); `768px` is the project breakpoint per PRD FR-09 and OQ-07.
+  branch keeps its drag-resize with a `220px` to `420px` clamp. An existing
+  saved width remains in effect; `240px` applies only without a saved value.
+  Pi-Science Sidebar V4 Visual Refinement PRD v1.1 §3 updates the earlier V4
+  proposal's `299px` default; no upstream selector.
+- Workspace primary navigation rail width `60px` on desktop and `58px` below
+  `768px`; tokens `--rail-width` and `--rail-width-mobile`. Pi-Science
+  Sidebar V4 Visual Refinement PRD v1.1 §3 updates the earlier V4 proposal's
+  `68px` desktop width; `768px` remains the project breakpoint.
   This supersedes the confirmed upstream `56px` collapsed-rail value for this
   surface; the upstream `56px` row stays as the frozen record.
 - Rail item box `44px`, reusing the existing `--density-header` value
-  (`2.75rem`), inside a `12px` horizontal rail gutter. Rail active indicator: a
+  (`2.75rem`), inside an `8px` horizontal desktop rail gutter. Rail active indicator: a
   `3px` bar, radius `3px`, height `26px`, `--accent` fill, offset `8px` outside
   the item's leading edge. V4 Pi-Science proposal citing PRD §4.1 "Rail 一级按钮"
   row and prototype `.rail-button` / `.rail-button[aria-current=page]::before`
   (`width:3px;height:26px;border-radius:3px;left:-8px`). The prototype box is
   `45px` inside an `8px` rail padding; this proposal takes `44px` so the rail
-  math is `12 + 44 + 12 = 68px` and the box reuses `--density-header`.
+  math is `8 + 44 + 8 = 60px` and the box reuses `--density-header`.
+- The project panel header shows one Projects link with `pi-science` at
+  `18px/24px`, weight `600`, letter spacing `-0.03em`, and the project name
+  below at `12px/16px` with truncation. The Rail uses a text `pi` mark;
+  New conversation uses a soft accent and border instead of a solid fill.
+  Pi-Science Sidebar V4 Visual Refinement PRD v1.1 §§3.1–3.5.
 - Context panel tab active indicator: a `2px` `--accent` bar inset `5px` from
   each end of the tab trigger, and the tab list stops using a filled pill. V4
   Pi-Science proposal for the tab geometry, citing prototype

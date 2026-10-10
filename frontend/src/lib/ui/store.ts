@@ -195,7 +195,7 @@ export const useUiStore = create<UiState>((set) => ({
   },
 
   contextPanelCollapsed: loadFromStorage("sidebar.collapsed", false),
-  sidebarWidth: loadFromStorage("sidebar.width", 299),
+  sidebarWidth: loadFromStorage("sidebar.width", 240),
   sidebarFileBrowserHeight: loadFromStorage("sidebar.fileBrowserHeight", 288),
   setContextPanelCollapsed: (c) => {
     saveToStorage("sidebar.collapsed", c);
