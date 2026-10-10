@@ -322,7 +322,7 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
       ))}
       <div className="flex min-h-0 flex-1 flex-col pt-2">
         <div className="flex items-center">
-          {embedded ? <span className="flex-1 px-2 text-ui-caption text-muted">{t("nav.files")}</span> : <button
+          {embedded ? <span className="flex-1 px-2 text-ui-meta font-medium uppercase tracking-wide text-muted">{t("nav.files")}</span> : <button
             type="button"
             onClick={() => { setExpanded(!expanded); if (!expanded) void loadFiles(); }}
             className="flex h-tool min-w-0 flex-1 items-center gap-1.5 px-2 text-ui-caption font-medium uppercase tracking-wider text-muted hover:text-text"
@@ -356,7 +356,7 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
                     <button
                       onClick={() => handleClick(e)}
                       onContextMenu={(ev) => handleContextMenu(ev, e)}
-                      className="flex h-icon w-full items-center gap-2 truncate rounded px-2 text-left text-ui-caption text-text/80 hover:bg-surface-hover"
+                      className="flex h-tool w-full items-center gap-2 truncate rounded-input px-2 text-left text-ui-caption text-text/80 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                       title={e.path}
                       style={{ paddingLeft: `${8 + e.depth * 12}px` }}
                     >
