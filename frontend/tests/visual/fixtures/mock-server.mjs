@@ -176,7 +176,17 @@ function handleApi(req, res, url) {
   // File browser + file content.
   if (method === "GET" && pathname === "/api/files") {
     log();
-    return json(res, 200, FIXTURES.files);
+    // The real endpoint lists direct children of the requested directory.
+    const subdir = searchParams.get("subdir") || "";
+    const entries = FIXTURES.files
+      .filter(entry => {
+        const slash = entry.path.lastIndexOf("/");
+        return (slash < 0 ? "" : entry.path.slice(0, slash)) === subdir;
+      })
+      .sort((left, right) =>
+        Number(right.isDir) - Number(left.isDir) || left.name.localeCompare(right.name),
+      );
+    return json(res, 200, entries);
   }
   if (method === "GET" && pathname === "/api/files/breadcrumbs") {
     log();
