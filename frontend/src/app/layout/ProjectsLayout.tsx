@@ -7,7 +7,7 @@ import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { WorkspaceRail } from "../../components/sidebar/WorkspaceRail";
 import { useWorkspaceCwd } from "../../lib/workspace";
 import { cn } from "../../lib/ui";
-import { PanelLeftClose } from "lucide-react";
+import { ChevronsLeft } from "lucide-react";
 import { IconButton } from "../../components/ui/Icon";
 import { NARROW_MEDIA_QUERY, isNarrowViewport } from "../../lib/ui/viewport";
 
@@ -194,7 +194,7 @@ export function ProjectsLayout() {
                 <span className="text-[18px] font-semibold leading-6 tracking-[-0.03em]">pi-science</span>
                 <span className="truncate text-xs font-normal leading-4 text-muted">{activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")}</span>
               </Link>
-              {isWorkspace && <IconButton icon={PanelLeftClose} label={t("shell.toggleContextPanel")} title={t("shell.collapseContextPanel")} aria-controls="workspace-context-panel" aria-expanded={!contextPanelCollapsed} onClick={() => setContextPanelCollapsed(true)} />}
+              {isWorkspace && <IconButton icon={ChevronsLeft} label={t("shell.toggleContextPanel")} title={t("shell.collapseContextPanel")} aria-controls="workspace-context-panel" aria-expanded={!contextPanelCollapsed} onClick={() => setContextPanelCollapsed(true)} />}
             </header>
             {isWorkspace && <Suspense fallback={<div role="status" className="min-h-0 flex-1 p-2 text-ui-label text-muted">{t("inspector.loading")}</div>}><SidebarMainArea key={activeCwd!} cwd={activeCwd!} /></Suspense>}
           </div>
