@@ -82,6 +82,8 @@ export function ProjectsLayout() {
   const sidebarDragWidthRef = useRef<number | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
   const toggleRef = useRef<HTMLButtonElement | null>(null);
+  const headerLinkRef = useRef<HTMLAnchorElement | null>(null);
+  const focusBeforeExplicitExpand = useRef<HTMLButtonElement | null>(null);
   const focusBeforeExplicitClose = useRef<{ element: Element | null } | null>(null);
   const [narrowViewport, setNarrowViewport] = useState(isNarrowViewport);
   const location = useLocation();
@@ -158,6 +160,11 @@ export function ProjectsLayout() {
     if (isNarrowViewport()) setContextPanelCollapsed(true);
   }, [location.pathname, setContextPanelCollapsed]);
 
+  const expandContextPanel = useCallback((trigger: HTMLButtonElement) => {
+    focusBeforeExplicitExpand.current = document.activeElement === trigger ? trigger : null;
+    setContextPanelCollapsed(false);
+  }, [setContextPanelCollapsed]);
+
   const closeContextPanel = useCallback(() => {
     focusBeforeExplicitClose.current = { element: document.activeElement };
     setContextPanelCollapsed(true);
@@ -165,7 +172,14 @@ export function ProjectsLayout() {
 
   useEffect(() => {
     if (drawerOpen) panelRef.current?.focus();
-    if (!contextPanelCollapsed) return;
+    if (!contextPanelCollapsed) {
+      const trigger = focusBeforeExplicitExpand.current;
+      focusBeforeExplicitExpand.current = null;
+      if (!drawerOpen && trigger && (document.activeElement === trigger || document.activeElement === document.body)) {
+        headerLinkRef.current?.focus();
+      }
+      return;
+    }
     const pending = focusBeforeExplicitClose.current;
     focusBeforeExplicitClose.current = null;
     // Restore only after an explicit close, and preserve focus if another
@@ -196,12 +210,12 @@ export function ProjectsLayout() {
       </a>
       {/* The project workbench is full-width; workspace routes retain navigation. */}
       {!isProjectsHome && <>
-        <WorkspaceRail cwd={activeCwd} toggleRef={toggleRef} />
+        <WorkspaceRail cwd={activeCwd} toggleRef={toggleRef} onExpand={expandContextPanel} />
         <div data-context-panel-shade aria-hidden="true" hidden={!drawerOpen} onPointerDown={closeContextPanel} onMouseDown={(event) => event.preventDefault()} className={cn(!drawerOpen && "!hidden", "absolute inset-y-0 left-[var(--rail-width-mobile)] right-0 z-50 bg-black/45 md:hidden")} />
         <aside ref={panelRef} tabIndex={-1} id="workspace-context-panel" aria-label={t("sidebar.workspaceContent")} hidden={contextPanelCollapsed || !isWorkspace} className={cn((contextPanelCollapsed || !isWorkspace) && "!hidden", "app-sidebar sidebar-enter absolute inset-y-0 left-[var(--rail-width-mobile)] z-[60] flex h-full shrink-0 flex-col overflow-hidden border-r border-faint md:relative md:left-auto md:z-auto")} style={{ width: sidebarDragWidth ?? sidebarWidth, maxWidth: "calc(100vw - var(--rail-width-mobile))" }}>
           <div className="flex h-full min-h-0 flex-col px-panel py-card">
             <header className="mb-2 flex shrink-0 items-start gap-2 px-2 py-1">
-              <Link to="/" title={activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")} className="flex min-w-0 flex-1 flex-col text-text">
+              <Link ref={headerLinkRef} to="/" title={activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")} className="flex min-w-0 flex-1 flex-col text-text">
                 <span className="text-[18px] font-semibold leading-6 tracking-[-0.03em]">pi-science</span>
                 <span className="truncate text-xs font-normal leading-4 text-muted">{activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")}</span>
               </Link>

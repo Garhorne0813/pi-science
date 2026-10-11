@@ -102,6 +102,35 @@ describe("V4 independent primary navigation and context", () => {
     expect(screen.getByTestId("projects-home")).toBeInTheDocument();
     expect(useUiStore.getState().contextPanelCollapsed).toBe(true);
   });
+  it("moves keyboard focus into the desktop sidebar after explicitly expanding it", async () => {
+    useUiStore.setState({ contextPanelCollapsed: true });
+    const { container } = renderWorkspaceShell();
+    screen.getByRole("button", { name: "Expand sidebar" }).focus();
+    await userEvent.keyboard("{Enter}");
+    expect(container.querySelector("aside header a")).toHaveFocus();
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Collapse sidebar" })).toHaveFocus();
+  });
+  it("preserves other control focus when a state update expands the desktop sidebar", () => {
+    useUiStore.setState({ contextPanelCollapsed: true });
+    renderWorkspaceShell();
+    const research = screen.getByRole("link", { name: "Research" });
+    research.focus();
+    act(() => useUiStore.getState().setContextPanelCollapsed(false));
+    expect(research).toHaveFocus();
+  });
+  it("preserves focus claimed by another control before explicit expansion finishes", () => {
+    useUiStore.setState({ contextPanelCollapsed: true });
+    renderWorkspaceShell();
+    const expand = screen.getByRole("button", { name: "Expand sidebar" });
+    const research = screen.getByRole("link", { name: "Research" });
+    expand.focus();
+    act(() => {
+      fireEvent.click(expand);
+      research.focus();
+    });
+    expect(research).toHaveFocus();
+  });
   it("preserves focus on another control when state updates collapse the panel", async () => {
     const { container } = renderWorkspaceShell();
     await screen.findByRole("searchbox");

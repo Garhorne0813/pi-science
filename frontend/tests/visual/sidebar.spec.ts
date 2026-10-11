@@ -29,9 +29,21 @@ test("collapsed workspace keeps a direct Projects link and names the sidebar act
     await expect(svg).toHaveAttribute("height", "20");
     await expect(svg).toHaveAttribute("stroke-width", "1.75");
   }
-  await expand.click();
+  await expand.focus();
+  await page.keyboard.press("Enter");
   await expect(page.getByRole("button", { name: "Collapse sidebar", exact: true })).toBeVisible();
   await expect(expand).toHaveCount(0);
+  if (testInfo.project.name === "desktop-light") {
+    await expect(page.locator(`${PANEL} header a`)).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("button", { name: "Collapse sidebar", exact: true })).toBeFocused();
+    const brand = rail.locator(":scope > div").first();
+    const before = await brand.evaluate(element => getComputedStyle(element).backgroundColor);
+    await brand.hover();
+    expect(await brand.evaluate(element => getComputedStyle(element).backgroundColor)).toBe(before);
+  } else {
+    await expect(page.locator(PANEL)).toBeFocused();
+  }
   expect((await projects.boundingBox())!.y).toBeCloseTo(projectsBox.y, 1);
   expect((await settings.boundingBox())!.y).toBeCloseTo(settingsBox.y, 1);
   await page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
