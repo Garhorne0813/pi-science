@@ -70,6 +70,28 @@ function renderWorkspaceShell(initialEntry = "/workspace/proj/research") {
 }
 
 describe("V4 independent primary navigation and context", () => {
+  it("collapses from the brand header and expands from the top-left brand without navigating", async () => {
+    const { container } = renderWorkspaceShell();
+    await screen.findByRole("searchbox");
+    const toggle = screen.getByRole("button", { name: "Workspace context panel" });
+    expect(toggle).toHaveAttribute("title", "Collapse sidebar");
+    expect(toggle.querySelector("svg")).not.toBeNull();
+    expect(toggle.closest("header")).toBe(container.querySelector("aside header"));
+    expect(container.querySelector("nav")?.querySelector("button[aria-controls='workspace-context-panel']")).toBeNull();
+    fireEvent.click(toggle);
+    expect(container.querySelector("aside")).toHaveAttribute("hidden");
+    const expand = screen.getByRole("button", { name: "Workspace context panel" });
+    expect(expand).toHaveFocus();
+    expect(expand).toHaveTextContent("pi");
+    expect(expand).toHaveAttribute("title", "Expand sidebar");
+    expect(screen.queryByRole("link", { name: "Projects" })).toBeNull();
+    expect(container.querySelector("nav")?.firstElementChild).toBe(expand);
+    fireEvent.click(expand);
+    expect(container.querySelector("aside")).not.toHaveAttribute("hidden");
+    expect(screen.getByRole("link", { name: "Projects" })).toHaveTextContent("pi");
+    expect(screen.getByTestId("path")).toHaveTextContent("/workspace/proj/research");
+    expect(screen.getByRole("button", { name: "New conversation" })).not.toHaveClass("text-accent", "bg-accent-soft", "border-accent-border");
+  });
   it("Research and Files are simultaneously active without changing Main", async () => { const { container } = renderWorkspaceShell(); await userEvent.click(await screen.findByRole("tab", { name: "Files" })); expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/research"); expect(screen.getByRole("link", { name: "Research" })).toHaveAttribute("aria-current", "page"); expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true"); expect(container.querySelector("aside")?.style.width).toBe("240px"); expect(container.querySelectorAll("nav[aria-label='Primary navigation']")).toHaveLength(1); });
   it("Runs and Conversations are simultaneously active without changing Main", async () => { renderWorkspaceShell("/workspace/proj/runs"); expect(await screen.findByRole("tab", { name: "Conversations" })).toHaveAttribute("aria-selected", "true"); expect(screen.getByRole("link", { name: "Run history" })).toHaveAttribute("aria-current", "page"); expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/runs"); });
   it("shows brand and project name in one Projects link in the panel", async () => {
@@ -90,7 +112,7 @@ describe("V4 independent primary navigation and context", () => {
 
 describe("mobile Context drawer", () => {
   function narrowViewport() { vi.stubGlobal("innerWidth", 375); vi.stubGlobal("matchMedia", (media: string) => ({ media, matches: media.includes("767") || media.includes("1023"), addEventListener: vi.fn(), removeEventListener: vi.fn() })); }
-  it("opens with focus and inerts Main, preview controls and the skip link then returns focus on Escape", async () => { narrowViewport(); const { container } = renderWorkspaceShell("/workspace/proj/session/s1"); const toggle = screen.getByRole("button", { name: "Workspace context panel" }); expect(toggle).toHaveAttribute("aria-expanded", "false"); fireEvent.click(toggle); const panel = container.querySelector("aside")!; expect(panel).toHaveFocus(); expect(toggle).toHaveAttribute("aria-expanded", "true"); expect(container.querySelector("main")).toHaveAttribute("inert"); expect(container.querySelector("a[href='#main-content']")).toHaveAttribute("inert"); expect(screen.queryByRole("link", { name: "Skip to content" })).toBe(null); const preview = screen.getByRole("button", { name: "Show preview panel", hidden: true }); expect(preview.closest("[inert]")).toHaveAttribute("aria-hidden", "true"); const shade = container.querySelector("[data-context-panel-shade]")!; expect(shade).toHaveAttribute("aria-hidden", "true"); expect(shade).not.toHaveAttribute("tabindex"); fireEvent.keyDown(panel, { key: "Escape" }); expect(panel).toHaveAttribute("hidden"); expect(toggle).toHaveFocus(); expect(container.querySelector("main")).not.toHaveAttribute("inert"); await screen.findByRole("link", { name: "Skip to content" }); });
+  it("opens with focus and inerts Main, preview controls and the skip link then returns focus on Escape", async () => { narrowViewport(); const { container } = renderWorkspaceShell("/workspace/proj/session/s1"); const toggle = screen.getByRole("button", { name: "Workspace context panel" }); expect(toggle).toHaveAttribute("aria-expanded", "false"); fireEvent.click(toggle); const panel = container.querySelector("aside")!; expect(panel).toHaveFocus(); expect(screen.getByRole("button", { name: "Workspace context panel" })).toHaveAttribute("aria-expanded", "true"); expect(container.querySelector("main")).toHaveAttribute("inert"); expect(container.querySelector("a[href='#main-content']")).toHaveAttribute("inert"); expect(screen.queryByRole("link", { name: "Skip to content" })).toBe(null); const preview = screen.getByRole("button", { name: "Show preview panel", hidden: true }); expect(preview.closest("[inert]")).toHaveAttribute("aria-hidden", "true"); const shade = container.querySelector("[data-context-panel-shade]")!; expect(shade).toHaveAttribute("aria-hidden", "true"); expect(shade).not.toHaveAttribute("tabindex"); fireEvent.keyDown(panel, { key: "Escape" }); expect(panel).toHaveAttribute("hidden"); expect(screen.getByRole("button", { name: "Workspace context panel" })).toHaveFocus(); expect(container.querySelector("main")).not.toHaveAttribute("inert"); await screen.findByRole("link", { name: "Skip to content" }); });
   it("ignores an Escape that a modal dialog already handled", () => {
     narrowViewport();
     // Stands in for the shared confirmation dialog, which listens on window and
@@ -108,7 +130,7 @@ describe("mobile Context drawer", () => {
     }
   });
 
-  it("closes on shade pointer down and returns focus to the one Rail toggle", () => { narrowViewport(); const { container } = renderWorkspaceShell(); const toggle = screen.getByRole("button", { name: "Workspace context panel" }); fireEvent.click(toggle); fireEvent.pointerDown(container.querySelector("[data-context-panel-shade]")!); expect(container.querySelector("aside")).toHaveAttribute("hidden"); expect(toggle).toHaveFocus(); expect(toggle).toHaveAttribute("aria-expanded", "false"); });
+  it("closes on shade pointer down and returns focus to the one Rail toggle", () => { narrowViewport(); const { container } = renderWorkspaceShell(); const toggle = screen.getByRole("button", { name: "Workspace context panel" }); fireEvent.click(toggle); fireEvent.pointerDown(container.querySelector("[data-context-panel-shade]")!); expect(container.querySelector("aside")).toHaveAttribute("hidden"); expect(screen.getByRole("button", { name: "Workspace context panel" })).toHaveFocus(); expect(toggle).toHaveAttribute("aria-expanded", "false"); });
   it("keeps the Rail operable and closes the drawer when navigating to Runs", async () => { narrowViewport(); const { container } = renderWorkspaceShell(); fireEvent.click(screen.getByRole("button", { name: "Workspace context panel" })); await userEvent.click(screen.getByRole("link", { name: "Run history" })); expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/runs"); expect(container.querySelector("aside")).toHaveAttribute("hidden"); expect(screen.getByRole("link", { name: "Run history" })).toHaveAttribute("aria-current", "page"); });
   it("mobile New conversation clears Files and search, closes the drawer and creates no session", async () => { narrowViewport(); const { container } = renderWorkspaceShell("/workspace/proj/session/s1"); fireEvent.click(screen.getByRole("button", { name: "Workspace context panel" })); fireEvent.change(await screen.findByRole("searchbox"), { target: { value: "old" } }); await userEvent.click(screen.getByRole("tab", { name: "Files" })); fireEvent.click(screen.getByRole("button", { name: "New conversation" })); expect(container.querySelector("aside")).toHaveAttribute("hidden"); expect(screen.getByTestId("path").textContent).toBe("/workspace/proj"); expect(screen.getByRole("tab", { name: "Conversations", hidden: true })).toHaveAttribute("aria-selected", "true"); expect(screen.getByRole("searchbox", { hidden: true })).toHaveValue(""); expect(useRuntimeStore.getState().createNewSession).toHaveBeenCalledTimes(0); });
   it("removes a background inspector control from reach while the drawer is open", async () => { narrowViewport(); renderWorkspaceShell(); act(() => useUiStore.getState().openInspector({ variant: "file", path: "notes.txt", filename: "notes.txt", cwd: "proj" })); const control = await screen.findByRole("button", { name: "Inspector control" }); const chrome = screen.getByRole("dialog", { name: "Open file previews" }); expect(control.closest("[inert]")).toBe(null); fireEvent.click(screen.getByRole("button", { name: "Workspace context panel" })); expect(chrome).toHaveAttribute("inert"); expect(chrome).toHaveAttribute("aria-hidden", "true"); expect(control.closest("[inert]")).toBe(chrome); expect(screen.queryByRole("dialog", { name: "Open file previews" })).toBe(null); expect(screen.queryByRole("button", { name: "Inspector control" })).toBe(null); fireEvent.keyDown(document, { key: "Escape" }); expect(screen.getByRole("button", { name: "Inspector control" })).toBe(control); expect(screen.getByRole("button", { name: "Workspace context panel" })).toHaveFocus(); });
@@ -387,8 +409,8 @@ describe("WorkspaceSessionList", () => {
     renderList();
 
     const button = screen.getByRole("button", { name: "New conversation" });
-    expect(button).toHaveClass("h-header", "w-header", "bg-accent-soft", "border-accent-border");
-    expect(button).not.toHaveClass("bg-accent-fill");
+    expect(button).toHaveClass("h-header", "w-header", "text-muted");
+    expect(button).not.toHaveClass("bg-accent-fill", "bg-accent-soft", "border-accent-border", "text-accent");
     expect(screen.getAllByRole("button", { name: "New conversation" })).toHaveLength(1);
     expect(button.closest("nav")).toHaveAttribute("aria-label", "Primary navigation");
   });

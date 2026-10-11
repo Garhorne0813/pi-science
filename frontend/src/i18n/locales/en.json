@@ -1367,6 +1367,8 @@
   "skills.openNewChat": "Open new conversation",
   "shell.primaryNav": "Primary navigation",
   "shell.toggleContextPanel": "Workspace context panel",
+  "shell.expandContextPanel": "Expand sidebar",
+  "shell.collapseContextPanel": "Collapse sidebar",
   "sidebar.pendingKnowledge": "{{count}} pending proposals",
   "shell.resizeSidebar": "Resize sidebar",
   "settings.environments.title": "Shared environments",

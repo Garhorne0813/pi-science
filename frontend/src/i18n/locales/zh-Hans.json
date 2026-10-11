@@ -1367,6 +1367,8 @@
   "skills.openNewChat": "打开新对话区",
   "shell.primaryNav": "一级导航",
   "shell.toggleContextPanel": "工作区上下文栏",
+  "shell.expandContextPanel": "展开侧边栏",
+  "shell.collapseContextPanel": "收起侧边栏",
   "sidebar.pendingKnowledge": "{{count}} 条待审核提案",
   "shell.resizeSidebar": "调整侧边栏宽度",
   "settings.environments.title": "共享环境",
