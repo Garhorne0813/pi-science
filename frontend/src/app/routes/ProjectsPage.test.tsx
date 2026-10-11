@@ -1,5 +1,5 @@
 import { createRef, useState } from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -7,6 +7,7 @@ import { FeedbackContext } from "../../components/feedback/feedback-context";
 import { apiRequest } from "../../lib/client/api";
 import i18n from "../../i18n";
 import { ProjectsPage, sortProjects, WorkspaceCard } from "./ProjectsPage";
+import { useUiStore } from "../../lib/ui";
 
 beforeAll(async () => {
   await i18n.changeLanguage("en");
@@ -87,7 +88,7 @@ vi.mock("../../lib/client/api", async (importOriginal) => ({
   apiRequest: vi.fn(),
 }));
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.useRealTimers(); useUiStore.setState({ settingsOpen: false, settingsScope: null }); });
 
 describe("ProjectsPage loading", () => {
   function renderPage(client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
@@ -100,6 +101,36 @@ describe("ProjectsPage loading", () => {
     );
     return client;
   }
+
+  it("opens global settings from the header with no workspaces", async () => {
+    vi.mocked(apiRequest).mockImplementation(async (path) => path === "/api/workspaces/pinned" ? { paths: [] } : []);
+    useUiStore.setState({ settingsOpen: false, settingsScope: "/previous-workspace" });
+    const client = renderPage();
+    const settings = await screen.findByRole("button", { name: "Settings" });
+    expect(screen.getByText(i18n.t("projects.emptyTitle"))).toBeInTheDocument();
+    expect(settings).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(settings);
+    expect(useUiStore.getState()).toMatchObject({ settingsOpen: true, settingsScope: null });
+    expect(settings).toHaveAttribute("aria-expanded", "true");
+    client.clear();
+  });
+
+  it("refreshes activity and reorders cards without leaving the page", async () => {
+    const projects = [
+      { name: "Alpha", path: "/alpha", project_id: "1", session_count: 0, last_modified: "2026-09-12T00:00:00Z" },
+      { name: "Beta", path: "/beta", project_id: "2", session_count: 0, last_modified: "2026-09-01T00:00:00Z" },
+    ];
+    let scanned = false;
+    vi.mocked(apiRequest).mockImplementation(async (path) => path === "/api/workspaces/pinned" ? { paths: [] } : projects.map(project => ({ ...project, last_activity_at: scanned && project.name === "Beta" ? "2026-09-20T00:00:00Z" : project.last_modified })));
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const client = renderPage();
+    const cards = () => screen.getAllByRole("link", { name: /^Open (Alpha|Beta)$/ }).map(link => link.getAttribute("aria-label"));
+    await waitFor(() => expect(cards()).toEqual(["Open Alpha", "Open Beta"]));
+    scanned = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    await waitFor(() => expect(cards()).toEqual(["Open Beta", "Open Alpha"]));
+    client.clear();
+  });
 
   it("hides overview and empty states on API failure, then restores them after retry", async () => {
     let failed = true;

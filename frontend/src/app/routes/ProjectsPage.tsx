@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, Pin, PinOff, Pencil, Trash2, Activity, Search, Grid2X2, LayoutList, ArrowRight, Clock3, Sparkles, X } from "lucide-react";
-import { cn } from "../../lib/ui";
+import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, Pin, PinOff, Pencil, Trash2, Activity, Search, Grid2X2, LayoutList, ArrowRight, Clock3, Sparkles, X, Settings } from "lucide-react";
+import { cn, useUiStore } from "../../lib/ui";
+import { preloadSettingsContent } from "../../components/settings/settings-loading";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
@@ -24,6 +25,8 @@ interface Workspace {
 const workspacesKey = ["workspaces"];
 const workspacesQuery = {
   queryKey: workspacesKey,
+  // Pick up completed background activity scans while the workbench is visible.
+  refetchInterval: 30_000,
   queryFn: ({ signal }: { signal: AbortSignal }) => apiRequest<Workspace[]>("/api/workspaces", {
     signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
   }),
@@ -57,6 +60,8 @@ export function sortProjects<T extends Workspace>(items: T[], mode: ProjectSort)
 
 export function ProjectsPage() {
   const { t } = useTranslation();
+  const openSettings = useUiStore((state) => state.openSettings);
+  const settingsOpen = useUiStore((state) => state.settingsOpen);
   const { toast, confirm: confirmAction } = useFeedback();
   const [creating, setCreating] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
@@ -269,6 +274,13 @@ export function ProjectsPage() {
               <p className="mt-2 max-w-xl text-sm leading-6 text-muted">{t("projects.description")}</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <button type="button" aria-expanded={settingsOpen}
+                onClick={() => { preloadSettingsContent(); openSettings(null); }}
+                onPointerEnter={preloadSettingsContent} onFocus={preloadSettingsContent}
+                className="inline-flex h-primary items-center gap-2 rounded-input border border-border bg-surface-raised px-4 text-ui-body font-medium text-text transition-colors hover:bg-surface-2">
+                <Settings size={16} />
+                {t("nav.settings")}
+              </button>
               <button type="button" onClick={handleOpenFolder} disabled={creating || importingFolder}
                 className="inline-flex h-primary items-center gap-2 rounded-input border border-border bg-surface-raised px-4 text-ui-body font-medium text-text transition-colors hover:bg-surface-2 disabled:opacity-50">
                 {importingFolder ? <Loader2 size={16} className="animate-spin" /> : <FolderInput size={16} />}
