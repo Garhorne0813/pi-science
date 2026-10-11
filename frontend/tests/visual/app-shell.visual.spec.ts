@@ -34,7 +34,7 @@ test("collapsed context panel leaves a stable primary rail", async ({ page }, te
   // The workspace root auto-navigates into the most recent session; wait for
   // the settled thread so the rail screenshot is not racing the message load.
   await waitForConversationSettled(page);
-  const toggle = page.getByRole("button", { name: "Workspace context panel" });
+  const toggle = page.getByRole("button", { name: /^(Expand|Collapse) sidebar$/ });
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");

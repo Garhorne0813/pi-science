@@ -149,7 +149,7 @@ async function run() {
     await page.screenshot({ path: desktopScreenshot, fullPage: true });
 
     await page.setViewportSize({ width: 375, height: 812 });
-    const contextPanelToggle = page.getByRole("button", { name: "Workspace context panel" });
+    const contextPanelToggle = page.getByRole("button", { name: /^(Expand|Collapse) sidebar$/ });
     if (await contextPanelToggle.getAttribute("aria-expanded") === "true") await contextPanelToggle.click();
     await page.waitForTimeout(200);
     const dimensions = await page.evaluate(() => ({
