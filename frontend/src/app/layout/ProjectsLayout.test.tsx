@@ -88,7 +88,8 @@ describe("V4 independent primary navigation and context", () => {
     expect(container.querySelector("nav")?.firstElementChild).toBe(expand);
     fireEvent.click(expand);
     expect(container.querySelector("aside")).not.toHaveAttribute("hidden");
-    expect(screen.getByRole("link", { name: "Projects" })).toHaveTextContent("pi");
+    expect(container.querySelector("nav")?.firstElementChild).toHaveTextContent("pi");
+    expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute("href", "/");
     expect(screen.getByTestId("path")).toHaveTextContent("/workspace/proj/research");
     expect(screen.getByRole("button", { name: "New conversation" })).not.toHaveClass("text-accent", "bg-accent-soft", "border-accent-border");
   });
@@ -131,7 +132,8 @@ describe("V4 independent primary navigation and context", () => {
     expect(link).toHaveAttribute("title", "proj");
     expect(link.textContent).toBe("pi-scienceproj");
     expect(header.querySelectorAll("a")).toHaveLength(1);
-    expect(screen.getByRole("link", { name: "Projects" })).toHaveTextContent("pi");
+    expect(container.querySelector("nav")?.firstElementChild).toHaveTextContent("pi");
+    expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute("href", "/");
   });
   it("has one toggle and no duplicate primary links or panel New action", async () => { const { container } = renderWorkspaceShell(); await screen.findByRole("searchbox"); for (const name of ["Project Knowledge", "Research", "Run history"]) expect(screen.getAllByRole("link", { name })).toHaveLength(1); expect(screen.getAllByRole("button", { name: "Settings" })).toHaveLength(1); expect(screen.getAllByRole("button", { name: "New conversation" })).toHaveLength(1); expect(screen.getAllByRole("button", { name: /^(Expand|Collapse) sidebar$/ })).toHaveLength(1); expect(container.querySelector("aside")?.querySelectorAll("nav, button[title='New conversation']")).toHaveLength(0); });
   it("exposes the Knowledge pending count once in the Rail accessible name", async () => { pendingKnowledge.count = 2; const { container } = renderWorkspaceShell(); await screen.findByRole("searchbox"); const item = screen.getByRole("link", { name: "Project Knowledge (2 pending proposals)" }); expect(item).toHaveAttribute("href", "/workspace/proj/knowledge"); expect(item.querySelector("span[aria-hidden='true']")?.textContent).toBe("2"); expect(container.querySelector("aside")?.textContent).not.toContain("pending proposals"); expect(screen.getAllByRole("link", { name: "Project Knowledge (2 pending proposals)" })).toHaveLength(1); });

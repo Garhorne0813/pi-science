@@ -22,9 +22,10 @@ export const IconButton = forwardRef<HTMLButtonElement, Omit<ButtonHTMLAttribute
   icon: LucideIcon;
   label: string;
   size?: IconButtonSize;
+  iconSize?: IconSize;
   iconClassName?: string;
   title?: string;
-}>(({ icon, label, size = "standard", className, iconClassName, title, type = "button", ...props }, ref) => {
+}>(({ icon, label, size = "standard", className, iconSize, iconClassName, title, type = "button", ...props }, ref) => {
   const metrics = BUTTON_SIZES[size];
   return (
     <button
@@ -39,7 +40,7 @@ export const IconButton = forwardRef<HTMLButtonElement, Omit<ButtonHTMLAttribute
       )}
       {...props}
     >
-      <Icon icon={icon} size={metrics.icon} className={iconClassName} />
+      <Icon icon={icon} size={iconSize ?? metrics.icon} className={iconClassName} />
     </button>
   );
 });

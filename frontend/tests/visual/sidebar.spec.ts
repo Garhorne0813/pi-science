@@ -17,9 +17,23 @@ test("collapsed workspace keeps a direct Projects link and names the sidebar act
   }
   const expand = page.getByRole("button", { name: "Expand sidebar", exact: true });
   await expect(expand).toBeVisible();
+  const rail = page.locator(RAIL);
+  const projects = rail.getByRole("link", { name: "Projects", exact: true });
+  const settings = rail.getByRole("button", { name: "Settings", exact: true });
+  const projectsBox = (await projects.boundingBox())!;
+  const settingsBox = (await settings.boundingBox())!;
+  expect(projectsBox.y + projectsBox.height).toBeLessThanOrEqual(settingsBox.y);
+  expect(await projects.evaluate(element => element.nextElementSibling?.getAttribute("aria-label"))).toBe("Settings");
+  for (const svg of await rail.locator("svg").all()) {
+    await expect(svg).toHaveAttribute("width", "20");
+    await expect(svg).toHaveAttribute("height", "20");
+    await expect(svg).toHaveAttribute("stroke-width", "1.75");
+  }
   await expand.click();
   await expect(page.getByRole("button", { name: "Collapse sidebar", exact: true })).toBeVisible();
   await expect(expand).toHaveCount(0);
+  expect((await projects.boundingBox())!.y).toBeCloseTo(projectsBox.y, 1);
+  expect((await settings.boundingBox())!.y).toBeCloseTo(settingsBox.y, 1);
   await page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
   await expect(expand).toBeFocused();
   await page.locator(RAIL).getByRole("link", { name: "Projects", exact: true }).click();
