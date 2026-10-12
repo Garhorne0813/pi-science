@@ -1,3 +1,7 @@
+import { Maximize, Scan, Minus, Plus } from "lucide-react";
+import { clampImageScale, imageScaleLimits } from "./image-scale";
+import { IconButton } from "../ui/Icon";
+import { ViewerToolbar, ViewerStatusBar } from "./PreviewFrame";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -78,6 +82,21 @@ export function FitsView({ filename, bytes }: { filename: string; bytes: ArrayBu
 function ImageView({ filename, img }: { filename: string; img: FitsImage }) {
   const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const [bounds, setBounds] = useState({ width: img.width, height: img.height });
+  const [scale, setScale] = useState<number | null>(null);
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const measure = () => setBounds({ width: Math.max(1, el.clientWidth - 32), height: Math.max(1, el.clientHeight - 32) });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const fitScale = Math.min(bounds.width / img.width, bounds.height / img.height);
+  const imageScale = scale ?? fitScale;
+  const limits = imageScaleLimits(fitScale, 64, imageScale);
   const [cmap, setCmap] = useState<Cmap>("magma");
   const [stretch, setStretch] = useState<Stretch>("linear");
   const [hover, setHover] = useState<{ x: number; y: number; v: number } | null>(null);
@@ -134,7 +153,7 @@ function ImageView({ filename, img }: { filename: string; img: FitsImage }) {
     <div className="flex h-full flex-col bg-[#0f0f14]">
       <Toolbar
         left={
-          <span className="truncate font-mono text-[11px] text-white/50">
+          <span className="truncate font-mono text-[11px] text-muted">
             {filename} · {img.width}×{img.height}
             {img.bunit ? ` · ${img.bunit}` : ""}
           </span>
@@ -152,33 +171,39 @@ function ImageView({ filename, img }: { filename: string; img: FitsImage }) {
           options={["magma", "viridis", "gray"]}
           labelFor={(v) => t(`fits.colormap.${v as Cmap}`)}
         />
+        <IconButton icon={Maximize} label={t("filePreview.fitImage")} size="compact" aria-pressed={scale === null} onClick={() => { setScale(null); viewportRef.current?.scrollTo?.({ left: 0, top: 0 }); }} />
+        <IconButton icon={Scan} label={t("filePreview.actualImage")} size="compact" aria-pressed={scale === 1} onClick={() => setScale(1)} />
+        <IconButton icon={Minus} label={t("filePreview.zoomOut")} size="compact" disabled={imageScale <= limits.min} onClick={() => setScale(clampImageScale(imageScale / 1.2, limits))} />
+        <IconButton icon={Plus} label={t("filePreview.zoomIn")} size="compact" disabled={imageScale >= limits.max} onClick={() => setScale(clampImageScale(imageScale * 1.2, limits))} />
       </Toolbar>
 
-      <div className="relative flex min-h-0 flex-1 items-center justify-center p-4">
+      <div ref={viewportRef} className="min-h-0 flex-1 overflow-auto">
+        <div className="flex min-h-full min-w-full w-max items-center justify-center p-4">
         <canvas
           ref={canvasRef}
           onMouseMove={onMove}
           onMouseLeave={() => setHover(null)}
-          className="max-h-full max-w-full object-contain shadow-lg"
-          style={{ imageRendering: "pixelated", aspectRatio: `${img.width} / ${img.height}` }}
+          className="max-w-none"
+          style={{ imageRendering: "pixelated", width: img.width * imageScale, height: img.height * imageScale }}
         />
+        </div>
       </div>
 
-      <div className="flex items-center gap-3 border-t border-white/10 px-3 py-2">
+      <ViewerStatusBar>
         <Colorbar cmap={cmap} stretch={stretch} lo={img.lo} hi={img.hi} unit={img.bunit} />
-        <div className="ml-auto min-h-[2.25rem] text-right font-mono text-[11px] text-white/70">
+        <div className="ml-auto min-h-[2.25rem] text-right font-mono text-[11px] text-text">
           {hover ? (
             <>
               <div>
                 {t("fits.pixelValue", { x: hover.x, y: hover.y, value: hover.v.toPrecision(5) })}
               </div>
-              {world && <div className="text-white/45">{fmtCoord(world.lon, world.lat)}</div>}
+              {world && <div className="text-muted">{fmtCoord(world.lon, world.lat)}</div>}
             </>
           ) : (
-            <span className="text-white/30">{t("fits.hoverHintImage")}</span>
+            <span className="text-muted">{t("fits.hoverHintImage")}</span>
           )}
         </div>
-      </div>
+      </ViewerStatusBar>
     </div>
   );
 }
@@ -220,9 +245,9 @@ function Colorbar({
   }, [cmap, stretch]);
   return (
     <div className="flex items-center gap-2">
-      <span className="font-mono text-[10px] text-white/50">{lo.toPrecision(3)}</span>
-      <canvas ref={ref} className="h-2.5 w-40 rounded-sm ring-1 ring-white/15" />
-      <span className="font-mono text-[10px] text-white/50">
+      <span className="font-mono text-[10px] text-muted">{lo.toPrecision(3)}</span>
+      <canvas ref={ref} className="h-2.5 w-24 sm:w-40 rounded-sm ring-1 ring-border" />
+      <span className="font-mono text-[10px] text-muted">
         {hi.toPrecision(3)}
         {unit ? ` ${unit}` : ""}
       </span>
@@ -298,7 +323,7 @@ function SpectrumView({ filename, spec }: { filename: string; spec: import("@/li
           </text>
         </svg>
       </div>
-      <div className="border-t border-border px-3 py-2 text-right font-mono text-[11px] text-muted">
+      <ViewerStatusBar>
         {hover ? (
           <>
             {/* eslint-disable-next-line i18next/no-literal-string -- "x" is a default axis-name fallback (scientific notation), not prose */}
@@ -308,17 +333,17 @@ function SpectrumView({ filename, spec }: { filename: string; spec: import("@/li
         ) : (
           <span className="text-muted/50">{t("fits.hoverHintSpectrum")}</span>
         )}
-      </div>
+      </ViewerStatusBar>
     </div>
   );
 }
 
 function Toolbar({ left, children }: { left: React.ReactNode; children?: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-2 border-b border-white/10 bg-black/20 px-3 py-2">
-      <div className="min-w-0 flex-1">{left}</div>
+    <ViewerToolbar>
+      <div className="w-full min-w-0">{left}</div>
       {children}
-    </div>
+    </ViewerToolbar>
   );
 }
 
@@ -334,14 +359,16 @@ function Segmented({
   labelFor?: (v: string) => string;
 }) {
   return (
-    <div className="flex overflow-hidden rounded-md ring-1 ring-white/15">
+    <div className="flex shrink-0 rounded-input bg-surface-2 p-0.5">
       {options.map((o) => (
         <button
           key={o}
+          type="button"
+          aria-pressed={value === o}
           onClick={() => onChange(o)}
           className={cn(
-            "px-2 py-1 text-[11px] font-medium capitalize transition-colors",
-            value === o ? "bg-white/20 text-white" : "bg-transparent text-white/50 hover:text-white/80",
+            "preview-control capitalize",
+            value === o ? "bg-surface-selected text-accent" : "text-muted hover:text-text",
           )}
         >
           {labelFor ? labelFor(o) : o}

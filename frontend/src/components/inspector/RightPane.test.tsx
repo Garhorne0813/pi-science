@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { RightPane } from "./RightPane";
 import { useUiStore } from "@/lib/ui";
 import i18n from "@/i18n";
@@ -49,6 +49,20 @@ describe("RightPane resizing", () => {
     Reflect.deleteProperty(HTMLElement.prototype, "setPointerCapture");
     Reflect.deleteProperty(HTMLElement.prototype, "hasPointerCapture");
     Reflect.deleteProperty(HTMLElement.prototype, "releasePointerCapture");
+  });
+
+  it("keeps the same preview DOM and draft when expanding and restoring the workspace", () => {
+    render(<RightPane onMinimize={vi.fn()}><textarea aria-label="Draft" defaultValue="initial" /></RightPane>);
+    const draft = screen.getByRole("textbox", { name: "Draft" });
+    fireEvent.change(draft, { target: { value: "unsaved view state" } });
+    act(() => useUiStore.getState().setInspectorMaximized(true));
+    expect(screen.getByRole("textbox", { name: "Draft" })).toBe(draft);
+    expect(draft).toHaveValue("unsaved view state");
+    expect(screen.queryByRole("separator")).toBeNull();
+    act(() => useUiStore.getState().setInspectorMaximized(false));
+    expect(screen.getByRole("textbox", { name: "Draft" })).toBe(draft);
+    expect(draft).toHaveValue("unsaved view state");
+    expect(useUiStore.getState().inspectorRatio).toBeCloseTo(420 / 1024);
   });
 
   it("updates the live pane width during a pointer drag and persists on release", () => {
@@ -158,8 +172,8 @@ describe("RightPane resizing", () => {
       </RightPane>,
     );
 
-    expect(container.firstElementChild).toHaveClass("flex-1");
-    expect(container.firstElementChild).not.toHaveClass("fixed", "inset-0");
+    expect(container.firstElementChild).toHaveClass("lg:flex-1", "lg:relative");
+    expect(container.firstElementChild).not.toHaveClass("lg:w-[var(--inspector-width)]");
   });
 
   it("minimizes below the collapse threshold without discarding preview tabs", () => {

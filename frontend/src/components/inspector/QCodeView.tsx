@@ -1,3 +1,4 @@
+import { ViewerToolbar, ViewerStatusBar } from "./PreviewFrame";
 import { useMemo, useState } from "react";
 import { AlertTriangle, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -48,7 +49,7 @@ export function QCodeView({ filename, text }: { filename: string; text: string }
 
   return (
     <div className="flex h-full flex-col bg-surface">
-      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+      <ViewerToolbar>
         <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted">
           {filename} · {t("qcode.sourceCount", { count: doc.sources.length })} ·{" "}
           {t("qcode.codeCount", { count: doc.codes.length })}
@@ -56,11 +57,11 @@ export function QCodeView({ filename, text }: { filename: string; text: string }
         <span className="inline-flex items-center gap-1 text-[11px] text-ok-text" title={t("qcode.exactSpansTitle")}>
           <ShieldCheck size={13} /> {t("qcode.exactSpansBadge")}
         </span>
-      </div>
+      </ViewerToolbar>
 
       <div className="flex min-h-0 flex-1">
         {/* Codebook */}
-        <div className="w-52 shrink-0 overflow-y-auto border-r border-border p-2">
+        <div className="w-1/3 max-w-52 min-w-24 shrink-0 overflow-y-auto border-r border-border p-2">
           <div className="px-1 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted">
             {t("qcode.codebookHeading")}
           </div>
@@ -70,10 +71,12 @@ export function QCodeView({ filename, text }: { filename: string; text: string }
             return (
               <button
                 key={c.name}
+                type="button"
+                aria-pressed={on}
                 onClick={() => setActive(on ? null : c.name)}
                 className={cn(
                   "mb-0.5 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] transition-colors",
-                  on ? "bg-surface-2 ring-1 ring-border" : "hover:bg-surface-2/60",
+                  on ? "bg-surface-selected" : "hover:bg-surface-hover",
                 )}
                 title={c.description}
               >
@@ -114,7 +117,7 @@ export function QCodeView({ filename, text }: { filename: string; text: string }
           {doc.sources.map((s) => (
             <div key={s.id} className="mb-5">
               <div className="mb-1.5 text-[12px] font-medium text-text">{s.title ?? s.id}</div>
-              <p className="whitespace-pre-wrap font-serif text-[14px] leading-relaxed text-text">
+              <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-text">
                 {segmentsFor(doc, s.id).map((seg, i) => {
                   if (seg.codes.length === 0) return <span key={i}>{seg.text}</span>;
                   const dim = active !== null && !seg.codes.includes(active);
@@ -141,15 +144,15 @@ export function QCodeView({ filename, text }: { filename: string; text: string }
         </div>
       </div>
 
-      <div className="border-t border-border px-3 py-2 font-mono text-[11px] text-muted">
+      <ViewerStatusBar>
         {hoverSeg ? (
           <span>
             <span className="text-text">“{hoverSeg.text}”</span> → {hoverSeg.codes.join(", ")}
           </span>
         ) : (
-          <span className="text-muted/50">{t("qcode.hoverDefaultHint")}</span>
+          <span className="text-muted">{t("qcode.hoverDefaultHint")}</span>
         )}
-      </div>
+      </ViewerStatusBar>
     </div>
   );
 }

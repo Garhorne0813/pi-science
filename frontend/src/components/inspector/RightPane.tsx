@@ -119,6 +119,7 @@ export function RightPane({
   }, [mobileOverlay, inert]);
 
   const onOverlayKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.defaultPrevented) return;
     if (e.key === "Escape") {
       e.preventDefault();
       onMinimize();
@@ -204,10 +205,6 @@ export function RightPane({
     persistSplit(clamp(inspectorWidth + delta));
   };
 
-  if (inspectorMaximized) {
-    return <div inert={inert} aria-hidden={inert || undefined} className="relative h-full min-w-0 flex-1 bg-surface">{children}</div>;
-  }
-
   return (
     <div
       ref={paneRef}
@@ -219,8 +216,9 @@ export function RightPane({
       tabIndex={mobileOverlay ? -1 : undefined}
       onKeyDown={mobileOverlay ? onOverlayKeyDown : undefined}
       className={cn(
-        "fixed inset-0 z-50 block h-full w-full bg-surface outline-none lg:relative lg:inset-auto lg:z-auto lg:w-[var(--inspector-width)] lg:shrink-0",
-        side === "right" ? "lg:border-l lg:border-border" : "lg:border-r lg:border-border",
+        "fixed inset-0 z-50 block h-full w-full bg-surface outline-none lg:relative lg:inset-auto lg:z-auto",
+        inspectorMaximized ? "min-w-0 lg:flex-1" : "lg:w-[var(--inspector-width)] lg:shrink-0",
+        !inspectorMaximized && (side === "right" ? "lg:border-l lg:border-border" : "lg:border-r lg:border-border"),
         side === "left" && "order-1",
         dragging && "will-change-[width] select-none",
       )}
@@ -230,20 +228,22 @@ export function RightPane({
       {/* Drag divider: resize within the responsive min/max bounds; dragging
           toward the pane minimizes it while retaining its tabs. */}
       <div
+        hidden={inspectorMaximized}
         role="separator"
         aria-orientation="vertical"
         aria-label={t("shell.resizePane")}
         aria-valuemin={INSPECTOR_MIN}
         aria-valuemax={Math.round(window.innerWidth * MAX_FRACTION)}
         aria-valuenow={inspectorWidth}
-        tabIndex={mobileOverlay ? -1 : 0}
+        tabIndex={mobileOverlay || inspectorMaximized ? -1 : 0}
         onPointerDown={onDividerPointerDown}
         onPointerMove={onDividerPointerMove}
         onPointerUp={onDividerPointerUp}
         onPointerCancel={onDividerPointerUp}
         onKeyDown={onDividerKeyDown}
         className={cn(
-          "group absolute inset-y-0 z-10 hidden w-2 cursor-col-resize touch-none select-none lg:block",
+          "group absolute inset-y-0 z-10 hidden w-2 cursor-col-resize touch-none select-none",
+          !inspectorMaximized && "lg:block",
           side === "right" ? "left-0" : "right-0",
         )}
       >

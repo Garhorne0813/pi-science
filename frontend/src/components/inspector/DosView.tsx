@@ -1,3 +1,4 @@
+import { ViewerToolbar, ViewerStatusBar } from "./PreviewFrame";
 import { useMemo, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -82,7 +83,7 @@ export function DosView({ filename, bytes }: { filename: string; bytes: ArrayBuf
 
   return (
     <div className="flex h-full flex-col bg-surface">
-      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+      <ViewerToolbar>
         <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted">
           {filename} · {t("dos.viewLabel")} · {t("dos.pointCount", { count: dos.nedos })}
           {dos.spin ? t("dos.spinPolarizedSuffix") : ""}
@@ -98,7 +99,7 @@ export function DosView({ filename, bytes }: { filename: string; bytes: ArrayBuf
         >
           {alignFermi ? t("dos.axisToggle.relative") : t("dos.axisToggle.absolute")}
         </button>
-      </div>
+      </ViewerToolbar>
 
       <div className="flex min-h-0 flex-1 items-center justify-center p-4">
         <svg
@@ -147,7 +148,7 @@ export function DosView({ filename, bytes }: { filename: string; bytes: ArrayBuf
         </svg>
       </div>
 
-      <div className="border-t border-border px-3 py-2 text-right font-mono text-[11px] text-muted">
+      <ViewerStatusBar>
         {hover ? (
           /* eslint-disable i18next/no-literal-string -- physics notation/units ("E =", "(rel. E_F)", "eV", "DOS↑/↓ ="), not prose; consistent with the rest of this inspector family. Scoped to this one hover-notation fragment only, re-enabled right below. */
           <>
@@ -156,9 +157,9 @@ export function DosView({ filename, bytes }: { filename: string; bytes: ArrayBuf
           </>
           /* eslint-enable i18next/no-literal-string */
         ) : (
-          <span className="text-muted/50">{t("dos.emptyHint")}</span>
+          <span className="text-muted">{t("dos.emptyHint")}</span>
         )}
-      </div>
+      </ViewerStatusBar>
     </div>
   );
 }

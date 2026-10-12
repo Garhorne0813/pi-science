@@ -1,3 +1,5 @@
+import { ViewerToolbar, ViewerStatusBar } from "./PreviewFrame";
+import { IconButton } from "../ui/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Box, RotateCcw } from "lucide-react";
 import * as THREE from "three";
@@ -256,10 +258,9 @@ export function MeshView({ filename, bytes }: { filename: string; bytes: ArrayBu
   }, []);
 
   return (
-    <div className="relative h-full min-h-[420px] w-full touch-none select-none overflow-hidden">
-      <div ref={mountRef} className="absolute inset-0" aria-label={t("mesh.viewerLabel")} />
+    <div className="flex h-full min-h-[420px] w-full flex-col overflow-hidden">
 
-      <div className="ui-popover absolute left-3 top-3 flex items-center gap-2 rounded-input bg-surface/90 p-1 backdrop-blur">
+      <ViewerToolbar>
         <div className="flex items-center gap-1 px-1.5 text-xs font-medium text-muted">
           <Box size={13} /> {"3D"}
         </div>
@@ -275,35 +276,20 @@ export function MeshView({ filename, bytes }: { filename: string; bytes: ArrayBu
                 setShaded(o.v);
                 applyWireframe(!o.v);
               }}
+              aria-pressed={shaded === o.v}
               className={cn(
-                "rounded px-2 py-1 text-xs font-medium transition-colors",
-                shaded === o.v ? "bg-surface text-text shadow-sm" : "text-muted hover:text-text",
+                "preview-control",
+                shaded === o.v ? "bg-surface-selected text-accent" : "text-muted hover:text-text",
               )}
             >
               {o.label}
             </button>
           ))}
         </div>
-        <button
-          type="button"
-          onClick={resetView}
-          aria-label={t("mesh.resetView")}
-          title={t("mesh.resetView")}
-          className="flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-text"
-        >
-          <RotateCcw size={13} />
-        </button>
-      </div>
-
-      <div className="ui-popover pointer-events-none absolute bottom-3 right-3 rounded-input bg-surface/90 px-3 py-1.5 text-xs text-muted backdrop-blur">
-        <span className="font-medium text-text">{ext.toUpperCase()}</span>
-        {meta && (
-          <span className="ml-2">
-            {`${meta.tris.toLocaleString()} triangles`}
-          </span>
-        )}
-      </div>
-
+        <IconButton icon={RotateCcw} label={t("mesh.resetView")} size="compact" onClick={resetView} />
+      </ViewerToolbar>
+      <div className="relative min-h-0 flex-1 touch-none select-none">
+        <div ref={mountRef} className="absolute inset-0" aria-label={t("mesh.viewerLabel")} />
       {(rendering || error) && (
         <div className="ui-popover pointer-events-none absolute bottom-3 left-3 max-w-[70%] rounded-input bg-surface/95 px-3 py-1.5 text-xs text-muted backdrop-blur">
           {rendering ? t("mesh.rendering") : error}
@@ -318,6 +304,16 @@ export function MeshView({ filename, bytes }: { filename: string; bytes: ArrayBu
           {notice}
         </div>
       )}
+      </div>
+      <ViewerStatusBar>
+        <span className="font-medium text-text">{ext.toUpperCase()}</span>
+        {meta && (
+          <span className="ml-2">
+            {`${meta.tris.toLocaleString()} triangles`}
+          </span>
+        )}
+      </ViewerStatusBar>
+
     </div>
   );
 }

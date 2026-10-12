@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within, waitFor } from "@testing-library/react";
 import { InspectorTabs } from "./InspectorTabs";
 import { inspectorTabId, useUiStore } from "@/lib/ui";
 import type { FilePreviewInspector } from "../../types/thread";
@@ -45,7 +45,7 @@ describe("InspectorTabs", () => {
 
     expect(screen.getByRole("tab", { name: "two.txt" })).toHaveAttribute("aria-selected", "true");
     const activePanel = screen.getByRole("tabpanel");
-    expect(within(activePanel).getByRole("banner")).toHaveClass("h-9");
+    expect(within(activePanel).getByRole("banner")).toHaveClass("min-h-9");
     expect(within(activePanel).queryByRole("button", { name: "Close" })).toBeNull();
     expect(within(activePanel).queryByRole("button", { name: "Open" })).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "one.txt" }));
@@ -85,7 +85,7 @@ describe("InspectorTabs", () => {
     expect(tablist.firstElementChild).toHaveClass("h-11", "w-max", "min-w-full");
     expect(tablist.firstElementChild).not.toHaveClass("pr-20");
     expect(tablist.firstElementChild).not.toHaveClass("border-b");
-    const controls = screen.getByRole("button", { name: "Expand panel" }).parentElement!;
+    const controls = screen.getByRole("button", { name: "Expand workspace" }).parentElement!;
     expect(controls).toHaveClass("absolute", "right-card");
     expect(controls.parentElement).toBe(tablist.parentElement);
     const activeTabContainer = screen.getByRole("tab", { name: "two.txt" }).parentElement;
@@ -129,13 +129,13 @@ describe("InspectorTabs", () => {
     useUiStore.getState().openInspector(file("two.txt"));
     render(<Harness />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Maximize panel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Focus file" }));
 
     const dialog = screen.getByRole("dialog", { name: "two.txt" });
     expect(dialog).toHaveStyle({ width: "92vw", height: "92vh", left: "4vw", top: "4vh" });
     expect(dialog.previousElementSibling).toHaveClass("bg-black/50");
     expect(dialog.previousElementSibling).not.toHaveClass("backdrop-blur-sm");
-    expect(screen.getByRole("button", { name: "Restore panel" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Exit focus" })).toHaveAttribute("aria-pressed", "true");
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "two.txt" })).toBeNull();
@@ -145,7 +145,7 @@ describe("InspectorTabs", () => {
   it("moves focus into the expanded dialog and restores it on close", () => {
     useUiStore.getState().openInspector(file("two.txt"));
     render(<Harness />);
-    const maximize = screen.getByRole("button", { name: "Maximize panel" });
+    const maximize = screen.getByRole("button", { name: "Focus file" });
     // jsdom does not move focus during fireEvent.click; a real click focuses
     // the trigger, which is exactly what the restore path relies on.
     maximize.focus();
@@ -162,7 +162,7 @@ describe("InspectorTabs", () => {
   it("traps Tab inside the expanded dialog", () => {
     useUiStore.getState().openInspector(file("two.txt"));
     render(<Harness />);
-    fireEvent.click(screen.getByRole("button", { name: "Maximize panel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Focus file" }));
 
     const dialog = screen.getByRole("dialog", { name: "two.txt" });
     const focusables = Array.from(dialog.querySelectorAll<HTMLElement>(
@@ -171,6 +171,10 @@ describe("InspectorTabs", () => {
     expect(focusables.length).toBeGreaterThan(0);
     const first = focusables[0];
     const last = focusables[focusables.length - 1];
+
+    dialog.focus();
+    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(last);
 
     last.focus();
     fireEvent.keyDown(dialog, { key: "Tab" });
@@ -181,16 +185,70 @@ describe("InspectorTabs", () => {
     expect(document.activeElement).toBe(last);
   });
 
+  it("preserves text size across focus, workspace expansion, and tab switches", () => {
+    const first = file("one.txt");
+    const second = file("two.txt");
+    useUiStore.getState().openInspector(first);
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    act(() => useUiStore.setState({ inspectorMaximized: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Focus file" }));
+    expect(screen.getByRole("button", { name: "Reset zoom to 100%" })).toHaveTextContent("110%");
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(useUiStore.getState().inspectorMaximized).toBe(true);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    act(() => useUiStore.getState().openInspector(second));
+    fireEvent.click(screen.getByRole("tab", { name: "one.txt" }));
+    expect(within(screen.getByRole("tabpanel")).getByRole("button", { name: "Reset zoom to 100%" })).toHaveTextContent("110%");
+    expect(screen.getByText("one.txt content").closest("[tabindex]")).toHaveStyle({ fontSize: "13.75px" });
+  });
+
+  it("does not offer or apply generic zoom to a scientific view", async () => {
+    useUiStore.getState().openInspector({ ...file("features.bed"), content: "chr1\t0\t100\tgene" });
+    render(<Harness />);
+    await screen.findByText(/1 features/);
+    expect(screen.queryByRole("button", { name: "Reset zoom to 100%" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Focus file" }));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.querySelector('[style*="zoom"]')).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: "Reset zoom to 100%" })).toBeNull();
+    expect(within(dialog).getByRole("button", { name: "Zoom in" })).toBeInTheDocument();
+  });
+
+  it("includes the iframe after toolbar controls and contains focus returning from it", async () => {
+    useUiStore.getState().openInspector(file("interactive.html"));
+    render(<><button>Background action</button><Harness /></>);
+    fireEvent.click(screen.getByRole("button", { name: "Focus file" }));
+    const dialog = screen.getByRole("dialog");
+    await waitFor(() => expect(dialog.querySelector("iframe")).not.toBeNull());
+    expect(screen.getByRole("button", { name: "Background action" }).closest("[inert]")).not.toBeNull();
+    const frame = dialog.querySelector("iframe")!;
+    const toolbarButtons = within(dialog).getAllByRole("button");
+    const lastToolbarButton = toolbarButtons.at(-1)!;
+    lastToolbarButton.focus();
+    expect(fireEvent.keyDown(lastToolbarButton, { key: "Tab" })).toBe(false);
+    expect(frame).toHaveFocus();
+    frame.focus();
+    fireEvent.keyDown(frame, { key: "Tab" });
+    expect(toolbarButtons[0]).toHaveFocus();
+    screen.getByRole("button", { name: "Background action" }).focus();
+    expect(toolbarButtons[0]).toHaveFocus();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.getByRole("button", { name: "Background action" }).closest("[inert]")).toBeNull();
+    screen.getByRole("button", { name: "Background action" }).focus();
+    expect(screen.getByRole("button", { name: "Background action" })).toHaveFocus();
+  });
+
   it("zooms expanded preview content with controls and Ctrl+wheel", () => {
     useUiStore.getState().openInspector(file("two.txt"));
     render(<Harness />);
-    fireEvent.click(screen.getByRole("button", { name: "Maximize panel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Focus file" }));
 
     const header = within(screen.getByRole("dialog", { name: "two.txt" })).getByRole("banner");
     const zoomGroup = screen.getByRole("button", { name: "Reset zoom to 100%" }).parentElement;
     const editButton = within(header).getByRole("button", { name: "Edit file" });
     const historyButton = within(header).getByRole("button", { name: "Version history" });
-    const maximizeButton = within(header).getByRole("button", { name: "Restore panel" });
+    const maximizeButton = within(header).getByRole("button", { name: "Exit focus" });
     for (const button of [editButton, historyButton, maximizeButton]) {
       expect(button).toHaveClass("h-icon", "w-icon", "rounded-input", "text-text");
     }
@@ -204,7 +262,7 @@ describe("InspectorTabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reset zoom to 100%" }));
     expect(screen.getByRole("button", { name: "Reset zoom to 100%" })).toHaveTextContent("100%");
 
-    fireEvent.wheel(screen.getByRole("dialog", { name: "two.txt" }), { ctrlKey: true, deltaY: -100 });
+    fireEvent.wheel(screen.getByRole("dialog", { name: "two.txt" }).querySelector("[data-preview-viewport]")!, { ctrlKey: true, deltaY: -100 });
     expect(screen.getByRole("button", { name: "Reset zoom to 100%" })).toHaveTextContent("122%");
   });
 });

@@ -7,7 +7,8 @@ import { apiRequest } from "../lib/client/api";
 import { injectWorkspaceReferences } from "../lib/files";
 import { useFeedback } from "../components/feedback/feedback-context";
 import type { ResearchLoopDraft, ResearchStarter } from "../components/conversation/ResearchLoopControls";
-import { injectSubagentMentions, type SubagentMention } from "../lib/conversation";
+import { injectSubagentMentions } from "../lib/conversation";
+import { inlineWorkspaceReferences, validComposerEntities, type ComposerEntity } from "../lib/conversation/composer-document";
 
 /**
  * Composer state and send pipeline: attachments, drag-and-drop, IME guards,
@@ -41,7 +42,11 @@ export function useComposer(params: {
   const input = useRuntimeStore((s) => s.draft);
   const setInput = useRuntimeStore((s) => s.setDraft);
   const [files, setFiles] = useState<File[]>([]);
-  const [mentions, setMentions] = useState<SubagentMention[]>([]);
+  const [entities, setEntities] = useState<ComposerEntity[]>([]);
+  const validEntities = useMemo(() => validComposerEntities(input, entities), [input, entities]);
+  const mentions = useMemo(() => validEntities.flatMap((entity) => entity.kind === "mention"
+    ? [{ id: entity.id, name: entity.name, start: entity.start, end: entity.end }] : []), [validEntities]);
+  const inlineReferences = useMemo(() => inlineWorkspaceReferences(validEntities), [validEntities]);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -67,7 +72,7 @@ export function useComposer(params: {
     const adoptedDraft = sameDraft && previousContext?.sessionId === null && activeSessionId !== null;
     if (previousContext && (!sameDraft || previousContext.sessionId !== activeSessionId) && !adoptedDraft) {
       setInput("");
-      setMentions([]);
+      setEntities([]);
       setFiles([]);
       clearWorkspaceReferences(cwd);
     }
@@ -120,16 +125,18 @@ export function useComposer(params: {
   const handleSend = async () => {
     const originalDraft = input;
     const text = input.trim();
-    if (!selectedModel || (!text && files.length === 0 && workspaceReferences.length === 0) || working || reviewingProject || configuringModel) return;
+    const references = [...inlineReferences, ...workspaceReferences].filter((reference, index, all) =>
+      all.findIndex((other) => other.cwd === reference.cwd && other.path === reference.path) === index);
+    if (!selectedModel || (!text && files.length === 0 && references.length === 0) || working || reviewingProject || configuringModel) return;
     let workflowMessage: string | null = null;
     if (research.mode && !research.draft && text) {
       const prepared = await research.intent(text);
       if (!prepared) return;
-      if (prepared.kind === "draft") { setInput(""); setMentions([]); return; }
+      if (prepared.kind === "draft") { setInput(""); setEntities([]); return; }
       workflowMessage = prepared.message;
     }
 
-    if (text.startsWith("/") && mentions.length === 0 && files.length === 0 && workspaceReferences.length === 0 && await runSlashCommand(text)) {
+    if (text.startsWith("/") && mentions.length === 0 && files.length === 0 && references.length === 0 && await runSlashCommand(text)) {
       setInput("");
       return;
     }
@@ -143,13 +150,13 @@ export function useComposer(params: {
     }
 
     message = injectSubagentMentions(message, mentions);
-    message = injectWorkspaceReferences(message, workspaceReferences);
+    message = injectWorkspaceReferences(message, references);
 
     const sentFiles = files;
     const sentReferences = workspaceReferences;
-    const sentMentions = mentions;
+    const sentEntities = entities;
     setInput("");
-    setMentions([]);
+    setEntities([]);
     setFiles([]);
     clearWorkspaceReferences(cwd);
     onSend?.();
@@ -174,7 +181,7 @@ export function useComposer(params: {
         const composer = composerContextRef.current;
         if (composer?.cwd !== cwd || composer.conversationKey !== sentFrom) return;
         if (!useRuntimeStore.getState().draft) setInput(originalDraft);
-        setMentions((current) => current.length > 0 ? current : sentMentions);
+        setEntities((current) => current.length > 0 ? current : sentEntities);
         setFiles((current) => current.length > 0 ? current : sentFiles);
         sentReferences.forEach((reference) => useUiStore.getState().addWorkspaceReference(reference));
       });
@@ -207,7 +214,7 @@ export function useComposer(params: {
   };
 
   return {
-    input, setInput, mentions, setMentions, files, setFiles, dragOver, setDragOver,
+    input, setInput, entities, setEntities, mentions, files, setFiles, dragOver, setDragOver,
     fileInputRef, inputRef, composingRef, workspaceReferences,
     handleSend, handleKeyDown, handleDrop, handleFilePick,
   };

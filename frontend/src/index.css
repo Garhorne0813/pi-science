@@ -616,3 +616,28 @@ button:disabled {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Shared preview chrome; scientific canvases retain their own backgrounds. */
+@layer components {
+  .preview-toolbar {
+    @apply flex min-h-9 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-surface px-3 py-1 text-ui-caption text-text;
+  }
+  .preview-status {
+    @apply flex min-h-8 shrink-0 flex-wrap items-center gap-2 border-t border-border bg-surface px-3 py-1.5 text-ui-caption tabular-nums text-muted;
+  }
+  .preview-control {
+    @apply rounded-input px-2 py-1 text-ui-caption font-medium text-muted transition-colors hover:bg-surface-hover hover:text-text;
+  }
+  .preview-control[aria-pressed="true"] {
+    @apply bg-surface-selected text-accent;
+  }
+}
+@media (max-width: 767px) {
+  .preview-focus {
+    width: 100vw !important;
+    height: 100dvh !important;
+    left: 0 !important;
+    top: 0 !important;
+    border-radius: 0;
+  }
+}

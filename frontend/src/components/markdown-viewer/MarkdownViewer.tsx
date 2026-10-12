@@ -10,6 +10,7 @@ import { cn } from "@/lib/ui";
 import { fenceLanguage, runnableLanguage } from "@/lib/conversation";
 import { notebookRuntime, type CellResult } from "@/lib/notebook";
 import { RunnableCodeBlock } from "../conversation/RunnableCodeBlock";
+import { CodeViewer } from "../code-viewer/CodeViewer";
 import { CodeBlockFrame } from "./CodeBlockFrame";
 import { fileInspectorForPath } from "@/lib/artifacts";
 import { resolveMarkdownResource, type MarkdownResourceContext } from "@/lib/files/markdown-resources";
@@ -25,7 +26,7 @@ import { prepareStreamingMarkdown, type MarkdownRenderMode } from "./streaming-m
 
 export type { MarkdownRenderMode } from "./streaming-markdown";
 
-type Variant = "chat" | "document";
+type Variant = "chat" | "document" | "inspector";
 
 const REMARK_PLUGINS: NonNullable<Options["remarkPlugins"]> = [remarkGfm, remarkMath];
 const REHYPE_PLUGINS: NonNullable<Options["rehypePlugins"]> = [[rehypeKatex, { throwOnError: false }]];
@@ -70,6 +71,26 @@ const STYLES: Record<Variant, Record<string, string>> = {
     table: "border-collapse text-sm",
     th: "border border-border bg-surface-2 px-3 py-1.5 text-left font-semibold",
     td: "border border-border px-3 py-1.5",
+  },
+  inspector: {
+    root: "preview-markdown text-text leading-[1.7] antialiased",
+    p: "my-3 first:mt-0 last:mb-0 [overflow-wrap:anywhere]",
+    a: "text-accent underline underline-offset-2 [overflow-wrap:anywhere]",
+    code: "rounded-input bg-surface-2 px-1 py-0.5 font-mono text-[0.87em] [overflow-wrap:anywhere]",
+    pre: "my-3 overflow-x-auto rounded-input border border-border bg-surface-2 p-3 font-mono text-[0.87em] leading-[1.55] [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-[1em]",
+    ul: "my-3 ml-5 list-disc space-y-1",
+    ol: "my-3 ml-5 list-decimal space-y-1",
+    h1: "mb-4 mt-6 text-[1.8em] font-semibold leading-tight first:mt-0",
+    h2: "mb-3 mt-6 text-[1.4em] font-semibold leading-snug first:mt-0",
+    h3: "mb-2 mt-5 text-[1.2em] font-semibold first:mt-0",
+    h4: "mb-2 mt-4 text-[1em] font-semibold first:mt-0",
+    h5: "mb-2 mt-4 text-[0.9em] font-semibold first:mt-0",
+    h6: "mb-2 mt-4 text-[0.85em] font-semibold text-muted first:mt-0",
+    blockquote: "my-3 border-l-2 border-border pl-4 text-muted",
+    hr: "my-5 border-border",
+    table: "w-full border-collapse text-[0.9em] tabular-nums",
+    th: "border-b border-border bg-surface-2 px-3 py-2 text-left font-semibold",
+    td: "border-b border-border px-3 py-2",
   },
   document: {
     root: "text-[15px] leading-[1.65] text-[var(--doc-ink)] antialiased [font-feature-settings:'liga','kern'] [font-family:-apple-system,'SF_Pro_Text','Segoe_UI','PingFang_SC','Microsoft_YaHei',sans-serif] selection:bg-[var(--doc-selection)]",
@@ -397,6 +418,7 @@ export function MarkdownViewer({
   resourceContext,
   codeChrome,
   mode = "final",
+  textScale = 1,
 }: {
   children: string;
   className?: string;
@@ -405,6 +427,7 @@ export function MarkdownViewer({
   resourceContext?: MarkdownResourceContext;
   codeChrome?: boolean;
   mode?: MarkdownRenderMode;
+  textScale?: number;
 }) {
   const s = STYLES[variant];
   const cwd = codeRunner?.cwd;
@@ -577,6 +600,7 @@ export function MarkdownViewer({
         }
         return <CodeBlockFrame language={language} code={code} preClassName={s.pre}>{children}</CodeBlockFrame>;
       }
+      if (variant === "inspector") return <CodeViewer code={code} language={language ?? undefined} fontSize={13 * textScale} className="my-3" />;
       if (variant === "chat") return <pre className={cn(s.pre, "my-2 rounded-input border border-border bg-surface-2")}>{children}</pre>;
       return <pre className={s.pre}>{children}</pre>;
     },
@@ -596,9 +620,9 @@ export function MarkdownViewer({
     ),
     th: ({ children, style }) => <th className={s.th} style={style}>{children}</th>,
     td: ({ children, style }) => <td className={s.td} style={style}>{children}</td>,
-  }), [closeCodeResult, codeChrome, codeExecutions, context, cwd, fenceIdentities, handleFileLink, runCode, s, sessionId, t, variant]);
+  }), [closeCodeResult, codeChrome, codeExecutions, context, cwd, fenceIdentities, handleFileLink, runCode, s, sessionId, t, textScale, variant]);
   return (
-    <div className={cn(s.root, className)}>
+    <div className={cn(s.root, className)} style={variant === "inspector" ? { fontSize: 15 * textScale } : undefined}>
       <MemoizedMarkdownRenderer value={renderedValue} components={components} renderMode={mode} />
     </div>
   );

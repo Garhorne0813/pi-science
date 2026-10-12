@@ -1,9 +1,10 @@
 import { useRef, useState } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentMention } from "../../lib/conversation";
 import { queryClient } from "../../lib/client/query-client";
+import i18n from "../../i18n";
 import { MentionComposer } from "./MentionComposer";
 
 const fetchMock = vi.fn(async (_input: RequestInfo | URL) => new Response(JSON.stringify({
@@ -56,6 +57,12 @@ function renderComposer() {
 }
 
 describe("MentionComposer", () => {
+  // The listbox carries a translated accessible name, so this file initialises i18n itself
+  // instead of relying on a side effect of an unrelated import.
+  beforeAll(async () => {
+    await i18n.changeLanguage("en");
+  });
+
   beforeEach(() => {
     queryClient.clear();
     vi.stubGlobal("fetch", fetchMock);

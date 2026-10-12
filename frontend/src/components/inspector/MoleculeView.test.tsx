@@ -67,7 +67,7 @@ describe("MoleculeView", () => {
     expect(screen.getByRole("toolbar", { name: "Molecule styles" })).toBeInTheDocument();
   });
 
-  it("refits the structure after the inspector is maximized", async () => {
+  it("resizes without resetting the camera after the inspector is expanded", async () => {
     let notifyResize!: ResizeObserverCallback;
     vi.stubGlobal("ResizeObserver", class {
       constructor(callback: ResizeObserverCallback) { notifyResize = callback; }
@@ -88,10 +88,10 @@ describe("MoleculeView", () => {
     notifyResize([{ contentRect: { width: 1_000, height: 800 } } as ResizeObserverEntry], {} as ResizeObserver);
 
     expect(viewerMocks.resize).toHaveBeenCalled();
-    expect(viewerMocks.fitToViewport).toHaveBeenCalledOnce();
+    expect(viewerMocks.fitToViewport).not.toHaveBeenCalled();
   });
 
-  it("refits when either inspector layout button explicitly signals a change", async () => {
+  it("preserves the camera when a layout button signals a change", async () => {
     vi.stubGlobal("ResizeObserver", class {
       observe() {}
       unobserve() {}
@@ -108,7 +108,7 @@ describe("MoleculeView", () => {
     window.dispatchEvent(new Event(INSPECTOR_LAYOUT_CHANGE_EVENT));
 
     expect(viewerMocks.resize).toHaveBeenCalled();
-    expect(viewerMocks.fitToViewport).toHaveBeenCalledOnce();
+    expect(viewerMocks.fitToViewport).not.toHaveBeenCalled();
   });
 
   it("shows the existing error boundary when Mol* rejects the file", async () => {

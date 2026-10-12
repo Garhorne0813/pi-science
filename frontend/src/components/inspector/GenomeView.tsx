@@ -1,3 +1,5 @@
+import { IconButton } from "../ui/Icon";
+import { ViewerToolbar, ViewerStatusBar } from "./PreviewFrame";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Dna, Minus, Plus, RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -59,6 +61,10 @@ export function GenomeView({ filename, text }: { filename: string; text: string 
     setHover(null);
   }, [contig]);
 
+  const viewportReady = !!view;
+
+  // The first render has no viewport until the contig extent is initialized.
+  // Observe once that viewport exists, then retain the observer while panning.
   useLayoutEffect(() => {
     const el = boxRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -66,7 +72,7 @@ export function GenomeView({ filename, text }: { filename: string; text: string 
     ro.observe(el);
     setWidth(el.clientWidth || 760);
     return () => ro.disconnect();
-  }, []);
+  }, [viewportReady]);
 
   if (!format) return <div className="p-4 text-sm text-muted">{t("genome.notAnnotationFile")}</div>;
   if (!data || data.features.length === 0 || !contig || !view)
@@ -112,8 +118,8 @@ export function GenomeView({ filename, text }: { filename: string; text: string 
   const ticks = niceTicks(view.start, view.end, 6);
 
   return (
-    <div className="flex h-full flex-col bg-surface">
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2 text-xs">
+    <div className="flex h-full w-full min-w-0 flex-col bg-surface">
+      <ViewerToolbar>
         <span className="flex items-center gap-1 font-medium text-muted">
           <Dna size={13} /> {format.toUpperCase()}
         </span>
@@ -139,20 +145,11 @@ export function GenomeView({ filename, text }: { filename: string; text: string 
         </span>
         <div className="flex-1" />
         <div className="flex items-center gap-1">
-          <IconBtn label={t("genome.zoomIn")} onClick={() => zoomAt(0.6, width / 2)}>
-            <Plus size={13} />
-          </IconBtn>
-          <IconBtn label={t("genome.zoomOut")} onClick={() => zoomAt(1.66, width / 2)}>
-            <Minus size={13} />
-          </IconBtn>
-          <IconBtn
-            label={t("genome.resetView")}
-            onClick={() => setView({ start: extent.start, end: extent.end })}
-          >
-            <RotateCcw size={12} />
-          </IconBtn>
+          <IconButton icon={Plus} label={t("genome.zoomIn")} size="compact" onClick={() => zoomAt(0.6, width / 2)} />
+          <IconButton icon={Minus} label={t("genome.zoomOut")} size="compact" onClick={() => zoomAt(1.66, width / 2)} />
+          <IconButton icon={RotateCcw} label={t("genome.resetView")} size="compact" onClick={() => setView({ start: extent.start, end: extent.end })} />
         </div>
-      </div>
+      </ViewerToolbar>
 
       {categories.list.length > 1 && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-1.5 text-[11px] text-muted">
@@ -170,7 +167,7 @@ export function GenomeView({ filename, text }: { filename: string; text: string 
 
       <div
         ref={boxRef}
-        className={cn("relative flex-1 overflow-hidden", dragRef.current ? "cursor-grabbing" : "cursor-grab")}
+        className={cn("relative w-full min-w-0 flex-1 overflow-hidden", dragRef.current ? "cursor-grabbing" : "cursor-grab")}
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId);
           dragRef.current = { x: e.clientX, startBp: view.start, span };
@@ -252,28 +249,14 @@ export function GenomeView({ filename, text }: { filename: string; text: string 
         )}
       </div>
 
-      <div className="border-t border-border px-3 py-1 text-[11px] text-muted">
+      <ViewerStatusBar>
         {t("genome.panZoomHint")}
         {rows.length > 0 &&
           Math.max(...rows) + 1 > MAX_ROWS &&
           t("genome.showingRows", { shown: MAX_ROWS, total: Math.max(...rows) + 1 })}
         {data.truncated && t("genome.truncatedNotice")}
-      </div>
+      </ViewerStatusBar>
     </div>
-  );
-}
-
-function IconBtn({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onClick={onClick}
-      className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-text"
-    >
-      {children}
-    </button>
   );
 }
 

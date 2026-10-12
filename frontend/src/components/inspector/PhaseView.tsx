@@ -1,3 +1,4 @@
+import { ViewerToolbar, ViewerStatusBar } from "./PreviewFrame";
 import { useMemo, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -50,12 +51,12 @@ export function PhaseView({ filename, text }: { filename: string; text: string }
 
   return (
     <div className="flex h-full flex-col bg-surface">
-      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+      <ViewerToolbar>
         <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted">
           {filename} · {pd.elements[0]}–{pd.elements[1]} · {t("phase.phaseCount", { count: pd.entries.length })} ·{" "}
           {t("phase.stableCount", { count: pd.entries.filter((e) => e.stable).length })}
         </span>
-      </div>
+      </ViewerToolbar>
 
       <div className="flex min-h-0 flex-1 items-center justify-center p-4">
         <svg viewBox={`0 0 ${W} ${H}`} className="h-auto max-h-full w-full max-w-[760px]">
@@ -122,7 +123,7 @@ export function PhaseView({ filename, text }: { filename: string; text: string }
         </svg>
       </div>
 
-      <div className="border-t border-border px-3 py-2 text-right font-mono text-[11px] text-muted">
+      <ViewerStatusBar>
         {hover ? (
           (() => {
             const e = pd.entries.find((x) => x.formula === hover)!;
@@ -137,9 +138,9 @@ export function PhaseView({ filename, text }: { filename: string; text: string }
             );
           })()
         ) : (
-          <span className="text-muted/50">{t("phase.hoverDefaultHint")}</span>
+          <span className="text-muted">{t("phase.hoverDefaultHint")}</span>
         )}
-      </div>
+      </ViewerStatusBar>
     </div>
   );
 }

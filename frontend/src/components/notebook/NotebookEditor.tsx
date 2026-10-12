@@ -36,6 +36,7 @@ export function NotebookEditor({
   sessionId,
   onClose,
   controls,
+  compactHeader = false,
 }: {
   path: string;
   root?: FileRoot;
@@ -43,6 +44,7 @@ export function NotebookEditor({
   sessionId?: string;
   onClose: () => void;
   controls?: React.ReactNode;
+  compactHeader?: boolean;
 }) {
   const { t } = useTranslation();
   const [cells, setCells] = useState<EditableCell[]>([]);
@@ -197,7 +199,7 @@ export function NotebookEditor({
 
   return (
     <div className="flex h-full flex-col bg-surface">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-surface px-4">
+      <header className={compactHeader ? "preview-toolbar min-h-9" : "preview-toolbar min-h-12"}>
         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent"><BookOpen size={14} /></div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold text-text">{filename}</div>

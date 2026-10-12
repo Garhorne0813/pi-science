@@ -45,8 +45,8 @@
   "todo.owner": "负责人: {{owner}}",
   "shell.showInspector": "显示预览栏",
   "shell.hideInspector": "隐藏预览栏",
-  "shell.expandPanel": "展开面板",
-  "shell.restorePanelWidth": "恢复面板宽度",
+  "shell.expandPanel": "展开工作区",
+  "shell.restorePanelWidth": "恢复分栏",
   "common.close": "关闭",
   "common.cancel": "取消",
   "common.back": "返回",
@@ -1529,5 +1529,14 @@
   "sidebar.deleteSession": "删除会话",
   "sidebar.loadError": "无法加载会话",
   "sidebar.forkError": "无法分叉会话",
-  "sidebar.deleteError": "无法删除会话"
+  "sidebar.deleteError": "无法删除会话",
+  "filePreview.focus": "专注查看",
+  "filePreview.exitFocus": "退出专注",
+  "filePreview.fitImage": "适应窗口",
+  "filePreview.actualImage": "原始尺寸",
+  "filePreview.imageToolbar": "图片视图",
+  "filePreview.viewerToolbar": "视图工具",
+  "filePreview.fontSize": "文字大小",
+  "filePreview.pdfFocusHint": "浏览器 PDF 阅读器可能自行处理 Esc，请使用工具栏的“退出专注”返回。",
+  "filePreview.frameFocusHint": "可访问的 HTML 预览支持 Esc 退出；若嵌入页面自行处理 Esc，请使用工具栏的“退出专注”。"
 }

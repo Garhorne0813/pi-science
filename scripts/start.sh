@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # start.sh — start already-installed Pi-Science services.
-# Usage: bash scripts/start.sh
+# Usage: bash scripts/start.sh [--dev]
 set -euo pipefail
 
 if [ "${1:-}" = "--launch-token" ]; then
@@ -24,10 +24,23 @@ if ! pi_science_prepare_node 0; then
 fi
 NODE_COMMAND="$PI_SCIENCE_NODE_COMMAND"
 PI_NODE_PATH="$PI_SCIENCE_NODE_COMMAND"
+DEPLOYMENT_MODE="${PI_SCIENCE_MODE:-production}"
+if [ "${1:-}" = "--dev" ]; then DEPLOYMENT_MODE=dev; shift; fi
+[ "$#" -eq 0 ] || { echo "Usage: bash scripts/start.sh [--dev]" >&2; exit 2; }
+case "$DEPLOYMENT_MODE" in production|dev) ;; *) echo "Error: PI_SCIENCE_MODE must be production or dev." >&2; exit 2 ;; esac
 CONTROL_PLANE_CLI="$PROJECT_DIR/apps/server/node_modules/tsx/dist/cli.mjs"
+CONTROL_PLANE_BUILD="$PROJECT_DIR/apps/server/dist/app/main.js"
 VITE_BIN="$PROJECT_DIR/frontend/node_modules/.bin/vite"
-[ -f "$CONTROL_PLANE_CLI" ] || { echo "Error: server dependencies are not installed. Run: bash scripts/install.sh" >&2; exit 1; }
-[ -x "$VITE_BIN" ] || { echo "Error: frontend dependencies are not installed. Run: bash scripts/install.sh" >&2; exit 1; }
+if [ "$DEPLOYMENT_MODE" = dev ]; then
+  [ -f "$CONTROL_PLANE_CLI" ] || { echo "Error: server dependencies are not installed. Run: bash scripts/install.sh" >&2; exit 1; }
+  [ -x "$VITE_BIN" ] || { echo "Error: frontend dependencies are not installed. Run: bash scripts/install.sh" >&2; exit 1; }
+else
+  PI_SCIENCE_FRONTEND_DIST="$("$NODE_COMMAND" "$SCRIPT_DIR/resolve-frontend-dist.mjs" "${PI_SCIENCE_FRONTEND_DIST:-}")"
+  export PI_SCIENCE_FRONTEND_DIST
+  [ -f "$CONTROL_PLANE_BUILD" ] && [ -f "${PI_SCIENCE_FRONTEND_DIST:-$PROJECT_DIR/frontend/dist}/index.html" ] || { echo "Error: production build missing. Run: bash scripts/install.sh" >&2; exit 1; }
+fi
+# The browser cookie is internal authentication, not a remote-user login.
+export PI_SCIENCE_HOST=127.0.0.1
 
 CONTROL_PLANE_PID=""
 CONTROL_PLANE_STARTED=""
@@ -39,7 +52,7 @@ STARTUP_TIMEOUT_SECONDS="${PI_SCIENCE_STARTUP_TIMEOUT_SECONDS:-90}"
 case "$STARTUP_TIMEOUT_SECONDS" in ''|*[!0-9]*) echo "Error: PI_SCIENCE_STARTUP_TIMEOUT_SECONDS must be a positive integer." >&2; exit 1 ;; esac
 [ "$STARTUP_TIMEOUT_SECONDS" -gt 0 ] || { echo "Error: PI_SCIENCE_STARTUP_TIMEOUT_SECONDS must be a positive integer." >&2; exit 1; }
 STARTUP_DEADLINE=$(( $(date +%s) + STARTUP_TIMEOUT_SECONDS ))
-# The control plane runs directly (stable mode) by default. `tsx watch` under a
+# In development, the control plane runs directly (stable mode) by default. `tsx watch` under a
 # detached supervisor sends SIGTERM to its child shortly after startup and never
 # restarts it, so watch mode is an explicit development opt-in only.
 CONTROL_PLANE_MODE="stable"
@@ -123,18 +136,24 @@ wait_for_health() {
   local pid="$1" url="$2" label="$3"
   while [ "$(date +%s)" -lt "$STARTUP_DEADLINE" ]; do
     kill -0 "$pid" 2>/dev/null || { echo "Error: $label exited during startup." >&2; return 1; }
-    curl --fail --silent "$url" >/dev/null 2>&1 && return 0
+    "$NODE_COMMAND" "$SCRIPT_DIR/check-http-health.mjs" "$url" "$STARTUP_DEADLINE" >/dev/null 2>&1 && return 0
     sleep 0.25
   done
-  curl --fail --silent "$url" >/dev/null 2>&1 && return 0
   echo "Error: $label did not become ready within the ${STARTUP_TIMEOUT_SECONDS}s startup deadline." >&2
   return 1
 }
 
+APP_PORT="$CONTROL_PLANE_PORT"
+[ "$DEPLOYMENT_MODE" != dev ] || APP_PORT="$FRONTEND_PORT"
+
 export PI_NODE_PATH
 export PI_SCIENCE_HOME="${PI_SCIENCE_HOME:-$HOME/.pi-science}"
 export PI_SCIENCE_WORKSPACES="${PI_SCIENCE_WORKSPACES:-$HOME/pi-science-workspaces}"
-export PI_SCIENCE_INTERNAL_TOKEN="${PI_SCIENCE_INTERNAL_TOKEN:-$(openssl rand -hex 32 2>/dev/null || date +%s)}"
+if [ -z "${PI_SCIENCE_INTERNAL_TOKEN:-}" ]; then
+  PI_SCIENCE_INTERNAL_TOKEN="$("$NODE_COMMAND" -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
+  [ -n "$PI_SCIENCE_INTERNAL_TOKEN" ] || { echo "Error: token generation failed." >&2; exit 1; }
+fi
+export PI_SCIENCE_INTERNAL_TOKEN
 export PI_SCIENCE_REQUIRE_INTERNAL_TOKEN="${PI_SCIENCE_REQUIRE_INTERNAL_TOKEN:-1}"
 mkdir -p "$PI_SCIENCE_HOME/sessions" "$PI_SCIENCE_WORKSPACES"
 
@@ -151,7 +170,9 @@ export PI_SCIENCE_NODE_SSE="${PI_SCIENCE_NODE_SSE:-1}"
 export PI_SCIENCE_NODE_PI_MANAGER="${PI_SCIENCE_NODE_PI_MANAGER:-1}"
 (
   cd "$PROJECT_DIR/apps/server"
-  if [ "$CONTROL_PLANE_MODE" = "watch" ]; then
+  if [ "$DEPLOYMENT_MODE" = production ]; then
+    PI_SCIENCE_OPEN_BROWSER=0 PI_SCIENCE_PORT="$CONTROL_PLANE_PORT" exec "$PI_NODE_PATH" "$CONTROL_PLANE_BUILD"
+  elif [ "$CONTROL_PLANE_MODE" = "watch" ]; then
     PI_SCIENCE_OPEN_BROWSER=0 PI_SCIENCE_PORT="$CONTROL_PLANE_PORT" exec "$PI_NODE_PATH" "$CONTROL_PLANE_CLI" watch src/app/main.ts
   else
     PI_SCIENCE_OPEN_BROWSER=0 PI_SCIENCE_PORT="$CONTROL_PLANE_PORT" exec "$PI_NODE_PATH" "$CONTROL_PLANE_CLI" src/app/main.ts
@@ -164,26 +185,30 @@ CONTROL_PLANE_STARTED="$(process_start_identity "$CONTROL_PLANE_PID")"
 echo "  Waiting for control plane..."
 wait_for_health "$CONTROL_PLANE_PID" "http://127.0.0.1:${CONTROL_PLANE_PORT}/internal/ready" "control plane"
 
-echo "==> Starting frontend on http://127.0.0.1:$FRONTEND_PORT"
-port_is_available "$FRONTEND_PORT" || { echo "Error: port $FRONTEND_PORT is already in use; refusing to reuse an unverified frontend." >&2; exit 1; }
-(
-  cd "$PROJECT_DIR/frontend"
-  exec "$VITE_BIN" --host 127.0.0.1 --port "$FRONTEND_PORT" --strictPort
-) &
-FRONTEND_PID=$!
-FRONTEND_STARTED="$(process_start_identity "$FRONTEND_PID")"
-[ -n "$FRONTEND_STARTED" ] || { echo "Error: unable to establish frontend process identity." >&2; exit 1; }
-wait_for_health "$FRONTEND_PID" "http://127.0.0.1:$FRONTEND_PORT" "frontend"
+if [ "$DEPLOYMENT_MODE" = dev ]; then
+  echo "==> Starting frontend on http://127.0.0.1:$FRONTEND_PORT"
+  port_is_available "$FRONTEND_PORT" || { echo "Error: port $FRONTEND_PORT is already in use; refusing to reuse an unverified frontend." >&2; exit 1; }
+  (
+    cd "$PROJECT_DIR/frontend"
+    exec "$VITE_BIN" --host 127.0.0.1 --port "$FRONTEND_PORT" --strictPort
+  ) &
+  FRONTEND_PID=$!
+  FRONTEND_STARTED="$(process_start_identity "$FRONTEND_PID")"
+  [ -n "$FRONTEND_STARTED" ] || { echo "Error: unable to establish frontend process identity." >&2; exit 1; }
+  wait_for_health "$FRONTEND_PID" "http://127.0.0.1:$FRONTEND_PORT" "frontend"
+else
+  wait_for_health "$CONTROL_PLANE_PID" "http://127.0.0.1:$CONTROL_PLANE_PORT" "frontend build"
+fi
 
 if [ "${PI_SCIENCE_OPEN_BROWSER:-0}" = "1" ]; then
-  if command -v open >/dev/null 2>&1; then open "http://127.0.0.1:$FRONTEND_PORT" >/dev/null 2>&1 || true
-  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "http://127.0.0.1:$FRONTEND_PORT" >/dev/null 2>&1 || true
+  if command -v open >/dev/null 2>&1; then open "http://127.0.0.1:$APP_PORT" >/dev/null 2>&1 || true
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "http://127.0.0.1:$APP_PORT" >/dev/null 2>&1 || true
   fi
 fi
 
 echo ""
 echo "Pi-Science is running:"
-echo "  Frontend:          http://127.0.0.1:$FRONTEND_PORT"
+echo "  Frontend:          http://127.0.0.1:$APP_PORT ($DEPLOYMENT_MODE)"
 echo "  Node control plane: http://127.0.0.1:$CONTROL_PLANE_PORT"
 echo "Press Ctrl+C to stop."
 wait

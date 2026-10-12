@@ -69,8 +69,8 @@ export const mentionProvider: CompletionProvider = {
         label: entry.name + (entry.isDir ? "/" : ""),
         description: entry.path === entry.name ? undefined : entry.path,
         group,
-        // Accepting a path here drops the token and fills the composer's reference chips instead.
-        insertText: "",
+        // Accepting a path keeps its token inline and attaches identity metadata.
+        insertText: `@${entry.path}${context.value.slice(query.end).startsWith(" ") ? "" : " "}`,
         payload: { kind: "reference", reference: { path: entry.path, name: entry.name, isDir: entry.isDir } },
         size: entry.size,
       });

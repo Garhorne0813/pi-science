@@ -1,3 +1,4 @@
+import { ViewerStatusBar } from "./PreviewFrame";
 import { useEffect, useRef, useState } from "react";
 import { Atom } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -100,64 +101,23 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
   useEffect(() => {
     const container = containerRef.current;
     if (!container || typeof ResizeObserver === "undefined") return;
-    let previousWidth = container.clientWidth;
-    let previousHeight = container.clientHeight;
     let resizeFrame: number | null = null;
-    let fitFrame: number | null = null;
-    let settleTimer: ReturnType<typeof setTimeout> | null = null;
-    let fitPending = false;
-    const resizeAndFit = () => {
-      viewerRef.current?.resize();
-      if (fitFrame !== null) cancelAnimationFrame(fitFrame);
-      fitFrame = requestAnimationFrame(() => {
-        fitFrame = null;
-        viewerRef.current?.fitToViewport();
-      });
-      // Mol* animates camera changes for 160ms. A second pass after it settles
-      // prevents a stale maximize animation from winning over a restore, and
-      // catches pane layouts whose final canvas size lands a frame later.
-      if (settleTimer !== null) clearTimeout(settleTimer);
-      settleTimer = setTimeout(() => {
-        settleTimer = null;
-        viewerRef.current?.resize();
-        viewerRef.current?.fitToViewport();
-      }, 200);
-    };
-    const scheduleResize = (refit: boolean) => {
-      fitPending ||= refit;
+    const scheduleResize = () => {
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
       resizeFrame = requestAnimationFrame(() => {
         resizeFrame = null;
-        if (!fitPending) {
-          viewerRef.current?.resize();
-          return;
-        }
-        fitPending = false;
-        resizeAndFit();
+        // Resizing the viewport must preserve the camera and selections.
+        viewerRef.current?.resize();
       });
     };
-    const observer = new ResizeObserver((entries) => {
-      const rect = entries.at(-1)?.contentRect ?? container.getBoundingClientRect();
-      const width = rect.width;
-      const height = rect.height;
-      if (previousWidth > 0 && previousHeight > 0 && width > 0 && height > 0) {
-        if (Math.abs(width - previousWidth) > 1 || Math.abs(height - previousHeight) > 1) {
-          fitPending = true;
-        }
-      }
-      previousWidth = width;
-      previousHeight = height;
-      scheduleResize(fitPending);
-    });
-    const handleInspectorLayoutChange = () => scheduleResize(true);
+    const observer = new ResizeObserver(scheduleResize);
+    const handleInspectorLayoutChange = scheduleResize;
     observer.observe(container);
     window.addEventListener(INSPECTOR_LAYOUT_CHANGE_EVENT, handleInspectorLayoutChange);
     return () => {
       observer.disconnect();
       window.removeEventListener(INSPECTOR_LAYOUT_CHANGE_EVENT, handleInspectorLayoutChange);
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
-      if (fitFrame !== null) cancelAnimationFrame(fitFrame);
-      if (settleTimer !== null) clearTimeout(settleTimer);
     };
   }, []);
 
@@ -179,9 +139,9 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
   if (!format) return <div className="p-4 text-sm text-muted">{t("molecule.notChemical")}</div>;
 
   return (
-    <div className="flex h-full min-h-[420px] w-full flex-col overflow-hidden bg-[var(--doc-paper)]" data-molecule-viewer="true">
+    <div className="flex h-full min-h-[420px] w-full flex-col overflow-hidden bg-surface" data-molecule-viewer="true">
       <div
-        className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-surface px-2 py-1.5"
+        className="preview-toolbar"
         role="toolbar"
         aria-label={t("molecule.styleToolbar")}
       >
@@ -192,8 +152,8 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
             aria-pressed={stylePreset === id}
             disabled={rendering || styleBusy || !summary}
             onClick={() => void changeStyle(id)}
-            className={`shrink-0 rounded-[5px] px-2 py-1 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-              stylePreset === id ? "bg-accent text-white" : "text-muted hover:bg-surface-2 hover:text-text"
+            className={`preview-control shrink-0 disabled:cursor-not-allowed disabled:opacity-50 ${
+              stylePreset === id ? "bg-surface-selected text-accent" : "text-muted hover:bg-surface-2 hover:text-text"
             }`}
           >
             {t(labelKey)}
@@ -202,17 +162,17 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
       </div>
       <div className="relative min-h-0 flex-1">
         <div ref={containerRef} className="absolute inset-0" aria-label={t("molecule.viewerLabel")} />
-        <div className="ui-popover pointer-events-none absolute bottom-3 right-3 z-10 rounded-input bg-surface/90 px-3 py-1.5 text-xs text-muted backdrop-blur">
-          <span className="inline-flex items-center gap-1 font-medium text-text"><Atom size={12} /> Mol*</span>
-          <span className="ml-2">{(summary?.format ?? format).toUpperCase()}</span>
-          {summary && <span className="ml-2">{t("molecule.atomCount", { count: summary.atomCount })}</span>}
-        </div>
         {(rendering || error) && (
           <div className={`ui-popover absolute bottom-3 left-3 z-10 max-w-[70%] rounded-input bg-surface/95 px-3 py-1.5 text-xs text-muted backdrop-blur ${error && !rendering ? "pointer-events-auto" : "pointer-events-none"}`}>
             {rendering ? t("molecule.rendering") : <>{error} <button type="button" className="ml-2 text-link underline" onClick={() => setRetry((value) => value + 1)}>{t("molecule.retry")}</button></>}
           </div>
         )}
       </div>
+        <ViewerStatusBar>
+          <span className="inline-flex items-center gap-1 font-medium text-text"><Atom size={12} /> Mol*</span>
+          <span className="ml-2">{(summary?.format ?? format).toUpperCase()}</span>
+          {summary && <span className="ml-2">{t("molecule.atomCount", { count: summary.atomCount })}</span>}
+        </ViewerStatusBar>
     </div>
   );
 }

@@ -36,7 +36,7 @@ describe("PreviewPaneControls", () => {
     fireEvent.click(hide);
     expect(useUiStore.getState().inspectorOpen).toBe(false);
     expect(useUiStore.getState().inspectorTabs).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "Expand panel" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Expand workspace" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Show preview panel" }));
     expect(useUiStore.getState().inspectorOpen).toBe(true);
@@ -47,12 +47,12 @@ describe("PreviewPaneControls", () => {
     render(<PreviewPaneControls />);
 
     const toggle = screen.getByRole("button", { name: "Hide preview panel" });
-    fireEvent.click(screen.getByRole("button", { name: "Expand panel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expand workspace" }));
     expect(useUiStore.getState().inspectorMaximized).toBe(true);
-    expect(screen.getByRole("button", { name: "Restore panel width" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Restore split layout" })).toBeTruthy();
     expect(toggle.parentElement?.lastElementChild).toBe(toggle);
 
-    fireEvent.click(screen.getByRole("button", { name: "Restore panel width" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restore split layout" }));
     expect(useUiStore.getState().inspectorMaximized).toBe(false);
   });
 
