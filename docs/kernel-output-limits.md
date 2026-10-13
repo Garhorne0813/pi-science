@@ -88,8 +88,8 @@ kernel.
 
 | surface | over its budget |
 | --- | --- |
-| `stdout`, `stderr` | head + marker + tail, total length at most the channel cap |
-| live `stream` events for a channel | emit the retained head, then one event carrying only the marker, then stay silent for that channel |
+| `stdout`, `stderr` | head + marker + tail, total length at most the channel cap. A channel at or under its cap is returned unchanged |
+| live `stream` events for a channel | emit the retained head, then one event carrying only the marker, then stay silent for that channel. The live view stops at the head even when the final payload keeps the whole channel |
 | `error` (traceback) | head + marker + tail, total length at most `stderrChars` |
 | `result` (repr of the tail expression) | head + marker, total at most `resultChars` |
 | MIME payload of `text/*` or `image/svg+xml` | head + marker + tail, total at most `mimeChars` |
@@ -149,7 +149,9 @@ The notice takes one of the `displayOutputs` slots. When the payload list is
 already full, the last payload is dropped first and counted in `outputs_dropped`,
 and the notice takes its place.
 
-Both layers apply the same rule. `NotebookOutputs` renders a `text/plain`-only
+Both layers apply the same rule, and both keep the notice text bounded. A count drop contributes one marker however many payloads it drops, and each dropped MIME contributes one marker for its name, so a cell that drops a million outputs still emits a notice of a few dozen characters. The counts live in the truncation report instead. The notice also never costs the cell its tail value: it takes its slot from the last plain display output, so an `execute_result` keeps its own.
+
+`NotebookOutputs` renders a `text/plain`-only
 entry as text, so the marker is visible with no frontend change. A marker written
 under `image/png` would render as a broken image and is forbidden.
 
@@ -170,13 +172,16 @@ rich outputs, so neither its own 20-output slice nor the 20-output slice in
   image limit, and the 20-output limit in `notebook-routes.ts` still apply, and the
   bridge caps now make the 4 MiB image path unreachable from a kernel cell.
 - Report counts mix UTF-16 code units and code points, as the Units section says.
-- The notice is a cell-level entry. A reader that inspects one output on its own
-  may not see which payload the marker names.
+- A live stream stops at the head even when the final payload holds the whole
+  channel, so the live view can show its marker for a cell that lost nothing.
+- The notice is one entry per cell. A reader that inspects a single output cannot
+tell which payload the marker names.
 
 ## Measurement
 
 ```
 node scripts/benchmark-kernel-output.mjs
+node scripts/benchmark-kernel-output.mjs --display-storm 2000000
 ```
 
 The script drives the real Python bridge on one cell that writes 64 MiB to stdout,
@@ -192,25 +197,37 @@ default workload, 2026-10-13:
 
 | run | bridge peak RSS | bytes on stdout | wall |
 | --- | --- | --- | --- |
-| unbounded caps | 549.4 MiB | 192.0 MiB | 0.53 s |
-| shipped defaults | 225.5 MiB | 2.2 MiB | 0.07 s |
+| unbounded caps | 549.5 MiB | 192.0 MiB | 0.49 s |
+| shipped defaults | 116.3 MiB | 2.2 MiB | 0.05 s |
 
 Every number in that table is measured, not derived. The bridge's own report for
 the bounded run is `truncated={"rich_chars":24117254,"stdout_chars":67043328,"stderr_chars":8323072}`,
 with `stdout_chars` and `stderr_chars` in its `--limits` JSON both 65,536 and a
 9-character `result`. Transport fell from 192.0 MiB to 2.2 MiB, which is the
 bridge's stdout bytes for both the stream events and the result line. Peak RSS
-fell from 549.4 MiB to 225.5 MiB, and the residual is the library and allocator
+fell from 549.5 MiB to 116.3 MiB, and the residual is the library and allocator
 cost of the un-bounded intermediates the workload builds before it bounds them,
 chiefly the 12 MiB PNG buffer and its base64 encoding.
 
 Peak RSS is the noisiest of the three numbers. The transport bytes repeat exactly
-at 192.0 MiB and 2.2 MiB across runs, and the wall time stays within 0.07 s. Four
-runs of the unbounded case sampled between 465.3 MiB and 549.4 MiB of peak, and
-four runs of the bounded case between 215.2 MiB and 225.5 MiB. A 25 ms sampling
+at 192.0 MiB and 2.2 MiB across runs, and the wall time stays within 0.07 s.
+Three runs sampled between 545.6 MiB and 549.6 MiB of peak for the unbounded case
+and between 116.3 MiB and 158.0 MiB for the bounded case. A 25 ms sampling
 interval is coarse over a half-second run, so a sample can land before or after
 the peak allocation. The script reports the highest sample it saw, which is a
 floor on the true peak.
+
+The display storm is the other pathological cell. It calls `display()` far past
+the count cap, so the bridge drops payloads and still has to say so.
+
+| run | response characters | peak RSS | wall |
+| --- | --- | --- | --- |
+| 2,000,000 displays | 1,457 | 13.3 MiB | 0.22 s |
+
+The response holds the 20 allowed outputs and one notice of 15 characters, and
+reports `outputs_dropped: 1999981`. A notice that grew by one marker per dropped
+display would instead put about 30 MB on the wire and trip the frame guard, which
+turns the cell into a protocol failure and kills the namespace.
 
 Repeating the measurement at four times the workload (`--workload-mib 256`) moves
 the unbounded run to 1354.4 MiB of peak RSS and 768.0 MiB of transport in 1.94 s,

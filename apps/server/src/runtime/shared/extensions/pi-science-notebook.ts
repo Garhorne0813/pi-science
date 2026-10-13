@@ -7,7 +7,7 @@
  * visible to the browser and to non-agent callers.
  */
 
-import { KERNEL_TRUNCATION_MARKER } from "../../kernel/kernel-output-limits.js";
+import { isKernelTruncationNotice } from "../../kernel/kernel-output-limits.js";
 
 const MAX_CELLS_PER_CALL = 50;
 const MAX_SOURCE_CHARS = 30_000;
@@ -271,7 +271,7 @@ function kernelOutputs(result: Record<string, unknown>, executionCount: number):
 }
 
 function isTruncationNotice(output: unknown): boolean {
-  return isRecord(output) && isRecord(output.data) && text(output.data["text/plain"]).includes(KERNEL_TRUNCATION_MARKER);
+  return isRecord(output) && isRecord(output.data) && isKernelTruncationNotice(text(output.data["text/plain"]));
 }
 
 function notebookExecutionOutputs(result: Record<string, unknown>, executionCount: number): unknown[] {

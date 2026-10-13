@@ -12,6 +12,7 @@ import {
   boundKernelText,
   DEFAULT_KERNEL_OUTPUT_LIMITS,
   KERNEL_TRUNCATION_MARKER,
+  isKernelTruncationNotice,
   kernelOutputLimitArgs,
   kernelOutputLimits,
   kernelPayloadMarker,
@@ -675,8 +676,78 @@ describe("NodeKernelManager output limits", () => {
         timeoutMs: 60_000,
       });
       const outputs = result.outputs ?? [];
-      expect(outputs.map((output) => output.data["text/plain"])).toEqual(["0", "1", "2", "3", KERNEL_TRUNCATION_MARKER.repeat(20)]);
+      expect(outputs.map((output) => output.data["text/plain"])).toEqual(["0", "1", "2", "3", KERNEL_TRUNCATION_MARKER]);
       expect(result.truncated).toEqual({ outputs_dropped: 21 });
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(python === null)("keeps the notice bounded when a cell displays far past the cap", async () => {
+    const { workspace, environment } = await pythonWorkspace("limits-notice-bound");
+    const manager = new NodeKernelManager({ limits: smallLimits() });
+    try {
+      const result = await manager.execute({
+        language: "python",
+        code: Array.from({ length: 500 }, (_value, index) => `display(${index})`).join("\n"),
+        cwd: workspace,
+        environment,
+        timeoutMs: 60_000,
+      });
+      const outputs = result.outputs ?? [];
+      expect(outputs).toHaveLength(5);
+      expect(outputs[4]?.data["text/plain"]).toBe(KERNEL_TRUNCATION_MARKER);
+      expect(result.truncated).toEqual({ outputs_dropped: 496 });
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(python === null)("keeps the tail expression when the notice takes its slot", async () => {
+    const { workspace, environment } = await pythonWorkspace("limits-notice-tail");
+    const manager = new NodeKernelManager({ limits: smallLimits() });
+    try {
+      const result = await manager.execute({
+        language: "python",
+        code: [...Array.from({ length: 6 }, (_value, index) => `display(${index})`), "42"].join("\n"),
+        cwd: workspace,
+        environment,
+        timeoutMs: 60_000,
+      });
+      const outputs = result.outputs ?? [];
+      expect(outputs[3]).toEqual({ output_type: "execute_result", data: { "text/plain": "42" } });
+      expect(outputs[4]?.data["text/plain"]).toBe(KERNEL_TRUNCATION_MARKER);
+      expect(result.result).toBe("42");
+      expect(result.truncated).toEqual({ outputs_dropped: 3 });
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(python === null)("leaves a channel that fits its cap untouched", async () => {
+    const { workspace, environment } = await pythonWorkspace("limits-stream-fits");
+    const manager = new NodeKernelManager({ limits: smallLimits() });
+    try {
+      const exact = await manager.execute({
+        language: "python",
+        code: 'import sys; sys.stdout.write("x" * 64)',
+        cwd: workspace,
+        environment,
+        timeoutMs: 60_000,
+      });
+      expect(exact.stdout).toBe("x".repeat(64));
+      expect("truncated" in exact).toBe(false);
+
+      const past = await manager.execute({
+        language: "python",
+        code: 'import sys; sys.stdout.write("x" * 65)',
+        cwd: workspace,
+        environment,
+        timeoutMs: 60_000,
+      });
+      expect(past.stdout).toHaveLength(64);
+      expect(past.stdout.slice(25, 39)).toBe(KERNEL_TRUNCATION_MARKER);
+      expect(past.truncated).toEqual({ stdout_chars: 1 });
     } finally {
       await manager.shutdownAll();
     }
@@ -945,7 +1016,7 @@ describe("NodeKernelManager output limits without an interpreter", () => {
       const { cell, result } = await startCell(manager, kernels);
       respond(cell.kernel, { outputs: Array.from({ length: 25 }, (_value, index) => ({ output_type: "display_data", data: { "text/plain": String(index) } })) });
       const value = await result;
-      expect(value.outputs?.map((output) => output.data["text/plain"])).toEqual(["0", "1", "2", "3", KERNEL_TRUNCATION_MARKER.repeat(20)]);
+      expect(value.outputs?.map((output) => output.data["text/plain"])).toEqual(["0", "1", "2", "3", KERNEL_TRUNCATION_MARKER]);
       expect(value.truncated).toEqual({ outputs_dropped: 21 });
     } finally {
       await stopFake(manager, kernels);
@@ -1026,6 +1097,12 @@ describe("kernel output limits", () => {
     });
     expect(limits).toMatchObject({ stdoutChars: 128, stderrChars: 129, resultChars: 130, mimeChars: 131, outputsChars: 132 });
     expect(limits.frameChars).toBe(6 * (128 + 2 * 129 + 130 + 131 + 132) + 65_536);
+  });
+
+  it("recognizes a payload notice by the same predicate as a count notice", () => {
+    expect(isKernelTruncationNotice(kernelPayloadMarker("image/png"))).toBe(true);
+    expect(isKernelTruncationNotice(KERNEL_TRUNCATION_MARKER)).toBe(true);
+    expect(isKernelTruncationNotice("plain output")).toBe(false);
   });
 
   it("ignores a configured cap below the marker floor", () => {

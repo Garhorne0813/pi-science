@@ -4,9 +4,13 @@
 // bridge's peak resident memory, the bytes it put on stdout, and the wall time.
 //
 //   node scripts/benchmark-kernel-output.mjs [--workload-mib 64]
+//   node scripts/benchmark-kernel-output.mjs --display-storm [2000000]
 //
-// No dependencies beyond the Node standard library. Exits non-zero when the
-// bounded run's transport exceeds four times the sum of the default caps.
+// The display-storm mode runs the other pathological cell, one that calls
+// display() far past the count cap, and reports the response size instead of a
+// before/after pair. No dependencies beyond the Node standard library. The
+// workload mode exits non-zero when the bounded run's transport exceeds four
+// times the sum of the default caps.
 
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -16,8 +20,8 @@ const BRIDGE = fileURLToPath(new URL("../apps/server/src/runtime/kernel/bridges/
 const SAMPLE_INTERVAL_MS = 25;
 // Keep in sync with DEFAULT_KERNEL_OUTPUT_LIMITS in
 // apps/server/src/runtime/kernel/kernel-output-limits.ts.
-const DEFAULT_CAPS = { stdout_chars: 65_536, stderr_chars: 65_536, result_chars: 262_144, mime_chars: 1_048_576, outputs_chars: 2_097_152 };
-const UNBOUNDED_CAPS = { stdout_chars: 1_000_000_000, stderr_chars: 1_000_000_000, result_chars: 1_000_000_000, mime_chars: 1_000_000_000, outputs_chars: 1_000_000_000 };
+const DEFAULT_CAPS = { stdout_chars: 65_536, stderr_chars: 65_536, result_chars: 262_144, mime_chars: 1_048_576, outputs_chars: 2_097_152, display_outputs: 20 };
+const UNBOUNDED_CAPS = { ...DEFAULT_CAPS, stdout_chars: 1_000_000_000, stderr_chars: 1_000_000_000, result_chars: 1_000_000_000, mime_chars: 1_000_000_000, outputs_chars: 1_000_000_000 };
 const MIB = 1_048_576;
 const BASE_STDOUT_MIB = 64;
 // The bounded run reads up to this much of the response to report what the caps
@@ -123,6 +127,37 @@ function report(response) {
   }
 }
 
+function displayStormCount() {
+  const index = process.argv.indexOf("--display-storm");
+  if (index === -1) return null;
+  const value = process.argv[index + 1];
+  if (value === undefined || value.startsWith("--")) return 2_000_000;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) fail("--display-storm needs a positive display count");
+  return parsed;
+}
+
+const toMib = (bytes) => bytes / MIB;
+const format = (value) => value.toFixed(1).padStart(9);
+
+/** The other pathological cell: display() called far past the count cap. */
+async function runDisplayStorm(count) {
+  const response = await runBridge(DEFAULT_CAPS, `for i in range(${count}): display(i)`);
+  const line = response.captured.split("\n").findLast((value) => value.trim());
+  let parsed;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    fail("the display storm response could not be parsed");
+  }
+  const outputs = parsed.outputs ?? [];
+  const notices = outputs.filter((output) => String(output.data?.["text/plain"] ?? "").includes("truncated"));
+  console.log(`displays ${count}  response characters ${line.length}  outputs ${outputs.length}  notices ${notices.length}  notice ${JSON.stringify(String(notices.at(-1)?.data?.["text/plain"] ?? ""))}`);
+  console.log(`report ${JSON.stringify(parsed.truncated ?? {})}`);
+  console.log(`display storm  rss ${format(response.peakKb / 1024)} MiB  stdout ${format(toMib(response.stdoutBytes))} MiB  wall ${response.wallSeconds.toFixed(2)} s`);
+}
+
+async function runWorkload() {
 const stdoutMib = workloadMib();
 const source = cellSource(stdoutMib);
 const unbounded = await runBridge(UNBOUNDED_CAPS, source);
@@ -137,7 +172,12 @@ console.log(`unbounded  ${report(unbounded)}`);
 console.log(`defaults   ${report(bounded)}`);
 console.log(`before -> after  rss ${format(unbounded.peakKb / 1024)} -> ${format(bounded.peakKb / 1024)} MiB   stdout ${format(toMib(unbounded.stdoutBytes))} -> ${format(toMib(bounded.stdoutBytes))} MiB`);
 
-const capSum = Object.values(DEFAULT_CAPS).reduce((sum, value) => sum + value, 0);
+const capSum = ["stdout_chars", "stderr_chars", "result_chars", "mime_chars", "outputs_chars"].reduce((sum, key) => sum + DEFAULT_CAPS[key], 0);
 const budget = 4 * capSum;
 console.log(`transport limit  ${toMib(budget).toFixed(1)} MiB (four times the ${capSum}-character cap sum), bounded used ${toMib(bounded.stdoutBytes).toFixed(1)} MiB`);
 if (bounded.stdoutBytes > budget) fail(`the bounded run wrote ${bounded.stdoutBytes} bytes to stdout, over the ${budget}-byte limit`);
+}
+
+const displays = displayStormCount();
+if (displays === null) await runWorkload();
+else await runDisplayStorm(displays);

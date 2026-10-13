@@ -44,6 +44,40 @@ def kernel_payload_marker(mime: str) -> str:
     return "\n… [truncated: {}]".format(mime)
 
 
+class CellNotice:
+    """The cell's drop notice, kept small on purpose: one marker for a count drop plus one
+    marker per distinct dropped MIME. A cell that drops a million outputs still emits one
+    short notice, and the counts live in the report instead."""
+
+    def __init__(self) -> None:
+        self.count_dropped = 0
+        self.payload: list = []
+
+    def count(self) -> None:
+        self.count_dropped += 1
+
+    def payloads(self, markers: list) -> None:
+        for marker in markers:
+            if marker not in self.payload:
+                self.payload.append(marker)
+
+    def empty(self) -> bool:
+        return not self.count_dropped and not self.payload
+
+    def text(self) -> str:
+        return (KERNEL_TRUNCATION_MARKER if self.count_dropped else "") + "".join(self.payload)
+
+
+def evict_display(outputs: list) -> None:
+    """The notice takes a display slot. Prefer the last plain display so that a tail
+    expression, which the cell appends last, keeps its slot and stays visible."""
+    for index in range(len(outputs) - 1, -1, -1):
+        if outputs[index].get("output_type") == "display_data":
+            del outputs[index]
+            return
+    outputs.pop()
+
+
 def limits_from_argv(argv: list) -> dict:
     """Read the host's caps; a missing, unreadable or non-positive value keeps the default."""
     limits = dict(DEFAULT_LIMITS)
@@ -125,8 +159,9 @@ class BoundedStreamCapture(io.StringIO):
         self.cap = cap
         self.head_cap = max((cap - len(KERNEL_TRUNCATION_MARKER)) // 2, 0)
         self.tail_cap = max(cap - len(KERNEL_TRUNCATION_MARKER) - self.head_cap, 0)
-        self.head: list = []
+        self.head: list = []  # retains up to the whole cap, so a payload that fits is lossless
         self.head_len = 0
+        self.live_len = 0
         self.tail: deque = deque()
         self.tail_len = 0
         self.total = 0
@@ -136,18 +171,25 @@ class BoundedStreamCapture(io.StringIO):
         produced = len(text)
         if text:
             self.total += produced
-            room = self.head_cap - self.head_len
+            room = self.cap - self.head_len
             head = text[:room] if room > 0 else ""
             if head:
                 self.head.append(head)
                 self.head_len += len(head)
-                self.emit(self.stream, head)
-            rest = text[len(head):]
-            if rest:
-                self._retain_tail(rest)
-                if not self.muted:
-                    self.emit(self.stream, KERNEL_TRUNCATION_MARKER)
-                    self.muted = True
+            # The tail keeps the last `tail_cap` characters of the whole channel, because
+            # a truncated payload shows the head of the channel and the tail of it, and the
+            # part between them is what the marker stands for.
+            self._retain_tail(text)
+            live_room = self.head_cap - self.live_len
+            live = head[:live_room] if live_room > 0 else ""
+            if live:
+                self.live_len += len(live)
+                self.emit(self.stream, live)
+            if self.total > self.live_len and not self.muted:
+                # The live view stops at the head, so it says so once and then stays quiet;
+                # the final payload may still hold the whole channel.
+                self.emit(self.stream, KERNEL_TRUNCATION_MARKER)
+                self.muted = True
         return produced
 
     def _retain_tail(self, text: str) -> None:
@@ -168,11 +210,10 @@ class BoundedStreamCapture(io.StringIO):
             self.tail_len -= excess
 
     def retained(self) -> str:
-        head = "".join(self.head)
-        tail = "".join(self.tail)
-        if self.total <= self.head_cap + self.tail_cap:
-            return head + tail
-        return head + KERNEL_TRUNCATION_MARKER[: self.cap] + tail
+        if self.total <= self.cap:
+            return "".join(self.head)
+        head = "".join(self.head)[: self.head_cap]
+        return head + KERNEL_TRUNCATION_MARKER[: self.cap] + "".join(self.tail)
 
     @property
     def dropped(self) -> int:
@@ -217,7 +258,7 @@ def display_mime(value) -> dict:
     return bundle
 
 
-def capture_matplotlib_figures(outputs: list, displayed_figures: set, limits: dict, rich: dict, report: dict, notices: list) -> int:
+def capture_matplotlib_figures(outputs: list, displayed_figures: set, limits: dict, rich: dict, report: dict, notice: CellNotice) -> int:
     """Capture figures after code calls show(), without requiring IPython. Returns the
     figures dropped by the display-output count cap."""
     try:
@@ -232,7 +273,7 @@ def capture_matplotlib_figures(outputs: list, displayed_figures: set, limits: di
             continue
         if len(outputs) >= limits["display_outputs"]:
             dropped += 1
-            notices.append(KERNEL_TRUNCATION_MARKER)
+            notice.count()
             continue
         try:
             figure.canvas.draw()
@@ -240,7 +281,7 @@ def capture_matplotlib_figures(outputs: list, displayed_figures: set, limits: di
             figure.savefig(buffer, format="png")
             png = base64.b64encode(buffer.getvalue()).decode("ascii")
             data, markers = bound_bundle({"image/png": png}, limits, rich, report)
-            notices.extend(markers)
+            notice.payloads(markers)
             outputs.append({"output_type": "display_data", "data": data})
             displayed_figures.add(identity)
         except Exception:
@@ -256,7 +297,7 @@ def run_cell(ns: dict, code: str, emit=lambda _stream, _text: None, limits=None)
     out = BoundedStreamCapture("stdout", emit, limits["stdout_chars"])
     err_out = BoundedStreamCapture("stderr", emit, limits["stderr_chars"])
     display_outputs: list = []
-    notices: list = []
+    notice = CellNotice()
     displayed_figures: set = set()
     dropped_outputs = 0
 
@@ -266,10 +307,10 @@ def run_cell(ns: dict, code: str, emit=lambda _stream, _text: None, limits=None)
             if len(display_outputs) >= limits["display_outputs"]:
                 # The cap drops what it cannot show; the host counts them as well.
                 dropped_outputs += 1
-                notices.append(KERNEL_TRUNCATION_MARKER)
+                notice.count()
                 continue
             data, markers = bound_bundle(display_mime(value), limits, rich, report)
-            notices.extend(markers)
+            notice.payloads(markers)
             display_outputs.append({"output_type": "display_data", "data": data})
             if hasattr(value, "savefig") and hasattr(value, "canvas"):
                 displayed_figures.add(id(value))
@@ -283,12 +324,12 @@ def run_cell(ns: dict, code: str, emit=lambda _stream, _text: None, limits=None)
     def finalize() -> None:
         """A drop marker is its own output holding one text/plain value: a marker beside
         a surviving payload is not rendered, and the notice takes a display slot."""
-        if not notices:
+        if notice.empty():
             return
         if len(display_outputs) >= limits["display_outputs"]:
-            display_outputs.pop()
+            evict_display(display_outputs)
             charge(report, "outputs_dropped", 1)
-        display_outputs.append({"output_type": "display_data", "data": {"text/plain": "".join(notices)}})
+        display_outputs.append({"output_type": "display_data", "data": {"text/plain": notice.text()}})
 
     # Keep a fresh collector for each cell while preserving the shared namespace.
     ns["display"] = display
@@ -319,12 +360,12 @@ def run_cell(ns: dict, code: str, emit=lambda _stream, _text: None, limits=None)
                     result, dropped = bound_head(repr(value), limits["result_chars"])
                     charge(report, "result_chars", dropped)
                     mime, markers = bound_bundle(rich_mime(value), limits, rich, report)
-                    notices.extend(markers)
+                    notice.payloads(markers)
                     if len(display_outputs) >= limits["display_outputs"]:
                         # The tail expression keeps the last slot, so its value is visible.
-                        display_outputs.pop()
+                        evict_display(display_outputs)
                         dropped_outputs += 1
-                        notices.append(KERNEL_TRUNCATION_MARKER)
+                        notice.count()
                     display_outputs.append({
                         "output_type": "execute_result",
                         "data": {"text/plain": result, **mime},
@@ -332,7 +373,7 @@ def run_cell(ns: dict, code: str, emit=lambda _stream, _text: None, limits=None)
                     if hasattr(value, "savefig") and hasattr(value, "canvas"):
                         displayed_figures.add(id(value))
             if re.search(r"\bshow\s*\(", code):
-                dropped_outputs += capture_matplotlib_figures(display_outputs, displayed_figures, limits, rich, report, notices)
+                dropped_outputs += capture_matplotlib_figures(display_outputs, displayed_figures, limits, rich, report, notice)
     except KeyboardInterrupt:
         stdout, stderr = streamed_text()
         finalize()

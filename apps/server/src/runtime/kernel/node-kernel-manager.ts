@@ -606,12 +606,13 @@ function mergedTruncationReport(...reports: unknown[]): KernelTruncationReport {
   return merged;
 }
 
+/** A dropped payload's marker goes into the cell notice, once per MIME however often it drops. */
 function normalizeBundle(
   raw: Record<string, unknown>,
   limits: KernelOutputLimits,
   budget: { remaining: number },
   charge: (dropped: number) => void,
-  notices: string[],
+  notices: Set<string>,
 ): Record<string, string> {
   const kept: Record<string, string> = {};
   for (const [mime, item] of Object.entries(raw)) {
@@ -624,9 +625,21 @@ function normalizeBundle(
       continue;
     }
     charge(item.length);
-    notices.push(kernelPayloadMarker(mime));
+    notices.add(kernelPayloadMarker(mime));
   }
   return kept;
+}
+
+/** The notice takes a display slot. Prefer the last plain display so an
+ * execute_result, which the bridge appends last, keeps its slot. */
+function evictDisplay(outputs: KernelOutput[]): void {
+  for (let index = outputs.length - 1; index >= 0; index -= 1) {
+    if (outputs[index]!.output_type !== "execute_result") {
+      outputs.splice(index, 1);
+      return;
+    }
+  }
+  outputs.pop();
 }
 
 function normalizeResult(message: Record<string, unknown>, limits: KernelOutputLimits): KernelResult {
@@ -649,7 +662,8 @@ function normalizeResult(message: Record<string, unknown>, limits: KernelOutputL
   const result = rawResult === null ? null : boundKernelHeadText(rawResult, limits.resultChars);
   if (rawResult !== null && result !== null) charge("result_chars", rawResult.length - result.length);
 
-  const notices: string[] = [];
+  const notices = new Set<string>();
+  let countDropped = false;
   const budget = { remaining: limits.outputsChars };
   const richCharge = (dropped: number) => charge("rich_chars", dropped);
   const mime = message.mime !== null && typeof message.mime === "object" && !Array.isArray(message.mime)
@@ -662,20 +676,24 @@ function normalizeResult(message: Record<string, unknown>, limits: KernelOutputL
     if (typeof output.output_type !== "string" || !output.data || typeof output.data !== "object" || Array.isArray(output.data)) continue;
     if (outputs.length >= limits.displayOutputs) {
       charge("outputs_dropped", 1);
-      notices.push(KERNEL_TRUNCATION_MARKER);
+      countDropped = true;
       continue;
     }
     outputs.push({ output_type: output.output_type, data: normalizeBundle(output.data as Record<string, unknown>, limits, budget, richCharge, notices) });
   }
   // One notice stands in for every dropped payload, in an output whose only key is
   // text/plain: a marker written next to a surviving payload is not rendered, and
-  // it takes a display slot like any other output.
-  if (notices.length > 0) {
+  // it takes a display slot like any other output. The text stays bounded, because
+  // the counts live in the report and one marker per reason is enough.
+  if (notices.size > 0 || countDropped) {
     if (outputs.length >= limits.displayOutputs) {
-      outputs.pop();
+      evictDisplay(outputs);
       charge("outputs_dropped", 1);
     }
-    outputs.push({ output_type: "display_data", data: { "text/plain": notices.join("") } });
+    outputs.push({
+      output_type: "display_data",
+      data: { "text/plain": (countDropped ? KERNEL_TRUNCATION_MARKER : "") + [...notices].join("") },
+    });
   }
 
   return {

@@ -14,6 +14,13 @@ export function kernelPayloadMarker(mime: string): string {
   return `\n… [truncated: ${mime}]`;
 }
 
+/** Both markers contain this prefix, so one predicate recognizes every notice. */
+export const KERNEL_TRUNCATION_NOTICE_PREFIX = "… [truncated";
+
+export function isKernelTruncationNotice(value: string): boolean {
+  return value.includes(KERNEL_TRUNCATION_NOTICE_PREFIX);
+}
+
 export interface KernelOutputLimits {
   readonly stdoutChars: number;
   readonly stderrChars: number;
