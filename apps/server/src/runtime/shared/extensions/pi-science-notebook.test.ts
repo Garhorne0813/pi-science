@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { KERNEL_TRUNCATION_MARKER } from "../../kernel/kernel-output-limits.js";
 import registerNotebook from "./pi-science-notebook.js";
 
 afterEach(() => {
@@ -128,6 +129,48 @@ describe("Pi-Science notebook extension", () => {
       { output_type: "execute_result", execution_count: 1, data: { "text/plain": "figure" } },
     ]);
     expect(body.outputs[1].data["image/png"]).toHaveLength(20_000);
+  });
+
+  it("persists the truncation notice ahead of the rich outputs it can be sliced with", async () => {
+    vi.stubEnv("PI_SCIENCE_INTERNAL_TOKEN", "test-control-token");
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes("/api/notebooks/document")) {
+        return new Response(JSON.stringify({
+          path: "analysis/demo.ipynb",
+          sha256: "a".repeat(64),
+          document: { metadata: { kernelspec: { language: "python" } }, cells: [{ id: "c1", cell_type: "code", source: "display('hello')\n", execution_count: null, outputs: [] }] },
+        }), { status: 200 });
+      }
+      if (url.includes("/api/kernels/execute")) {
+        return new Response(JSON.stringify({
+          ok: true,
+          execution_id: "exec-1",
+          status: "succeeded",
+          stdout: "hello\n",
+          result: null,
+          mime: {},
+          outputs: [
+            ...Array.from({ length: 20 }, (_value, index) => ({ output_type: "display_data", data: { "text/plain": String(index) } })),
+            { output_type: "display_data", data: { "text/plain": KERNEL_TRUNCATION_MARKER } },
+          ],
+        }), { status: 200 });
+      }
+      if (url.includes("/api/executions/exec-1")) return new Response(JSON.stringify({ execution_id: "exec-1", status: "succeeded" }), { status: 200 });
+      if (url.includes("/api/notebooks/output")) return new Response(JSON.stringify({ ok: true, path: "analysis/demo.ipynb", sha256: "b".repeat(64) }), { status: 200 });
+      throw new Error(`Unexpected URL: ${url}`);
+    }));
+
+    const tools = new Map<string, any>();
+    registerNotebook({ registerTool: (tool: any) => tools.set(tool.name, tool) });
+    await tools.get("notebook_run").execute("run-1", { path: "analysis/demo.ipynb", cell_ids: ["c1"] }, undefined, undefined, { cwd: "/workspace" });
+
+    const body = JSON.parse(String(calls.find((call) => call.url.includes("/api/notebooks/output"))?.init.body));
+    expect(body.outputs).toHaveLength(20);
+    expect(body.outputs[0]).toEqual({ output_type: "stream", name: "stdout", text: "hello\n" });
+    expect(body.outputs[1]).toEqual({ output_type: "display_data", data: { "text/plain": KERNEL_TRUNCATION_MARKER } });
   });
 
   it("reports an output persistence conflict after the kernel result is available", async () => {

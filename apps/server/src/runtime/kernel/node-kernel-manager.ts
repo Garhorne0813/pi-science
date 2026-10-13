@@ -11,6 +11,16 @@ import {
   workspaceEnvironmentVariables,
   type WorkspaceEnvironmentStatus,
 } from "../workspace/workspace-environment.js";
+import {
+  boundKernelHeadText,
+  boundKernelPayload,
+  boundKernelStreamText,
+  KERNEL_TRUNCATION_MARKER,
+  kernelOutputLimitArgs,
+  kernelOutputLimits,
+  kernelPayloadMarker,
+  type KernelOutputLimits,
+} from "./kernel-output-limits.js";
 
 export type KernelLanguage = "python" | "r";
 
@@ -25,6 +35,15 @@ export interface KernelOutput {
   data: Record<string, string>;
 }
 
+/** Characters produced by the cell but not delivered; a key exists only above zero, so `{}` means intact. */
+export interface KernelTruncationReport {
+  stdout_chars?: number;
+  stderr_chars?: number;
+  result_chars?: number;
+  rich_chars?: number;
+  outputs_dropped?: number;
+}
+
 export interface KernelResult {
   ok: boolean;
   stdout: string;
@@ -34,6 +53,7 @@ export interface KernelResult {
   interrupted: boolean;
   mime: Record<string, string>;
   outputs?: KernelOutput[];
+  truncated?: KernelTruncationReport;
 }
 
 export interface KernelExecuteOptions {
@@ -72,6 +92,7 @@ export interface NodeKernelManagerDependencies {
   interpreterAvailable?: (command: string) => boolean;
   spawnProcess?: typeof spawn;
   killProcessTree?: (pid: number) => void;
+  limits?: KernelOutputLimits;
 }
 
 const PYTHON_BRIDGE = fileURLToPath(new URL("./bridges/kernel_bridge.py", import.meta.url));
@@ -86,11 +107,23 @@ class KernelTimeoutError extends Error {
   }
 }
 
+/** The bridge wrote a protocol line the host refuses to parse or retain. */
+export class KernelProtocolError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "KernelProtocolError";
+  }
+}
+
+interface StreamBudget { spent: number; muted: boolean }
+type StreamBudgets = Record<"stdout" | "stderr", StreamBudget>;
+
 interface PendingCell {
   resolve: (result: KernelResult) => void;
   reject: (error: Error) => void;
   onEvent?: (event: KernelStreamEvent) => void;
   promise: Promise<KernelResult>;
+  budgets: StreamBudgets;
 }
 
 interface KernelStartState { options: KernelExecuteOptions; controller: AbortController }
@@ -140,6 +173,7 @@ export class NodeKernelManager {
       interpreterAvailable: deps.interpreterAvailable ?? defaultInterpreterAvailable,
       spawnProcess: deps.spawnProcess ?? spawn,
       killProcessTree: deps.killProcessTree ?? defaultKillProcessTree,
+      limits: deps.limits ?? kernelOutputLimits(process.env),
     };
   }
 
@@ -381,8 +415,8 @@ class NodeKernelSession {
   private async start(signal?: AbortSignal): Promise<void> {
     const executable = this.executablePath();
     const args = this.options.language === "python"
-      ? [PYTHON_BRIDGE]
-      : [R_BRIDGE, this.rCodeFile!];
+      ? [PYTHON_BRIDGE, ...kernelOutputLimitArgs(this.deps.limits)]
+      : [R_BRIDGE, this.rCodeFile!, ...kernelOutputLimitArgs(this.deps.limits)];
     if (this.rCodeFile) {
       await mkdir(join(metadataRoot(this.options.cwd), "runtime", "kernels"), { recursive: true });
       await writeFile(this.rCodeFile, "", "utf8");
@@ -449,7 +483,7 @@ class NodeKernelSession {
       resolveResult = resolve;
       rejectResult = reject;
     });
-    this.pending.set(id, { resolve: resolveResult, reject: rejectResult, onEvent, promise: result });
+    this.pending.set(id, { resolve: resolveResult, reject: rejectResult, onEvent, promise: result, budgets: { stdout: { spent: 0, muted: false }, stderr: { spent: 0, muted: false } } });
     try {
       if (this.options.language === "python") {
         child.stdin?.write(JSON.stringify({ id, code }) + "\n");
@@ -500,6 +534,17 @@ class NodeKernelSession {
   }
 
   private handleLine(line: string): void {
+    const frameLimit = this.deps.limits.frameChars;
+    if (line.length > frameLimit) {
+      // Parsing or retaining a line this large is the failure mode this guard
+      // exists to prevent, so the session dies instead of clamping it.
+      const error = new KernelProtocolError(`Kernel protocol line exceeded ${frameLimit} characters`);
+      for (const pending of this.pending.values()) pending.reject(error);
+      this.pending.clear();
+      this.exited = true;
+      this.child?.kill();
+      return;
+    }
     if (!line.trim()) return;
     let message: Record<string, unknown>;
     try {
@@ -511,7 +556,7 @@ class NodeKernelSession {
     if (message.type === "stream" && id) {
       const pending = this.pending.get(id);
       if (pending && typeof message.text === "string") {
-        pending.onEvent?.({ type: "stream", stream: message.stream === "stderr" ? "stderr" : "stdout", text: message.text });
+        this.forwardStream(pending, message.stream === "stderr" ? "stderr" : "stdout", message.text);
       }
       return;
     }
@@ -519,33 +564,129 @@ class NodeKernelSession {
     const pending = this.pending.get(id);
     if (!pending) return;
     this.pending.delete(id);
-    pending.resolve(normalizeResult(message));
+    pending.resolve(normalizeResult(message, this.deps.limits));
+  }
+
+  private forwardStream(pending: PendingCell, stream: "stdout" | "stderr", text: string): void {
+    const cap = stream === "stderr" ? this.deps.limits.stderrChars : this.deps.limits.stdoutChars;
+    const budget = pending.budgets[stream];
+    if (budget.muted) return;
+    const room = cap - budget.spent;
+    if (text.length <= room) {
+      budget.spent += text.length;
+      pending.onEvent?.({ type: "stream", stream, text });
+      return;
+    }
+    const head = room > 0 ? text.slice(0, room) : "";
+    budget.spent += head.length;
+    if (head) pending.onEvent?.({ type: "stream", stream, text: head });
+    // The marker replaces every character past the cap, and the channel then
+    // stays silent; the protocol already carries the same text in the result
+    // line, so a stream drop is not a payload the cell failed to deliver.
+    budget.muted = true;
+    pending.onEvent?.({ type: "stream", stream, text: KERNEL_TRUNCATION_MARKER });
   }
 }
 
-function normalizeResult(message: Record<string, unknown>): KernelResult {
-  const outputs = Array.isArray(message.outputs)
-    ? message.outputs.flatMap((value): KernelOutput[] => {
-      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-      const output = value as Record<string, unknown>;
-      if (typeof output.output_type !== "string" || !output.data || typeof output.data !== "object" || Array.isArray(output.data)) return [];
-      const data: Record<string, string> = {};
-      for (const [key, item] of Object.entries(output.data as Record<string, unknown>)) {
-        if (typeof item === "string") data[key] = item;
-      }
-      return [{ output_type: output.output_type, data }];
-    })
-    : [];
+const TRUNCATION_KEYS = ["stdout_chars", "stderr_chars", "result_chars", "rich_chars", "outputs_dropped"] as const;
+type TruncationKey = typeof TRUNCATION_KEYS[number];
+
+/** Counts arrive from the bridge, so a value that is not a positive integer is not a count. */
+function mergedTruncationReport(...reports: unknown[]): KernelTruncationReport {
+  const merged: KernelTruncationReport = {};
+  for (const report of reports) {
+    if (report === null || typeof report !== "object" || Array.isArray(report)) continue;
+    const fields = report as Record<string, unknown>;
+    for (const key of TRUNCATION_KEYS) {
+      const value = fields[key];
+      if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) continue;
+      merged[key] = (merged[key] ?? 0) + value;
+    }
+  }
+  return merged;
+}
+
+function normalizeBundle(
+  raw: Record<string, unknown>,
+  limits: KernelOutputLimits,
+  budget: { remaining: number },
+  charge: (dropped: number) => void,
+  notices: string[],
+): Record<string, string> {
+  const kept: Record<string, string> = {};
+  for (const [mime, item] of Object.entries(raw)) {
+    if (typeof item !== "string") continue;
+    const bounded = boundKernelPayload(item, mime, limits.mimeChars);
+    if (bounded !== null && bounded.length <= budget.remaining) {
+      budget.remaining -= bounded.length;
+      charge(item.length - bounded.length);
+      kept[mime] = bounded;
+      continue;
+    }
+    charge(item.length);
+    notices.push(kernelPayloadMarker(mime));
+  }
+  return kept;
+}
+
+function normalizeResult(message: Record<string, unknown>, limits: KernelOutputLimits): KernelResult {
+  const report = mergedTruncationReport(message.truncated);
+  const charge = (key: TruncationKey, dropped: number) => {
+    if (dropped > 0) report[key] = (report[key] ?? 0) + dropped;
+  };
+
+  const rawStdout = typeof message.stdout === "string" ? message.stdout : "";
+  const stdout = boundKernelStreamText(rawStdout, limits.stdoutChars);
+  charge("stdout_chars", rawStdout.length - stdout.length);
+  const rawStderr = typeof message.stderr === "string" ? message.stderr : "";
+  const stderr = boundKernelStreamText(rawStderr, limits.stderrChars);
+  charge("stderr_chars", rawStderr.length - stderr.length);
+  // A traceback shares the stderr channel and its cap.
+  const rawError = message.error === null || message.error === undefined ? null : String(message.error);
+  const error = rawError === null ? null : boundKernelStreamText(rawError, limits.stderrChars);
+  if (rawError !== null && error !== null) charge("stderr_chars", rawError.length - error.length);
+  const rawResult = message.result === null || message.result === undefined ? null : String(message.result);
+  const result = rawResult === null ? null : boundKernelHeadText(rawResult, limits.resultChars);
+  if (rawResult !== null && result !== null) charge("result_chars", rawResult.length - result.length);
+
+  const notices: string[] = [];
+  const budget = { remaining: limits.outputsChars };
+  const richCharge = (dropped: number) => charge("rich_chars", dropped);
+  const mime = message.mime !== null && typeof message.mime === "object" && !Array.isArray(message.mime)
+    ? normalizeBundle(message.mime as Record<string, unknown>, limits, budget, richCharge, notices)
+    : {};
+  const outputs: KernelOutput[] = [];
+  for (const value of Array.isArray(message.outputs) ? message.outputs : []) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const output = value as Record<string, unknown>;
+    if (typeof output.output_type !== "string" || !output.data || typeof output.data !== "object" || Array.isArray(output.data)) continue;
+    if (outputs.length >= limits.displayOutputs) {
+      charge("outputs_dropped", 1);
+      notices.push(KERNEL_TRUNCATION_MARKER);
+      continue;
+    }
+    outputs.push({ output_type: output.output_type, data: normalizeBundle(output.data as Record<string, unknown>, limits, budget, richCharge, notices) });
+  }
+  // One notice stands in for every dropped payload, in an output whose only key is
+  // text/plain: a marker written next to a surviving payload is not rendered, and
+  // it takes a display slot like any other output.
+  if (notices.length > 0) {
+    if (outputs.length >= limits.displayOutputs) {
+      outputs.pop();
+      charge("outputs_dropped", 1);
+    }
+    outputs.push({ output_type: "display_data", data: { "text/plain": notices.join("") } });
+  }
+
   return {
     ok: message.ok === true,
-    stdout: typeof message.stdout === "string" ? message.stdout : "",
-    stderr: typeof message.stderr === "string" ? message.stderr : "",
-    result: message.result === null || message.result === undefined ? null : String(message.result),
-    error: message.error === null || message.error === undefined ? null : String(message.error),
+    stdout,
+    stderr,
+    result,
+    error,
     interrupted: message.interrupted === true,
-    mime: message.mime !== null && typeof message.mime === "object" && !Array.isArray(message.mime)
-      ? message.mime as Record<string, string>
-      : {},
+    mime,
     outputs,
+    ...(Object.keys(report).length > 0 ? { truncated: report } : {}),
   };
 }
