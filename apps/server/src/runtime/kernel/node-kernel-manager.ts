@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface, type Interface } from "node:readline";
 import { metadataRoot } from "../../storage/persistence.js";
+import { planKernelLaunch, type KernelIsolationPolicy, type KernelLaunch } from "./kernel-isolation.js";
 import {
   environmentPythonExecutable,
   workspaceEnvironmentVariables,
@@ -67,6 +68,7 @@ export interface KernelManagerStatus {
 }
 
 export interface NodeKernelManagerDependencies {
+  isolation: KernelIsolationPolicy;
   workspaceEnvironmentVariables?: (status: WorkspaceEnvironmentStatus, inherited?: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   interpreterAvailable?: (command: string) => boolean;
@@ -133,8 +135,9 @@ export class NodeKernelManager {
   private stoppingAll: Promise<void> | null = null;
   private readonly deps: Required<NodeKernelManagerDependencies>;
 
-  constructor(deps: NodeKernelManagerDependencies = {}) {
+  constructor(deps: NodeKernelManagerDependencies) {
     this.deps = {
+      isolation: deps.isolation,
       workspaceEnvironmentVariables: deps.workspaceEnvironmentVariables ?? workspaceEnvironmentVariables,
       platform: deps.platform ?? process.platform,
       interpreterAvailable: deps.interpreterAvailable ?? defaultInterpreterAvailable,
@@ -250,6 +253,7 @@ export class NodeKernelManager {
 class NodeKernelSession {
   exited = false;
   private child?: ChildProcess;
+  private launch?: KernelLaunch;
   private reader?: Interface;
   private readonly pending = new Map<string, PendingCell>();
   private readonly rCodeFile?: string;
@@ -376,22 +380,23 @@ class NodeKernelSession {
     this.reader?.close();
     this.reader = undefined;
     if (this.rCodeFile) await rm(this.rCodeFile, { force: true }).catch(() => undefined);
+    await this.launch?.dispose();
   }
 
   private async start(signal?: AbortSignal): Promise<void> {
     const executable = this.executablePath();
-    const args = this.options.language === "python"
-      ? [PYTHON_BRIDGE]
-      : [R_BRIDGE, this.rCodeFile!];
+    const bridge = this.options.language === "python" ? PYTHON_BRIDGE : R_BRIDGE;
     if (this.rCodeFile) {
       await mkdir(join(metadataRoot(this.options.cwd), "runtime", "kernels"), { recursive: true });
       await writeFile(this.rCodeFile, "", "utf8");
     }
     if (signal?.aborted) throw kernelStartCancelledError();
-    const env = this.deps.workspaceEnvironmentVariables(this.options.environment);
-    const child = this.deps.spawnProcess(executable, args, {
+    const launch = await planKernelLaunch(this.deps.isolation, { platform: this.deps.platform, workspace: this.options.cwd, environmentPrefix: this.options.environment.prefix, interpreter: executable, bridge, codeFile: this.rCodeFile, env: this.deps.workspaceEnvironmentVariables(this.options.environment) });
+    this.launch = launch;
+    if (signal?.aborted) { await launch.dispose(); throw kernelStartCancelledError(); }
+    const child = this.deps.spawnProcess(launch.command, launch.args, {
       cwd: this.options.cwd,
-      env,
+      env: launch.env,
       stdio: ["pipe", "pipe", "pipe"],
       // A new process group lets Windows deliver CTRL_BREAK_EVENT (SIGBREAK)
       // to the kernel alone instead of terminating the whole tree.

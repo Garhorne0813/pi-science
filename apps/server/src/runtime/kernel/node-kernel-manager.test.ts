@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NodeKernelManager, type KernelResult } from "./node-kernel-manager.js";
+import type { KernelIsolationPolicy } from "./kernel-isolation.js";
 import type { WorkspaceEnvironmentStatus } from "../workspace/workspace-environment.js";
 
 function systemPython(): string | null {
@@ -74,7 +75,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = new NodeKernelManager({ isolation: "unconfined" });
     try {
       const result = await manager.execute({
         language: "python",
@@ -97,7 +98,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = new NodeKernelManager({ isolation: "unconfined" });
     try {
       const result = await manager.execute({
         language: "python",
@@ -122,7 +123,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = new NodeKernelManager({ isolation: "unconfined" });
     try {
       const result = await manager.execute({
         language: "python",
@@ -144,7 +145,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = new NodeKernelManager({ isolation: "unconfined" });
     try {
       const result = await manager.execute({
         language: "python",
@@ -167,7 +168,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = new NodeKernelManager({ isolation: "unconfined" });
     try {
       await manager.execute({ language: "python", code: "x = 40", cwd: workspace, environment: status(workspace, prefix), timeoutMs: 10_000 });
       const second = await manager.execute({ language: "python", code: "x + 2", cwd: workspace, environment: status(workspace, prefix), timeoutMs: 10_000 });
@@ -185,7 +186,7 @@ describe("NodeKernelManager native execution", () => {
     await createTestEnvironment(prefix);
     await writeFile(join(workspace, "local_module.py"), "value = 41\n", "utf8");
 
-    const manager = new NodeKernelManager();
+    const manager = new NodeKernelManager({ isolation: "unconfined" });
     try {
       const result = await manager.execute({
         language: "python",
@@ -207,7 +208,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = new NodeKernelManager({ isolation: "unconfined" });
     try {
       await manager.execute({ language: "python", code: "1+1", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-1", timeoutMs: 10_000 });
       const before = manager.status();
@@ -228,7 +229,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = new NodeKernelManager({ isolation: "unconfined" });
     try {
       const options = { language: "python" as const, cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-race", timeoutMs: 10_000 };
       const [first, second] = await Promise.all([
@@ -250,7 +251,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = new NodeKernelManager({ isolation: "unconfined" });
     try {
       const outcome = await manager.execute({ language: "python", code: "import time\ntime.sleep(5)", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-timeout", timeoutMs: 500 }).then(
         (value) => ({ resolved: true as const, value }),
@@ -290,11 +291,12 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     return { child, writes, kills, answered: new Set<string>() };
   }
 
-  function managerWithFake(platform: NodeJS.Platform) {
+  function managerWithFake(platform: NodeJS.Platform, isolation: KernelIsolationPolicy = "unconfined") {
     const spawned: { command: string; args: string[]; options?: SpawnOptions }[] = [];
     const treeKills: number[] = [];
     const sessions: FakeSession[] = [];
     const manager = new NodeKernelManager({
+      isolation,
       platform,
       workspaceEnvironmentVariables: () => ({}),
       interpreterAvailable: () => true,
@@ -485,13 +487,23 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     expect(treeKills).toContain(4242);
   });
 
+  it("refuses to spawn when the platform cannot enforce the policy", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-isolation-refused-"));
+    cleanup.push(cwd);
+    const { manager, spawned } = managerWithFake("linux", "workspace");
+    const error = await manager.execute({ language: "python", code: "1+1", cwd, environment: status(cwd, join(cwd, "env")), timeoutMs: 10_000 }).catch((error: unknown) => error);
+    expect(error).toMatchObject({ name: "KernelIsolationUnavailableError", message: expect.stringContaining("PI_SCIENCE_KERNEL_ISOLATION=unconfined") });
+    expect(spawned).toHaveLength(0);
+    await manager.shutdownAll();
+  });
+
   it.skipIf(python === null || process.platform === "win32")("keeps the session usable after an interrupted cell", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "pi-science-kernel-recover-"));
     cleanup.push(workspace);
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = new NodeKernelManager({ isolation: "unconfined" });
     try {
       await manager.execute({ language: "python", code: "x = 41", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-recover", timeoutMs: 8_000 });
       const outcome = await manager.execute({ language: "python", code: "import time\ntime.sleep(5)", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-recover", timeoutMs: 500 }).then(
@@ -522,7 +534,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     await mkdir(binDir, { recursive: true });
     await symlink(rscript!, join(binDir, "Rscript"));
 
-    const manager = new NodeKernelManager();
+    const manager = new NodeKernelManager({ isolation: "unconfined" });
     try {
       const first = await manager.execute({ language: "r", code: "answer <- 21", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-r", timeoutMs: 15_000 });
       expect(first.ok).toBe(true);
