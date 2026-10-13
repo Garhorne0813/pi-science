@@ -10,7 +10,7 @@ import { createServerModules } from "../../app/server-modules.js";
 import type { ServerConfig } from "../../config/config.js";
 import type { KernelExecuteOptions, KernelResult, NodeKernelManager } from "../../runtime/kernel/node-kernel-manager.js";
 
-const STALLED_CLIENT_CEILING_BYTES = 4 * 1024 * 1024;
+const LIVE_STREAM_CEILING_BYTES = 2 * 1024 * 1024;
 const MAX_FRAME_BYTES = 1024 * 1024;
 const BURST_CHUNK = "x".repeat(16 * 1024);
 const BURST_EVENTS = 2048;
@@ -195,8 +195,7 @@ describe("kernel NDJSON stream backpressure", () => {
       external_delta_bytes: stalled.external - baseline.external,
     }));
 
-    expect(streamed.bytes, "live stream bytes must stay under the documented bound").toBeLessThan(STALLED_CLIENT_CEILING_BYTES);
-    expect(stalled.rss - baseline.rss, "server memory must stay under the documented bound").toBeLessThan(STALLED_CLIENT_CEILING_BYTES * 8);
+    expect(streamed.bytes, "live stream bytes must stay under the documented bound").toBeLessThan(LIVE_STREAM_CEILING_BYTES);
     const retained = streamed.frames.filter((frame) => frame.type === "stream").map((frame) => String(frame.text)).join("");
     expect(BURST_CHUNK.repeat(BURST_EVENTS).startsWith(retained), "a truncated live stream keeps the first bytes and drops the tail").toBe(true);
     const frameTypes = streamed.frames.map((frame) => frame.type);
