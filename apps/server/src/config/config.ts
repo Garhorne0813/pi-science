@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { randomBytes } from "node:crypto";
+import { DEFAULT_KERNEL_ISOLATION, KERNEL_ISOLATION_POLICIES, type KernelIsolationPolicy } from "../runtime/kernel/kernel-isolation.js";
 
 const environmentSchema = z.object({
   PI_SCIENCE_HOST: z.string().default("127.0.0.1"),
@@ -10,6 +11,7 @@ const environmentSchema = z.object({
   PI_SCIENCE_INTERNAL_TOKEN: z.string().optional(),
   PI_SCIENCE_REQUIRE_INTERNAL_TOKEN: z.enum(["0", "1"]).default("1"),
   PI_SCIENCE_MICROMAMBA_EXECUTABLE: z.string().optional(),
+  PI_SCIENCE_KERNEL_ISOLATION: z.enum(KERNEL_ISOLATION_POLICIES).default(DEFAULT_KERNEL_ISOLATION),
   PI_SCIENCE_NODE_SESSIONS: z.enum(["0", "1"]).default("1"),
   PI_SCIENCE_NODE_SSE: z.enum(["0", "1"]).default("1"),
   PI_SCIENCE_NODE_FILES: z.enum(["0", "1"]).default("1"),
@@ -35,6 +37,7 @@ export interface ServerConfig {
   internalToken?: string;
   requireInternalToken?: boolean;
   micromambaExecutable?: string;
+  kernelIsolation?: KernelIsolationPolicy;
   nodeSessions: boolean;
   nodeSse: boolean;
   nodeFiles: boolean;
@@ -67,6 +70,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Server
       : undefined,
     requireInternalToken: parsed.PI_SCIENCE_REQUIRE_INTERNAL_TOKEN === "1",
     micromambaExecutable: parsed.PI_SCIENCE_MICROMAMBA_EXECUTABLE,
+    kernelIsolation: parsed.PI_SCIENCE_KERNEL_ISOLATION,
     nodeSessions: parsed.PI_SCIENCE_NODE_SESSIONS === "1",
     nodeSse: parsed.PI_SCIENCE_NODE_SSE === "1",
     nodeFiles: parsed.PI_SCIENCE_NODE_FILES === "1",

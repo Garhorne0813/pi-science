@@ -9,6 +9,7 @@ import { JobCoordinator } from "../runtime/jobs/job-coordinator.js";
 import type { ServerConfig } from "../config/config.js";
 import { WorkspaceEnvironmentService } from "../runtime/workspace/workspace-environment.js";
 import { NodeKernelManager } from "../runtime/kernel/node-kernel-manager.js";
+import { DEFAULT_KERNEL_ISOLATION } from "../runtime/kernel/kernel-isolation.js";
 import { NotebookService } from "../runtime/notebooks/notebook-service.js";
 import { ResearchLoopCoordinator } from "../research-loop/coordinator.js";
 import { ProjectReviewService } from "../project-review/service.js";
@@ -62,7 +63,7 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
   const sessionRepository = new SessionRepository();
   const runtimeCatalog = new AgentCoreCatalogService();
   const environments = new WorkspaceEnvironmentService(undefined, config?.micromambaExecutable, sqliteEnabled ? environmentRepository : undefined);
-  const kernels = new NodeKernelManager();
+  const kernels = new NodeKernelManager({ isolation: config?.kernelIsolation ?? DEFAULT_KERNEL_ISOLATION });
   const notebooks = new NotebookService({
     micromambaExecutable: config?.micromambaExecutable,
     micromambaResolver: () => environments.ensureMicromambaExecutable(),
