@@ -9,10 +9,11 @@ import { observeAgentEvent } from "../events/agent-event-observer.js";
 import { configPath as globalConfigPath, metadataRoot, readJson, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
 import { AgentRuntimeManager } from "./agent-runtime-manager.js";
 import { AgentSessionRepository } from "./agent-session-repository.js";
+import { BACKGROUND_CONTEXT, NodeExecutionEnv, loadPromptTemplates, loadSkills } from "@earendil-works/pi-agent-core/node";
 import type { AgentCoreRuntimeClient } from "./agent-runtime-client.js";
 import type { RuntimeResult, RuntimeSkillPolicy } from "./agent-runtime-types.js";
 import type { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
-import { seedWorkspaceAssets } from "../agent/runtime-config.js";
+import { packagedSkillsRoot, seedWorkspaceAssets } from "../agent/runtime-config.js";
 import { CredentialStore } from "../../model-resources/credential-store.js";
 import { projectedEnvironmentNames } from "../shared/extensions/pi-science-mcp.js";
 import { AgentRuntimeExitedError, AgentRuntimeTimeoutError } from "./agent-runtime-errors.js";
@@ -58,6 +59,20 @@ async function globalSkillPolicy(): Promise<RuntimeSkillPolicy> {
     return { mode: policy.mode, skills: policy.skills.filter((name): name is string => typeof name === "string") };
   }
   return { mode: "inherit" };
+}
+function applySkillPolicy<T extends { name: string }>(skills: T[], policy: RuntimeSkillPolicy): T[] {
+  if (policy.mode === "none") return [];
+  if (policy.mode === "inherit") return skills;
+  const names = new Set(policy.skills);
+  return skills.filter((skill) => policy.mode === "allowlist" ? names.has(skill.name) : !names.has(skill.name));
+}
+/** Later skill roots override earlier ones for the same name, and the winner keeps the
+ *  position its name first occupied. A seeded workspace copy therefore hides its
+ *  packaged twin instead of being listed next to it. */
+function overrideByName<T extends { name: string }>(skills: T[]): T[] {
+  const byName = new Map<string, T>();
+  for (const skill of skills) byName.set(skill.name, skill);
+  return [...byName.values()];
 }
 function splitModel(model: string | null | undefined): { provider: string; modelId: string } | null {
   const index = model?.indexOf("/") ?? -1;
@@ -106,6 +121,24 @@ export class AgentCoreSessionService {
       ...(this.server.backendUrl ? { PI_SCIENCE_BACKEND_URL: this.server.backendUrl } : {}),
       ...(this.server.internalToken ? { PI_SCIENCE_INTERNAL_TOKEN: this.server.internalToken } : {}),
     } as Record<string, string>;
+  }
+
+  /** Read the command catalogue with the same resource loaders and global skill policy as a new runtime.
+   *  This deliberately does not open a session, worker, lane, or event stream. */
+  async composerCommands(cwd: string, config: PiConfig): Promise<{ commands: Array<{ name: string; description: string; source: string; group: string }>; revision: string }> {
+    const executionEnv = new NodeExecutionEnv({ cwd, shellEnv: {} });
+    const skillPaths = [packagedSkillsRoot(), join(cwd, ".pi", "skills"), ...(config.skills ?? [])];
+    const [discovered, templates, policy] = await Promise.all([
+      loadSkills(executionEnv, skillPaths, BACKGROUND_CONTEXT),
+      loadPromptTemplates(executionEnv, join(cwd, ".pi", "prompts"), BACKGROUND_CONTEXT),
+      globalSkillPolicy(),
+    ]);
+    const commands = [
+      ...applySkillPolicy(overrideByName(discovered.skills), policy).map((skill) => ({ name: `skill:${skill.name}`, description: skill.description, source: "skill", group: "skill" })),
+      ...templates.promptTemplates.map((template) => ({ name: template.name, description: template.description ?? "", source: "prompt", group: "utility" })),
+    ];
+    const revision = createHash("sha256").update(JSON.stringify({ commands, policy })).digest("hex").slice(0, 16);
+    return { commands, revision };
   }
 
   private async credentialEnvNames(cwd: string): Promise<string[]> {
@@ -669,3 +702,4 @@ export class AgentCoreSessionService {
     return work;
   }
 }
+

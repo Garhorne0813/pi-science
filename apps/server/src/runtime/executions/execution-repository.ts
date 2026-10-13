@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
+import { stat } from "node:fs/promises";
 import {
   executionEventSchema,
   executionRecordSchema,
@@ -46,7 +47,54 @@ export function executionIdFor(...parts: string[]): string {
   return `exec_${createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 24)}`;
 }
 
+export interface ExecutionQuery {
+  limit?: number;
+  target_id?: string;
+  offset?: number;
+  session_id?: string;
+  kind?: ExecutionKind;
+  status?: ExecutionStatus;
+  search?: string;
+  from?: string;
+  to?: string;
+}
+
 export class ExecutionRepository {
+  // A disposable materialization; JSONL remains the source of truth. File metadata
+  // invalidates external edits too, while bounded retention avoids unbounded RAM.
+  private snapshots = new Map<string, { signature: string; records: ExecutionRecord[] }>();
+
+  private async records(cwd: string): Promise<ExecutionRecord[]> {
+    const path = this.path(cwd);
+    const signature = async () => {
+      try {
+        const info = await stat(path, { bigint: true });
+        return `${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
+      }
+    };
+    const before = await signature();
+    const cached = this.snapshots.get(path);
+    if (before && cached?.signature === before) return cached.records.slice();
+    const records = reduceExecutionEvents(await this.events(cwd));
+    const after = await signature();
+    if (before && before === after && records.length <= 100_000) {
+      this.snapshots.delete(path);
+      let retained = [...this.snapshots.values()].reduce((sum, snapshot) => sum + snapshot.records.length, 0);
+      while (this.snapshots.size && (this.snapshots.size >= 4 || retained + records.length > 100_000)) {
+        const oldest = this.snapshots.keys().next().value!;
+        retained -= this.snapshots.get(oldest)!.records.length;
+        this.snapshots.delete(oldest);
+      }
+      this.snapshots.set(path, { signature: after, records });
+    } else {
+      this.snapshots.delete(path);
+    }
+    return records.slice();
+  }
+
   private path(cwd: string): string {
     return workspaceFile(cwd, EXECUTION_LOG);
   }
@@ -59,17 +107,52 @@ export class ExecutionRepository {
     });
   }
 
-  async list(cwd: string, options: { limit?: number; session_id?: string; kind?: ExecutionKind; status?: ExecutionStatus } = {}): Promise<ExecutionRecord[]> {
-    let records = reduceExecutionEvents(await this.events(cwd));
+  async list(cwd: string, options: ExecutionQuery = {}): Promise<ExecutionRecord[]> {
+    return (await this.query(cwd, options)).executions;
+  }
+
+  async query(cwd: string, options: ExecutionQuery = {}) {
+    let records = await this.records(cwd);
     if (options.session_id) records = records.filter((record) => record.correlation.session_id === options.session_id);
+    const total = records.length;
+    const targetInScope = options.target_id ? records.some((record) => record.execution_id === options.target_id) : undefined;
+    const statusCounts: Partial<Record<ExecutionStatus, number>> = {};
+    let completedDurationMs = 0;
+    let completedDurationCount = 0;
+    for (const record of records) {
+      statusCounts[record.status] = (statusCounts[record.status] ?? 0) + 1;
+      const start = Date.parse(record.started_at ?? "");
+      const end = Date.parse(record.ended_at ?? "");
+      if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
+        completedDurationMs += end - start;
+        completedDurationCount++;
+      }
+    }
     if (options.kind) records = records.filter((record) => record.kind === options.kind);
     if (options.status) records = records.filter((record) => record.status === options.status);
-    const limit = Math.min(1_000, Math.max(1, options.limit ?? 100));
-    return records.sort((left, right) => right.created_at.localeCompare(left.created_at)).slice(0, limit);
+    if (options.from || options.to) {
+      const now = Date.now();
+      records = records.filter((record) => executionOverlapsWindow(record, options.from, options.to, now));
+    }
+    const needle = options.search?.trim().toLocaleLowerCase();
+    if (needle) records = records.filter((record) => JSON.stringify([
+      record.execution_id, record.kind, record.surface, record.status, record.producer,
+      record.correlation, record.request, record.result, record.files, record.artifacts,
+    ]).toLocaleLowerCase().includes(needle));
+    const limit = Number.isFinite(options.limit) ? Math.min(1_000, Math.max(1, Math.floor(options.limit!))) : 100;
+    const offset = Number.isFinite(options.offset) ? Math.max(0, Math.floor(options.offset!)) : 0;
+    records.sort((left, right) => right.created_at.localeCompare(left.created_at) || left.execution_id.localeCompare(right.execution_id));
+    const targetIndex = options.target_id ? records.findIndex((record) => record.execution_id === options.target_id) : -1;
+    return {
+      executions: structuredClone(records.slice(offset, offset + limit)), total, filtered_total: records.length, offset, limit,
+      status_counts: statusCounts, completed_duration_ms: completedDurationMs, completed_duration_count: completedDurationCount,
+      ...(options.target_id ? { target_in_scope: targetInScope, target_matches: targetIndex >= 0,
+        target_offset: targetIndex >= 0 ? Math.floor(targetIndex / limit) * limit : null } : {}),
+    };
   }
 
   async get(cwd: string, executionId: string): Promise<ExecutionRecord | null> {
-    return reduceExecutionEvents(await this.events(cwd)).find((record) => record.execution_id === executionId) ?? null;
+    return structuredClone((await this.records(cwd)).find((record) => record.execution_id === executionId) ?? null);
   }
 
   async start(cwd: string, input: StartExecutionInput): Promise<ExecutionRecord> {
@@ -140,7 +223,10 @@ export class ExecutionRepository {
       await appendJsonLineUnlocked(path, event);
       return event;
     });
-    if (appended) emitExecutionEvent(cwd, appended);
+    if (appended) {
+      this.snapshots.delete(path);
+      emitExecutionEvent(cwd, appended);
+    }
   }
 }
 
@@ -260,3 +346,14 @@ function mergeArtifacts(left: ExecutionArtifactRef[], right: ExecutionArtifactRe
 }
 
 export const executionRepository = new ExecutionRepository();
+
+/** Inclusive interval intersection. Unknown starts cannot establish an overlap;
+ * terminal records without an end can only establish their known start instant. */
+export function executionOverlapsWindow(record: Pick<ExecutionRecord, "started_at" | "ended_at" | "status">, from?: string, to?: string, now = Date.now()): boolean {
+  const start = Date.parse(record.started_at ?? "");
+  if (!Number.isFinite(start)) return false;
+  const active = record.status === "running" || record.status === "pending";
+  const end = record.ended_at ? Date.parse(record.ended_at) : active ? Math.max(now, start) : start;
+  if (!Number.isFinite(end) || end < start) return false;
+  return end >= (from ? Date.parse(from) : -Infinity) && start <= (to ? Date.parse(to) : Infinity);
+}

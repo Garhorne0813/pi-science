@@ -127,17 +127,17 @@ $NodeVersionCheck = Join-Path $ScriptDir "check-node-version.mjs"
 if ($LASTEXITCODE -ne 0) {
     throw "Node.js >=24.16.0 is required."
 }
-$PnpmPath = Get-ProcessCommand "pnpm"
-if (-not $PnpmPath) {
-    throw "pnpm is required. Enable it with: corepack enable pnpm"
-}
+$PackageManager = Join-Path $ScriptDir "package-manager.mjs"
+Invoke-Checked -FilePath $NodePath -Arguments @($PackageManager, "--version") -WorkingDirectory $ProjectDir
 Write-Host ("  Node.js: " + (& $NodePath --version))
-Write-Host ("  pnpm:   " + (& $PnpmPath --version))
 
 Write-Host "==> Installing JavaScript workspace dependencies..."
-$PnpmStoreDir = if ($env:PNPM_STORE_DIR) { $env:PNPM_STORE_DIR } else { Join-Path $ProjectDir ".cache\pnpm-store" }
+$PnpmStoreDir = if ($env:PNPM_STORE_DIR) { $env:PNPM_STORE_DIR } else { Join-Path $env:LOCALAPPDATA "pi-science\pnpm-store" }
 New-Item -ItemType Directory -Path $PnpmStoreDir -Force | Out-Null
-Invoke-Checked -FilePath $PnpmPath -Arguments @("--config.store-dir=$PnpmStoreDir", "install", "--frozen-lockfile") -WorkingDirectory $ProjectDir
+Invoke-Checked -FilePath $NodePath -Arguments @($PackageManager, "--config.store-dir=$PnpmStoreDir", "install", "--frozen-lockfile") -WorkingDirectory $ProjectDir
+
+Write-Host "==> Building production application..."
+Invoke-Checked -FilePath $NodePath -Arguments @($PackageManager, "build") -WorkingDirectory $ProjectDir
 
 New-Item -ItemType Directory -Path $InstallStateDir -Force | Out-Null
 $stateLines = @(

@@ -131,8 +131,8 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
           <MentionComposer
             cwd={workspaceCwd}
             value={input}
-            mentions={composer.mentions}
-            onChange={(value, mentions) => { setInput(value); composer.setMentions(mentions); }}
+            entities={composer.entities}
+            onChange={(value, _mentions, entities) => { setInput(value); composer.setEntities(entities); }}
             onKeyDown={composer.handleKeyDown}
             onCompositionStart={() => { composer.composingRef.current = true; setComposing(true); }}
             onCompositionEnd={() => { setTimeout(() => { composer.composingRef.current = false; setComposing(false); }, 0); }}

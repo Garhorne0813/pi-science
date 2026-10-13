@@ -70,7 +70,7 @@ export function TableChart({ table }: { table: ParsedTable }) {
 
   return (
     <div className="flex h-full flex-col bg-surface">
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2 text-[12px]">
+      <div className="preview-toolbar">
         <Segmented
           value={type}
           onChange={(v) => setType(v as ChartType)}
@@ -183,7 +183,7 @@ export function TableChart({ table }: { table: ParsedTable }) {
         </svg>
       </div>
 
-      <div className="flex items-center gap-3 border-t border-border px-3 py-2 text-[11px]">
+      <div className="preview-status">
         <div className="flex flex-wrap gap-x-3 gap-y-1">
           {ys.map((sIdx, si) => (
             <span key={sIdx} className="inline-flex items-center gap-1 text-muted">
@@ -214,10 +214,12 @@ function Segmented({
       {options.map((o) => (
         <button
           key={o}
+          type="button"
+          aria-pressed={value === o}
           onClick={() => onChange(o)}
           className={cn(
-            "px-2 py-1 text-[11px] font-medium capitalize transition-colors",
-            value === o ? "bg-surface-2 text-text" : "text-muted hover:text-text",
+            "preview-control capitalize",
+            value === o ? "bg-surface-selected text-accent" : "text-muted hover:text-text",
           )}
         >
           {labelFor ? labelFor(o) : o}

@@ -230,7 +230,7 @@ function handleApi(req, res, url) {
   }
   if (method === "GET" && pathname === "/api/executions") {
     log();
-    return json(res, 200, []);
+    return json(res, 200, { executions: [], total: 0, filtered_total: 0, offset: 0, limit: 50 });
   }
   if (method === "GET" && pathname === "/api/executions/events") {
     log();

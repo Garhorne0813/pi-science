@@ -111,7 +111,7 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
       decodeMs: 2500,
     } }));
   }
-  if (url.includes("/commands?")) return Promise.resolve(jsonResponse({ commands: [] }));
+  if (url.includes("/api/composer/commands?")) return Promise.resolve(jsonResponse({ commands: [] }));
   if (url.startsWith("/api/project-memory/research-loops")) return Promise.resolve(jsonResponse({ loops: [] }));
   if (url.startsWith("/api/model-selection/default")) return Promise.resolve(jsonResponse({ scope: "default", selection: { model: "prov/m1", thinking: "high" } }));
   if (url.includes("/model-selection?")) {
@@ -202,10 +202,10 @@ function renderPage(search = "") {
   );
 }
 
-function renderWorkspaceLanding() {
+function renderWorkspaceLanding(toast = vi.fn()) {
   return render(
     <QueryClientProvider client={queryClient}>
-      <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
+      <FeedbackContext.Provider value={{ toast, confirm: async () => true }}>
         <MemoryRouter initialEntries={[`/workspace/${CWD}`]}>
           <Routes>
             <Route path="/workspace/:cwd" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
@@ -404,8 +404,7 @@ describe("composer send-failure restore", () => {
       await pending.catch(() => undefined);
     });
 
-    // References are always re-added; the draft is only restored when empty.
-    await waitFor(() => expect(useUiStore.getState().workspaceReferences).toHaveLength(1));
+    expect(useUiStore.getState().workspaceReferences).toEqual([]);
     expect(useRuntimeStore.getState().draft).toBe("typed while sending");
   });
 });
@@ -826,23 +825,19 @@ describe("slash-command dispatcher", () => {
   });
 
   it("discovers skills on a cold new conversation and preserves its draft", async () => {
-    let finish!: (id: string) => void;
-    const pending = new Promise<string>((resolve) => { finish = resolve; });
-    const create = vi.fn(() => pending);
-    overrides.push((url) => url.includes("/commands?")
+    const create = vi.fn(async () => "unexpected-session");
+    overrides.push((url) => url.includes("/api/composer/commands?")
       ? Promise.resolve(jsonResponse({ commands: [{ name: "skill:review", description: "Review files", source: "skill" }] }))
       : null);
     useRuntimeStore.setState({ activeSessionId: null, createNewSession: create });
     renderWorkspaceLanding();
     expect(create).not.toHaveBeenCalled();
     act(() => { useRuntimeStore.getState().setDraft("/skill:rev"); });
-    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
-    act(() => { useRuntimeStore.setState({ activeSessionId: "s2" }); finish("s2"); });
     await waitFor(() => expect(screen.getByRole("listbox")).toHaveTextContent("/skill:review"));
     expect(textarea()).toHaveValue("/skill:rev");
     fireEvent.keyDown(textarea(), { key: "Tab" });
     await waitFor(() => expect(textarea()).toHaveValue("/skill:review"));
-    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).not.toHaveBeenCalled();
   });
 
   it("/compact posts to the compact endpoint and reports it without sending a prompt", async () => {
@@ -1452,9 +1447,11 @@ function deferred<T>() {
 const SKILL_COMMAND = { name: "skill:review", description: "Review files", source: "skill", group: "skill" };
 const PROMPT_COMMAND = { name: "summarize", description: "Summarize text", source: "prompt", group: "utility" };
 
-/** Answer every commands request with this catalogue. */
+/** Answer every workspace command catalogue request with this catalogue. */
 function stubCommands(...commands: Array<Record<string, unknown>>) {
-  overrides.push((url) => (url.includes("/commands?") ? Promise.resolve(jsonResponse({ commands })) : null));
+  overrides.push((url) => (url.includes("/api/composer/commands?") || /\/api\/sessions\/[^/]+\/commands\?/.test(url)
+    ? Promise.resolve(jsonResponse({ commands }))
+    : null));
 }
 
 async function typeDraft(value: string) {
@@ -1541,7 +1538,7 @@ describe("route-level completion lifecycle", () => {
     });
   });
 
-  it("creates exactly one runtime session for a slash draft and keeps the draft, attachment and reference (AC-14)", async () => {
+  it("keeps slash discovery, attachments and references session-free until send (AC-14)", async () => {
     stubCommands(SKILL_COMMAND);
     const create = vi.fn(async (): Promise<string> => "s2");
     useRuntimeStore.setState({ sessions: [], activeSessionId: null, createNewSession: create });
@@ -1552,15 +1549,12 @@ describe("route-level completion lifecycle", () => {
     await attachFile("protein.csv");
     await typeDraft("/skill:rev");
 
-    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
-
-    // The runtime answers: the composer adopts the new session without dropping what was typed.
-    await act(async () => { useRuntimeStore.setState({ activeSessionId: "s2" }); });
-
     const menu = await screen.findByRole("listbox");
     expect(within(menu).getByText("/skill:review")).toBeInTheDocument();
     expect(textarea()).toHaveValue("/skill:rev");
-    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).not.toHaveBeenCalled();
+    expect(useRuntimeStore.getState().activeSessionId).toBeNull();
+    expect(useRuntimeStore.getState().sessions).toEqual([]);
     expect(screen.getByText("protein.csv")).toBeInTheDocument();
     expect(screen.getByLabelText("Remove reference protein.csv")).toBeInTheDocument();
     expect(useUiStore.getState().workspaceReferences).toEqual([
@@ -1568,8 +1562,32 @@ describe("route-level completion lifecycle", () => {
     ]);
   });
 
-  it("does not initialize a workspace the slash draft was not typed in", async () => {
+  it("explains that /compact needs a session and keeps the draft on a blank conversation", async () => {
+    const create = vi.fn(async () => "unexpected-session");
+    const sendPrompt = vi.fn(async (): Promise<string | null> => null);
+    const toast = vi.fn();
+    useRuntimeStore.setState({ activeSessionId: null, createNewSession: create, sendPrompt });
+    renderWorkspaceLanding(toast);
+    await screen.findByTestId("model-control");
+    await typeDraft("/compact");
+
+    fireEvent.click(sendButton());
+
+    await waitFor(() => expect(useRuntimeStore.getState().draft).toBe("/compact"));
+    expect(create).not.toHaveBeenCalled();
+    expect(sendPrompt).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("existing conversation"), "error");
+  });
+
+  it("does not initialize any workspace when discovery returns after a workspace switch", async () => {
     const create = vi.fn(async (): Promise<string> => "s2");
+    const commandGate = deferred<void>();
+    overrides.push((url) => {
+      if (!url.includes("/api/composer/commands?")) return null;
+      const workspace = new URL(url, "http://localhost").searchParams.get("cwd");
+      if (workspace === CWD) return commandGate.promise.then(() => jsonResponse({ commands: [SKILL_COMMAND] }));
+      return null;
+    });
     // The real connect moves the store to the new workspace synchronously, before the
     // composer has had the chance to clear the previous workspace's draft.
     const connect = vi.fn(async (cwd: string) => { useRuntimeStore.setState({ cwd }); });
@@ -1578,12 +1596,13 @@ describe("route-level completion lifecycle", () => {
     await screen.findByTestId("model-control");
 
     await typeDraft("/skill:rev");
-    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
-    create.mockClear();
-
-    // The user leaves for another workspace while that creation is still in flight. The draft
-    // belongs to the workspace it was typed in, so the new workspace stays lazy.
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/composer/commands?") && String(url).includes(encodeURIComponent(CWD)))).toBe(true));
+    // The user leaves while the old workspace catalogue may still be in flight.
     await act(async () => { navigate("/workspace/proj-b"); });
+    await act(async () => {
+      commandGate.resolve();
+      await commandGate.promise;
+    });
 
     expect(useRuntimeStore.getState().cwd).toBe("proj-b");
     expect(useRuntimeStore.getState().draft).toBe("");
@@ -1607,6 +1626,7 @@ describe("route-level completion lifecycle", () => {
       await waitFor(() => expect(textarea()).toHaveValue("/summarize"));
       expect(sendPrompt).not.toHaveBeenCalled();
       expect(useRuntimeStore.getState().draft).toBe("/summarize");
+      expect(screen.queryByRole("listbox")).toBeNull();
     });
 
     it("offers a prompt command and accepts it with Enter without sending", async () => {
@@ -1623,25 +1643,26 @@ describe("route-level completion lifecycle", () => {
 
       await waitFor(() => expect(textarea()).toHaveValue("/summarize"));
       expect(sendPrompt).not.toHaveBeenCalled();
+      expect(screen.queryByRole("listbox")).toBeNull();
     });
   });
 
-  it("does not show the previous session's prompt command when its response lands late (AC-18)", async () => {
-    // Each request gets its own response body, so both the in-flight request and the refetch the
-    // same session issues later get real data.
+  it("does not show a previous workspace's prompt command when its response lands late", async () => {
     const firstGate = deferred<void>();
     const secondGate = deferred<void>();
+    useRuntimeStore.setState({ sessions: [], activeSessionId: null });
     overrides.push((url) => {
-      if (!url.includes("/commands?")) return null;
-      if (url.includes(`/sessions/${SESSION_ID}/`)) return firstGate.promise.then(() => jsonResponse({ commands: [PROMPT_COMMAND] }));
-      if (url.includes("/sessions/s2/")) return secondGate.promise.then(() => jsonResponse({ commands: [{ name: "summaries", description: "Summarize a set", source: "prompt", group: "utility" }] }));
+      if (!url.includes("/api/composer/commands?")) return null;
+      const workspace = new URL(url, "http://localhost").searchParams.get("cwd");
+      if (workspace === CWD) return firstGate.promise.then(() => jsonResponse({ commands: [PROMPT_COMMAND] }));
+      if (workspace === "proj-b") return secondGate.promise.then(() => jsonResponse({ commands: [{ name: "summaries", description: "Summarize a set", source: "prompt", group: "utility" }] }));
       return null;
     });
-    await renderReady();
-    // The previous session's catalogue is requested on mount and still in flight.
-    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes(`/sessions/${SESSION_ID}/commands?`))).toBe(true));
-
-    await act(async () => { useRuntimeStore.setState({ activeSessionId: "s2" }); });
+    const navigate = renderSwitchableLanding();
+    await screen.findByTestId("model-control");
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/composer/commands?") && String(url).includes(encodeURIComponent(CWD)))).toBe(true));
+    await act(async () => { navigate("/workspace/proj-b"); });
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/composer/commands?") && String(url).includes("proj-b"))).toBe(true));
     await typeDraft("/sum");
 
     await act(async () => {
@@ -1652,7 +1673,7 @@ describe("route-level completion lifecycle", () => {
     const menu = await screen.findByRole("listbox");
     expect(within(menu).getByText("/summaries")).toBeInTheDocument();
 
-    // The previous session's response lands only now, after the switch.
+    // The previous workspace's response lands only now, after the switch.
     await act(async () => {
       firstGate.resolve();
       await firstGate.promise;
@@ -1661,11 +1682,6 @@ describe("route-level completion lifecycle", () => {
     expect(within(screen.getByRole("listbox")).queryByText("/summarize")).toBeNull();
     expect(within(screen.getByRole("listbox")).getByText("/summaries")).toBeInTheDocument();
 
-    // Control: the same catalogue does reach the menu while its own session is current, so the
-    // negative above is session scoping and not a response this harness can never surface.
-    await act(async () => { useRuntimeStore.setState({ activeSessionId: SESSION_ID }); });
-    await typeDraft("/sum");
-    const back = await screen.findByRole("listbox");
-    expect(within(back).getByText("/summarize")).toBeInTheDocument();
   });
 });
+

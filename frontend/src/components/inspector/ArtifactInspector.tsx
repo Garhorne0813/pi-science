@@ -21,11 +21,13 @@ export function ArtifactInspector({
   data,
   onClose,
   controls,
+  compactHeader = false,
 }: {
   data: ArtifactInspectorT;
   onClose: () => void;
   /** Pane-level header buttons (e.g. maximize), rendered before Close. */
   controls?: React.ReactNode;
+  compactHeader?: boolean;
 }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<ArtifactTab>("code");
@@ -53,7 +55,7 @@ export function ArtifactInspector({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
+      <header className="preview-toolbar">
         <span className="truncate text-sm font-medium text-text">{data.title}</span>
         <div className="ml-2 flex items-center gap-1 text-text">
           <IconButton
@@ -83,7 +85,7 @@ export function ArtifactInspector({
           onClick={() => void saveTextWithFeedback(scriptName, content.code)}
         />
         {controls}
-        <IconButton icon={X} label="Close" size="compact" className="text-text" onClick={onClose} />
+        {!compactHeader && <IconButton icon={X} label="Close" size="compact" className="text-text" onClick={onClose} />}
       </header>
 
       <nav className="flex items-center gap-4 border-b border-border px-4">

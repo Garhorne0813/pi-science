@@ -1,3 +1,4 @@
+import { ViewerToolbar, ViewerStatusBar } from "./PreviewFrame";
 import { useMemo, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -57,7 +58,7 @@ export function BandView({ filename, bytes }: { filename: string; bytes: ArrayBu
 
   return (
     <div className="flex h-full flex-col bg-surface">
-      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+      <ViewerToolbar>
         <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted">
           {filename} · {t("band.viewLabel")} · {t("band.bandCount", { count: d.nbands })} × {t("band.kpointCount", { count: d.nkpts })}{d.spin ? t("band.spinPolarizedSuffix") : ""}
         </span>
@@ -71,7 +72,7 @@ export function BandView({ filename, bytes }: { filename: string; bytes: ArrayBu
             </span>
           </span>
         )}
-      </div>
+      </ViewerToolbar>
 
       <div className="flex min-h-0 flex-1 items-center justify-center p-4">
         <svg
@@ -112,14 +113,14 @@ export function BandView({ filename, bytes }: { filename: string; bytes: ArrayBu
         </svg>
       </div>
 
-      <div className="border-t border-border px-3 py-2 text-right font-mono text-[11px] text-muted">
+      <ViewerStatusBar>
         {hover ? (
           // eslint-disable-next-line i18next/no-literal-string -- physics notation/units ("k =", "E ≈", "eV"), not prose; consistent with the rest of this inspector family
           <>k = {hover.k} · E ≈ {hover.e.toFixed(2)} eV</>
         ) : (
-          <span className="text-muted/50">{t("band.hoverHint")}</span>
+          <span className="text-muted">{t("band.hoverHint")}</span>
         )}
-      </div>
+      </ViewerStatusBar>
     </div>
   );
 }

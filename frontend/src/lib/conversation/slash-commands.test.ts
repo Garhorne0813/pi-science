@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { allCommands, commandHint, commandTakesArguments, matchCommands, slashCommandsQuery } from "./slash-commands";
+import { allCommands, commandHint, commandTakesArguments, matchCommands, slashCommandsKey, slashCommandsPrefix, slashCommandsRoot, slashCommandsQuery } from "./slash-commands";
 import type { SlashCommand } from "./slash-commands";
 import { queryClient } from "../client/query-client";
 
@@ -29,46 +29,58 @@ describe("slash commands", () => {
         { name: "summarize", description: "Summarize text", source: "prompt" },
       ],
     }), { status: 200, headers: { "Content-Type": "application/json" } })));
-    const commands = await queryClient.fetchQuery(slashCommandsQuery("/workspace", "session-a"));
+    const commands = await queryClient.fetchQuery(slashCommandsQuery("/workspace"));
     expect(allCommands(commands).map((command) => command.name)).toContain("skill:review");
     expect(allCommands(commands).map((command) => command.name)).not.toContain("deploy");
     expect(allCommands(commands)).toContainEqual(expect.objectContaining({ name: "summarize", group: "utility", source: "prompt" }));
     expect(allCommands(commands).filter((command) => command.name === "compact")).toHaveLength(1);
   });
 
-  it("isolates workspaces and sessions when requests finish out of order", async () => {
+  it("isolates workspace catalogues when requests finish out of order", async () => {
     const resolve = new Map<string, (response: Response) => void>();
     vi.stubGlobal("fetch", vi.fn((url: string) => new Promise<Response>((done) => { resolve.set(url, done); })));
-    const a = slashCommandsQuery("/a", "s1");
-    const b = slashCommandsQuery("/b", "s1");
-    const next = slashCommandsQuery("/b", "s2");
+    const a = slashCommandsQuery("/a");
+    const b = slashCommandsQuery("/b");
     const first = queryClient.fetchQuery(a);
     const second = queryClient.fetchQuery(b);
-    const third = queryClient.fetchQuery(next);
     const finish = (index: number, name: string) => [...resolve.values()][index](new Response(JSON.stringify({
       commands: [{ name: `skill:${name}`, source: "skill" }],
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
-    finish(2, "next"); await third;
     finish(1, "b"); await second;
     finish(0, "a"); await first;
     expect(queryClient.getQueryData(a.queryKey)).toMatchObject([{ name: "skill:a" }]);
     expect(queryClient.getQueryData(b.queryKey)).toMatchObject([{ name: "skill:b" }]);
-    expect(queryClient.getQueryData(next.queryKey)).toMatchObject([{ name: "skill:next" }]);
-    expect(slashCommandsQuery("/b", null).enabled).toBe(false);
   });
 
-  it("keeps an old session prompt catalogue out of the current session", async () => {
-    const resolve = new Map<string, (response: Response) => void>();
-    vi.stubGlobal("fetch", vi.fn((url: string) => new Promise<Response>((done) => { resolve.set(url, done); })));
-    const previous = slashCommandsQuery("/workspace", "s1");
-    const current = slashCommandsQuery("/workspace", "s2");
-    const first = queryClient.fetchQuery(previous);
-    const second = queryClient.fetchQuery(current);
-    const finish = (index: number, command: Record<string, string>) => [...resolve.values()][index](new Response(JSON.stringify({ commands: [command] }), { status: 200, headers: { "Content-Type": "application/json" } }));
-    finish(1, { name: "skill:current", source: "skill" }); await second;
-    finish(0, { name: "summarize", source: "prompt" }); await first;
-    expect(queryClient.getQueryData(current.queryKey)).toMatchObject([{ name: "skill:current" }]);
-    expect(queryClient.getQueryData(current.queryKey)).not.toContainEqual(expect.objectContaining({ name: "summarize" }));
+  it("loads the catalogue without a session and marks session commands", async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL) => new Response(JSON.stringify({ commands: [] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetch);
+    const query = slashCommandsQuery("/workspace");
+    expect(query.enabled).toBe(true);
+    await queryClient.fetchQuery(query);
+    expect(String(fetch.mock.calls[0]?.[0])).toContain("/api/composer/commands?");
+    expect(allCommands().find((command) => command.name === "compact")?.requiresSession).toBe(true);
+    expect(allCommands().find((command) => command.name === "export")?.requiresSession).toBe(true);
+  });
+
+  it("keeps an active session's command policy scoped to that session", async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL) => new Response(JSON.stringify({
+      commands: [{ name: "skill:session-only", description: "Session policy", source: "skill" }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetch);
+    const query = slashCommandsQuery("/workspace", "session-1");
+    expect(query.queryKey).toEqual(slashCommandsKey("/workspace", "session-1"));
+    await queryClient.fetchQuery(query);
+    expect(String(fetch.mock.calls[0]?.[0])).toContain("/api/sessions/session-1/commands?");
+  });
+
+  it("builds every catalogue key under the workspace prefix the invalidations use", () => {
+    expect(slashCommandsPrefix("/workspace")).toEqual(["composer-commands", "/workspace"]);
+    expect(slashCommandsPrefix("/workspace").slice(0, slashCommandsRoot.length)).toEqual(slashCommandsRoot);
+    expect(slashCommandsKey("/workspace", "session-1")).toEqual(["composer-commands", "/workspace", "session-1"]);
+    expect(slashCommandsKey("/workspace", null)).toEqual(["composer-commands", "/workspace", null]);
+    expect(slashCommandsKey("/workspace", "session-1").slice(0, slashCommandsPrefix("/workspace").length)).toEqual(slashCommandsPrefix("/workspace"));
+    expect(slashCommandsKey("/workspace", null).slice(0, slashCommandsPrefix("/workspace").length)).toEqual(slashCommandsPrefix("/workspace"));
   });
 
   it("ranks a name prefix above a name substring above a description match", () => {
@@ -120,3 +132,4 @@ describe("slash commands", () => {
     expect(commandTakesArguments(command)).toBe(true);
   });
 });
+

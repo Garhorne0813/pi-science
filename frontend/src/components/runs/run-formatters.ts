@@ -9,6 +9,18 @@ export function executionLabel(run: ExecutionRecord): string {
   return run.request.command?.join(" ") || String(run.request.tool || run.execution_id);
 }
 
+/** Prefer recorded descriptions or code excerpts; never invent a research stage. */
+export function executionShortLabel(run: ExecutionRecord): string {
+  if (typeof run.request.title === "string" && run.request.title.trim()) return run.request.title.trim();
+  if (run.kind === "kernel_cell" && run.request.code?.trim()) return run.request.code.trim().split("\n")[0]!;
+  const input = run.request.input;
+  if (run.request.tool && input && typeof input === "object" && !Array.isArray(input)) {
+    const path = (input as Record<string, unknown>).path;
+    if (typeof path === "string" && path) return `${run.request.tool} · ${fileName(path)}`;
+  }
+  return executionLabel(run);
+}
+
 export function executionSearchText(run: ExecutionRecord): string {
   return [run.execution_id, run.kind, run.surface, run.status, run.producer, executionLabel(run), ...run.files.read.map((file) => file.path), ...run.files.written.map((file) => file.path)].join("\n");
 }
@@ -49,12 +61,16 @@ export function executionDuration(run: ExecutionRecord, runningLabel: string): s
   const start = Date.parse(run.started_at ?? run.created_at);
   const end = run.ended_at ? Date.parse(run.ended_at) : Number.NaN;
   if (!Number.isFinite(start) || !Number.isFinite(end)) return "—";
-  const milliseconds = Math.max(0, end - start);
+  return end >= start ? formatDuration(end - start) : "—";
+}
+
+export function formatDuration(milliseconds: number): string {
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return "—";
   if (milliseconds < 1_000) return `${milliseconds} ms`;
   if (milliseconds < 60_000) return `${(milliseconds / 1_000).toFixed(milliseconds < 10_000 ? 1 : 0)} s`;
-  const minutes = Math.floor(milliseconds / 60_000);
-  const seconds = Math.floor((milliseconds % 60_000) / 1_000);
-  return `${minutes}m ${seconds}s`;
+  if (milliseconds >= 86_400_000) return `${Math.floor(milliseconds / 86_400_000)}d ${Math.floor((milliseconds % 86_400_000) / 3_600_000)}h`;
+  if (milliseconds >= 3_600_000) return `${Math.floor(milliseconds / 3_600_000)}h ${Math.floor((milliseconds % 3_600_000) / 60_000)}m`;
+  return `${Math.floor(milliseconds / 60_000)}m ${Math.floor((milliseconds % 60_000) / 1_000)}s`;
 }
 
 export function formatTimestamp(value?: string): string {

@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { waitForConversationSettled } from "./fixtures/app.fixture";
 import { VISUAL_CWD, VISUAL_SESSION } from "./fixtures/data.mjs";
 
 const root = `/workspace/${encodeURIComponent(VISUAL_CWD)}`;
@@ -8,6 +9,66 @@ const TOGGLE = /^(Expand|Collapse) sidebar$/;
 // The Rail's Knowledge link folds the pending count into its accessible name,
 // so it is matched by prefix rather than exactly.
 const KNOWLEDGE = /^Project Knowledge/;
+
+test("desktop rail reveals labels above adjacent panes without shifting the layout", async ({ page }, testInfo) => {
+  test.skip(!["desktop-light", "desktop-dark", "tablet"].includes(testInfo.project.name), "Desktop hover and keyboard coverage");
+  if (testInfo.project.name === "desktop-dark") {
+    await page.addInitScript(() => localStorage.setItem("pi-science.theme", JSON.stringify("dark")));
+  }
+  await page.goto(`${root}/research`);
+  const rail = page.locator(RAIL);
+  const railSlot = page.locator("[data-workspace-rail-slot]");
+  const main = page.locator("#main-content");
+  const panel = page.locator(PANEL);
+  await expect(page.getByRole("searchbox")).toBeVisible();
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await Promise.all(document.getAnimations().filter(animation =>
+      animation.effect?.getComputedTiming().iterations !== Infinity
+    ).map(animation => animation.finished.catch(() => undefined)));
+  });
+  const mainX = (await main.boundingBox())!.x;
+  const panelX = (await panel.boundingBox())!.x;
+  await expect(railSlot).toHaveCSS("width", "60px");
+  await expect(rail).toHaveCSS("width", "60px");
+  const research = rail.getByRole("link", { name: "Research", exact: true });
+  await research.hover();
+  await expect(rail).toHaveCSS("width", "220px");
+  await expect(research.locator(".workspace-rail-label")).toHaveCSS("opacity", "1");
+  for (const label of await rail.locator(".workspace-rail-label").all()) {
+    await expect(label).toHaveCSS("text-align", "left");
+  }
+  await page.screenshot({ path: testInfo.outputPath("rail-expanded.png") });
+  expect((await main.boundingBox())!.x).toBe(mainX);
+  expect((await panel.boundingBox())!.x).toBe(panelX);
+  await page.mouse.move(700, 300);
+  await expect(rail).toHaveCSS("width", "60px");
+  // A pointer click retains DOM focus, but must not pin the overlay open.
+  await research.click();
+  await page.mouse.move(700, 300);
+  await expect(rail).toHaveCSS("width", "60px");
+  await page.getByRole("link", { name: "Skip to content", exact: true }).focus();
+  for (let i = 0; i < 4; i++) await page.keyboard.press("Tab");
+  await expect(research).toBeFocused();
+  await expect(rail).toHaveCSS("width", "220px");
+  await expect(research.locator(".workspace-rail-label")).toHaveCSS("opacity", "1");
+  await main.focus();
+  await expect(rail).toHaveCSS("width", "60px");
+  await page.screenshot({ path: testInfo.outputPath("rail-collapsed.png") });
+});
+
+
+test("mobile rail stays compact on hover and keyboard focus", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile", "Mobile compact rail coverage");
+  await page.goto(`${root}/research`);
+  const rail = page.locator(RAIL);
+  const research = rail.getByRole("link", { name: "Research", exact: true });
+  await research.hover();
+  await research.focus();
+  await expect(rail).toHaveCSS("width", "58px");
+  await expect(research.locator(".workspace-rail-label")).toHaveCSS("opacity", "0");
+  await page.screenshot({ path: testInfo.outputPath("rail-mobile.png") });
+});
 
 test("collapsed workspace keeps a direct Projects link and names the sidebar actions", async ({ page }, testInfo) => {
   test.skip(!["desktop-light", "mobile"].includes(testInfo.project.name), "Desktop and mobile navigation coverage");
@@ -57,6 +118,7 @@ test("sidebar tabs preserve session lifecycle and collapsed New stays blank", as
   test.skip(testInfo.project.name !== "desktop-light", "Desktop interaction coverage");
   await page.goto(`${root}/session/${VISUAL_SESSION}`);
   await expect(page.getByRole("button", { name: "Markdown rendering demo", exact: true })).toBeVisible();
+  await waitForConversationSettled(page);
   let reloads = 0;
   page.on("request", request => {
     if (new URL(request.url()).pathname === "/api/sessions" && request.method() === "GET") reloads++;
@@ -130,6 +192,7 @@ test("rail navigation highlights only exact primary routes", async ({ page }, te
     await expect(conversations).not.toHaveClass(/bg-surface-selected/);
     await expect(item).toHaveAttribute("aria-current", "page");
   }
+  await page.mouse.move(700, 300);
   // The full Files route has no Rail entry, so nothing may claim to be current
   // there. The Files context tab still shows where the user is working.
   await page.getByRole("tab", { name: "Files", exact: true }).click();
@@ -152,6 +215,7 @@ test("research with files and runs with conversations stay simultaneously curren
   await expect(page).toHaveURL(new RegExp(`${root}/runs$`));
   await expect(page.getByRole("tab", { name: "Files", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(RAIL).getByRole("link", { name: "Run history", exact: true })).toHaveAttribute("aria-current", "page");
+  await page.mouse.move(700, 300);
   await page.getByRole("tab", { name: "Conversations", exact: true }).click();
   await expect(page.getByRole("tab", { name: "Conversations", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(RAIL).getByRole("link", { name: "Run history", exact: true })).toHaveAttribute("aria-current", "page");
@@ -203,6 +267,8 @@ test("embedded file polling stops while the panel or file tab is hidden", async 
   expect(fileRequests).toBe(collapsed);
   await toggle.click();
   await expect.poll(() => fileRequests).toBeGreaterThan(collapsed);
+  await page.mouse.move(700, 300);
+  await page.clock.runFor(300);
   await page.getByRole("tab", { name: "Conversations", exact: true }).click();
   const conversations = fileRequests;
   await page.clock.runFor(6_000);
@@ -238,7 +304,7 @@ test("the rail is operable while the mobile drawer is open and navigating closes
   const runs = page.locator(RAIL).getByRole("link", { name: "Run history", exact: true });
   await expect(runs).toBeVisible();
   await runs.click();
-  await expect(page).toHaveURL(new RegExp(`${root}/runs$`));
+  await expect(page).toHaveURL(new RegExp(`${root}/runs\\?session_id=${VISUAL_SESSION}$`));
   await expect(runs).toHaveAttribute("aria-current", "page");
   await expect(page.locator(PANEL)).toHaveAttribute("hidden");
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -321,7 +387,9 @@ test("the panel overlays main below 768px and is an in-flow column at 768px", as
   expect(narrow.left).toBe("58px");
   // 768px turns the same element into an in-flow column and keeps the user's
   // open choice; it does not close or reopen behind their back.
+  await page.mouse.move(700, 300);
   await page.setViewportSize({ width: 768, height: 900 });
+  await expect(page.locator(RAIL)).toHaveCSS("width", "60px");
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   const wide = await page.evaluate((selector) => {
     const rail = document.querySelector('nav[aria-label="Primary navigation"]')!.getBoundingClientRect();

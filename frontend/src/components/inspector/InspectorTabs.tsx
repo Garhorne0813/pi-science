@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Maximize2, Minimize2, Minus, Plus, X } from "lucide-react";
+import { Maximize2, Minimize2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Inspector } from "../../types/thread";
 import { useUiStore, type InspectorTab } from "@/lib/ui";
@@ -8,15 +8,9 @@ import { notifyInspectorLayoutChange } from "@/lib/ui/inspector-layout";
 import { IconButton } from "../ui/Icon";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { InspectorShell } from "./InspectorShell";
+import { previewFocusables, inertPreviewBackground, focusPreviewElement } from "./preview-focus";
+import { bindPreviewFrameEscape } from "./iframe-focus";
 import { PreviewPaneControls } from "./PreviewPaneControls";
-
-const MIN_ZOOM = 0.25;
-const MAX_ZOOM = 4;
-const ZOOM_STEP = 0.1;
-
-function clampZoom(value: number): number {
-  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(value * 100) / 100));
-}
 
 function tabTitle(data: Inspector, sessionKernelTitle: string): string {
   switch (data.variant) {
@@ -47,7 +41,6 @@ export function InspectorTabs({
   const activateTab = useUiStore((state) => state.activateInspectorTab);
   const closeTab = useUiStore((state) => state.closeInspectorTab);
   const [expandedTabId, setExpandedTabId] = useState<string | null>(null);
-  const [zoomByTab, setZoomByTab] = useState<Record<string, number>>({});
   // Keep visited tabs mounted so drafts and per-file view state survive tab
   // switches, but do not parse/load every unopened preview on first render.
   const [mountedTabIds, setMountedTabIds] = useState<Set<string>>(
@@ -57,13 +50,7 @@ export function InspectorTabs({
   const tabScrollRef = useRef<HTMLDivElement | null>(null);
   // Focus origin of the expanded dialog, restored when it closes.
   const lastFocusedRef = useRef<HTMLElement | null>(null);
-
-  const setTabZoom = (tabId: string, update: (current: number) => number) => {
-    setZoomByTab((current) => ({
-      ...current,
-      [tabId]: clampZoom(update(current[tabId] ?? 1)),
-    }));
-  };
+  const reverseTabRef = useRef(false);
 
   useEffect(() => {
     const validIds = new Set(tabs.map((tab) => tab.id));
@@ -83,35 +70,41 @@ export function InspectorTabs({
   }, [activeTabId, expandedTabId, tabs]);
 
   useEffect(() => {
+    notifyInspectorLayoutChange();
     if (!expandedTabId) return;
     // Remember where focus came from and move it into the expanded dialog.
     lastFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const restoreBackground = expandedPanelRef.current ? inertPreviewBackground(expandedPanelRef.current) : undefined;
     expandedPanelRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setExpandedTabId(null);
+      if (event.key === "Tab") reverseTabRef.current = event.shiftKey;
+      const nestedDialog = event.target instanceof HTMLElement ? event.target.closest('[role="dialog"]') : null;
+      if (nestedDialog && nestedDialog !== expandedPanelRef.current) return;
+      if (event.key === "Escape" && !event.defaultPrevented) {
+        event.preventDefault();
+        event.stopPropagation();
+        setExpandedTabId(null);
+      }
     };
+    const onFocusIn = (event: FocusEvent) => {
+      const panel = expandedPanelRef.current;
+      if (!panel || !(event.target instanceof Node) || panel.contains(event.target)) return;
+      // iframe key events do not bubble to React. Contain native focus when
+      // Tab leaves a browsing context, including a browser-owned PDF viewer.
+      const available = previewFocusables(panel);
+      ((reverseTabRef.current ? available.at(-1) : available[0]) ?? panel).focus();
+    };
+    document.addEventListener("focusin", onFocusIn);
     window.addEventListener("keydown", onKeyDown);
+    const unbindFrames = expandedPanelRef.current ? bindPreviewFrameEscape(expandedPanelRef.current, () => setExpandedTabId(null), (reverse) => { reverseTabRef.current = reverse; }) : undefined;
     return () => {
+      unbindFrames?.();
+      document.removeEventListener("focusin", onFocusIn);
+      restoreBackground?.();
       window.removeEventListener("keydown", onKeyDown);
       lastFocusedRef.current?.focus();
       lastFocusedRef.current = null;
     };
-  }, [expandedTabId]);
-
-  useEffect(() => {
-    if (!expandedTabId || !expandedPanelRef.current) return;
-    const panel = expandedPanelRef.current;
-    const onWheel = (event: WheelEvent) => {
-      // Chromium emits ctrl+wheel for a trackpad pinch. metaKey also supports
-      // the familiar Command+wheel gesture on macOS.
-      if (!event.ctrlKey && !event.metaKey) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const factor = Math.exp(-event.deltaY * 0.002);
-      setTabZoom(expandedTabId, (current) => current * factor);
-    };
-    panel.addEventListener("wheel", onWheel, { passive: false, capture: true });
-    return () => panel.removeEventListener("wheel", onWheel, { capture: true });
   }, [expandedTabId]);
 
   useEffect(() => {
@@ -135,19 +128,33 @@ export function InspectorTabs({
   // Keep Tab inside the expanded dialog so keyboard users cannot reach the
   // background while it is open.
   const handleExpandedPanelKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Tab" || !expandedPanelRef.current) return;
-    const focusables = expandedPanelRef.current.querySelectorAll<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-    );
-    if (focusables.length === 0) return;
-    const first = focusables[0];
-    const last = focusables[focusables.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
+    if (event.defaultPrevented || !expandedPanelRef.current) return;
+    const nestedDialog = (event.target as HTMLElement).closest?.('[role="dialog"]');
+    if (nestedDialog && nestedDialog !== expandedPanelRef.current) return;
+    if (event.key === "Escape") {
       event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
+      event.stopPropagation();
+      setExpandedTabId(null);
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const available = previewFocusables(expandedPanelRef.current);
+    if (available.length === 0) { event.preventDefault(); return; }
+    const first = available[0];
+    const last = available[available.length - 1];
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === expandedPanelRef.current)) {
       event.preventDefault();
-      first.focus();
+      focusPreviewElement(last, true);
+    } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === expandedPanelRef.current)) {
+      event.preventDefault();
+      focusPreviewElement(first);
+    } else {
+      const index = available.indexOf(document.activeElement as HTMLElement);
+      const destination = available[index + (event.shiftKey ? -1 : 1)];
+      if (destination?.tagName === "IFRAME") {
+        event.preventDefault();
+        focusPreviewElement(destination, event.shiftKey);
+      }
     }
   };
 
@@ -197,7 +204,7 @@ export function InspectorTabs({
                   data-tab-index={index}
                   aria-selected={active}
                   aria-controls={`inspector-panel-${index}`}
-                  className="min-w-0 flex-1 truncate text-left text-ui-label outline-none"
+                  className="min-w-0 flex-1 truncate text-left text-ui-label outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   onClick={() => activateTab(tab.id)}
                   onAuxClick={(event) => {
                     if (event.button === 1) closeTab(tab.id);
@@ -244,7 +251,6 @@ export function InspectorTabs({
           const active = tab.id === activeTabId;
           const expanded = tab.id === expandedTabId;
           const title = tabTitle(tab.data, t("notebook.sessionKernel"));
-          const zoom = zoomByTab[tab.id] ?? 1;
           const mounted = active || mountedTabIds.has(tab.id);
           return (
             <div
@@ -260,7 +266,7 @@ export function InspectorTabs({
               onKeyDown={expanded ? handleExpandedPanelKeyDown : undefined}
               className={cn(
                 "h-full",
-                expanded && "fixed z-50 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl",
+                expanded && "preview-focus fixed z-50 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl",
               )}
             >
               {mounted && (
@@ -270,43 +276,14 @@ export function InspectorTabs({
                     onClose={() => closeTab(tab.id)}
                     cwd={cwd}
                     sessionId={sessionId}
+                    focused={expanded}
                     compactHeader
-                    contentZoom={expanded ? zoom : 1}
-                    leadingControls={tab.data.variant === "file" && expanded ? (
-                      <div className="flex items-center rounded-input bg-surface-2 p-0.5">
-                        <IconButton
-                          icon={Minus}
-                          label={t("filePreview.zoomOut")}
-                          size="compact"
-                          className="hover:bg-surface"
-                          disabled={zoom <= MIN_ZOOM}
-                          onClick={() => setTabZoom(tab.id, (current) => current - ZOOM_STEP)}
-                        />
-                        <button
-                          type="button"
-                          className="min-w-12 rounded px-1 py-0.5 text-ui-caption tabular-nums text-muted hover:bg-surface hover:text-text"
-                          aria-label={t("filePreview.resetZoom")}
-                          title={t("filePreview.resetZoom")}
-                          onClick={() => setTabZoom(tab.id, () => 1)}
-                        >
-                          {Math.round(zoom * 100)}%
-                        </button>
-                        <IconButton
-                          icon={Plus}
-                          label={t("filePreview.zoomIn")}
-                          size="compact"
-                          className="hover:bg-surface"
-                          disabled={zoom >= MAX_ZOOM}
-                          onClick={() => setTabZoom(tab.id, (current) => current + ZOOM_STEP)}
-                        />
-                      </div>
-                    ) : undefined}
-                    controls={tab.data.variant === "file" ? (
+                    controls={["file", "pdf", "artifact", "notebook-file"].includes(tab.data.variant) ? (
                       <IconButton
                         icon={expanded ? Minimize2 : Maximize2}
-                        label={t(expanded ? "shell.restorePanel" : "shell.maximizePanel")}
+                        label={t(expanded ? "filePreview.exitFocus" : "filePreview.focus")}
                         size="compact"
-                        className="text-text"
+                        className="hidden text-text lg:inline-flex"
                         aria-pressed={expanded}
                         onClick={() => {
                           setExpandedTabId(expanded ? null : tab.id);

@@ -3,8 +3,12 @@ import { fileURLToPath } from "node:url";
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import type { PiConfig } from "@pi-science/contracts";
 import { configRoot, metadataRoot } from "../../storage/persistence.js";
+/** Packaged builtin skills source. Read-only callers (the composer catalogue) use
+ *  it directly instead of waiting for a seed to copy it into the workspace. */
+export function packagedSkillsRoot(): string {
+  return join(resolve(dirname(fileURLToPath(import.meta.url)), "../../../../.."), "skills");
+}
 export function seedWorkspaceAssets(cwd: string): string[] {
-  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
   // Legacy workspaces still keep state under .pi-science. Never follow a
   // foreign marker there; registered projects use the relocated state root.
   if (metadataRoot(cwd) === join(cwd, ".pi-science")) {
@@ -13,7 +17,7 @@ export function seedWorkspaceAssets(cwd: string): string[] {
   }
   // The workspace-local .pi directory contains the skills exposed to Pi.
   replaceForeignEntry(join(cwd, ".pi"));
-  const sourceSkills = join(projectRoot, "skills");
+  const sourceSkills = packagedSkillsRoot();
   const targetSkills = join(cwd, ".pi", "skills");
   // The .pi/skills tree is managed state: if a previous seed or the runtime
   // left a symlink (or plain file) here, remove it first. Never seed through

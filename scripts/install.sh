@@ -15,19 +15,16 @@ if ! pi_science_prepare_node 1; then
   exit 1
 fi
 NODE_PATH="$PI_SCIENCE_NODE_COMMAND"
-if ! command -v pnpm >/dev/null 2>&1; then
-  echo "Error: pnpm is required. Enable it with: corepack enable pnpm" >&2
-  exit 1
-fi
-
 echo "  Node.js: $("$NODE_PATH" --version)"
-echo "  pnpm:   $(pnpm --version)"
+echo "  pnpm:    $("$NODE_PATH" "$SCRIPT_DIR/package-manager.mjs" --version)"
 
 echo "==> Installing JavaScript workspace dependencies..."
-PNPM_STORE_DIR="${PNPM_STORE_DIR:-$PROJECT_DIR/.cache/pnpm-store}"
+PNPM_STORE_DIR="${PNPM_STORE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/pi-science/pnpm-store}"
 mkdir -p "$PNPM_STORE_DIR"
 cd "$PROJECT_DIR"
-pnpm --config.store-dir="$PNPM_STORE_DIR" install --frozen-lockfile
+"$NODE_PATH" "$SCRIPT_DIR/package-manager.mjs" --config.store-dir="$PNPM_STORE_DIR" install --frozen-lockfile
+echo "==> Building production application..."
+"$NODE_PATH" "$SCRIPT_DIR/package-manager.mjs" build
 
 mkdir -p "$INSTALL_STATE_DIR"
 printf 'PI_SCIENCE_INSTALL_RUNTIME=agent-core\n' > "$INSTALL_STATE_FILE"

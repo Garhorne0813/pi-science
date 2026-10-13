@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SubagentMention } from "../../lib/conversation";
+import type { ComposerEntity } from "../../lib/conversation/composer-document";
 import { queryClient } from "../../lib/client/query-client";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
@@ -46,7 +46,10 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       { name: "scout", description: "Gather context", source: "builtin" },
     ] });
   }
-  if (url.startsWith("/api/files/breadcrumbs")) return json([]);
+  if (url.startsWith("/api/files/breadcrumbs")) {
+    const subdir = new URLSearchParams(url.slice(url.indexOf("?"))).get("subdir") ?? "";
+    return json(subdir ? subdir.split("/").map((name, index, parts) => ({ name, path: parts.slice(0, index + 1).join("/") })) : []);
+  }
   if (url.includes("/commands?")) {
     if (commandsFail) return json({ detail: "no runtime" }, 500);
     return json({ commands: [{ name: "skill:review", description: "Review files", source: "skill" }] });
@@ -63,7 +66,7 @@ const onKeyDown = vi.fn();
 
 function Harness({ initialValue = "" }: { initialValue?: string }) {
   const [value, setValue] = useState(initialValue);
-  const [mentions, setMentions] = useState<SubagentMention[]>([]);
+  const [entities, setEntities] = useState<ComposerEntity[]>([]);
   const [composing, setComposing] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
@@ -71,8 +74,8 @@ function Harness({ initialValue = "" }: { initialValue?: string }) {
     <MentionComposer
       cwd="project"
       value={value}
-      mentions={mentions}
-      onChange={(next, nextMentions) => { setValue(next); setMentions(nextMentions); }}
+      entities={entities}
+      onChange={(next, _mentions, nextEntities) => { setValue(next); setEntities(nextEntities); }}
       onKeyDown={onKeyDown}
       onCompositionStart={() => { composingRef.current = true; setComposing(true); }}
       onCompositionEnd={() => { setTimeout(() => { composingRef.current = false; setComposing(false); }, 0); }}
@@ -105,7 +108,29 @@ async function settle(): Promise<void> {
 }
 
 async function type(value: string, position = value.length): Promise<void> {
-  fireEvent.change(input(), { target: { value } });
+  const element = input();
+  const previous = element.value;
+  let start = 0;
+  let oldEnd = previous.length;
+  let newEnd = value.length;
+  if (value.startsWith(previous)) {
+    start = oldEnd = previous.length;
+    newEnd = value.length;
+  } else if (previous.startsWith(value)) {
+    start = 0;
+    oldEnd = previous.length;
+    newEnd = value.length;
+  } else {
+    while (start < previous.length && start < value.length && previous[start] === value[start]) start += 1;
+    while (oldEnd > start && newEnd > start && previous[oldEnd - 1] === value[newEnd - 1]) {
+      oldEnd -= 1;
+      newEnd -= 1;
+    }
+  }
+  element.setSelectionRange(start, oldEnd);
+  const inputType = value.length < previous.length && newEnd === start ? "deleteContentBackward" : "insertText";
+  fireEvent(element, new InputEvent("beforeinput", { inputType, bubbles: true, cancelable: true }));
+  fireEvent.change(element, { target: { value } });
   input().setSelectionRange(position, position);
   fireEvent.select(input());
   await settle();
@@ -394,6 +419,20 @@ describe("composer completion keyboard paths", () => {
     expect(input()).toHaveValue("results/structures/1abc.pdb");
   });
 
+  it("returns to the workspace root when the root breadcrumb is clicked", async () => {
+    renderComposer();
+    await type("@data/");
+    const labels = () => screen.getAllByRole("option").map((option) => option.querySelector("span")?.textContent);
+    await waitFor(() => expect(labels()).toEqual(["dataset.csv", "protein.csv"]));
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspace" }));
+
+    await waitFor(() => expect(labels()).toEqual([
+      "protein_structure/", "protein_structure/", "notes.md", "protein_old.csv", "protein.csv", "report.md",
+    ]));
+    expect(input()).toHaveValue("@data/");
+  });
+
   it("navigates the candidate list with the arrow keys and accepts with Enter", async () => {
     renderComposer();
     await type("@");
@@ -522,14 +561,57 @@ describe("composer completion keyboard paths", () => {
     expect(screen.getByRole("listbox", { name: "Subagents" })).toBeInTheDocument();
   });
 
-  it("turns an @file candidate into a workspace reference instead of text", async () => {
+  it("keeps an @file candidate inline as a structured reference", async () => {
     renderComposer();
     await type("@data/pro");
     await press("Tab");
-    await waitFor(() => expect(useUiStore.getState().workspaceReferences).toEqual([
-      { cwd: "project", path: "data/protein.csv", name: "protein.csv", isDir: false },
-    ]));
-    expect(input()).toHaveValue("");
+    await waitFor(() => expect(input()).toHaveValue("@data/protein.csv "));
+    expect(useUiStore.getState().workspaceReferences).toEqual([]);
+    expect(input().parentElement?.querySelector("[aria-hidden='true']")?.textContent).toContain("@data/protein.csv");
+  });
+
+  it("keeps a bound file through an IME edit that arrives without an input transaction", async () => {
+    renderComposer();
+    await type("@data/pro");
+    await press("Tab");
+    await waitFor(() => expect(input()).toHaveValue("@data/protein.csv "));
+
+    // A composition edit that reaches the composer with no beforeinput in front of it.
+    const element = input();
+    fireEvent.compositionStart(element);
+    element.setSelectionRange(0, 0);
+    fireEvent.change(element, { target: { value: "pin @data/protein.csv " } });
+    fireEvent.compositionEnd(element, { data: "pin " });
+    await settle();
+
+    expect(input()).toHaveValue("pin @data/protein.csv ");
+    expect(input().parentElement?.querySelector("div[aria-hidden='true'] span")?.textContent).toBe("@data/protein.csv");
+  });
+
+  it("removes an inline file and its highlighted binding with Backspace", async () => {
+    const { container } = renderComposer();
+    await type("@data/pro");
+    await press("Tab");
+    const token = "@data/protein.csv";
+    expect(input()).toHaveValue(token + " ");
+    expect(container.querySelector("div[aria-hidden='true'] span")?.textContent).toBe(token);
+    input().setSelectionRange(token.length, token.length);
+    fireEvent.select(input());
+    await press("Backspace");
+    expect(input()).toHaveValue(" ");
+    expect(container.querySelector("div[aria-hidden='true'] span")).toBeNull();
+  });
+
+  it("keeps two independent occurrences of the same file in the text", async () => {
+    const { container } = renderComposer();
+    await type("@data/pro");
+    await press("Tab");
+    await type("@data/protein.csv and @data/pro");
+    await press("Tab");
+    expect(input()).toHaveValue("@data/protein.csv and @data/protein.csv ");
+    expect([...container.querySelectorAll("div[aria-hidden='true'] span")].map((node) => node.textContent)).toEqual([
+      "@data/protein.csv", "@data/protein.csv",
+    ]);
   });
 
   it("lets Enter send when the list is closed", async () => {
@@ -570,14 +652,21 @@ describe("composer completion keyboard paths", () => {
     renderComposer();
     await type("/skill:rev");
     expect(input()).toHaveValue("/skill:rev");
-    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    await screen.findByRole("alert");
+    const failedMenu = await screen.findByRole("listbox", { name: "Completions" });
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(failedMenu.querySelector("[role='option']")).toBeNull();
     await press("Tab");
     expect(input()).toHaveValue("/skill:rev");
     expect(onKeyDown).toHaveBeenCalledTimes(1);
 
     await type("/exp");
-    expect(screen.getByRole("listbox", { name: "Completions" })).toBeInTheDocument();
+    const builtins = screen.getByRole("listbox", { name: "Completions" });
+    expect(builtins).toBeInTheDocument();
+    expect(screen.getByText("/export")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
     await press("Tab");
     expect(input()).toHaveValue("/export ");
   });
 });
+

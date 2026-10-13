@@ -22,7 +22,7 @@ import { ApiError } from "./api";
  *   ["runs", cwd]                                        ["runs", cwd, executionId, "log"]
  *   ["provenance", cwd, "versions" | "env", path | hash]
  *   ["artifact-file", cwd, root, path, maxBytes]
- *   ["slash-commands", cwd, sessionId]
+ *   ["composer-commands", cwd, sessionId]
  *   ["notebooks", cwd] / ["notebooks", "jupyter", cwd] / ["environments", cwd]
  *   ["workspaces"] / ["workspaces", "pinned"]
  *

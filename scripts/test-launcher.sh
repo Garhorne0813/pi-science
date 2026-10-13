@@ -12,6 +12,8 @@ INSTALL_SCRIPT="$PROJECT_DIR/scripts/install.sh"
 WRITER_SCRIPT="$PROJECT_DIR/scripts/write-launcher.sh"
 TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/pi science launcher.XXXXXX")"
 START_PID=""
+export PI_SCIENCE_HOME="$TEMP_ROOT/data"
+export PI_SCIENCE_WORKSPACES="$TEMP_ROOT/workspaces"
 cleanup() { [ -z "$START_PID" ] || kill "$START_PID" 2>/dev/null || true; rm -rf "$TEMP_ROOT"; }
 trap cleanup EXIT
 
@@ -20,7 +22,7 @@ assert_contains() { grep -Fq "$2" "$1" || fail "$1 does not contain: $2"; }
 assert_not_contains() { ! grep -Fq "$2" "$1" || fail "$1 unexpectedly contains: $2"; }
 free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'; }
 port_available() { python3 -c 'import socket,sys; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",int(sys.argv[1]))); s.close()' "$1"; }
-wait_url() { local url="$1" attempts=100; while [ "$attempts" -gt 0 ]; do curl --fail --silent "$url" >/dev/null 2>&1 && return 0; sleep 0.1; attempts=$((attempts - 1)); done; return 1; }
+wait_url() { local url="$1" attempts=100; while [ "$attempts" -gt 0 ]; do node "$PROJECT_DIR/scripts/check-http-health.mjs" "$url" >/dev/null 2>&1 && return 0; sleep 0.1; attempts=$((attempts - 1)); done; return 1; }
 wait_port_available() { local port="$1" attempts=100; while [ "$attempts" -gt 0 ]; do port_available "$port" >/dev/null 2>&1 && return 0; sleep 0.1; attempts=$((attempts - 1)); done; return 1; }
 wait_file() { local file="$1" attempts=200; while [ "$attempts" -gt 0 ]; do [ -f "$file" ] && return 0; sleep 0.05; attempts=$((attempts - 1)); done; return 1; }
 wait_pid_gone() { local pid="$1" attempts=100; while [ "$attempts" -gt 0 ]; do ! kill -0 "$pid" 2>/dev/null && return 0; sleep 0.1; attempts=$((attempts - 1)); done; return 1; }
@@ -132,6 +134,10 @@ set -e
 [ ! -e "$BIN_DIR/.pi-science-launcher.lock" ] || fail "signaled writer leaked its lock"
 if find "$BIN_DIR" -maxdepth 1 -name '.pi-science-launcher.*' -print | grep -q .; then fail "signaled writer leaked a temp file"; fi
 
+# Existing lifecycle cases exercise explicit source mode. Production has its
+# own real-build smoke test.
+export PI_SCIENCE_MODE=dev
+
 # Temporary local checkout with real Node and fake package-local CLIs. The fake
 # services record CWD/PIDs and expose only the readiness endpoints used by start.sh.
 FIXTURE="$TEMP_ROOT/runtime checkout with spaces"
@@ -140,6 +146,12 @@ cp "$START_SCRIPT" "$FIXTURE/scripts/start.sh"
 cp "$COMMAND_SCRIPT" "$FIXTURE/scripts/pi-science.sh"
 cp "$NODE_CHECK_SCRIPT" "$FIXTURE/scripts/check-node-version.mjs"
 cp "$NODE_RUNTIME_SCRIPT" "$FIXTURE/scripts/node-runtime.sh"
+cp "$PROJECT_DIR/scripts/check-http-health.mjs" "$FIXTURE/scripts/check-http-health.mjs"
+# Any accidental curl dependency fails the lifecycle suite.
+mkdir -p "$TEMP_ROOT/no-curl"
+printf '#!/usr/bin/env bash\necho unexpected-curl >&2\nexit 97\n' > "$TEMP_ROOT/no-curl/curl"
+chmod +x "$TEMP_ROOT/no-curl/curl"
+export PATH="$TEMP_ROOT/no-curl:$PATH"
 cat > "$FIXTURE/apps/server/node_modules/tsx/dist/cli.mjs" <<'EOF'
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -165,7 +177,10 @@ import http from "node:http";
 const args = process.argv.slice(2); const port = Number(args[args.indexOf("--port") + 1]);
 writeFileSync(new URL("../frontend.cwd", import.meta.url), process.cwd());
 writeFileSync(new URL("../frontend.pid", import.meta.url), String(process.pid));
-const server = http.createServer((_req, res) => { res.writeHead(200); res.end("vite"); });
+const server = http.createServer((_req, res) => {
+  if (process.env.PI_SCIENCE_TEST_FRONTEND_HANG === "1") return;
+  res.writeHead(200); res.end("vite");
+});
 if (process.env.PI_SCIENCE_TEST_FRONTEND_NEVER_READY !== "1") setTimeout(() => server.listen(port, "127.0.0.1"), Number(process.env.PI_SCIENCE_TEST_FRONTEND_DELAY_MS || 0));
 else setInterval(() => {}, 1000);
 const stop = () => server.close(() => process.exit(0));
@@ -176,6 +191,19 @@ cat > "$FIXTURE/frontend/node_modules/.bin/vite" <<EOF
 exec "$(command -v node)" "$FIXTURE/frontend/fake-vite.mjs" "\$@"
 EOF
 chmod +x "$FIXTURE/frontend/node_modules/.bin/vite"
+
+# Token generation must fail closed before any service starts.
+TOKEN_BIN="$TEMP_ROOT/token-failure-bin"
+mkdir -p "$TOKEN_BIN"
+cat > "$TOKEN_BIN/node" <<EOF
+#!/usr/bin/env bash
+case "\$*" in *'randomBytes(32)'*) echo 'simulated crypto failure' >&2; exit 9 ;; esac
+exec "$(command -v node)" "\$@"
+EOF
+chmod +x "$TOKEN_BIN/node"
+if (unset PI_SCIENCE_INTERNAL_TOKEN; PATH="$TOKEN_BIN:$PATH" bash "$FIXTURE/scripts/start.sh") >"$TEMP_ROOT/token-failure.log" 2>&1; then fail "crypto failure returned success"; fi
+assert_contains "$TEMP_ROOT/token-failure.log" 'simulated crypto failure'
+[ ! -f "$FIXTURE/control.pid" ] || fail "crypto failure started the control plane"
 
 CONTROL_PORT="$(free_port)"
 RUNTIME_PORT="$(free_port)"
@@ -445,6 +473,28 @@ wait_port_available "$NEVER_FRONTEND_PORT" || fail "timed-out detached start lef
 wait_pid_gone "$NEVER_CONTROL_PID" || fail "deadline rollback left control plane alive"
 wait_pid_gone "$NEVER_CONTROL_CHILD_PID" || fail "deadline rollback left TERM-ignoring descendant alive"
 wait_pid_gone "$NEVER_FRONTEND_PID" || fail "deadline rollback left frontend alive"
+
+# Accepted HTTP connections without responses must time out in both launch modes.
+for launch_mode in foreground detached; do
+  HANG_CONTROL_PORT="$(free_port)"; HANG_FRONTEND_PORT="$(free_port)"
+  PI_SCIENCE_CONTROL_PLANE_PORT="$HANG_CONTROL_PORT" PI_SCIENCE_FRONTEND_PORT="$HANG_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=2 PI_SCIENCE_TEST_FRONTEND_HANG=1 python3 - "$FIXTURE" "$launch_mode" "$TEMP_ROOT/hang-$launch_mode.log" <<'PYTHON'
+import subprocess, sys, time
+fixture, mode, log = sys.argv[1:]
+command = ["bash", fixture + "/scripts/start.sh"] if mode == "foreground" else ["bash", fixture + "/scripts/pi-science.sh", "start", "--detach", "--no-open"]
+with open(log, "w") as output:
+    started = time.monotonic()
+    result = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, timeout=20)
+assert result.returncode != 0, "hung HTTP startup returned success"
+assert time.monotonic() - started < 15, "readiness did not respect its deadline plus cleanup grace"
+PYTHON
+  assert_contains "$TEMP_ROOT/hang-$launch_mode.log" 'did not become ready within'
+  [ ! -e "$FIXTURE/.runtime/pi-science/run.state" ] || fail "hung startup left run.state"
+  wait_port_available "$HANG_CONTROL_PORT" || fail "hung startup left control plane listening"
+  wait_port_available "$HANG_FRONTEND_PORT" || fail "hung startup left frontend listening"
+  wait_pid_gone "$(cat "$FIXTURE/control.pid")" || fail "hung startup left control plane alive"
+  wait_pid_gone "$(cat "$FIXTURE/control.child.pid")" || fail "hung startup left descendant alive"
+  wait_pid_gone "$(cat "$FIXTURE/frontend.pid")" || fail "hung startup left frontend alive"
+done
 
 # The watch opt-in passes the watch argument to tsx and logs the mode; default
 # stays direct so detached supervisors never see a tsx watch restart loop.

@@ -8,12 +8,16 @@ export function PdfInspector({
   data,
   onClose,
   controls,
+  compactHeader = false,
+  focused = false,
   cwd,
 }: {
   data: PdfInspectorT;
   onClose: () => void;
   /** Pane-level header buttons (e.g. maximize), rendered before Close. */
   controls?: React.ReactNode;
+  compactHeader?: boolean;
+  focused?: boolean;
   cwd: string;
 }) {
   const { t } = useTranslation();
@@ -23,14 +27,15 @@ export function PdfInspector({
   const url = baseUrl ? `${baseUrl}${page ? `#page=${page}` : ""}` : null;
   return (
     <div className="flex h-full flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
+      <header className="preview-toolbar">
         <span className="truncate text-sm font-medium text-text">{title}</span>
         <div className="flex-1" />
         {controls}
-        <button className="text-text hover:opacity-60" aria-label={t("shell.closeInspector")} onClick={onClose}>
+        {!compactHeader && <button className="text-text hover:opacity-60" aria-label={t("shell.closeInspector")} onClick={onClose}>
           <X size={14} strokeWidth={1.5} />
-        </button>
+        </button>}
       </header>
+      {focused && <p role="note" className="shrink-0 border-b border-border bg-surface-2 px-3 py-1.5 text-ui-caption text-muted">{t("filePreview.pdfFocusHint")}</p>}
 
       {url ? (
         <iframe title={title} src={url} className="min-h-0 flex-1 bg-[var(--bg)]" />

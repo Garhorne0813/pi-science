@@ -35,7 +35,8 @@ Pi-Science 将 AI 对话、科学计算、数据预览和项目知识整合到�
 
 ### 环境要求
 
-- Node.js **24.16+**、Python **3.11+**、pnpm **11.7.0**（仓库锁定的包管理器版本）
+- Node.js **24.16+**，包含 npm。安装器自动引导仓库锁定的 **pnpm 11.7.0**，无需全局安装 pnpm。
+- Git 用于克隆源码。Python、R 和 Micromamba 环境在使用科学计算功能时按需配置。
 - 一个 LLM API Key，或已配置的 Ollama、LM Studio 等本地端点
 - Windows 需要 PowerShell **5.1+**
 
@@ -66,16 +67,21 @@ powershell -File scripts/install.ps1
 powershell -File scripts/start.ps1
 ```
 
-打开 **http://127.0.0.1:5173**，在 **设置 → LLM** 配置提供商和默认模型，再打开工作区开始对话。**设置 → Skills** 管理技能，**设置 → MCP** 启用科学连接器；初始仅启用 Paper Search。控制面 API 位于 `127.0.0.1:8787`。
+打开 **http://127.0.0.1:8787**，在 **设置 → LLM** 配置提供商和默认模型，再打开工作区开始对话。**设置 → Skills** 管理技能，**设置 → MCP** 启用科学连接器；初始仅启用 Paper Search。控制面 API 位于同一端口。
 
-启动器运行 Vite 和 `tsx watch` **开发服务**。Bash 支持 macOS/Linux 与 WSL，原生 Windows 不需要 Git Bash；Agent Core SDK 随项目依赖安装。
+安装器构建控制面、Agent Worker 和前端。默认启动运行**编译后的 JavaScript**，由控制面在同一个端口提供前端和 API，运行时不使用 Vite 或 tsx。Bash 支持 macOS/Linux 与 WSL，原生 Windows 不需要 Git Bash；Agent Core SDK 随项目依赖安装。
 
-### 启动、停止与更新
+### 启动、诊断与停止
 
 安装器提供 `pi-science` 命令。macOS/Linux 需要将 `~/.local/bin` 加入 `PATH`（可用 `PI_SCIENCE_BIN_DIR` 修改安装目录）；Windows 安装更新 `PATH` 后请打开新终端。
 
 ```text
-pi-science                 启动服务
+pi-science                 启动生产构建（端口 8787）
+pi-science start --dev     启动源码和 Vite（端口 5173）
+pi-science install         安装依赖并重新构建
+pi-science doctor          诊断生产模式运行条件
+pi-science doctor --dev    诊断开发模式运行条件
+pi-science logs            输出运行日志
 pi-science status          查看服务状态
 pi-science stop            停止当前 checkout 的服务
 pi-science help            查看命令帮助
@@ -83,7 +89,7 @@ pi-science help            查看命令帮助
 
 前台启动占用当前终端，按 **Ctrl+C** 停止服务。Bash 还支持 `pi-science start --detach`；Windows 启动器仅支持前台运行。
 
-移动仓库或更新 Node/Python 依赖元数据、锁文件、SDK 依赖后，应重新运行对应平台安装器。仅修改源代码不需要重装。组合 Bash 启动器可跳过安装：
+移动或更新仓库后，应重新运行对应平台安装器，刷新生产构建产物。只有开发模式会直接使用修改后的源码。组合 Bash 启动器可跳过安装：
 
 ```bash
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
@@ -92,7 +98,15 @@ PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 <details>
 <summary>启动器行为与持久状态</summary>
 
-安装后的启动器直接调用包内可执行文件，启动不依赖 npm/pnpm 包装器；安装、构建和依赖更新仍需要 pnpm。默认就绪期限为 90 秒，可用 `PI_SCIENCE_STARTUP_TIMEOUT_SECONDS` 调整。启动器记录自己启动的服务以准确停止，并拒绝覆盖无关的启动器路径。
+生产启动器直接调用 Node，npm/pnpm 仅用于安装、构建和依赖更新。`doctor` 执行本地检查，不下载软件、不写入持久数据库；检查范围包括运行时、构建和 Worker 文件、依赖、回环端口、目录权限以及 SQLite 内存查询。Python/R/Micromamba 和 LLM 配置作为按需设置单独说明，持久 SQLite 数据库的就绪状态在启动时检查。`doctor` 会检查端口是否可用，因此请先停止运行中的实例，再进行启动前诊断。
+
+开发时使用 `pi-science start --dev`（Node 直接运行 tsx，另启动 Vite）、`bash scripts/start.sh --dev` 或 `powershell -File scripts/start.ps1 -Dev`。设置 `PI_SCIENCE_SERVER_WATCH=1` 才会启用 `tsx watch`；Bash 和 PowerShell 的开发模式均默认直接运行 tsx。`PI_SCIENCE_CONTROL_PLANE_PORT` 修改生产端口，`PI_SCIENCE_FRONTEND_PORT` 仅用于开发模式。两种启动器都将控制面绑定到 `127.0.0.1`。浏览器内部认证 Cookie 不等于用户登录，不应将服务暴露到公网。
+
+pnpm store 默认由多个仓库目录共享：POSIX 使用 `${XDG_CACHE_HOME:-~/.cache}/pi-science/pnpm-store`，Windows 使用 `%LOCALAPPDATA%\pi-science\pnpm-store`。可用 `PNPM_STORE_DIR` 指定独立缓存，包括原先的仓库内 `.cache/pnpm-store`。默认就绪期限为 90 秒，可用 `PI_SCIENCE_STARTUP_TIMEOUT_SECONDS` 调整。启动器根据进程身份停止服务，并拒绝覆盖无关的启动器路径。Windows 停止前检查仓库目录、可执行文件、入口文件、进程创建时间和每次启动的标识；状态缺失或过期时，不会仅凭端口号停止进程。
+
+**更新：** 当前未提供事务式 `update`、`rollback`、`uninstall` 或独立安装包。手动更新源码前，应停止应用并备份应用状态和工作区数据，包括 SQLite 数据库及其 WAL 文件。更新后重新运行安装器。源码降级不能撤销数据库迁移，恢复时需要兼容的应用版本和完整数据备份。验收方式与后续计划见[安装与部署](docs/deployment.zh-CN.md)。
+
+Windows 停止失败时保留身份记录以便重试，并返回退出码 1。Windows 的 `logs` 默认包含控制面和前端的 stdout/stderr，`logs --stderr` 仅显示错误输出。POSIX 前台输出保留在终端，`logs` 读取后台运行日志。启动器与 `doctor` 都将相对的 `PI_SCIENCE_FRONTEND_DIST` 解释为相对于仓库根目录的路径。
 
 应用状态使用 `PI_SCIENCE_HOME` 或 `~/.pi-science`，必要时回退到 checkout 内。项目元数据可位于工作区或应用托管目录，移动或备份前请参阅[数据归属](docs/architecture.zh-CN.md#持久化与数据归属)。旧 v3 会话支持自动转换或[离线转换](docs/agent-core-session-conversion.md)。
 

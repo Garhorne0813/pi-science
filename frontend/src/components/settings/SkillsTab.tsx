@@ -4,6 +4,7 @@ import { AlertTriangle, ChevronDown, Loader2, Package, Pencil, Plus, RotateCcw, 
 import { useTranslation } from "react-i18next";
 import { apiRequest } from "../../lib/client/api";
 import { queryClient } from "../../lib/client/query-client";
+import { slashCommandsPrefix, slashCommandsRoot } from "../../lib/conversation/slash-commands";
 import { invalidateSettings, settingsApi, settingsKey } from "../../lib/settings";
 import { SkillChatDialog, SkillEditorDialog, SkillGithubDialog, SkillUploadDialog } from "./SkillDialogs";
 
@@ -19,8 +20,10 @@ type Skill = {
 
 type SkillsResponse = { skills?: Skill[]; configured?: boolean };
 
-function invalidateSkills() {
-  void queryClient.invalidateQueries({ queryKey: ["slash-commands"] });
+/** `cwd` marks a workspace-scoped skill write. Without it the global skill policy changed, which
+ *  leaves the catalogue of every workspace stale. */
+function invalidateSkills(cwd?: string | null) {
+  void queryClient.invalidateQueries({ queryKey: cwd ? slashCommandsPrefix(cwd) : slashCommandsRoot });
   void queryClient.invalidateQueries({ queryKey: settingsKey("skills") });
   invalidateSettings();
 }
@@ -233,7 +236,7 @@ export function SkillsTab({ workspaceCwd }: { workspaceCwd: string | null }) {
     setDeleteConfirm(null);
     try {
       await apiRequest(`/api/settings/skills/${encodeURIComponent(skill.skill_id)}?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "DELETE" });
-      invalidateSkills();
+      invalidateSkills(workspaceCwd);
       await reload();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));

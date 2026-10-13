@@ -17,6 +17,8 @@ import { formatNumber } from "@/i18n/format";
 import { CodeViewer } from "@/components/code-viewer/CodeViewer";
 import { MarkdownViewer } from "@/components/markdown-viewer/MarkdownViewer";
 import { IconButton } from "@/components/ui/Icon";
+import { ImagePreview } from "./ImagePreview";
+import { PreviewZoomControls, clampPreviewScale } from "./PreviewZoomControls";
 import { ProvenancePanel } from "./ProvenancePanel";
 import { TablePreview } from "./TablePreview";
 import { TableChart } from "./TableChart";
@@ -58,8 +60,8 @@ export function FilePreviewInspector({
   showTitle = true,
   showClose = true,
   showOpenExternally = true,
-  contentZoom = 1,
   compactHeader = false,
+  focused = false,
 }: {
   data: FilePreviewInspectorT;
   onClose: () => void;
@@ -74,9 +76,8 @@ export function FilePreviewInspector({
   showClose?: boolean;
   /** Multi-file tabs keep the content header focused on preview actions. */
   showOpenExternally?: boolean;
-  /** Scale applied to preview content while keeping the toolbar unchanged. */
-  contentZoom?: number;
   compactHeader?: boolean;
+  focused?: boolean;
 }) {
   const { t } = useTranslation();
   const kind = previewKindForName(data.filename);
@@ -92,6 +93,8 @@ export function FilePreviewInspector({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"preview" | "code">(policy.defaultTab);
+  const [textScale, setTextScale] = useState(1);
+  const supportsTextScale = kind === "text" || kind === "markdown" || (policy.supportsCode && tab === "code");
   const [showHistory, setShowHistory] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
@@ -110,6 +113,7 @@ export function FilePreviewInspector({
     // the user opens a different file, and the async loads below only fill in
     // what the NEW file needs — without this, the previous file's text/url/bytes
     // would linger and bleed into the new preview.
+    setTextScale(1);
     setText(data.content ?? null);
     setTextTruncated(false);
     setUrl(null);
@@ -271,9 +275,22 @@ export function FilePreviewInspector({
     showHistory || !loading,
   );
 
+  useEffect(() => {
+    const viewport = scrollRef.current;
+    if (!viewport || !supportsTextScale || editing || showHistory) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setTextScale((scale) => clampPreviewScale(scale * Math.exp(-event.deltaY * 0.002)));
+    };
+    viewport.addEventListener("wheel", onWheel, { passive: false });
+    return () => viewport.removeEventListener("wheel", onWheel);
+  }, [scrollRef, supportsTextScale, editing, showHistory]);
+
   return (
     <div className="flex h-full flex-col">
-      <header className={cn("flex shrink-0 items-center gap-2 border-b border-border px-4", compactHeader ? "h-9" : "h-12")}>
+      <header className={cn("preview-toolbar", compactHeader ? "min-h-9" : "min-h-12")}>
         {showTitle && <span className="truncate text-sm font-medium text-text">{data.filename}</span>}
         {data.sha256 && <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">{t("filePreview.publishedVersion", { version: data.version ? `v${data.version}` : data.sha256.slice(0, 8) })}</span>}
         <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">
@@ -292,6 +309,7 @@ export function FilePreviewInspector({
           </div>
         )}
         <div className="flex-1" />
+        {supportsTextScale && !showHistory && !editing && <PreviewZoomControls scale={textScale} onChange={setTextScale} />}
         {leadingControls}
         {saveNotice && <span className="mr-1 text-xs text-ok-text">{saveNotice}</span>}
         {editing ? (
@@ -354,9 +372,10 @@ export function FilePreviewInspector({
           />
         )}
       </header>
+      {focused && (kind === "pdf" || (kind === "html" && tab === "preview")) && <p role="note" className="shrink-0 border-b border-border bg-surface-2 px-3 py-1.5 text-ui-caption text-muted">{t(kind === "html" ? "filePreview.frameFocusHint" : "filePreview.pdfFocusHint")}</p>}
 
-      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto bg-surface-2">
-        <div className="h-full min-h-full" style={{ zoom: contentZoom }}>
+      <div data-preview-viewport ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto bg-surface">
+        <div className="h-full min-h-full">
         {showHistory && <ProvenancePanel path={data.path} language={data.language} cwd={cwd} />}
         {!showHistory && editing && draft !== null && (
           <div className="flex h-full flex-col">
@@ -388,6 +407,7 @@ export function FilePreviewInspector({
         {!showHistory && !editing && !loading && !error && (
           <Suspense fallback={<Note text={t("filePreview.loadingScientificViewer")} />}>
             <Body
+              textScale={textScale}
               kind={kind}
               url={url}
               text={text}
@@ -412,6 +432,7 @@ export function FilePreviewInspector({
 }
 
 function Body({
+  textScale,
   kind,
   url,
   text,
@@ -427,6 +448,7 @@ function Body({
   cwd,
   root,
 }: {
+  textScale: number;
   kind: PreviewKind;
   url: string | null;
   text: string | null;
@@ -507,7 +529,7 @@ function Body({
     if (showCode) {
       return text !== null ? (
         <div>
-          <CodeViewer code={text} language={language} className="w-full rounded-none" />
+          <CodeViewer fontSize={12.5 * textScale} code={text} language={language} className="w-full rounded-none border-0" />
         </div>
       ) : (
         <Note text={t("filePreview.openInDesktop")} />
@@ -523,7 +545,7 @@ function Body({
     if (showCode) {
       return text !== null ? (
         <div>
-          <CodeViewer code={text} language={language} className="w-full rounded-none" />
+          <CodeViewer fontSize={12.5 * textScale} code={text} language={language} className="w-full rounded-none border-0" />
         </div>
       ) : (
         <Note text={t("filePreview.openInDesktop")} />
@@ -545,15 +567,13 @@ function Body({
             error={fullTextError}
             onLoadFullText={onLoadFullText}
           />
-          <CodeViewer code={text} language="markdown" className="min-h-0 w-full flex-1 rounded-none" />
+          <CodeViewer fontSize={12.5 * textScale} code={text} language="markdown" className="min-h-0 w-full flex-1 rounded-none border-0" />
         </div>
       ) : (
         <Note text={t("filePreview.openInDesktop")} />
       );
     }
-    // A document reads as a page on a paper canvas that follows the active
-    // appearance (light = white paper, dark = warm dark paper), matching the
-    // Office-preview treatment while adapting to the theme.
+    // Inspector documents share the workbench palette and a bounded reading width.
     return text !== null ? (
       <div className="flex h-full min-h-full flex-col">
         <MarkdownPreviewNotice
@@ -563,7 +583,7 @@ function Body({
           onLoadFullText={onLoadFullText}
         />
         <div
-          className="w-full flex-1 rounded-sm bg-[var(--doc-paper)] shadow-[0_1px_4px_rgba(0,0,0,.25)] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+          className="mx-auto w-full max-w-[760px] flex-1 bg-surface outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
           tabIndex={0}
           onKeyDown={(event) => {
             if (!isSelectAllShortcut(event.nativeEvent)) return;
@@ -577,7 +597,7 @@ function Body({
             paddingBlock: "1.25rem",
           }}
         >
-          <MarkdownViewer variant="document" resourceContext={{ cwd: cwd ?? "", root, documentPath: path }}>{text}</MarkdownViewer>
+          <MarkdownViewer textScale={textScale} variant="inspector" resourceContext={{ cwd: cwd ?? "", root, documentPath: path }}>{text}</MarkdownViewer>
         </div>
       </div>
     ) : (
@@ -587,7 +607,7 @@ function Body({
   if (kind === "html" && showCode) {
     return text !== null ? (
       <div>
-        <CodeViewer code={text} language="html" className="w-full rounded-none" />
+        <CodeViewer fontSize={12.5 * textScale} code={text} language="html" className="w-full rounded-none border-0" />
       </div>
     ) : (
       <Note text={t("filePreview.openInDesktop")} />
@@ -631,9 +651,7 @@ function Body({
   }
   if (kind === "image") {
     return url ? (
-      <div className="flex items-center justify-center min-h-full p-4">
-        <img src={url} alt={filename} className="max-h-full max-w-full rounded-sm border border-border bg-white object-contain dark:bg-[var(--surface-inset)]" />
-      </div>
+      <ImagePreview key={url} url={url} filename={filename} />
     ) : (
       <Note text={t("filePreview.loading")} />
     );
@@ -662,7 +680,7 @@ function Body({
   }
   return text !== null ? (
     <div>
-      <CodeViewer code={text} language={language} className="w-full rounded-none" />
+      <CodeViewer fontSize={12.5 * textScale} code={text} language={language} className="w-full rounded-none border-0" />
     </div>
   ) : (
     <Note text={t("filePreview.loading")} />

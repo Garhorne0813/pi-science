@@ -52,7 +52,8 @@ export interface CompletionItem {
  *  only names which one the candidate belongs to. */
 export type CompletionPayload =
   | { kind: "reference"; reference: CompletionReference }
-  | { kind: "mention"; name: string; token: string };
+  | { kind: "mention"; name: string; token: string }
+  | { kind: "navigate-directory"; path: string };
 
 /** The workspace-relative identity of a file or directory. The composer adds the workspace. */
 export interface CompletionReference {
@@ -101,6 +102,8 @@ export interface CompletionContext {
   agents: readonly CompletionAgent[];
   /** Commands the composer may run: the builtins plus the discovered `skill:*` commands. */
   commands: readonly SlashCommand[];
+  /** Temporary directory navigation state for the bare @ file picker. */
+  browsePath?: string;
 }
 
 export interface CompletionProvider {
@@ -119,7 +122,9 @@ export interface CompletionProvider {
 export type CompletionCommand =
   | { kind: "ignore" }
   | { kind: "open-menu" }
+  | { kind: "navigate-directory"; path: string }
   | { kind: "apply"; value: string; caret: number; start: number; end: number; payload?: CompletionPayload };
 
 /** The apply branch, named for the composer that carries it out. */
 export type CompletionApply = Extract<CompletionCommand, { kind: "apply" }>;
+

@@ -7,11 +7,10 @@ import type { CompletionContext, CompletionItem, CompletionProvider, CompletionQ
 const TRIGGER_AT = /(?:^|[\s([{])@([^\s]*)$/;
 
 function mentionDirectory(token: string) {
+  if (!token) return { subdir: "", prefix: "", base: "" };
   const directory = splitPathToken(token);
   if (!directory) return null;
-  // A bare `@` answers with agents only. Listing every root entry there would bury them, so a
-  // file listing needs a prefix, or an explicit `@dir/`.
-  return directory.prefix || token.endsWith("/") ? directory : null;
+  return directory;
 }
 
 export const mentionProvider: CompletionProvider = {
@@ -58,19 +57,42 @@ export const mentionProvider: CompletionProvider = {
     const directory = query.directory;
     if (!directory) return items;
     const group = "files";
-    const prefix = directory.prefix.toLowerCase();
+    const prefix = (context.browsePath ? "" : directory.prefix).toLowerCase();
     const entries = context.entries
       .filter((entry) => entry.name.toLowerCase().startsWith(prefix))
       .sort(compareEntries);
     for (const entry of entries) {
+      if (entry.isDir) {
+        items.push({
+          id: `mention:navigate:${entry.path}`,
+          kind: "directory",
+          label: entry.name + "/",
+          description: entry.path,
+          group,
+          insertText: "",
+          payload: { kind: "navigate-directory", path: entry.path },
+          size: entry.size,
+        });
+        items.push({
+          id: `mention:directory-reference:${entry.path}`,
+          kind: "directory",
+          label: entry.name + "/",
+          description: entry.path,
+          group,
+          insertText: `@${entry.path}${context.value.slice(query.end).startsWith(" ") ? "" : " "}`,
+          payload: { kind: "reference", reference: { path: entry.path, name: entry.name, isDir: true } },
+          size: entry.size,
+        });
+        continue;
+      }
       items.push({
         id: `mention:path:${entry.path}`,
-        kind: entry.isDir ? "directory" : "file",
-        label: entry.name + (entry.isDir ? "/" : ""),
+        kind: "file",
+        label: entry.name,
         description: entry.path === entry.name ? undefined : entry.path,
         group,
-        // Accepting a path here drops the token and fills the composer's reference chips instead.
-        insertText: "",
+        // Accepting a path keeps its token inline and attaches identity metadata.
+        insertText: `@${entry.path}${context.value.slice(query.end).startsWith(" ") ? "" : " "}`,
         payload: { kind: "reference", reference: { path: entry.path, name: entry.name, isDir: entry.isDir } },
         size: entry.size,
       });
@@ -78,3 +100,4 @@ export const mentionProvider: CompletionProvider = {
     return items;
   },
 };
+

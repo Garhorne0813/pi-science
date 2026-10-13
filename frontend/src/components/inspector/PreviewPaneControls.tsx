@@ -1,4 +1,4 @@
-import { Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { PanelsTopLeft, Columns2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn, useUiStore } from "@/lib/ui";
 import { notifyInspectorLayoutChange } from "@/lib/ui/inspector-layout";
@@ -23,7 +23,7 @@ export function PreviewPaneControls({ embedded = false, inert = false }: { embed
     )}>
       {inspectorOpen && hasTabs && (
         <IconButton
-          icon={inspectorMaximized ? Minimize2 : Maximize2}
+          icon={inspectorMaximized ? Columns2 : PanelsTopLeft}
           label={t(inspectorMaximized ? "shell.restorePanelWidth" : "shell.expandPanel")}
           size="compact"
           className="text-text"

@@ -9,10 +9,11 @@ interface Props {
   language?: string;
   startLine?: number;
   className?: string;
+  fontSize?: number;
 }
 
 /** Read-only code with a line-number gutter. Scrolls horizontally; no wrapping. */
-export function CodeViewer({ code, language, startLine = 1, className }: Props) {
+export function CodeViewer({ code, language, startLine = 1, className, fontSize = 12.5 }: Props) {
   const codeRef = useRef<HTMLElement>(null);
   const html = useMemo(() => {
     try {
@@ -30,6 +31,7 @@ export function CodeViewer({ code, language, startLine = 1, className }: Props) 
   return (
     <div
       className={cn("flex overflow-x-auto rounded-input border border-border bg-surface font-mono text-[12.5px] leading-[1.55] outline-none focus-visible:ring-2 focus-visible:ring-accent/40", className)}
+      style={{ fontSize: Math.round(fontSize * 100) / 100 }}
       tabIndex={0}
       onKeyDown={(event) => {
         if (!isSelectAllShortcut(event.nativeEvent) || !codeRef.current) return;

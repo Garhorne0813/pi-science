@@ -38,10 +38,12 @@ agent host. The SQLite service uses a separate **worker thread**.
 | `ConversationEventHub` | Product event identity, persistence, delivery and product side effects | Invented Core completion results |
 | Scientific services | Kernel, notebook, execution, artifact and research orchestration state | Model reasoning |
 
-The default development endpoints are `http://127.0.0.1:5173` for the frontend
-and `http://127.0.0.1:8787` for the control plane. Workers have no public HTTP
-endpoint. The repository launchers run development servers; building packages
-does not turn those launchers into production deployment servers.
+The repository installer builds the control plane, Workers and frontend. Default
+startup serves the frontend and API from compiled JavaScript at
+`http://127.0.0.1:8787`. Explicit `start --dev` uses source code, with Vite at
+`http://127.0.0.1:5173` and the control plane at `http://127.0.0.1:8787`.
+Workers have no public HTTP endpoint. See [deployment](deployment.md) for
+installation, diagnostics and recovery.
 
 ## Agent execution and configuration
 

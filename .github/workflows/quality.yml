@@ -36,6 +36,13 @@ jobs:
       - name: Lint frontend
         run: pnpm --filter frontend lint
 
+      - name: Test environment diagnostics
+        run: node --test scripts/doctor.test.mjs scripts/check-http-health.test.mjs
+
+      - name: Test Windows process ownership
+        if: runner.os == 'Windows'
+        run: powershell -NoProfile -File scripts/test-process-identity.ps1
+
       - name: Test POSIX launcher lifecycle
         if: runner.os != 'Windows'
         run: bash scripts/test-launcher.sh
@@ -94,6 +101,20 @@ jobs:
         if: runner.os == 'Linux'
         run: pnpm --filter frontend exec playwright test --config playwright.visual.config.ts --grep @accessibility
 
+      - name: Run workspace sidebar interaction tests
+        if: runner.os == 'Linux'
+        run: |
+          pnpm --filter frontend exec playwright test --config playwright.visual.config.ts sidebar.spec.ts --project desktop-light --project mobile --project tablet --output tests/visual/.artifacts/sidebar
+          pnpm --filter frontend exec playwright test --config playwright.visual.config.ts app-shell.visual.spec.ts --grep "collapsed context panel" --project desktop-light --project desktop-dark --project desktop-lg --project tablet --project wide --update-snapshots=none --output tests/visual/.artifacts/rail-baseline
+
+      - name: Upload workspace sidebar screenshots
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-sidebar-interactions
+          path: frontend/tests/visual/.artifacts
+          if-no-files-found: ignore
+
       - name: Enforce Settings browser performance budgets
         if: runner.os == 'Linux'
         run: pnpm --filter frontend exec playwright test --config playwright.visual.config.ts settings-performance.spec.ts model-selection-performance.spec.ts --project desktop-light --project mobile
@@ -132,3 +153,31 @@ jobs:
 
       - name: Test macOS launcher lifecycle
         run: bash scripts/test-launcher.sh
+
+  production-install:
+    name: production install (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      PI_SCIENCE_BIN_DIR: ${{ github.workspace }}/work/production-install/pi-science-bin
+      PNPM_STORE_DIR: ${{ github.workspace }}/work/production-install/pi-science-store
+      PI_SCIENCE_HOME: ${{ github.workspace }}/work/production-install/pi-science-data
+      PI_SCIENCE_WORKSPACES: ${{ github.workspace }}/work/production-install/pi-science-workspaces
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.16.0
+      # Intentionally omit pnpm setup: exercise the pinned bootstrap from npm.
+      - name: Install and build (POSIX)
+        if: runner.os != 'Windows'
+        run: bash scripts/install.sh
+      - name: Install and build (Windows PowerShell 5.1)
+        if: runner.os == 'Windows'
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1
+      - name: Test real production lifecycle
+        run: node scripts/smoke-production.mjs

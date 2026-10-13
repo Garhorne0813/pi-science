@@ -1,3 +1,4 @@
+import { ViewerToolbar, ViewerStatusBar } from "./PreviewFrame";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -111,11 +112,11 @@ function Map({ filename, grid }: { filename: string; grid: AnomalyGrid }) {
 
   return (
     <div className="flex h-full flex-col bg-[#0f1320]">
-      <div className="flex items-center gap-2 border-b border-white/10 bg-black/20 px-3 py-2">
-        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-white/50">
+      <ViewerToolbar>
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted">
           {filename} · {cols}×{rows} {t("anomaly.gridLabel")}{grid.unit ? ` · ${grid.unit}` : ""}
         </span>
-      </div>
+      </ViewerToolbar>
 
       <div className="flex min-h-0 flex-1 items-center justify-center p-4">
         <div className="relative w-full max-w-[820px]" style={{ aspectRatio: `${W} / ${H}` }}>
@@ -157,19 +158,19 @@ function Map({ filename, grid }: { filename: string; grid: AnomalyGrid }) {
         </div>
       </div>
 
-      <div className="flex items-center gap-3 border-t border-white/10 px-3 py-2">
+      <ViewerStatusBar>
         <Colorbar absMax={grid.absMax} unit={grid.unit} />
-        <div className="ml-auto min-h-[1.25rem] text-right font-mono text-[11px] text-white/70">
+        <div className="ml-auto min-h-[1.25rem] text-right font-mono text-[11px] text-text">
           {hover ? (
             <>
               {fmtLat(hover.lat)}, {fmtLon(hover.lon)} ·{" "}
               {Number.isFinite(hover.v) ? `${hover.v > 0 ? "+" : ""}${hover.v.toPrecision(3)}` : t("anomaly.noData")}
             </>
           ) : (
-            <span className="text-white/30">{t("anomaly.hoverHint")}</span>
+            <span className="text-muted">{t("anomaly.hoverHint")}</span>
           )}
         </div>
-      </div>
+      </ViewerStatusBar>
     </div>
   );
 }
@@ -198,9 +199,9 @@ function Colorbar({ absMax, unit }: { absMax: number; unit?: string }) {
   }, []);
   return (
     <div className="flex items-center gap-2">
-      <span className="font-mono text-[10px] text-white/50">−{absMax.toPrecision(3)}</span>
-      <canvas ref={ref} className="h-2.5 w-44 rounded-sm ring-1 ring-white/15" />
-      <span className="font-mono text-[10px] text-white/50">
+      <span className="font-mono text-[10px] text-muted">−{absMax.toPrecision(3)}</span>
+      <canvas ref={ref} className="h-2.5 w-24 sm:w-44 rounded-sm ring-1 ring-border" />
+      <span className="font-mono text-[10px] text-muted">
         +{absMax.toPrecision(3)}
         {unit ? ` ${unit}` : ""}
       </span>

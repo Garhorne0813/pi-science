@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { File, FolderOpen } from "lucide-react";
+import { File, FolderOpen, Loader2 } from "lucide-react";
 import type { RefObject } from "react";
 import type { CompletionGroup, CompletionItem } from "../../lib/conversation/completion";
 import { workspaceFiles } from "../../lib/workspace/workspace-files";
@@ -17,6 +17,12 @@ interface Props {
   onDismiss: () => void;
   /** The input this menu belongs to. A pointerdown inside it moves the caret, so it is not a dismissal. */
   inputRef?: RefObject<HTMLTextAreaElement | null>;
+  loading?: boolean;
+  error?: boolean;
+  empty?: boolean;
+  retry?: () => void;
+  breadcrumbs?: Array<{ name: string; path: string }>;
+  navigate?: (path: string) => void;
 }
 
 /** Adjacent rows that share one group value, with the index of the run's first row in `items`. */
@@ -30,7 +36,7 @@ function groupRuns(items: CompletionItem[]): Array<{ group: CompletionGroup | un
   return runs;
 }
 
-export function CompletionMenu({ id, label, items, activeIndex, onSelect, onActiveChange, onDismiss, inputRef }: Props) {
+export function CompletionMenu({ id, label, items, activeIndex, onSelect, onActiveChange, onDismiss, inputRef, loading, error, empty, retry, breadcrumbs, navigate }: Props) {
   const { t } = useTranslation();
   const menuRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -50,7 +56,7 @@ export function CompletionMenu({ id, label, items, activeIndex, onSelect, onActi
     return () => document.removeEventListener("pointerdown", handlePointerDown, true);
   }, [inputRef, onDismiss]);
 
-  if (items.length === 0) return null;
+  if (items.length === 0 && !loading && !error && !empty) return null;
 
   // The heading is translated here, so a language switch re-renders it and a provider never has to
   // reach into the i18n instance.
@@ -81,24 +87,42 @@ export function CompletionMenu({ id, label, items, activeIndex, onSelect, onActi
       <span title={item.label} className="max-w-[55%] min-w-0 shrink-0 truncate rounded bg-accent-soft px-1 font-mono text-text">{item.label}</span>
       {item.description && <span className="min-w-0 flex-1 truncate" title={item.description}>{item.description}</span>}
       {item.detail && <span className="shrink-0 text-ui-meta text-muted">{item.detail}</span>}
-      {item.payload?.kind === "reference" && <span className="shrink-0 text-ui-meta text-muted">{t("conversation.completion.reference")}</span>}
+      {item.payload?.kind === "navigate-directory" && <span className="shrink-0 text-ui-meta text-muted">{t("conversation.completion.openDirectory")}</span>}
+      {item.payload?.kind === "reference" && <span className="shrink-0 text-ui-meta text-muted">{item.payload.reference.isDir ? t("conversation.completion.referenceDirectory") : t("conversation.completion.reference")}</span>}
       {item.kind !== "directory" && item.size !== undefined && <span className="shrink-0 font-mono text-ui-meta text-muted">{workspaceFiles.formatSize(item.size)}</span>}
     </button>
   );
 
   return (
-    <div ref={menuRef} role="listbox" id={id} aria-label={label} className="ui-popover absolute bottom-full left-0 right-0 z-50 mb-1 max-h-56 w-full max-w-full overflow-y-auto rounded-card p-1">
-      <div id={`${id}-help`} className="sr-only">
-        {t("conversation.completion.keyboardHint")}
-      </div>
-      {groups.size > 1
-        ? runs.map((run) => (
+    <div ref={menuRef} className="ui-popover absolute bottom-full left-0 right-0 z-50 mb-1 max-h-56 w-full max-w-full overflow-y-auto rounded-card p-1">
+      {breadcrumbs && breadcrumbs.length > 0 && navigate && (
+        <nav aria-label={t("conversation.completion.workspacePath")} className="flex flex-wrap items-center gap-1 px-2 py-1 text-ui-meta text-muted">
+          <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => navigate("")} className="hover:text-text">{t("conversation.completion.workspaceRoot")}</button>
+          {breadcrumbs.map((breadcrumb, index) => (
+            <span key={breadcrumb.path} className="flex items-center gap-1">
+              <span aria-hidden="true">/</span>
+              <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => navigate(breadcrumb.path)} className="hover:text-text" aria-current={index === breadcrumbs.length - 1 ? "location" : undefined}>{breadcrumb.name}</button>
+            </span>
+          ))}
+        </nav>
+      )}
+      {loading && <div role="status" className="flex items-center gap-2 px-2 py-2 text-ui-caption text-muted"><Loader2 size={13} className="animate-spin" />{t("conversation.completion.loading")}</div>}
+      {error && <div role="alert" className="flex items-center justify-between gap-3 px-2 py-2 text-ui-caption text-error-text"><span>{t("conversation.completion.loadError")}</span><button type="button" onMouseDown={(event) => event.preventDefault()} onClick={retry} className="rounded-input px-2 py-1 text-text hover:bg-surface-2">{t("conversation.completion.retry")}</button></div>}
+      {empty && <div role="status" className="px-2 py-2 text-ui-caption text-muted">{t("conversation.completion.emptyFolder")}</div>}
+      <div role="listbox" id={id} aria-label={label}>
+        <div id={`${id}-help`} className="sr-only">
+          {t("conversation.completion.keyboardHint")}
+        </div>
+        {groups.size > 1
+          ? runs.map((run) => (
             <div key={run.group ?? run.start} role="group" aria-label={heading(run.group)}>
               <div aria-hidden="true" className="px-2 pt-1.5 pb-0.5 text-ui-meta text-muted">{heading(run.group)}</div>
               {run.items.map((item, offset) => renderRow(item, run.start + offset))}
             </div>
           ))
-        : items.map((item, index) => renderRow(item, index))}
+          : items.map((item, index) => renderRow(item, index))}
+      </div>
     </div>
   );
 }
+

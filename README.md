@@ -35,7 +35,8 @@ Conversations run concurrently in isolated Agent Core Worker processes. AgentHar
 
 ### Requirements
 
-- Node.js **24.16+**, Python **3.11+**, and pnpm **11.7.0** (the pinned package manager)
+- Node.js **24.16+** with npm. The installer bootstraps the repository-pinned **pnpm 11.7.0** without a global install.
+- Git to clone the source. Python, R and Micromamba environments are provisioned on demand when scientific computation is used.
 - An LLM API key, or a configured local endpoint such as Ollama or LM Studio
 - On Windows, PowerShell **5.1+**
 
@@ -66,16 +67,21 @@ powershell -File scripts/install.ps1
 powershell -File scripts/start.ps1
 ```
 
-Open **http://127.0.0.1:5173**. In **Settings → LLM**, configure a provider and default model, then open a workspace and start a conversation. Use **Settings → Skills** to manage skills and **Settings → MCP** to enable scientific connectors; only Paper Search is enabled initially. The control-plane API runs on `127.0.0.1:8787`.
+Open **http://127.0.0.1:8787**. In **Settings → LLM**, configure a provider and default model, then open a workspace and start a conversation. Use **Settings → Skills** to manage skills and **Settings → MCP** to enable scientific connectors; only Paper Search is enabled initially. The control-plane API runs on `127.0.0.1:8787`.
 
-These launchers run the Vite and `tsx watch` **development servers**. Bash supports macOS/Linux and WSL; native Windows does not require Git Bash. Installation includes the Agent Core SDK through workspace dependencies.
+The installer builds the server, Agent Workers and frontend. Default startup runs **compiled JavaScript** and serves the frontend from the control plane on one port; Vite and tsx are not used at runtime. Bash supports macOS/Linux and WSL; native Windows does not require Git Bash. Installation includes the Agent Core SDK through workspace dependencies.
 
-### Start, stop and update
+### Start, diagnose and stop
 
 The installer provides a `pi-science` command. On macOS/Linux, add `~/.local/bin` to `PATH` if needed (`PI_SCIENCE_BIN_DIR` overrides that directory). On Windows, open a new terminal after installation updates `PATH`.
 
 ```text
-pi-science                 Start the services
+pi-science                 Start the production build (port 8787)
+pi-science start --dev     Start source code and Vite (port 5173)
+pi-science install         Install dependencies and rebuild
+pi-science doctor          Diagnose production prerequisites
+pi-science doctor --dev    Diagnose development prerequisites
+pi-science logs            Print runtime logs
 pi-science status          Show service status
 pi-science stop            Stop this checkout's services
 pi-science help            Show command help
@@ -83,7 +89,7 @@ pi-science help            Show command help
 
 Foreground startup keeps the terminal open; **Ctrl+C** stops the services. Bash also supports `pi-science start --detach`; the Windows launcher is foreground-only.
 
-Re-run the platform installer after moving the checkout or updating Node/Python dependency metadata, the lockfile or SDK dependencies. Source-only edits do not require reinstallation. To skip installation with the combined Bash launcher:
+Re-run the platform installer after moving or updating the checkout to rebuild production artifacts. Source edits take effect immediately only in development mode. To skip installation with the combined Bash launcher:
 
 ```bash
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
@@ -92,7 +98,15 @@ PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 <details>
 <summary>Launcher behavior and persistent state</summary>
 
-Installed launchers use package-local executables, so npm/pnpm wrappers are not needed for startup; pnpm is required for installation, builds and dependency updates. Startup has a 90-second readiness deadline, configurable with `PI_SCIENCE_STARTUP_TIMEOUT_SECONDS`. Launchers track owned services for shutdown and refuse to overwrite an unrelated launcher path.
+Production launchers invoke Node directly; npm/pnpm is needed only for installation, builds and dependency updates. `doctor` performs local checks without downloads or persistent database writes: runtime, build/Worker files, dependencies, loopback ports, directory permissions and an in-memory SQLite query. It reports Python/R/Micromamba and LLM configuration as optional setup; persistent SQLite readiness is checked during startup. It checks port availability, so stop a running instance before using it as a pre-start check.
+
+For development, use `pi-science start --dev` (direct Node + tsx, plus Vite), `bash scripts/start.sh --dev`, or `powershell -File scripts/start.ps1 -Dev`. Set `PI_SCIENCE_SERVER_WATCH=1` to opt into `tsx watch`; Bash and PowerShell default to direct tsx in development. `PI_SCIENCE_CONTROL_PLANE_PORT` changes the production port; `PI_SCIENCE_FRONTEND_PORT` is used only in development. Both launchers bind the control plane to `127.0.0.1`. The internal browser cookie is not user login: do not expose this service to the public network.
+
+The pnpm store is shared between checkouts by default (`${XDG_CACHE_HOME:-~/.cache}/pi-science/pnpm-store` on POSIX, `%LOCALAPPDATA%\pi-science\pnpm-store` on Windows). Set `PNPM_STORE_DIR` to choose an independent cache, including the previous checkout-local `.cache/pnpm-store`. Startup has a 90-second readiness deadline, configurable with `PI_SCIENCE_STARTUP_TIMEOUT_SECONDS`. Launchers track process identity for shutdown and refuse to overwrite an unrelated launcher path. Windows stop checks checkout, executable, entry point, creation time and a per-launch marker; missing or stale state never permits stopping by port alone.
+
+**Updates:** this change does not provide transactional `update`, `rollback`, `uninstall`, or standalone installation packages. Before manually updating source, stop the app and back up application state and workspace data (including SQLite and its WAL files). Re-run the installer after updating. A source downgrade cannot undo database migrations; recovery requires a compatible application version and a full data backup. See [deployment](docs/deployment.md) for verification and the remaining roadmap.
+
+Windows stop failures preserve identity state for retry and exit with code 1. Windows `logs` includes control-plane/frontend stdout and stderr by default; `logs --stderr` selects errors. On POSIX, foreground output stays in the terminal and `logs` reads the detached log. Relative `PI_SCIENCE_FRONTEND_DIST` values are resolved from the checkout root by both the launcher and doctor.
 
 Application state uses `PI_SCIENCE_HOME` or `~/.pi-science`, with a checkout-local fallback when necessary. Project metadata may be workspace-local or application-managed; see [data ownership](docs/architecture.md#persistence-and-data-ownership) before moving or backing up state. Existing v3 sessions can be converted automatically or with the [offline conversion command](docs/agent-core-session-conversion.md).
 

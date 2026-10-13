@@ -9,4 +9,4 @@ if [ "${PI_SCIENCE_SKIP_INSTALL:-0}" != "1" ]; then
   bash "$SCRIPT_DIR/install.sh"
 fi
 
-exec bash "$SCRIPT_DIR/start.sh"
+exec bash "$SCRIPT_DIR/start.sh" "$@"
