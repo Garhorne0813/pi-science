@@ -1248,6 +1248,7 @@
   "notebook.agent": "Agent",
   "notebook.edit": "Edit",
   "notebook.outputLabel": "Output",
+  "notebook.outputTruncated": "Output was truncated. Some text is not shown.",
   "notebook.wroteFiles": "Wrote {{files}}",
   "notebook.errorStatus": "error",
   "notebook.interruptedStatus": "interrupted",
