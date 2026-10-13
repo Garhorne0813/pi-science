@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NodeKernelManager, type KernelResult } from "./node-kernel-manager.js";
+import type { KernelIsolationPolicy } from "./kernel-isolation.js";
 import type { WorkspaceEnvironmentStatus } from "../workspace/workspace-environment.js";
 
 function systemPython(): string | null {
@@ -290,12 +291,12 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     return { child, writes, kills, answered: new Set<string>() };
   }
 
-  function managerWithFake(platform: NodeJS.Platform) {
+  function managerWithFake(platform: NodeJS.Platform, isolation: KernelIsolationPolicy = "unconfined") {
     const spawned: { command: string; args: string[]; options?: SpawnOptions }[] = [];
     const treeKills: number[] = [];
     const sessions: FakeSession[] = [];
     const manager = new NodeKernelManager({
-      isolation: "unconfined",
+      isolation,
       platform,
       workspaceEnvironmentVariables: () => ({}),
       interpreterAvailable: () => true,
@@ -484,6 +485,16 @@ describe("NodeKernelManager platform interrupt semantics", () => {
       await stopping;
     }
     expect(treeKills).toContain(4242);
+  });
+
+  it("refuses to spawn when the platform cannot enforce the policy", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-isolation-refused-"));
+    cleanup.push(cwd);
+    const { manager, spawned } = managerWithFake("linux", "workspace");
+    const error = await manager.execute({ language: "python", code: "1+1", cwd, environment: status(cwd, join(cwd, "env")), timeoutMs: 10_000 }).catch((error: unknown) => error);
+    expect(error).toMatchObject({ name: "KernelIsolationUnavailableError", message: expect.stringContaining("PI_SCIENCE_KERNEL_ISOLATION=unconfined") });
+    expect(spawned).toHaveLength(0);
+    await manager.shutdownAll();
   });
 
   it.skipIf(python === null || process.platform === "win32")("keeps the session usable after an interrupted cell", async () => {
