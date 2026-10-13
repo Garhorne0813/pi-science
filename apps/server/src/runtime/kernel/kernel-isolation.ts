@@ -99,7 +99,7 @@ export async function planKernelLaunch(policy: KernelIsolationPolicy, request: K
       { effect: "allow", operation: "file-write*", selector: "subpath", paths: [scratch!] },
     ];
     const env = { ...request.env };
-    for (const key of Object.keys(env)) if (key === "PI_SCIENCE_INTERNAL_TOKEN" || /_(API_KEY|TOKEN|SECRET|PASSWORD|ACCESS_KEY|PRIVATE_KEY)$/.test(key.toUpperCase())) delete env[key];
+    for (const key of Object.keys(env)) if (key === "PI_SCIENCE_INTERNAL_TOKEN" || /_(API_KEY|KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY)$/.test(key.toUpperCase())) delete env[key];
     const [tmp, matplotlib, cache] = await Promise.all(["tmp", "matplotlib", "cache"].map((name) => canonicalize(join(scratch!, name))));
     Object.assign(env, { TMPDIR: tmp, TMP: tmp, TEMP: tmp, MPLCONFIGDIR: matplotlib, XDG_CACHE_HOME: cache });
     return { command: SANDBOX_EXEC, args: ["-p", profile(policy, rules), request.interpreter, ...args], env, dispose };

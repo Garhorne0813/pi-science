@@ -277,7 +277,7 @@ describe("kernel launch planning", () => {
     const fixture = await isolationFixture();
     const codeFile = join(fixture.workspace, ".pi-science", "cell.R");
     await writeFile(codeFile, "", "utf8");
-    const env: NodeJS.ProcessEnv = { ...bareRequest.env, PI_SCIENCE_INTERNAL_TOKEN: "secret", custom_token: "secret", DB_PASSWORD: "secret", AWS_ACCESS_KEY: "secret", SIGNING_PRIVATE_KEY: "secret", CLIENT_SECRET: "secret", HF_HOME: "keep" };
+    const env: NodeJS.ProcessEnv = { ...bareRequest.env, PI_SCIENCE_INTERNAL_TOKEN: "secret", custom_token: "secret", DB_PASSWORD: "secret", AWS_ACCESS_KEY: "secret", SIGNING_PRIVATE_KEY: "secret", CLIENT_SECRET: "secret", PUBMED_KEY: "secret", HF_HOME: "keep" };
     const request = { platform: "darwin" as const, workspace: fixture.workspace, environmentPrefix: fixture.prefix, interpreter: status(fixture.workspace, fixture.prefix).python, bridge: codeFile, codeFile, env };
     const launch = await planKernelLaunch("workspace", request);
     try {
@@ -296,7 +296,7 @@ describe("kernel launch planning", () => {
       expect(profile.lastIndexOf(literal)).toBeGreaterThan(profile.indexOf("(deny file-read*"));
       expect(profile.endsWith("(deny network*)")).toBe(true);
       expect(launch.env).toMatchObject({ HOME: "/original-home", PATH: "/original-path", HF_HOME: "keep", TMP: launch.env.TMPDIR, TEMP: launch.env.TMPDIR });
-      for (const key of ["OPENAI_API_KEY", "PI_SCIENCE_INTERNAL_TOKEN", "custom_token", "DB_PASSWORD", "AWS_ACCESS_KEY", "SIGNING_PRIVATE_KEY", "CLIENT_SECRET"]) expect(launch.env).not.toHaveProperty(key);
+      for (const key of ["OPENAI_API_KEY", "PI_SCIENCE_INTERNAL_TOKEN", "custom_token", "DB_PASSWORD", "AWS_ACCESS_KEY", "SIGNING_PRIVATE_KEY", "CLIENT_SECRET", "PUBMED_KEY"]) expect(launch.env).not.toHaveProperty(key);
       expect(env.OPENAI_API_KEY).toBe("unchanged");
       for (const key of ["TMPDIR", "MPLCONFIGDIR", "XDG_CACHE_HOME"]) expect(await realpath(launch.env[key]!)).toBe(launch.env[key]);
       const firstDisposal = launch.dispose();

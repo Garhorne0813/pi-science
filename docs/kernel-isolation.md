@@ -90,12 +90,16 @@ The kernel environment comes from `workspaceEnvironmentVariables()`, which copie
 environment. The isolation seam removes the server's credentials from it before the spawn:
 
 - the exact key `PI_SCIENCE_INTERNAL_TOKEN`, which `scripts/start.sh` exports, and
-- any key whose uppercase form ends in `_API_KEY`, `_TOKEN`, `_SECRET`, `_PASSWORD`, `_ACCESS_KEY`,
-  or `_PRIVATE_KEY`.
+- any key whose uppercase form ends in `_API_KEY`, `_KEY`, `_TOKEN`, `_SECRET`, `_PASSWORD`, or
+  `_PRIVATE_KEY`.
 
 Everything else is kept, so a cell still sees `PATH`, the locale, and an operator variable such as
-`R_LIBS` or `HF_HOME`. The seam points five variables at the scratch directory: `TMPDIR`, `TMP`,
-`TEMP`, `MPLCONFIGDIR`, and `XDG_CACHE_HOME`. It does not rewrite `HOME`, so a write to `~` fails
+`R_LIBS` or `HF_HOME`. Two limits apply. `unconfined` removes nothing and leaves the environment as
+it is. The rule matches names, so a credential the operator registered under an unusual name can
+still reach a cell. The key that grants control-plane access is removed by exact name.
+
+The seam points five variables at the scratch directory: `TMPDIR`, `TMP`, `TEMP`, `MPLCONFIGDIR`,
+and `XDG_CACHE_HOME`. It does not rewrite `HOME`, so a write to `~` fails
 loudly instead of landing in a directory that the kernel deletes when it stops.
 
 ## Workflows that need an exception
