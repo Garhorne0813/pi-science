@@ -56,8 +56,6 @@ function status(workspace: string, prefix: string): WorkspaceEnvironmentStatus {
   };
 }
 
-/** A loopback listener gives the cell a reachable address, so a denied
- *  connection reads as EPERM instead of an unreachable-network error. */
 async function listenOnLoopback(): Promise<number> {
   const server = createServer((socket) => socket.end());
   servers.push(server);
@@ -137,7 +135,8 @@ describe("kernel cell escapes", () => {
   it.skipIf(python === null || !hasEnforcer)("denies filesystem and network escapes while allowing workspace writes", async () => {
     const fixture = await isolationFixture();
     const outcome = await escapeOutcome(escapeCell(fixture.workspace, fixture.secret, fixture.target, await listenOnLoopback()), fixture.workspace, fixture.prefix, "workspace");
-    for (const name of ["read_outside", "write_outside", "read_workspace_metadata", "network", "subprocess_network"]) expect(outcome[name], name).not.toBe("allowed");
+    for (const name of ["read_outside", "write_outside", "read_workspace_metadata", "network"]) expect(outcome[name], name).toBe("PermissionError");
+    expect(outcome.subprocess_network).toBe("CalledProcessError");
     for (const name of ["workspace_write", "devnull_write", "devnull_subprocess"]) expect(outcome[name], name).toBe("allowed");
   });
 
@@ -146,7 +145,7 @@ describe("kernel cell escapes", () => {
     const outcome = await escapeOutcome(escapeCell(fixture.workspace, fixture.secret, fixture.target, await listenOnLoopback()), fixture.workspace, fixture.prefix, "workspace-network");
     expect(outcome.network).toBe("allowed");
     expect(outcome.subprocess_network).toBe("allowed");
-    for (const name of ["read_outside", "write_outside", "read_workspace_metadata"]) expect(outcome[name], name).not.toBe("allowed");
+    for (const name of ["read_outside", "write_outside", "read_workspace_metadata"]) expect(outcome[name], name).toBe("PermissionError");
     expect(outcome.workspace_write).toBe("allowed");
   });
 
@@ -179,8 +178,8 @@ describe("kernel cell escapes", () => {
       "print(json.dumps(outcome))",
     ].join("\n");
     const outcome = await escapeOutcome(code, fixture.workspace, fixture.prefix, "workspace");
-    expect(outcome.app_read).not.toBe("allowed");
-    expect(outcome.runtime_write).not.toBe("allowed");
+    expect(outcome.app_read).toBe("PermissionError");
+    expect(outcome.runtime_write).toBe("PermissionError");
     expect(outcome.scratch_write).toBe("allowed");
   });
 
@@ -206,8 +205,8 @@ describe("kernel cell escapes", () => {
       "print(json.dumps(outcome))",
     ].join("\n");
     const outcome = await escapeOutcome(code, fixture.workspace, fixture.prefix, "workspace");
-    expect(outcome.app_state_read).not.toBe("allowed");
-    expect(outcome.app_state_write).not.toBe("allowed");
+    expect(outcome.app_state_read).toBe("PermissionError");
+    expect(outcome.app_state_write).toBe("PermissionError");
     expect(outcome.workspace_read).toBe("allowed");
   });
 

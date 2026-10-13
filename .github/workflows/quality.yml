@@ -133,9 +133,6 @@ jobs:
       - name: Test macOS launcher lifecycle
         run: bash scripts/test-launcher.sh
 
-      # The enforced kernel profile is darwin only, and the verify job runs on
-      # ubuntu and windows, so this is the one lane that executes a cell under
-      # the real profile. The darwin cases skip themselves when sandbox-exec or
-      # python3 is missing.
+      # The profile is darwin only, and the verify job runs on ubuntu and windows.
       - name: Test kernel isolation under the macOS profile
         run: pnpm --filter @pi-science/server exec vitest run src/runtime/kernel/kernel-isolation.test.ts
