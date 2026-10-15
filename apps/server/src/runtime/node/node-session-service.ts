@@ -155,6 +155,16 @@ export class NodeSessionService {
     try { await validateWorkspaceCwd(cwdValue); } catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
     return { success: true, data: { models: await agentModelCatalog() } };
   }
+  async composerCommands(cwdValue: string): Promise<RuntimeResult<{ commands: Array<{ name: string; description: string; source: string; group: string }>; revision: string }>> {
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(cwdValue); }
+    catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
+    try {
+      return { success: true, data: await this.agentCore.composerCommands(cwd, effectiveConfig()) };
+    } catch (error) {
+      return { success: false, code: "command_catalog_failed", error: error instanceof Error ? error.message : String(error) };
+    }
+  }
   async availableThinkingLevels(cwdValue: string, expectedModel?: string): Promise<RuntimeResult> {
     try { await validateWorkspaceCwd(cwdValue); } catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
     if (expectedModel) {
@@ -208,3 +218,4 @@ export class NodeSessionService {
 }
 
 export const nodeSessionService = new NodeSessionService();
+

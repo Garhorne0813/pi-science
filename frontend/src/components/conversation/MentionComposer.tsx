@@ -2,16 +2,18 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { useTranslation } from "react-i18next";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from "react";
 import type { SubagentMention } from "../../lib/conversation";
+import { applyComposerEdit, entityIntersectsEdit, updateComposerDocument, validComposerEntities, type ComposerEditIntent, type ComposerEntity } from "../../lib/conversation/composer-document";
 import type { CompletionApply } from "../../lib/conversation/completion";
 import { useComposerCompletion } from "../../hooks/useComposerCompletion";
-import { useUiStore } from "../../lib/ui";
 import { CompletionMenu } from "./CompletionMenu";
 
 interface Props {
   cwd: string;
   value: string;
-  mentions: SubagentMention[];
-  onChange: (value: string, mentions: SubagentMention[]) => void;
+  /** Legacy mention input is retained for existing stand-alone consumers. */
+  mentions?: SubagentMention[];
+  entities?: ComposerEntity[];
+  onChange: (value: string, mentions: SubagentMention[], entities: ComposerEntity[]) => void;
   onKeyDown: (event: ReactKeyboardEvent<HTMLTextAreaElement>) => void;
   onCompositionStart: () => void;
   onCompositionEnd: () => void;
@@ -27,31 +29,27 @@ interface Props {
 const COMPOSER_MIN_HEIGHT = 64;
 const COMPOSER_MAX_HEIGHT = 160;
 
-function changedRange(previous: string, next: string): { start: number; oldEnd: number; inserted: string } {
-  let start = 0;
-  while (start < previous.length && start < next.length && previous[start] === next[start]) start += 1;
-  let oldEnd = previous.length;
-  let nextEnd = next.length;
-  while (oldEnd > start && nextEnd > start && previous[oldEnd - 1] === next[nextEnd - 1]) {
-    oldEnd -= 1;
-    nextEnd -= 1;
-  }
-  return { start, oldEnd, inserted: next.slice(start, nextEnd) };
+interface ComposerSnapshot {
+  value: string;
+  entities: ComposerEntity[];
+  selectionStart: number;
+  selectionEnd: number;
 }
 
-function mentionIntersectsEdit(mention: SubagentMention, start: number, oldEnd: number): boolean {
-  if (start === oldEnd) return mention.start < start && start < mention.end;
-  return start < mention.end && oldEnd > mention.start;
+function documentKey(value: string, entities: readonly ComposerEntity[]): string {
+  return JSON.stringify([value, entities.map((entity) => entity.kind === "mention"
+    ? [entity.kind, entity.id, entity.start, entity.end, entity.name]
+    : [entity.kind, entity.id, entity.start, entity.end, entity.reference.cwd, entity.reference.path, entity.reference.isDir])]);
 }
 
-function renderHighlighted(value: string, mentions: SubagentMention[]) {
+function renderHighlighted(value: string, entities: ComposerEntity[]) {
   const result: ReactNode[] = [];
   let cursor = 0;
-  for (const mention of [...mentions].sort((a, b) => a.start - b.start)) {
+  for (const mention of validComposerEntities(value, entities)) {
     if (mention.start < cursor || mention.end > value.length) continue;
     result.push(value.slice(cursor, mention.start));
     result.push(
-      <span key={mention.id} className="rounded bg-accent/15 text-accent ring-1 ring-inset ring-accent/20">
+      <span key={mention.id} className={mention.kind === "reference" ? "rounded bg-accent/15 text-accent ring-1 ring-inset ring-accent/30" : "rounded bg-accent/15 text-accent ring-1 ring-inset ring-accent/20"}>
         {value.slice(mention.start, mention.end)}
       </span>,
     );
@@ -61,12 +59,84 @@ function renderHighlighted(value: string, mentions: SubagentMention[]) {
   return result;
 }
 
-export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onCompositionStart, onCompositionEnd, inputRef, composing, composingRef, placeholder }: Props) {
+export function MentionComposer({ cwd, value, mentions = [], entities, onChange, onKeyDown, onCompositionStart, onCompositionEnd, inputRef, composing, composingRef, placeholder }: Props) {
   const { t } = useTranslation();
   const [caret, setCaret] = useState(value.length);
   const mirrorRef = useRef<HTMLDivElement>(null);
-  const selectionDirectionRef = useRef<"forward" | "backward" | "none">("none");
-  const addWorkspaceReference = useUiStore((state) => state.addWorkspaceReference);
+  const pendingIntentRef = useRef<ComposerEditIntent | null>(null);
+  const undoHistoryRef = useRef<ComposerSnapshot[]>([]);
+  const redoHistoryRef = useRef<ComposerSnapshot[]>([]);
+  const pendingCaretRef = useRef<{ documentKey: string | null; start: number; end: number } | null>(null);
+  const keyboardDirectionRef = useRef<"backward" | "forward" | null>(null);
+  const chordHistoryRef = useRef<"undo" | "redo" | null>(null);
+  const expectedDocumentKeyRef = useRef<string | null>(null);
+  const activeEntities = validComposerEntities(value, entities ?? mentions.map((mention) => ({ ...mention, kind: "mention" as const })));
+  const activeDocumentKey = documentKey(value, activeEntities);
+  const observedDocumentKeyRef = useRef(activeDocumentKey);
+  useLayoutEffect(() => {
+    if (activeDocumentKey === observedDocumentKeyRef.current) return;
+    observedDocumentKeyRef.current = activeDocumentKey;
+    if (expectedDocumentKeyRef.current === activeDocumentKey) {
+      expectedDocumentKeyRef.current = null;
+      return;
+    }
+    undoHistoryRef.current = [];
+    redoHistoryRef.current = [];
+    pendingIntentRef.current = null;
+  }, [activeDocumentKey]);
+  const emitChange = useCallback((nextValue: string, nextEntities: ComposerEntity[]) => {
+    const valid = validComposerEntities(nextValue, nextEntities);
+    expectedDocumentKeyRef.current = documentKey(nextValue, valid);
+    onChange(nextValue, valid.filter((entity) => entity.kind === "mention").map(({ id, name, start, end }) => ({ id, name, start, end })), valid);
+  }, [onChange]);
+
+  const snapshot = useCallback((start?: number, end?: number): ComposerSnapshot => {
+    const element = inputRef.current;
+    return {
+      value,
+      entities: activeEntities.map((entity) => ({ ...entity })),
+      selectionStart: start ?? element?.selectionStart ?? caret,
+      selectionEnd: end ?? element?.selectionEnd ?? caret,
+    };
+  }, [activeEntities, caret, inputRef, value]);
+
+  const rememberEdit = useCallback((before: ComposerSnapshot) => {
+    const stack = undoHistoryRef.current;
+    if (stack.length === 0 || documentKey(stack[stack.length - 1]!.value, stack[stack.length - 1]!.entities) !== documentKey(before.value, before.entities)) {
+      stack.push(before);
+      if (stack.length > 100) stack.shift();
+    }
+    redoHistoryRef.current = [];
+  }, []);
+
+  const applyCaretRequest = useCallback((request: { start: number; end: number }) => {
+    const element = inputRef.current;
+    if (!element) return;
+    element.focus();
+    element.setSelectionRange(request.start, request.end);
+    setCaret(request.end);
+  }, [inputRef]);
+
+  const placeCaret = useCallback((start: number, end = start) => {
+    const request = { documentKey: expectedDocumentKeyRef.current, start, end };
+    pendingCaretRef.current = request;
+    // Nothing to wait for when the document this caret belongs to is already on screen.
+    if (request.documentKey === null) {
+      pendingCaretRef.current = null;
+      applyCaretRequest(request);
+    }
+  }, [applyCaretRequest]);
+
+  const restoreHistory = useCallback((direction: "undo" | "redo") => {
+    const source = direction === "undo" ? undoHistoryRef.current : redoHistoryRef.current;
+    const destination = direction === "undo" ? redoHistoryRef.current : undoHistoryRef.current;
+    const target = source.pop();
+    if (!target) return false;
+    destination.push(snapshot());
+    emitChange(target.value, target.entities);
+    placeCaret(target.selectionStart, target.selectionEnd);
+    return true;
+  }, [emitChange, placeCaret, snapshot]);
 
   useEffect(() => {
     const element = inputRef.current;
@@ -95,86 +165,180 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
     if (mirrorRef.current) mirrorRef.current.scrollTop = element.scrollTop;
   }, [inputRef, value]);
 
-  const placeCaret = useCallback((position: number) => {
-    requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(position, position);
-      setCaret(position);
-    });
-  }, [inputRef]);
+  // The placement runs inside the commit that carries its document, so no keystroke or click can land
+  // between the value change and the caret. A request whose document never arrived is dropped.
+  useLayoutEffect(() => {
+    const request = pendingCaretRef.current;
+    if (!request) return;
+    pendingCaretRef.current = null;
+    if (request.documentKey !== activeDocumentKey) return;
+    applyCaretRequest(request);
+  }, [activeDocumentKey, applyCaretRequest]);
 
   const handleChange = (nextValue: string) => {
-    const edit = changedRange(value, nextValue);
-    const affected = mentions.filter((mention) => mentionIntersectsEdit(mention, edit.start, edit.oldEnd));
-    if (affected.length > 0) {
-      const expandedStart = Math.min(edit.start, ...affected.map((mention) => mention.start));
-      const expandedEnd = Math.max(edit.oldEnd, ...affected.map((mention) => mention.end));
-      const repaired = value.slice(0, expandedStart) + edit.inserted + value.slice(expandedEnd);
-      const delta = edit.inserted.length - (expandedEnd - expandedStart);
-      const nextMentions = mentions
-        .filter((mention) => !affected.includes(mention))
-        .map((mention) => mention.start >= expandedEnd ? { ...mention, start: mention.start + delta, end: mention.end + delta } : mention);
-      onChange(repaired, nextMentions);
-      placeCaret(expandedStart + edit.inserted.length);
-      return;
-    }
-    const delta = nextValue.length - value.length;
-    const nextMentions = mentions.map((mention) => mention.start >= edit.oldEnd
-      ? { ...mention, start: mention.start + delta, end: mention.end + delta }
-      : mention);
-    onChange(nextValue, nextMentions);
-    setCaret(edit.start + edit.inserted.length);
+    const intent = pendingIntentRef.current;
+    pendingIntentRef.current = null;
+    const change = intent
+      ? applyComposerEdit({ value, entities: activeEntities }, intent, nextValue)
+      : updateComposerDocument({ value, entities: activeEntities }, nextValue);
+    rememberEdit(intent
+      ? { value: intent.value, entities: intent.entities.map((entity) => ({ ...entity })), selectionStart: intent.selectionStart, selectionEnd: intent.selectionEnd }
+      : snapshot());
+    emitChange(change.value, change.entities);
+    if (change.value !== nextValue) placeCaret(change.caret);
+    else setCaret(change.caret);
   };
 
   const applyCompletion = useCallback((apply: CompletionApply) => {
-    const delta = apply.caret - apply.end;
-    const nextMentions = mentions
-      .filter((mention) => !mentionIntersectsEdit(mention, apply.start, apply.end))
-      .map((mention) => mention.start >= apply.end ? { ...mention, start: mention.start + delta, end: mention.end + delta } : mention);
+    const delta = apply.value.length - value.length;
+    const nextEntities = activeEntities
+      .filter((entity) => !entityIntersectsEdit(entity, apply.start, apply.end))
+      .map((entity) => entity.start >= apply.end
+        ? { ...entity, start: entity.start + delta, end: entity.end + delta } : entity);
     if (apply.payload?.kind === "mention") {
-      const mention: SubagentMention = {
-        id: `${apply.payload.name}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      nextEntities.push({
+        kind: "mention",
+        id: `mention-${Date.now()}-${Math.random().toString(36).slice(2)}`,
         name: apply.payload.name,
         start: apply.start,
         end: apply.start + apply.payload.token.length,
-      };
-      if (!nextMentions.some((existing) => existing.start === mention.start && existing.end === mention.end)) nextMentions.push(mention);
+      });
     }
     if (apply.payload?.kind === "reference") {
-      addWorkspaceReference({ cwd, ...apply.payload.reference });
+      nextEntities.push({
+        kind: "reference",
+        id: `reference-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        start: apply.start,
+        end: apply.start + `@${apply.payload.reference.path}`.length,
+        reference: { cwd, ...apply.payload.reference },
+      });
     }
-    onChange(apply.value, nextMentions.sort((a, b) => a.start - b.start));
+    rememberEdit(snapshot());
+    emitChange(apply.value, nextEntities);
     placeCaret(apply.caret);
-  }, [addWorkspaceReference, cwd, mentions, onChange, placeCaret]);
+  }, [activeEntities, cwd, emitChange, placeCaret, rememberEdit, snapshot, value]);
 
   const completion = useComposerCompletion({ cwd, value, caret, composing, composingRef, onApply: applyCompletion });
 
   const handleSelect = (element: HTMLTextAreaElement) => {
+    const direction = element.selectionDirection;
     let start = element.selectionStart;
     let end = element.selectionEnd;
-    const startMention = mentions.find((mention) => mention.start < start && start < mention.end);
-    const endMention = mentions.find((mention) => mention.start < end && end < mention.end);
+    if (composing || composingRef.current) { setCaret(end); return; }
+    // Only a keyboard move carries a direction of travel; a pointer click keeps the nearest-half rule.
+    const travel = keyboardDirectionRef.current;
+    keyboardDirectionRef.current = null;
+    const startMention = activeEntities.find((entity) => entity.start < start && start < entity.end);
+    const endMention = activeEntities.find((entity) => entity.start < end && end < entity.end);
     if (start === end && startMention) {
-      const snapped = start < (startMention.start + startMention.end) / 2 ? startMention.start : startMention.end;
+      const crossed = travel === "backward" ? startMention.start : travel === "forward" ? startMention.end : null;
+      const snapped = crossed ?? (start < (startMention.start + startMention.end) / 2 ? startMention.start : startMention.end);
       start = snapped;
       end = snapped;
     } else {
       if (startMention) start = startMention.start;
       if (endMention) end = endMention.end;
     }
-    if (start !== element.selectionStart || end !== element.selectionEnd) element.setSelectionRange(start, end, selectionDirectionRef.current);
-    selectionDirectionRef.current = element.selectionDirection;
+    if (start !== element.selectionStart || end !== element.selectionEnd) element.setSelectionRange(start, end, direction);
     setCaret(end);
   };
 
   const handleKey = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (completion.handleKeyDown(event)) return;
+    const pressed = event.metaKey || event.ctrlKey ? event.key.toLowerCase() : "";
+    const undoChord = pressed === "z" && !event.shiftKey;
+    const redoChord = !undoChord && ((pressed === "z" && event.shiftKey) || (event.ctrlKey && pressed === "y"));
+    // A keystroke that is not this chord closes the window for the event it may have paired with.
+    if (!undoChord && !redoChord) chordHistoryRef.current = null;
+    if ((undoChord || redoChord) && !event.nativeEvent.isComposing && !composingRef.current) {
+      // A native history step would move the text without its bindings, and the platform stops
+      // offering its own redo once this stack cancels the undo, so the chord belongs here.
+      event.preventDefault();
+      const direction = undoChord ? "undo" : "redo";
+      chordHistoryRef.current = direction;
+      restoreHistory(direction);
+      return;
+    }
+    const arrow = event.key === "ArrowLeft" || event.key === "ArrowRight";
+    if (arrow && !event.nativeEvent.isComposing && !composingRef.current) keyboardDirectionRef.current = event.key === "ArrowLeft" ? "backward" : "forward";
+    if (!event.nativeEvent.isComposing && !composingRef.current && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && arrow) {
+      const element = event.currentTarget;
+      if (element.selectionStart === element.selectionEnd) {
+        const target = activeEntities.find((entity) => event.key === "ArrowLeft" ? entity.end === element.selectionStart : entity.start === element.selectionStart);
+        if (target) {
+          event.preventDefault();
+          const position = event.key === "ArrowLeft" ? target.start : target.end;
+          element.setSelectionRange(position, position);
+          setCaret(position);
+          return;
+        }
+      }
+    }
+    if (!event.nativeEvent.isComposing && !composingRef.current && (event.key === "Backspace" || event.key === "Delete")) {
+      const element = event.currentTarget;
+      if (element.selectionStart === element.selectionEnd) {
+        const position = element.selectionStart;
+        const target = activeEntities.find((entity) =>
+          event.key === "Backspace" ? entity.end === position : entity.start === position);
+        if (target) {
+          event.preventDefault();
+          const nextValue = value.slice(0, target.start) + value.slice(target.end);
+          const nextEntities = activeEntities.filter((entity) => entity !== target)
+            .map((entity) => entity.start >= target.end
+              ? { ...entity, start: entity.start - (target.end - target.start), end: entity.end - (target.end - target.start) } : entity);
+          rememberEdit(snapshot());
+          emitChange(nextValue, nextEntities);
+          placeCaret(target.start);
+          return;
+        }
+      }
+    }
     onKeyDown(event);
+  };
+
+  const handleBeforeInput = useCallback((native: InputEvent) => {
+    if (native.inputType === "historyUndo" || native.inputType === "historyRedo") {
+      native.preventDefault();
+      pendingIntentRef.current = null;
+      const direction = native.inputType === "historyUndo" ? "undo" : "redo";
+      // A browser that still delivers the event after the chord must not move the stack twice.
+      if (chordHistoryRef.current === direction) {
+        chordHistoryRef.current = null;
+        return;
+      }
+      restoreHistory(direction);
+      return;
+    }
+    const element = inputRef.current;
+    if (!element) return;
+    pendingIntentRef.current = {
+      value,
+      entities: activeEntities.map((entity) => ({ ...entity })),
+      selectionStart: element.selectionStart,
+      selectionEnd: element.selectionEnd,
+      inputType: native.inputType ?? "",
+    };
+  }, [activeEntities, inputRef, restoreHistory, value]);
+
+  // React's delegated onBeforeInput does not consistently receive native historyUndo/Redo
+  // events. Listen on the textarea itself so the edit intent is captured before React onChange.
+  useEffect(() => {
+    const element = inputRef.current;
+    if (!element) return;
+    element.addEventListener("beforeinput", handleBeforeInput);
+    return () => element.removeEventListener("beforeinput", handleBeforeInput);
+  }, [handleBeforeInput, inputRef]);
+
+  const cancelPendingCaret = () => {
+    // Cancel on pointerdown/blur, not select. Completion placement also emits select.
+    pendingCaretRef.current = null;
+    keyboardDirectionRef.current = null;
   };
 
   // Tab can carry focus out of the composer. The list belongs to the composer, so it goes with it
   // rather than staying on screen with no key left to close it.
   const handleBlur = () => {
+    cancelPendingCaret();
     completion.menu?.dismiss();
   };
 
@@ -196,6 +360,12 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
           onActiveChange={completion.menu.setActive}
           onDismiss={completion.menu.dismiss}
           inputRef={inputRef}
+          loading={completion.menu.loading}
+          error={completion.menu.error}
+          empty={completion.menu.empty}
+          retry={completion.menu.retry}
+          breadcrumbs={completion.menu.breadcrumbs}
+          navigate={completion.menu.navigate}
         />
       )}
       <div className="relative min-h-[64px] max-h-[160px] overflow-hidden rounded-t-composer">
@@ -204,7 +374,7 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
           aria-hidden="true"
           className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2 text-sm leading-6 text-text [clip-path:inset(8px_12px)]"
         >
-          {renderHighlighted(value, mentions)}
+          {renderHighlighted(value, activeEntities)}
           {value.endsWith("\n") ? "\n" : null}
         </div>
         <textarea
@@ -215,11 +385,12 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
           aria-expanded={completion.menu !== null}
           aria-controls={completion.menu?.id}
           aria-describedby={completion.menu ? `${completion.menu.id}-help` : undefined}
-          aria-activedescendant={completion.menu ? `${completion.menu.id}-option-${completion.menu.activeIndex}` : undefined}
+          aria-activedescendant={completion.menu && completion.menu.items.length > 0 ? `${completion.menu.id}-option-${completion.menu.activeIndex}` : undefined}
           aria-autocomplete="list"
           onChange={(event) => handleChange(event.target.value)}
           onSelect={(event) => handleSelect(event.currentTarget)}
           onKeyDown={handleKey}
+          onPointerDown={cancelPendingCaret}
           onBlur={handleBlur}
           onCompositionStart={onCompositionStart}
           onCompositionEnd={onCompositionEnd}
@@ -232,3 +403,4 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
     </>
   );
 }
+

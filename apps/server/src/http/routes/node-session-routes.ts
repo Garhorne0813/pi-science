@@ -252,6 +252,12 @@ export function registerNodeSessionRoutes(
     return { commands: Array.isArray(data.commands) ? data.commands : [] };
   });
 
+  app.get("/api/composer/commands", async (request, reply) => {
+    const result = await nodeSessionService.composerCommands(cwd(request));
+    if (!result.success) return sendFailure(reply, result);
+    return result.data;
+  });
+
   app.get<{ Params: { session_id: string } }>("/api/sessions/:session_id/export", async (request, reply) => {
     const query = request.query as { format?: unknown };
     const format = typeof query.format === "string" ? query.format : "html";
@@ -289,3 +295,4 @@ function messageText(content: Array<Record<string, unknown>>): string {
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
+

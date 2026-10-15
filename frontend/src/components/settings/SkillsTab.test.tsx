@@ -1,8 +1,10 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { queryClient } from "../../lib/client/query-client";
+import { slashCommandsQuery } from "../../lib/conversation/slash-commands";
 import i18n from "../../i18n";
 import { SkillsTab } from "./SkillsTab";
 
@@ -56,6 +58,9 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   }
   if (url.startsWith("/api/skills/project-1/content?cwd=")) {
     return Promise.resolve(jsonResponse({ content: "# Beta\n\nBody" }));
+  }
+  if (url.startsWith("/api/composer/commands?")) {
+    return Promise.resolve(jsonResponse({ commands: [{ name: "skill:beta", description: "Project beta", source: "skill" }] }));
   }
   return Promise.resolve(jsonResponse({ error: `unhandled ${method} ${url}` }, 404));
 }
@@ -142,15 +147,47 @@ describe("SkillsTab", () => {
     });
   });
 
-  it("marks the command catalogue stale once a skill is disabled", async () => {
+  it("refetches the composer catalogue once a skill is disabled", async () => {
     renderTab("/tmp/ws");
     await screen.findByText("beta");
-    queryClient.setQueryData(["slash-commands", "/tmp/ws", "session-1"], [{ name: "skill:beta", description: "Project beta", group: "skill" }]);
+    const catalogueReads = () => calls.filter((call) => call.url.startsWith("/api/composer/commands?")).length;
+    const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    const { unmount } = renderHook(() => useQuery(slashCommandsQuery("/tmp/ws")), { wrapper });
+    await waitFor(() => expect(catalogueReads()).toBe(1));
+
     fireEvent.click(screen.getByRole("checkbox", { name: "Enable beta" }));
-    await waitFor(() => {
-      expect(queryClient.getQueryState(["slash-commands", "/tmp/ws", "session-1"])?.isInvalidated).toBe(true);
-    });
+
+    await waitFor(() => expect(catalogueReads()).toBeGreaterThan(1));
     expect(calls.some((call) => call.method === "PUT" && call.url === "/api/settings/skills/toggle")).toBe(true);
+    unmount();
+  });
+
+  it("refetches every workspace catalogue when the global policy changes", async () => {
+    renderTab("/tmp/ws");
+    await screen.findByText("beta");
+    const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    const readsFor = (cwd: string) => calls.filter((call) => call.url.startsWith("/api/composer/commands?") && call.url.includes(`cwd=${encodeURIComponent(cwd)}`)).length;
+    const other = renderHook(() => useQuery(slashCommandsQuery("/tmp/other")), { wrapper });
+    await waitFor(() => expect(readsFor("/tmp/other")).toBe(1));
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Enable beta" }));
+
+    await waitFor(() => expect(readsFor("/tmp/other")).toBeGreaterThan(1));
+    other.unmount();
+  });
+
+  it("refetches the catalogue when the tab has no workspace scope", async () => {
+    renderTab(null);
+    await screen.findByText("beta");
+    const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    const catalogueReads = () => calls.filter((call) => call.url.startsWith("/api/composer/commands?")).length;
+    const catalogue = renderHook(() => useQuery(slashCommandsQuery("/tmp/ws")), { wrapper });
+    await waitFor(() => expect(catalogueReads()).toBe(1));
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Enable beta" }));
+
+    await waitFor(() => expect(catalogueReads()).toBeGreaterThan(1));
+    catalogue.unmount();
   });
 
   it("opens the editor for a project skill", async () => {

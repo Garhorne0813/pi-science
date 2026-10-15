@@ -50,9 +50,9 @@ describe("mentionProvider detection", () => {
     expect(mentionProvider.detect(context("@reviewer "))).toBeNull();
   });
 
-  it("asks for a directory only when the token names one", () => {
+  it("uses the root directory for a bare @ and follows explicitly typed paths", () => {
     expect(mentionProvider.detect(context("pro"))).toBeNull();
-    expect(detect("@").directory).toBeUndefined();
+    expect(detect("@").directory).toEqual({ subdir: "", prefix: "", base: "" });
     expect(detect("@data/pro").directory).toEqual({ subdir: "data", prefix: "pro", base: "data/" });
     expect(detect("@data/").directory).toEqual({ subdir: "data", prefix: "", base: "data/" });
   });
@@ -89,20 +89,31 @@ describe("mentionProvider candidates", () => {
       value: "@reviewer ,notes.csv tail", end: caret,
     });
     expect(planAccept({ query, item: candidates[1], value })).toMatchObject({
-      value: " tail", end: value.indexOf(" "),
+      // The token already ends at a space, so the accept keeps the single separator.
+      value: "@rev,notes.csv tail", end: value.indexOf(" "),
       payload: { kind: "reference", reference: { path: "rev,notes.csv" } },
     });
   });
 
-  it("lists the matching directory entries as workspace references", () => {
+  it("separates directory navigation from explicit directory references", () => {
     expect(complete("@data/pro")).toEqual([
       {
-        id: "mention:path:data/protein_structure",
+        id: "mention:navigate:data/protein_structure",
         kind: "directory",
         label: "protein_structure/",
         description: "data/protein_structure",
         group: "files",
         insertText: "",
+        payload: { kind: "navigate-directory", path: "data/protein_structure" },
+        size: 0,
+      },
+      {
+        id: "mention:directory-reference:data/protein_structure",
+        kind: "directory",
+        label: "protein_structure/",
+        description: "data/protein_structure",
+        group: "files",
+        insertText: "@data/protein_structure ",
         payload: { kind: "reference", reference: { path: "data/protein_structure", name: "protein_structure", isDir: true } },
         size: 0,
       },
@@ -112,7 +123,7 @@ describe("mentionProvider candidates", () => {
         label: "protein.csv",
         description: "data/protein.csv",
         group: "files",
-        insertText: "",
+        insertText: "@data/protein.csv ",
         payload: { kind: "reference", reference: { path: "data/protein.csv", name: "protein.csv", isDir: false } },
         size: 2048,
       },
@@ -124,11 +135,15 @@ describe("mentionProvider candidates", () => {
     const candidates = mentionProvider.complete(detect("@pro"), context("@pro", 4, root));
     expect(candidates.map((candidate) => candidate.description)).toEqual([undefined]);
     const nested = mentionProvider.complete(detect("@data/pro"), context("@data/pro"));
-    expect(nested.map((candidate) => candidate.description)).toEqual(["data/protein_structure", "data/protein.csv"]);
+    expect(nested.map((candidate) => candidate.description)).toEqual(["data/protein_structure", "data/protein_structure", "data/protein.csv"]);
   });
 
-  it("answers a bare @ with agents only", () => {
-    expect(complete("@").map((item) => item.id)).toEqual(["mention:agent:reviewer", "mention:agent:scout"]);
+  it("answers a bare @ with root files, folders, and agents", () => {
+    expect(complete("@").map((item) => item.id)).toEqual([
+      "mention:agent:reviewer", "mention:agent:scout",
+      "mention:navigate:data/protein_structure", "mention:directory-reference:data/protein_structure",
+      "mention:path:data/notes.md", "mention:path:data/protein.csv",
+    ]);
   });
 
   it("leaves the candidate list empty when nothing matches", () => {
@@ -136,3 +151,4 @@ describe("mentionProvider candidates", () => {
     expect(complete("@data/zzz")).toEqual([]);
   });
 });
+

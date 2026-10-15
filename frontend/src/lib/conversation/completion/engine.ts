@@ -118,6 +118,9 @@ export function planAccept(input: {
 }): CompletionCommand {
   const { query, item, value } = input;
   if (!query || !item) return { kind: "ignore" };
+  if (item.payload?.kind === "navigate-directory") {
+    return { kind: "navigate-directory", path: item.payload.path };
+  }
   const end = item.replaceEnd ?? query.end;
   const next = value.slice(0, query.start) + item.insertText + value.slice(end);
   // An exact match has nothing left to complete, so the key falls through to its normal meaning.
@@ -133,3 +136,4 @@ export function planAccept(input: {
     payload: item.payload,
   };
 }
+

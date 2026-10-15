@@ -58,6 +58,27 @@ function app() {
 }
 
 describe("native Node conversation routes", () => {
+  it("serves composer commands for a workspace without opening a session", async () => {
+    const cwd = await workspaceWithSessions();
+    const composerCommands = vi.fn(async (_workspace: string) => ({
+      success: true as const,
+      data: { commands: [{ name: "skill:review", description: "Review files", source: "skill", group: "skill" }], revision: "test-revision" },
+    }));
+    const fakeService = { composerCommands, liveSessions: () => [] } as unknown as NodeSessionService;
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(server, fakeService, sessionRepository);
+
+    const response = await server.inject({ method: "GET", url: `/api/composer/commands?cwd=${encodeURIComponent(cwd)}` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      revision: "test-revision",
+      commands: [{ name: "skill:review", source: "skill" }],
+    });
+    expect(composerCommands).toHaveBeenCalledWith(cwd);
+    expect(fakeService.liveSessions(cwd)).toEqual([]);
+    await server.close();
+  });
+
   it("accepts client message IDs idempotently and rejects reuse with different content", async () => {
     const cwd = await workspaceWithSessions("prompt-idempotency");
     const command = vi.fn(async () => ({ success: true }));
@@ -556,3 +577,4 @@ describe("native Node conversation routes", () => {
     await server.close();
   });
 });
+

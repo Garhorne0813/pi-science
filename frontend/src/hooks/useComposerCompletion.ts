@@ -16,7 +16,7 @@ import {
   type CompletionItem,
 } from "../lib/conversation/completion";
 import { subagentsDiscoveryQuery } from "../lib/settings";
-import { workspaceFilesQuery } from "../lib/workspace/workspace-files";
+import { workspaceFilesQuery, type Breadcrumb } from "../lib/workspace/workspace-files";
 
 /** Everything the candidate menu needs, or null while no list belongs on screen. */
 export interface ComposerCompletionMenu {
@@ -27,6 +27,12 @@ export interface ComposerCompletionMenu {
   select: (item: CompletionItem) => void;
   setActive: (index: number) => void;
   dismiss: () => void;
+  loading?: boolean;
+  error?: boolean;
+  empty?: boolean;
+  retry?: () => void;
+  breadcrumbs?: Breadcrumb[];
+  navigate?: (path: string) => void;
 }
 
 export interface ComposerCompletion {
@@ -83,7 +89,29 @@ export function useComposerCompletion(params: {
     () => detectCompletion(completionProviders, { value, caret, cwd, entries: [], agents, commands }),
     [agents, caret, commands, cwd, value],
   );
-  const subdir = detected?.query.directory?.subdir ?? null;
+  const detectedScope = detected ? completionScope(detected.query) : null;
+  // `path: null` means no hand navigation yet, `path: ""` means the user navigated to the workspace
+  // root. Keeping them apart is what lets the root breadcrumb leave the typed directory.
+  const [browseState, setBrowseState] = useState<{ scope: string; path: string | null; query: string }>({ scope: "", path: null, query: "" });
+  const browsePath = detected?.query.providerId === "mention"
+    && browseState.scope === detectedScope && browseState.query === detected.query.query ? browseState.path : null;
+  const effectiveDetected = useMemo(() => {
+    if (!detected || detected.query.providerId !== "mention" || !detected.query.directory || browsePath === null) return detected;
+    return {
+      ...detected,
+      query: {
+        ...detected.query,
+        directory: { ...detected.query.directory, subdir: browsePath, prefix: "", base: browsePath ? `${browsePath}/` : "" },
+      },
+    };
+  }, [browsePath, detected]);
+  useEffect(() => {
+    const currentQuery = detected?.query.query ?? "";
+    if (browseState.scope !== detectedScope || browseState.query !== currentQuery) {
+      setBrowseState({ scope: detectedScope ?? "", path: null, query: currentQuery });
+    }
+  }, [browseState.query, browseState.scope, detected, detectedScope]);
+  const subdir = effectiveDetected?.query.directory?.subdir ?? null;
   const directoryQuery = useQuery({ ...workspaceFilesQuery(cwd, subdir ?? ""), enabled: subdir !== null });
   const entries = useMemo(() => {
     // A malformed payload leaves the candidate list empty instead of blocking typing.
@@ -92,12 +120,12 @@ export function useComposerCompletion(params: {
   }, [directoryQuery.data]);
 
   const items = useMemo(
-    () => (detected ? completeQuery(detected, { value, caret, cwd, entries, agents, commands })
-      .filter((item) => planAccept({ query: detected.query, item, value }).kind === "apply") : []),
-    [agents, caret, commands, cwd, detected, entries, value],
+    () => (effectiveDetected ? completeQuery(effectiveDetected, { value, caret, cwd, entries, agents, commands, browsePath: browsePath ?? undefined })
+      .filter((item) => ["apply", "navigate-directory"].includes(planAccept({ query: effectiveDetected.query, item, value }).kind)) : []),
+    [agents, browsePath, caret, commands, cwd, effectiveDetected, entries, value],
   );
 
-  const scope = detected ? completionScope(detected.query) : null;
+  const scope = detectedScope;
   // An old row number must not select a different candidate after filtering or reordering.
   // Keep menu dismissal scoped to the token, but scope navigation to this exact candidate list.
   const cursorKey = detected ? JSON.stringify([cwd, scope, detected.query.query, items.map((item) => item.id)]) : null;
@@ -105,6 +133,17 @@ export function useComposerCompletion(params: {
     setCursor((current) => current.key === cursorKey ? current : { key: cursorKey, index: 0 });
   }, [cursorKey]);
   const override = overrideIsLive(menuOverride, scope, value) ? menuOverride : null;
+  const statusLoading = (detected?.query.providerId === "slash" && commandsQuery.isFetching)
+    || (effectiveDetected?.query.providerId === "mention" && directoryQuery.isFetching);
+  // Slash discovery errors stay visible alongside builtins so users can retry without
+  // confusing a partial catalog for the complete command set.
+  const statusError = (detected?.query.providerId === "slash" && commandsQuery.isError)
+    || (effectiveDetected?.query.providerId === "mention" && directoryQuery.isError);
+  const statusVisible = !composing && override?.mode !== "closed" && (statusLoading || statusError);
+  const emptyVisible = !composing && override?.mode !== "closed"
+    && effectiveDetected?.query.providerId === "mention"
+    && Boolean(effectiveDetected.query.directory)
+    && items.length === 0 && !directoryQuery.isFetching && !directoryQuery.isError;
   const view = useMemo(
     () => completionView({
       detected,
@@ -125,15 +164,38 @@ export function useComposerCompletion(params: {
     if (scope) setMenuOverride({ scope, value, mode: "closed" });
   }, [scope, value]);
 
+  const runCommand = useCallback((command: ReturnType<typeof planAccept>, closeAfterAccept = false) => {
+    if (command.kind === "open-menu") return true;
+    if (command.kind === "navigate-directory") {
+      if (scope && effectiveDetected) setBrowseState({ scope, path: command.path, query: effectiveDetected.query.query });
+      return true;
+    }
+    if (command.kind === "apply") {
+      onApply(command);
+      // A selected Slash command can leave the caret inside the same token
+      // (for example, when it has no arguments). Keep that accepted command
+      // from immediately reopening the candidate list.
+      if (closeAfterAccept && scope && effectiveDetected?.query.providerId === "slash") {
+        setMenuOverride({ scope, value: command.value, mode: "closed" });
+      }
+      return true;
+    }
+    return false;
+  }, [effectiveDetected, onApply, scope]);
+
   const select = useCallback((item: CompletionItem) => {
-    if (!detected) return;
-    const command = planAccept({ query: detected.query, item, value });
-    if (command.kind === "apply") onApply(command);
-  }, [detected, onApply, value]);
+    if (!effectiveDetected) return;
+    runCommand(planAccept({ query: effectiveDetected.query, item, value }), true);
+  }, [effectiveDetected, runCommand, value]);
 
   const setActive = useCallback((index: number) => {
     setCursor((current) => current.key === cursorKey && current.index === index ? current : { key: cursorKey, index });
   }, [cursorKey]);
+
+  const retry = useCallback(() => {
+    if (detected?.query.providerId === "slash") void commandsQuery.refetch();
+    if (effectiveDetected?.query.providerId === "mention") void directoryQuery.refetch();
+  }, [commandsQuery, detected, directoryQuery, effectiveDetected]);
 
   const handleKeyDown = useCallback((event: ReactKeyboardEvent<HTMLTextAreaElement>): boolean => {
     // An IME owns every key while it composes: Tab moves between its candidates and Enter
@@ -149,7 +211,7 @@ export function useComposerCompletion(params: {
       return true;
     }
     if (event.key === "Escape") {
-      if (!view.visible) return false;
+      if (!view.visible && !statusVisible) return false;
       event.preventDefault();
       event.stopPropagation();
       dismiss();
@@ -157,28 +219,27 @@ export function useComposerCompletion(params: {
     }
     if (event.key === "Enter" && !event.shiftKey) {
       if (!view.visible) return false;
-      const command = planAccept({ query: detected?.query ?? null, item: view.activeItem, value });
-      if (command.kind !== "apply") return false;
-      onApply(command);
+      const command = planAccept({ query: effectiveDetected?.query ?? null, item: view.activeItem, value });
+      if (!runCommand(command, true)) return false;
       event.preventDefault();
       event.stopPropagation();
       return true;
     }
     if (event.key === "Tab" && !event.shiftKey) {
-      const command = planTab({ view, detected, items, value, caret });
+      const command = planTab({ view, detected: effectiveDetected, items, value, caret });
       if (command.kind === "ignore") return false;
       if (scope) setMenuOverride({ scope, value, mode: "open" });
-      if (command.kind === "apply") onApply(command);
+      if (!runCommand(command, view.visible)) return false;
       event.preventDefault();
       event.stopPropagation();
       return true;
     }
     return false;
-  }, [caret, composingRef, cursorKey, detected, dismiss, items, onApply, scope, value, view]);
+  }, [caret, composingRef, cursorKey, dismiss, effectiveDetected, items, runCommand, scope, statusVisible, value, view]);
 
   const menu = useMemo<ComposerCompletionMenu | null>(() => {
-    if (!view.visible) return null;
-    const onlySubagents = items.every((item) => item.kind === "subagent");
+    if (!view.visible && !statusVisible && !emptyVisible) return null;
+    const onlySubagents = items.length > 0 && items.every((item) => item.kind === "subagent");
     return {
       id: listboxId,
       label: onlySubagents ? t("conversation.subagentList") : t("conversation.completionList"),
@@ -187,8 +248,15 @@ export function useComposerCompletion(params: {
       select,
       setActive,
       dismiss,
+      loading: statusLoading,
+      error: statusError,
+      empty: emptyVisible,
+      retry,
+      breadcrumbs: effectiveDetected?.query.providerId === "mention" ? directoryQuery.data?.breadcrumbs : undefined,
+      navigate: (path) => { if (scope && effectiveDetected) setBrowseState({ scope, path, query: effectiveDetected.query.query }); },
     };
-  }, [dismiss, items, listboxId, select, setActive, t, view]);
+  }, [directoryQuery, dismiss, effectiveDetected, emptyVisible, items, listboxId, retry, statusError, statusLoading, statusVisible, scope, select, setActive, t, view]);
 
   return { menu, handleKeyDown };
 }
+

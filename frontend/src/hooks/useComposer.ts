@@ -7,7 +7,8 @@ import { apiRequest } from "../lib/client/api";
 import { injectWorkspaceReferences } from "../lib/files";
 import { useFeedback } from "../components/feedback/feedback-context";
 import type { ResearchLoopDraft, ResearchStarter } from "../components/conversation/ResearchLoopControls";
-import { injectSubagentMentions, type SubagentMention } from "../lib/conversation";
+import { injectSubagentMentions } from "../lib/conversation";
+import { inlineWorkspaceReferences, validComposerEntities, type ComposerEntity } from "../lib/conversation/composer-document";
 
 /**
  * Composer state and send pipeline: attachments, drag-and-drop, IME guards,
@@ -39,9 +40,17 @@ export function useComposer(params: {
   const sendPrompt = useRuntimeStore((s) => s.sendPrompt);
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
   const input = useRuntimeStore((s) => s.draft);
-  const setInput = useRuntimeStore((s) => s.setDraft);
-  const [files, setFiles] = useState<File[]>([]);
-  const [mentions, setMentions] = useState<SubagentMention[]>([]);
+  const setDraft = useRuntimeStore((s) => s.setDraft);
+  const composerRevisionRef = useRef(0);
+  const setInput = useCallback((value: string) => { composerRevisionRef.current += 1; setDraft(value); }, [setDraft]);
+  const [files, updateFiles] = useState<File[]>([]);
+  const [entities, updateEntities] = useState<ComposerEntity[]>([]);
+  const setFiles = useCallback<React.Dispatch<React.SetStateAction<File[]>>>((value) => { composerRevisionRef.current += 1; updateFiles(value); }, []);
+  const setEntities = useCallback<React.Dispatch<React.SetStateAction<ComposerEntity[]>>>((value) => { composerRevisionRef.current += 1; updateEntities(value); }, []);
+  const validEntities = useMemo(() => validComposerEntities(input, entities), [input, entities]);
+  const mentions = useMemo(() => validEntities.flatMap((entity) => entity.kind === "mention"
+    ? [{ id: entity.id, name: entity.name, start: entity.start, end: entity.end }] : []), [validEntities]);
+  const inlineReferences = useMemo(() => inlineWorkspaceReferences(validEntities), [validEntities]);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -58,6 +67,18 @@ export function useComposer(params: {
   const composerContextRef = useRef<{ cwd: string; conversationKey: string | null; sessionId: string | null } | null>(null);
 
   useEffect(() => {
+    const unsubscribeRuntime = useRuntimeStore.subscribe((state, previous) => {
+      if (state.draft !== previous.draft || (previous.activeSessionId !== null && state.activeSessionId !== previous.activeSessionId)) composerRevisionRef.current += 1;
+    });
+    const unsubscribeUi = useUiStore.subscribe((state, previous) => {
+      const current = state.workspaceReferences.filter((reference) => reference.cwd === cwd);
+      const before = previous.workspaceReferences.filter((reference) => reference.cwd === cwd);
+      if (current.length !== before.length || current.some((reference, index) => reference !== before[index])) composerRevisionRef.current += 1;
+    });
+    return () => { unsubscribeRuntime(); unsubscribeUi(); composerRevisionRef.current += 1; };
+  }, [cwd]);
+
+  useEffect(() => {
     const composerContext = { cwd, conversationKey, sessionId: activeSessionId };
     const previousContext = composerContextRef.current;
     composerContextRef.current = composerContext;
@@ -67,7 +88,7 @@ export function useComposer(params: {
     const adoptedDraft = sameDraft && previousContext?.sessionId === null && activeSessionId !== null;
     if (previousContext && (!sameDraft || previousContext.sessionId !== activeSessionId) && !adoptedDraft) {
       setInput("");
-      setMentions([]);
+      setEntities([]);
       setFiles([]);
       clearWorkspaceReferences(cwd);
     }
@@ -77,7 +98,7 @@ export function useComposer(params: {
     if (initialDraft && !useRuntimeStore.getState().draft) {
       setInput(initialDraft);
     }
-  }, [activeSessionId, clearWorkspaceReferences, conversationKey, cwd, location.state, setInput]);
+  }, [activeSessionId, clearWorkspaceReferences, conversationKey, cwd, location.state, setEntities, setFiles, setInput]);
 
   const uploadFiles = useCallback(async (fileList: FileList | File[]) => {
     const arr = Array.from(fileList);
@@ -94,25 +115,31 @@ export function useComposer(params: {
         toast(err instanceof Error ? err.message : t("conversation.uploadError"), "error");
       }
     }
-  }, [t, toast, cwd]);
+  }, [t, toast, cwd, setFiles]);
 
-  const runSlashCommand = async (value: string): Promise<boolean> => {
+  const runSlashCommand = async (value: string): Promise<"handled" | "requires-session" | false> => {
     const match = value.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
     if (!match) return false;
     const [, name, rawArgs = ""] = match;
     const args = rawArgs.trim();
     if (name === "compact") {
-      if (!activeSessionId) return true;
+      if (!activeSessionId) {
+        toast(t("conversation.commandRequiresSession"), "error");
+        return "requires-session";
+      }
       await apiRequest(`/api/sessions/${encodeURIComponent(activeSessionId)}/compact?${new URLSearchParams({ cwd })}`, { method: "POST" });
       setReviewNotice("Session compacted");
-      return true;
+      return "handled";
     }
     if (name === "export") {
-      if (!activeSessionId) return true;
+      if (!activeSessionId) {
+        toast(t("conversation.commandRequiresSession"), "error");
+        return "requires-session";
+      }
       const format = args === "jsonl" ? "jsonl" : "html";
       const params = new URLSearchParams({ cwd, format });
       window.open(`/api/sessions/${encodeURIComponent(activeSessionId)}/export?${params}`, "_blank", "noopener,noreferrer");
-      return true;
+      return "handled";
     }
     return false;
   };
@@ -120,18 +147,24 @@ export function useComposer(params: {
   const handleSend = async () => {
     const originalDraft = input;
     const text = input.trim();
-    if (!selectedModel || (!text && files.length === 0 && workspaceReferences.length === 0) || working || reviewingProject || configuringModel) return;
+    const references = [...inlineReferences, ...workspaceReferences].filter((reference, index, all) =>
+      all.findIndex((other) => other.cwd === reference.cwd && other.path === reference.path) === index);
+    if (!selectedModel || (!text && files.length === 0 && references.length === 0) || working || reviewingProject || configuringModel) return;
     let workflowMessage: string | null = null;
     if (research.mode && !research.draft && text) {
       const prepared = await research.intent(text);
       if (!prepared) return;
-      if (prepared.kind === "draft") { setInput(""); setMentions([]); return; }
+      if (prepared.kind === "draft") { setInput(""); setEntities([]); return; }
       workflowMessage = prepared.message;
     }
 
-    if (text.startsWith("/") && mentions.length === 0 && files.length === 0 && workspaceReferences.length === 0 && await runSlashCommand(text)) {
-      setInput("");
-      return;
+    if (text.startsWith("/") && mentions.length === 0 && files.length === 0 && references.length === 0) {
+      const slashResult = await runSlashCommand(text);
+      if (slashResult === "requires-session") return;
+      if (slashResult === "handled") {
+        setInput("");
+        return;
+      }
     }
 
     let message = workflowMessage ?? text;
@@ -143,15 +176,16 @@ export function useComposer(params: {
     }
 
     message = injectSubagentMentions(message, mentions);
-    message = injectWorkspaceReferences(message, workspaceReferences);
+    message = injectWorkspaceReferences(message, references);
 
     const sentFiles = files;
     const sentReferences = workspaceReferences;
-    const sentMentions = mentions;
+    const sentEntities = entities;
     setInput("");
-    setMentions([]);
+    setEntities([]);
     setFiles([]);
     clearWorkspaceReferences(cwd);
+    const sentRevision = composerRevisionRef.current;
     onSend?.();
     // A late result belongs to the conversation that sent the prompt. The composer records
     // that context, so a user who opened another conversation meanwhile is left alone.
@@ -169,13 +203,12 @@ export function useComposer(params: {
         }
       })
       .catch(() => {
-        // Keep the failed message visible with its inline error, but restore the
-        // original draft/attachments so retrying does not require retyping.
+        // The thread keeps the failed message and its retry action when a newer draft owns the composer.
         const composer = composerContextRef.current;
-        if (composer?.cwd !== cwd || composer.conversationKey !== sentFrom) return;
-        if (!useRuntimeStore.getState().draft) setInput(originalDraft);
-        setMentions((current) => current.length > 0 ? current : sentMentions);
-        setFiles((current) => current.length > 0 ? current : sentFiles);
+        if (composer?.cwd !== cwd || composer.conversationKey !== sentFrom || composerRevisionRef.current !== sentRevision || useRuntimeStore.getState().draft) return;
+        setInput(originalDraft);
+        setEntities(sentEntities);
+        setFiles(sentFiles);
         sentReferences.forEach((reference) => useUiStore.getState().addWorkspaceReference(reference));
       });
   };
@@ -207,8 +240,9 @@ export function useComposer(params: {
   };
 
   return {
-    input, setInput, mentions, setMentions, files, setFiles, dragOver, setDragOver,
+    input, setInput, entities, setEntities, mentions, files, setFiles, dragOver, setDragOver,
     fileInputRef, inputRef, composingRef, workspaceReferences,
     handleSend, handleKeyDown, handleDrop, handleFilePick,
   };
 }
+
