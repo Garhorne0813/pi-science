@@ -1,3 +1,4 @@
+import { ModelConfigService } from "../model-config/model-config-service.js";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
@@ -13,7 +14,6 @@ import { registerJobRoutes } from "../http/routes/job-routes.js";
 import { registerArtifactRoutes } from "../http/routes/artifact-routes.js";
 import { registerTurnArtifactRoutes } from "../http/routes/turn-artifact-routes.js";
 import { registerSettingsRoutes } from "../http/routes/settings-routes.js";
-import { registerModelEndpointRoutes } from "../http/routes/model-endpoint-routes.js";
 import { registerModelResourceRoutes } from "../http/routes/model-resource-routes.js";
 import { registerExecutionRoutes } from "../http/routes/execution-routes.js";
 import { registerKernelExecutionRoutes } from "../http/routes/kernel-execution-routes.js";
@@ -133,16 +133,14 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   });
 
   app.get("/internal/diagnostics", async () => {
-    const modelState = await modelResources.repository.read();
+    const modelState = new ModelConfigService().readSync();
     return {
       sqlite: sqliteEnabled ? stateStore.diagnostics() : { status: "disabled" },
       model_resources: {
         schema_version: modelState.schema_version,
-        migration: modelState.migration ?? null,
-        provider_count: modelState.providers.length,
-        model_count: modelState.models.length,
-        endpoint_count: modelState.endpoints.length,
-        binding_count: modelState.bindings.length,
+        revision: modelState.revision,
+        provider_count: Object.keys(modelState.config.providers).length,
+        model_count: Object.values(modelState.config.providers).reduce((count, provider) => count + (provider.models?.length ?? 0), 0),
         credential_ref_count: Object.keys(modelState.credential_refs).length,
       },
     };
@@ -170,7 +168,6 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeSettings !== false && sqliteEnabled) registerMcpRoutes(app, mcp);
   if (config.nodeSettings !== false) {
     registerModelResourceRoutes(app, modelResources, nodeSessionService);
-    registerModelEndpointRoutes(app, { service: modelResources, nodeSessionService });
   }
   if (config.nodeExecutions !== false) registerExecutionRoutes(app, jobs);
   if (config.nodeExecutions !== false) registerKernelExecutionRoutes(app, config, environments, kernels);

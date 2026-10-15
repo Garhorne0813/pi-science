@@ -9,12 +9,12 @@ import { ModelCredentialAdapter } from "./model-credential-adapter.js";
 import { ModelRegistryService } from "./model-registry-service.js";
 import { ModelConfigMigration } from "./model-config-migration.js";
 import { ModelResourceService } from "../model-resources/model-resource-service.js";
-import { agentModels, legacyAgentModels } from "../runtime/agent/worker/agent-models.js";
+import { agentModels } from "../runtime/agent/worker/agent-models.js";
 import { registerModelResourceRoutes } from "../http/routes/model-resource-routes.js";
 import type { NodeSessionService } from "../runtime/node/node-session-service.js";
 
 let root: string;
-beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "pi-model-config-")); vi.stubEnv("PI_SCIENCE_HOME", root); vi.stubEnv("PI_SCIENCE_MODEL_CONFIG_BACKEND", "legacy"); });
+beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "pi-model-config-")); vi.stubEnv("PI_SCIENCE_HOME", root); vi.stubEnv("PI_SCIENCE_MODEL_CONFIG_BACKEND", "pi_ai_v1"); });
 afterEach(async () => { vi.unstubAllEnvs(); vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); });
 const config = { providers: { lab: { api: "openai-completions" as const, baseUrl: "http://127.0.0.1:9876/v1", models: [{ id: "test", contextWindow: 8192 }] } } };
 
@@ -29,9 +29,9 @@ describe("native model configuration", () => {
   ])("rejects unknown/version-incompatible or secret-bearing fields", (input) => {
     expect(modelConfigSchema.safeParse(input).success).toBe(false);
   });
-  it("requires explicit rollout and rejects unknown backends", () => {
+  it("defaults to native and rejects unknown backends", () => {
     delete process.env.PI_SCIENCE_MODEL_CONFIG_BACKEND;
-    expect(modelConfigBackend()).toBe("legacy");
+    expect(modelConfigBackend()).toBe("pi_ai_v1");
     vi.stubEnv("PI_SCIENCE_MODEL_CONFIG_BACKEND", "surprise");
     expect(() => modelConfigBackend()).toThrow();
   });
@@ -115,12 +115,13 @@ describe("native model configuration", () => {
     const before = await readFile(join(root, "model-resources.json"), "utf8");
     const migration = new ModelConfigMigration(new ModelConfigService(), resources.repository);
     const plan = await migration.plan();
-    expect(plan.providers.find((row) => row.provider_id === provider.id)).toMatchObject({ status: "legacy", reasons: expect.arrayContaining(["binding_policy"]) });
-    const report = await migration.apply(0);
+    expect(plan.providers.find((row) => row.provider_id === provider.id)).toMatchObject({ status: "blocked", reasons: expect.arrayContaining(["binding_policy"]) });
+    await expect(migration.apply(0, plan.source_revision)).rejects.toMatchObject({ code: "import_blocked" });
+    const report = await migration.apply(0, plan.source_revision, [provider.id]);
     expect(await readFile(join(report.backup, "model-resources.json"), "utf8")).toBe(before);
     expect(await readFile(join(root, "model-resources.json"), "utf8")).toBe(before);
-    const registry = new ModelRegistryService().compile(undefined, legacyAgentModels());
-    expect(registry.getModel(provider.id, "test")).toBeDefined();
+    const registry = new ModelRegistryService().compile();
+    expect(registry.getModel(provider.id, "test")).toBeUndefined();
   });
   it("keeps native HTTP reads pure, rejects stale edits and hides managed keys", async () => {
     vi.stubEnv("PI_SCIENCE_MODEL_CONFIG_BACKEND", "pi_ai_v1");
@@ -134,7 +135,7 @@ describe("native model configuration", () => {
       const response = await app.inject({ method: "PUT", url: "/api/model-config/providers/lab/credential", payload: { revision: 1, credential: { source: "managed", secret: "private-key" } } });
       expect(response.statusCode).toBe(200); expect(response.body).not.toContain("private-key");
       expect((await app.inject("/api/model-config/catalog")).body).not.toContain("private-key");
-      expect((await app.inject({ method: "POST", url: "/api/providers", payload: {} })).statusCode).toBe(409);
+      expect((await app.inject({ method: "POST", url: "/api/providers", payload: {} })).statusCode).toBe(410);
       expect(reload).toHaveBeenCalledTimes(2);
       for (let attempt = 0; attempt < 10; attempt++) await app.inject({ method: "POST", url: "/api/model-config/discover", payload: {} });
       expect((await app.inject({ method: "POST", url: "/api/model-config/discover", payload: {} })).statusCode).toBe(429);
@@ -142,7 +143,7 @@ describe("native model configuration", () => {
   });
 });
 
-it("keeps text, thinking and tool stream events equivalent across legacy and native registries", async () => {
+it("keeps text, thinking and tool stream events equivalent across Worker and control-plane registries", async () => {
   const { createServer } = await import("node:http");
   const requests: Array<{ auth?: string; model: string }> = [];
   const server = createServer(async (request, response) => {
@@ -165,12 +166,12 @@ it("keeps text, thinking and tool stream events equivalent across legacy and nat
     const endpoint = await resources.createEndpoint({ name: "Lab", base_url: baseUrl, protocol: "openai", credential_ref: credential.id, enabled: true, data_egress: "local" });
     await resources.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 100 });
     await resources.updateModel(provider.id, "test", { enabled: true, capabilities: { reasoning: true, thinking_levels: ["off", "high"], context_window: 8192, max_output_tokens: 4096 } });
-    const legacy = legacyAgentModels();
+    expect(await agentModels().getAvailable()).toEqual([]);
     const service = new ModelConfigService();
     await service.createProvider(0, provider.id, { api: "openai-completions", baseUrl, models: [{ id: "test", reasoning: true, contextWindow: 8192, maxTokens: 4096, thinkingLevelMap: { off: "off", high: "high", minimal: null, low: null, medium: null, xhigh: null, max: null } }] }, { source: "managed", secret: "route-secret" });
     const native = new ModelRegistryService(service).compile();
     const traces = [];
-    for (const registry of [legacy, native]) {
+    for (const registry of [agentModels(), native]) {
       const stream = registry.streamSimple(registry.getModel(provider.id, "test")!, { messages: [{ role: "user", content: "hello", timestamp: 1 }] }, { reasoning: "high" });
       const events: unknown[] = [];
       for await (const event of stream) events.push({ type: event.type, delta: "delta" in event ? event.delta : undefined });
@@ -216,13 +217,12 @@ it("migrates builtin credentials without Provider rows and keeps the available c
   await service.credentials.put({ id: "builtin-key", kind: "api_key", backend: "managed", secret: "builtin-test-secret" });
   const resources = new ModelResourceService();
   await resources.repository.update((state) => { state.credential_refs.openai = "builtin-key"; });
-  const legacy = legacyAgentModels();
+  expect(await agentModels().getAvailable()).toEqual([]);
   const migration = new ModelConfigMigration(service, resources.repository);
   const plan = await migration.plan();
   expect(plan.providers).toContainEqual(expect.objectContaining({ provider_id: "openai", status: "migrated" }));
   await migration.apply(0, plan.source_revision);
-  const differences = await new ModelRegistryService(service).compare(service.readSync(), legacy);
-  expect(differences).toMatchObject({ added: [], removed: [], changed: [] });
+  expect((await agentModels().getAvailable()).some((model) => model.provider === "openai")).toBe(true);
 });
 
 it("atomically creates an empty builtin override with its first managed credential", async () => {
@@ -249,12 +249,12 @@ it("preserves non-reasoning Thinking maps when converting a simple custom provid
   const endpoint = await resources.createEndpoint({ name: "Simple", base_url: config.providers.lab.baseUrl, protocol: "openai", enabled: true, data_egress: "local" });
   await resources.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 100 });
   await resources.updateModel(provider.id, "test", { enabled: true, capabilities: { reasoning: false, thinking_levels: ["off"], context_window: 8192, max_output_tokens: 4096 } });
-  const legacy = legacyAgentModels();
+  expect(await agentModels().getAvailable()).toEqual([]);
   const migration = new ModelConfigMigration(new ModelConfigService(), resources.repository);
   const plan = await migration.plan();
   expect(plan.providers).toContainEqual(expect.objectContaining({ provider_id: provider.id, status: "migrated" }));
   await migration.apply(0, plan.source_revision);
-  expect(await new ModelRegistryService().compare(new ModelConfigService().readSync(), legacy)).toMatchObject({ added: [], removed: [], changed: [] });
+  expect(new ModelRegistryService().compile().getModel(provider.id, "test")).toMatchObject({ reasoning: false, thinkingLevelMap: { off: null } });
 });
 
 it("binds the native snapshot and trusted EnvRef for direct disposable Worker callers", async () => {

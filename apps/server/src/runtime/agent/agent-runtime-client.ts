@@ -83,8 +83,8 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
     // trusted boundary. Parent tasks may retain their already validated revision.
     const backend = modelConfigBackend();
     const service = new ModelConfigService();
-    const snapshot = backend === "pi_ai_v1" ? options.settings?.modelConfigSnapshot
-      ? modelConfigSnapshotSchema.parse(options.settings.modelConfigSnapshot) : service.readSync() : undefined;
+    const snapshot = options.settings?.modelConfigSnapshot
+      ? modelConfigSnapshotSchema.parse(options.settings.modelConfigSnapshot) : service.readSync();
     const modelEnvironment: Record<string, string> = {};
     for (const ref of Object.values(snapshot?.credential_refs ?? {})) {
       const metadata = await service.credentials.metadata(ref);

@@ -1,3 +1,4 @@
+import { ModelConfigService } from "../../model-config/model-config-service.js";
 import { providerViewsResponseSchema } from "@pi-science/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
@@ -28,7 +29,7 @@ beforeEach(async () => {
   vi.stubEnv("PI_CLI_PATH", "");
   modules = createServerModules(config, { sqliteEnabled: false });
   app = buildApp(config, modules);
-  expect((await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "deepseek", api_key: "synthetic-ownership-key" } })).statusCode).toBe(200);
+  expect((await app.inject({ method: "PUT", url: "/api/model-config/providers/deepseek/credential", payload: { revision: 0, credential: { source: "managed", secret: "synthetic-ownership-key" } } })).statusCode).toBe(200);
   expect((await app.inject({ method: "PUT", url: "/api/model-selection/default", payload: { model: flash, thinking: "off" } })).statusCode).toBe(200);
 });
 afterEach(async () => {
@@ -51,28 +52,24 @@ async function selection(id: string) {
 }
 describe("ModelSelection v2", () => {
   it.each(["failed", "threw"])("keeps configured providers manageable when the workspace Core catalog %s", async (scenario) => {
-    const resources = modules.modelResources;
-    const provider = await resources.createProvider({ name: "Recovery Lab", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
-    const credential = await resources.credentials.put({ kind: "api_key", backend: "managed", secret: "recovery-key", owner_provider_id: provider.id });
-    const endpoint = await resources.createEndpoint({ name: "Recovery endpoint", base_url: "http://127.0.0.1:9/v1", protocol: "openai", credential_ref: credential.id, enabled: true, data_egress: "local", owner_provider_id: provider.id });
-    await resources.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 1 });
-    await resources.updateModel(provider.id, "lab-model", { enabled: true });
+    const provider = { id: "native-recovery" };
+    await new ModelConfigService().createProvider(1, provider.id, { api: "openai-completions", baseUrl: "http://127.0.0.1:9/v1", models: [{ id: "lab-model" }] }, { source: "managed", secret: "recovery-key" });
     const read = vi.spyOn(modules.sessions, "availableModels");
     if (scenario === "failed") read.mockResolvedValue({ success: false, code: "unavailable", error: "Core offline" });
     else read.mockRejectedValue(new Error("Core offline"));
-    const before = await readFile(join(home, "model-resources.json"), "utf8");
+    const before = await readFile(join(home, "models.json"), "utf8");
     const response = await app.inject({ method: "GET", url: `/api/provider-views?cwd=${encodeURIComponent(cwd)}` });
     expect(response.statusCode).toBe(200);
     expect(providerViewsResponseSchema.safeParse(response.json()).success).toBe(true);
-    expect(response.json().catalog_status).toBe("unavailable");
+    expect(response.json().catalog_status).toBe("ready");
     const view = response.json().providers.find((item: { id: string }) => item.id === provider.id);
-    expect(view).toMatchObject({ status: "unavailable", credential: { configured: true },
-      routing: { configured_model_count: 1, selectable_model_count: 0 },
-      models: [expect.objectContaining({ id: `${provider.id}/lab-model`, available: false, availability_reason: "catalog_unavailable" })] });
+    expect(view).toMatchObject({ status: "ready", credential: { configured: true },
+      routing: { configured_model_count: 1, selectable_model_count: 1 },
+      models: [expect.objectContaining({ id: `${provider.id}/lab-model`, available: true })] });
     expect(view.allowed_actions).toContain("edit");
-    expect(view.routing.issues).toEqual(expect.arrayContaining([{ code: "catalog_unavailable" }]));
+    expect(view.routing.issues).toEqual([]);
     expect(response.body).not.toContain("recovery-key");
-    expect(await readFile(join(home, "model-resources.json"), "utf8")).toBe(before);
+    expect(await readFile(join(home, "models.json"), "utf8")).toBe(before);
   });
   it("separates defaults, existing sessions and cold durable resumes", async () => {
     const reload = vi.spyOn(modules.sessions, "reloadConfiguration");
@@ -136,200 +133,37 @@ describe("ModelSelection v2", () => {
     const draft = await modules.sessions.create({ cwd, config: { model: pro, thinking: "high", skills: [], extensions: [] } });
     expect(draft).toHaveProperty("id");
   }, 30000);
-  it.each(["credential_deleted", "endpoint_disabled", "binding_disabled", "binding_deleted", "allowlist_excludes", "provider_disabled", "model_disabled", "endpoint_blocked"])("rejects a catalogued custom model after %s without changing either owner", async (failure) => {
-    const resources = modules.modelResources;
-    const provider = await resources.createProvider({ name: "Selectable Lab", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
-    const credential = await resources.credentials.put({ kind: "api_key", backend: "managed", secret: "synthetic-selectability-key", owner_provider_id: provider.id });
-    const endpoint = await resources.createEndpoint({ name: "Lab route", base_url: "http://127.0.0.1:9/v1", protocol: "openai", credential_ref: credential.id, enabled: true, data_egress: "local", owner_provider_id: provider.id });
-    const binding = await resources.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 1 });
-    const model = `${provider.id}/lab-model`;
-    await resources.updateModel(provider.id, "lab-model", { enabled: true });
-    const catalog = async () => (await app.inject({ method: "GET", url: "/api/model-selection/catalog" })).json().available_models;
-    expect(await catalog()).toEqual(expect.arrayContaining([expect.objectContaining({ id: model })]));
-    expect((await app.inject({ method: "PUT", url: "/api/model-selection/default", payload: { model, thinking: "off" } })).statusCode).toBe(200);
-    await app.inject({ method: "PUT", url: "/api/model-selection/default", payload: { model: flash, thinking: "off" } });
+  it.each(["credential_deleted", "provider_removed", "model_removed"])("rejects unavailable native model after %s without changing either selection owner", async (failure) => {
+    const service = new ModelConfigService();
+    const config = { api: "openai-completions" as const, baseUrl: "http://127.0.0.1:9/v1", models: [{ id: "lab-model" }] };
+    await service.createProvider(1, "native-selectable", config, { source: "managed", secret: "selection-secret" });
+    const model = "native-selectable/lab-model";
+    expect((await app.inject({ method: "GET", url: "/api/model-selection/catalog" })).json().available_models).toEqual(expect.arrayContaining([expect.objectContaining({ id: model })]));
     const a = await create();
-    if (failure === "credential_deleted") await resources.credentials.remove(credential.id);
-    if (failure === "endpoint_disabled") await resources.updateEndpoint(endpoint.id, { enabled: false });
-    if (failure === "binding_disabled") await resources.updateBinding(binding.id, { enabled: false });
-    if (failure === "binding_deleted") await resources.deleteBinding(binding.id);
-    if (failure === "allowlist_excludes") await resources.updateBinding(binding.id, { model_allowlist: ["another-model"] });
-    if (failure === "provider_disabled") await resources.updateProvider(provider.id, { enabled: false });
-    if (failure === "model_disabled") await resources.updateModel(provider.id, "lab-model", { enabled: false });
-    if (failure === "endpoint_blocked") await resources.repository.update((state) => { state.endpoints.find((item) => item.id === endpoint.id)!.health = "blocked"; });
-    const resourceBeforeGet = await readFile(join(home, "model-resources.json"), "utf8");
-    const management = await app.inject({ method: "GET", url: "/api/provider-views" });
-    expect(management.statusCode).toBe(200);
-    expect(providerViewsResponseSchema.safeParse(management.json()).success).toBe(true);
-    const view = management.json().providers.find((item: { id: string }) => item.id === provider.id);
-    expect(view).toMatchObject({ routing: { configured_model_count: 1, selectable_model_count: 0 }, last_verification: { state: "never", checked_at: null }, models: [expect.objectContaining({ id: model, available: false })] });
-    expect(view.allowed_actions).toContain("edit");
-    if (failure === "binding_deleted") expect(view).toMatchObject({ status: "unavailable", credential: { state: "ready", configured: true }, routing: { issues: [{ code: "no_binding" }] } });
-    expect(management.body).not.toContain("synthetic-selectability-key");
-    expect(await readFile(join(home, "model-resources.json"), "utf8")).toBe(resourceBeforeGet);
-    // This is a real Core projection, not a mocked catalog or resource list.
-    expect(await catalog()).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: model })]));
+    if (failure === "credential_deleted") await service.credentials.remove(service.readSync().credential_refs["native-selectable"]!);
+    else if (failure === "provider_removed") await service.replace(2, { providers: { deepseek: {} } });
+    else await service.update(2, (snapshot) => { snapshot.config.providers["native-selectable"] = { ...config, models: [{ id: "other" }] }; });
     const persisted = await readFile(join(home, "config.json"), "utf8");
     const configure = vi.spyOn(modules.sessions, "configure");
     for (const url of ["/api/model-selection/default", path(a), `/api/settings/model?cwd=${encodeURIComponent(cwd)}`]) {
-      const response = await app.inject({ method: "PUT", url, payload: { model, thinking: "off" } });
-      expect(response.statusCode).toBe(422);
-      expect(response.json()).toMatchObject({ code: "invalid_model" });
+      const result = await app.inject({ method: "PUT", url, payload: { model, thinking: "off" } });
+      expect(result.statusCode).toBe(422); expect(result.json()).toMatchObject({ code: "invalid_model" });
     }
-    expect(configure).not.toHaveBeenCalled();
-    expect(await readFile(join(home, "config.json"), "utf8")).toBe(persisted);
-    expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
-    if (failure === "endpoint_disabled") {
-      const credentialBefore = await readFile(join(home, "credentials.json"), "utf8");
-      expect((await app.inject({ method: "PUT", url: `/api/custom-providers/${provider.id}`, payload: { name: "Edited Lab", base_url: "http://127.0.0.1:10/v1" } })).statusCode).toBe(200);
-      expect((await resources.repository.read()).endpoints.find((item) => item.id === endpoint.id)?.enabled).toBe(false);
-      expect((await app.inject({ method: "PUT", url: `/api/endpoints/${endpoint.id}/enabled?enabled=true` })).statusCode).toBe(200);
-      const recovered = (await app.inject({ method: "GET", url: "/api/provider-views" })).json().providers.find((item: { id: string }) => item.id === provider.id);
-      expect(recovered).toMatchObject({ status: "ready", routing: { selectable_model_count: 1, issues: [] } });
-      expect(await catalog()).toEqual(expect.arrayContaining([expect.objectContaining({ id: model })]));
-      expect(await readFile(join(home, "credentials.json"), "utf8")).toBe(credentialBefore);
-      expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
-    }
-    if (failure === "binding_deleted") {
-      const credentialBefore = await readFile(join(home, "credentials.json"), "utf8");
-      const repaired = await app.inject({ method: "PUT", url: `/api/custom-providers/${provider.id}`, payload: { name: provider.name, base_url: endpoint.base_url } });
-      expect(repaired.statusCode).toBe(200);
-      expect(repaired.json()).toMatchObject({ endpoint: { id: endpoint.id, credential_ref: credential.id }, binding: { provider_id: provider.id, endpoint_id: endpoint.id, enabled: true } });
-      expect(await readFile(join(home, "credentials.json"), "utf8")).toBe(credentialBefore);
-      expect(await catalog()).toEqual(expect.arrayContaining([expect.objectContaining({ id: model })]));
-      const recovered = (await app.inject({ method: "GET", url: "/api/provider-views" })).json().providers.find((item: { id: string }) => item.id === provider.id);
-      expect(recovered).toMatchObject({ status: "ready", credential: { configured: true }, routing: { selectable_model_count: 1, issues: [] } });
-      expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
-    }
-  }, 30000);
-  it.each([false, true])("reports a partially saved connection when binding creation fails (endpoint lost: %s) and safely retries", async (endpointLost) => {
-    const resources = modules.modelResources;
-    const created = await resources.createCustomProvider({ name: "Repair Lab", base_url: "http://127.0.0.1:9/v1", protocol: "openai", auth: { kind: "api_key", secret: "before-partial-repair" }, models: ["lab-model"] });
-    await resources.deleteBinding(created.binding.id);
-    if (endpointLost) await resources.deleteEndpoint(created.endpoint.id);
-    const createBinding = vi.spyOn(resources, "createBinding").mockRejectedValueOnce(new Error("injected-binding-failure-secret"));
-    const payload = { name: "Repaired Lab", base_url: "http://127.0.0.1:10/v1", auth: { kind: "api_key", secret: "after-partial-repair" } };
-    const response = await app.inject({ method: "PUT", url: `/api/custom-providers/${created.provider.id}`, payload });
-    expect(response.statusCode).toBe(500);
-    expect(response.json()).toMatchObject({ code: "connection_repair_incomplete", partial_commit: true, failed_step: "create_binding" });
-    expect(response.json().error).toContain("Connection changes were saved");
-    expect(response.body).not.toContain("injected-binding-failure-secret");
-    const partial = await resources.repository.read();
-    expect(partial.providers.find((item) => item.id === created.provider.id)?.name).toBe("Repaired Lab");
-    const endpoint = partial.endpoints.find((item) => item.owner_provider_id === created.provider.id)!;
-    expect(endpoint).toMatchObject({ base_url: payload.base_url, data_egress: "local", credential_ref: created.credential!.id });
-    expect(partial.bindings.filter((item) => item.provider_id === created.provider.id)).toHaveLength(0);
-    expect(await resources.credentials.getForRuntime(created.credential!.id)).toMatchObject({ secret: "after-partial-repair" });
-    createBinding.mockRestore();
-    const credentialsBeforeRetry = await readFile(join(home, "credentials.json"), "utf8");
-    const retry = await app.inject({ method: "PUT", url: `/api/custom-providers/${created.provider.id}`, payload: { name: payload.name, base_url: payload.base_url } });
-    expect(retry.statusCode).toBe(200);
-    expect(retry.json()).toMatchObject({ endpoint: { id: endpoint.id, credential_ref: created.credential!.id }, binding: { endpoint_id: endpoint.id, enabled: true } });
-    expect(await readFile(join(home, "credentials.json"), "utf8")).toBe(credentialsBeforeRetry);
-    expect((await resources.repository.read()).endpoints.filter((item) => item.owner_provider_id === created.provider.id)).toHaveLength(1);
-  }, 30000);
-
-  it("validates a global default against the same workspace-enriched catalog as its picker", async () => {
-    const model = "user-hinted/hinted-model";
-    await modules.modelResources.upsertLegacyProvider({ id: "hinted", name: "Hinted", base_url: "http://127.0.0.1:9/v1", api: "openai-completions", models: ["hinted-model"], api_key: "synthetic-hint-key", model_hints: { "hinted-model": { reasoning: true, thinking_levels: ["off", "high"] } } });
-    await modules.modelResources.repository.update((state) => { state.aliases["custom-hinted/hinted-model"] = model; });
-    await modules.settings.update((settings) => { settings.custom_providers = [{ id: "hinted", name: "Hinted", base_url: "http://127.0.0.1:9/v1", api: "openai-completions", models: ["hinted-model"], model_hints: { "hinted-model": { reasoning: true, thinking_levels: ["off", "high"] } } }]; });
-    vi.spyOn(modules.sessions, "availableModels").mockResolvedValue({ success: true, data: { models: [{ provider: "user-hinted", id: "hinted-model", name: "Hinted model" }] } });
-    vi.spyOn(modules.sessions, "availableThinkingLevels").mockResolvedValue({ success: false, code: "not_found", error: "No additional runtime capability" });
-    const configure = vi.spyOn(modules.sessions, "configure");
-    const selection = { model, thinking: "high" };
-    const picker = await app.inject({ method: "GET", url: `/api/model-selection/catalog?cwd=${encodeURIComponent(cwd)}` });
-    expect(picker.json().available_models).toContainEqual(expect.objectContaining({ id: model, thinking_levels: ["off", "high"] }));
-    const saved = await app.inject({ method: "PUT", url: `/api/model-selection/default?cwd=${encodeURIComponent(cwd)}`, payload: selection });
-    expect(saved.statusCode).toBe(200);
-    expect(saved.json()).toEqual({ scope: "default", selection });
-    expect((await app.inject({ method: "GET", url: "/api/model-selection/default" })).json().selection).toEqual(selection);
-    expect(configure).not.toHaveBeenCalled();
-    expect((await modules.settings.read()).model).toBe(model);
-  }, 30000);
-
-  it.each(["environment-only", "environment-reference", "external-reference"])("keeps %s credentials usable but cannot remove them or clear the default", async (source) => {
-    const resources = modules.modelResources;
-    const previous = (await resources.repository.read()).credential_refs.deepseek;
-    await resources.credentials.remove(previous!);
-    vi.stubEnv("DEEPSEEK_API_KEY", "synthetic-environment-only-key");
-    let ref: string | undefined;
-    if (source === "environment-reference") ref = (await resources.credentials.put({ kind: "api_key", backend: "environment", environment_variable: "DEEPSEEK_API_KEY" })).id;
-    if (source === "external-reference") ref = (await resources.credentials.put({ kind: "api_key", backend: "external", external_ref: "synthetic-external-reference" })).id;
-    await resources.repository.update((state) => { if (ref) state.credential_refs.deepseek = ref; else delete state.credential_refs.deepseek; });
-    const before = await Promise.all(["config.json", "credentials.json", "model-resources.json"].map((file) => readFile(join(home, file), "utf8")));
-    const response = await app.inject({ method: "GET", url: "/api/provider-views" });
-    const view = response.json().providers.find((item: { id: string }) => item.id === "deepseek");
-    expect(view).toMatchObject({ credential: { configured: true }, status: "ready" });
-    expect(view.allowed_actions).toContain("replace_credential");
-    expect(view.allowed_actions).not.toContain("remove_credential");
-    expect(response.body).not.toContain("synthetic-environment-only-key");
-    expect(response.body).not.toContain("synthetic-external-reference");
-    const removed = await app.inject({ method: "DELETE", url: "/api/settings/api-key/deepseek" });
-    expect(removed.statusCode).toBe(409);
-    expect(removed.json()).toMatchObject({ code: "credential_not_removable" });
-    expect(await Promise.all(["config.json", "credentials.json", "model-resources.json"].map((file) => readFile(join(home, file), "utf8")))).toEqual(before);
-    expect((await app.inject({ method: "GET", url: "/api/model-selection/default" })).json().selection).toEqual({ model: flash, thinking: "off" });
-  }, 30000);
-
-  it("refuses to remove a managed builtin credential shared with another endpoint", async () => {
-    const resources = modules.modelResources;
-    const ref = (await resources.repository.read()).credential_refs.deepseek!;
-    const provider = await resources.createProvider({ name: "Shared Lab", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
-    const endpoint = await resources.createEndpoint({ name: "Shared route", base_url: "http://127.0.0.1:9/v1", protocol: "openai", credential_ref: ref, enabled: true, data_egress: "local", owner_provider_id: provider.id });
-    await resources.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 1 });
-    await resources.updateModel(provider.id, "lab-model", { enabled: true });
-    const before = await Promise.all(["config.json", "credentials.json", "model-resources.json"].map((file) => readFile(join(home, file), "utf8")));
-    const view = (await app.inject({ method: "GET", url: "/api/provider-views" })).json().providers.find((item: { id: string }) => item.id === "deepseek");
-    expect(view.allowed_actions).not.toContain("remove_credential");
-    const reload = vi.spyOn(modules.sessions, "reloadConfiguration");
-    const removed = await app.inject({ method: "DELETE", url: "/api/settings/api-key/deepseek" });
-    expect(removed.statusCode).toBe(409);
-    expect(removed.json()).toMatchObject({ code: "resource_in_use" });
-    expect(reload).not.toHaveBeenCalled();
-    expect(await Promise.all(["config.json", "credentials.json", "model-resources.json"].map((file) => readFile(join(home, file), "utf8")))).toEqual(before);
-    expect((await app.inject({ method: "GET", url: "/api/model-selection/catalog" })).json().available_models).toEqual(expect.arrayContaining([expect.objectContaining({ id: `${provider.id}/lab-model` })]));
-    expect((await app.inject({ method: "GET", url: "/api/model-selection/default" })).json().selection).toEqual({ model: flash, thinking: "off" });
-    await resources.updateEndpoint(endpoint.id, { credential_ref: null });
-    expect((await app.inject({ method: "DELETE", url: "/api/settings/api-key/deepseek" })).statusCode).toBe(200);
-  }, 30000);
-
-  it("offers and removes an actual managed builtin credential", async () => {
-    const response = await app.inject({ method: "GET", url: "/api/provider-views" });
-    const view = response.json().providers.find((item: { id: string }) => item.id === "deepseek");
-    expect(view.allowed_actions).toContain("remove_credential");
-    const removed = await app.inject({ method: "DELETE", url: "/api/settings/api-key/deepseek" });
-    expect(removed.statusCode).toBe(200);
-    expect((await modules.modelResources.repository.read()).credential_refs.deepseek).toBeUndefined();
-  }, 30000);
-
-  it("rejects a builtin model after its managed credential is deleted", async () => {
-    const a = await create();
-    const ref = (await modules.modelResources.repository.read()).credential_refs.deepseek;
-    expect(ref).toBeDefined();
-    await modules.modelResources.credentials.remove(ref!);
-    const persisted = await readFile(join(home, "config.json"), "utf8");
-    for (const url of ["/api/model-selection/default", path(a)]) {
-      expect((await app.inject({ method: "PUT", url, payload: { model: flash, thinking: "off" } })).statusCode).toBe(422);
-    }
-    expect(await readFile(join(home, "config.json"), "utf8")).toBe(persisted);
+    expect(configure).not.toHaveBeenCalled(); expect(await readFile(join(home, "config.json"), "utf8")).toBe(persisted);
     expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
   }, 30000);
-
-  it("keeps configured native routes distinct from Core selectability and inference verification", async () => {
-    const resources = modules.modelResources;
-    const provider = await resources.createProvider({ name: "Native Lab", adapter: "native", catalog_mode: "manual", auth_kind: "none", enabled: true });
-    const endpoint = await resources.createEndpoint({ name: "Native", base_url: "http://127.0.0.1:9", protocol: "native", credential_ref: null, enabled: true, data_egress: "local" });
-    await resources.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 1 });
-    await resources.updateModel(provider.id, "unsupported", { capabilities: { context_window: 65536 } });
-    await resources.repository.update((state) => { const row = state.endpoints.find((item) => item.id === endpoint.id)!; row.health = "ready"; row.last_checked_at = new Date().toISOString(); });
-    const snapshot = await readFile(join(home, "model-resources.json"), "utf8");
-    const response = await app.inject({ method: "GET", url: "/api/provider-views" });
-    expect(response.statusCode).toBe(200);
-    const view = response.json().providers.find((item: { id: string }) => item.id === provider.id);
-    expect(view).toMatchObject({ status: "unavailable", credential: { configured: true, state: "ready" }, routing: { configured_model_count: 1, selectable_model_count: 0 }, last_verification: { state: "never", checked_at: null }, models: [expect.objectContaining({ available: false, availability_reason: "core_unavailable", capabilities: expect.objectContaining({ context_window: 65536 }), routes: [expect.objectContaining({ health: "ready" })] })] });
-    expect((await app.inject({ method: "GET", url: "/api/provider-views" })).json()).toEqual(response.json());
-    expect(await readFile(join(home, "model-resources.json"), "utf8")).toBe(snapshot);
+  it("removes a native credential mapping without deleting its shared CredentialStore resource", async () => {
+    const service = new ModelConfigService(); const ref = service.readSync().credential_refs.deepseek!;
+    await service.update(1, (snapshot) => { snapshot.config.providers.openai = {}; snapshot.credential_refs.openai = ref; });
+    const response = await app.inject({ method: "PUT", url: "/api/model-config/providers/deepseek/credential", payload: { revision: 2, credential: { source: "remove" } } });
+    expect(response.statusCode).toBe(200); expect(service.readSync().credential_refs.deepseek).toBeUndefined();
+    expect(service.readSync().credential_refs.openai).toBe(ref); expect((await service.credentials.getForRuntime(ref))?.secret).toBe("synthetic-ownership-key");
+  });
+  it("rejects a builtin model after its native credential is deleted", async () => {
+    const a = await create(); const service = new ModelConfigService();
+    await service.credentials.remove(service.readSync().credential_refs.deepseek!);
+    for (const url of ["/api/model-selection/default", path(a)]) expect((await app.inject({ method: "PUT", url, payload: { model: flash, thinking: "off" } })).statusCode).toBe(422);
+    expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
   }, 30000);
   it("scopes provider views to the validated workspace catalog", async () => {
     const response = await app.inject({ method: "GET", url: `/api/provider-views?cwd=${encodeURIComponent(cwd)}` });

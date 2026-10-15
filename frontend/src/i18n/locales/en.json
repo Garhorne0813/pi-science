@@ -1550,7 +1550,6 @@
   "filePreview.frameFocusHint": "Esc exits accessible HTML previews. If the embedded page handles Esc, use Exit focus in the toolbar.",
   "settings.native.scope": "Global model services · Defaults and current conversations are managed separately.",
   "settings.native.edit": "Advanced model configuration",
-  "settings.native.legacy": "This provider retains legacy routing. Complex routes require explicit migration.",
   "settings.native.reloadPending": "Saved; runtime reload needs retry. Active turns keep their configuration.",
   "settings.native.saved": "Saved. Busy conversations apply changes after their current turn.",
   "settings.native.resolved": "Credential resolves · Inference not verified",

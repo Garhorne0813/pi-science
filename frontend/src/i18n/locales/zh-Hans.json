@@ -1550,7 +1550,6 @@
   "filePreview.frameFocusHint": "可访问的 HTML 预览支持 Esc 退出；若嵌入页面自行处理 Esc，请使用工具栏的“退出专注”。",
   "settings.native.scope": "全局模型服务 · 新会话默认模型与当前会话模型分别管理。",
   "settings.native.edit": "高级模型配置",
-  "settings.native.legacy": "该服务保留旧路由。复杂路由需要显式迁移，不会自动覆盖。",
   "settings.native.reloadPending": "已保存，运行时重载需要重试。活动任务继续使用原配置。",
   "settings.native.saved": "已保存。忙碌会话将在本轮结束后应用配置。",
   "settings.native.resolved": "凭证可解析 · 尚未验证推理",

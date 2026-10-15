@@ -3,16 +3,14 @@ import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { ProviderView } from "@pi-science/contracts";
 import { ModelConfigService } from "./model-config-service.js";
 import { ModelRegistryService } from "./model-registry-service.js";
-import { ModelResourceService } from "../model-resources/model-resource-service.js";
-import { legacyAgentModels } from "../runtime/agent/worker/agent-models.js";
 
 /** Compatibility DTO compiled from exactly the same registry as new Workers. */
 export async function nativeProviderViews(): Promise<ProviderView[]> {
   const service = new ModelConfigService(), snapshot = service.readSync();
-  const registry = new ModelRegistryService(service).compile(snapshot, snapshot.legacy_providers.length ? legacyAgentModels() : undefined);
+  const registry = new ModelRegistryService(service).compile(snapshot);
   const builtin = builtinModels();
   const selectable = new Set((await registry.getAvailable()).map((model) => `${model.provider}/${model.id}`));
-  const views = await Promise.all(registry.getProviders().filter((provider) => !snapshot.legacy_providers.includes(provider.id)).map(async (provider): Promise<ProviderView> => {
+  const views = await Promise.all(registry.getProviders().map(async (provider): Promise<ProviderView> => {
     const view = await service.view(provider.id, snapshot);
     const native = builtin.getProvider(provider.id);
     const count = provider.getModels().filter((model) => selectable.has(`${provider.id}/${model.id}`)).length;
@@ -39,10 +37,5 @@ export async function nativeProviderViews(): Promise<ProviderView[]> {
       }),
     };
   }));
-  if (!snapshot.legacy_providers.length) return views;
-  // Management retains unavailable legacy providers too; the Worker registry
-  // may omit them when every route's credential is missing or expired.
-  const retained = await new ModelResourceService().providerViews(selectable);
-  return [...views, ...retained.filter((provider) => snapshot.legacy_providers.includes(provider.id)).map((provider) => ({ ...provider,
-    allowed_actions: [], routing: { ...provider.routing, issues: [...provider.routing.issues, { code: "legacy_route" }] } }))];
+  return views;
 }

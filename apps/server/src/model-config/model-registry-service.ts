@@ -1,8 +1,8 @@
 import { validateOutboundHttpUrl } from "../security/outbound-security.js";
 import { SettingsStore } from "../storage/settings-store.js";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { createProvider, lazyApi, type Api, type Model, type MutableModels, type ProviderStreams } from "@earendil-works/pi-ai";
-import type { ModelConfigSnapshot } from "@pi-science/contracts";
+import { createProvider, lazyApi, type Api, type Model, type ProviderStreams } from "@earendil-works/pi-ai";
+import { modelConfigSnapshotSchema, type ModelConfigSnapshot } from "@pi-science/contracts";
 import { ModelCredentialAdapter } from "./model-credential-adapter.js";
 import { ModelConfigService } from "./model-config-service.js";
 
@@ -14,7 +14,8 @@ const implementations: Record<string, ProviderStreams> = {
 
 export class ModelRegistryService {
   constructor(private readonly service = new ModelConfigService()) {}
-  compile(snapshot = this.service.readSync(), legacy?: MutableModels, deploymentAllowPrivate = process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0") {
+  compile(snapshot = this.service.readSync(), deploymentAllowPrivate = process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0") {
+    modelConfigSnapshotSchema.parse(snapshot);
     // Preserve streaming and trusted proxy/CA handling; pin the control-plane
     // deployment policy even though this variable is deliberately absent in Workers.
     const guardedFetch: typeof fetch = async (input, init) => {
@@ -26,7 +27,6 @@ export class ModelRegistryService {
     const models = builtinModels({ credentials: new ModelCredentialAdapter(this.service, snapshot),
       authContext: { env: async () => undefined, fileExists: async () => false } });
     for (const [id, config] of Object.entries(snapshot.config.providers)) {
-      if (snapshot.legacy_providers.includes(id)) continue;
       const native = models.getProvider(id);
       const catalog = new Map((native?.getModels() ?? []).map((model) => [model.id, model]));
       for (const model of config.models ?? []) {
@@ -63,18 +63,6 @@ export class ModelRegistryService {
           } } } }));
       }
     }
-    for (const id of snapshot.legacy_providers) {
-      const provider = legacy?.getProvider(id);
-      if (provider) models.setProvider(provider);
-      else models.deleteProvider(id);
-    }
     return models;
-  }
-  async compare(snapshot: ModelConfigSnapshot, legacy: MutableModels) {
-    const native = this.compile(snapshot, legacy);
-    const ids = async (models: MutableModels) => new Map((await models.getAvailable()).map((model) => [`${model.provider}/${model.id}`, model]));
-    const before = await ids(legacy), after = await ids(native);
-    return { revision: snapshot.revision, added: [...after.keys()].filter((id) => !before.has(id)), removed: [...before.keys()].filter((id) => !after.has(id)),
-      changed: [...before].filter(([id, model]) => { const other = after.get(id); return other && (model.contextWindow !== other.contextWindow || model.maxTokens !== other.maxTokens || model.reasoning !== other.reasoning || JSON.stringify(model.input) !== JSON.stringify(other.input) || JSON.stringify(model.thinkingLevelMap) !== JSON.stringify(other.thinkingLevelMap)); }).map(([id]) => id) };
   }
 }

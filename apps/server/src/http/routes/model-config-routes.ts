@@ -7,10 +7,8 @@ import { modelConfigSchema, providerConfigSchema } from "@pi-science/contracts";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import type { ModelResourceService } from "../../model-resources/model-resource-service.js";
 import { ModelConfigService, configError, modelConfigBackend } from "../../model-config/model-config-service.js";
-import { ModelResourceRepository } from "../../model-resources/model-resource-repository.js";
 import { ModelConfigMigration } from "../../model-config/model-config-migration.js";
 import { ModelRegistryService } from "../../model-config/model-registry-service.js";
-import { legacyAgentModels } from "../../runtime/agent/worker/agent-models.js";
 
 const revision = z.number().int().nonnegative();
 const credentialInput = z.discriminatedUnion("source", [
@@ -25,27 +23,26 @@ export function registerModelConfigRoutes(app: FastifyInstance, resources: Model
   const fail = (reply: FastifyReply, error: unknown) => {
     const code = (error as { code?: string }).code ?? "invalid_config";
     // Never echo a rejected config/secret or upstream error payload.
-    return reply.code(code === "revision_conflict" || code === "legacy_route" ? 409 : 400).send({ code, error: code === "revision_conflict" ? "Configuration changed; reload before saving" : "Model configuration request failed validation",
+    return reply.code(code === "revision_conflict" || code === "legacy_route" || code === "import_blocked" ? 409 : 400).send({ code, error: code === "revision_conflict" ? "Configuration changed; reload before saving" : "Model configuration request failed validation",
       ...(error instanceof z.ZodError ? { fields: error.issues.map((issue) => ({ path: issue.path, code: issue.code })) } : {}) });
   };
   const publish = async (snapshot: { revision: number }) => {
-    if (modelConfigBackend() !== "pi_ai_v1") return { ok: true, revision: snapshot.revision, runtime: "inactive" };
     try { await sessions.reloadConfiguration(); return { ok: true, revision: snapshot.revision, runtime: "published", busy_workers: "after_current_turn" }; }
     catch { return { ok: true, revision: snapshot.revision, runtime: "reload_pending" }; }
   };
   app.get("/api/model-config", async (_request, reply) => {
     try { const snapshot = service.readSync(); return { backend: modelConfigBackend(), ...snapshot,
-      providers: await Promise.all([...new Set([...Object.keys(snapshot.config.providers), ...snapshot.legacy_providers])].map((id) => service.view(id, snapshot))) }; }
+      providers: await Promise.all(Object.keys(snapshot.config.providers).map((id) => service.view(id, snapshot))) }; }
     catch (error) { return fail(reply, error); }
   });
   app.get("/api/model-config/catalog", async (_request, reply) => {
     try {
       const snapshot = service.readSync();
-      const models = new ModelRegistryService(service).compile(snapshot, snapshot.legacy_providers.length ? legacyAgentModels() : undefined);
+      const models = new ModelRegistryService(service).compile(snapshot);
       const builtin = builtinModels();
       const available = new Set((await models.getAvailable()).map((model) => `${model.provider}/${model.id}`));
       const providers = await Promise.all(models.getProviders().map(async (provider) => ({
-        ...await service.view(provider.id, snapshot), editable: !snapshot.legacy_providers.includes(provider.id) && Boolean(provider.auth.apiKey), name: snapshot.config.providers[provider.id]?.name ?? provider.name,
+        ...await service.view(provider.id, snapshot), editable: Boolean(provider.auth.apiKey), name: snapshot.config.providers[provider.id]?.name ?? provider.name,
         models: provider.getModels().map((model) => {
           const config = snapshot.config.providers[provider.id];
           const declared = config?.models?.find((entry) => entry.id === model.id);
@@ -60,19 +57,6 @@ export function registerModelConfigRoutes(app: FastifyInstance, resources: Model
             source: declared || override ? "configured" : known ? "pi-ai" : "unknown" };
         }),
       })));
-      const missing = snapshot.legacy_providers.filter((id) => !models.getProvider(id));
-      if (missing.length) {
-        const state = new ModelResourceRepository().readSync();
-        for (const id of missing) {
-          const provider = state.providers.find((entry) => entry.id === id);
-          if (!provider) continue;
-          providers.push({ ...await service.view(id, snapshot), editable: false, name: provider.name,
-            models: state.models.filter((model) => model.provider_id === id).map((model) => ({ id: model.model_id, name: model.display_name, available: false,
-              contextWindow: model.capabilities.context_window, maxTokens: model.capabilities.max_output_tokens,
-              reasoning: model.capabilities.reasoning, thinking_levels: model.capabilities.thinking_levels.filter((level): level is ReturnType<typeof getSupportedThinkingLevels>[number] => ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(level)), input: model.capabilities.vision === undefined ? null : ["text" as const, ...(model.capabilities.vision ? ["image" as const] : [])], source: "legacy" })),
-          });
-        }
-      }
       return { revision: snapshot.revision, providers };
     } catch (error) { return fail(reply, error); }
   });
@@ -94,24 +78,14 @@ export function registerModelConfigRoutes(app: FastifyInstance, resources: Model
   });
   app.get<{ Params: { id: string } }>("/api/model-config/providers/:id", async (request, reply) => {
     try {
-      if (modelConfigBackend() === "pi_ai_v1") return service.view(request.params.id);
-      // Legacy editor snapshot is aggregated server-side; a complex route is never silently flattened.
-      const state = resources.repository.readSync();
-      const bindings = state.bindings.filter((binding) => binding.provider_id === request.params.id);
-      const owned = state.endpoints.filter((endpoint) => endpoint.owner_provider_id === request.params.id);
-      const endpoint = bindings.length === 1 ? state.endpoints.find((endpoint) => endpoint.id === bindings[0]!.endpoint_id) : bindings.length === 0 && owned.length === 1 ? owned[0] : undefined;
-      const credential = endpoint?.credential_ref ? await resources.credentials.metadata(endpoint.credential_ref) : null;
-      const shared = endpoint && (state.bindings.some((binding) => binding.endpoint_id === endpoint.id && binding.provider_id !== request.params.id)
-        || credential?.owner_kind === "mcp" || endpoint.credential_ref && state.endpoints.some((other) => other.id !== endpoint.id && other.credential_ref === endpoint.credential_ref));
-      const complex = Boolean(shared) || owned.length > 1 || bindings.length > 1 || Boolean(bindings[0]?.model_aliases && Object.keys(bindings[0].model_aliases).length || bindings[0]?.headers_policy && Object.keys(bindings[0].headers_policy).length);
-      return { id: request.params.id, legacy: true, editable: !complex, endpoint: endpoint ? { id: endpoint.id, base_url: endpoint.base_url, protocol: endpoint.protocol, health: endpoint.health, enabled: endpoint.enabled } : null };
+      return service.view(request.params.id);
     } catch (error) { return fail(reply, error); }
   });
   app.patch<{ Params: { id: string } }>("/api/model-config/providers/:id", async (request, reply) => {
     try {
       const body = z.object({ revision, config: providerConfigSchema }).strict().parse(request.body);
       return publish(await service.update(body.revision, (snapshot) => {
-        if (!snapshot.config.providers[request.params.id] || snapshot.legacy_providers.includes(request.params.id)) throw configError("legacy_route", "Use the legacy adapter");
+        if (!snapshot.config.providers[request.params.id]) throw configError("legacy_route", "Provider is not configured");
         snapshot.config.providers[request.params.id] = body.config;
       }));
     } catch (error) { return fail(reply, error); }
@@ -120,7 +94,6 @@ export function registerModelConfigRoutes(app: FastifyInstance, resources: Model
     try {
       const body = z.object({ revision }).strict().parse(request.body);
       return publish(await service.update(body.revision, (snapshot) => {
-        if (snapshot.legacy_providers.includes(request.params.id)) throw configError("legacy_route", "Legacy resources must be retained");
         delete snapshot.config.providers[request.params.id]; delete snapshot.credential_refs[request.params.id];
         snapshot.keyless_providers = snapshot.keyless_providers.filter((id) => id !== request.params.id);
       }));
@@ -148,19 +121,11 @@ export function registerModelConfigRoutes(app: FastifyInstance, resources: Model
     catch (error) { return fail(reply, error); }
   });
   app.post("/api/model-config/migration", async (request, reply) => {
-    try { const body = z.object({ revision, source_revision: z.string().length(64) }).strict().parse(request.body); return { ...await migration.apply(body.revision, body.source_revision), ...await publish(service.readSync()) }; }
+    try { const body = z.object({ revision, source_revision: z.string().length(64), excluded_provider_ids: z.array(z.string()).default([]) }).strict().parse(request.body); return { ...await migration.apply(body.revision, body.source_revision, body.excluded_provider_ids), ...await publish(service.readSync()) }; }
     catch (error) { return fail(reply, error); }
   });
-  app.get("/api/model-config/shadow", async (_request, reply) => {
-    try { const plan = await migration.plan(); return await new ModelRegistryService(service).compare(plan.snapshot, legacyAgentModels()); }
-    catch (error) { return fail(reply, error); }
-  });
-  // Old writes cannot silently change data no longer authoritative for native providers.
-  app.addHook("preHandler", async (request, reply) => {
-    if (["GET", "HEAD", "OPTIONS"].includes(request.method) || modelConfigBackend() !== "pi_ai_v1") return;
-    if (/^\/api\/(providers|models|endpoints|credentials|provider-endpoint-bindings|custom-providers)(\/|\?|$)/.test(request.url)
-      || /^\/api\/settings\/(api-key|custom-providers)(\/|\?|$)/.test(request.url)) {
-      return reply.code(409).send({ code: "native_config_required", error: "Use the versioned model-config API; legacy resources are retained read-only" });
-    }
-  });
+  // Tombstones run before validation, discovery, or mutation. No legacy CRUD is registered.
+  for (const path of ["providers", "models", "endpoints", "credentials", "provider-endpoint-bindings", "custom-providers", "settings/api-key", "settings/custom-providers", "model-config/shadow"]) {
+    for (const url of [`/api/${path}`, `/api/${path}/*`]) app.all(url, async (_request, reply) => reply.code(410).send({ code: "model_config_retired", error: "Use /api/model-config; old model configuration is no longer active" }));
+  }
 }

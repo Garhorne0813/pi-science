@@ -12,7 +12,7 @@ import { ModelRegistryService } from "./model-registry-service.js";
 import { nativeProviderViews } from "./provider-config-view.js";
 import { ModelResourceService } from "../model-resources/model-resource-service.js";
 import { AgentCoreRuntimeClient } from "../runtime/agent/agent-runtime-client.js";
-import { agentModels, legacyAgentModels } from "../runtime/agent/worker/agent-models.js";
+import { agentModels } from "../runtime/agent/worker/agent-models.js";
 import { registerModelResourceRoutes } from "../http/routes/model-resource-routes.js";
 import { buildApp } from "../app/app.js";
 import { createServerModules } from "../app/server-modules.js";
@@ -25,7 +25,7 @@ const apps: Array<{ close(): Promise<unknown> }> = [];
 const config: ProviderConfig = { api: "openai-completions", baseUrl: "http://127.0.0.1:9876/v1", models: [{ id: "test", contextWindow: 8192 }] };
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "pi-model-review-"));
-  vi.stubEnv("PI_SCIENCE_HOME", root); vi.stubEnv("PI_SCIENCE_MODEL_CONFIG_BACKEND", "legacy");
+  vi.stubEnv("PI_SCIENCE_HOME", root); vi.stubEnv("PI_SCIENCE_MODEL_CONFIG_BACKEND", "pi_ai_v1");
   vi.mocked(lookup).mockResolvedValue([{ address: "203.0.113.10", family: 4 }] as never);
 });
 afterEach(async () => {
@@ -56,10 +56,10 @@ describe("review migration resource graph", () => {
     await legacyProvider(resources, "user-second", { endpoint: first.endpoint });
     const before = await bytes(); const migration = new ModelConfigMigration(new ModelConfigService(), resources.repository);
     const plan = await migration.plan();
-    expect(plan.providers.filter((row) => row.status === "legacy").map((row) => row.provider_id).sort()).toEqual(["user-first", "user-second"]);
+    expect(plan.providers.filter((row) => row.status === "blocked").map((row) => row.provider_id).sort()).toEqual(["user-first", "user-second"]);
     expect(plan.providers.every((row) => row.reasons.includes("shared_endpoint"))).toBe(true);
     expect(await bytes()).toEqual(before);
-    await migration.apply(0, plan.source_revision);
+    await migration.apply(0, plan.source_revision, plan.providers.filter((row) => row.status === "blocked").map((row) => row.provider_id));
     expect(await readFile(join(root, "model-resources.json"), "utf8")).toBe(before["model-resources.json"]);
     expect(new ModelConfigService().readSync().config.providers).toEqual({});
   });
@@ -75,7 +75,7 @@ describe("review migration resource graph", () => {
     });
     const migration = new ModelConfigMigration(new ModelConfigService(), resources.repository);
     const plan = await migration.plan();
-    expect(plan.providers).toEqual(expect.arrayContaining(["user-a", "user-b"].map((provider_id) => expect.objectContaining({ provider_id, status: "legacy", reasons: expect.arrayContaining(["shared_or_unsupported_credential"]) }))));
+    expect(plan.providers).toEqual(expect.arrayContaining(["user-a", "user-b"].map((provider_id) => expect.objectContaining({ provider_id, status: "blocked", reasons: expect.arrayContaining(["shared_or_unsupported_credential"]) }))));
   });
   it("keeps MCP-owned credentials and their provider references intact during migration", async () => {
     const resources = new ModelResourceService();
@@ -83,8 +83,8 @@ describe("review migration resource graph", () => {
     await legacyProvider(resources, "user-mcp", { ref: credential.id });
     const before = await bytes(); const migration = new ModelConfigMigration(new ModelConfigService(), resources.repository);
     const plan = await migration.plan();
-    expect(plan.providers).toContainEqual(expect.objectContaining({ provider_id: "user-mcp", status: "legacy", reasons: expect.arrayContaining(["shared_or_unsupported_credential"]) }));
-    await migration.apply(0, plan.source_revision);
+    expect(plan.providers).toContainEqual(expect.objectContaining({ provider_id: "user-mcp", status: "blocked", reasons: expect.arrayContaining(["shared_or_unsupported_credential"]) }));
+    await migration.apply(0, plan.source_revision, plan.providers.filter((row) => row.status === "blocked").map((row) => row.provider_id));
     expect(await resources.credentials.metadata(credential.id)).toMatchObject({ owner_kind: "mcp", owner_id: "mcp-science" });
     expect(await readFile(join(root, "credentials.json"), "utf8")).toBe(before["credentials.json"]);
     expect(await readFile(join(root, "model-resources.json"), "utf8")).toBe(before["model-resources.json"]);
@@ -95,11 +95,11 @@ describe("review migration resource graph", () => {
     await legacyProvider(resources, "user-healthy");
     const migration = new ModelConfigMigration(new ModelConfigService(), resources.repository);
     const before = await bytes(); const plan = await migration.plan();
-    expect(plan.providers).toContainEqual(expect.objectContaining({ provider_id: "user-empty", status: "legacy", reasons: expect.arrayContaining(["empty_model_catalog"]) }));
+    expect(plan.providers).toContainEqual(expect.objectContaining({ provider_id: "user-empty", status: "blocked", reasons: expect.arrayContaining(["empty_model_catalog"]) }));
     expect(plan.providers).toContainEqual(expect.objectContaining({ provider_id: "user-healthy", status: "migrated" }));
     expect(await bytes()).toEqual(before);
-    await migration.apply(0, plan.source_revision);
-    expect(new ModelConfigService().readSync()).toMatchObject({ revision: 1, legacy_providers: ["user-empty"], config: { providers: { "user-healthy": expect.any(Object) } } });
+    await migration.apply(0, plan.source_revision, plan.providers.filter((row) => row.status === "blocked").map((row) => row.provider_id));
+    expect(new ModelConfigService().readSync()).toMatchObject({ revision: 1, legacy_providers: [], config: { providers: { "user-healthy": expect.any(Object) } } });
     expect(await readFile(join(root, "model-resources.json"), "utf8")).toBe(before["model-resources.json"]);
   });
   it("retains native gateway transport and the exact destination instead of silently using builtin defaults", async () => {
@@ -110,14 +110,11 @@ describe("review migration resource graph", () => {
     const endpoint = await resources.createEndpoint({ name: "Gateway", base_url: "http://127.0.0.1:8989/vendor-proxy", protocol: "native", credential_ref: credential.id, enabled: true, data_egress: "local" });
     await resources.createBinding({ provider_id: "openai", endpoint_id: endpoint.id, enabled: true, priority: 100 });
     await resources.repository.update((state) => { state.models.push({ provider_id: "openai", model_id: model.id, display_name: model.name, enabled: true, capabilities: { reasoning: false, thinking_levels: ["off"], context_window: model.contextWindow, max_output_tokens: model.maxTokens }, capability_source: "runtime" }); });
-    const legacy = legacyAgentModels();
-    expect(legacy.getModel("openai", model.id)?.baseUrl).toBe(endpoint.base_url);
     const migration = new ModelConfigMigration(new ModelConfigService(), resources.repository); const plan = await migration.plan();
-    expect(plan.providers).toContainEqual(expect.objectContaining({ provider_id: "openai", status: "legacy", reasons: expect.arrayContaining(["native_endpoint_transport"]) }));
-    await migration.apply(0, plan.source_revision);
-    const retained = legacyAgentModels(); const native = new ModelRegistryService().compile(undefined, retained);
-    expect(native.getProvider("openai")).toBe(retained.getProvider("openai"));
-    expect(native.getModel("openai", model.id)).toMatchObject({ baseUrl: endpoint.base_url, api: legacy.getModel("openai", model.id)!.api });
+    expect(plan.providers).toContainEqual(expect.objectContaining({ provider_id: "openai", status: "blocked", reasons: expect.arrayContaining(["native_endpoint_transport"]) }));
+    await migration.apply(0, plan.source_revision, plan.providers.filter((row) => row.status === "blocked").map((row) => row.provider_id));
+    expect(new ModelRegistryService().compile().getModel("openai", model.id)?.baseUrl).not.toBe(endpoint.base_url);
+    expect(await agentModels().getAvailable()).toEqual([]);
   });
   it("preserves original files and references when apply fails before the atomic commit", async () => {
     const resources = new ModelResourceService(); await legacyProvider(resources, "user-failed");
@@ -199,26 +196,28 @@ describe("review network preflight", () => {
     vi.mocked(lookup).mockResolvedValue([{ address: "127.0.0.1", family: 4 }] as never);
     await service.setCredential("lab", 1, { source: "keyless" });
     const fetch = vi.spyOn(globalThis, "fetch");
-    const registry = new ModelRegistryService(service).compile(undefined, undefined, false);
+    const registry = new ModelRegistryService(service).compile(undefined, false);
     const result = await registry.completeSimple(registry.getModel("lab", "test")!, { messages: [{ role: "user", content: "test", timestamp: 1 }] });
     expect(result.stopReason).toBe("error"); expect(fetch).not.toHaveBeenCalled();
   });
 });
 
-describe("review legacy authentication projection", () => {
-  it.each(["managed", "environment", "keyless", "expired-env", "removed-key"] as const)("projects %s from legacy routes consistently without exposing secrets", async (kind) => {
+describe("native authentication projection", () => {
+  it.each(["managed", "environment", "keyless", "expired-env", "removed-key"] as const)("projects %s from native configuration consistently without exposing secrets", async (kind) => {
     const resources = new ModelResourceService(); const service = new ModelConfigService();
     vi.stubEnv("REVIEW_LEGACY_KEY", kind === "expired-env" ? "" : "legacy-env-secret");
     const credential = kind === "keyless" ? undefined : await resources.credentials.put(kind === "managed" || kind === "removed-key"
       ? { kind: "api_key", backend: "managed", secret: "legacy-managed-secret" }
       : { kind: "api_key", backend: "environment", environment_variable: "REVIEW_LEGACY_KEY" });
-    const { provider } = await legacyProvider(resources, "user-complex", { priority: 1, ref: credential?.id });
-    const migration = new ModelConfigMigration(service, resources.repository); const plan = await migration.plan(); await migration.apply(0, plan.source_revision);
-    vi.stubEnv("PI_SCIENCE_MODEL_CONFIG_BACKEND", "pi_ai_v1"); const app = await routeApp(resources);
+    const provider = { id: "native-lab" };
+    await service.createProvider(0, provider.id, config);
+    if (credential) await service.update(1, (snapshot) => { snapshot.credential_refs[provider.id] = credential.id; });
+    else await service.setCredential(provider.id, 1, { source: "keyless" });
+    const app = await routeApp(resources);
     if (kind === "removed-key") await resources.credentials.remove(credential!.id);
     const resolved = kind !== "expired-env" && kind !== "removed-key";
     const source = kind === "expired-env" ? "environment" : kind === "removed-key" ? "unconfigured" : kind;
-    expect(await service.view(provider.id)).toMatchObject({ legacy: true, editable: false, authentication: { source, resolved } });
+    expect(await service.view(provider.id)).toMatchObject({ legacy: false, editable: true, authentication: { source, resolved } });
     const views = await nativeProviderViews(); const view = views.find((entry) => entry.id === provider.id);
     expect(view).toMatchObject({ status: resolved ? "ready" : "needs_key", credential: { configured: resolved, state: resolved ? "ready" : "needs_key" } });
     const catalog = (await app.inject({ method: "GET", url: "/api/model-config/catalog" })).json();
@@ -230,14 +229,14 @@ describe("review legacy authentication projection", () => {
     const sessionsRoot = join(root, ".pi-science", "agent-sessions"); await mkdir(sessionsRoot, { recursive: true });
     const startup = () => AgentCoreRuntimeClient.start({ cwd: root, sessionsRoot, model: { provider: provider.id, modelId: "test" }, allowedTools: [], skillPaths: [],
       env: { REVIEW_LEGACY_KEY: process.env.REVIEW_LEGACY_KEY! }, credentialEnvNames: ["REVIEW_LEGACY_KEY"] });
-    if (resolved) {
+    {
       const worker = await startup();
       try {
         const result = await worker.sendCommand("get_available_models");
-        expect(result).toMatchObject({ success: true, data: { models: expect.arrayContaining([expect.objectContaining({ provider: provider.id, id: "test" })]) } });
+        expect(result).toMatchObject({ success: true, data: { models: resolved ? expect.arrayContaining([expect.objectContaining({ provider: provider.id, id: "test" })]) : [] } });
         expect(JSON.stringify(result)).not.toMatch(/legacy-managed-secret|legacy-env-secret/);
       } finally { await worker.shutdown(); }
-    } else await expect(startup()).rejects.toThrow(/model not found/);
+    }
   }, 30000);
 });
 
@@ -249,10 +248,10 @@ it("enforces native legacy-write isolation using the full App registration order
   const modules = createServerModules(cfg, { sqliteEnabled: false }); const app = buildApp(cfg, modules); apps.push(app); await app.ready();
   const before = await bytes();
   expect((await app.inject({ method: "GET", url: "/api/model-config/migration" })).statusCode).toBe(200);
-  expect((await app.inject({ method: "GET", url: "/api/model-config/shadow" })).statusCode).toBe(200);
+  expect((await app.inject({ method: "GET", url: "/api/model-config/shadow" })).statusCode).toBe(410);
   expect(await bytes()).toEqual(before);
   for (const url of ["/api/providers", "/api/endpoints", "/api/credentials", "/api/provider-endpoint-bindings"]) {
-    expect((await app.inject({ method: "GET", url })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url })).statusCode).toBe(410);
     expect(await bytes()).toEqual(before);
   }
   const bindings = resources.repository.readSync().bindings;
@@ -272,17 +271,7 @@ it("enforces native legacy-write isolation using the full App registration order
   ] as const;
   for (const [method, url, payload] of calls) {
     const response = await app.inject({ method, url, ...(payload ? { payload } : {}) });
-    expect({ method, url, status: response.statusCode, body: response.json() }).toMatchObject({ status: 409, body: { code: "native_config_required" } });
+    expect({ method, url, status: response.statusCode, body: response.json() }).toMatchObject({ status: 410, body: { code: "model_config_retired" } });
     expect(await bytes()).toEqual(before);
   }
-});
-
-it.each(["legacy", "shadow"] as const)("keeps old model entity writes authoritative in %s mode", async (backend) => {
-  vi.stubEnv("PI_SCIENCE_MODEL_CONFIG_BACKEND", backend);
-  const cfg = { ...loadConfig({ PI_SCIENCE_REQUIRE_INTERNAL_TOKEN: "0", LOG_LEVEL: "silent" }), nodePiManager: false, nodeSessions: false, nodeSse: false, nodeFiles: false };
-  const modules = createServerModules(cfg, { sqliteEnabled: false }); const app = buildApp(cfg, modules); apps.push(app); await app.ready();
-  const response = await app.inject({ method: "POST", url: "/api/providers", payload: { id: "user-compatible", name: "Compatible", adapter: "openai-compatible", auth_kind: "none", enabled: true, catalog_mode: "manual" } });
-  expect(response.statusCode).toBe(200);
-  expect(modules.modelResources.repository.readSync().providers).toContainEqual(expect.objectContaining({ id: "user-compatible" }));
-  expect(new ModelConfigService().readSync().revision).toBe(0);
 });

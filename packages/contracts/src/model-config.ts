@@ -37,12 +37,12 @@ export const providerConfigSchema = z.object({
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: "custom", message: "Duplicate model IDs" });
 });
 export const modelConfigSchema = z.object({ providers: z.record(id, providerConfigSchema).default(() => ({})) }).strict();
-export const modelConfigBackendSchema = z.enum(["legacy", "shadow", "pi_ai_v1"]);
+export const modelConfigBackendSchema = z.literal("pi_ai_v1");
 export const modelConfigSnapshotSchema = z.object({
   schema_version: z.literal(1).default(1), revision: z.number().int().nonnegative().default(0),
   config: modelConfigSchema.default(() => ({ providers: {} })),
   credential_refs: z.record(id, z.string().min(1)).default(() => ({})),
-  keyless_providers: z.array(id).default(() => []), legacy_providers: z.array(id).default(() => []),
+  keyless_providers: z.array(id).default(() => []), legacy_providers: z.array(id).max(0, "Legacy adapters are no longer supported; import or reconfigure explicitly").default(() => []),
   aliases: z.record(z.string(), z.string()).default(() => ({})),
 }).strict();
 export type ModelConfig = z.infer<typeof modelConfigSchema>;

@@ -62,13 +62,13 @@ export function NativeModelSettings({ onConfigReload }: { onConfigReload?: () =>
       <button className={button} disabled={revision === undefined} onClick={() => { setEditorRevision(revision ?? null); setEditor(JSON.stringify(configuration.data?.config ?? { providers: {} }, null, 2)); setPreviewed(false); setError(null); }}>{t("settings.native.edit")}</button></div>
     {(catalog.isPending || configuration.isPending) && <p role="status">{t("common.loading")}</p>}
     {(catalog.error || configuration.error || error) && <p role="alert" className="text-ui-caption text-error-text">{error ?? catalog.error?.message ?? configuration.error?.message}</p>}
+    {(catalog.error || configuration.error) && <button className={button} onClick={() => { setError(null); void configuration.refetch(); void catalog.refetch(); }}>{t("settings.redesign.retryLoad")}</button>}
     {notice && <p role="status" className="text-ui-caption text-muted">{notice}</p>}
     {providers.slice(page * 20, (page + 1) * 20).map((provider) => <section key={provider.id} className="space-y-3 border-b border-faint py-3">
       <div className="flex flex-wrap items-center gap-3"><button className="min-h-9 text-ui-label font-medium text-text" aria-expanded={expanded === provider.id} onClick={() => { setExpanded(expanded === provider.id ? null : provider.id); }}>{provider.name}</button><span className="text-ui-caption text-muted">{provider.models.filter((model) => model.available).length} / {provider.models.length}</span>
         {provider.editable && <button className={button} onClick={() => { setCredential(provider); setSource("managed"); setSecret(""); setError(null); }}>{t("settings.resources.auth")}</button>}</div>
       <p className="text-ui-caption text-muted">{t(`settings.native.source.${provider.authentication.source}`)}{provider.authentication.environment_variable ? `: ${provider.authentication.environment_variable}` : ""} · {t(provider.authentication.resolved ? "settings.native.resolved" : "settings.native.unresolved")}</p>
       {provider.authentication.restart_required && <p className="text-ui-caption text-muted">{t("settings.native.restart")}</p>}
-      {provider.legacy && <p className="text-ui-caption text-muted">{t("settings.native.legacy")}</p>}
       {expanded === provider.id && <NativeModels key={`${provider.id}:${search}`} models={provider.models} search={provider.name.toLowerCase().includes(search.toLowerCase()) || provider.id.toLowerCase().includes(search.toLowerCase()) ? "" : search} />}
     </section>)}
     {providers.length > 20 && <div className="flex gap-2"><button className={button} disabled={page === 0} onClick={() => setPage(page - 1)}>{t("settings.redesign.previousPage")}</button><button className={button} disabled={(page + 1) * 20 >= providers.length} onClick={() => setPage(page + 1)}>{t("settings.redesign.nextPage")}</button></div>}

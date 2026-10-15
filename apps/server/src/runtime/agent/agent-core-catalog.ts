@@ -9,7 +9,7 @@ export class AgentCoreCatalogService {
     const configured = new Set((await models.getAvailable()).map((model) => model.provider));
     return {
       schemaVersion: 1,
-      providers: models.getProviders().filter((provider) => !provider.id.startsWith("user-")).map((provider) => ({
+      providers: models.getProviders().map((provider) => ({
         id: provider.id,
         name: provider.name,
         baseUrl: provider.baseUrl ?? null,

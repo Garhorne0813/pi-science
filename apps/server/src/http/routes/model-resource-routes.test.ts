@@ -1,189 +1,23 @@
 import Fastify from "fastify";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
-import { ModelResourceService } from "../../model-resources/model-resource-service.js";
-import { registerModelEndpointRoutes } from "./model-endpoint-routes.js";
+import { afterEach, expect, it, vi } from "vitest";
 import { registerModelResourceRoutes } from "./model-resource-routes.js";
-import { registerSettingsRoutes } from "./settings-routes.js";
-import { SettingsStore } from "../../storage/settings-store.js";
-
-const roots: string[] = [];
-const originalHome = process.env.PI_SCIENCE_HOME;
-
-beforeEach(async () => {
-  const root = await mkdtemp(join(tmpdir(), "pi-science-model-resource-routes-"));
-  roots.push(root);
-  process.env.PI_SCIENCE_HOME = root;
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  if (originalHome === undefined) delete process.env.PI_SCIENCE_HOME;
-  else process.env.PI_SCIENCE_HOME = originalHome;
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
-});
-
-describe("model resource routes", () => {
-  it("keeps MCP-owned credentials behind connector-specific routes", async () => {
-    const session = { reloadConfiguration: vi.fn().mockResolvedValue([]) } as unknown as NodeSessionService;
-    const service = new ModelResourceService();
-    await service.credentials.put({ id: "mcp_owned", kind: "api_key", backend: "managed", secret: "mcp-secret", owner_kind: "mcp", owner_id: "connector-1" });
-    const app = Fastify({ logger: false });
-    registerModelResourceRoutes(app, service, session);
-
-    expect((await app.inject({ method: "GET", url: "/api/credentials" })).json().credentials).toEqual([]);
-    expect((await app.inject({ method: "PUT", url: "/api/credentials/mcp_owned", payload: { secret: "replacement" } })).statusCode).toBe(409);
-    expect((await app.inject({ method: "DELETE", url: "/api/credentials/mcp_owned" })).statusCode).toBe(409);
-    expect((await app.inject({ method: "POST", url: "/api/credentials", payload: { kind: "api_key", backend: "managed", secret: "bad", owner_kind: "mcp", owner_id: "connector-2" } })).statusCode).toBe(403);
-    expect((await service.credentials.getForRuntime("mcp_owned"))?.secret).toBe("mcp-secret");
-  });
-
-  it.each([
-    { sharing: "endpoint", edit: { base_url: "https://new.example/v1" } },
-    { sharing: "endpoint", edit: { api: "openai-responses" } },
-    { sharing: "endpoint", edit: { auth: { kind: "api_key", secret: "replacement-secret" } } },
-    { sharing: "endpoint", edit: { auth: { kind: "none" } } },
-    { sharing: "disabled-binding", edit: { base_url: "https://new.example/v1" } },
-    { sharing: "credential", edit: { auth: { kind: "api_key", secret: "replacement-secret" } } },
-    { sharing: "disabled-endpoint", edit: { auth: { kind: "api_key", secret: "replacement-secret" } } },
-    { sharing: "builtin", edit: { auth: { kind: "api_key", secret: "replacement-secret" } } },
-    { sharing: "repair", edit: { base_url: "https://new.example/v1", auth: { kind: "api_key", secret: "replacement-secret" } } },
-  ])("rejects aggregate edits of $sharing resources before any write ($edit)", async ({ sharing, edit }) => {
-    const reloadConfiguration = vi.fn().mockResolvedValue([]);
-    const service = new ModelResourceService();
-    const app = Fastify({ logger: false });
-    registerModelResourceRoutes(app, service, { reloadConfiguration } as unknown as NodeSessionService);
-    const a = await service.createProvider({ name: "A", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
-    const b = await service.createProvider({ name: "B", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
-    const key = await service.credentials.put({ kind: "api_key", backend: "managed", secret: "shared-secret", owner_provider_id: a.id });
-    const endpoint = await service.createEndpoint({ name: "A connection", base_url: "https://old.example/v1", protocol: "openai", data_egress: "remote", api: "openai-completions", credential_ref: key.id, enabled: true, owner_provider_id: a.id });
-    const binding = await service.createBinding({ priority: 100, provider_id: a.id, endpoint_id: endpoint.id, enabled: true });
-    const sharedEndpoint = sharing === "endpoint" || sharing === "disabled-binding";
-    const otherEndpoint = sharedEndpoint ? endpoint : await service.createEndpoint({ name: "B connection", base_url: "https://other.example/v1", protocol: "openai", data_egress: "remote", credential_ref: key.id, enabled: sharing !== "disabled-endpoint", owner_provider_id: b.id });
-    await service.createBinding({ priority: 100, provider_id: b.id, endpoint_id: otherEndpoint.id, enabled: sharing !== "disabled-binding" });
-    await service.updateModel(b.id, "model-b", { enabled: true });
-    if (sharing === "builtin") {
-      await service.updateEndpoint(otherEndpoint.id, { credential_ref: null });
-      await service.repository.update((state) => { state.credential_refs.openai = key.id; });
+import { ModelResourceService } from "../../model-resources/model-resource-service.js";
+import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
+let root: string;
+afterEach(async () => { vi.unstubAllEnvs(); if (root) await rm(root, { recursive: true, force: true }); });
+it("keeps MCP credentials inaccessible and immutable through retired model APIs", async () => {
+  root = await mkdtemp(join(tmpdir(), "pi-retired-http-")); vi.stubEnv("PI_SCIENCE_HOME", root);
+  const service = new ModelResourceService();
+  const key = await service.credentials.put({ kind: "api_key", backend: "managed", secret: "mcp-secret", owner_kind: "mcp", owner_id: "connector-1" });
+  const app = Fastify(); registerModelResourceRoutes(app, service, { reloadConfiguration: async () => [] } as unknown as NodeSessionService);
+  try {
+    for (const method of ["GET", "POST", "PUT", "DELETE"] as const) {
+      const response = await app.inject({ method, url: `/api/credentials/${key.id}` });
+      expect(response.statusCode).toBe(410); expect(response.body).not.toContain("mcp-secret");
     }
-    if (sharing === "repair") {
-      await service.deleteBinding(binding.id);
-      await service.deleteEndpoint(endpoint.id);
-    }
-    await new SettingsStore().update((settings) => { settings.model = `${b.id}/model-b`; });
-    const routeBefore = await service.resolveModelRoute(`${b.id}/model-b`);
-    const files = ["model-resources.json", "credentials.json", "config.json"].map((name) => join(process.env.PI_SCIENCE_HOME!, name));
-    const snapshot = () => Promise.all(files.map(async (file) => ({ bytes: await readFile(file, "utf8"), modified: (await stat(file)).mtimeMs })));
-    const before = await snapshot();
-    const response = await app.inject({ method: "PUT", url: `/api/custom-providers/${a.id}`, payload: { name: "A renamed", ...edit } });
-    expect(response.statusCode).toBe(409);
-    expect(response.json()).toMatchObject({ code: "resource_in_use" });
-    expect(response.body).not.toContain("replacement-secret");
-    expect(await snapshot()).toEqual(before);
-    expect(await service.resolveModelRoute(`${b.id}/model-b`)).toEqual(routeBefore);
-    expect((await service.credentials.getForRuntime(key.id))?.secret).toBe("shared-secret");
-    expect(reloadConfiguration).not.toHaveBeenCalled();
-    await app.close();
-  });
-
-  it("switches an aggregate provider to no authentication", async () => {
-    const reloadConfiguration = vi.fn().mockResolvedValue([]);
-    const session = { reloadConfiguration } as unknown as NodeSessionService;
-    const service = new ModelResourceService();
-    const app = Fastify({ logger: false });
-    registerModelResourceRoutes(app, service, session);
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ data: [{ id: "model-a" }] }), { status: 200, headers: { "content-type": "application/json" } }));
-
-    const created = await app.inject({ method: "POST", url: "/api/custom-providers", payload: { name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "api_key", secret: "route-secret" } } });
-    expect(created.statusCode).toBe(200);
-    const providerId = created.json().provider.id as string;
-    const credentialId = created.json().credential.id as string;
-
-    const updated = await app.inject({ method: "PUT", url: `/api/custom-providers/${providerId}`, payload: { auth: { kind: "none" } } });
-
-    expect(updated.statusCode).toBe(200);
-    expect(updated.json()).toMatchObject({ provider: { auth_kind: "none" }, endpoint: { credential_ref: null } });
-    expect(await service.credentials.metadata(credentialId)).toBeNull();
-  });
-
-  it("keeps a builtin provider when a custom provider has the same basename", async () => {
-    const session = { reloadConfiguration: vi.fn().mockResolvedValue([]) } as unknown as NodeSessionService;
-    const service = new ModelResourceService();
-    const app = Fastify({ logger: false });
-    registerModelResourceRoutes(app, service, session);
-    registerSettingsRoutes(app, session, new SettingsStore(), service, {
-      getCatalog: vi.fn().mockResolvedValue({
-        schemaVersion: 1,
-        providers: [{
-          id: "lab",
-          name: "Builtin Lab",
-          baseUrl: null,
-          auth: { apiKey: false, oauth: false, subscription: false, configured: true },
-          models: [{ id: "builtin-model", name: "Builtin Model", api: "openai-completions", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 }],
-        }],
-      }),
-    });
-
-    const created = await app.inject({ method: "POST", url: "/api/providers", payload: { id: "lab", name: "Custom Lab", adapter: "openai-compatible", catalog_mode: "hybrid", auth_kind: "none" } });
-    expect(created.statusCode).toBe(200);
-    expect(created.json()).toMatchObject({ provider: { id: "user-lab" } });
-
-    const response = await app.inject({ method: "GET", url: "/api/settings/config" });
-    expect(response.statusCode).toBe(200);
-    expect(response.json().providers.map((provider: { id: string }) => provider.id)).toEqual(expect.arrayContaining(["lab", "user-lab"]));
-  });
-
-  it("runs provider → credential → endpoint → binding → discovery and fails closed when disabled", async () => {
-    const reloadConfiguration = vi.fn().mockResolvedValue([]);
-    const session = { reloadConfiguration } as unknown as NodeSessionService;
-    const service = new ModelResourceService();
-    const app = Fastify({ logger: false });
-    registerModelResourceRoutes(app, service, session);
-    registerModelEndpointRoutes(app, { service, nodeSessionService: session });
-    registerSettingsRoutes(app, session, new SettingsStore(), service);
-
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      expect(String(input)).toContain("/models");
-      return new Response(JSON.stringify({ data: [{ id: "model-a", context_window: 131072, reasoning: true, thinking_levels: ["off", "high"] }] }), { status: 200, headers: { "content-type": "application/json" } });
-    });
-
-    const provider = await app.inject({ method: "POST", url: "/api/providers", payload: { name: "Lab", adapter: "openai-compatible", catalog_mode: "hybrid", auth_kind: "api_key" } });
-    expect(provider.statusCode).toBe(200);
-    const providerId = provider.json().provider.id as string;
-    const credential = await app.inject({ method: "POST", url: "/api/credentials", payload: { kind: "api_key", backend: "managed", secret: "route-secret", label: "Lab key" } });
-    expect(credential.statusCode).toBe(200);
-    expect(credential.body).not.toContain("route-secret");
-    const credentialId = credential.json().credential.id as string;
-    const endpoint = await app.inject({ method: "POST", url: "/api/endpoints", payload: { name: "Lab connection", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", credential_ref: credentialId, data_egress: "local" } });
-    expect(endpoint.statusCode).toBe(200);
-    const endpointId = endpoint.json().endpoint.id as string;
-    const binding = await app.inject({ method: "POST", url: "/api/provider-endpoint-bindings", payload: { provider_id: providerId, endpoint_id: endpointId, priority: 10, enabled: true } });
-    expect(binding.statusCode).toBe(200);
-    const bindingId = binding.json().binding.id as string;
-
-    const discovered = await app.inject({ method: "POST", url: `/api/providers/${providerId}/discover`, payload: { binding_id: bindingId } });
-    expect(discovered.statusCode).toBe(200);
-    expect(discovered.json().models).toEqual(expect.arrayContaining([expect.objectContaining({ id: `${providerId}/model-a`, available: true, capability_source: "discovery" })]));
-
-    const available = await app.inject({ method: "GET", url: "/api/models?available=true" });
-    expect(available.statusCode).toBe(200);
-    expect(available.json().models).toEqual(expect.arrayContaining([expect.objectContaining({ id: `${providerId}/model-a`, available: true, routes: [expect.objectContaining({ binding_id: bindingId, priority: 10 })] })]));
-
-    const selected = await app.inject({ method: "PUT", url: "/api/settings/model", payload: { model: `${providerId}/model-a`, thinking: "high" } });
-    expect(selected.statusCode).toBe(200);
-    expect(selected.json()).toMatchObject({ ok: true, model: `${providerId}/model-a` });
-
-    const disabled = await app.inject({ method: "PUT", url: `/api/endpoints/${endpointId}/enabled?enabled=false` });
-    expect(disabled.statusCode).toBe(200);
-    expect(disabled.json()).toMatchObject({ endpoint: { enabled: false, health: "blocked" } });
-    const unavailable = await app.inject({ method: "GET", url: `/api/models?provider_id=${providerId}` });
-    expect(unavailable.json().models).toEqual(expect.arrayContaining([expect.objectContaining({ id: `${providerId}/model-a`, available: false, availability_reason: "disabled_endpoint" })]));
-    reloadConfiguration.mockClear();
-    const probed = await app.inject({ method: "POST", url: `/api/endpoints/${endpointId}/health` });
-    expect(probed.statusCode).toBe(200);
-    expect(reloadConfiguration).toHaveBeenCalledTimes(1);
-  });
+    expect((await service.credentials.getForRuntime(key.id))?.secret).toBe("mcp-secret");
+  } finally { await app.close(); }
 });

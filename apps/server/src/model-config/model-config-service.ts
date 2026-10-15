@@ -5,12 +5,10 @@ import { randomUUID } from "node:crypto";
 import { modelConfigBackendSchema, modelConfigSnapshotSchema, modelConfigSchema, type ModelConfig, type ModelConfigSnapshot, type ProviderConfig, type ProviderConfigView } from "@pi-science/contracts";
 import { configPath, withFileWriteLock, writeJsonAtomic } from "../storage/persistence.js";
 import { CredentialStore } from "../model-resources/credential-store.js";
-import { ModelResourceRepository } from "../model-resources/model-resource-repository.js";
-import { RuntimeModelResolver } from "../model-resources/runtime-model-resolver.js";
 import { SettingsStore } from "../storage/settings-store.js";
 import { validateOutboundHttpUrl } from "../security/outbound-security.js";
 
-export function modelConfigBackend() { return modelConfigBackendSchema.parse(process.env.PI_SCIENCE_MODEL_CONFIG_BACKEND ?? "legacy"); }
+export function modelConfigBackend() { return modelConfigBackendSchema.parse(process.env.PI_SCIENCE_MODEL_CONFIG_BACKEND ?? "pi_ai_v1"); }
 export function isAllowedModelEnvRef(name: string | undefined): name is string {
   return Boolean(name && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !/^(PI_SCIENCE_|NCBI_|OPENALEX_|OPENFDA_|HTTP_|HTTPS_|ALL_PROXY$|NO_PROXY$|SSL_CERT_|NODE_|PATH$|HOME$)/i.test(name));
 }
@@ -62,7 +60,7 @@ export class ModelConfigService {
     let created: string | undefined;
     try {
       return await this.update(revision, async (snapshot) => {
-        if (snapshot.config.providers[id] || snapshot.legacy_providers.includes(id)) throw configError("legacy_route", "Provider already exists");
+        if (snapshot.config.providers[id]) throw configError("legacy_route", "Provider already exists");
         Object.assign(snapshot.config.providers, validated.providers);
         if (credential?.source === "managed") {
           const metadata = await this.credentials.put({ kind: "api_key", backend: "managed", secret: credential.secret, owner_kind: "provider", owner_id: id, owner_provider_id: id });
@@ -74,43 +72,19 @@ export class ModelConfigService {
   async replace(revision: number, config: unknown) {
     const parsed = modelConfigSchema.parse(config);
     return this.update(revision, (snapshot) => {
-      if (Object.keys(parsed.providers).some((id) => snapshot.legacy_providers.includes(id))) throw configError("legacy_route", "Legacy providers require an explicit migration");
       snapshot.config = parsed;
       for (const id of Object.keys(snapshot.credential_refs)) if (!parsed.providers[id]) delete snapshot.credential_refs[id];
       snapshot.keyless_providers = snapshot.keyless_providers.filter((id) => Boolean(parsed.providers[id]));
     });
   }
-  private async legacyAuthentication(id: string): Promise<ProviderConfigView["authentication"]> {
-    const repository = new ModelResourceRepository(), state = repository.readSync();
-    const provider = state.providers.find((entry) => entry.id === id);
-    if (provider?.auth_kind === "none") return { source: "keyless", resolved: true };
-    const credentials = await this.credentials.readSnapshot();
-    const selected = new RuntimeModelResolver(repository, credentials).resolveStateSync(state)
-      .filter((model) => model.provider_id === id && model.available).map((model) => model.routes[0]?.credential_ref);
-    const endpoints = new Map(state.endpoints.map((endpoint) => [endpoint.id, endpoint]));
-    const refs = [...new Set([...selected, state.credential_refs[id],
-      ...state.bindings.filter((binding) => binding.provider_id === id).map((binding) => endpoints.get(binding.endpoint_id)?.credential_ref),
-      ...state.endpoints.filter((endpoint) => endpoint.owner_provider_id === id).map((endpoint) => endpoint.credential_ref),
-      ...(await credentials.listMetadata()).filter((credential) => credential.owner_provider_id === id && credential.owner_kind !== "mcp").map((credential) => credential.id),
-    ].filter((ref): ref is string => Boolean(ref)))];
-    const values = await Promise.all(refs.map((ref) => credentials.getForRuntime(ref)));
-    const usable = (item: typeof values[number]) => Boolean(item && ["configured", "connected"].includes(item.metadata.status)
-      && (item.metadata.kind === "none" || item.secret));
-    const credential = values.find(usable) ?? values.find((item) => item !== null);
-    const source = credential?.metadata.kind === "none" ? "keyless" : !credential ? "unconfigured"
-      : credential.metadata.backend === "environment" ? "environment" : credential.metadata.backend === "managed" ? "managed" : "unsupported";
-    return { source, resolved: source !== "unsupported" && usable(credential ?? null),
-      ...(source === "environment" ? { environment_variable: credential!.metadata.environment_variable, restart_required: true } : {}) };
-  }
   async view(id: string, snapshot = this.readSync()): Promise<ProviderConfigView> {
-    if (snapshot.legacy_providers.includes(id)) return { id, revision: snapshot.revision, config: null, legacy: true, editable: false, authentication: await this.legacyAuthentication(id) };
     const ref = snapshot.credential_refs[id];
     const credential = ref ? await this.credentials.getForRuntime(ref) : null;
     const source = snapshot.keyless_providers.includes(id) ? "keyless" : !credential ? "unconfigured"
       : credential.metadata.backend === "environment" ? "environment" : credential.metadata.backend === "managed" ? "managed" : "unsupported";
     return { id, revision: snapshot.revision, config: snapshot.config.providers[id] ?? null,
-      legacy: snapshot.legacy_providers.includes(id), editable: !snapshot.legacy_providers.includes(id),
-      authentication: { source, resolved: source === "keyless" || (source !== "unsupported" && Boolean(credential?.secret)),
+      legacy: false, editable: true,
+      authentication: { source, resolved: source === "keyless" || (source !== "unsupported" && credential?.metadata.kind === "api_key" && (source !== "environment" || isAllowedModelEnvRef(credential.metadata.environment_variable)) && Boolean(credential?.secret)),
         ...(source === "environment" ? { environment_variable: credential!.metadata.environment_variable, restart_required: true } : {}) } };
   }
   // Copy-on-write credential replacement never mutates/deletes a credential shared with MCP.
@@ -118,7 +92,6 @@ export class ModelConfigService {
     let created: string | undefined;
     try {
       return await this.update(revision, async (snapshot) => {
-        if (snapshot.legacy_providers.includes(id)) throw configError("legacy_route", "Provider uses legacy routes");
         if (!Object.hasOwn(snapshot.config.providers, id)) {
           const { builtinModels } = await import("@earendil-works/pi-ai/providers/all");
           if (!builtinModels().getProvider(id)) throw configError("legacy_route", "Provider is missing");
