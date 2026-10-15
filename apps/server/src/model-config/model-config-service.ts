@@ -5,6 +5,8 @@ import { randomUUID } from "node:crypto";
 import { modelConfigBackendSchema, modelConfigSnapshotSchema, modelConfigSchema, type ModelConfig, type ModelConfigSnapshot, type ProviderConfig, type ProviderConfigView } from "@pi-science/contracts";
 import { configPath, withFileWriteLock, writeJsonAtomic } from "../storage/persistence.js";
 import { CredentialStore } from "../model-resources/credential-store.js";
+import { ModelResourceRepository } from "../model-resources/model-resource-repository.js";
+import { RuntimeModelResolver } from "../model-resources/runtime-model-resolver.js";
 import { SettingsStore } from "../storage/settings-store.js";
 import { validateOutboundHttpUrl } from "../security/outbound-security.js";
 
@@ -28,7 +30,7 @@ export class ModelConfigService {
       throw configError("invalid_config", "models.json is invalid; repair it before using the native backend");
     }
   }
-  async preflight(config: ModelConfig) {
+  async preflight(config: ModelConfig, previous?: ModelConfig) {
     const { builtinModels } = await import("@earendil-works/pi-ai/providers/all");
     const builtin = builtinModels();
     const settings = await new SettingsStore().read();
@@ -36,7 +38,7 @@ export class ModelConfigService {
       const native = builtin.getProvider(id);
       if (native && provider.api && !native.getModels().some((model) => model.api === provider.api)) throw configError("invalid_config", "API override is not supported by this native provider");
       if (!builtin.getProvider(id) && (!provider.api || !provider.baseUrl || !provider.models?.length)) throw configError("invalid_config", "Custom providers require api, baseUrl and models");
-      if (provider.baseUrl) await validateOutboundHttpUrl(provider.baseUrl, { allowPrivate: settings.allow_private_providers !== false && process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0" });
+      if (provider.baseUrl && provider.baseUrl !== previous?.providers[id]?.baseUrl) await validateOutboundHttpUrl(provider.baseUrl, { allowPrivate: settings.allow_private_providers !== false && process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0" });
       const known = new Set([...(builtin.getProvider(id)?.getModels().map((model) => model.id) ?? []), ...(provider.models?.map((model) => model.id) ?? [])]);
       if (Object.keys(provider.modelOverrides ?? {}).some((model) => !known.has(model))) throw configError("invalid_config", "Override refers to an unknown model");
     }
@@ -45,9 +47,10 @@ export class ModelConfigService {
     return withFileWriteLock(modelConfigPath(), async () => {
       const snapshot = this.readSync();
       if (revision !== undefined && snapshot.revision !== revision) throw configError("revision_conflict", "Configuration changed; reload before saving");
+      const previous = structuredClone(snapshot.config);
       await operation(snapshot);
       const parsed = modelConfigSnapshotSchema.parse(snapshot);
-      await this.preflight(parsed.config);
+      await this.preflight(parsed.config, previous);
       parsed.revision += 1;
       const { config, ...manifest } = parsed;
       await writeJsonAtomic(modelConfigPath(), { ...manifest, providers: config.providers }, { mode: 0o600 });
@@ -77,7 +80,30 @@ export class ModelConfigService {
       snapshot.keyless_providers = snapshot.keyless_providers.filter((id) => Boolean(parsed.providers[id]));
     });
   }
+  private async legacyAuthentication(id: string): Promise<ProviderConfigView["authentication"]> {
+    const repository = new ModelResourceRepository(), state = repository.readSync();
+    const provider = state.providers.find((entry) => entry.id === id);
+    if (provider?.auth_kind === "none") return { source: "keyless", resolved: true };
+    const credentials = await this.credentials.readSnapshot();
+    const selected = new RuntimeModelResolver(repository, credentials).resolveStateSync(state)
+      .filter((model) => model.provider_id === id && model.available).map((model) => model.routes[0]?.credential_ref);
+    const endpoints = new Map(state.endpoints.map((endpoint) => [endpoint.id, endpoint]));
+    const refs = [...new Set([...selected, state.credential_refs[id],
+      ...state.bindings.filter((binding) => binding.provider_id === id).map((binding) => endpoints.get(binding.endpoint_id)?.credential_ref),
+      ...state.endpoints.filter((endpoint) => endpoint.owner_provider_id === id).map((endpoint) => endpoint.credential_ref),
+      ...(await credentials.listMetadata()).filter((credential) => credential.owner_provider_id === id && credential.owner_kind !== "mcp").map((credential) => credential.id),
+    ].filter((ref): ref is string => Boolean(ref)))];
+    const values = await Promise.all(refs.map((ref) => credentials.getForRuntime(ref)));
+    const usable = (item: typeof values[number]) => Boolean(item && ["configured", "connected"].includes(item.metadata.status)
+      && (item.metadata.kind === "none" || item.secret));
+    const credential = values.find(usable) ?? values.find((item) => item !== null);
+    const source = credential?.metadata.kind === "none" ? "keyless" : !credential ? "unconfigured"
+      : credential.metadata.backend === "environment" ? "environment" : credential.metadata.backend === "managed" ? "managed" : "unsupported";
+    return { source, resolved: source !== "unsupported" && usable(credential ?? null),
+      ...(source === "environment" ? { environment_variable: credential!.metadata.environment_variable, restart_required: true } : {}) };
+  }
   async view(id: string, snapshot = this.readSync()): Promise<ProviderConfigView> {
+    if (snapshot.legacy_providers.includes(id)) return { id, revision: snapshot.revision, config: null, legacy: true, editable: false, authentication: await this.legacyAuthentication(id) };
     const ref = snapshot.credential_refs[id];
     const credential = ref ? await this.credentials.getForRuntime(ref) : null;
     const source = snapshot.keyless_providers.includes(id) ? "keyless" : !credential ? "unconfigured"

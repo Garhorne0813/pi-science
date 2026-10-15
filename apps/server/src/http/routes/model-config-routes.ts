@@ -7,6 +7,7 @@ import { modelConfigSchema, providerConfigSchema } from "@pi-science/contracts";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import type { ModelResourceService } from "../../model-resources/model-resource-service.js";
 import { ModelConfigService, configError, modelConfigBackend } from "../../model-config/model-config-service.js";
+import { ModelResourceRepository } from "../../model-resources/model-resource-repository.js";
 import { ModelConfigMigration } from "../../model-config/model-config-migration.js";
 import { ModelRegistryService } from "../../model-config/model-registry-service.js";
 import { legacyAgentModels } from "../../runtime/agent/worker/agent-models.js";
@@ -34,7 +35,7 @@ export function registerModelConfigRoutes(app: FastifyInstance, resources: Model
   };
   app.get("/api/model-config", async (_request, reply) => {
     try { const snapshot = service.readSync(); return { backend: modelConfigBackend(), ...snapshot,
-      providers: await Promise.all(Object.keys(snapshot.config.providers).map((id) => service.view(id, snapshot))) }; }
+      providers: await Promise.all([...new Set([...Object.keys(snapshot.config.providers), ...snapshot.legacy_providers])].map((id) => service.view(id, snapshot))) }; }
     catch (error) { return fail(reply, error); }
   });
   app.get("/api/model-config/catalog", async (_request, reply) => {
@@ -43,7 +44,7 @@ export function registerModelConfigRoutes(app: FastifyInstance, resources: Model
       const models = new ModelRegistryService(service).compile(snapshot, snapshot.legacy_providers.length ? legacyAgentModels() : undefined);
       const builtin = builtinModels();
       const available = new Set((await models.getAvailable()).map((model) => `${model.provider}/${model.id}`));
-      return { revision: snapshot.revision, providers: await Promise.all(models.getProviders().map(async (provider) => ({
+      const providers = await Promise.all(models.getProviders().map(async (provider) => ({
         ...await service.view(provider.id, snapshot), editable: !snapshot.legacy_providers.includes(provider.id) && Boolean(provider.auth.apiKey), name: snapshot.config.providers[provider.id]?.name ?? provider.name,
         models: provider.getModels().map((model) => {
           const config = snapshot.config.providers[provider.id];
@@ -58,11 +59,25 @@ export function registerModelConfigRoutes(app: FastifyInstance, resources: Model
             input: known ? model.input : override?.input ?? declared?.input ?? null,
             source: declared || override ? "configured" : known ? "pi-ai" : "unknown" };
         }),
-      }))) };
+      })));
+      const missing = snapshot.legacy_providers.filter((id) => !models.getProvider(id));
+      if (missing.length) {
+        const state = new ModelResourceRepository().readSync();
+        for (const id of missing) {
+          const provider = state.providers.find((entry) => entry.id === id);
+          if (!provider) continue;
+          providers.push({ ...await service.view(id, snapshot), editable: false, name: provider.name,
+            models: state.models.filter((model) => model.provider_id === id).map((model) => ({ id: model.model_id, name: model.display_name, available: false,
+              contextWindow: model.capabilities.context_window, maxTokens: model.capabilities.max_output_tokens,
+              reasoning: model.capabilities.reasoning, thinking_levels: model.capabilities.thinking_levels.filter((level): level is ReturnType<typeof getSupportedThinkingLevels>[number] => ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(level)), input: model.capabilities.vision === undefined ? null : ["text" as const, ...(model.capabilities.vision ? ["image" as const] : [])], source: "legacy" })),
+          });
+        }
+      }
+      return { revision: snapshot.revision, providers };
     } catch (error) { return fail(reply, error); }
   });
   app.post("/api/model-config/preview", async (request, reply) => {
-    try { const config = modelConfigSchema.parse(request.body); await service.preflight(config); return { valid: true, config }; }
+    try { const config = modelConfigSchema.parse(request.body); await service.preflight(config, service.readSync().config); return { valid: true, config }; }
     catch (error) { return fail(reply, error); }
   });
   app.put("/api/model-config", async (request, reply) => {

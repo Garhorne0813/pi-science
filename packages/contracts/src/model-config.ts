@@ -2,7 +2,22 @@ import { z } from "zod";
 
 // Explicit Pi 0.99.2 subset. No shell commands, ambient auth, inline keys or 1.2 fields.
 const id = z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/).refine((value) => !["constructor", "prototype", "__proto__"].includes(value));
-const headers = z.record(z.string().regex(/^[A-Za-z0-9-]+$/).refine((key) => !/authorization|cookie|api-key|token|secret/i.test(key)), z.string().max(1000));
+// Protocol negotiation only. Free-form/custom authentication headers belong to
+// CredentialStore integrations, never this browser-readable configuration.
+const headerValues: Record<string, RegExp> = {
+  "accept": /^(application\/json|text\/event-stream)(,\s*(application\/json|text\/event-stream))*$/i,
+  "content-type": /^application\/json$/i,
+  "anthropic-version": /^\d{4}-\d{2}-\d{2}$/,
+  "anthropic-beta": /^[a-z][a-z-]*-\d{4}-\d{2}-\d{2}(,\s*[a-z][a-z-]*-\d{4}-\d{2}-\d{2})*$/,
+};
+const headers = z.record(z.string(), z.string().max(1000)).superRefine((value, ctx) => {
+  const seen = new Set<string>();
+  for (const [key, content] of Object.entries(value)) {
+    const name = key.toLowerCase(), rule = Object.hasOwn(headerValues, name) ? headerValues[name] : undefined;
+    if (!rule?.test(content) || /[\r\n]/.test(content) || seen.has(name)) ctx.addIssue({ code: "custom", path: [key], message: "Unsupported non-authentication header" });
+    seen.add(name);
+  }
+});
 export const modelConfigApiSchema = z.enum(["openai-completions", "openai-responses", "anthropic-messages"]);
 export const configuredModelSchema = z.object({
   id: z.string().min(1).max(500), name: z.string().min(1).max(500).optional(),

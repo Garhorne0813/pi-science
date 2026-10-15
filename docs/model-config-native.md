@@ -190,3 +190,97 @@ redaction and independent default selection without contacting a real model.
 In a managed environment that supplies an HTTP proxy, Node's downloader may
 require `NODE_USE_ENV_PROXY=1 pnpm smoke` for Micromamba provisioning; keep the
 provided proxy and CA trust settings intact.
+
+## Migration equivalence matrix
+
+Automatic conversion is deliberately narrower than the legacy resource model.
+Classification must finish in the dry-run; an unrepresentable row must never be
+reported as migrated and then prevent unrelated healthy rows from being applied.
+References are counted even when their binding or endpoint is disabled.
+
+| Source topology or behavior | Automatic conversion | Preserved behavior / report reason |
+| --- | --- | --- |
+| One enabled custom provider, nonempty declared catalog, one supported endpoint and binding at priority 100 | Yes, if all remaining checks pass | Same provider/model IDs, destination, protocol, credential reference and supported capability/Thinking metadata |
+| Custom provider with no discovered/declared models | No | `empty_model_catalog`; keep connection and allow healthy rows in the same apply |
+| Two providers reference one endpoint | No | `shared_endpoint`; preserve shared connection ownership |
+| Credential referenced by another provider-level map or another endpoint (including cross references) | No | `shared_or_unsupported_credential`; retain the graph, never clone credentials |
+| MCP-owned, foreign-provider-owned, missing or unsupported credential | No | `shared_or_unsupported_credential`; keep original credential bytes and ownership |
+| Required endpoint credential absent, even when a provider-level key exists | No | `missing_endpoint_credential`; a provider-level key must not activate an unavailable custom route |
+| Explicit `protocol: native` endpoint, including an official provider behind a custom gateway | No | `native_endpoint_transport`; retain the exact legacy provider/stream dispatcher and destination until transport equivalence is proven |
+| Multiple bindings, nondefault priority, aliases, header policies, allowlists, endpoint network/rate policies | No | Existing routing/policy reasons; retain IDs, routing and security behavior |
+| Builtin credential with no Provider row and no shared reference | Yes, if authentication is supported | Keep official factory and the existing credential ID |
+| Unsupported or unverified capability metadata, disabled resources, OAuth | No | Existing capability/disabled/authentication reasons; never silently drop metadata |
+
+A successful apply preserves the legacy graph and credential files. A stale
+source fingerprint or config revision rejects before committing; failure during
+preflight leaves the active files and revision unchanged (a restricted backup
+may already exist). Production migration still requires a frozen write window
+and reconciliation of the report with actual deployment state.
+
+## Header policy and validation timing
+
+Provider headers, model headers and model overrides share one strict allowlist.
+Header names are case-insensitive; duplicate names differing only in case and
+CR/LF values are rejected. Accepted values have protocol-specific formats:
+
+| Header | Accepted value |
+| --- | --- |
+| `Accept` | `application/json`, `text/event-stream`, or a comma-separated list of those types |
+| `Content-Type` | `application/json` |
+| `Anthropic-Version` | A date in `YYYY-MM-DD` form |
+| `Anthropic-Beta` | Comma-separated feature names ending in `-YYYY-MM-DD` |
+
+Free-form attribution, gateway and authentication headers are outside this
+supported subset. Expanding the subset requires specifying and testing safe
+value semantics; adding more words to a secret-name blacklist is insufficient.
+Custom header authentication requires a separately reviewed CredentialStore
+integration. Existing unsupported headers fail closed on read and need explicit
+repair; rejected values are neither persisted nor echoed by the API. Protocol
+headers listed above remain supported through configuration, disk, catalog and
+stream construction.
+
+Every commit validates the **entire** structural schema and provider/model
+semantics. Network/DNS preflight validates only a provider's added or changed
+explicit `baseUrl`, comparing against a deep copy of the previous configuration
+under the same write lock. Creating a provider validates its URL even when
+another provider uses that URL. Preview uses the same comparison without
+writing. Credential rotation, renaming, removal and revision changes do not
+re-resolve unrelated, unchanged destinations. At inference time the existing
+DNS/private-network and redirect checks still apply to every custom request;
+skipping redundant write-time DNS checks never authorizes a runtime request.
+
+## Backend/API compatibility and negative tests
+
+| Backend | Legacy model entity / Settings key and custom-provider GET | Legacy POST/PUT/DELETE | Versioned configuration authority |
+| --- | --- | --- | --- |
+| `legacy` (default) | Existing behavior | Existing behavior and status codes | Preparation only; runtime remains legacy |
+| `shadow` | Existing behavior | Existing behavior and status codes | Dry-run/shadow reads have no persistent side effects; explicit preparation writes remain inactive |
+| `pi_ai_v1` | Compatibility reads | 409 `native_config_required` for legacy model configuration endpoints, including credential validation and discovery/probe POSTs | Only versioned writes change native configuration; retained resources stay read-only |
+
+The full App registers Settings first and model-config later in the same Fastify
+scope. Fastify applies the scope's hooks at route finalization, so the existing
+write guard also protects those earlier routes. The full-App regression checks
+HTTP responses and every JSON file after Settings, provider, model, endpoint,
+binding and credential writes. This registration-order concern did not require
+a behavior change. Default/session model-selection APIs keep their existing
+independent ownership and are not legacy entity writes.
+
+Legacy authentication is projected from the resource graph and CredentialStore,
+not from native credential mappings. Selected route references take precedence;
+provider-level, bound and owned credentials remain visible for repair. Keyless,
+managed and explicit EnvRef sources are redacted. An unresolved legacy provider
+remains visible in Settings/catalog even when the Worker registry has no usable
+route; its model is unavailable, not silently replaced.
+
+| Negative scenario | Required result / regression in `model-config-review.test.ts` |
+| --- | --- |
+| Shared endpoint, provider/provider or provider/endpoint key reference | Both affected providers stay legacy; original files and ownership remain intact |
+| MCP-owned credential | Keep legacy and leave MCP metadata/secret storage unchanged |
+| Empty catalog mixed with a healthy provider | Explain empty row in plan; apply still migrates the healthy row |
+| Native gateway endpoint | Retain provider object/stream dispatch, API and custom base URL |
+| `X-ApiKey`, `X-Auth`, arbitrary custom authentication header at all three config levels | Schema/API reject; disk/revision unchanged; responses do not echo rejected values |
+| Old persisted authentication header, invalid protocol value, CR/LF or duplicate header casing | Fail closed without repair writes or secret echo |
+| Unchanged provider DNS offline during another provider's key rotation | Rotation/preview succeed without DNS; newly added/changed invalid destinations still reject |
+| DNS changes to a private address after configuration | Runtime rejects before fetch when private providers are forbidden |
+| Legacy managed/EnvRef/keyless/missing or expired credential | Settings, catalog and Worker agree on source/resolution/selectability; no secrets in DTOs |
+| Stale or failed migration; dry-run/shadow reads | Active bytes, credential references and revision remain unchanged |
