@@ -67,7 +67,7 @@ powershell -File scripts/install.ps1
 powershell -File scripts/start.ps1
 ```
 
-Open **http://127.0.0.1:8787**. In **Settings → LLM**, configure a provider and default model, then open a workspace and start a conversation. Use **Settings → Skills** to manage skills and **Settings → MCP** to enable scientific connectors; only Paper Search is enabled initially. The control-plane API runs on `127.0.0.1:8787`.
+Open **http://127.0.0.1:8787**. In **Settings → LLM**, configure a provider and default model, then open a workspace and start a conversation. Use **Settings → Skills** to manage skills and **Settings → MCP** to enable scientific connectors; Paper Search and Web Search & Fetch are enabled initially. The control-plane API runs on `127.0.0.1:8787`.
 
 The installer builds the server, Agent Workers and frontend. Default startup runs **compiled JavaScript** and serves the frontend from the control plane on one port; Vite and tsx are not used at runtime. Bash supports macOS/Linux and WSL; native Windows does not require Git Bash. Installation includes the Agent Core SDK through workspace dependencies.
 
@@ -127,13 +127,14 @@ Application state uses `PI_SCIENCE_HOME` or `~/.pi-science`, with a checkout-loc
 
 ## Scientific MCP Connectors
 
-Pi-Science includes 18 managed MCP connectors backed by public scientific data
-services. They run as local MCP processes and expose compact, typed, read-only
-tools to the agent; the upstream searches still make outbound network requests.
+Pi-Science includes 19 managed MCP connectors for public scientific data and general
+web search. They run as local MCP processes and expose typed tools to the agent;
+the upstream searches still make outbound network requests.
 
 | Connector | Upstream services | Default |
 |---|---|---|
 | Paper Search | PubMed, arXiv, Crossref, bioRxiv, medRxiv, Europe PMC | Enabled |
+| Web Search & Fetch | pi-web-access: web search, webpage / PDF extraction, source checks | Enabled |
 | Literature Graph | OpenAlex | Disabled |
 | Clinical Trials | ClinicalTrials.gov | Disabled |
 | Structures & Interactions | RCSB PDB, AlphaFold DB, EMDB, IntAct, Complex Portal | Disabled |
@@ -152,7 +153,7 @@ tools to the agent; the upstream searches still make outbound network requests.
 | Target Discovery | Open Targets Platform | Disabled |
 | ChEMBL | ChEMBL | Disabled |
 
-Together they expose 85 tools. Enable only the domains you need from
+Together they expose 89 tools. Enable only the domains you need from
 **Settings → MCP**, where you can inspect discovered tools, test a connection,
 filter exposed tools, and choose `Ask`, `Allow`, or `Deny` decisions. Built-in
 definitions are read-only, while custom `stdio`, Streamable HTTP, SSE, and
@@ -161,6 +162,8 @@ projects may override tool decisions. Connector changes are projected into
 active agent runtimes without manually editing Pi configuration files.
 
 Connector authentication can reference a managed key/token or a named environment variable, delivered as a process variable, HTTP header or Bearer token. Policy snapshots contain only credential references; permitted credentials are resolved in Worker memory. OAuth login/refresh is not currently supported.
+
+Web Search & Fetch uses the pinned standalone `pi-web-access@0.40.0` MCP CLI, with no Curator page or `pi install`. Use Paper Search for structured scholarly databases and Web Access for general web sources. Approval defaults to `ask`; select `allow_all` in MCP settings and change any explicit `ask` overrides to `allow` to avoid repeated confirmations. Explicit `deny` remains effective. The connector uses isolated Pi-Science configuration and disables GitHub Clone / PR Issue handling. Adding a Brave key does not select Brave; choose the Provider explicitly. See [Web Access configuration and validation](docs/web-access-mcp.md) for providers, cache lifetime, and outbound security limits.
 
 ## Scientific Viewers
 

@@ -28,7 +28,8 @@ The Linux quality job also runs `sidebar.spec.ts` for desktop-light, mobile
 and tablet, plus the collapsed-rail screenshot across all five desktop/tablet
 projects. The screenshot gate uses `--update-snapshots=none`: a missing or changed
 baseline fails CI. Screenshots and diffs are uploaded as
-`workspace-sidebar-interactions` before the performance suite runs.
+`workspace-sidebar-interactions` before the performance suite runs. Uploads
+explicitly include hidden files because Playwright writes into `.artifacts/`.
 
 ```bash
 pnpm --filter frontend exec playwright test --config playwright.visual.config.ts sidebar.spec.ts --project desktop-light --project mobile --project tablet
@@ -76,6 +77,10 @@ the app — the theme is user-controlled and defaults to light.
   project. Every baseline update must be reviewed: a `test:visual:update` run
   with unrelated pixel drift means the fixture is not deterministic —
   investigate before committing.
+- The collapsed-rail Linux baselines include the compact interaction dock. Moving
+  prompts out of the virtual list removed its empty 32px footer, so the settled
+  thread is anchored without that spacer; keep the full-page baselines in sync
+  with intentional layout changes while retaining the screenshot threshold.
 - Collapsed-rail screenshots have separate Linux and macOS baselines; keep
   platform-specific font rendering differences out of cross-platform comparisons.
 - Screenshot failures produce a diff image in `tests/visual/.artifacts/`.

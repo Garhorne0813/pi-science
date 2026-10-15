@@ -67,7 +67,7 @@ powershell -File scripts/install.ps1
 powershell -File scripts/start.ps1
 ```
 
-打开 **http://127.0.0.1:8787**，在 **设置 → LLM** 配置提供商和默认模型，再打开工作区开始对话。**设置 → Skills** 管理技能，**设置 → MCP** 启用科学连接器；初始仅启用 Paper Search。控制面 API 位于同一端口。
+打开 **http://127.0.0.1:8787**，在 **设置 → LLM** 配置提供商和默认模型，再打开工作区开始对话。**设置 → Skills** 管理技能，**设置 → MCP** 启用科学连接器；初始启用 Paper Search 和 Web Search & Fetch。控制面 API 位于同一端口。
 
 安装器构建控制面、Agent Worker 和前端。默认启动运行**编译后的 JavaScript**，由控制面在同一个端口提供前端和 API，运行时不使用 Vite 或 tsx。Bash 支持 macOS/Linux 与 WSL，原生 Windows 不需要 Git Bash；Agent Core SDK 随项目依赖安装。
 
@@ -127,12 +127,13 @@ Windows 停止失败时保留身份记录以便重试，并返回退出码 1。W
 
 ## 科学 MCP 连接器
 
-Pi-Science 内置 18 个由公共科学数据服务驱动的 MCP 连接器。它们以本地 MCP
-进程运行，向 Agent 提供紧凑、带类型、只读的工具；实际检索仍会向上游服务发送网络请求。
+Pi-Science 内置 19 个 MCP 连接器，覆盖公共科学数据服务和通用网页搜索。它们以本地 MCP
+进程运行，向 Agent 提供带类型的工具；实际检索仍会向上游服务发送网络请求。
 
 | 连接器 | 上游服务 | 默认状态 |
 |---|---|---|
 | Paper Search | PubMed、arXiv、Crossref、bioRxiv、medRxiv、Europe PMC | 启用 |
+| Web Search & Fetch | pi-web-access：网页搜索、网页 / PDF 抓取、来源核查 | 启用 |
 | Literature Graph | OpenAlex | 关闭 |
 | Clinical Trials | ClinicalTrials.gov | 关闭 |
 | Structures & Interactions | RCSB PDB、AlphaFold DB、EMDB、IntAct、Complex Portal | 关闭 |
@@ -151,13 +152,15 @@ Pi-Science 内置 18 个由公共科学数据服务驱动的 MCP 连接器。它
 | Target Discovery | Open Targets Platform | 关闭 |
 | ChEMBL | ChEMBL | 关闭 |
 
-这些连接器共提供 85 个工具。可在 **设置 → MCP** 中仅启用需要的科研领域，查看已发现
+这些连接器共提供 89 个工具。可在 **设置 → MCP** 中仅启用需要的科研领域，查看已发现
 工具、测试连接、筛选暴露的工具，并为工具选择 `询问`、`允许` 或 `拒绝`。内置连接器
 定义只读；也可以注册自定义 `stdio`、Streamable HTTP、SSE 和 socket 连接器。连接器
 设置全局生效，单个项目可以覆盖工具决策。配置变更会自动投影到活跃 Agent runtime，
 无需手工编辑 Pi 配置文件。
 
 连接器认证可引用托管密钥/令牌或具名环境变量，作为进程变量、HTTP Header 或 Bearer Token 传递。策略快照只含凭据引用，获准使用的凭据在 Worker 内存中解析。目前不支持 OAuth 登录与刷新。
+
+Web Search & Fetch 固定使用 `pi-web-access@0.40.0` 独立 MCP，不打开 Curator 页面，无需 `pi install`。Paper Search 用于结构化学术数据库检索；Web Access 用于通用网页与来源核查。默认询问授权，可在 MCP 设置中设为 `allow_all`；已有的显式 `ask` 需改为 `allow`，`deny` 继续生效。内置连接器使用 Pi-Science 独立配置，关闭 GitHub Clone / PR Issue 特殊处理；配置 Brave Key 不会自动选择 Brave，需显式设置 Provider。Provider 配置、缓存生存期和出站安全验收见 [Web Access 使用与验收说明](docs/web-access-mcp.md)。
 
 ## 科学文件查看器
 

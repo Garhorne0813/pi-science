@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { McpConnectorCreate, McpToolSummary } from "@pi-science/contracts";
+import { configRoot } from "../storage/persistence.js";
 
 export interface BuiltinMcpConnector {
   connector_id: string;
@@ -34,7 +35,41 @@ export function builtinMcpConnectors(): BuiltinMcpConnector[] {
       { name: "search_biorxiv_preprints", title: "Search bioRxiv / medRxiv Preprints", description: "List bioRxiv or medRxiv preprints by date interval and category.", read_only: true, decision: "ask" },
       { name: "get_europe_pmc_full_text", title: "Get Europe PMC Full Text", description: "Retrieve bounded open-access article text by PMCID.", read_only: true, decision: "ask" },
     ],
-  }, ...scientificDataConnectors()];
+  }, webAccessConnector(), ...scientificDataConnectors()];
+}
+
+function webAccessConnector(): BuiltinMcpConnector {
+  // Check the pinned release while keeping configuration isolation in our
+  // launcher, before the upstream CLI initializes any configuration modules.
+  const entry = fileURLToPath(import.meta.resolve("pi-web-access/dist/mcp-cli.js"));
+  if (!existsSync(entry)) throw new Error(`pi-web-access MCP entry not found: ${entry}`);
+  const here = dirname(fileURLToPath(import.meta.url));
+  const compiled = resolve(here, "builtin", "web-access-server.js");
+  const args = existsSync(compiled) ? [compiled] : ["--import", import.meta.resolve("tsx"), resolve(here, "builtin", "web-access-server.ts")];
+  return {
+    connector_id: "mcp_builtin_web_access",
+    enabled_by_default: true,
+    definition: {
+      name: "web-access",
+      display_name: "Web Search & Fetch",
+      description: "Search the public web and fetch readable web content.",
+      transport: "stdio",
+      endpoint_url: null,
+      command: process.execPath,
+      // Bind the control plane's resolved root to this connector alone. Worker
+      // tool environments intentionally do not forward PI_SCIENCE_HOME.
+      args: [...args, configRoot()],
+      socket_path: null,
+      runtime_config: { lifecycle: "lazy", expose_resources: false, include_tools: [], exclude_tools: [], environment: {}, headers: {}, auth: "none", allow_private: false },
+      credential_ref: null,
+    },
+    tools: [
+      { name: "web_search", title: "Web Search", description: "Search the web for source-linked results.", read_only: false, decision: "ask" },
+      { name: "fetch_content", title: "Fetch Content", description: "Fetch and extract webpage or PDF content.", read_only: false, decision: "ask" },
+      { name: "get_search_content", title: "Get Search Content", description: "Read cached results or fetched content by response ID.", read_only: true, decision: "ask" },
+      { name: "source_check", title: "Source Check", description: "Collect sources supporting or challenging a claim.", read_only: false, decision: "ask" },
+    ],
+  };
 }
 
 const scientificDomains = [
