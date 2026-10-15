@@ -13,6 +13,7 @@ export interface CellResult {
   mime?: Record<string, string>;
   outputs?: NotebookOutput[];
   execution_id?: string;
+  stream_transport?: { bytes_dropped?: number; truncated?: boolean };
 }
 
 export interface KernelCapabilities {

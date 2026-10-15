@@ -200,6 +200,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
                 )}
                 {storedOutputs.length > 0 && <div className="mt-2"><StoredOutputs outputs={storedOutputs} /></div>}
                 {storedOutputs.length === 0 && Object.keys(mime).length > 0 && <div className="mt-2"><NotebookMimeOutput mime={mime} label={t("notebook.output", { index: historicalCells.length - index })} /></div>}
+                {(run.usage?.stream_transport as CellResult["stream_transport"])?.truncated && <div className="text-ui-caption text-muted">{t("notebook.outputTruncated")}</div>}
                 {run.files.written.length > 0 && <div className="mt-2 text-[11px] text-muted">{t("notebook.wroteFiles", { files: run.files.written.map((file) => file.path.split("/").pop()).join(", ") })}</div>}
               </section>
             );
@@ -240,6 +241,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
                 />
               ) : <NotebookCodePreview code={cell.code} language={cell.language} className="rounded-lg border border-faint" />}
 
+              {cell.result?.stream_transport?.truncated && <div className="text-ui-caption text-muted">{t("notebook.outputTruncated")}</div>}
               {cell.result && (cell.result.stdout || cell.result.stderr || cell.result.result || cell.result.error || cell.result.outputs?.length) && (
                 <div className={cn("mt-2 max-h-56 overflow-auto rounded-lg border-l-2 bg-[var(--surface-inset)] px-3 py-2 font-mono text-xs leading-5", cell.result.error && !cell.result.interrupted ? "border-error text-error" : cell.result.interrupted ? "border-border text-muted" : "border-border text-text")}>
                   {cell.result.stdout && <pre className="whitespace-pre-wrap">{cell.result.stdout}</pre>}

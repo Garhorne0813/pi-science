@@ -392,7 +392,7 @@ function NotebookCellView({
         <NotebookCodePreview code={cell.code} language={language} className="rounded-lg border border-faint" />
       )}
       {cell.liveResult ? (
-        <LiveResult result={cell.liveResult} />
+        <LiveResult result={cell.liveResult} truncationNotice={t("notebook.outputTruncated")} />
       ) : (
         <StoredOutputs outputs={cell.outputs || []} />
       )}
@@ -400,10 +400,11 @@ function NotebookCellView({
   );
 }
 
-function LiveResult({ result }: { result: CellResult }) {
-  if (!result.stdout && !result.stderr && !result.result && !result.error && !Object.keys(result.mime || {}).length && !result.outputs?.length) return null;
+function LiveResult({ result, truncationNotice }: { result: CellResult; truncationNotice: string }) {
+  if (!result.stdout && !result.stderr && !result.result && !result.error && !Object.keys(result.mime || {}).length && !result.outputs?.length && !result.stream_transport?.truncated) return null;
   return (
     <div className="space-y-2 border-t border-faint px-4 py-3 font-mono text-xs leading-5">
+      {result.stream_transport?.truncated && <div className="text-ui-caption text-muted">{truncationNotice}</div>}
       {result.stdout && <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-text">{result.stdout}</pre>}
       {result.stderr && <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-warn">{result.stderr}</pre>}
       {result.outputs?.length ? <StoredOutputs outputs={result.outputs} /> : null}

@@ -1,4 +1,5 @@
 import { Readable } from "node:stream";
+import { BoundedQueue } from "../backpressure-queue.js";
 import type { FastifyInstance } from "fastify";
 import type { ConversationEventHub } from "../../runtime/events/conversation-event-hub.js";
 import type { SseEventRecord } from "../../runtime/events/event-store.js";
@@ -9,32 +10,21 @@ const MAX_SSE_PENDING_BYTES = 512 * 1024;
 const MAX_SSE_PENDING_ITEMS = 512;
 
 export class SseBackpressureBuffer {
-  private readonly pending: string[] = [];
-  private pendingBytes = 0;
+  private readonly pending: BoundedQueue;
 
-  constructor(
-    private readonly maxBytes = MAX_SSE_PENDING_BYTES,
-    private readonly maxItems = MAX_SSE_PENDING_ITEMS,
-  ) {}
-
-  enqueue(text: string): boolean {
-    const bytes = Buffer.byteLength(text);
-    if (bytes > this.maxBytes || this.pending.length >= this.maxItems || this.pendingBytes + bytes > this.maxBytes) return false;
-    this.pending.push(text);
-    this.pendingBytes += bytes;
-    return true;
+  constructor(maxBytes = MAX_SSE_PENDING_BYTES, maxItems = MAX_SSE_PENDING_ITEMS) {
+    this.pending = new BoundedQueue({ maxBytes, maxItems });
   }
+
+  enqueue(text: string): boolean { return this.pending.offer(text); }
 
   drain(write: (text: string) => boolean): void {
-    while (this.pending.length > 0) {
-      const next = this.pending.shift()!;
-      this.pendingBytes -= Buffer.byteLength(next);
-      if (!write(next)) return;
-    }
+    let next: string | undefined;
+    while ((next = this.pending.shift()) !== undefined) if (!write(next)) return;
   }
 
-  get length(): number { return this.pending.length; }
-  clear(): void { this.pending.length = 0; this.pendingBytes = 0; }
+  get length(): number { return this.pending.items; }
+  clear(): void { this.pending.clear(); }
 }
 
 export function resolveLastEventId(headerValue: unknown, queryValue: unknown): string | undefined {

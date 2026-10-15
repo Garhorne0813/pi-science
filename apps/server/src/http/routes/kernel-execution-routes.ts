@@ -14,7 +14,8 @@ import {
 } from "../../runtime/artifacts/workspace-artifact-publisher.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { WorkspaceEnvironmentService } from "../../runtime/workspace/workspace-environment.js";
-import type { KernelStreamEvent, NodeKernelManager } from "../../runtime/kernel/node-kernel-manager.js";
+import type { NodeKernelManager } from "../../runtime/kernel/node-kernel-manager.js";
+import { KernelStreamWriter } from "../kernel-stream-writer.js";
 
 const executeCellRequestSchema = z.object({
   language: z.enum(["python", "r"]),
@@ -216,9 +217,13 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
     });
 
     reply.hijack();
+    const writer = new KernelStreamWriter({
+      sink: reply.raw, executionId: execution.execution_id, statusCode: 200,
+      headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no", "x-pi-science-kernel": "node", "x-request-id": request.id },
+      onRecord: (record) => app.log[record.level]({ ...record.fields, execution_id: execution.execution_id }, record.event),
+    });
+    writer.send({ type: "started", execution_id: execution.execution_id });
     try {
-      reply.raw.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no", "x-pi-science-kernel": "node", "x-request-id": request.id });
-      reply.raw.write(JSON.stringify({ type: "started", execution_id: execution.execution_id }) + "\n");
       const result = await kernels.execute({
         language: body.language,
         code: body.code,
@@ -229,17 +234,18 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
         kernelInstanceId: body.kernel_instance_id,
         environmentRevisionId: environment.revision_id,
         timeoutMs: kernelTimeoutMs,
-        onEvent: (event: KernelStreamEvent) => {
-          if (!reply.raw.destroyed) reply.raw.write(JSON.stringify(event) + "\n");
-        },
+        onEvent: (event) => writer.send({ ...event }),
       });
       const after = await snapshotWorkspace(cwd);
       const diff = after ? diffWorkspaceSnapshots(before, after) : { created: [], modified: [] };
       const outputEvidence = await publishKernelOutputs(cwd, diff, execution.execution_id, body, app.log);
       const error = result.error;
+      const status = result.interrupted ? "interrupted" : result.ok ? "succeeded" : "failed";
+      const prepared = writer.prepareTerminal({ type: "result", ...result, ...(outputEvidence.failures.length > 0 ? { artifact_publish_errors: outputEvidence.failures } : {}), execution_id: execution.execution_id });
       await executionRepository.finish(cwd, execution.execution_id, {
-        status: result.interrupted ? "interrupted" : result.ok ? "succeeded" : "failed",
+        status,
         producer: "node-kernel-gateway",
+        usage: { stream_transport: prepared.transport },
         result: {
           ok: result.ok, http_status: 200, stdout_preview: preview(result.stdout), stderr_preview: preview(result.stderr), output_preview: preview(result.result),
           mime: result.mime, outputs: result.outputs ?? [], ...(error ? { error } : {}),
@@ -248,15 +254,8 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
         files: { written: outputEvidence.written },
         artifacts: outputEvidence.artifacts,
       });
-      if (!reply.raw.destroyed) {
-        reply.raw.write(JSON.stringify({
-          type: "result",
-          ...result,
-          ...(outputEvidence.failures.length > 0 ? { artifact_publish_errors: outputEvidence.failures } : {}),
-          execution_id: execution.execution_id,
-        }) + "\n");
-        reply.raw.end();
-      }
+      await writer.finish(prepared);
+      app.log.info({ execution_id: execution.execution_id, status, ...writer.telemetry() }, "Kernel execution stream finished");
       return reply;
     } catch (error) {
       const timedOut = error instanceof Error && error.name === "KernelTimeoutError";
@@ -264,9 +263,11 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
       const after = await snapshotWorkspace(cwd);
       const diff = after ? diffWorkspaceSnapshots(before, after) : { created: [], modified: [] };
       const outputEvidence = await publishKernelOutputs(cwd, diff, execution.execution_id, body, app.log);
+      const prepared = writer.prepareTerminal({ type: "result", ok: false, error: message, ...(outputEvidence.failures.length > 0 ? { artifact_publish_errors: outputEvidence.failures } : {}), execution_id: execution.execution_id });
       await executionRepository.finish(cwd, execution.execution_id, {
         status: timedOut ? "timed_out" : "failed",
         producer: "node-kernel-gateway",
+        usage: { stream_transport: prepared.transport },
         result: {
           ok: false,
           error: message,
@@ -275,16 +276,8 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
         files: { written: outputEvidence.written },
         artifacts: outputEvidence.artifacts,
       });
-      if (!reply.raw.destroyed) {
-        reply.raw.write(JSON.stringify({
-          type: "result",
-          ok: false,
-          error: message,
-          ...(outputEvidence.failures.length > 0 ? { artifact_publish_errors: outputEvidence.failures } : {}),
-          execution_id: execution.execution_id,
-        }) + "\n");
-        reply.raw.end();
-      }
+      await writer.finish(prepared);
+      app.log.info({ execution_id: execution.execution_id, status: timedOut ? "timed_out" : "failed", ...writer.telemetry() }, "Kernel execution stream finished");
       return reply;
     }
   });
