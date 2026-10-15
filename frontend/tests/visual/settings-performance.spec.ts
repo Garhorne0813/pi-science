@@ -1,18 +1,16 @@
 import { expect, test } from "./fixtures/app.fixture";
-import { providerViewsFixture } from "../fixtures/provider-views";
-import { FIXTURES } from "./fixtures/data.mjs";
 import { writeFile } from "node:fs/promises";
 
 test("Settings isolates delayed model loading and bounds a 10,000-model catalog", async ({ page }, testInfo) => {
-  const providers = Array.from({ length: 100 }, (_, index) => ({ id: `user-lab${index}`, name: `Lab ${index}`, custom: true, enabled: true, has_key: true, credential_status: "configured" as const, models: Array.from({ length: 100 }, (_, model) => `model-${index}-${model}`) }));
-  const models = providers.flatMap((provider, index) => provider.models.map((model, position) => ({ ...FIXTURES.config.available_models[0], id: `${provider.id}/${model}`, provider: provider.id, model, label: `Model ${index}-${position}`, custom: true })));
+  const providers = Array.from({ length: 100 }, (_, index) => ({ id: `user-lab${index}`, name: `Lab ${index}`, revision: 0, editable: true, legacy: false, config: {}, authentication: { source: "managed", resolved: true }, models: Array.from({ length: 100 }, (_, model) => ({ id: `model-${index}-${model}`, name: `Model ${index}-${model}`, available: true, contextWindow: 65536, source: "configured" })) }));
+  await page.route("**/api/model-config", (route) => route.fulfill({ json: { backend: "pi_ai_v1", revision: 0, config: { providers: {} }, providers: [] } }));
   let requests = 0;
   let release!: () => void;
   const delay = new Promise<void>((resolve) => { release = resolve; });
-  await page.route("**/api/provider-views*", async (route) => {
+  await page.route("**/api/model-config/catalog", async (route) => {
     requests++;
     await delay;
-    await route.fulfill({ json: providerViewsFixture({ ...FIXTURES.config, providers, available_models: models, custom_providers: [] }) });
+    await route.fulfill({ json: { providers, revision: 0 } });
   });
   const opened = Date.now();
   await page.goto("/settings");
@@ -43,23 +41,25 @@ test("Settings isolates delayed model loading and bounds a 10,000-model catalog"
   const catalogStart = Date.now();
   release();
   await dialog.getByRole("tab", { name: "AI Models", exact: true }).click();
+  await dialog.getByRole("button", { name: "Lab 0", exact: true }).click();
   await expect(dialog.getByText("Model 0-0", { exact: false })).toBeVisible();
   const catalogReadyMs = Date.now() - catalogStart;
-  await expect(dialog.getByRole("button", { name: "Connection settings" })).toHaveCount(20);
-  await expect(dialog.locator('[id^="models-for-"] .min-h-12')).toHaveCount(50);
-  await dialog.getByRole("navigation", { name: "Lab 0 models" }).getByRole("button", { name: "Next", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "Authentication" })).toHaveCount(20);
+  await expect(dialog.locator("section .break-all")).toHaveCount(50);
+  await dialog.locator("section").first().getByRole("button", { name: "Next", exact: true }).click();
   await expect(dialog.getByText("Model 0-50", { exact: false })).toBeVisible();
   await expect(dialog.getByText("Model 0-0", { exact: false })).toHaveCount(0);
   const searchStart = Date.now();
-  await dialog.getByRole("searchbox").pressSequentially("model-99-99", { delay: 20 });
+  await dialog.getByRole("textbox", { name: /Search/ }).pressSequentially("model-99-99", { delay: 20 });
   await expect(dialog.getByText("Lab 99", { exact: true })).toBeVisible();
   const searchReadyMs = Date.now() - searchStart;
-  await expect(dialog.getByRole("button", { name: "Connection settings" })).toHaveCount(1);
-  await dialog.getByRole("button", { name: /Lab 99.*Available/ }).click();
+  await expect(dialog.getByRole("button", { name: "Authentication" })).toHaveCount(1);
+  await dialog.getByRole("button", { name: "Lab 99", exact: true }).click();
   await expect(dialog.getByText("Model 99-99", { exact: false })).toBeVisible();
-  await dialog.getByRole("button", { name: "Clear", exact: true }).click();
+  await dialog.getByRole("textbox", { name: /Search/ }).fill("");
+  await dialog.getByRole("button", { name: "Lab 0", exact: true }).click();
   await expect(dialog.getByText("Model 0-0", { exact: false })).toBeVisible();
-  await expect(dialog.locator('[id^="models-for-"] .min-h-12')).toHaveCount(50);
+  await expect(dialog.locator("section .break-all")).toHaveCount(50);
   expect(await dialog.getByRole("tabpanel").evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   const longTasks = await page.evaluate(async () => {
     await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
