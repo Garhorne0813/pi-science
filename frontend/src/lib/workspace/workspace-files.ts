@@ -2,6 +2,8 @@ import type { FileListEntry } from "../../components/sidebar/FileContextMenu";
 import { apiRequest } from "../client/api";
 import { queryClient } from "../client/query-client";
 
+export const SIDEBAR_FILE_LIMIT = 30;
+
 export interface Breadcrumb { name: string; path: string }
 
 export const workspaceFilesKey = (...selector: string[]) => ["workspace-files", ...selector];
@@ -57,10 +59,17 @@ export const workspaceFiles = {
     return this.directory(cwd, subdir, signal);
   },
 
-  async sidebar(cwd: string, signal?: AbortSignal): Promise<FileListEntry[]> {
+  async sidebar(cwd: string, signal?: AbortSignal, recentPaths: readonly string[] = []): Promise<FileListEntry[]> {
     const { entries } = await this.directory(cwd, "", signal);
-    // Sort before applying the limit so folders cannot be excluded by an unordered response.
-    return sortFileEntries(entries.filter((entry) => !entry.name.startsWith("."))).slice(0, 30);
+    // Reserve directory navigation first. Fill remaining slots with the newest
+    // root uploads, then ordinary files, without exceeding the sidebar limit.
+    const recent = new Map(recentPaths.slice(-SIDEBAR_FILE_LIMIT).map((path, index) => [path, index]));
+    const visible = sortFileEntries(entries.filter((entry) => !entry.name.startsWith(".") || recent.has(entry.path)));
+    const directories = visible.filter((entry) => entry.isDir);
+    const uploaded = visible.filter((entry) => !entry.isDir && recent.has(entry.path))
+      .sort((left, right) => recent.get(right.path)! - recent.get(left.path)!);
+    const rest = visible.filter((entry) => !entry.isDir && !recent.has(entry.path));
+    return sortFileEntries([...directories, ...uploaded, ...rest].slice(0, SIDEBAR_FILE_LIMIT));
   },
 
   async remove(cwd: string, path: string): Promise<void> {

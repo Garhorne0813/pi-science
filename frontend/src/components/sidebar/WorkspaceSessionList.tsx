@@ -55,7 +55,8 @@ export function WorkspaceSessionList({ cwd, query = "" }: { cwd: string; query?:
   useEffect(() => {
     let cancelled = false;
     const isConversationRoute = location.pathname.startsWith(`${workspaceRoot}/session/`);
-    if (!isWorkspaceRoot && (!isConversationRoute || !sessionsEmpty)) return;
+    const isRunsRoute = location.pathname === `${workspaceRoot}/runs`;
+    if (!isWorkspaceRoot && ((!isConversationRoute && !isRunsRoute) || !sessionsEmpty)) return;
     if (isWorkspaceRoot && blocksRootAutoNavigation(live.current.location.state, cwd)) return;
     void loadSessions(cwd).then(merged => {
       if (cancelled || blocksRootAutoNavigation(live.current.location.state, cwd)) return;

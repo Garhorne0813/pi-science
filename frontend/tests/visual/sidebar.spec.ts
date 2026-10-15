@@ -238,7 +238,7 @@ test("the rail is operable while the mobile drawer is open and navigating closes
   const runs = page.locator(RAIL).getByRole("link", { name: "Run history", exact: true });
   await expect(runs).toBeVisible();
   await runs.click();
-  await expect(page).toHaveURL(new RegExp(`${root}/runs$`));
+  await expect(page).toHaveURL(new RegExp(`${root}/runs\\?session_id=${VISUAL_SESSION}$`));
   await expect(runs).toHaveAttribute("aria-current", "page");
   await expect(page.locator(PANEL)).toHaveAttribute("hidden");
   await expect(toggle).toHaveAttribute("aria-expanded", "false");

@@ -80,3 +80,61 @@ describe("execution routes", () => {
     expect((await app.inject({ method: "GET", url: `/api/executions/missing?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(404);
   });
 });
+
+describe("execution history and previews", () => {
+  it("paginates beyond 100 records, searches all history, and strictly isolates sessions", async () => {
+    const cwd = await workspace();
+    // Seed one event log in bulk so the test exercises real persistence without quadratic writes.
+    const { writeFile } = await import("node:fs/promises");
+    const rows = Array.from({ length: 125 }, (_, index) => ({
+      schema_version: 1, event_id: `event-${index}`, execution_id: `exec-${index}`, sequence: 1,
+      event_type: "execution.started", kind: "tool", surface: "pi", workspace_id: cwd,
+      created_at: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(), producer: "test",
+      payload: { correlation: index === 0 ? {} : { session_id: index % 2 ? "A" : "B" },
+        request: { tool: index === 0 ? "oldest-needle" : "read" } },
+    }));
+    await writeFile(join(cwd, ".pi-science", "execution-events-v1.jsonl"), rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+    const app = Fastify();
+    registerExecutionRoutes(app);
+    const get = async (query: string) => (await app.inject(`/api/executions?cwd=${encodeURIComponent(cwd)}&${query}`)).json();
+    expect(await get("limit=100")).toMatchObject({ total: 125, filtered_total: 125, limit: 100, offset: 0 });
+    const older = await get("limit=100&offset=100");
+    expect(older.executions).toHaveLength(25);
+    expect(older.executions.at(-1).execution_id).toBe("exec-0");
+    const found = await get("search=oldest-needle");
+    expect(found).toMatchObject({ total: 125, filtered_total: 1 });
+    expect(found.executions[0].execution_id).toBe("exec-0");
+    const session = await get("session_id=A");
+    expect(session.total).toBe(62);
+    expect(session.executions.every((run: { correlation: { session_id?: string } }) => run.correlation.session_id === "A")).toBe(true);
+    expect((await get("from=2026-01-01T00:00:00Z&to=2026-01-01T00:00:00Z")).filtered_total).toBe(1);
+    expect(await get("target_id=exec-50&limit=50")).toMatchObject({ target_offset: 50, target_in_scope: true, target_matches: true });
+    expect(await get("target_id=exec-0&limit=50")).toMatchObject({ target_offset: 100, target_in_scope: true, target_matches: true });
+    expect(await get("target_id=exec-0&session_id=A")).toMatchObject({ target_offset: null, target_in_scope: false, target_matches: false });
+    expect(await get("target_id=exec-0&kind=job")).toMatchObject({ target_offset: null, target_in_scope: true, target_matches: false });
+    expect(await get("limit=1")).toMatchObject({ status_counts: { running: 125 }, completed_duration_ms: 0 });
+    expect((await get("kind=job")).filtered_total).toBe(0);
+    expect((await get("status=failed")).filtered_total).toBe(0);
+    await app.close();
+  });
+
+  it("returns tool output alongside stdout, stderr, and errors without claiming completeness", async () => {
+    const cwd = await workspace();
+    await executionRepository.start(cwd, { execution_id: "preview", kind: "tool", surface: "pi", producer: "test" });
+    await executionRepository.finish(cwd, "preview", { status: "failed", producer: "test",
+      result: { output_preview: "tool result", stdout_preview: "stdout", stderr_preview: "stderr", error: "reason" } });
+    const app = Fastify();
+    registerExecutionRoutes(app);
+    const response = await app.inject(`/api/executions/preview/logs?cwd=${encodeURIComponent(cwd)}`);
+    expect(response.json()).toMatchObject({ stdout: "stdout\ntool result", stderr: "stderr\nreason", source: "preview", complete: false });
+    await app.close();
+  });
+
+  it.each(["limit=nope", "limit=0", "limit=1001", "offset=-1", "offset=0.5", "from=invalid", "to=invalid", "from=2026-02-01&to=2026-01-01"])("rejects malformed query %s", async (query) => {
+    const cwd = await workspace();
+    const app = Fastify();
+    registerExecutionRoutes(app);
+    expect((await app.inject(`/api/executions?cwd=${encodeURIComponent(cwd)}&${query}`)).statusCode).toBe(400);
+    await app.close();
+  });
+});

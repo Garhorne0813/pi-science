@@ -42,18 +42,27 @@ export function registerExecutionRoutes(app: FastifyInstance, jobs?: Pick<JobCoo
   app.get("/api/executions", async (request, reply) => {
     const cwd = await workspace(request, reply);
     if (!cwd) return;
-    const query = request.query as { limit?: string; session_id?: string; kind?: string; status?: string };
+    const query = request.query as { limit?: string; offset?: string; target_id?: string; session_id?: string; kind?: string; status?: string; search?: string; from?: string; to?: string };
+    const limit = Number(query.limit ?? 100);
+    const offset = Number(query.offset ?? 0);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1_000 || !Number.isInteger(offset) || offset < 0) {
+      return reply.code(400).send({ error: "Invalid execution pagination" });
+    }
+    for (const value of [query.from, query.to]) {
+      if (value !== undefined && !Number.isFinite(Date.parse(value))) return reply.code(400).send({ error: "Invalid execution time range" });
+    }
+    if (query.from && query.to && Date.parse(query.from) > Date.parse(query.to)) return reply.code(400).send({ error: "Invalid execution time range" });
     const kind = query.kind ? executionKindSchema.safeParse(query.kind) : null;
     const status = query.status ? executionStatusSchema.safeParse(query.status) : null;
     if (kind && !kind.success) return reply.code(400).send({ error: "Invalid execution kind" });
     if (status && !status.success) return reply.code(400).send({ error: "Invalid execution status" });
-    const executions = await executionRepository.list(cwd, {
-      limit: Number(query.limit ?? 100),
+    const page = await executionRepository.query(cwd, {
+      limit, offset, target_id: query.target_id, search: query.search, from: query.from, to: query.to,
       ...(query.session_id ? { session_id: query.session_id } : {}),
       ...(kind?.success ? { kind: kind.data } : {}),
       ...(status?.success ? { status: status.data } : {}),
     });
-    return executionListResponseSchema.parse({ executions });
+    return executionListResponseSchema.parse(page);
   });
 
   app.get<{ Params: { execution_id: string } }>("/api/executions/:execution_id", async (request, reply) => {
@@ -81,8 +90,8 @@ export function registerExecutionRoutes(app: FastifyInstance, jobs?: Pick<JobCoo
     }
     return executionLogResponseSchema.parse({
       execution_id: execution.execution_id,
-      stdout: String(execution.result.stdout_preview ?? ""),
-      stderr: String(execution.result.stderr_preview ?? execution.result.error ?? ""),
+      stdout: [...new Set([execution.result.stdout_preview, execution.result.output_preview].filter(Boolean))].join("\n"),
+      stderr: [...new Set([execution.result.stderr_preview, execution.result.error].filter(Boolean))].join("\n"),
       source: "preview" as const,
       complete: false,
     });

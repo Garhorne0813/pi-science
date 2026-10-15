@@ -81,3 +81,43 @@ describe("ExecutionRepository", () => {
     unsubscribe();
   });
 });
+
+it("reuses unchanged materializations and invalidates appends and external edits", async () => {
+  const cwd = await workspace();
+  const repository = new ExecutionRepository();
+  const { vi } = await import("vitest");
+  const events = vi.spyOn(repository, "events");
+  await repository.start(cwd, { execution_id: "cache", kind: "tool", surface: "pi", producer: "test" });
+  await repository.query(cwd);
+  const reads = events.mock.calls.length;
+  const record = await repository.get(cwd, "cache");
+  record!.request.tool = "mutation";
+  expect((await repository.get(cwd, "cache"))!.request.tool).toBeUndefined();
+  await repository.query(cwd);
+  expect(events.mock.calls.length).toBe(reads);
+  await repository.finish(cwd, "cache", { status: "succeeded", producer: "test" });
+  expect((await repository.query(cwd)).executions[0]!.status).toBe("succeeded");
+  const { writeFile } = await import("node:fs/promises");
+  await writeFile(join(cwd, ".pi-science", "execution-events-v1.jsonl"), "");
+  expect((await repository.query(cwd)).total).toBe(0);
+});
+
+describe("execution time window intersection", () => {
+  it("includes long executions crossing a window and inclusive edges", async () => {
+    const { executionOverlapsWindow } = await import("./execution-repository.js");
+    const from = "2026-10-13T10:00:00Z", to = "2026-10-13T11:00:00Z";
+    expect(executionOverlapsWindow({ status: "succeeded", started_at: "2026-10-13T09:00:00Z", ended_at: "2026-10-13T12:00:00Z" }, from, to)).toBe(true);
+    expect(executionOverlapsWindow({ status: "succeeded", started_at: "2026-10-13T09:00:00Z", ended_at: from }, from, to)).toBe(true);
+    expect(executionOverlapsWindow({ status: "succeeded", started_at: to, ended_at: "2026-10-13T12:00:00Z" }, from, to)).toBe(true);
+    expect(executionOverlapsWindow({ status: "succeeded", started_at: "2026-10-13T09:00:00Z", ended_at: "2026-10-13T09:59:59Z" }, from, to)).toBe(false);
+  });
+  it("uses now for running executions and does not invent missing or invalid intervals", async () => {
+    const { executionOverlapsWindow } = await import("./execution-repository.js");
+    const from = "2026-10-13T10:00:00Z", to = "2026-10-13T11:00:00Z", now = Date.parse(to);
+    expect(executionOverlapsWindow({ status: "running", started_at: "2026-10-13T09:00:00Z" }, from, to, now)).toBe(true);
+    expect(executionOverlapsWindow({ status: "succeeded", started_at: from }, from, to, now)).toBe(true);
+    expect(executionOverlapsWindow({ status: "succeeded" }, from, to, now)).toBe(false);
+    expect(executionOverlapsWindow({ status: "running", started_at: "invalid" }, from, to, now)).toBe(false);
+    expect(executionOverlapsWindow({ status: "succeeded", started_at: to, ended_at: from }, from, to, now)).toBe(false);
+  });
+});
