@@ -54,7 +54,8 @@ describe("native model configuration", () => {
     const before = await readFile(modelConfigPath(), "utf8");
     await expect(service.replace(1, { providers: { bad: {} } })).rejects.toThrow();
     expect(await readFile(modelConfigPath(), "utf8")).toBe(before);
-    expect((await stat(modelConfigPath())).mode & 0o777).toBe(0o600);
+    // Windows reports synthesized POSIX mode bits; its access control is ACL-based.
+    if (process.platform !== "win32") expect((await stat(modelConfigPath())).mode & 0o777).toBe(0o600);
   });
   it("does not adopt ambient keys and resolves only explicit env refs", async () => {
     vi.stubEnv("OPENAI_API_KEY", "ambient-secret"); vi.stubEnv("LAB_KEY", "explicit-secret");

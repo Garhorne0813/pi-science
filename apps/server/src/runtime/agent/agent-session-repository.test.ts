@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -27,5 +27,34 @@ it("restores aborted and completed turns from durable results, including pages w
     expect(latest.messages[0]).toMatchObject({ id: final, turnId: "completed-run", turnStatus: "completed" });
     const previous = await history.messagesPage(cwd, id, { limit: 2, before: latest.next_cursor! });
     expect(previous.messages.find((m) => m.id === tool)).toMatchObject({ turnId: "stopped-run", turnStatus: "aborted" });
+  } finally { await repo.close(ctx); await env.cleanup(ctx); await rm(cwd, { recursive: true, force: true }); }
+});
+
+it("never repairs a live Worker's partial result transaction while projecting history", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "core-history-live-"));
+  const env = new NodeExecutionEnv({ cwd });
+  const ctx = BACKGROUND_CONTEXT;
+  const repo = new JsonlSessionRepo({ fileSystem: env, sessionsRoot: join(cwd, ".pi-science", "agent-sessions") });
+  try {
+    const session = await repo.create({ cwd }, ctx);
+    const branch = await session.createBranch("main", null, ctx);
+    const user = await branch.appendMessage({ role: "user", content: "stop before reply", timestamp: 1000 }, ctx);
+    const path = session.metadata.path;
+    const beforeResult = await readFile(path, "utf8");
+    await session.setValue(operationResult("stopped-live"), { operationId: "stopped-live", kind: "run", status: "aborted", fromTipId: null, tipId: user, startedAt: 1000, endedAt: 2000 }, ctx);
+    const complete = await readFile(path, "utf8");
+    await session.close(ctx); await repo.close(ctx);
+    const transaction = complete.slice(beforeResult.length);
+    const split = Math.floor(transaction.length / 2);
+    const partial = beforeResult + transaction.slice(0, split);
+    await writeFile(path, partial);
+    const history = new AgentSessionRepository();
+    expect((await history.messages(cwd, session.metadata.id))[0]).toMatchObject({ id: user });
+    expect(await readFile(path, "utf8")).toBe(partial);
+    expect((await history.messagesPage(cwd, session.metadata.id)).messages[0]).not.toHaveProperty("turnStatus");
+    expect(await readFile(path, "utf8")).toBe(partial);
+    await appendFile(path, transaction.slice(split));
+    expect((await history.messages(cwd, session.metadata.id))[0]).toMatchObject({ id: user, turnStatus: "aborted" });
+    expect(await readFile(path, "utf8")).toBe(complete);
   } finally { await repo.close(ctx); await env.cleanup(ctx); await rm(cwd, { recursive: true, force: true }); }
 });

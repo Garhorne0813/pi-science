@@ -71,8 +71,21 @@ async function projectMessages(session: Session, entries: Entry[]): Promise<Sess
 /** Read-only projection of AgentHarness v4 sessions into the existing browser history protocol. */
 export class AgentSessionRepository {
   private readonly registry = new AgentSessionRegistry();
-  private async withRepo<T>(cwd: string, read: (repo: JsonlSessionRepo) => Promise<T>): Promise<T> {
+  private async withRepo<T>(cwd: string, read: (repo: JsonlSessionRepo) => Promise<T>, readOnly = true): Promise<T> {
     const environment = new NodeExecutionEnv({ cwd });
+    if (readOnly) {
+      const readTextFile = environment.readTextFile.bind(environment);
+      environment.readTextFile = async (path, ctx) => {
+        const result = await readTextFile(path, ctx);
+        // Agent Core repairs a torn JSONL tail on open. A projection can catch
+        // a live Worker's append midway; trim only the read snapshot so opening
+        // history never truncates the writer's transaction on disk.
+        if (!result.ok || !path.endsWith(".jsonl") || result.value.endsWith("\n")) return result;
+        const headerEnd = result.value.indexOf("\n");
+        if (headerEnd < 0 || JSON.parse(result.value.slice(0, headerEnd)).v !== 4) return result;
+        return { ...result, value: result.value.slice(0, result.value.lastIndexOf("\n") + 1) };
+      };
+    }
     const repo = new JsonlSessionRepo({ fileSystem: environment, sessionsRoot: join(metadataRoot(cwd), "agent-sessions") });
     try { return await read(repo); }
     finally {
@@ -100,7 +113,7 @@ export class AgentSessionRepository {
         await session.setValue({ kind: "value", namespace: "pi-science", key: "legacy-import" }, { source, entryIds, importedAt: new Date().toISOString() }, context);
       }
       finally { await session.close(context); }
-    });
+    }, false);
   }
 
   async migrationEntryIds(cwd: string, sessionId: string): Promise<Record<string, string>> {
