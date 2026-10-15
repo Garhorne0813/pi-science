@@ -196,14 +196,25 @@ describe("agent-core product turns", () => {
     await vi.waitFor(async () => expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }), { timeout: 15000 });
   }, 45000);
 
-  it("detects a lost settled event and completes the persisted product lifecycle after reopening", async () => {
+  it("detects a lost worker settled event and completes the persisted product lifecycle once", async () => {
     const { cwd, id, service, core, events, review } = await fixture();
     const original = core.liveRuntime(cwd)!;
     const emit = original.emit.bind(original);
-    vi.spyOn(original, "emit").mockImplementation((type, ...args) => type === "event" && args[0]?.type === "operation.settled" ? false : emit(type, ...args));
+    let dropped = 0;
+    vi.spyOn(original, "emit").mockImplementation((type, ...args) => {
+      // Drop the worker frame, but allow the watchdog's snapshot reconciliation.
+      // Core may persist the result before its watch publishes the terminal frame.
+      if (type === "event" && args[0]?.type === "operation.settled" && typeof args[0].runtime_sequence === "number") {
+        dropped++;
+        return false;
+      }
+      return emit(type, ...args);
+    });
     expect(await service.command(id, cwd, "prompt", { message: "write and recover", client_message_id: "lost-settle" })).toMatchObject({ success: true });
     await vi.waitFor(() => expect(events.some((event) => event.type === "turn.artifacts")).toBe(true), { timeout: 15000 });
-    expect(core.liveRuntime(cwd)).not.toBe(original);
+    await vi.waitFor(() => expect(dropped).toBe(1), { timeout: 15000 });
+    // A sequence gap reopens the worker; an idle snapshot can settle in place.
+    expect(events.filter((event) => event.type === "turn.artifacts")).toHaveLength(1);
     expect(await turnArtifactRepository.forSession(cwd, id)).toHaveLength(1);
     await vi.waitFor(() => expect(review.run).toHaveBeenCalledOnce(), { timeout: 15000 });
     expect((await new SessionRepository().messages(cwd, id)).filter((message) => message.client_message_id === "lost-settle")).toHaveLength(1);
