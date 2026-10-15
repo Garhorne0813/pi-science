@@ -23,7 +23,7 @@ import { safeConnectorFetch, validateOutboundHttpUrl } from "../security/outboun
 import { SettingsStore } from "../storage/settings-store.js";
 import { CredentialStore, type CredentialReader } from "./credential-store.js";
 import { resolveCapabilities, normalizeContextWindow, normalizeThinkingLevels, type CapabilityPatch } from "./capability-resolver.js";
-import { migrateLegacyModelResources, type MigrationResult } from "./migration/migrate-custom-providers.js";
+import { type MigrationResult } from "./migration/migrate-custom-providers.js";
 import { ModelResourceRepository } from "./model-resource-repository.js";
 import { canonicalModelRef, resolvedModelToRead, RuntimeModelResolver } from "./runtime-model-resolver.js";
 
@@ -196,7 +196,6 @@ export class ModelResourceService {
   readonly credentials: CredentialStore;
   private readonly settings: SettingsStore;
   private readonly runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">;
-  private migrationPromise: Promise<MigrationResult> | undefined;
 
   constructor(options: { repository?: ModelResourceRepository; credentials?: CredentialStore; settings?: SettingsStore; runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog"> } = {}) {
     this.repository = options.repository ?? new ModelResourceRepository();
@@ -206,11 +205,8 @@ export class ModelResourceService {
   }
 
   async ensureMigrated(): Promise<MigrationResult> {
-    if (!this.migrationPromise) this.migrationPromise = migrateLegacyModelResources(this.repository, this.credentials, this.settings).catch((error) => {
-      this.migrationPromise = undefined;
-      throw error;
-    });
-    return this.migrationPromise;
+    // Archived resource tooling must never activate old settings during normal use.
+    return { migrated: false, provider_count: 0, model_count: 0, endpoint_count: 0, binding_count: 0, warnings: [] };
   }
 
   async resolveAvailableModels() {

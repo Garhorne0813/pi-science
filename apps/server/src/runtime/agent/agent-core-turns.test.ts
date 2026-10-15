@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ModelResourceService } from "../../model-resources/model-resource-service.js";
+import { ModelConfigService } from "../../model-config/model-config-service.js";
 import { ConversationEventHub } from "../events/conversation-event-hub.js";
 import { NodeSessionService } from "../node/node-session-service.js";
 import { SessionRepository } from "../node/session-repository.js";
@@ -65,12 +65,8 @@ async function fixture(mode: "reply" | "write" | "hold-first" | "stall-stream" |
     server.closeAllConnections();
     server.close((error) => error ? reject(error) : resolve());
   }));
-  const resources = new ModelResourceService();
-  const provider = await resources.createProvider({ name: "Local Lab", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
-  const credential = await resources.credentials.put({ kind: "api_key", backend: "managed", secret: "local-test-key" });
-  const endpoint = await resources.createEndpoint({ name: "Local test", base_url: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, protocol: "openai", credential_ref: credential.id, enabled: true, data_egress: "local" });
-  await resources.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 1 });
-  await resources.updateModel(provider.id, "lab", { enabled: true, capabilities: { reasoning: false, context_window: 128000 } });
+  const provider = { id: "native-lab" };
+  await new ModelConfigService().createProvider(0, provider.id, { api: "openai-completions", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, models: [{ id: "lab", reasoning: false, contextWindow: 128000 }] }, { source: "managed", secret: "local-test-key" });
   const events: Record<string, unknown>[] = [];
   const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
   const publish = hub.publish.bind(hub);
@@ -200,24 +196,24 @@ describe("agent-core product turns", () => {
     await vi.waitFor(async () => expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }), { timeout: 15000 });
   }, 45000);
 
-  it("reconciles a lost settled event and completes the persisted product lifecycle once", async () => {
+  it("detects a lost worker settled event and completes the persisted product lifecycle once", async () => {
     const { cwd, id, service, core, events, review } = await fixture();
     const original = core.liveRuntime(cwd)!;
     const emit = original.emit.bind(original);
-    let droppedSettled = false;
+    let dropped = 0;
     vi.spyOn(original, "emit").mockImplementation((type, ...args) => {
-      // Lose the worker's terminal event, not a supervisor's synthetic repair.
-      // Depending on the last observed sequence, the watchdog can reconcile a
-      // snapshot in this worker or reopen it after detecting a sequence gap.
-      if (type === "event" && args[0]?.type === "operation.settled" && !args[0]?.recovery) {
-        droppedSettled = true;
+      // Drop the worker frame, but allow the watchdog's snapshot reconciliation.
+      // Core may persist the result before its watch publishes the terminal frame.
+      if (type === "event" && args[0]?.type === "operation.settled" && typeof args[0].runtime_sequence === "number") {
+        dropped++;
         return false;
       }
       return emit(type, ...args);
     });
     expect(await service.command(id, cwd, "prompt", { message: "write and recover", client_message_id: "lost-settle" })).toMatchObject({ success: true });
     await vi.waitFor(() => expect(events.some((event) => event.type === "turn.artifacts")).toBe(true), { timeout: 15000 });
-    expect(droppedSettled).toBe(true);
+    await vi.waitFor(() => expect(dropped).toBe(1), { timeout: 15000 });
+    // A sequence gap reopens the worker; an idle snapshot can settle in place.
     expect(events.filter((event) => event.type === "turn.artifacts")).toHaveLength(1);
     expect(await turnArtifactRepository.forSession(cwd, id)).toHaveLength(1);
     await vi.waitFor(() => expect(review.run).toHaveBeenCalledOnce(), { timeout: 15000 });

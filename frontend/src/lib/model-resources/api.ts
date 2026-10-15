@@ -24,6 +24,9 @@ function query(params: Record<string, string | boolean | undefined>): string {
 }
 
 export const modelResourcesApi = {
+  connection(providerId: string): Promise<{ id: string; editable: boolean; legacy: boolean; endpoint: { id: string; base_url: string; protocol: string; health: string; enabled: boolean } | null }> {
+    return apiRequest(`/api/model-config/providers/${encodeURIComponent(providerId)}`);
+  },
   providerViews(cwd: string | null = null, signal?: AbortSignal): Promise<{ providers: ProviderView[]; catalog_status?: "ready" | "unavailable" }> {
     return apiRequest(`/api/provider-views${query({ cwd: cwd ?? undefined })}`, { signal });
   },

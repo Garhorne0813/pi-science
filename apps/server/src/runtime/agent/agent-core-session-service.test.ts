@@ -9,6 +9,7 @@ import { workspaceIdentity } from "./workspace-session-identity.js";
 import { CredentialStore } from "../../model-resources/credential-store.js";
 import { AgentRuntimeExitedError, AgentRuntimeTimeoutError } from "./agent-runtime-errors.js";
 import { EventEmitter } from "node:events";
+import type { RuntimeSnapshot } from "./worker/command-contract.js";
 
 describe("agent-core session configuration", () => {
   it("inherits current defaults for a legacy cold session only until a durable lane model exists", async () => {
@@ -216,8 +217,11 @@ describe("agent-core operation progress watchdog", () => {
     vi.setSystemTime(100_000);
     vi.stubEnv("PI_SCIENCE_EVENT_WATCHDOG_MS", "100");
     vi.stubEnv("PI_SCIENCE_OPERATION_NO_PROGRESS_MS", "1000");
-    const snapshot = { busy: true, operation: { id: "run" }, eventSequence: 0, faulted: false, pendingInteraction: false,
-      lastResult: undefined as { operationId: string; status: "completed" } | undefined };
+    const snapshot: {
+      busy: boolean; operation: { id: string } | null; eventSequence: number;
+      faulted: boolean; pendingInteraction: boolean;
+      lastResult?: Pick<NonNullable<RuntimeSnapshot["lastResult"]>, "operationId" | "status">;
+    } = { busy: true, operation: { id: "run" }, eventSequence: 0, faulted: false, pendingInteraction: false };
     const runtime = Object.assign(new EventEmitter(), { cwd: process.cwd(), sessionId: "watchdog", isClosed: false,
       sendCommand: vi.fn(async () => ({ success: true, data: snapshot })) });
     const service = new AgentCoreSessionService({ bind: () => undefined } as never, {} as never);
@@ -229,6 +233,21 @@ describe("agent-core operation progress watchdog", () => {
     const live = await internals.attach("watchdog", runtime, "openai/gpt-4.1-mini", "off", {});
     return { runtime, snapshot, recover, live, internals };
   }
+
+  it("settles from an idle snapshot before the worker publishes its terminal frame", async () => {
+    const { runtime, snapshot, recover } = await supervised();
+    const events: unknown[] = [];
+    runtime.on("event", (event) => events.push(event));
+    snapshot.busy = false;
+    snapshot.operation = null;
+    snapshot.lastResult = { operationId: "run", status: "completed" };
+    await vi.advanceTimersByTimeAsync(100);
+    expect(events).toEqual([{ type: "operation.settled", runId: "run", status: "completed", recovery: true }]);
+    expect(recover).not.toHaveBeenCalled();
+    const probes = runtime.sendCommand.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(runtime.sendCommand).toHaveBeenCalledTimes(probes);
+  });
 
   it("does not count successful liveness probes as operation progress", async () => {
     const { runtime, recover, live } = await supervised();

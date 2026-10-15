@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CredentialStore } from "../../../model-resources/credential-store.js";
 import { ModelResourceRepository } from "../../../model-resources/model-resource-repository.js";
 import { agentModelCatalog, agentModels } from "./agent-models.js";
-import { ModelResourceService } from "../../../model-resources/model-resource-service.js";
+import { ModelConfigService } from "../../../model-config/model-config-service.js";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { createServer } from "node:http";
 import { SessionRuntime } from "./session-runtime.js";
@@ -40,24 +40,21 @@ describe("agent-core model credentials", () => {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     try {
       const port = (server.address() as { port: number }).port;
-      const service = new ModelResourceService();
-      const provider = await service.createProvider({ name: "Core Lab", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
-      for (const name of ["one", "two"]) {
-        const credential = await service.credentials.put({ kind: "api_key", backend: "managed", secret: `secret-${name}` });
-        const endpoint = await service.createEndpoint({ name, base_url: `http://127.0.0.1:${port}/${name}/v1`, protocol: "openai", credential_ref: credential.id, enabled: true, data_egress: "local" });
-        await service.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 1, model_allowlist: [name], model_aliases: { [name]: `upstream-${name}` } });
-        await service.updateModel(provider.id, name, { enabled: true, capabilities: { reasoning: true, thinking_levels: ["off", "high"], context_window: 8192 } });
+      const service = new ModelConfigService();
+      const provider = { id: "native-lab" };
+      for (const [index, name] of ["one", "two"].entries()) {
+        await service.createProvider(index, index === 0 ? provider.id : "native-second", { api: "openai-completions", baseUrl: `http://127.0.0.1:${port}/${name}/v1`, models: [{ id: name, reasoning: true, contextWindow: 8192, thinkingLevelMap: { off: "off", high: "high", minimal: null, low: null, medium: null, xhigh: null, max: null } }] }, { source: "managed", secret: `secret-${name}` });
       }
       const models = agentModels({ model_context_window_override: { model: `${provider.id}/one`, context_window: 4096 } });
       for (const name of ["one", "two"]) {
-        const model = models.getModel(provider.id, name)!;
+        const model = models.getModel(name === "one" ? provider.id : "native-second", name)!;
         expect(getSupportedThinkingLevels(model)).toEqual(["off", "high"]);
         expect(model.contextWindow).toBe(name === "one" ? 4096 : 8192);
         const result = await models.completeSimple(model, { messages: [{ role: "user", content: "hello", timestamp: 1 }] });
         expect(result.stopReason).toBe("stop");
         expect(result.usage.totalTokens).toBe(102);
       }
-      expect(requests).toEqual(["one", "two"].map((name) => ({ url: `/${name}/v1/chat/completions`, authorization: `Bearer secret-${name}`, model: `upstream-${name}` })));
+      expect(requests).toEqual(["one", "two"].map((name) => ({ url: `/${name}/v1/chat/completions`, authorization: `Bearer secret-${name}`, model: name })));
       expect(JSON.stringify(await agentModelCatalog(models))).not.toContain("secret-");
       const events: Array<{ type: string }> = [];
       const runtime = await SessionRuntime.open({ cwd: root, sessionsRoot: join(root, ".pi-science", "agent-sessions"),
@@ -68,7 +65,7 @@ describe("agent-core model credentials", () => {
       try {
         await runtime.command("activate", {});
         expect(await runtime.command("get_available_thinking_levels", {})).toMatchObject({ success: true, data: { levels: ["off", "high"] } });
-        expect(await runtime.command("configure", { provider: provider.id, modelId: "two", level: "medium" }))
+        expect(await runtime.command("configure", { provider: "native-second", modelId: "two", level: "medium" }))
           .toMatchObject({ success: false, code: "invalid_thinking" });
         expect(await runtime.command("get_state", {})).toMatchObject({ data: { context_tokens: null, context_window: 4096,
           compaction: { enabled: false, reserveTokens: 820 }, compaction_threshold_percent: 80, thinkingLevel: "high" } });
@@ -81,7 +78,7 @@ describe("agent-core model credentials", () => {
         await vi.waitFor(() => expect(events.some((event) => event.type === "compaction.end" || event.type === "compaction.error")).toBe(true));
         expect(events.some((event) => event.type === "compaction.start")).toBe(true);
       } finally { await runtime.close(); }
-      await service.updateProvider(provider.id, { enabled: false });
+      await service.replace(service.readSync().revision, { providers: {} });
       expect((await agentModelCatalog()).some((model) => model.provider === provider.id)).toBe(false);
     } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
   });
@@ -90,7 +87,7 @@ describe("agent-core model credentials", () => {
     roots.push(root);
     process.env.PI_SCIENCE_HOME = root;
     await new CredentialStore().putRaw("deepseek-test", { kind: "api_key", backend: "managed" }, "test-secret");
-    await new ModelResourceRepository().update((state) => { state.credential_refs.deepseek = "deepseek-test"; });
+    await new ModelConfigService().update(0, (snapshot) => { snapshot.config.providers.deepseek = {}; snapshot.credential_refs.deepseek = "deepseek-test"; });
     const models = agentModels();
     expect(models.getModel("deepseek", "deepseek-v4-pro")).toBeDefined();
     expect(models.getModel("deepseek", "deepseek-v4-flash")).toBeUndefined();

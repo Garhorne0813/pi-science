@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
 import { buildApp } from "../apps/server/dist/app/app.js";
 import { createServerModules } from "../apps/server/dist/app/server-modules.js";
-import { emptyModelResourceState } from "../apps/server/dist/model-resources/model-resource-repository.js";
+import { ModelConfigService } from "../apps/server/dist/model-config/model-config-service.js";
 import { agentModelCatalog } from "../apps/server/dist/runtime/agent/worker/agent-models.js";
 
 // Run separately from parallel unit suites, against the built Node server and
@@ -22,18 +22,16 @@ let app;
 const median = (samples) => [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)];
 try {
   const modules = createServerModules(config, { sqliteEnabled: false });
-  const state = emptyModelResourceState();
-  state.migration = { version: 1, completed_at: "2026-01-01T00:00:00.000Z" };
+  const native = new ModelConfigService();
+  const providers = {};
+  const references = {};
   const credential = await modules.modelResources.credentials.put({ id: "benchmark-key", kind: "api_key", backend: "managed", secret: "synthetic-benchmark-credential" });
   for (let provider = 0; provider < 100; provider++) {
     const id = `user-lab${provider}`;
-    state.providers.push({ id, name: `Lab ${provider}`, kind: "user", adapter: "openai-compatible", enabled: true, catalog_mode: "manual", auth_kind: "api_key", source: "user" });
-    state.endpoints.push({ id: `ep-${provider}`, name: `Lab ${provider}`, base_url: "http://127.0.0.1:9/v1", protocol: "openai", credential_ref: credential.id, enabled: true, health: "unknown", data_egress: "local" });
-    state.bindings.push({ id: `bind-${provider}`, provider_id: id, endpoint_id: `ep-${provider}`, enabled: true, priority: 1 });
-    for (let model = 0; model < 100; model++) state.models.push({ provider_id: id, model_id: `model-${model}`, display_name: `Model ${provider}-${model}`, enabled: true,
-      capabilities: { reasoning: false, thinking_levels: ["off"], context_window: 65536, max_output_tokens: 8192 }, capability_source: "manual" });
+    providers[id] = { name: `Lab ${provider}`, api: "openai-completions", baseUrl: "http://127.0.0.1:9/v1", models: Array.from({ length: 100 }, (_, model) => ({ id: `model-${model}`, name: `Model ${provider}-${model}`, reasoning: false, contextWindow: 65536, maxTokens: 8192 })) };
+    references[id] = "benchmark-key";
   }
-  await modules.modelResources.repository.replace(state);
+  await native.update(0, (snapshot) => { snapshot.config = { providers }; snapshot.credential_refs = references; });
   await modules.settings.update((settings) => { settings.model = "user-lab0/model-0"; settings.thinking = "off"; });
   app = buildApp(config, modules);
   const base = await app.listen({ host: "127.0.0.1", port: 0 });
@@ -59,7 +57,7 @@ try {
   }
   // Exclude server/module cold imports and one legitimate capability repair.
   await configRead();
-  const paths = [join(root, "config.json"), join(root, "model-resources.json"), join(root, "credentials.json")];
+  const paths = [join(root, "config.json"), join(root, "models.json"), join(root, "credentials.json")];
   const fingerprints = async () => Promise.all(paths.map(async (path) => ({ contents: await readFile(path, "utf8"), mtime: (await stat(path, { bigint: true })).mtimeNs.toString() })));
   const before = await fingerprints();
   const catalogSamples = [];

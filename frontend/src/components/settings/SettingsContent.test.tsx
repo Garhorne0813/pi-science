@@ -2,8 +2,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
-import type { SettingsConfig } from "../../lib/settings";
-import { providerViewsFixture } from "../../../tests/fixtures/provider-views";
 import { SettingsContent } from "./SettingsContent";
 import { queryClient } from "../../lib/client/query-client";
 import { useUiStore } from "../../lib/ui";
@@ -13,10 +11,14 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
+const nativeSnapshot = { backend: "pi_ai_v1", schema_version: 1, revision: 0, config: { providers: {} }, credential_refs: {}, keyless_providers: [], legacy_providers: [], aliases: {}, providers: [] };
+const nativeProvider = { id: "user-lab", name: "Lab", editable: true, legacy: false, config: {}, revision: 0, authentication: { source: "managed", resolved: true }, models: [{ id: "model-a", name: "Model A", available: true, contextWindow: 8192, source: "configured" }] };
 const putCalls: { url: string; body: unknown }[] = [];
 
 function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   const method = (init.method || "GET").toUpperCase();
+  if (url === "/api/model-config") return Promise.resolve(jsonResponse(nativeSnapshot));
+  if (url === "/api/model-config/catalog") return Promise.resolve(jsonResponse({ revision: 0, providers: [] }));
   if (url.startsWith("/api/provider-views")) return Promise.resolve(jsonResponse({ providers: [] }));
   if (url.startsWith("/api/model-selection/catalog")) return Promise.resolve(jsonResponse({ available_models: [{ id: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash", thinking_levels: ["off", "high", "max"], context_window: 1000000 }] }));
   if (url === "/api/model-selection/default") {
@@ -157,7 +159,7 @@ describe("SettingsContent", () => {
     expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("tabpanel", { name: "AI Models" })).toHaveAttribute("aria-labelledby", "settings-tab-models");
-    expect(await screen.findByText("Model services")).toBeInTheDocument();
+    expect(await screen.findByText("Advanced model configuration")).toBeInTheDocument();
   });
 
   it("shows separate Built-in and User Skills tables inside Settings", async () => {
@@ -228,7 +230,7 @@ describe("SettingsContent", () => {
   it("keeps runtime model controls out of Settings", async () => {
     renderContent(null);
     fireEvent.click(await screen.findByRole("tab", { name: "AI Models" }));
-    expect(await screen.findByText("Model services")).toBeInTheDocument();
+    expect(await screen.findByText("Advanced model configuration")).toBeInTheDocument();
     expect(screen.queryByText("Default model")).not.toBeInTheDocument();
     expect(screen.queryByText("Thinking Level")).not.toBeInTheDocument();
     expect(screen.queryByText("Context Management")).not.toBeInTheDocument();
@@ -256,50 +258,45 @@ describe("SettingsContent", () => {
     expect(screen.getByText("/lab/project")).toBeInTheDocument();
   });
 
-  it("reloads a repaired custom provider before the settings cache TTL expires", async () => {
+  it("reloads a repaired native credential before the settings cache TTL expires", async () => {
     let repaired = false;
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const url = String(input);
-      if (url.startsWith("/api/provider-views")) return jsonResponse(providerViewsFixture({ model: "", thinking: "off", api_keys: {}, custom_providers: [], available_models: [], compaction_enabled: true, compaction_threshold_percent: 85,
-        providers: [{ id: "user-lab", name: "Lab", custom: true, enabled: true, models: ["model-a"], has_key: repaired, credential_status: repaired ? "configured" : "needs_key" }] } as SettingsConfig));
-      if (url === "/api/endpoints") return jsonResponse({ endpoints: [{ id: "lab-endpoint", base_url: "https://lab.example/v1", protocol: "openai", health: "unknown" }] });
-      if (url === "/api/provider-endpoint-bindings") return jsonResponse({ bindings: [{ provider_id: "user-lab", endpoint_id: "lab-endpoint" }] });
-      if (url === "/api/custom-providers/user-lab" && init.method === "PUT") { repaired = true; return jsonResponse({ ok: true }); }
+      if (url === "/api/model-config/catalog") return jsonResponse({ revision: 0, providers: [{ ...nativeProvider, authentication: { source: repaired ? "managed" : "unconfigured", resolved: repaired }, models: [{ ...nativeProvider.models[0], available: repaired }] }] });
+      if (url === "/api/model-config/providers/user-lab/credential" && init.method === "PUT") { repaired = true; return jsonResponse({ ok: true, revision: 1, runtime: "published" }); }
       return defaultFetch(url, init);
     });
-    renderContent(null);
-    fireEvent.click(await screen.findByRole("tab", { name: "AI Models" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Configure connection" }));
-    await waitFor(() => expect(screen.getByLabelText("Base URL")).toHaveValue("https://lab.example/v1"));
-    fireEvent.change(screen.getByLabelText("API key"), { target: { value: "test-repair-key" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByRole("button", { name: /Lab.*Available/ })).toBeInTheDocument();
-    expect(screen.queryByText("Needs API key")).not.toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "Edit connection" })).not.toBeInTheDocument();
+    renderContent(null); fireEvent.click(await screen.findByRole("tab", { name: "AI Models" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Authentication" }));
+    const dialog = screen.getByRole("dialog", { name: "user-lab · Authentication" });
+    fireEvent.change(within(dialog).getByLabelText("API key"), { target: { value: "test-repair-key" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("1 / 1")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   it("keeps General and Skills usable while model configuration is delayed", async () => {
     let resolveModel!: (response: Response) => void;
     const modelResponse = new Promise<Response>((resolve) => { resolveModel = resolve; });
-    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => String(input).startsWith("/api/provider-views") ? modelResponse : defaultFetch(String(input), init));
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => String(input) === "/api/model-config" ? modelResponse : defaultFetch(String(input), init));
     renderContent(null);
     expect(screen.getByRole("button", { name: "Light" })).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/model-config")).toHaveLength(1));
     fireEvent.click(screen.getByRole("tab", { name: "General" }));
     fireEvent.click(screen.getByRole("button", { name: "Dark" }));
     expect(useUiStore.getState().theme).toBe("dark");
     expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Skills" }));
     expect(await screen.findByText("Analyze alpha data")).toBeInTheDocument();
-    await act(async () => resolveModel(jsonResponse({ providers: [], available_models: [], api_keys: {}, custom_providers: [], model: "", thinking: "off" })));
+    await act(async () => resolveModel(jsonResponse(nativeSnapshot)));
   });
 
   it("isolates model loading errors from General and supports retry", async () => {
     let attempts = 0;
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      if (String(input).startsWith("/api/provider-views") && ++attempts <= 2) return jsonResponse({ error: "Catalog unavailable" }, 400);
+      if (String(input) === "/api/model-config" && ++attempts <= 2) return jsonResponse({ error: "Catalog unavailable" }, 400);
       return defaultFetch(String(input), init);
     });
     renderContent(null);
@@ -311,7 +308,7 @@ describe("SettingsContent", () => {
     fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Catalog unavailable");
     fireEvent.click(screen.getByRole("button", { name: "Retry loading" }));
-    expect(await screen.findByText("Model services")).toBeInTheDocument();
+    expect(await screen.findByText("Advanced model configuration")).toBeInTheDocument();
     expect(attempts).toBe(3);
   });
 
@@ -335,22 +332,21 @@ describe("SettingsContent", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
-  it.each(["save", "delete"])("propagates API key %s failures to the open maintenance dialog", async (operation) => {
+  it.each(["save", "delete"])("propagates native credential %s failures to the open dialog", async (operation) => {
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      if (String(input).startsWith("/api/provider-views")) { const inventory = providerViewsFixture({ providers: [{ id: "deepseek", name: "DeepSeek", models: [], has_key: true }], available_models: [] }); inventory.providers[0].allowed_actions.push("remove_credential"); return jsonResponse(inventory); }
-      if (String(input).startsWith("/api/settings/api-key")) return jsonResponse({ error: "Credential write failed" }, 500);
+      if (String(input) === "/api/model-config/catalog") return jsonResponse({ revision: 0, providers: [nativeProvider] });
+      if (String(input) === "/api/model-config/providers/user-lab/credential") return jsonResponse({ error: "Credential write failed" }, 500);
       return defaultFetch(String(input), init);
     });
-    renderContent(null);
-    fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Connection settings" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: operation === "save" ? "Replace" : "Disconnect" }));
-    const dialog = screen.getByRole("dialog", { name: operation === "save" ? "Replace API key" : "Disconnect service" });
-    if (operation === "save") fireEvent.change(within(dialog).getByLabelText(/DeepSeek API key/), { target: { value: "retained-test-key" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: operation === "save" ? "Save" : "Disconnect" }));
+    renderContent(null); fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Authentication" }));
+    const dialog = screen.getByRole("dialog", { name: "user-lab · Authentication" });
+    if (operation === "save") fireEvent.change(within(dialog).getByLabelText("API key"), { target: { value: "retained-test-key" } });
+    else fireEvent.change(within(dialog).getByRole("combobox"), { target: { value: "remove" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("Credential write failed");
     expect(dialog).toBeInTheDocument();
-    if (operation === "save") expect(within(dialog).getByLabelText(/DeepSeek API key/)).toHaveValue("retained-test-key");
+    if (operation === "save") expect(within(dialog).getByLabelText("API key")).toHaveValue("retained-test-key");
   });
 
 });
