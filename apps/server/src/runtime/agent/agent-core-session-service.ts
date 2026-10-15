@@ -1,3 +1,5 @@
+import { pathIsInside } from "../../support/platform-utils.js";
+import { withWorkspaceAdmission, WorkspaceLifecycleBusyError } from "../workspace/workspace-lifecycle.js";
 import type { PiConfig, SessionState, SessionStats } from "@pi-science/contracts";
 import { createHash, randomUUID } from "node:crypto";
 import { workspaceIdentity } from "./workspace-session-identity.js";
@@ -83,7 +85,7 @@ function thinking(value: string | null | undefined): "off" | "minimal" | "low" |
     ? value as ReturnType<typeof thinking> : "high";
 }
 function failed(error: unknown): RuntimeResult<never> {
-  const code = error instanceof AgentRuntimeTimeoutError ? "timeout"
+  const code = error instanceof WorkspaceLifecycleBusyError ? "busy" : error instanceof AgentRuntimeTimeoutError ? "timeout"
     : error instanceof AgentRuntimeExitedError ? "process_exit" : "runtime_command_failed";
   return { success: false, code, error: error instanceof Error ? error.message : String(error) };
 }
@@ -231,12 +233,38 @@ export class AgentCoreSessionService {
       .map((item) => ({ id: item.runtime.sessionId, cwd }));
   }
 
+  /** Include admission/recovery windows and queued or interaction-blocked operations. */
+  async hasActiveOperations(cwd: string): Promise<boolean> {
+    const workspace = workspaceIdentity(cwd);
+    const pending = () => [this.opening, this.mutations, this.recovering, this.recoveryTimers].some((entries) => [...entries.keys()].some((key) => pathIsInside(workspace, key.split("\0")[0]!, true)));
+    if (pending()) return true;
+    for (const item of this.live.values()) {
+      if (!pathIsInside(workspace, workspaceIdentity(item.runtime.cwd), true) || item.runtime.isClosed) continue;
+      if (item.busy || item.expectedOperationId) return true;
+      const snapshot = await item.runtime.sendCommand("get_state").catch(failed);
+      const data = snapshot.data;
+      if (!snapshot.success || !data || data.busy || data.pendingInteraction || Array.isArray(data.queues) && data.queues.length > 0) return true;
+    }
+    return pending() || [...this.live.values()].some((item) => pathIsInside(workspace, workspaceIdentity(item.runtime.cwd), true) && !item.runtime.isClosed && (item.busy || Boolean(item.expectedOperationId)));
+  }
+
+  /** Called only while the workspace holds exclusive lifecycle admission. */
+  async closeIdleWorkspace(cwd: string): Promise<void> {
+    for (const item of [...this.live.values()]) if (pathIsInside(workspaceIdentity(cwd), workspaceIdentity(item.runtime.cwd), true)) await this.stopForReload(item);
+    await this.events.flush(cwd);
+  }
+
   liveRuntime(cwd: string, expectedModel?: string): AgentCoreRuntimeClient | null {
     return [...this.live.values()].find((item) => workspaceIdentity(item.runtime.cwd) === workspaceIdentity(cwd) && !item.runtime.isClosed
       && (!expectedModel || item.model === expectedModel))?.runtime ?? null;
   }
 
   async create(cwd: string, config: PiConfig): Promise<{ id: string } | { error: string; code: string }> {
+    try { return await withWorkspaceAdmission(cwd, () => this.createAdmitted(cwd, config)); }
+    catch (error) { if (error instanceof WorkspaceLifecycleBusyError) return { error: error.message, code: "busy" }; throw error; }
+  }
+
+  private async createAdmitted(cwd: string, config: PiConfig): Promise<{ id: string } | { error: string; code: string }> {
     const model = splitModel(config.model);
     if (!model) return { error: "An agent-core session requires a provider/model setting", code: "invalid_model" };
     try {
@@ -396,8 +424,9 @@ export class AgentCoreSessionService {
   }
 
   async command(cwd: string, sessionId: string, type: string, params: Record<string, unknown>, config: PiConfig): Promise<RuntimeResult> {
-    if (["abort", "steer", "follow_up"].includes(type)) return this.commandOnce(cwd, sessionId, type, params, config);
-    return this.withMutation(cwd, sessionId, () => this.commandOnce(cwd, sessionId, type, params, config));
+    return withWorkspaceAdmission(cwd, () => ["abort", "steer", "follow_up"].includes(type)
+      ? this.commandOnce(cwd, sessionId, type, params, config)
+      : this.withMutation(cwd, sessionId, () => this.commandOnce(cwd, sessionId, type, params, config))).catch(failed);
   }
 
   private async commandOnce(cwd: string, sessionId: string, type: string, params: Record<string, unknown>, config: PiConfig): Promise<RuntimeResult> {
@@ -433,6 +462,10 @@ export class AgentCoreSessionService {
   }
 
   async notify(cwd: string, sessionId: string, type: string, params: Record<string, unknown>): Promise<RuntimeResult> {
+    return withWorkspaceAdmission(cwd, () => this.notifyAdmitted(cwd, sessionId, type, params)).catch(failed);
+  }
+
+  private async notifyAdmitted(cwd: string, sessionId: string, type: string, params: Record<string, unknown>): Promise<RuntimeResult> {
     const current = this.live.get(identity(cwd, sessionId));
     if (!current || current.runtime.isClosed) return { success: false, code: "not_found", error: "active agent worker not found" };
     try {
@@ -539,6 +572,10 @@ export class AgentCoreSessionService {
   }
 
   async fork(cwd: string, sessionId: string, entryId: string | undefined, config: PiConfig): Promise<RuntimeResult> {
+    return withWorkspaceAdmission(cwd, () => this.forkAdmitted(cwd, sessionId, entryId, config)).catch(failed);
+  }
+
+  private async forkAdmitted(cwd: string, sessionId: string, entryId: string | undefined, config: PiConfig): Promise<RuntimeResult> {
     const result = await this.command(cwd, sessionId, entryId ? "fork" : "clone", entryId ? { entryId } : {}, config);
     if (result.success && typeof result.sessionId === "string") {
       const saved = await readJson<Pick<PiConfig, "skills" | "model_context_window_override"> | null>(configPath(cwd, sessionId), null);
@@ -584,6 +621,10 @@ export class AgentCoreSessionService {
   }
 
   private async withMutation<T>(cwd: string, sessionId: string, operation: () => Promise<T>): Promise<T> {
+    return withWorkspaceAdmission(cwd, () => this.withSessionMutation(cwd, sessionId, operation));
+  }
+
+  private async withSessionMutation<T>(cwd: string, sessionId: string, operation: () => Promise<T>): Promise<T> {
     const key = identity(cwd, sessionId);
     const previous = this.mutations.get(key) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(operation);

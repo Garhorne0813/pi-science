@@ -1,10 +1,11 @@
 import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useState } from "react";
 import { useComposer } from "./useComposer";
 import { useRuntimeStore } from "../lib/agent-runtime";
 import { apiRequest } from "../lib/client/api";
 import { useUiStore } from "../lib/ui";
-import type { ResearchStarter } from "../components/conversation/ResearchLoopControls";
+import type { ResearchStarter } from "../components/conversation/ResearchModePicker";
 
 const { navigateMock } = vi.hoisted(() => ({ navigateMock: vi.fn() }));
 
@@ -22,17 +23,16 @@ vi.mock("../lib/files", () => ({ injectWorkspaceReferences: (message: string) =>
 
 function Harness({
   onSend,
-  intent,
   researchMode,
   conversationKey = null,
   configuringModel,
 }: {
   configuringModel?: boolean;
   onSend?: () => void;
-  intent?: (text: string) => Promise<{ kind: "draft" } | { kind: "conversation"; message: string } | null>;
   researchMode?: ResearchStarter | null;
   conversationKey?: string | null;
 }) {
+  const [mode, setMode] = useState(researchMode ?? null);
   const composer = useComposer({
     cwd: "/w",
     conversationKey,
@@ -41,9 +41,7 @@ function Harness({
     reviewingProject: false,
     setReviewNotice: () => undefined,
     research: {
-      mode: researchMode ?? null,
-      draft: null,
-      intent: intent ?? (async () => null),
+      mode, setMode,
     },
     onSend,
   });
@@ -71,7 +69,7 @@ function renderPendingComposer() {
   let rejectSend!: (error: Error) => void;
   const sendPrompt = vi.fn(() => new Promise<string | null>((_resolve, reject) => { rejectSend = reject; }));
   useRuntimeStore.setState({ sendPrompt });
-  const hook = renderHook(() => useComposer({ cwd: "/w", conversationKey: "s1", selectedModel: "m", reviewingProject: false, setReviewNotice: () => undefined, research: { mode: null, draft: null, intent: async () => null } }));
+  const hook = renderHook(() => useComposer({ cwd: "/w", conversationKey: "s1", selectedModel: "m", reviewingProject: false, setReviewNotice: () => undefined, research: { mode: null, setMode: () => undefined } }));
   act(() => {
     hook.result.current.setInput("@data/protein.csv original");
     hook.result.current.setEntities([{ id: "protein", kind: "reference", start: 0, end: 17, reference: { cwd: "/w", path: "data/protein.csv", name: "protein.csv", isDir: false } }]);
@@ -240,17 +238,37 @@ describe("useComposer onSend", () => {
     expect(order).toEqual(["onSend", "sendPrompt"]);
   });
 
-  it("does not fire onSend when the research intent detours into a draft", async () => {
-    const onSend = vi.fn();
-    const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
-    useRuntimeStore.setState({ draft: "explore X", sendPrompt });
-    render(<Harness onSend={onSend} intent={async () => ({ kind: "draft" })} researchMode={{ id: "explore", label: "Explore", prompt: "p" } as unknown as ResearchStarter} />);
-
+  it("dispatches research through the skill in the normal conversation", async () => {
+    const onSend = vi.fn(); const sendPrompt = vi.fn(async () => null);
+    useRuntimeStore.setState({ draft: "Explore evidence", sendPrompt });
+    render(<Harness onSend={onSend} researchMode="research_loop" />);
     fireEvent.click(screen.getByRole("button", { name: "send" }));
+    await vi.waitFor(() => expect(sendPrompt).toHaveBeenCalledWith("/skill:auto-research [Workflow: research_loop]\nExplore evidence"));
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
 
-    await vi.waitFor(() => expect(useRuntimeStore.getState().draft).toBe(""));
-    expect(onSend).not.toHaveBeenCalled();
-    expect(sendPrompt).not.toHaveBeenCalled();
+  it("uses the research starter only for the first message in an existing session", async () => {
+    const sendPrompt = vi.fn(async () => "s1");
+    useRuntimeStore.setState({ activeSessionId: "s1", draft: "Explore evidence", sendPrompt });
+    render(<Harness conversationKey="s1" researchMode="research_loop" />);
+    fireEvent.click(screen.getByRole("button", { name: "send" }));
+    await vi.waitFor(() => expect(sendPrompt).toHaveBeenCalledWith("/skill:auto-research [Workflow: research_loop]\nExplore evidence"));
+    act(() => useRuntimeStore.setState({ draft: "Explain the result" }));
+    fireEvent.click(screen.getByRole("button", { name: "send" }));
+    await vi.waitFor(() => expect(sendPrompt).toHaveBeenLastCalledWith("Explain the result"));
+    expect(sendPrompt).toHaveBeenCalledTimes(2);
+  });
+
+  it("restores the research starter when a failed dispatch restores its draft", async () => {
+    const sendPrompt = vi.fn().mockRejectedValueOnce(new Error("rejected")).mockResolvedValue("s1");
+    useRuntimeStore.setState({ activeSessionId: "s1", draft: "Explore evidence", sendPrompt });
+    render(<Harness conversationKey="s1" researchMode="research_loop" />);
+    fireEvent.click(screen.getByRole("button", { name: "send" }));
+    await vi.waitFor(() => expect(useRuntimeStore.getState().draft).toBe("Explore evidence"));
+    fireEvent.click(screen.getByRole("button", { name: "send" }));
+    await vi.waitFor(() => expect(sendPrompt).toHaveBeenCalledTimes(2));
+    expect(sendPrompt).toHaveBeenLastCalledWith("/skill:auto-research [Workflow: research_loop]\nExplore evidence");
   });
 
   it("does not refill the composer after the user moves to another conversation", async () => {

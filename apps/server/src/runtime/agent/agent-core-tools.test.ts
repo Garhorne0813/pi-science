@@ -10,8 +10,6 @@ import { ModelResourceService } from "../../model-resources/model-resource-servi
 import { AgentRuntimeManager } from "./agent-runtime-manager.js";
 import { openHiddenTask, runHiddenPrompt } from "./hidden-agent-task.js";
 import { CoreReviewSubagentRunner } from "../../project-review/core-subagent-runner.js";
-import { CoreResearchSubagentRunner } from "../../research-loop/core-subagent-runner.js";
-import type { AgentRunRequest } from "../../research-loop/types.js";
 import { AgentCoreSessionService } from "./agent-core-session-service.js";
 import { AgentSessionRegistry } from "./agent-session-registry.js";
 import { ConversationEventHub } from "../events/conversation-event-hub.js";
@@ -105,17 +103,97 @@ describe("agent-core product tools", () => {
     expect(fixture.requests()).toBe(3);
   }, 20000);
 
-  it("runs Core review schema repair and research usage in independent Workers", async () => {
+  it("runs literature research with parallel skill-local roles under the parent's permissions", async () => {
+    const observed: Array<{ system: string; tools: unknown[] }> = [];
+    const fixture = await modelFixture((body) => {
+      const system = body.messages[0]!.content; observed.push({ system, tools: body.tools ?? [] });
+      if (system.includes("You are a research subagent")) return JSON.stringify({ sub_question: "Source coverage", findings: [{ claim: "Evidence is preliminary", source_refs: ["source-001"], confidence: "low" }], conflicts: [], gaps: ["independent replication"], next_steps: [] });
+      if (system.includes("You are an independent reviewer")) return JSON.stringify({ status: "PARTIAL", checks: { evidence: "PARTIAL" }, blocking_issues: ["Independent replication missing"], recommendation: "revise" });
+      const completed = body.messages.filter((item) => item.role === "tool").length;
+      if (completed === 0) return { name: "execution_budget", args: { max_seconds: 30, max_executions: 3 } };
+      if (completed === 1) return { name: "subagent", args: { tasks: [
+        { agent: "auto-research/researcher", task: "Analyze coverage. Supplied source-001: one preliminary observational study; no independent replication. Protocol: verify coverage and source independence." },
+        { agent: "auto-research/researcher", task: "Analyze counterevidence. Supplied source-001: one preliminary observational study; no independent replication. Protocol: identify gaps." },
+      ] } };
+      if (completed === 2) return { name: "subagent", args: { agent: "auto-research/reviewer", task: "Review the literature protocol and supplied findings; source-001 has no independent replication. Success requires independent evidence." } };
+      return "Partial literature report: source-001 is preliminary. Independent replication remains a blocker.";
+    });
+    const { seedWorkspaceAssets } = await import("./runtime-config.js"); seedWorkspaceAssets(fixture.cwd);
+    const manager = new AgentRuntimeManager(); cleanup.push(() => manager.shutdownAll());
+    const parent = await openHiddenTask(manager, "literature-parent", { cwd: fixture.cwd, sessionsRoot: join(fixture.cwd, ".pi-science/agent-sessions"), model: fixture.model, thinking: "off", allowedTools: ["read", "subagent", "execution_budget"] }, "literature-owner");
+    expect(await runHiddenPrompt(parent, "/skill:auto-research Investigate the supplied literature", "literature-once", Date.now() + 20000)).toContain("replication remains a blocker");
+    const messages = await new AgentSessionRepository().messages(fixture.cwd, parent.sessionId);
+    expect(messages.filter((item) => item.toolName === "subagent"), JSON.stringify(messages.filter((item) => item.toolName === "subagent").map((item) => item.details))).toMatchObject([
+      { details: { mode: "parallel", results: [{ agent: "auto-research/researcher", exitCode: 0 }, { agent: "auto-research/researcher", exitCode: 0 }] } },
+      { details: { results: [{ agent: "auto-research/reviewer", output: expect.stringContaining("PARTIAL") }] } },
+    ]);
+    const children = observed.filter((item) => item.system.includes("subagent") || item.system.includes("independent reviewer"));
+    expect(children).toHaveLength(3);
+    for (const child of children) expect(child.tools.map((tool) => (tool as { function: { name: string } }).function.name)).toEqual(["read"]);
+  }, 30000);
+
+  it("rejects skill-local delegation after the parent disables the skill without opening a child", async () => {
+    const fixture = await modelFixture((body) => body.messages.some((item) => item.role === "tool")
+      ? "Delegation denied by current skill policy" : { name: "subagent", args: { agent: "auto-research/reviewer", task: "Review evidence" } });
+    const { seedWorkspaceAssets } = await import("./runtime-config.js"); seedWorkspaceAssets(fixture.cwd);
+    const manager = new AgentRuntimeManager(); cleanup.push(() => manager.shutdownAll());
+    const parent = await openHiddenTask(manager, "policy-parent", { cwd: fixture.cwd, sessionsRoot: join(fixture.cwd, ".pi-science/agent-sessions"), model: fixture.model, thinking: "off", allowedTools: ["read", "subagent"] }, "policy-owner");
+    expect(await parent.setSkillPolicy({ mode: "none" })).toMatchObject({ success: true });
+    expect(await runHiddenPrompt(parent, "Try to delegate", "disabled-local", Date.now() + 10000)).toContain("denied");
+    expect(fixture.requests()).toBe(2); expect(manager.processCount).toBe(1);
+    const history = await new AgentSessionRepository().messages(fixture.cwd, parent.sessionId);
+    expect(history.find((item) => item.toolName === "subagent")).toMatchObject({ isError: true, content: [{ type: "text", text: expect.stringContaining("disabled") }] });
+  }, 20000);
+
+  it("executes a task-specific numerical evaluator, preserves results on resume and reports validity blockers separately", async () => {
+    const evaluator = `const fs = require('node:fs'); const assert = require('node:assert/strict');
+const rmse = (values, truth) => Math.sqrt(values.reduce((sum, x, i) => sum + (x - truth[i]) ** 2, 0) / truth.length);
+assert.equal(rmse([1, 3], [1, 3]), 0); assert.equal(rmse([2, 4], [1, 3]), 1);
+const baseline = {metric: 'rmse', value: rmse([2, 4], [1, 3]), evaluator_version: 1};
+const result = {metric: 'rmse', value: rmse([1, 3], [1, 3]), evaluator_version: 1};
+fs.writeFileSync('research/quant/baseline.json', JSON.stringify(baseline));
+fs.writeFileSync('research/quant/result.json', JSON.stringify(result)); console.log(JSON.stringify({baseline, result}));`;
+    const fixture = await modelFixture((body) => {
+      if (body.messages[0]!.content.includes("You are an independent reviewer")) return '{"status":"FAIL","blocking_issues":["Final-test data was used for tuning"],"recommendation":"revise"}';
+      const latestUser = body.messages.filter((item) => item.role === "user").at(-1)?.content ?? "";
+      if (latestUser.includes("Resume saved quantitative")) {
+        const last = body.messages.at(-1);
+        return last?.role === "tool" ? "Reused completed experiment 001; no repeated computation. Validity blocker remains." : { name: "read", args: { path: "research/quant/state.json" } };
+      }
+      const completed = body.messages.filter((item) => item.role === "tool").length;
+      if (completed === 0) return { name: "execution_budget", args: { max_seconds: 30, max_executions: 5 } };
+      if (completed === 1) return { name: "write", args: { path: "research/quant/evaluation.yaml", content: "version: 1\nobjective: Reduce RMSE\nmetric: rmse\ndirection: minimize\nconstraints: [no_data_leakage]\nbudget: {max_seconds: 30, max_execution_calls: 5, max_experiments: 1}\n" } };
+      if (completed === 2) return { name: "write", args: { path: "research/quant/evaluator.cjs", content: evaluator } };
+      if (completed === 3) return { name: "bash", args: { command: "node research/quant/evaluator.cjs", timeout: 10 } };
+      if (completed === 4) return { name: "write", args: { path: "research/quant/state.json", content: JSON.stringify({ protocol_version: 1, completed_experiments: ["001"], result_path: "research/quant/result.json", remaining_experiments: 0, blockers: ["test leakage"] }) } };
+      if (completed === 5) return { name: "subagent", args: { agent: "auto-research/reviewer", task: "Review evaluation.yaml, evaluator.cjs and result.json in research/quant. Candidate metric improved; final-test data was used for tuning. Independently assess no_data_leakage." } };
+      return "RMSE improved from 1 to 0, but Reviewer FAIL: final-test leakage blocks a success claim.";
+    });
+    const { seedWorkspaceAssets } = await import("./runtime-config.js"); seedWorkspaceAssets(fixture.cwd);
+    const manager = new AgentRuntimeManager(); cleanup.push(() => manager.shutdownAll());
+    const options = { cwd: fixture.cwd, sessionsRoot: join(fixture.cwd, ".pi-science/agent-sessions"), model: fixture.model, thinking: "off" as const };
+    const parent = await openHiddenTask(manager, "quant-parent", options, "quant-owner");
+    const result = await runHiddenPrompt(parent, "/skill:auto-research Compare numerical predictions", "quant-once", Date.now() + 20000);
+    expect(result).toContain("leakage blocks a success claim");
+    expect(JSON.parse(await readFile(join(fixture.cwd, "research/quant/baseline.json"), "utf8"))).toMatchObject({ value: 1, evaluator_version: 1 });
+    expect(JSON.parse(await readFile(join(fixture.cwd, "research/quant/result.json"), "utf8"))).toMatchObject({ value: 0, evaluator_version: 1 });
+    const originalRequests = fixture.requests(); await manager.stop("quant-parent");
+    const reopened = await openHiddenTask(manager, "quant-parent", options, "quant-owner");
+    expect(await runHiddenPrompt(reopened, "/skill:auto-research Compare numerical predictions", "quant-once", Date.now() + 10000)).toBe(result);
+    expect(fixture.requests()).toBe(originalRequests);
+    expect(await runHiddenPrompt(reopened, "/skill:auto-research Resume saved quantitative research", "quant-resume", Date.now() + 10000)).toContain("no repeated computation");
+    const history = await new AgentSessionRepository().messages(fixture.cwd, reopened.sessionId);
+    expect(history.filter((item) => item.toolName === "bash")).toHaveLength(1);
+    expect(history.some((item) => item.toolName === "subagent" && JSON.stringify(item.details).includes("Final-test"))).toBe(true);
+  }, 30000);
+
+  it("runs Core project review schema repair in an independent Worker", async () => {
     const fixture = await modelFixture((body) => body.messages[0]!.content.includes("project reviewer")
       ? body.messages.length > 2 ? "[]" : "invalid-json"
       : '{"kind":"analysis","findings":[{"summary":"Measured improvement"}],"next_strategy":"Repeat"}');
     const environment = { environment: async () => ({}) };
     const review = new CoreReviewSubagentRunner(environment); cleanup.push(() => review.shutdown());
     expect(await review.run({ run_id: "review-test", cwd: fixture.cwd, session_id: "conversation", excerpt: { session_id: "conversation", messages: [], truncated: false } })).toEqual({ run_id: "review-test", output: { proposals: [] } });
-    const research = new CoreResearchSubagentRunner(environment); cleanup.push(() => research.shutdown());
-    const result = await research.run({ operation_id: "research-test", phase: "analysis", loop: { loop_id: "loop-test" }, context: { cwd: fixture.cwd } } as unknown as AgentRunRequest);
-    expect(result).toMatchObject({ run_id: "research-test", output: { kind: "analysis" }, model_tokens: 110 });
-    expect(await research.status("research-test")).toBe("completed");
     expect(await new AgentSessionRepository().list(fixture.cwd)).toEqual([]);
   }, 20000);
 

@@ -1,3 +1,5 @@
+import { AgentRuntimeManager } from "../../runtime/agent/agent-runtime-manager.js";
+import { WorkspaceLifecycleBusyError } from "../../runtime/workspace/workspace-lifecycle.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { access, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -5,7 +7,6 @@ import { join } from "node:path";
 import { buildApp } from "../../app/app.js";
 import type { ServerConfig } from "../../config/config.js";
 import { nodeSessionService } from "../../runtime/node/node-session-service.js";
-import { ResearchRepository } from "../../research-loop/repository.js";
 import { createServerModules } from "../../app/server-modules.js";
 // Full runtime-only cases need a configured pi-ai catalog. Unit tests inject
 // their own catalog fixtures; these integration cases remain opt-in locally.
@@ -843,6 +844,68 @@ describe("native control-plane business routes", () => {
     await expect(stat(unmarked)).resolves.toBeDefined();
   });
 
+  it.each(["rename", "delete"])("rejects workspace %s during active Conversation operations without a Job", async (operation) => {
+    const sandbox = join(tmpdir(), `pi-science-conversation-lifecycle-${Date.now()}-${Math.random()}`); tempDirs.push(sandbox);
+    const managed = join(sandbox, "managed"); const cwd = join(managed, "project");
+    await mkdir(join(cwd, ".pi-science"), { recursive: true }); process.env.PI_SCIENCE_WORKSPACES = managed;
+    const modules = createServerModules(config());
+    vi.spyOn(modules.jobs, "hasActive").mockResolvedValue(false);
+    const active = vi.spyOn(modules.sessions, "hasActiveOperations").mockResolvedValue(true);
+    const app = buildApp(config(), modules); apps.push(app);
+    const request = { method: operation === "rename" ? "POST" as const : "DELETE" as const, url: `/api/workspaces/${operation}`, payload: { path: cwd, name: "renamed" } };
+    expect((await app.inject(request)).statusCode).toBe(409);
+    expect(active).toHaveBeenCalledWith(await realpath(cwd)); await expect(stat(cwd)).resolves.toBeDefined();
+    active.mockResolvedValue(false);
+    expect((await app.inject(request)).statusCode).toBe(200);
+  });
+
+  it.each(["rename", "delete"])("rejects new Conversation admissions after the %s active check and before filesystem mutation", async (operation) => {
+    const sandbox = join(tmpdir(), `pi-science-lifecycle-race-${Date.now()}-${Math.random()}`); tempDirs.push(sandbox);
+    const managed = join(sandbox, "managed"); const cwd = join(managed, "project"); const alias = join(sandbox, "alias");
+    await mkdir(join(cwd, ".pi-science"), { recursive: true }); await symlink(managed, alias, process.platform === "win32" ? "junction" : "dir");
+    process.env.PI_SCIENCE_WORKSPACES = managed;
+    const modules = createServerModules(config()); const app = buildApp({ ...config(), nodePiManager: true }, modules); apps.push(app); await app.ready();
+    let checked!: () => void; const checkedPromise = new Promise<void>((resolve) => { checked = resolve; });
+    let finish!: () => void; const finishPromise = new Promise<void>((resolve) => { finish = resolve; });
+    vi.spyOn(modules.jobs, "hasActive").mockResolvedValue(false);
+    vi.spyOn(modules.sessions, "hasActiveOperations").mockImplementation(async () => { checked(); await finishPromise; return false; });
+    const command = vi.spyOn(modules.sessions, "command");
+    const mutation = app.inject({ method: operation === "rename" ? "POST" : "DELETE", url: `/api/workspaces/${operation}`, payload: { path: cwd, name: "renamed" } });
+    const resultPromise = Promise.resolve(mutation); await checkedPromise;
+    try {
+      const aliasedCwd = join(alias, "project");
+      const prompt = await app.inject({ method: "POST", url: `/api/sessions/old/prompt?cwd=${encodeURIComponent(aliasedCwd)}`, payload: { message: "Research now" } });
+      expect(prompt.statusCode).toBe(409); expect(prompt.json().code).toBe("busy"); expect(command).not.toHaveBeenCalled();
+      expect(await modules.sessions.create({ cwd: aliasedCwd, config: { skills: [], extensions: [] } })).toMatchObject({ code: "busy" });
+      const manager = new AgentRuntimeManager();
+      await expect(manager.start("racing", { cwd: aliasedCwd, sessionsRoot: join(cwd, ".pi-science/agent-sessions"), model: { provider: "openai", modelId: "gpt-4.1-mini" } })).rejects.toBeInstanceOf(WorkspaceLifecycleBusyError);
+      expect(manager.processCount).toBe(0);
+      if (operation === "rename") expect(await modules.sessions.create({ cwd: join(managed, "renamed"), config: { skills: [], extensions: [] } })).toMatchObject({ code: "busy" });
+      await expect(stat(cwd)).resolves.toBeDefined();
+    } finally { finish(); }
+    expect((await resultPromise).statusCode).toBe(200);
+    expect(await modules.sessions.create({ cwd, config: { skills: [], extensions: [] } })).toMatchObject({ code: "workspace_invalid" });
+  });
+
+  it.each(["rename", "delete"])("rejects workspace %s when Conversation preparation has already been admitted", async (operation) => {
+    const sandbox = join(tmpdir(), `pi-science-lifecycle-admission-${Date.now()}-${Math.random()}`); tempDirs.push(sandbox);
+    const managed = join(sandbox, "managed"); const cwd = join(managed, "project"); await mkdir(join(cwd, ".pi-science"), { recursive: true }); process.env.PI_SCIENCE_WORKSPACES = managed;
+    const modules = createServerModules(config()); const app = buildApp(config(), modules); apps.push(app); await app.ready();
+    let entered!: () => void; const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+    let finish!: () => void; const finishPromise = new Promise<void>((resolve) => { finish = resolve; });
+    const migrate = modules.modelResources.ensureMigrated.bind(modules.modelResources);
+    vi.spyOn(modules.modelResources, "ensureMigrated").mockImplementation(async () => { entered(); await finishPromise; return migrate(); });
+    const internals = modules.sessions as unknown as { agentCore: { create: () => Promise<{ id: string }> } };
+    vi.spyOn(internals.agentCore, "create").mockResolvedValue({ id: "new-session" });
+    const activeCheck = vi.spyOn(modules.sessions, "hasActiveOperations");
+    const admission = modules.sessions.create({ cwd, config: { skills: [], extensions: [] } }); await enteredPromise;
+    try {
+      const mutation = await app.inject({ method: operation === "rename" ? "POST" : "DELETE", url: `/api/workspaces/${operation}`, payload: { path: cwd, name: "renamed" } });
+      expect(mutation.statusCode).toBe(409); expect(activeCheck).not.toHaveBeenCalled(); await expect(stat(cwd)).resolves.toBeDefined();
+    } finally { finish(); await admission; }
+    expect((await app.inject({ method: operation === "rename" ? "POST" : "DELETE", url: `/api/workspaces/${operation}`, payload: { path: cwd, name: "renamed" } })).statusCode).toBe(200);
+  });
+
   it("updates a pin stored through a symlinked managed root after rename", async () => {
     const sandbox = join(tmpdir(), `pi-science-pinned-link-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     const managed = join(sandbox, "managed");
@@ -1001,7 +1064,7 @@ describe("native control-plane business routes", () => {
     ]));
   });
 
-  it("supports atomic file writes and research-loop state transitions", async () => {
+  it("supports atomic file writes after retiring research-loop routes", async () => {
     const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
     const upload = await app.inject({ method: "POST", url: `/api/files/upload?cwd=${encodeURIComponent(cwd)}`, payload: { filename: "uploaded.txt", content: "hello" } });
     expect(upload.statusCode).toBe(200);
@@ -1012,80 +1075,29 @@ describe("native control-plane business routes", () => {
     expect(remove.statusCode).toBe(200);
     await expect(stat(join(cwd, "renamed.txt"))).rejects.toThrow();
 
-    const loop = await app.inject({ method: "POST", url: `/api/project-memory/research-loops?cwd=${encodeURIComponent(cwd)}`, payload: { title: "Smoke loop", objective: "Verify state", task_type: "optimize" } });
-    expect(loop.statusCode).toBe(200);
-    const loopId = loop.json().loop_id as string;
-    expect((await app.inject({ method: "POST", url: `/api/project-memory/research-loops/${loopId}/start?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(409);
-    expect((await app.inject({ method: "POST", url: `/api/project-memory/research-loops/${loopId}/cancel?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(200);
-    const listed = await app.inject({ method: "GET", url: `/api/project-memory/research-loops?cwd=${encodeURIComponent(cwd)}` });
-    expect(listed.json().loops[0]).toMatchObject({ loop_id: loopId, status: "cancelled", task_type: "optimize" });
-  });
-
-  it("compiles conversation research modes into distinct execution plans", async () => {
-    const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
-
-    const optimize = await app.inject({ method: "POST", url: `/api/project-memory/research-loop-intents?cwd=${encodeURIComponent(cwd)}`, payload: { mode: "optimize", objective: "Minimize model latency" } });
-    expect(optimize.statusCode).toBe(200);
-    expect(optimize.json()).toMatchObject({
-      requires_confirmation: true,
-      missing_fields: [],
-      draft: { task_type: "optimize", execution_kind: "iterative", metric: "latency", direction: "minimize", conversation_prompt: null },
-    });
-
-    const naturalLanguage = await app.inject({ method: "POST", url: `/api/project-memory/research-loop-intents?cwd=${encodeURIComponent(cwd)}`, payload: { mode: "optimize", objective: "降低模型首 token 时间，同时保持回答质量" } });
-    expect(naturalLanguage.statusCode).toBe(200);
-    expect(naturalLanguage.json()).toMatchObject({
-      requires_confirmation: true,
-      missing_fields: [],
-      draft: { metric: "time_to_first_token", direction: "minimize" },
-    });
-    expect(naturalLanguage.json().draft.success_criterion).toContain("降低");
-    expect(naturalLanguage.json().draft.plan_steps).toHaveLength(3);
-
-    const exploratory = await app.inject({ method: "POST", url: `/api/project-memory/research-loop-intents?cwd=${encodeURIComponent(cwd)}`, payload: { mode: "research_loop", objective: "探索这种材料为什么在潮湿环境中失效" } });
-    expect(exploratory.statusCode).toBe(200);
-    expect(exploratory.json()).toMatchObject({
-      requires_confirmation: true,
-      missing_fields: [],
-      draft: { metric: "evidence_quality", direction: "maximize" },
-    });
-
-    const compare = await app.inject({ method: "POST", url: `/api/project-memory/research-loop-intents?cwd=${encodeURIComponent(cwd)}`, payload: { mode: "compare", objective: "Compare method A with method B" } });
-    expect(compare.statusCode).toBe(200);
-    expect(compare.json()).toMatchObject({ requires_confirmation: false, draft: { task_type: "compare", execution_kind: "conversation" } });
-    expect(compare.json().draft.conversation_prompt).toContain("[Workflow: compare]");
-    expect(compare.json().draft.conversation_prompt).toContain("comparison table");
-
-    const invalid = await app.inject({ method: "POST", url: `/api/project-memory/research-loop-intents?cwd=${encodeURIComponent(cwd)}`, payload: { mode: "unknown", objective: "Anything" } });
-    expect(invalid.statusCode).toBe(400);
-  });
-
-  it("streams research record invalidation events over SSE", async () => {
-    const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
-    const response = await app.inject({ method: "GET", url: `/api/project-memory/research-events?cwd=${encodeURIComponent(cwd)}`, payloadAsStream: true });
-    try {
-      expect(response.statusCode).toBe(200);
-      expect(response.headers["content-type"]).toBe("text/event-stream");
-      let text = ""; let notify: (() => void) | null = null;
-      response.stream().on("data", (chunk: Buffer) => { text += String(chunk); notify?.(); });
-      const readUntil = async (marker: string) => {
-        const deadline = Date.now() + 8_000;
-        while (!text.includes(marker)) {
-          if (Date.now() > deadline) throw new Error(`timed out waiting for ${JSON.stringify(marker)}; received: ${JSON.stringify(text)}`);
-          await new Promise<void>((resolve) => { notify = resolve; setTimeout(resolve, 50); });
-        }
-        return text;
-      };
-      await readUntil(": connected\n\n");
-      // The route subscribes under the realpath'd workspace (validateWorkspaceCwd),
-      // so emit through a repository keyed the same way.
-      await new ResearchRepository(await realpath(cwd)).append("loop.created", { title: "SSE smoke" }, { loop_id: "loop-sse" });
-      const received = await readUntil("research.record");
-      expect(received).toContain(`data: ${JSON.stringify({ type: "research.record", loop_id: "loop-sse", record_type: "loop.created" })}\n\n`);
-    } finally {
-      response.raw.res.destroy();
+    for (const path of ["research-loops", "research-loop-intents", "research-events", "evaluators"]) {
+      expect((await app.inject({ method: "POST", url: `/api/project-memory/${path}?cwd=${encodeURIComponent(cwd)}`, payload: {} })).statusCode).toBe(404);
+      expect((await app.inject({ method: "GET", url: `/api/project-memory/${path}?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(404);
     }
-  }, 15_000);
+  });
+
+  it("serves historical archives through generic memory/file routes without modifying legacy records", async () => {
+    const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
+    const { appendJsonLine, workspaceFile } = await import("../../storage/persistence.js");
+    const path = workspaceFile(cwd, "research-records-v2.jsonl");
+    await appendJsonLine(path, { record_type: "loop.created", loop_id: "legacy", payload: { title: "Historical study", status: "running" } });
+    const original = await readFile(path, "utf8");
+    const response = await app.inject({ method: "GET", url: `/api/project-memory/archives?cwd=${encodeURIComponent(cwd)}` });
+    expect(response.statusCode).toBe(200); expect(response.json().archives[0]).toMatchObject({ id: "legacy", title: "Historical study", status: "running" });
+    const exportedPath = response.json().archives[0].path;
+    await expect(stat(join(cwd, exportedPath))).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await app.inject({ method: "POST", url: `/api/project-memory/archives/legacy/export?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: `/api/project-memory/archives/missing/export?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(404);
+    const file = await app.inject({ method: "GET", url: `/api/files/serve/${exportedPath}?cwd=${encodeURIComponent(cwd)}` });
+    expect(file.statusCode).toBe(200); expect(JSON.parse(file.body).records).toHaveLength(1);
+    expect(await readFile(path, "utf8")).toBe(original);
+    expect((await app.inject({ method: "GET", url: "/api/project-memory/archives?cwd=/tmp" })).statusCode).toBe(403);
+  });
 
   it("preserves exact multipart upload bytes and supports nested destination paths", async () => {
     const cwd = await workspace(); const app = buildApp(config()); apps.push(app);

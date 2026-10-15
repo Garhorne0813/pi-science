@@ -1,3 +1,6 @@
+import { workspaceIdentity } from "./workspace-session-identity.js";
+import { pathIsInside } from "../../support/platform-utils.js";
+import { withWorkspaceAdmission, WorkspaceLifecycleBusyError } from "../workspace/workspace-lifecycle.js";
 import { join, resolve } from "node:path";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { metadataRoot } from "../../storage/persistence.js";
@@ -9,6 +12,7 @@ import { bindSubagentDispatch } from "./subagent-dispatch.js";
 // Includes pending starts and workers belonging to every app-owned manager.
 const capacity = new Set<symbol>();
 const processOwners = new Map<string, symbol>();
+const workspaceRuntimes = new Map<AgentCoreRuntimeClient, { manager: AgentRuntimeManager; key: string }>();
 function workerLimit(): number {
   const value = Number(process.env.PI_SCIENCE_AGENT_MAX_WORKERS ?? 16);
   return Number.isSafeInteger(value) && value > 0 ? value : 16;
@@ -25,6 +29,23 @@ function idleTimeoutMs(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
+/** Called under exclusive lifecycle admission, including hidden workers owned by other managers. */
+export async function hasActiveWorkspaceRuntimes(cwd: string): Promise<boolean> {
+  for (const runtime of workspaceRuntimes.keys()) {
+    if (runtime.isClosed || !pathIsInside(workspaceIdentity(cwd), workspaceIdentity(runtime.cwd), true)) continue;
+    const state = await runtime.sendCommand("get_state").catch(() => null); const data = state?.data;
+    if (!state?.success || !data || data.busy || data.pendingInteraction || Array.isArray(data.queues) && data.queues.length > 0) return true;
+  }
+  return false;
+}
+export async function closeIdleWorkspaceRuntimes(cwd: string): Promise<void> {
+  for (const [runtime, owner] of [...workspaceRuntimes]) {
+    if (runtime.isClosed || !pathIsInside(workspaceIdentity(cwd), workspaceIdentity(runtime.cwd), true)) continue;
+    await owner.manager.stop(owner.key);
+    if (!runtime.isClosed) throw new WorkspaceLifecycleBusyError();
+  }
+}
+
 /** Owns one child process per durable session and deduplicates concurrent opens. */
 export class AgentRuntimeManager {
   private readonly runtimes = new Map<string, AgentCoreRuntimeClient>();
@@ -34,6 +55,10 @@ export class AgentRuntimeManager {
   private readonly dispatchDrains = new Map<AgentCoreRuntimeClient, () => Promise<void>>();
 
   async start(key: string, options: AgentRuntimeStartOptions): Promise<AgentCoreRuntimeClient> {
+    return withWorkspaceAdmission(options.cwd, () => this.startAdmitted(key, options));
+  }
+
+  private async startAdmitted(key: string, options: AgentRuntimeStartOptions): Promise<AgentCoreRuntimeClient> {
     const cwd = await validateWorkspaceCwd(options.cwd);
     const requestedRoot = resolve(options.sessionsRoot);
     const acceptedRoots = [options.cwd, cwd].map((workspace) => join(metadataRoot(workspace), "agent-sessions"));
@@ -121,6 +146,8 @@ export class AgentRuntimeManager {
       throw new Error(`session ${runtime.sessionId} is already owned by another worker`);
     }
     this.runtimes.set(key, runtime);
+    workspaceRuntimes.set(runtime, { manager: this, key });
+    runtime.once("exit", () => workspaceRuntimes.delete(runtime));
     this.owners.set(ownerKey, key);
     this.owners.set(canonical, key);
     runtime.once("exit", () => this.forget(key, runtime));

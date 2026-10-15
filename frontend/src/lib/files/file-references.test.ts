@@ -27,6 +27,20 @@ describe("workspace reference messages", () => {
     ]);
   });
 
+  it("shows the research objective instead of the expanded skill protocol, preserving file references", () => {
+    const objective = injectWorkspaceReferences("Investigate latency", references);
+    const expanded = `<skill name="auto-research" location="/project/.pi/skills/auto-research/SKILL.md">\nReferences are relative to /project/.pi/skills/auto-research.\n\n# Internal evaluation protocol\nDelegate bounded subquestions.\n</skill>\n\n[Workflow: optimize]\n${objective}`;
+    expect(visibleUserMessage(expanded)).toBe("Investigate latency");
+    expect(referencesFromMessage(expanded)).toEqual(references.map(({ cwd: _cwd, ...reference }) => reference));
+    expect(visibleUserMessage(`/skill:auto-research [Workflow: optimize]\n${objective}`)).toBe("Investigate latency");
+  });
+
+  it("keeps skill-only invocation recognizable and ordinary XML text visible", () => {
+    const expanded = '<skill name="inspect" location="/project/.pi/skills/inspect/SKILL.md">\nReferences are relative to /project/.pi/skills/inspect.\n\nRead evidence.\n</skill>';
+    expect(visibleUserMessage(expanded)).toBe("/skill:inspect");
+    expect(visibleUserMessage("Discuss <skill>scientific reasoning</skill>")).toBe("Discuss <skill>scientific reasoning</skill>");
+  });
+
   it("leaves ordinary user messages untouched", () => {
     expect(injectWorkspaceReferences("Hello", [])).toBe("Hello");
     expect(visibleUserMessage("Hello")).toBe("Hello");

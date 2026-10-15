@@ -1,3 +1,4 @@
+import { withWorkspaceAdmission } from "../workspace/workspace-lifecycle.js";
 import { CredentialStore } from "../../model-resources/credential-store.js";
 import { createHash, randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
@@ -43,7 +44,7 @@ export class CoreTitleRuntimeFactory {
 
   async start(cwd: string): Promise<TitleRuntime> {
     if (this.closing) throw new Error("Title runtime factory is closing");
-    const pending = this.startOnce(cwd);
+    const pending = withWorkspaceAdmission(cwd, () => this.startOnce(cwd));
     this.pending.add(pending);
     try { return await pending; }
     finally { this.pending.delete(pending); }
@@ -174,7 +175,7 @@ export class AiTitleService {
     const key = `${cwd}\u0000${sessionId}`;
     const existing = this.inFlight.get(key);
     if (existing) return existing;
-    const started = this.generateTitleUnlocked(cwd, sessionId).finally(() => {
+    const started = withWorkspaceAdmission(cwd, () => this.generateTitleUnlocked(cwd, sessionId)).finally(() => {
       this.inFlight.delete(key);
     });
     this.inFlight.set(key, started);

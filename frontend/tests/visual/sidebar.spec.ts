@@ -173,7 +173,7 @@ test("sidebar tabs preserve session lifecycle and collapsed New stays blank", as
   await expect(page.getByRole("searchbox")).toHaveValue("");
   expect(reloads).toBeLessThanOrEqual(1);
   await page.setViewportSize({ width: 1280, height: 600 });
-  for (const name of [/^Project Knowledge/, "Research", "Run history", "Settings"]) {
+  for (const name of [/^Project Knowledge/, "Run history", "Settings"]) {
     const box = await page.getByRole("link", { name }).or(page.getByRole("button", { name })).first().boundingBox();
     expect(box).not.toBeNull();
     expect(box!.y + box!.height).toBeLessThanOrEqual(600);
@@ -204,7 +204,7 @@ test("rail navigation highlights only exact primary routes", async ({ page }, te
   await page.getByRole("button", { name: "New conversation", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`${root}$`));
   await expect(conversations).toHaveAttribute("aria-current", "page");
-  for (const [path, label] of [["knowledge", KNOWLEDGE], ["research", "Research"], ["runs", "Run history"]] as const) {
+  for (const [path, label] of [["knowledge", KNOWLEDGE], ["runs", "Run history"]] as const) {
     const item = rail.getByRole("link", { name: label });
     await item.click();
     await expect(page).toHaveURL(new RegExp(`${root}/${path}$`));
@@ -222,22 +222,22 @@ test("rail navigation highlights only exact primary routes", async ({ page }, te
   await expect(page.getByRole("tab", { name: "Files", exact: true })).toHaveAttribute("aria-selected", "true");
 });
 
-test("research with files and runs with conversations stay simultaneously current", async ({ page }, testInfo) => {
+test("knowledge with files and runs with conversations stay simultaneously current", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-light", "Desktop selection coverage");
-  await page.goto(`${root}/research`);
-  await page.getByRole("tab", { name: "Files", exact: true }).click();
-  await expect(page.locator(RAIL).getByRole("link", { name: "Research", exact: true })).toHaveAttribute("aria-current", "page");
-  await expect(page.getByRole("tab", { name: "Files", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(page).toHaveURL(new RegExp(`${root}/research$`));
+  await page.goto(`${root}/knowledge`);
+  await page.locator(PANEL).getByRole("tab", { name: "Files", exact: true }).click();
+  await expect(page.locator(RAIL).getByRole("link", { name: KNOWLEDGE })).toHaveAttribute("aria-current", "page");
+  await expect(page.locator(PANEL).getByRole("tab", { name: "Files", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(new RegExp(`${root}/knowledge$`));
   // Routing away through the Rail must not reset the context tab. A reload
   // would, because the tab is session-only by design, so drive the app.
   await page.locator(RAIL).getByRole("link", { name: "Run history", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`${root}/runs$`));
-  await expect(page.getByRole("tab", { name: "Files", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(PANEL).getByRole("tab", { name: "Files", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(RAIL).getByRole("link", { name: "Run history", exact: true })).toHaveAttribute("aria-current", "page");
   await page.mouse.move(700, 300);
-  await page.getByRole("tab", { name: "Conversations", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "Conversations", exact: true })).toHaveAttribute("aria-selected", "true");
+  await page.locator(PANEL).getByRole("tab", { name: "Conversations", exact: true }).click();
+  await expect(page.locator(PANEL).getByRole("tab", { name: "Conversations", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(RAIL).getByRole("link", { name: "Run history", exact: true })).toHaveAttribute("aria-current", "page");
   await expect(page).toHaveURL(new RegExp(`${root}/runs$`));
 });
@@ -433,7 +433,7 @@ test("panel and rail controls fit narrow panel widths and short light/dark windo
     await expect(page.getByRole("searchbox")).toBeVisible();
     const railBox = (await page.locator(RAIL).boundingBox())!;
     // Every primary entry stays inside the rail column.
-    for (const [role, name] of [["button", "New conversation"], ["link", /^Project Knowledge/], ["link", "Research"], ["link", "Run history"], ["button", "Settings"]] as const) {
+    for (const [role, name] of [["button", "New conversation"], ["link", /^Project Knowledge/], ["link", "Run history"], ["button", "Settings"]] as const) {
       const box = await page.getByRole(role, { name }).boundingBox();
       expect(box).not.toBeNull();
       expect(box!.x).toBeGreaterThanOrEqual(railBox.x - 1);

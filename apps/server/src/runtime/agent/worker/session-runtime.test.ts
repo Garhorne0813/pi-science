@@ -196,7 +196,7 @@ describe("agent-core worker mutations", () => {
     const script = "console.log(JSON.stringify({model:!!process.env.OPENAI_API_KEY,server:!!process.env.PI_SCIENCE_INTERNAL_TOKEN,parent:!!process.env.PR115_PARENT_SECRET,path:!!process.env.PATH}))";
     const command = `'${process.execPath.replaceAll("'", "'\\''")}' -e '${script}'`;
     const result = await bash.execute("environment-test", { command }, () => undefined,
-      { env: parts.executionEnv }, {} as never, context);
+      { env: parts.executionEnv }, { operationId: "environment-operation", invocationId: "environment-test", turnId: "environment-turn", getMemo: async () => undefined, setMemo: async () => {} }, context);
     const text = result.content.filter((part) => part.type === "text").map((part) => part.type === "text" ? part.text : "").join("");
     expect(JSON.parse(text.trim())).toEqual({ model: false, server: false, parent: false, path: true });
   });

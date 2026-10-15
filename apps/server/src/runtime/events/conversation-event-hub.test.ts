@@ -30,6 +30,20 @@ it("flush waits for durable observer work before shutdown completes", async () =
   expect(completed).toBe(true);
 });
 
+it("workspace drain ignores unrelated durable observers and publications", async () => {
+  const cwd = await workspace(); const other = await workspace();
+  let release!: () => void; const hold = new Promise<void>((resolve) => { release = resolve; });
+  let entered!: () => void; const started = new Promise<void>((resolve) => { entered = resolve; });
+  const hub = new ConversationEventHub({ append: async (workspace) => { if (workspace === other) { entered(); await hold; } }, readAfter: async () => [] });
+  const runtime = new EventEmitter();
+  hub.bind(other, runtime, { activeSessionId: () => "other", onBusy: () => undefined, onExit: () => undefined });
+  runtime.emit("event", { type: "operation.settled", status: "completed" });
+  await started;
+  let allFlushed = false; const globalFlush = hub.flush().then(() => { allFlushed = true; });
+  try { await hub.flush(cwd); expect(allFlushed).toBe(false); }
+  finally { release(); await globalFlush; }
+});
+
 afterEach(async () => {
   await Promise.all(workspaces.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });

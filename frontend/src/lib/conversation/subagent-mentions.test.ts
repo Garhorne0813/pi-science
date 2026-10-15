@@ -13,9 +13,11 @@ describe("subagent mentions", () => {
   });
 
   it("supports runtime-qualified names and ignores unsafe names", () => {
-    const message = injectSubagentMentions("hello", [mention("Science.Auditor"), mention("bad name")]);
+    const message = injectSubagentMentions("hello", [mention("Science.Auditor"), mention("auto-research/reviewer"), mention("bad name"), mention("../reviewer")]);
     expect(message).toContain('- "Science.Auditor"');
+    expect(message).toContain('- "auto-research/reviewer"');
     expect(message).not.toContain("bad name");
+    expect(message).not.toContain("../reviewer");
     expect(stripSubagentMentionBlock("hello")).toBe("hello");
   });
 });

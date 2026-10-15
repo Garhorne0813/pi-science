@@ -65,7 +65,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderWorkspaceShell(initialEntry = "/workspace/proj/research") {
+function renderWorkspaceShell(initialEntry = "/workspace/proj/runs") {
   return render(<FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}><MemoryRouter initialEntries={[initialEntry]}><Routes><Route path="/" element={<span data-testid="projects-home">Projects home</span>} /><Route path="/workspace/:cwd" element={<WorkspaceProvider><ProjectsLayout /></WorkspaceProvider>}><Route index element={<LocationProbe />} /><Route path="session/:sessionId" element={<LocationProbe />} /><Route path="research" element={<LocationProbe />} /><Route path="runs" element={<LocationProbe />} /><Route path="knowledge" element={<LocationProbe />} /><Route path="files" element={<LocationProbe />} /></Route></Routes></MemoryRouter></FeedbackContext.Provider>);
 }
 
@@ -77,10 +77,10 @@ describe("V4 independent primary navigation and context", () => {
     const rail = slot?.querySelector("nav");
     expect(slot).toHaveClass("w-[var(--rail-width-mobile)]", "md:w-[var(--rail-width)]");
     expect(rail).toHaveClass("workspace-rail");
+    expect(screen.queryByRole("link", { name: "Research" })).toBeNull();
     for (const [role, name] of [
       ["button", "New conversation"],
       ["link", "Conversations"],
-      ["link", "Research"],
       ["link", "Run history"],
       ["link", "Projects"],
       ["button", "Settings"],
@@ -109,7 +109,7 @@ describe("V4 independent primary navigation and context", () => {
     expect(container.querySelector("aside")).not.toHaveAttribute("hidden");
     expect(container.querySelector("nav")?.firstElementChild).toHaveTextContent("pi");
     expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute("href", "/");
-    expect(screen.getByTestId("path")).toHaveTextContent("/workspace/proj/research");
+    expect(screen.getByTestId("path")).toHaveTextContent("/workspace/proj/runs");
     expect(screen.getByRole("button", { name: "New conversation" })).not.toHaveClass("text-accent", "bg-accent-soft", "border-accent-border");
   });
   it("returns directly to Projects from a collapsed workspace without expanding the panel", async () => {
@@ -133,7 +133,7 @@ describe("V4 independent primary navigation and context", () => {
   it("preserves other control focus when a state update expands the desktop sidebar", () => {
     useUiStore.setState({ contextPanelCollapsed: true });
     renderWorkspaceShell();
-    const research = screen.getByRole("link", { name: "Research" });
+    const research = screen.getByRole("link", { name: "Run history" });
     research.focus();
     act(() => useUiStore.getState().setContextPanelCollapsed(false));
     expect(research).toHaveFocus();
@@ -142,7 +142,7 @@ describe("V4 independent primary navigation and context", () => {
     useUiStore.setState({ contextPanelCollapsed: true });
     renderWorkspaceShell();
     const expand = screen.getByRole("button", { name: "Expand sidebar" });
-    const research = screen.getByRole("link", { name: "Research" });
+    const research = screen.getByRole("link", { name: "Run history" });
     expand.focus();
     act(() => {
       fireEvent.click(expand);
@@ -153,7 +153,7 @@ describe("V4 independent primary navigation and context", () => {
   it("preserves focus on another control when state updates collapse the panel", async () => {
     const { container } = renderWorkspaceShell();
     await screen.findByRole("searchbox");
-    const research = screen.getByRole("link", { name: "Research" });
+    const research = screen.getByRole("link", { name: "Run history" });
     research.focus();
     act(() => useUiStore.getState().setContextPanelCollapsed(true));
     expect(container.querySelector("aside")).toHaveAttribute("hidden");
@@ -169,7 +169,7 @@ describe("V4 independent primary navigation and context", () => {
     });
     expect(settings).toHaveFocus();
   });
-  it("Research and Files are simultaneously active without changing Main", async () => { const { container } = renderWorkspaceShell(); await userEvent.click(await screen.findByRole("tab", { name: "Files" })); expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/research"); expect(screen.getByRole("link", { name: "Research" })).toHaveAttribute("aria-current", "page"); expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true"); expect(container.querySelector("aside")?.style.width).toBe("240px"); expect(container.querySelectorAll("nav[aria-label='Primary navigation']")).toHaveLength(1); });
+  it("Runs and Files are simultaneously active without changing Main", async () => { const { container } = renderWorkspaceShell(); await userEvent.click(await screen.findByRole("tab", { name: "Files" })); expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/runs"); expect(screen.getByRole("link", { name: "Run history" })).toHaveAttribute("aria-current", "page"); expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true"); expect(container.querySelector("aside")?.style.width).toBe("240px"); expect(container.querySelectorAll("nav[aria-label='Primary navigation']")).toHaveLength(1); });
   it("Runs and Conversations are simultaneously active without changing Main", async () => { renderWorkspaceShell("/workspace/proj/runs"); expect(await screen.findByRole("tab", { name: "Conversations" })).toHaveAttribute("aria-selected", "true"); expect(screen.getByRole("link", { name: "Run history" })).toHaveAttribute("aria-current", "page"); expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/runs"); });
   it("shows brand and project name in one Projects link in the panel", async () => {
     const { container } = renderWorkspaceShell();
@@ -183,7 +183,7 @@ describe("V4 independent primary navigation and context", () => {
     expect(container.querySelector("nav")?.firstElementChild).toHaveTextContent("pi");
     expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute("href", "/");
   });
-  it("has one toggle and no duplicate primary links or panel New action", async () => { const { container } = renderWorkspaceShell(); await screen.findByRole("searchbox"); for (const name of ["Project Knowledge", "Research", "Run history"]) expect(screen.getAllByRole("link", { name })).toHaveLength(1); expect(screen.getAllByRole("button", { name: "Settings" })).toHaveLength(1); expect(screen.getAllByRole("button", { name: "New conversation" })).toHaveLength(1); expect(screen.getAllByRole("button", { name: /^(Expand|Collapse) sidebar$/ })).toHaveLength(1); expect(container.querySelector("aside")?.querySelectorAll("nav, button[title='New conversation']")).toHaveLength(0); });
+  it("has one toggle and no duplicate primary links or panel New action", async () => { const { container } = renderWorkspaceShell(); await screen.findByRole("searchbox"); for (const name of ["Project Knowledge", "Run history"]) expect(screen.getAllByRole("link", { name })).toHaveLength(1); expect(screen.getAllByRole("button", { name: "Settings" })).toHaveLength(1); expect(screen.getAllByRole("button", { name: "New conversation" })).toHaveLength(1); expect(screen.getAllByRole("button", { name: /^(Expand|Collapse) sidebar$/ })).toHaveLength(1); expect(container.querySelector("aside")?.querySelectorAll("nav, button[title='New conversation']")).toHaveLength(0); expect(screen.queryByRole("link", { name: "Research" })).toBeNull(); });
   it("exposes the Knowledge pending count once in the Rail accessible name", async () => { pendingKnowledge.count = 2; const { container } = renderWorkspaceShell(); await screen.findByRole("searchbox"); const item = screen.getByRole("link", { name: "Project Knowledge (2 pending proposals)" }); expect(item).toHaveAttribute("href", "/workspace/proj/knowledge"); expect(item.querySelector("span[aria-hidden='true']")?.textContent).toBe("2"); expect(container.querySelector("aside")?.textContent).not.toContain("pending proposals"); expect(screen.getAllByRole("link", { name: "Project Knowledge (2 pending proposals)" })).toHaveLength(1); });
   it("full Files route claims no current Rail item and Settings only expands", async () => { const { container } = renderWorkspaceShell("/workspace/proj/files"); await screen.findByRole("searchbox"); expect(container.querySelectorAll("nav [aria-current]")).toHaveLength(0); const settings = screen.getByRole("button", { name: "Settings" }); expect(settings).toHaveAttribute("aria-expanded", "false"); expect(settings).not.toHaveAttribute("aria-current"); });
 });
@@ -244,7 +244,7 @@ describe("WorkspaceRail Settings", () => {
     expect(screen.getByRole("link", { name: "Projects" })).toHaveClass("text-text");
     expect(screen.queryByRole("button", { name: /^(Expand|Collapse) sidebar$/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "New conversation" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Research" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Run history" })).toBeNull();
   });
 });
 
@@ -339,7 +339,7 @@ describe("WorkspaceSessionList", () => {
     expect(screen.getByRole("button", { name: "Session A" })).toHaveAttribute("aria-current", "page");
   });
 
-  it("runtime connected session on Research has a dot but no URL-current selection", async () => { useRuntimeStore.setState({ sessions: [session("s1", "Session A")], activeSessionId: "s1" }); renderWorkspaceShell(); const button = await screen.findByRole("button", { name: "Session A" }); expect(button).not.toHaveAttribute("aria-current"); expect(button).not.toHaveClass("font-medium"); expect(rowFor("Session A")).not.toHaveClass("bg-surface-selected"); expect(rowFor("Session A").querySelector("span[aria-hidden]")).toHaveClass("bg-accent"); expect(screen.getByRole("link", { name: "Research" })).toHaveAttribute("aria-current", "page"); });
+  it("runtime connected session on Runs has a dot but no URL-current selection", async () => { useRuntimeStore.setState({ sessions: [session("s1", "Session A")], activeSessionId: "s1" }); renderWorkspaceShell(); const button = await screen.findByRole("button", { name: "Session A" }); expect(button).not.toHaveAttribute("aria-current"); expect(button).not.toHaveClass("font-medium"); expect(rowFor("Session A")).not.toHaveClass("bg-surface-selected"); expect(rowFor("Session A").querySelector("span[aria-hidden]")).toHaveClass("bg-accent"); expect(screen.getByRole("link", { name: "Run history" })).toHaveAttribute("aria-current", "page"); });
 
   it("URL-current session selects independently from the runtime connection", () => { useRuntimeStore.setState({ sessions: [session("s1", "Session A"), session("s2", "Session B")], activeSessionId: "s2" }); renderList(); expect(screen.getByRole("button", { name: "Session A" })).toHaveAttribute("aria-current", "page"); expect(rowFor("Session A")).toHaveClass("bg-surface-selected"); expect(rowFor("Session A").querySelector("span[aria-hidden]")).toHaveClass("bg-transparent"); expect(screen.getByRole("button", { name: "Session B" })).not.toHaveAttribute("aria-current"); expect(rowFor("Session B")).not.toHaveClass("bg-surface-selected"); expect(rowFor("Session B").querySelector("span[aria-hidden]")).toHaveClass("bg-accent"); });
 
@@ -590,7 +590,7 @@ describe("WorkspaceSessionList", () => {
     await waitFor(() => expect(screen.getByTestId("path")).toHaveTextContent("/workspace/proj/session/forked"));
   });
 
-  it("does not replace Research after an in-flight connected-session delete", async () => { let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; }); useRuntimeStore.setState({ sessions: [session("s1", "Session A"), session("s2", "Session B")], activeSessionId: "s1", deleteSession: vi.fn(async () => { await gate; useRuntimeStore.setState({ sessions: [session("s2", "Session B")], activeSessionId: null }); }) }); renderWorkspaceShell("/workspace/proj/session/s1"); await screen.findByRole("button", { name: "Session A" }); await deleteConversation("Session A"); await userEvent.click(screen.getByRole("link", { name: "Research" })); await act(async () => { release(); await gate; }); expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/research"); expect(screen.getByTestId("location-state").textContent).toBe("null"); });
+  it("does not replace Runs after an in-flight connected-session delete", async () => { let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; }); useRuntimeStore.setState({ sessions: [session("s1", "Session A"), session("s2", "Session B")], activeSessionId: "s1", deleteSession: vi.fn(async () => { await gate; useRuntimeStore.setState({ sessions: [session("s2", "Session B")], activeSessionId: null }); }) }); renderWorkspaceShell("/workspace/proj/session/s1"); await screen.findByRole("button", { name: "Session A" }); await deleteConversation("Session A"); await userEvent.click(screen.getByRole("link", { name: "Run history" })); await act(async () => { release(); await gate; }); expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/runs"); expect(screen.getByTestId("location-state").textContent).toBe("null"); });
 
   it("does not kick the user out of a session they opened while the delete was in flight", async () => {
     let releaseDelete!: () => void;

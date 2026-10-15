@@ -308,6 +308,19 @@ describe("Node control plane", () => {
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }, 30_000);
 
+  // App setup and execution-evidence I/O need the same 30 s budget as neighboring integration cases.
+  // The asserted 1,000 ms kernel deadline remains independent of the test runner timeout.
+  it.each(["execute", "execute-stream"])("enforces the requested kernel time limit for %s independently of gateway grace", async (endpoint) => {
+    const workspace = join(tmpdir(), `pi-kernel-budget-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    const execute = vi.spyOn(fakeKernels, "execute");
+    try {
+      const app = buildApp(config("http://127.0.0.1:1", { upstreamTimeoutMs: 600_000 }), kernelModules()); openApps.push(app);
+      const response = await app.inject({ method: "POST", url: `/api/kernels/${endpoint}?cwd=${encodeURIComponent(workspace)}`, payload: { language: "python", code: "1+1", timeout_seconds: 1 } });
+      expect(response.statusCode).toBe(200); expect(execute).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
+    } finally { execute.mockRestore(); await rm(workspace, { recursive: true, force: true }); }
+  }, 30_000);
+
   it("shuts down core sessions on close even when session routes are off", async () => {
     const modules = createServerModules(config("http://127.0.0.1:1", { nodePiManager: false }));
     const shutdownSpy = vi.spyOn(modules.sessions, "shutdownAll").mockResolvedValue(undefined);

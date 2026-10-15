@@ -1,26 +1,40 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { ArrowRight, FlaskConical, MessageSquareText } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNewWorkspaceConversation } from "../sidebar/workspace-navigation";
+import { fileInspectorForPath } from "../../lib/artifacts";
+import { useUiStore } from "../../lib/ui";
 import { useTranslation } from "react-i18next";
 
-import { useResearchLoops } from "../../lib/knowledge";
+import { projectMemoryApi, useMemoryArchives } from "../../lib/knowledge";
 import { EmptyState } from "./EmptyState";
 
 /** Knowledge only summarizes research. New workflows start in conversation and
- *  detailed lifecycle controls live on the workspace Research page. */
+ *  historical records are read-only and continuation belongs to Conversation. */
 export function ResearchTab({ cwd, onError }: { cwd: string; onError: (message: string | null) => void }) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
-  const loopsRead = useResearchLoops(cwd);
-  const loops = loopsRead.data?.loops ?? [];
-  const loadError = loopsRead.error;
+  const newConversation = useNewWorkspaceConversation(cwd);
+  const openInspector = useUiStore((state) => state.openInspector);
+  const archivesRead = useMemoryArchives(cwd);
+  const archives = archivesRead.data?.archives ?? [];
+  const loadError = archivesRead.error;
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     if (loadError) onError(loadError instanceof Error ? loadError.message : t("research.loadError"));
   }, [loadError, onError, t]);
 
-  const openConversation = () => navigate(`/workspace/${encodeURIComponent(cwd)}`);
-  const openResearch = () => navigate(`/workspace/${encodeURIComponent(cwd)}/research`);
+  const openConversation = () => newConversation({ draft: "/skill:auto-research " });
+  const continueArchive = (path: string) => newConversation({ draft: `/skill:auto-research Resume from the historical archive ${path}. Inspect saved results and original run/artifact references before creating a new evaluation protocol. Reuse valid completed experiments.` });
+
+  const accessArchive = async (id: string, continueResearch: boolean) => {
+    setExporting(true); onError(null);
+    try {
+      const { archive } = await projectMemoryApi.exportArchive(cwd, id);
+      if (continueResearch) continueArchive(archive.path);
+      else openInspector(fileInspectorForPath(archive.path, "history.json", undefined, cwd));
+    } catch (error) { onError(error instanceof Error ? error.message : t("research.loadError")); }
+    finally { setExporting(false); }
+  };
 
   return (
     <div className="space-y-4">
@@ -33,26 +47,23 @@ export function ResearchTab({ cwd, onError }: { cwd: string; onError: (message: 
           <button type="button" onClick={openConversation} className="flex min-h-10 items-center gap-2 rounded-input bg-accent-fill px-4 text-sm font-medium text-accent-fg">
             <MessageSquareText size={15} /> {t("research.startFromConversation")}
           </button>
-          <button type="button" onClick={openResearch} className="flex min-h-10 items-center gap-2 rounded-input border border-border px-4 text-sm text-muted hover:text-text">
-            {t("research.details")} <ArrowRight size={14} />
-          </button>
+
         </div>
       </section>
 
-      {loops.length === 0 ? (
+      {archives.length === 0 ? (
         <EmptyState icon={<FlaskConical size={28} />} title={t("knowledge.researchEmpty")} text={t("knowledge.researchEmptyConversationText")} />
       ) : (
         <div className="space-y-3">
-          {loops.map((loop) => (
-            <button key={loop.loop_id} type="button" onClick={openResearch} className="ui-card-flat block w-full rounded-card p-5 text-left transition-colors hover:border-accent/40">
+          {archives.map((archive) => (
+            <div key={archive.id}><button type="button" disabled={exporting} onClick={() => void accessArchive(archive.id, false)} className="text-xs text-accent hover:underline">{archive.path}</button><button type="button" disabled={exporting} onClick={() => void accessArchive(archive.id, true)} className="ui-card-flat block w-full rounded-card p-5 text-left transition-colors hover:border-accent/40">
               <div className="flex flex-wrap items-center gap-2">
-                <h3 className="font-semibold text-text">{loop.title}</h3>
-                <span className="rounded-full bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted">{t(`research.status.${loop.status}`, { defaultValue: loop.status })}</span>
-                <span className="rounded-full bg-accent/5 px-2 py-0.5 text-[10px] text-accent">{t(`research.mode.${loop.task_type ?? "research_loop"}.label`)}</span>
+                <h3 className="font-semibold text-text">{archive.title}</h3>
+                <span className="rounded-full bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted">{t(`research.status.${archive.status}`, { defaultValue: archive.status })}</span>
               </div>
-              <p className="mt-2 text-sm leading-6 text-muted">{loop.objective}</p>
-              <div className="mt-3 flex items-center gap-1 text-xs text-accent">{t("research.details")} <ArrowRight size={12} /></div>
-            </button>
+              <p className="mt-2 text-sm leading-6 text-muted">{archive.objective}</p>
+              <div className="mt-3 flex items-center gap-1 text-xs text-accent">{t("research.continueInConversation")} <ArrowRight size={12} /></div>
+            </button></div>
           ))}
         </div>
       )}

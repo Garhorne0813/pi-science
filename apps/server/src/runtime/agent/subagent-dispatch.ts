@@ -1,6 +1,4 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { parse } from "yaml";
+import { AGENT_NAME_PATTERN, resolveAgentDefinition, childToolAllowance } from "./agent-definitions.js";
 import { z } from "zod";
 import { readJson, withFileWriteLock, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
 import { createHash } from "node:crypto";
@@ -10,14 +8,8 @@ import type { AgentCoreRuntimeClient } from "./agent-runtime-client.js";
 import type { AgentRuntimeStartOptions } from "./worker/protocol.js";
 import type { RuntimeEvent } from "./agent-runtime-types.js";
 
-const task = z.object({ agent: z.string().regex(/^[a-zA-Z0-9_-]+$/), task: z.string().min(1).max(200_000) }).strict();
+const task = z.object({ agent: z.string().regex(AGENT_NAME_PATTERN), task: z.string().min(1).max(200_000) }).strict();
 const paramsSchema = z.union([task, z.object({ chain: z.array(task).min(1).max(8) }).strict(), z.object({ tasks: z.array(task).min(1).max(4) }).strict()]);
-const builtin: Record<string, string> = {
-  planner: "Plan a conservative scientific investigation. Inspect evidence and return a concrete strategy.",
-  delegate: "Produce a self-contained scientific candidate following the supplied strategy and constraints.",
-  reviewer: "Review scientific evidence, identify errors and limitations, and propose corrections.",
-};
-
 /** Child requests travel over the owning worker's authenticated IPC connection. */
 export function bindSubagentDispatch(manager: AgentRuntimeManager, parent: AgentCoreRuntimeClient, options: AgentRuntimeStartOptions): () => Promise<void> {
   const pending = new Set<Promise<unknown>>();
@@ -53,25 +45,17 @@ export function bindSubagentDispatch(manager: AgentRuntimeManager, parent: Agent
           if (cancelled.has(id) || parent.isClosed) throw new Error("Subagent cancelled");
           const saved = await readJson<Record<string, unknown> | null>(resultPath, null);
           if (saved) return saved;
-          let prompt = builtin[item.agent];
-          let allowedTools = ["read"];
-          try {
-            const markdown = await readFile(join(options.cwd, ".pi", "agents", `${item.agent}.md`), "utf8");
-            const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
-            const metadata = match ? parse(match[1]!) as { tools?: string | string[] } : {};
-            prompt = match ? markdown.slice(match[0].length) : markdown;
-            if (metadata.tools) allowedTools = Array.isArray(metadata.tools) ? metadata.tools : metadata.tools.split(",").map((name) => name.trim());
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !prompt) throw error;
-          }
-          if (!prompt) throw new Error(`Unknown agent: ${item.agent}`);
-          // A child may narrow its parent's tools, never expand that allowance.
-          if (options.allowedTools) allowedTools = allowedTools.filter((name) => options.allowedTools!.includes(name));
-          allowedTools = allowedTools.filter((name) => name !== "ask_user_question" && !name.startsWith("mcp_"));
+          const resources = await parent.sendCommand("get_skills");
+          const namespace = item.agent.includes("/") ? item.agent.split("/")[0] : undefined;
+          if (namespace && (!resources.success || !resources.data?.skills?.some((skill: { name: string; enabled: boolean }) => skill.name === namespace && skill.enabled))) throw new Error(`Unknown or disabled agent: ${item.agent}`);
+          const policy = resources.success ? resources.data?.policy ?? options.skillPolicy : options.skillPolicy;
+          const definition = await resolveAgentDefinition(options.cwd, item.agent, policy);
+          const prompt = definition.prompt;
+          const allowedTools = childToolAllowance(definition.tools, options.allowedTools);
           keys.add(key);
           try {
             const child = await openHiddenTask(manager, key, { ...options, sessionId: undefined, systemPrompt: prompt,
-              depth: (options.depth ?? 0) + 1, allowedTools, skillPolicy: options.skillPolicy ?? { mode: "inherit" } }, parent.sessionId);
+              depth: (options.depth ?? 0) + 1, allowedTools, skillPolicy: policy ?? { mode: "inherit" } }, parent.sessionId);
             if (cancelled.has(id) || parent.isClosed) throw new Error("Subagent cancelled");
             const output = await runHiddenPrompt(child, item.task.replaceAll("{previous}", previous), `${event.invocationId}:${index}`, deadline);
             const stats = await child.sendCommand("get_session_stats");

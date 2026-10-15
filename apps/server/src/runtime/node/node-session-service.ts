@@ -1,3 +1,4 @@
+import { withWorkspaceAdmission, WorkspaceLifecycleBusyError } from "../workspace/workspace-lifecycle.js";
 import type { CreateSessionRequest, PiConfig, SessionState, SessionStats } from "@pi-science/contracts";
 import { resolve } from "node:path";
 import { ConversationEventHub, conversationEventHub } from "../events/conversation-event-hub.js";
@@ -74,7 +75,8 @@ export class NodeSessionService {
   configureLogging(log: (level: "info" | "warn" | "error", message: string) => void): void { this.log = log; }
   configureBeforeRuntimeStart(hook: ((cwd: string) => Promise<void>) | null): void { this.agentCore.configureBeforeStart(hook); }
 
-  async create(body: CreateSessionRequest): Promise<{ id: string; cwd: string; project_id: string } | RuntimeFailure> {
+  async create(body: CreateSessionRequest): Promise<{ id: string; cwd: string; project_id: string } | RuntimeFailure> { return this.admitted(body.cwd, () => this.createAdmitted(body), (error) => ({ error: error.message, code: "busy" })); }
+  private async createAdmitted(body: CreateSessionRequest): Promise<{ id: string; cwd: string; project_id: string } | RuntimeFailure> {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(body.cwd); }
     catch (error) { return { error: String(error), code: "workspace_invalid" }; }
@@ -83,6 +85,11 @@ export class NodeSessionService {
     const project = await ensureProject(cwd);
     const created = await this.agentCore.create(cwd, effectiveConfig(body.config));
     return "error" in created ? created : { id: created.id, cwd, project_id: project.id };
+  }
+
+  private async admitted<T>(cwd: string, operation: () => Promise<T>, reject: (error: WorkspaceLifecycleBusyError) => T): Promise<T> {
+    try { return await withWorkspaceAdmission(cwd, operation); }
+    catch (error) { if (error instanceof WorkspaceLifecycleBusyError) return reject(error); throw error; }
   }
 
   private async prepare(cwdValue: string, sessionId: string): Promise<{ cwd: string } | RuntimeResult> {
@@ -99,40 +106,48 @@ export class NodeSessionService {
     return imported.success ? { cwd } : imported;
   }
 
-  async prepareHistory(cwdValue: string, sessionId: string): Promise<RuntimeResult> {
+  async prepareHistory(cwdValue: string, sessionId: string): Promise<RuntimeResult> { return this.admitted(cwdValue, () => this.prepareHistoryAdmitted(cwdValue, sessionId), (error) => ({ success: false, error: error.message, code: "busy" })); }
+  private async prepareHistoryAdmitted(cwdValue: string, sessionId: string): Promise<RuntimeResult> {
     const prepared = await this.prepare(cwdValue, sessionId);
     return "success" in prepared ? prepared : { success: true };
   }
 
-  async command(sessionId: string, cwdValue: string, type: string, params: Record<string, unknown> = {}): Promise<RuntimeResult> {
+  async command(sessionId: string, cwdValue: string, type: string, params: Record<string, unknown> = {}): Promise<RuntimeResult> { return this.admitted(cwdValue, () => this.commandAdmitted(sessionId, cwdValue, type, params), (error) => ({ success: false, error: error.message, code: "busy" })); }
+  private async commandAdmitted(sessionId: string, cwdValue: string, type: string, params: Record<string, unknown> = {}): Promise<RuntimeResult> {
     const prepared = await this.prepare(cwdValue, sessionId);
     if ("success" in prepared) return prepared;
     const result = await this.agentCore.command(prepared.cwd, sessionId, type, params, effectiveConfig());
     return result.success && (result.data as { cancelled?: boolean } | undefined)?.cancelled
       ? { ...result, success: false, code: "cancelled", error: "operation cancelled" } : result;
   }
-  async notify(sessionId: string, cwdValue: string, type: string, params: Record<string, unknown>): Promise<RuntimeResult> {
+  async notify(sessionId: string, cwdValue: string, type: string, params: Record<string, unknown>): Promise<RuntimeResult> { return this.admitted(cwdValue, () => this.notifyAdmitted(sessionId, cwdValue, type, params), (error) => ({ success: false, error: error.message, code: "busy" })); }
+  private async notifyAdmitted(sessionId: string, cwdValue: string, type: string, params: Record<string, unknown>): Promise<RuntimeResult> {
     const prepared = await this.prepare(cwdValue, sessionId);
     return "success" in prepared ? prepared : this.agentCore.notify(prepared.cwd, sessionId, type, params);
   }
-  async fork(sessionId: string, cwdValue: string, entryId?: string): Promise<RuntimeResult> {
+  async fork(sessionId: string, cwdValue: string, entryId?: string): Promise<RuntimeResult> { return this.admitted(cwdValue, () => this.forkAdmitted(sessionId, cwdValue, entryId), (error) => ({ success: false, error: error.message, code: "busy" })); }
+  private async forkAdmitted(sessionId: string, cwdValue: string, entryId?: string): Promise<RuntimeResult> {
     const prepared = await this.prepare(cwdValue, sessionId);
     return "success" in prepared ? prepared : this.agentCore.fork(prepared.cwd, sessionId, entryId, effectiveConfig());
   }
-  async configure(sessionId: string, cwdValue: string, model: string, thinking?: string): Promise<RuntimeResult> {
+  async configure(sessionId: string, cwdValue: string, model: string, thinking?: string): Promise<RuntimeResult> { return this.admitted(cwdValue, () => this.configureAdmitted(sessionId, cwdValue, model, thinking), (error) => ({ success: false, error: error.message, code: "busy" })); }
+  private async configureAdmitted(sessionId: string, cwdValue: string, model: string, thinking?: string): Promise<RuntimeResult> {
     const prepared = await this.prepare(cwdValue, sessionId);
     return "success" in prepared ? prepared : this.agentCore.configure(prepared.cwd, sessionId, model, thinking, effectiveConfig());
   }
-  async resume(sessionId: string, cwdValue: string): Promise<RuntimeResult> {
+  async resume(sessionId: string, cwdValue: string): Promise<RuntimeResult> { return this.admitted(cwdValue, () => this.resumeAdmitted(sessionId, cwdValue), (error) => ({ success: false, error: error.message, code: "busy" })); }
+  private async resumeAdmitted(sessionId: string, cwdValue: string): Promise<RuntimeResult> {
     const prepared = await this.prepare(cwdValue, sessionId);
     return "success" in prepared ? prepared : this.agentCore.resume(prepared.cwd, sessionId, effectiveConfig());
   }
-  async state(sessionId: string, cwdValue: string): Promise<SessionState | RuntimeFailure> {
+  async state(sessionId: string, cwdValue: string): Promise<SessionState | RuntimeFailure> { return this.admitted(cwdValue, () => this.stateAdmitted(sessionId, cwdValue), (error) => ({ error: error.message, code: "busy" })); }
+  private async stateAdmitted(sessionId: string, cwdValue: string): Promise<SessionState | RuntimeFailure> {
     const prepared = await this.prepare(cwdValue, sessionId);
     return "success" in prepared ? { error: prepared.error ?? "session unavailable", code: prepared.code ?? "runtime_error" }
       : this.agentCore.state(prepared.cwd, sessionId, effectiveConfig());
   }
-  async stats(sessionId: string, cwdValue: string): Promise<{ stats: SessionStats } | RuntimeFailure> {
+  async stats(sessionId: string, cwdValue: string): Promise<{ stats: SessionStats } | RuntimeFailure> { return this.admitted(cwdValue, () => this.statsAdmitted(sessionId, cwdValue), (error) => ({ error: error.message, code: "busy" })); }
+  private async statsAdmitted(sessionId: string, cwdValue: string): Promise<{ stats: SessionStats } | RuntimeFailure> {
     const prepared = await this.prepare(cwdValue, sessionId);
     return "success" in prepared ? { error: prepared.error ?? "session unavailable", code: prepared.code ?? "runtime_error" }
       : this.agentCore.stats(prepared.cwd, sessionId);
@@ -141,11 +156,14 @@ export class NodeSessionService {
     try { return (await this.repository.findPath(await validateWorkspaceCwd(cwdValue), sessionId)) !== null; }
     catch { return false; }
   }
-  async delete(sessionId: string, cwdValue: string): Promise<RuntimeResult> {
+  async delete(sessionId: string, cwdValue: string): Promise<RuntimeResult> { return this.admitted(cwdValue, () => this.deleteAdmitted(sessionId, cwdValue), (error) => ({ success: false, error: error.message, code: "busy" })); }
+  private async deleteAdmitted(sessionId: string, cwdValue: string): Promise<RuntimeResult> {
     const prepared = await this.prepare(cwdValue, sessionId);
     if ("success" in prepared) return prepared.code === "not_found" ? { success: true } : prepared;
     return this.agentCore.delete(prepared.cwd, sessionId);
   }
+  closeIdleWorkspace(cwd: string): Promise<void> { return this.agentCore.closeIdleWorkspace(cwd); }
+  hasActiveOperations(cwdValue: string): Promise<boolean> { return this.agentCore.hasActiveOperations(cwdValue); }
   liveSessions(cwdValue: string): Array<{ id: string; cwd: string }> {
     try { return this.agentCore.liveSessions(resolve(cwdValue)); } catch { return []; }
   }

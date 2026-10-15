@@ -1,6 +1,6 @@
 # ADR: Durable serial Research Loop with subagents
 
-Status: accepted
+Status: superseded by [Conversation-native Auto Research](auto-research.md) (issue #150). The following records the retired design.
 
 Current process and persistence boundaries: [Architecture](architecture.md#scientific-execution-and-research).
 

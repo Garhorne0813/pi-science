@@ -1,3 +1,4 @@
+import { withWorkspaceAdmission, WorkspaceLifecycleBusyError } from "../../runtime/workspace/workspace-lifecycle.js";
 import { createSessionRequestSchema } from "@pi-science/contracts";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
@@ -11,6 +12,11 @@ import { PromptRequestRepository, isPromptDeliveryIndeterminate } from "../../ru
 function cwd(request: { query: unknown }): string {
   const value = (request.query as { cwd?: unknown }).cwd;
   return typeof value === "string" && value ? value : ".";
+}
+
+async function admitSessionRequest<T>(request: { query: unknown }, reply: FastifyReply, operation: () => Promise<T>): Promise<T | FastifyReply> {
+  try { return await withWorkspaceAdmission(cwd(request), operation); }
+  catch (error) { if (error instanceof WorkspaceLifecycleBusyError) return reply.code(409).send({ ok: false, code: "busy", error: error.message }); throw error; }
 }
 
 export function sessionRuntimeStatus(code: unknown): number {
@@ -66,6 +72,7 @@ export function registerNodeSessionRoutes(
   });
 
   app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/prompt", async (request, reply) => {
+    return admitSessionRequest(request, reply, async () => {
     const body = request.body as { message?: unknown; client_message_id?: unknown };
     if (typeof body?.message !== "string" || !body.message) return reply.code(400).send({ ok: false, code: "invalid_request", error: "message is required" });
     const clientMessageId = body.client_message_id;
@@ -125,6 +132,7 @@ export function registerNodeSessionRoutes(
       const delivery = await promptRequests.update(workspace, sessionId, requestId, state, { error_code: errorCode });
       return reply.code(sessionRuntimeStatus(result.code)).send({ ok: false, ...result, ...(delivery ?? {}) });
     });
+    });
   });
 
   app.get<{ Params: { session_id: string; client_message_id: string } }>("/api/sessions/:session_id/prompt-requests/:client_message_id", async (request, reply) => {
@@ -143,6 +151,7 @@ export function registerNodeSessionRoutes(
   });
 
   app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/title", async (request, reply) => {
+    return admitSessionRequest(request, reply, async () => {
     if (!aiTitleService) return reply.code(404).send({ ok: false, code: "not_found", error: "ai titles are not available" });
     const sessionId = request.params.session_id;
     let workspace: string;
@@ -158,9 +167,11 @@ export function registerNodeSessionRoutes(
     // network drop) cannot lose it; null means no title was produced.
     if (title) await titles.setTitle(workspace, sessionId, title);
     return { ok: true, title };
+    });
   });
 
   app.put<{ Params: { session_id: string } }>("/api/sessions/:session_id/title", async (request, reply) => {
+    return admitSessionRequest(request, reply, async () => {
     const sessionId = request.params.session_id;
     const body = (request.body ?? {}) as { title?: unknown };
     const title = typeof body.title === "string" ? body.title.trim() : "";
@@ -180,24 +191,31 @@ export function registerNodeSessionRoutes(
     if (!exists) return reply.code(404).send({ ok: false, code: "not_found", error: "session not found" });
     await titles.setTitle(workspace, sessionId, title);
     return { ok: true, title };
+    });
   });
 
   app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/resume", async (request, reply) => {
+    return admitSessionRequest(request, reply, async () => {
     const result = await nodeSessionService.resume(request.params.session_id, cwd(request));
     return result.success ? { ok: true, id: request.params.session_id, cwd: cwd(request) } : sendFailure(reply, result as Record<string, unknown>);
+    });
   });
 
   app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/fork", async (request, reply) => {
+    return admitSessionRequest(request, reply, async () => {
     const body = (request.body ?? {}) as { entry_id?: unknown };
     const result = await nodeSessionService.fork(request.params.session_id, cwd(request), typeof body.entry_id === "string" ? body.entry_id : undefined);
     return result.success && result.sessionId
       ? { ok: true, id: result.sessionId, cwd: cwd(request) }
       : sendFailure(reply, result);
+    });
   });
 
   app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/abort", async (request, reply) => {
+    return admitSessionRequest(request, reply, async () => {
     const result = await nodeSessionService.command(request.params.session_id, cwd(request), "abort");
     return result.success ? { ok: true } : sendFailure(reply, result);
+    });
   });
 
   app.get<{ Params: { session_id: string } }>("/api/sessions/:session_id/state", async (request, reply) => {
@@ -211,6 +229,7 @@ export function registerNodeSessionRoutes(
   });
 
   app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/model", async (request, reply) => {
+    return admitSessionRequest(request, reply, async () => {
     const body = request.body as { model?: unknown; thinking?: unknown };
     if (typeof body?.model !== "string" || !body.model.includes("/")) return reply.code(400).send({ ok: false, code: "invalid_request", error: "Model must use provider/model notation" });
     const result = await nodeSessionService.configure(request.params.session_id, cwd(request), body.model, typeof body.thinking === "string" ? body.thinking : undefined);
@@ -223,14 +242,18 @@ export function registerNodeSessionRoutes(
       restarted: result.restarted === true,
       replaced_blank: result.replacedBlank === true,
     };
+    });
   });
 
   app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/compact", async (request, reply) => {
+    return admitSessionRequest(request, reply, async () => {
     const result = await nodeSessionService.command(request.params.session_id, cwd(request), "compact");
     return result.success ? { ok: true } : sendFailure(reply, result);
+    });
   });
 
   app.post<{ Params: { session_id: string; request_id: string } }>("/api/sessions/:session_id/interactions/:request_id", async (request, reply) => {
+    return admitSessionRequest(request, reply, async () => {
     const body = (request.body ?? {}) as { cancelled?: unknown; confirmed?: unknown; value?: unknown };
     const payload: Record<string, unknown> = { id: request.params.request_id };
     if (body.cancelled === true) payload.cancelled = true;
@@ -239,6 +262,7 @@ export function registerNodeSessionRoutes(
     else payload.cancelled = true;
     const result = await nodeSessionService.notify(request.params.session_id, cwd(request), "extension_ui_response", payload);
     return result.success ? { ok: true } : sendFailure(reply, result);
+    });
   });
 
   app.get<{ Params: { session_id: string } }>("/api/sessions/:session_id/commands", async (request, reply) => {
@@ -275,6 +299,7 @@ export function registerNodeSessionRoutes(
   });
 
   app.delete<{ Params: { session_id: string } }>("/api/sessions/:session_id", async (request, reply) => {
+    return admitSessionRequest(request, reply, async () => {
     const sessionId = request.params.session_id;
     let workspace: string;
     try {
@@ -285,6 +310,7 @@ export function registerNodeSessionRoutes(
     const result = await nodeSessionService.delete(request.params.session_id, cwd(request));
     if (result.success) await titles.deleteTitle(workspace, sessionId);
     return result.success ? { ok: true } : sendFailure(reply, result as Record<string, unknown>);
+    });
   });
 }
 

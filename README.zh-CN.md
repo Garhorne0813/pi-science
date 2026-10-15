@@ -25,7 +25,7 @@ Pi-Science 将 AI 对话、科学计算、数据预览和项目知识整合到�
 
 - **在上下文中运行分析。** 在会话内核执行 Python/R 代码，与对话一起查看表格、图像和生成文件。
 - **保留执行证据。** 运行记录保存代码、环境版本、产物哈希和谱系，便于检查与复现结果。
-- **通过研究循环探索。** 智能体提出并分析候选方案，控制面负责确定性评估、预算和暂停恢复。
+- **在对话中开展研究。** Auto Research 技能指导动态子问题、独立审查和任务专属评价，保存恢复检查点，并由运行时限制工具预算。
 - **检索科学来源。** 内置连接器获取论文和科学数据，提供可以核对的引用元数据。
 - **使用普通项目目录。** 科研文件保存在工作区，模型请求和外部检索使用你配置的服务。
 
@@ -120,7 +120,7 @@ Windows 停止失败时保留身份记录以便重试，并返回退出码 1。W
 | 并行会话 | 活跃、恢复和分叉的对话使用独立的 Agent Core Worker 进程 |
 | 科学文件 | 原生预览分子结构、FITS、基因组、相图、3D 模型、表格、办公文档、媒体和代码 |
 | 可复现性 | 实时的会话级执行记录、产物哈希、生成代码与差异、环境快照、谱系历史和一键复现 |
-| 项目记忆 | Reviewer 提案、人工审核、证据链接、项目版本、研究循环和 Pareto 前沿 |
+| 项目记忆 | Reviewer 提案、人工审核、证据链接、项目版本与只读历史研究归档 |
 | 科学计算 | 可复用的 Micromamba 环境、隔离的 Python/R Session 内核、可执行 `.ipynb` 文件、与对话关联的运行记录和应用级 Jupyter Lab |
 | 扩展能力 | Pi skills、提示模板、MCP、subagents、自定义模型提供商和托管端点 |
 | 工作区安全 | 项目级元数据、路径校验、会话状态隔离和受控的模型端点发现 |
@@ -275,7 +275,7 @@ pnpm --filter frontend test:uat:office
 | 支持的工具与已知限制 | [Agent Core 能力清单](docs/agent-core-capability-inventory.md) |
 | 旧会话与离线转换 | [会话转换](docs/agent-core-session-conversion.md) |
 | 科学连接器、凭据与工具策略 | [MCP 管理](docs/mcp-management-implementation.md) |
-| 研究编排与确定性评估 | [研究循环 ADR](docs/adr-research-loop-subagents.md) |
+| 研究编排与确定性评估 | [对话原生 Auto Research](docs/auto-research.md) |
 | 编写项目技能 | [技能编写](docs/skill-authoring.md) |
 
 架构文档提供对应的实现记录链接，未提供双语版本的文档保留原语言。

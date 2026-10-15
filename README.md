@@ -25,7 +25,7 @@ Pi-Science brings AI conversations, scientific computation, data previews and pr
 
 - **Run analyses in context.** Execute Python/R code on session kernels and inspect the resulting tables, plots and files alongside the conversation.
 - **Keep execution evidence.** Runs record code, environment revisions, artifact hashes and provenance so results can be inspected and reproduced.
-- **Explore with research loops.** Agents propose and analyze candidates; the control plane applies deterministic evaluation, budgets and pause/resume controls.
+- **Research in Conversation.** The Auto Research skill guides dynamic subquestions, independent review and task-specific evaluation, with saved checkpoints and runtime tool budgets.
 - **Find scientific sources.** Built-in connectors retrieve papers and scientific data, with linked citation metadata you can verify.
 - **Use ordinary project folders.** Research files stay in your workspace. Model requests and external connector calls use the services you configure.
 
@@ -120,7 +120,7 @@ Application state uses `PI_SCIENCE_HOME` or `~/.pi-science`, with a checkout-loc
 | Concurrent sessions | Independent Agent Core Worker processes for active, restored, and forked conversations |
 | Scientific files | Native previews for molecular structures, FITS, genomics, phase data, 3D models, tables, office documents, media, and code |
 | Reproducibility | Live session-scoped execution records, artifact hashes, generating code and diffs, environment snapshots, provenance history, and reproduce actions |
-| Project memory | Reviewer proposals, human approval, evidence links, project versions, research loops, and Pareto-frontier tracking |
+| Project memory | Reviewer proposals, human approval, evidence links, project versions, and read-only historical research archives |
 | Computation | Shared versioned Micromamba environments, isolated Python/R Session kernels, executable `.ipynb` files, agent notebook cell read/edit/run tools, conversation-linked runs, and an optional app-managed Jupyter Lab |
 | Extensibility | Pi skills, prompt templates, MCP servers, subagents, custom model providers, and managed endpoints |
 | Workspace safety | Project-scoped metadata, validated paths, isolated session state, and controlled outbound provider discovery |
@@ -287,7 +287,7 @@ pnpm --filter frontend test:uat:office
 | Supported tools and known limits | [Agent Core capability inventory](docs/agent-core-capability-inventory.md) |
 | Existing sessions and offline conversion | [Session conversion](docs/agent-core-session-conversion.md) |
 | Scientific connectors, credentials and tool policy | [MCP management](docs/mcp-management-implementation.md) |
-| Research orchestration and deterministic evaluation | [Research-loop ADR](docs/adr-research-loop-subagents.md) |
+| Research orchestration and deterministic evaluation | [Conversation-native Auto Research](docs/auto-research.md) |
 | Writing project skills | [Skill authoring](docs/skill-authoring.md) |
 
 Implementation notes are linked from the architecture reference. Documents without an English counterpart are available in their original language.

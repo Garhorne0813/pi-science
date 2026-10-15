@@ -1,3 +1,5 @@
+import { hasActiveWorkspaceRuntimes, closeIdleWorkspaceRuntimes } from "../../runtime/agent/agent-runtime-manager.js";
+import { withWorkspaceMutation, WorkspaceLifecycleBusyError } from "../../runtime/workspace/workspace-lifecycle.js";
 import { access, cp, lstat, mkdir, readdir, readFile, realpath, rename, stat, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -10,8 +12,8 @@ import { egressAuditEnabled, recordEgress } from "../../security/egress-audit.js
 import { sessionRepository } from "../../runtime/node/session-repository.js";
 import { catalog as skillCatalog, getSkillContent, getSkillInfo, validateDirectory as validateSkillDir } from "../../catalog/skill-catalog.js";
 import { probeRequirements } from "../../catalog/skill-requirements.js";
+import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import type { JobCoordinator } from "../../runtime/jobs/job-coordinator.js";
-import type { ResearchLoopCoordinator } from "../../research-loop/coordinator.js";
 import type { WorkspaceRepository } from "../../storage/sqlite/repositories/workspace-repository.js";
 import type { McpConnectorService } from "../../mcp/connector-service.js";
 import { resolveMcpConfig } from "../../catalog/mcp-config.js";
@@ -246,7 +248,12 @@ const DEMOS: Record<string, { source: string; workspace: string }> = {
   climate: { source: "demos/climate-trends", workspace: "Climate Trends" },
 };
 
-export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinator, research?: ResearchLoopCoordinator, workspaceRepository?: WorkspaceRepository, mcp?: McpConnectorService): void {
+async function mutateWorkspace<T>(paths: string[], reply: { code: (status: number) => { send: (body: unknown) => unknown } }, operation: () => Promise<T>): Promise<T | unknown> {
+  try { return await withWorkspaceMutation(paths, operation); }
+  catch (error) { if (error instanceof WorkspaceLifecycleBusyError) return reply.code(409).send({ error: error.message }); throw error; }
+}
+
+export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinator, workspaceRepository?: WorkspaceRepository, mcp?: McpConnectorService, sessions?: Pick<NodeSessionService, "hasActiveOperations" | "closeIdleWorkspace">): void {
   const activity = new WorkspaceActivityCache((workspace, err) => app.log.warn({ err, workspace }, "Workspace file activity refresh failed or was limited"));
   app.addHook("onClose", async () => { activity.close(); });
   // ── Skills (delegated to skill-catalog service) ──
@@ -404,6 +411,11 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
   });
   app.post("/api/workspaces/rename", async (request, reply) => {
     const body = (request.body ?? {}) as { path?: unknown; name?: unknown };
+    const root = rootDir();
+    const name = String(body.name ?? "").trim().replace(/[\\/]/g, "-").slice(0, 100);
+    if (!name) return reply.code(400).send({ error: "Invalid workspace name" });
+    const destination = join(root, name);
+    return mutateWorkspace([String(body.path ?? ""), destination], reply, async () => {
     let source: string;
     try { source = await managedWorkspacePath(String(body.path ?? ""), "rename"); }
     catch (error) {
@@ -411,13 +423,12 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
       if (code === "ENOENT" || code === "ENOTDIR") return reply.code(404).send({ error: "Workspace not found" });
       return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) });
     }
-    const root = rootDir();
-    const name = String(body.name ?? "").trim().replace(/[\\/]/g, "-").slice(0, 100);
-    if (!name) return reply.code(400).send({ error: "Invalid workspace name" });
-    if (await research?.hasActive(source) || await jobs?.hasActive(source)) return reply.code(409).send({ error: "Pause or cancel active research and jobs before renaming this workspace" });
-    const destination = join(root, name);
+    if (await jobs?.hasActive(source)) return reply.code(409).send({ error: "Pause or cancel active jobs before renaming this workspace" });
+    if (await sessions?.hasActiveOperations(source) || await hasActiveWorkspaceRuntimes(source)) return reply.code(409).send({ error: "Stop active conversations before renaming this workspace" });
     try { await stat(destination); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* available */ }
     const sourceProject = await ensureProject(source);
+    await sessions?.closeIdleWorkspace(source);
+    await closeIdleWorkspaceRuntimes(source);
     let workspaceMoved = false;
     let stateMoved = false;
     let registryMoved = false;
@@ -437,6 +448,7 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
       if (stateMoved && workspaceMoved) await updateProject(source, { name: sourceProject.name }).catch(() => undefined);
       return reply.code(500).send({ error: error instanceof Error ? error.message : "Workspace rename failed" });
     }
+    });
   });
   app.get("/api/workspaces/pinned", async () => ({ paths: workspaceRepository ? (await workspaceRepository.listPinned()).map((location) => location.path) : await readJson<string[]>(configPath("pinned.json"), []) }));
   app.post("/api/workspaces/pin", async (request) => {
@@ -462,6 +474,7 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
     return { ok: true, pinned: false };
   });
   app.delete("/api/workspaces/delete", async (request, reply) => {
+    return mutateWorkspace([String(((request.body ?? {}) as { path?: unknown }).path ?? "")], reply, async () => {
     let path: string;
     try { path = await managedWorkspacePath(String(((request.body ?? {}) as { path?: unknown }).path ?? ""), "delete"); }
     catch (error) {
@@ -469,8 +482,12 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
       if (code === "ENOENT" || code === "ENOTDIR") return reply.code(404).send({ error: "Workspace not found" });
       return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) });
     }
-    if (await research?.hasActive(path) || await jobs?.hasActive(path)) return reply.code(409).send({ error: "Cancel active research and jobs before deleting this workspace" });
+    if (await jobs?.hasActive(path)) return reply.code(409).send({ error: "Cancel active jobs before deleting this workspace" });
+    if (await sessions?.hasActiveOperations(path) || await hasActiveWorkspaceRuntimes(path)) return reply.code(409).send({ error: "Stop active conversations before deleting this workspace" });
+    await sessions?.closeIdleWorkspace(path);
+    await closeIdleWorkspaceRuntimes(path);
     try { await rm(path, { recursive: true }); await removeWorkspaceMetadata(path); return { ok: true }; } catch { return reply.code(404).send({ error: "Workspace not found" }); }
+    });
   });
 
   // ── Compute machine registry ──

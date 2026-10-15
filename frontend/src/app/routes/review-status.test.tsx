@@ -42,7 +42,6 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {})
   if (url.startsWith("/api/model-selection/catalog")) return jsonResponse({ available_models: [] });
   if (url.includes("/model-selection?")) return jsonResponse({ scope: "session", session_id: SESSION_ID, selection: { model: null, thinking: "off" } });
   if (url.includes("/commands?")) return jsonResponse({ commands: [] });
-  if (url.startsWith("/api/project-memory/research-loops")) return jsonResponse({ loops: [] });
   return jsonResponse({ error: `unhandled ${(init.method || "GET").toUpperCase()} ${url}` }, 404);
 });
 

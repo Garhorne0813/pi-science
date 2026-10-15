@@ -241,13 +241,7 @@ fi
 assert_body_contains '"records"' "http://127.0.0.1:${NODE_PORT}/api/provenance?cwd=${WORKSPACE_Q}"
 
 echo "[smoke] native project memory and cleanup"
-LOOP_JSON="$(curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
-    -d '{"title":"Smoke loop","objective":"Validate native control plane"}' \
-    "http://127.0.0.1:${NODE_PORT}/api/project-memory/research-loops?cwd=${WORKSPACE_Q}")"
-LOOP_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["loop_id"])' "$LOOP_JSON")"
-curl --fail --silent --show-error -X POST \
-    "http://127.0.0.1:${NODE_PORT}/api/project-memory/research-loops/${LOOP_ID}/cancel?cwd=${WORKSPACE_Q}" >/dev/null
-assert_body_contains '"cancelled"' "http://127.0.0.1:${NODE_PORT}/api/project-memory/research-loops?cwd=${WORKSPACE_Q}"
+assert_body_contains '"archives"' "http://127.0.0.1:${NODE_PORT}/api/project-memory/archives?cwd=${WORKSPACE_Q}"
 curl --fail --silent --show-error -X DELETE \
     "http://127.0.0.1:${NODE_PORT}/api/files/renamed.txt?cwd=${WORKSPACE_Q}" >/dev/null
 

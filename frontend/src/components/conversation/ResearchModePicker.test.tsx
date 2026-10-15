@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import i18n from "@/i18n";
-import { ResearchModePicker } from "./ResearchLoopControls";
+import { ResearchModePicker } from "./ResearchModePicker";
 
 beforeAll(async () => {
   await i18n.changeLanguage("en");

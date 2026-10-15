@@ -1,3 +1,4 @@
+import { useSearchParams } from "react-router-dom";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -28,7 +29,8 @@ export function KnowledgePage() {
   const { t } = useTranslation();
   const cwd = useRequiredWorkspaceCwd();
   const activeSessionId = useRuntimeStore((state) => state.activeSessionId);
-  const [tab, setTab] = useState<KnowledgePageTab>("overview");
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState<KnowledgePageTab>(() => searchParams.get("tab") === "research" ? "research" : "overview");
   const [summary, setSummary] = useState<ProjectSummary | null>(null);
   const [memorySummary, setMemorySummary] = useState<ProjectMemoryOverview | null>(null);
   const [projectDocument, setProjectDocument] = useState("");
@@ -130,7 +132,7 @@ export function KnowledgePage() {
 
   /** Refresh drops whatever the visible tab renders; the tab's own query refetches. */
   const refresh = () => {
-    if (tab === "research") void queryClient.invalidateQueries({ queryKey: projectMemoryKey("research-loops", cwd) });
+    if (tab === "research") void queryClient.invalidateQueries({ queryKey: projectMemoryKey("archives", cwd) });
     else if (tab === "files") void queryClient.invalidateQueries({ queryKey: projectKnowledgeKey("file-views", cwd) });
     else if (tab === "history") void queryClient.invalidateQueries({ queryKey: projectMemoryKey("timeline", cwd) });
     else void loadCore();

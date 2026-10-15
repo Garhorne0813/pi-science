@@ -1,3 +1,4 @@
+import { executionBudgetTools } from "./execution-budget.js";
 import { randomUUID } from "node:crypto";
 import { decodeCommand, decodeNotification } from "./command-contract.js";
 import { isAbsolute, join, resolve } from "node:path";
@@ -152,17 +153,18 @@ export class SessionRuntime {
       }
       const skillPolicy = options.skillPolicy ?? { mode: "inherit" };
       const subagents = new SubagentBridge(emit);
+      const budgets = executionBudgetTools(options.cwd);
       const { harness, open } = await AgentHarness.create({
         session,
         models,
         model,
         thinkingLevel: clampThinkingLevel(model, options.thinking ?? "high"),
         compaction: resolveCompaction(model.contextWindow, options.settings).compaction,
-        tools: [createReadTool(), createBashTool({ prepare: (execution) => {
+        tools: [budgets.tool, createReadTool(), budgets.wrap(createBashTool({ prepare: (execution) => {
           execution.env = environment;
           execution.inheritEnv = false;
-        } }), createEditTool(), createWriteTool(),
-          todoHarnessTool(session), subagentHarnessTool(subagents), ...notebookHarnessTools(options.cwd, session.metadata.id), questionnaireHarnessTool(interactions), ...(mcp?.tools ?? [])]
+        } })), createEditTool(), createWriteTool(),
+          todoHarnessTool(session), budgets.wrap(subagentHarnessTool(subagents)), ...notebookHarnessTools(options.cwd, session.metadata.id).map(budgets.wrap), questionnaireHarnessTool(interactions), ...(mcp?.tools ?? []).map(budgets.wrap)]
           .filter((tool) => !options.allowedTools || options.allowedTools.includes(tool.name)),
         toolContext: { env: executionEnv },
         resources: { skills: applySkillPolicy(discovered.skills, skillPolicy), promptTemplates: templates.promptTemplates },

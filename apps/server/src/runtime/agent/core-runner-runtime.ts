@@ -37,7 +37,7 @@ class CoreTaskRuntime implements TaskRuntime {
 }
 
 export async function openCoreRunner(manager: AgentRuntimeManager, environments: Pick<WorkspaceEnvironmentService, "environment">,
-  cwd: string, key: string, owner: string, purpose: "research" | "review", server: { backendUrl?: string; internalToken?: string } = {}): Promise<TaskRuntime> {
+  cwd: string, key: string, owner: string, purpose: "review", server: { backendUrl?: string; internalToken?: string } = {}): Promise<TaskRuntime> {
   await new ModelResourceService().ensureMigrated();
   const config = loadDefaultPiConfig();
   const index = config.model?.indexOf("/") ?? -1;
@@ -52,9 +52,8 @@ export async function openCoreRunner(manager: AgentRuntimeManager, environments:
     skillPolicy: settings.skill_policy ?? { mode: "inherit" }, credentialEnvNames,
     env: { ...await environments.environment(cwd), ...(server.backendUrl ? { PI_SCIENCE_BACKEND_URL: server.backendUrl } : {}),
       ...(server.internalToken ? { PI_SCIENCE_INTERNAL_TOKEN: server.internalToken } : {}) },
-    allowedTools: purpose === "review" ? [] : ["read", "subagent"],
-    systemPrompt: purpose === "review" ? "You are a scientific project reviewer. Return only the requested JSON. Do not use tools."
-      : "You are a research supervisor. Delegate planning, candidate production, and review to subagents. Do not edit files or execute code.",
+    allowedTools: [],
+    systemPrompt: "You are a scientific project reviewer. Return only the requested JSON. Do not use tools.",
   }, `${purpose}:${owner}`, purpose);
   return new CoreTaskRuntime(runtime);
 }

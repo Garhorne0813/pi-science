@@ -45,9 +45,11 @@ export function subagentHarnessTool(bridge: SubagentBridge): AgentHarnessTool<{ 
       if (cached) return cached as unknown as { content: Array<{ type: "text"; text: string }>; details: unknown };
       onUpdate({ content: [{ type: "text", text: "Delegating…" }], details: { status: "running" } });
       const response = await bridge.request({ params, operationId: invocation.operationId, invocationId: invocation.invocationId }, context.abortSignal);
-      const result = response.success ? response.data as { content: Array<{ type: "text"; text: string }>; details: unknown }
-        : { content: [{ type: "text" as const, text: response.error ?? "Subagent failed" }], details: { error: response.error }, isError: true };
-      if (response.success) await invocation.setMemo("subagent-result", JSON.parse(JSON.stringify(result)));
+      // Harness records errors from thrown failures; an isError property on a
+      // returned result is not part of its execution contract.
+      if (!response.success) throw new Error(response.error ?? "Subagent failed");
+      const result = response.data as { content: Array<{ type: "text"; text: string }>; details: unknown };
+      await invocation.setMemo("subagent-result", JSON.parse(JSON.stringify(result)));
       return result;
     },
   };

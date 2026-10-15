@@ -1,3 +1,4 @@
+import { pathIsInside } from "../../support/platform-utils.js";
 import type { ProductInput } from "./product-input.js";
 import type { AssistantContentKind } from "./assistant-content.js";
 import { randomUUID } from "node:crypto";
@@ -361,7 +362,7 @@ export class ConversationEventHub {
   private readonly subscribers = new Map<string, Set<Subscriber>>();
   private readonly pendingInteractions = new Map<string, SseEventRecord[]>();
   private readonly publishing = new Map<string, Promise<void>>();
-  private readonly observing = new Set<Promise<void>>();
+  private readonly observing = new Map<Promise<void>, string>();
   private readonly pendingText = new Map<string, PendingText>();
   private readonly turns = new Map<string, TurnState>();
   private readonly bound = new WeakSet<RuntimeEventSource>();
@@ -380,19 +381,23 @@ export class ConversationEventHub {
     this.log = log;
   }
 
-  async flush(): Promise<void> {
+  async flush(cwd?: string): Promise<void> {
     // Process exit handlers append terminal records through their event queue.
     // Yield once so those publishes are registered before taking the snapshot.
+    const includes = (key: string) => !cwd || pathIsInside(resolve(cwd), key.split("\0")[0]!, true);
+    const observations = () => [...this.observing].filter(([, key]) => includes(key)).map(([pending]) => pending);
+    const publications = () => [...this.publishing].filter(([key]) => includes(key)).map(([, pending]) => pending);
+    const texts = () => [...this.pendingText.values()].filter((pending) => includes(streamKey(pending.cwd, pending.sessionId)));
     await new Promise<void>((resolve) => setImmediate(resolve));
     do {
-      await Promise.allSettled([...this.observing]);
-      await Promise.all([...this.pendingText.values()].map((pending) => this.flushPendingText(pending.cwd, pending.sessionId)));
-      await Promise.allSettled([...this.publishing.values()]);
-    } while (this.observing.size || this.publishing.size || this.pendingText.size);
+      await Promise.allSettled(observations());
+      await Promise.all(texts().map((pending) => this.flushPendingText(pending.cwd, pending.sessionId)));
+      await Promise.allSettled(publications());
+    } while (observations().length || publications().length || texts().length);
   }
 
-  private trackObservation(pending: Promise<void>): void {
-    this.observing.add(pending);
+  private trackObservation(pending: Promise<void>, cwd: string, sessionId: string): void {
+    this.observing.set(pending, streamKey(cwd, sessionId));
     const done = () => this.observing.delete(pending);
     void pending.then(done, done);
   }
@@ -495,7 +500,7 @@ export class ConversationEventHub {
         }
         await Promise.resolve(options.observe?.(input, sessionId, identity)).catch(() => undefined);
       });
-      this.trackObservation(eventQueue);
+      this.trackObservation(eventQueue, cwd, sessionId);
     });
     process.on("exit", ({ code, signal }: { code: number | null; signal: NodeJS.Signals | null }) => {
       const sessionId = options.activeSessionId();
@@ -518,7 +523,7 @@ export class ConversationEventHub {
         });
         await this.publish(cwd, sessionId, { type: "runtime.paused", sessionId });
       });
-      this.trackObservation(terminal);
+      this.trackObservation(terminal, cwd, sessionId);
     });
   }
 

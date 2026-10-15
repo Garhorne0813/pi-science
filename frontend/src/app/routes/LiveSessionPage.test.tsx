@@ -111,8 +111,7 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
       decodeMs: 2500,
     } }));
   }
-  if (url.includes("/api/composer/commands?")) return Promise.resolve(jsonResponse({ commands: [] }));
-  if (url.startsWith("/api/project-memory/research-loops")) return Promise.resolve(jsonResponse({ loops: [] }));
+  if (url.includes("/commands?")) return Promise.resolve(jsonResponse({ commands: [] }));
   if (url.startsWith("/api/model-selection/default")) return Promise.resolve(jsonResponse({ scope: "default", selection: { model: "prov/m1", thinking: "high" } }));
   if (url.includes("/model-selection?")) {
     const sessionId = url.match(/sessions\/([^/]+)/)?.[1];
@@ -413,21 +412,6 @@ describe("conversation research workflows", () => {
   it("sends compare as a structured conversation task instead of creating a loop", async () => {
     const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
-    overrides.push((url, init) => {
-      if ((init.method || "GET").toUpperCase() !== "POST" || !url.startsWith("/api/project-memory/research-loop-intents")) return null;
-      expect(JSON.parse(String(init.body))).toEqual({ mode: "compare", objective: "Compare method A and method B" });
-      return Promise.resolve(jsonResponse({
-        requires_confirmation: false,
-        missing_fields: [],
-        draft: {
-          task_type: "compare", execution_kind: "conversation", title: "Compare method A and method B", objective: "Compare method A and method B",
-          metric: null, direction: "maximize", budget: { max_candidates: 6, max_wall_seconds: 7200, max_parallel: 1 },
-          success_criterion: null, plan_steps: [], stop_conditions: { target_metrics: {}, patience: 3, min_improvement: 0 }, instructions: [],
-          conversation_prompt: "[Workflow: compare]\nObjective: Compare method A and method B\n\nRequired process:\n1. Return a comparison table.",
-        },
-      }));
-    });
-
     useUiStore.getState().addWorkspaceReference({ cwd: CWD, path: "methods/results.csv", name: "results.csv", isDir: false });
     renderWorkspaceLanding();
     await screen.findByTestId("model-control");
@@ -455,36 +439,16 @@ describe("conversation research workflows", () => {
     expect(screen.queryByRole("button", { name: "Reproduce experiment" })).toBeNull();
   });
 
-  it("turns optimize into an editable loop draft and infers a deterministic metric", async () => {
+  it("starts optimize in Conversation with auto-research and no research API", async () => {
     const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
-    overrides.push((url, init) => {
-      if ((init.method || "GET").toUpperCase() !== "POST" || !url.startsWith("/api/project-memory/research-loop-intents")) return null;
-      return Promise.resolve(jsonResponse({
-        requires_confirmation: true,
-        missing_fields: [],
-        draft: {
-          task_type: "optimize", execution_kind: "iterative", title: "Minimize model latency", objective: "Minimize model latency",
-          metric: "latency", direction: "minimize", budget: { max_candidates: 10, max_wall_seconds: 7200, max_parallel: 1 },
-          success_criterion: "Reduce latency with reproducible measurements while preserving required checks.",
-          plan_steps: ["Establish a reproducible baseline.", "Measure one change per round."],
-          stop_conditions: { target_metrics: {}, patience: 3, min_improvement: 0 }, instructions: [], conversation_prompt: null,
-        },
-      }));
-    });
-
-    renderWorkspaceLanding();
-    await screen.findByTestId("model-control");
+    renderWorkspaceLanding(); await screen.findByTestId("model-control");
     fireEvent.click(screen.getByRole("button", { name: "Optimize" }));
     act(() => { useRuntimeStore.getState().setDraft("Minimize model latency"); });
     fireEvent.click(sendButton());
-
-    expect(await screen.findByText("Confirm Optimize")).toBeInTheDocument();
-    expect(screen.getByText("Reduce latency with reproducible measurements while preserving required checks.")).toBeInTheDocument();
-    expect(screen.getByText("Establish a reproducible baseline.")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Metric")).toBeNull();
-    expect(screen.getByRole("button", { name: "Create and start" })).toBeEnabled();
-    expect(sendPrompt).not.toHaveBeenCalled();
+    await waitFor(() => expect(sendPrompt).toHaveBeenCalledWith("/skill:auto-research [Workflow: optimize]\nMinimize model latency"));
+    expect(screen.queryByRole("button", { name: "Create and start" })).toBeNull();
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("research-loop"))).toBe(false);
   });
 });
 
@@ -1643,4 +1607,3 @@ describe("route-level completion lifecycle", () => {
 
   });
 });
-

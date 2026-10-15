@@ -206,12 +206,8 @@ function handleApi(req, res, url) {
     return json(res, 404, { error: "fixture file not found", file: filePath });
   }
 
-  if (method === "GET" && pathname === "/api/project-memory/research-events") {
-    log();
-    return sendSse(res, "research");
-  }
 
-  // Knowledge badge + research-loop landing probe.
+  // Knowledge badge and historical archive access.
   if (method === "GET" && pathname === "/api/project-knowledge/proposals/count") {
     log();
     return json(res, 200, { pending_count: 0 });
@@ -224,9 +220,8 @@ function handleApi(req, res, url) {
     log();
     return json(res, 200, {});
   }
-  if (method === "GET" && pathname === "/api/project-memory/research-loops") {
-    log();
-    return json(res, 200, { loops: [] });
+  if (method === "GET" && pathname === "/api/project-memory/archives") {
+    return json(res, 200, { archives: [] });
   }
   if (method === "GET" && pathname === "/api/executions") {
     log();

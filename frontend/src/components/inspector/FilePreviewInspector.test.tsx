@@ -23,7 +23,6 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {})
   const url = String(input);
   const method = (init.method || "GET").toUpperCase();
   if (url.includes("/api/settings/config")) return jsonResponse({ ok: true, available_models: [], model: "", thinking: "high" });
-  if (url.includes("/api/project-memory/research-loops")) return jsonResponse({ loops: [] });
   if (method === "POST" && url.includes("/api/files/content")) {
     if (writeError) return jsonResponse({ error: writeError.message }, 500);
     const body = JSON.parse(String(init.body)) as { path: string; content: string };

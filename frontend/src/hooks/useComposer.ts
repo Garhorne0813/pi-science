@@ -6,13 +6,13 @@ import { useUiStore } from "../lib/ui";
 import { apiRequest } from "../lib/client/api";
 import { injectWorkspaceReferences } from "../lib/files";
 import { useFeedback } from "../components/feedback/feedback-context";
-import type { ResearchLoopDraft, ResearchStarter } from "../components/conversation/ResearchLoopControls";
+import type { ResearchStarter } from "../components/conversation/ResearchModePicker";
 import { injectSubagentMentions } from "../lib/conversation";
 import { inlineWorkspaceReferences, validComposerEntities, type ComposerEntity } from "../lib/conversation/composer-document";
 
 /**
  * Composer state and send pipeline: attachments, drag-and-drop, IME guards,
- * slash-command dispatch, and the research-intent detour before a normal send.
+ * slash-command dispatch, and conversation-native research skill invocation.
  */
 export function useComposer(params: {
   cwd: string;
@@ -23,12 +23,9 @@ export function useComposer(params: {
   setReviewNotice: (notice: string) => void;
   research: {
     mode: ResearchStarter | null;
-    draft: ResearchLoopDraft | null;
-    intent: (text: string) => Promise<{ kind: "draft" } | { kind: "conversation"; message: string } | null>;
+    setMode: (mode: ResearchStarter | null) => void;
   };
-  /** Fired right before a real message is dispatched (after slash-command and
-   *  research-draft branches, so /compact, /export and draft detours never
-   *  trigger it). */
+  /** Fired right before a real message is dispatched. */
   onSend?: () => void;
 }) {
   const { cwd, conversationKey = null, selectedModel, configuringModel = false, reviewingProject, setReviewNotice, research, onSend } = params;
@@ -150,14 +147,6 @@ export function useComposer(params: {
     const references = [...inlineReferences, ...workspaceReferences].filter((reference, index, all) =>
       all.findIndex((other) => other.cwd === reference.cwd && other.path === reference.path) === index);
     if (!selectedModel || (!text && files.length === 0 && references.length === 0) || working || reviewingProject || configuringModel) return;
-    let workflowMessage: string | null = null;
-    if (research.mode && !research.draft && text) {
-      const prepared = await research.intent(text);
-      if (!prepared) return;
-      if (prepared.kind === "draft") { setInput(""); setEntities([]); return; }
-      workflowMessage = prepared.message;
-    }
-
     if (text.startsWith("/") && mentions.length === 0 && files.length === 0 && references.length === 0) {
       const slashResult = await runSlashCommand(text);
       if (slashResult === "requires-session") return;
@@ -167,7 +156,7 @@ export function useComposer(params: {
       }
     }
 
-    let message = workflowMessage ?? text;
+    let message = text;
     if (files.length > 0) {
       const names = files.map((f) => f.name).join(", ");
       message = message
@@ -178,10 +167,14 @@ export function useComposer(params: {
     message = injectSubagentMentions(message, mentions);
     message = injectWorkspaceReferences(message, references);
 
+    const sentResearchMode = research.mode;
+    if (sentResearchMode) message = `/skill:auto-research [Workflow: ${sentResearchMode}]\n${message}`;
+
     const sentFiles = files;
     const sentReferences = workspaceReferences;
     const sentEntities = entities;
     setInput("");
+    research.setMode(null);
     setEntities([]);
     setFiles([]);
     clearWorkspaceReferences(cwd);
@@ -207,6 +200,7 @@ export function useComposer(params: {
         const composer = composerContextRef.current;
         if (composer?.cwd !== cwd || composer.conversationKey !== sentFrom || composerRevisionRef.current !== sentRevision || useRuntimeStore.getState().draft) return;
         setInput(originalDraft);
+        research.setMode(sentResearchMode);
         setEntities(sentEntities);
         setFiles(sentFiles);
         sentReferences.forEach((reference) => useUiStore.getState().addWorkspaceReference(reference));
@@ -245,4 +239,3 @@ export function useComposer(params: {
     handleSend, handleKeyDown, handleDrop, handleFilePick,
   };
 }
-

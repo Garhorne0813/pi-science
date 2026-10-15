@@ -133,7 +133,7 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
         sessionId: body.session_id,
         kernelInstanceId: body.kernel_instance_id,
         environmentRevisionId: environment.revision_id,
-        timeoutMs: kernelTimeoutMs,
+        timeoutMs: (body.timeout_seconds ?? 120) * 1_000,
       });
       const after = await snapshotWorkspace(cwd);
       const diff = after ? diffWorkspaceSnapshots(before, after) : { created: [], modified: [] };
@@ -228,7 +228,7 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
         sessionId: body.session_id,
         kernelInstanceId: body.kernel_instance_id,
         environmentRevisionId: environment.revision_id,
-        timeoutMs: kernelTimeoutMs,
+        timeoutMs: (body.timeout_seconds ?? 120) * 1_000,
         onEvent: (event: KernelStreamEvent) => {
           if (!reply.raw.destroyed) reply.raw.write(JSON.stringify(event) + "\n");
         },

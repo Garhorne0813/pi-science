@@ -22,7 +22,7 @@ function Harness() {
     selectedModel: "m",
     reviewingProject: false,
     setReviewNotice: () => undefined,
-    research: { mode: null, draft: null, intent: async () => null },
+    research: { mode: null, setMode: vi.fn() },
     onSend: undefined,
   });
   return <button type="button" onClick={() => void composer.handleSend()}>send</button>;

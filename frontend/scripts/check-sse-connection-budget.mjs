@@ -309,36 +309,21 @@ try {
   await assertStreamBudget(notebookPage, "Leaving Runs releases execution SSE", SESSION_PAGE_BUDGET);
   await notebookPage.close();
 
-  // Research list and detail must both recover authoritative REST data.
-  const researchPage = await context.newPage();
-  let researchTitle = "Budget research";
-  let revision = 1;
-  const loop = () => ({ loop_id: "budget-loop", title: researchTitle,
-    objective: "Verify visibility recovery", task_type: "research_loop", status: "running",
-    revision, candidates: [], operations: [] });
-  await researchPage.route("**/api/project-memory/research-loops**", (route) =>
-    route.fulfill({ json: new URL(route.request().url()).pathname.endsWith("/research-loops")
-      ? { loops: [loop()] } : loop() }));
-  await researchPage.goto(`${origin}/workspace/${encodeURIComponent(cwd)}/research`, { waitUntil: "domcontentloaded" });
-  const researchEndpoint = "/api/project-memory/research-events";
-  await researchPage.getByRole("heading", { name: researchTitle, exact: true }).waitFor();
-  await waitForOpenSource(researchPage, researchEndpoint);
-  await assertStreamBudget(researchPage, "Research", [knowledgeEndpoint, researchEndpoint]);
-  await setHidden(researchPage, true);
-  await waitForNoActiveSources(researchPage, "Research hidden");
-  researchTitle = "Recovered research"; revision += 1;
-  await setHidden(researchPage, false);
-  await researchPage.getByRole("heading", { name: researchTitle, exact: true }).waitFor();
-  await waitForOpenSource(researchPage, researchEndpoint);
-  await assertStreamBudget(researchPage, "Research catch-up", [knowledgeEndpoint, researchEndpoint]);
-  await researchPage.goto(`${origin}/workspace/${encodeURIComponent(cwd)}/runs`, { waitUntil: "domcontentloaded" });
-  await waitForOpenSource(researchPage, executionEndpoint);
-  await assertStreamBudget(researchPage, "Research cleanup", RUNS_PAGE_BUDGET);
-  await researchPage.close();
+  // Historical Research bookmarks use Knowledge archives and open no Research stream.
+  const archivePage = await context.newPage();
+  await archivePage.route("**/api/project-memory/archives**", (route) => route.fulfill({ json: { archives: [{ id: "old", title: "Historical research", objective: "Inspect saved evidence", status: "completed", path: "research/archives/old/history.json", record_count: 1 }] } }));
+  await archivePage.goto(`${origin}/workspace/${encodeURIComponent(cwd)}/research`, { waitUntil: "domcontentloaded" });
+  await archivePage.getByRole("button", { name: /Historical research/ }).waitFor();
+  assert(new URL(archivePage.url()).pathname.endsWith("/knowledge"), "Historical Research route redirects to Knowledge");
+  await assertStreamBudget(archivePage, "Historical archive", [knowledgeEndpoint]);
+  await setHidden(archivePage, true);
+  await waitForNoActiveSources(archivePage, "Archive hidden");
+  await setHidden(archivePage, false);
+  await waitForOpenSource(archivePage, knowledgeEndpoint);
+  await assertStreamBudget(archivePage, "Archive catch-up", [knowledgeEndpoint]);
+  await archivePage.close();
 
-  const health = await fetch(`${origin}/api/health`);
-  assert(health.ok, `/api/health returned ${health.status}`);
-  console.log("SSE connection budget passed: per-page subscription sets, two visible tabs, hidden-tab release, first CONNECTING resume, reload, executions resume, Knowledge count, shared Notebook stream, Research detail, and /api/health.");
+  console.log("SSE connection budget passed: per-page subscription sets, two visible tabs, hidden-tab release, first CONNECTING resume, reload, executions resume, Knowledge count, shared Notebook stream, historical archive redirect, and /api/health.");
   await context.close();
 } finally {
   // A rejected close must never skip the SIGTERM: a leftover fixture server

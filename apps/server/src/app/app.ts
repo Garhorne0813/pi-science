@@ -18,7 +18,7 @@ import { registerModelResourceRoutes } from "../http/routes/model-resource-route
 import { registerExecutionRoutes } from "../http/routes/execution-routes.js";
 import { registerKernelExecutionRoutes } from "../http/routes/kernel-execution-routes.js";
 import { registerNotebookRoutes } from "../http/routes/notebook-routes.js";
-import { knownWorkspacePaths, registerCatalogRoutes, rootDir } from "../http/routes/catalog-routes.js";
+import { registerCatalogRoutes, rootDir } from "../http/routes/catalog-routes.js";
 import { registerProjectRoutes } from "../http/routes/project-routes.js";
 import { registerMcpRoutes } from "../http/routes/mcp-routes.js";
 import { createServerModules, type ServerModules } from "./server-modules.js";
@@ -31,7 +31,7 @@ import { importLegacyState } from "../storage/sqlite/legacy-state.js";
 import { internalAuthCookie, requestInternalToken, tokensMatch } from "../security/internal-auth.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, runtimeCatalog, settings, modelResources, mcp, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
+  const { sessions: nodeSessionService, events, sessionRepository, runtimeCatalog, settings, modelResources, mcp, jobs, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
   let stateReady = !sqliteEnabled;
   let stateError: unknown;
   const app = Fastify({
@@ -174,8 +174,8 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeExecutions !== false) registerExecutionRoutes(app, jobs);
   if (config.nodeExecutions !== false) registerKernelExecutionRoutes(app, config, environments, kernels);
   registerNotebookRoutes(app, notebooks);
-  if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, research, sqliteEnabled ? workspaces : undefined, sqliteEnabled ? mcp : undefined);
-  if (config.nodeProject !== false) registerProjectRoutes(app, research, projectReview);
+  if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, sqliteEnabled ? workspaces : undefined, sqliteEnabled ? mcp : undefined, nodeSessionService);
+  if (config.nodeProject !== false) registerProjectRoutes(app, projectReview);
   app.addHook("onReady", async () => {
     if (sqliteEnabled) {
       try {
@@ -188,13 +188,10 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
         app.log.error({ err: error }, "SQLite state initialization failed");
       }
     }
-    const recoveryRepository = sqliteEnabled && stateReady ? workspaces : undefined;
-    const results = await Promise.allSettled((await knownWorkspacePaths(recoveryRepository)).map((cwd) => research.reconcile(cwd)));
-    for (const result of results) if (result.status === "rejected") app.log.error({ err: result.reason }, "research loop recovery failed");
+
   });
   app.addHook("onClose", async () => nodeSessionService.shutdownAll());
   app.addHook("onClose", async () => titleRuntimes.shutdownAll());
-  app.addHook("onClose", async () => research.shutdown());
   app.addHook("onClose", async () => projectReview.shutdown());
   app.addHook("onClose", async () => kernels.shutdownAll());
   app.addHook("onClose", async () => notebooks.shutdown());

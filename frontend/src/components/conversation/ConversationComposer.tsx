@@ -5,7 +5,7 @@ import { ArrowDown, ArrowUp, File, FolderOpen, Loader2, Plus, Sparkles, Square, 
 import type { SessionStats } from "../../lib/client/pi-science-client";
 import type { useComposer } from "../../hooks/useComposer";
 import type { useModelConfig } from "../../hooks/useModelConfig";
-import type { useResearchLoop } from "../../hooks/useResearchLoop";
+import type { useAutoResearch } from "../../hooks/useAutoResearch";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { findLocalPromptRequest, promptContentDigest } from "../../lib/client/prompt-request-cache";
 import { ConversationStatsLine } from "./ConversationStatsLine";
@@ -17,7 +17,7 @@ const ComposerTodo = lazy(() => import("../todo/ComposerTodo").then((module) => 
 
 type ComposerState = ReturnType<typeof useComposer>;
 type ModelState = ReturnType<typeof useModelConfig>;
-type ResearchState = ReturnType<typeof useResearchLoop>;
+type ResearchState = ReturnType<typeof useAutoResearch>;
 
 export interface ConversationComposerProps {
   workspaceCwd: string;
@@ -206,10 +206,10 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
                   type="button"
                   aria-label={t("conversation.sendMessage")}
                   onClick={composer.handleSend}
-                  disabled={working || model.configuringModel || interactionPending || (!model.selectedModel && !research.mode) || reviewingProject || research.busy || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
+                  disabled={working || model.configuringModel || interactionPending || !model.selectedModel || reviewingProject || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
                   className={cn(
                     "flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full",
-                    ((model.selectedModel || research.mode) && !model.configuringModel && !interactionPending && !reviewingProject && !research.busy && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent-fill text-accent-fg" : "bg-surface-2 text-muted cursor-default",
+                    (model.selectedModel && !model.configuringModel && !interactionPending && !reviewingProject && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent-fill text-accent-fg" : "bg-surface-2 text-muted cursor-default",
                   )}
                 >
                   <ArrowUp size={16} />

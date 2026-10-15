@@ -38,7 +38,7 @@ export const mentionProvider: CompletionProvider = {
     // Agent names stop at punctuation, while a file candidate can own punctuation in its path.
     // Still replace the rest of a partially typed name when the caret sits inside it.
     let mentionEnd = context.caret;
-    while (mentionEnd < query.end && /[a-z0-9_-]/i.test(context.value[mentionEnd])) mentionEnd += 1;
+    while (mentionEnd < query.end && /[a-z0-9_./-]/i.test(context.value[mentionEnd])) mentionEnd += 1;
     for (const agent of context.agents) {
       if (!agent.name.toLowerCase().includes(needle)) continue;
       const token = `@${agent.name}`;

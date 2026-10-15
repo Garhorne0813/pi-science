@@ -125,3 +125,19 @@ describe("project skill service", () => {
     await expect(parseGithubRepo("not-a-repo")).rejects.toThrow(/Expected owner\/repo/i);
   });
 });
+it("preserves skill-local roles and references on import/update and removes the whole tree on uninstall", async () => {
+  const zip = new JSZip();
+  zip.file("bundle/SKILL.md", "---\nname: imported-research\ndescription: Imported research\nlicense: Apache-2.0\n---\nResearch protocol");
+  zip.file("bundle/agents/researcher.md", "---\nname: researcher\ntools: [read]\n---\nBounded analysis");
+  zip.file("bundle/references/evaluation-design.md", "Task-specific evaluation");
+  const bytes = await zip.generateAsync({ type: "nodebuffer" });
+  const skill = await importSkillBundle(cwd(), "research.zip", bytes, "bundle");
+  const { resolveAgentDefinition } = await import("../runtime/agent/agent-definitions.js");
+  expect(await resolveAgentDefinition(cwd(), "imported-research/researcher")).toMatchObject({ prompt: "Bounded analysis" });
+  await updateProjectSkill(cwd(), skill.skill_id, { name: "imported-research", description: "Updated", body: "New protocol" });
+  expect(await readFile(join(cwd(), ".pi/skills/imported-research/references/evaluation-design.md"), "utf8")).toBe("Task-specific evaluation");
+  expect(await resolveAgentDefinition(cwd(), "imported-research/researcher")).toMatchObject({ prompt: "Bounded analysis" });
+  await deleteProjectSkill(cwd(), skill.skill_id);
+  await expect(stat(join(cwd(), ".pi/skills/imported-research"))).rejects.toThrow();
+  await expect(resolveAgentDefinition(cwd(), "imported-research/researcher")).rejects.toThrow("disabled");
+});

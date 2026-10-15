@@ -1,3 +1,4 @@
+import { withWorkspaceAdmission } from "../runtime/workspace/workspace-lifecycle.js";
 import { createHash, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { readProject } from "../project/project-registry.js";
@@ -27,6 +28,10 @@ export class ProjectReviewService {
 
   /** Single-flight per workspace: a concurrent call throws ProjectReviewBusyError. */
   async run(cwd: string, options: ProjectReviewOptions = {}): Promise<ProjectReviewSummary> {
+    return withWorkspaceAdmission(cwd, () => this.runAdmitted(cwd, options));
+  }
+
+  private async runAdmitted(cwd: string, options: ProjectReviewOptions): Promise<ProjectReviewSummary> {
     const key = resolve(cwd);
     if (this.running.has(key)) throw new ProjectReviewBusyError();
     const pending = this.execute(cwd, options).finally(() => { this.running.delete(key); });

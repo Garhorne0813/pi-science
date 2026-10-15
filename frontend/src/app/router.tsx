@@ -1,3 +1,4 @@
+import { LegacyWorkspaceRedirect } from "./routes/LegacyWorkspaceRedirect";
 import { createBrowserRouter, Navigate, useParams } from "react-router-dom";
 import { Suspense, lazy, type ReactElement } from "react";
 import { ProjectsLayout } from "./layout/ProjectsLayout";
@@ -11,7 +12,6 @@ const SettingsPage = lazy(() => import("./routes/SettingsPage").then((m) => ({ d
 const FilesPage = lazy(() => import("./routes/FilesPage").then((m) => ({ default: m.FilesPage })));
 const RunsPage = lazy(() => import("./routes/RunsPage").then((m) => ({ default: m.RunsPage })));
 const KnowledgePage = lazy(() => import("./routes/KnowledgePage").then((m) => ({ default: m.KnowledgePage })));
-const ResearchPage = lazy(() => import("./routes/ResearchPage").then((m) => ({ default: m.ResearchPage })));
 
 function LoadingFallback() {
   const { t } = useTranslation();
@@ -37,7 +37,7 @@ export const router = createBrowserRouter([
       { path: "workspace/:cwd/notebooks", element: <LegacyNotebooksRedirect /> },
       { path: "workspace/:cwd/runs", element: wrap(<RunsPage />) },
       { path: "workspace/:cwd/knowledge", element: wrap(<KnowledgePage />) },
-      { path: "workspace/:cwd/research", element: wrap(<ResearchPage />) },
+      { path: "workspace/:cwd/*", element: <LegacyWorkspaceRedirect /> },
       { path: "workspace/:cwd/settings", element: wrap(<SettingsPage />) },
     ],
   },

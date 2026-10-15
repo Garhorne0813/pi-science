@@ -8,6 +8,9 @@ export interface WorkspaceReference {
   isDir: boolean;
 }
 
+// Core persists the expanded skill for reproducibility; the user bubble shows the objective.
+const SKILL_BLOCK = /^<skill name="([^"]+)" location="[^"]+">\r?\nReferences are relative to [^\n]+\r?\n\r?\n[\s\S]*?\r?\n<\/skill>\s*/;
+const RESEARCH_STARTER = /^(?:\/skill:auto-research\s+)?\[Workflow: (?:research_loop|optimize|compare|evaluate|reproduce)\]\r?\n/;
 const REFERENCE_BLOCK = /<workspace_references>[\s\S]*?<\/workspace_references>\s*/g;
 
 export function injectWorkspaceReferences(message: string, references: WorkspaceReference[]): string {
@@ -19,7 +22,10 @@ export function injectWorkspaceReferences(message: string, references: Workspace
 }
 
 export function visibleUserMessage(message: string): string {
-  return stripSubagentMentionBlock(message.replace(REFERENCE_BLOCK, ""));
+  const skill = message.match(SKILL_BLOCK);
+  let visible = skill ? message.slice(skill[0].length) || `/skill:${skill[1]}` : message;
+  if (skill?.[1] === "auto-research" || message.startsWith("/skill:auto-research [Workflow:")) visible = visible.replace(RESEARCH_STARTER, "");
+  return stripSubagentMentionBlock(visible.replace(REFERENCE_BLOCK, ""));
 }
 
 export function referencesFromMessage(message: string): Array<Pick<WorkspaceReference, "path" | "name" | "isDir">> {

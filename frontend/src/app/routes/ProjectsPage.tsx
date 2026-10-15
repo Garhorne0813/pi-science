@@ -11,7 +11,7 @@ import { ApiError, apiRequest } from "../../lib/client/api";
 import { queryClient } from "../../lib/client/query-client";
 import { timeAgo } from "../../lib/shared";
 import { workspacePathLeaf } from "../../lib/workspace";
-import { randomIdSuffix } from "../../lib/research";
+import { randomIdSuffix } from "../../lib/client/random-id";
 
 interface Workspace {
   name: string;

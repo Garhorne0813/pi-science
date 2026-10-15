@@ -12,9 +12,6 @@ import { ApiError } from "./api";
  * part of the key wherever the server scopes the resource to a workspace.
  *
  *   ["project-memory", "overview" | "timeline" | "experiences", cwd, ...]
- *   ["project-memory", "research-loops", cwd]            loop list
- *   ["project-memory", "research-loops", cwd, loopId]    loop detail
- *   ["project-memory", "research-loops", cwd, loopId, "frontier"]
  *   ["project-knowledge", "summary" | "project" | "proposals" | "items" | …, cwd, …]
  *   ["settings", "config", cwd | null]                   ["settings", "skills"]
  *   ["skills", "list", cwd]                              ["skills", "tools"]

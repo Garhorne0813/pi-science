@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentRuntimeManager } from "./agent-runtime-manager.js";
+import { AgentRuntimeManager, hasActiveWorkspaceRuntimes, closeIdleWorkspaceRuntimes } from "./agent-runtime-manager.js";
 import { AgentRuntimeCapacityError } from "./agent-runtime-errors.js";
 
 const roots: string[] = [];
@@ -31,6 +31,19 @@ describe("AgentRuntimeManager", () => {
     const reopened = await second.start("reopened", { ...options, sessionId: runtime.sessionId });
     expect(reopened.sessionId).toBe(runtime.sessionId);
   }, 20000);
+  it("checks and drains workspace workers across managers without stopping another workspace", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-runtime-lifecycle-")); const other = await mkdtemp(join(tmpdir(), "pi-science-runtime-other-")); roots.push(cwd, other);
+    await mkdir(join(cwd, ".pi-science")); await mkdir(join(other, ".pi-science"));
+    const first = new AgentRuntimeManager(), second = new AgentRuntimeManager(); managers.push(first, second);
+    const options = { cwd, sessionsRoot: join(cwd, ".pi-science/agent-sessions"), model: { provider: "openai", modelId: "gpt-4.1-mini" } };
+    const runtime = await first.start("hidden", options);
+    await second.start("unrelated", { ...options, cwd: other, sessionsRoot: join(other, ".pi-science/agent-sessions") });
+    const snapshot = vi.spyOn(runtime, "sendCommand").mockResolvedValue({ success: true, data: { busy: true } });
+    expect(await hasActiveWorkspaceRuntimes(cwd)).toBe(true);
+    snapshot.mockRestore(); expect(await hasActiveWorkspaceRuntimes(cwd)).toBe(false);
+    await closeIdleWorkspaceRuntimes(cwd); expect(first.processCount).toBe(0); expect(second.processCount).toBe(1);
+  }, 20000);
+
   it("deduplicates opens of the same session and clears ownership on exit", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-agent-manager-"));
     roots.push(cwd);

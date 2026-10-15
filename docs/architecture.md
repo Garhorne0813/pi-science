@@ -36,7 +36,7 @@ agent host. The SQLite service uses a separate **worker thread**.
 | `SessionRuntime` / AgentHarness | Lane execution, tools, model configuration, compaction and durable operation results | Browser presentation |
 | `AgentSessionRepository` | Read-only projection of Core sessions into product history | A parallel transcript authority |
 | `ConversationEventHub` | Product event identity, persistence, delivery and product side effects | Invented Core completion results |
-| Scientific services | Kernel, notebook, execution, artifact and research orchestration state | Model reasoning |
+| Scientific services | Kernel, notebook, execution, artifact and scientific execution state | Model reasoning |
 
 The repository installer builds the control plane, Workers and frontend. Default
 startup serves the frontend and API from compiled JavaScript at
@@ -59,7 +59,7 @@ templates use Core loaders for configured skill paths, `.pi/skills/` and
 `.pi/prompts/`; product policy determines which resources can be invoked.
 
 The tool set combines Core `read`, `bash`, `edit` and `write` with product tools
-for notebooks, todo, subagents and browser questionnaires. Notebook tools call
+for notebooks, todo, subagents, execution budgets and browser questionnaires. Notebook tools call
 the Node notebook/kernel services. There is no general-purpose extension runtime
 implied by this integration; supported tools and limits are listed in the
 [capability inventory](agent-core-capability-inventory.md).
@@ -70,7 +70,6 @@ Hidden tasks share the same manager capacity and session repository:
 | --- | --- |
 | Conversation | Configured tools and skills; durable visible session |
 | Conversation subagent | Parent-scoped tools and model policy; hidden child session |
-| Research supervisor | `read` and `subagent`; hidden session |
 | Project review | No tools; hidden session |
 | AI title | No tools or skills, thinking off; disposable hidden session, using the configured default model |
 
@@ -176,12 +175,12 @@ The metadata root contains these stores, created as needed:
 ├── memory/ledger.json            # reviewed knowledge, proposals and decisions
 ├── mcp-runtime.json              # generated connector policy, credential references only
 ├── runs/                        # execution workspaces and outputs
-├── solutions/                   # immutable research candidates
+├── solutions/                   # legacy immutable research candidates
 ├── session-titles.jsonl
 ├── turn-artifacts.jsonl
 ├── artifacts.jsonl
 ├── provenance.jsonl
-└── research-records-v2.jsonl
+└── research-records-v2.jsonl     # retained read-only legacy archive source
 ```
 
 The global config root is `PI_SCIENCE_HOME`, or `~/.pi-science` by default, with a
@@ -250,11 +249,15 @@ file SHA-256 or selected cell revisions; source changes clear stale outputs.
 Execution writes bounded outputs atomically and records execution/artifact
 provenance. Artifact-publication failures remain visible as execution evidence.
 
-Node owns research-loop state, revisions, budgets, deterministic evaluation and
-stop decisions. Hidden Core Workers generate candidates and analyze results;
-`JobCoordinator` executes candidate/evaluator commands. Immutable snapshots and
-append-only records support recovery. See the
-[research-loop ADR](adr-research-loop-subagents.md).
+Auto Research is a skill executed by the current Conversation Agent. The Agent
+owns planning, dynamic delegation, iteration and stop decisions; task-specific
+evaluation protocols/evaluators and checkpoints are ordinary research files.
+Generic `execution_budget` enforces durable tool-call/time limits, and existing
+kernel/job/connector timeouts remain in force. Researcher/Reviewer skill-local
+roles use the existing dispatcher and narrower child permissions. No standalone
+Research API, supervisor or scheduler remains. Historical records and referenced
+outputs are available through read-only Knowledge archives. See
+[Auto Research](auto-research.md) for migration and recovery boundaries.
 
 ## Trust, diagnostics and implementation references
 

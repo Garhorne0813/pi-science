@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { artifactManifestSchema, conversationEventV3Schema, conversationSnapshotSchema, conversationToolUpdatedPayloadSchema, createResearchLoopSchema, createSessionRequestSchema, defaultProgressAppearance, executionEventSchema, executionRecordSchema, gatewayHealthSchema, jobRecordSchema, progressAppearanceInputSchema, progressAppearanceSchema, researchLoopSchema, sessionEventSchema, sessionMessagePageSchema, sessionStatsSchema, sessionUserMessageIndexSchema, skillContentSchema, textDeltaPayloadSchema } from "./index.js";
+import { artifactManifestSchema, conversationEventV3Schema, conversationSnapshotSchema, conversationToolUpdatedPayloadSchema, createSessionRequestSchema, defaultProgressAppearance, executionEventSchema, executionRecordSchema, gatewayHealthSchema, jobRecordSchema, progressAppearanceInputSchema, progressAppearanceSchema, sessionEventSchema, sessionMessagePageSchema, sessionStatsSchema, sessionUserMessageIndexSchema, skillContentSchema, textDeltaPayloadSchema } from "./index.js";
 
 describe("gateway contracts", () => {
   it("accepts a healthy Node gateway response", () => {
@@ -74,17 +74,6 @@ describe("gateway contracts", () => {
     expect(sessionMessagePageSchema.parse({ messages: [] })).toMatchObject({ next_cursor: null, has_more: false, snapshot_version: "" });
     expect(sessionUserMessageIndexSchema.parse({ messages: [{ id: "u1", text: "hello", before: "cursor" }] })).toMatchObject({ snapshot_version: "" });
     expect(() => sessionMessagePageSchema.parse({ messages: [], has_more: "yes" })).toThrow();
-  });
-
-  it("preserves research task types while defaulting legacy loops", () => {
-    expect(createResearchLoopSchema.parse({ title: "Tune latency", objective: "Minimize latency", task_type: "optimize" }).task_type).toBe("optimize");
-    expect(createResearchLoopSchema.parse({ title: "Legacy", objective: "Explore" }).task_type).toBe("research_loop");
-    expect(researchLoopSchema.parse({
-      loop_id: "loop-1", title: "Legacy", objective: "Explore", status: "draft",
-      budget: { max_candidates: 2, max_wall_seconds: 60, max_parallel: 1 },
-      stop_conditions: { target_metrics: {}, patience: 3, min_improvement: 0 },
-      created_at: "now", updated_at: "now",
-    }).task_type).toBe("research_loop");
   });
 
   it("validates skill content and rejects absolute locations", () => {
