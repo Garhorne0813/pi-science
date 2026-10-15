@@ -131,18 +131,22 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     return { status: "ready", service: "pi-science-server", control_plane: "node", sqlite: sqliteEnabled ? diagnostics : { status: "disabled", schema_version: null, journal_mode: null, pending_requests: 0 } };
   });
 
-  app.get("/internal/diagnostics", async () => {
-    const modelState = new ModelConfigService().readSync();
-    return {
-      sqlite: sqliteEnabled ? stateStore.diagnostics() : { status: "disabled" },
-      model_resources: {
-        schema_version: modelState.schema_version,
-        revision: modelState.revision,
-        provider_count: Object.keys(modelState.config.providers).length,
-        model_count: Object.values(modelState.config.providers).reduce((count, provider) => count + (provider.models?.length ?? 0), 0),
-        credential_ref_count: Object.keys(modelState.credential_refs).length,
-      },
-    };
+  // Isolate filesystem-backed diagnostics from unthrottled health probes.
+  void app.register(async (diagnosticsScope) => {
+    await diagnosticsScope.register(rateLimit, { global: false });
+    diagnosticsScope.get("/internal/diagnostics", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async () => {
+      const modelState = new ModelConfigService().readSync();
+      return {
+        sqlite: sqliteEnabled ? stateStore.diagnostics() : { status: "disabled" },
+        model_resources: {
+          schema_version: modelState.schema_version,
+          revision: modelState.revision,
+          provider_count: Object.keys(modelState.config.providers).length,
+          model_count: Object.values(modelState.config.providers).reduce((count, provider) => count + (provider.models?.length ?? 0), 0),
+          credential_ref_count: Object.keys(modelState.credential_refs).length,
+        },
+      };
+    });
   });
 
   if (config.nodeSessions || config.nodePiManager) registerSessionReadRoutes(app, sessionRepository, nodeSessionService);
