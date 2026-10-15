@@ -47,7 +47,7 @@ export function projectedEnvironmentNames(workspace: string): string[] {
   return [...names];
 }
 
-function loadProjectedSnapshot(workspace: string): ProjectedSnapshot {
+export function loadProjectedSnapshot(workspace: string): ProjectedSnapshot {
   let projected: ProjectedSnapshot = { version: 1, project_id: "empty", mcpServers: {} };
   const stateRoot = process.env.PI_SCIENCE_STATE_ROOT;
   let snapshotPath = join(workspace, ".pi-science", "mcp-runtime.json");

@@ -46,3 +46,41 @@ it("fails closed on a corrupt saved budget instead of replenishing it", async ()
   await mkdir(join(path, ".."), { recursive: true }); await writeFile(path, JSON.stringify({ deadline: 1, maxExecutions: -1, used: 100 }));
   await expect(budget.tool.execute("setup", { max_seconds: 30 }, () => {}, env, invocation("setup"), BACKGROUND_CONTEXT)).rejects.toThrow("refusing to reset");
 });
+
+it("shares one persistent research allowance across parent, parallel children, recreation and continuation", async () => {
+  const cwd = await workspace(); const parent = executionBudgetTools(cwd);
+  await parent.tool.execute("setup", { research_id: "study-1", max_seconds: 30, max_executions: 2 }, () => {}, env, invocation("setup"), BACKGROUND_CONTEXT);
+  const child = executionBudgetTools(cwd, "operation");
+  const base = { ...parent.tool, name: "bash", execute: async () => ({ content: [], details: {} }) };
+  const results = await Promise.allSettled([child, executionBudgetTools(cwd, "operation"), executionBudgetTools(cwd, "operation")].map((budget, index) =>
+    budget.wrap(base).execute(String(index), {}, () => {}, env, { ...invocation(String(index)), operationId: `child-${index}` }, BACKGROUND_CONTEXT)));
+  expect(results.filter((value) => value.status === "fulfilled")).toHaveLength(2);
+  const restored = executionBudgetTools(cwd);
+  const continuation = { ...invocation("resume"), operationId: "continuation" };
+  const status = await restored.tool.execute("resume", { research_id: "study-1", max_seconds: 3600, max_executions: 100 }, () => {}, env, continuation, BACKGROUND_CONTEXT);
+  expect(status.details).toMatchObject({ used: 2, maxExecutions: 2, remaining_executions: 0 });
+  await expect(restored.wrap(base).execute("later", {}, () => {}, env, continuation, BACKGROUND_CONTEXT)).rejects.toThrow("budget exhausted");
+  await expect(child.tool.execute("scope", { research_id: "fresh" }, () => {}, env, invocation("scope"), BACKGROUND_CONTEXT)).rejects.toThrow("Children cannot change");
+  await expect(restored.tool.execute("scope", { research_id: "fresh" }, () => {}, env, continuation, BACKGROUND_CONTEXT)).rejects.toThrow("Cannot change");
+});
+
+it("reserves across simultaneous children without refunding failed calls or exceeding the cap", async () => {
+  const cwd = await workspace(); const parent = executionBudgetTools(cwd);
+  await parent.tool.execute("setup", { max_seconds: 30, max_executions: 1 }, () => {}, env, invocation("setup"), BACKGROUND_CONTEXT);
+  let calls = 0;
+  const base = { ...parent.tool, name: "bash", execute: async () => { calls++; throw new Error("candidate failed"); } };
+  const results = await Promise.allSettled(["a", "b"].map((id) => executionBudgetTools(cwd, "operation").wrap(base).execute(id, {}, () => {}, env,
+    { ...invocation(id), operationId: `child-${id}` }, BACKGROUND_CONTEXT)));
+  expect(calls).toBe(1);
+  expect(results.map((value) => value.status === "rejected" ? String(value.reason) : "ok").sort()).toEqual(["Error: Execution call budget exhausted", "Error: candidate failed"]);
+  const status = await parent.tool.execute("inspect", {}, () => {}, env, invocation("inspect"), BACKGROUND_CONTEXT);
+  expect(status.details).toMatchObject({ used: 1, remaining_executions: 0 });
+});
+
+it("rejects late scope binding and refuses to recreate a missing inherited budget", async () => {
+  const cwd = await workspace(); const budget = executionBudgetTools(cwd);
+  await budget.tool.execute("setup", { max_executions: 1 }, () => {}, env, invocation("setup"), BACKGROUND_CONTEXT);
+  await expect(budget.tool.execute("bind", { research_id: "late" }, () => {}, env, invocation("bind"), BACKGROUND_CONTEXT)).rejects.toThrow("before the first execution");
+  const child = executionBudgetTools(cwd, "missing-owner");
+  await expect(child.tool.execute("setup", {}, () => {}, env, invocation("setup"), BACKGROUND_CONTEXT)).rejects.toThrow("Missing inherited");
+});

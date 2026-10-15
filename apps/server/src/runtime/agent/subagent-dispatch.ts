@@ -51,13 +51,35 @@ export function bindSubagentDispatch(manager: AgentRuntimeManager, parent: Agent
           const policy = resources.success ? resources.data?.policy ?? options.skillPolicy : options.skillPolicy;
           const definition = await resolveAgentDefinition(options.cwd, item.agent, policy);
           const prompt = definition.prompt;
-          const allowedTools = childToolAllowance(definition.tools, options.allowedTools);
+          const state = await parent.sendCommand("get_state");
+          if (!state.success || !state.data) throw new Error("Cannot establish parent tool permissions");
+          const allowedTools = childToolAllowance(definition.tools, state.data.activeTools, item.agent);
           keys.add(key);
           try {
             const child = await openHiddenTask(manager, key, { ...options, sessionId: undefined, systemPrompt: prompt,
-              depth: (options.depth ?? 0) + 1, allowedTools, skillPolicy: policy ?? { mode: "inherit" } }, parent.sessionId);
+              depth: (options.depth ?? 0) + 1, allowedTools, delegatedAgent: item.agent,
+              budgetOperationId: options.budgetOperationId ?? String(event.operationId), skillPolicy: policy ?? { mode: "inherit" } }, parent.sessionId);
             if (cancelled.has(id) || parent.isClosed) throw new Error("Subagent cancelled");
-            const output = await runHiddenPrompt(child, item.task.replaceAll("{previous}", previous), `${event.invocationId}:${index}`, deadline);
+            const authorize = (request: RuntimeEvent) => {
+              if (request.type !== "capability.requested") return;
+              const check = async () => {
+                if (cancelled.has(id) || parent.isClosed) throw new Error("Subagent cancelled");
+                const resources = await parent.sendCommand("get_skills");
+                const state = await parent.sendCommand("get_state");
+                if (!resources.success || !state.success || !state.data) throw new Error("Parent permissions unavailable");
+                if (namespace && !resources.data?.skills.some((skill) => skill.name === namespace && skill.enabled)) throw new Error(`Unknown or disabled agent: ${item.agent}`);
+                const current = await resolveAgentDefinition(options.cwd, item.agent, resources.data?.policy);
+                const tool = String(request.tool);
+                if (!allowedTools.includes(tool) || !childToolAllowance(current.tools, state.data.activeTools, item.agent).includes(tool)) throw new Error(`Delegated tool revoked: ${tool}`);
+                return { success: true };
+              };
+              track(check().then((result) => child.sendNotification("subagent_response", { id: String(request.id), result }),
+                (error) => child.sendNotification("subagent_response", { id: String(request.id), result: { success: false, error: String(error) } })).catch(() => undefined));
+            };
+            child.on("event", authorize);
+            let output: string;
+            try { output = await runHiddenPrompt(child, item.task.replaceAll("{previous}", previous), `${event.invocationId}:${index}`, deadline); }
+            finally { child.off("event", authorize); }
             const stats = await child.sendCommand("get_session_stats");
             const result = { agent: item.agent, task: item.task, childSessionId: child.sessionId, exitCode: 0,
               output, usage: stats.success ? stats.data : undefined };

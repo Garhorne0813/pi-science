@@ -4,7 +4,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { AgentHarnessTool, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import type { TSchema } from "typebox";
-import { loadProjectedServers } from "../../shared/extensions/pi-science-mcp.js";
+import { loadProjectedServers, loadProjectedSnapshot } from "../../shared/extensions/pi-science-mcp.js";
 import { builtinNetworkEnvironment } from "../../../mcp/bindings.js";
 import { createMcpFetch } from "../../../mcp/runtime-fetch.js";
 import { UnixSocketClientTransport } from "../../../mcp/connector-probe.js";
@@ -69,22 +69,23 @@ export class AgentMcpTools {
   readonly diagnostics: string[] = [];
 
   static async open(cwd: string, bridge: InteractionBridge, environment: Record<string, string>, budgetMs = DISCOVERY_BUDGET_MS,
-    allowedTools?: readonly string[]): Promise<AgentMcpTools> {
+    allowedTools?: readonly string[], preauthorizedOnly = false): Promise<AgentMcpTools> {
     const result = new AgentMcpTools();
     const capabilities = allowedTools === undefined ? undefined : new Set(allowedTools);
+    const rawSnapshot = loadProjectedSnapshot(cwd);
     const servers = loadProjectedServers(cwd, (name, error) => {
       result.diagnostics.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
-    }, (name) => capabilities === undefined || [...capabilities].some((tool) => tool.startsWith(`mcp__${name}__`))) as Record<string, ServerDefinition>;
+    }, (name) => capabilities === undefined || [...capabilities].some((tool) => tool.split("__").length === 3 && tool.split("__")[1] === name)) as Record<string, ServerDefinition>;
     const deadline = Date.now() + budgetMs;
     await Promise.all(Object.entries(servers).map(async ([name, server]) => {
-      try { await result.connect(name, server, cwd, bridge, environment, deadline, capabilities); }
+      try { await result.connect(name, server, cwd, bridge, environment, deadline, capabilities, preauthorizedOnly, rawSnapshot.mcpServers[name]); }
       catch (error) { result.diagnostics.push(`${name}: ${error instanceof Error ? error.message : String(error)}${typeof (error as { code?: unknown }).code === "number" ? ` (HTTP ${(error as { code: number }).code})` : ""}`); }
     }));
     return result;
   }
 
   private async connect(name: string, server: ServerDefinition, cwd: string, bridge: InteractionBridge, environment: Record<string, string>, deadline: number,
-    capabilities?: ReadonlySet<string>): Promise<void> {
+    capabilities?: ReadonlySet<string>, preauthorizedOnly = false, initial?: Record<string, unknown>): Promise<void> {
     if (server.auth === "oauth" && !Object.keys(server.headers ?? {}).some((key) => key.toLowerCase() === "authorization")) {
       throw new Error("OAuth MCP connector requires an authorized credential binding");
     }
@@ -104,6 +105,21 @@ export class AgentMcpTools {
         ? new SSEClientTransport(new URL(server.url), { fetch: checkedFetch, requestInit })
         : new StreamableHTTPClientTransport(new URL(server.url), { fetch: checkedFetch, requestInit });
     } else throw new Error("unsupported MCP transport");
+    const connectionIdentity = (value: Record<string, unknown> | undefined) => {
+      if (!value) return "";
+      const { approveTools, includeTools, excludeTools, __piScienceAllowedTools, ...connection } = value;
+      return JSON.stringify(connection);
+    };
+    const initialIdentity = connectionIdentity(initial);
+    const currentPolicy = (toolName: string): ServerDefinition => {
+      const snapshot = loadProjectedSnapshot(cwd);
+      const current = snapshot.mcpServers[name] as ServerDefinition | undefined;
+      if (!current || snapshot.project_id !== server.__piScienceProjectId || connectionIdentity(current) !== initialIdentity || !visible(current, toolName)) {
+        throw new Error(`MCP tool disabled or connector changed: ${name}: ${toolName}; refresh the worker`);
+      }
+      return current;
+    };
+    if (connectionIdentity(loadProjectedSnapshot(cwd).mcpServers[name]) !== initialIdentity) throw new Error("MCP connector changed during discovery");
     const client = new Client({ name: "pi-science-agent-core", version: "0.1.0" });
     try {
       await beforeDeadline(client.connect(transport, { timeout: Math.min(server.requestTimeoutMs ?? 15_000, Math.max(1, deadline - Date.now())) }), deadline, client);
@@ -119,11 +135,17 @@ export class AgentMcpTools {
           description: tool.description ?? `${name} MCP tool ${tool.name}`,
           parameters: tool.inputSchema as TSchema,
           async execute(_toolCallId, params, _onUpdate, _toolContext, _invocation, context) {
-            if (permissionRequired(server, tool.name)) {
+            let policy = currentPolicy(tool.name);
+            if (permissionRequired(policy, tool.name)) {
+              if (preauthorizedOnly) throw new Error(`Delegated MCP tool requires explicit preauthorization in MCP settings: ${name}: ${tool.name}`);
               const approved = await bridge.confirmPermission(`Allow ${name}: ${tool.name}?`,
                 `Arguments: ${JSON.stringify(params).slice(0, 4_000)}`, context.abortSignal);
               if (!approved) return { content: [{ type: "text", text: "MCP tool call was declined by the user" }], details: { declined: true }, isError: true };
             }
+            // Approval may race with connector disable/revocation. Recheck before dispatch.
+            policy = currentPolicy(tool.name);
+            if (preauthorizedOnly && permissionRequired(policy, tool.name)) throw new Error("Delegated MCP authorization revoked");
+            if (context.abortSignal?.aborted) throw context.abortSignal.reason;
             const response = await client.callTool({ name: tool.name, arguments: params as Record<string, unknown> }, undefined,
               { signal: context.abortSignal, timeout: server.requestTimeoutMs ?? 60_000 });
             const parts = Array.isArray(response.content) ? response.content as Array<Record<string, unknown>> : [];

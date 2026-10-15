@@ -45,3 +45,16 @@ it("skips malformed project and skill definitions while resolving valid neighbor
   const names = (await discoverAgentDefinitions(cwd)).map((agent) => agent.name);
   expect(names).not.toContain("broken"); expect(names).not.toContain("bad-tools"); expect(names).not.toContain("lab/broken");
 });
+
+it("delegates only exact MCP capabilities in the effective parent set", () => {
+  const tools = ["read", "mcp__web-access__web_search", "mcp__web-access__fetch_content", "mcp__science__lookup", "mcp__web-access__*", "mcp__foo__bar__baz", "ask_user_question"];
+  expect(childToolAllowance(tools, ["read", "mcp__web-access__web_search", "mcp__web-access__*", "mcp__foo__bar__baz", "ask_user_question"]))
+    .toEqual(["read", "mcp__web-access__web_search"]);
+  expect(childToolAllowance(tools, [])).toEqual([]);
+  expect(childToolAllowance(tools)).toEqual([]);
+});
+
+it("enforces the experimenter's safe fallback even if a project role declares execution or writes", () => {
+  const tools = ["read", "write", "edit", "bash", "notebook_run", "mcp__science__execute", "subagent"];
+  expect(childToolAllowance(tools, tools, "auto-research/experimenter")).toEqual(["read"]);
+});

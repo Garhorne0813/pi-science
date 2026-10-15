@@ -28,13 +28,14 @@ async function workspace() {
   return cwd;
 }
 
-async function modelFixture(answer: (body: { messages: Array<{ role: string; content: string }>; tools?: unknown[] }, index: number) => string | { name: string; args: unknown } | null) {
+type ModelAnswer = string | { name: string; args: unknown } | null;
+async function modelFixture(answer: (body: { messages: Array<{ role: string; content: string }>; tools?: unknown[] }, index: number) => ModelAnswer | Promise<ModelAnswer>) {
   const cwd = await workspace();
   let count = 0;
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
-    const value = answer(JSON.parse(Buffer.concat(chunks).toString()), ++count);
+    const value = await answer(JSON.parse(Buffer.concat(chunks).toString()), ++count);
     if (value === null) return;
     const tool = typeof value !== "string";
     response.writeHead(200, { "content-type": "text/event-stream" });
@@ -102,6 +103,80 @@ describe("agent-core product tools", () => {
     expect(await runHiddenPrompt(reopened, "Delegate", "delegate-once", Date.now() + 10000)).toBe("Parent synthesis");
     expect(fixture.requests()).toBe(3);
   }, 20000);
+
+  it("lets an authorized researcher search and fetch through real child IPC while spending the parent's research budget", async () => {
+    const fixture = await modelFixture((body) => {
+      const system = body.messages[0]!.content;
+      const completed = body.messages.filter((item) => item.role === "tool").length;
+      if (system.includes("You are a research subagent")) {
+        if (!completed) return { name: "mcp__web-access__web_search", args: {} };
+        if (completed === 1) return { name: "mcp__web-access__fetch_content", args: {} };
+        return "Source URL https://example.org/paper; retrieved fixture evidence. responseId is temporary.";
+      }
+      if (!completed) return { name: "execution_budget", args: { research_id: "retrieval-study", max_executions: 3, max_seconds: 30 } };
+      if (completed === 1) return { name: "subagent", args: { agent: "auto-research/researcher", task: "Search then fetch evidence; return original URL and excerpt." } };
+      return "Researcher evidence saved for synthesis.";
+    });
+    const { seedWorkspaceAssets } = await import("./runtime-config.js"); seedWorkspaceAssets(fixture.cwd);
+    const server = join(fixture.cwd, "mcp-fixture.mjs");
+    await writeFile(server, [
+      `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
+      `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
+      `const server = new McpServer({ name: "web-fixture", version: "1" });`,
+      `for (const name of ["web_search", "fetch_content"]) server.registerTool(name, { description: name }, async () => ({ content: [{ type: "text", text: "https://example.org/paper: fixture evidence" }] }));`,
+      `await server.connect(new StdioServerTransport());`,
+    ].join("\n"));
+    await writeFile(join(fixture.cwd, ".pi-science/mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "retrieval_project", mcpServers: {
+      "web-access": { command: process.execPath, args: [server], approveTools: true,
+        __piScienceAllowedTools: ["web_search", "fetch_content"], __piScienceConnectorId: "connector_web" },
+    } }));
+    const manager = new AgentRuntimeManager(); cleanup.push(() => manager.shutdownAll());
+    const parent = await openHiddenTask(manager, "retrieval-parent", { cwd: fixture.cwd, sessionsRoot: join(fixture.cwd, ".pi-science/agent-sessions"),
+      model: fixture.model, thinking: "off", allowedTools: ["read", "subagent", "execution_budget", "mcp__web-access__web_search", "mcp__web-access__fetch_content"] }, "retrieval-owner");
+    const interactions: unknown[] = []; parent.on("event", (event) => { if (event.type === "interaction.requested") interactions.push(event); });
+    expect(await runHiddenPrompt(parent, "Retrieve evidence", "retrieval-once", Date.now() + 30000)).toContain("evidence saved");
+    const history = await new AgentSessionRepository().messages(fixture.cwd, parent.sessionId);
+    const delegated = history.find((item) => item.toolName === "subagent")!;
+    expect(delegated).toMatchObject({ details: { results: [{ exitCode: 0, output: expect.stringContaining("https://example.org/paper") }] } });
+    const details = delegated.details as { results: Array<{ childSessionId: string }> };
+    const child = await new AgentSessionRepository().messages(fixture.cwd, details.results[0]!.childSessionId);
+    expect(child.filter((item) => item.role === "toolResult").map((item) => item.toolName)).toEqual(["mcp__web-access__web_search", "mcp__web-access__fetch_content"]);
+    expect(interactions).toEqual([]);
+    const { executionBudgetTools } = await import("./worker/execution-budget.js");
+    const budget = executionBudgetTools(fixture.cwd);
+    const status = await budget.tool.execute("resume", { research_id: "retrieval-study" }, () => {}, { env: {} as NodeExecutionEnv },
+      { operationId: "resume-operation", invocationId: "resume", turnId: "resume", getMemo: async () => undefined, setMemo: async () => {} }, BACKGROUND_CONTEXT);
+    expect(status.details).toMatchObject({ used: 3, remaining_executions: 0 });
+  }, 40000);
+
+  it("discovers the experimenter with read-only code generation and checks live role revocation before a child tool call", async () => {
+    let parent: Awaited<ReturnType<typeof openHiddenTask>>;
+    let checkedRevocation = false;
+    const fixture = await modelFixture(async (body) => {
+      const system = body.messages[0]!.content;
+      if (system.includes("You are an experimenter subagent")) {
+        const names = (body.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name);
+        expect(names).toEqual(["read"]);
+        if (!body.messages.some((item) => item.role === "tool")) {
+          await parent.sendCommand("set_skill_policy", { policy: { mode: "none" } });
+          return { name: "read", args: { path: "private.txt" } };
+        }
+        expect(JSON.stringify(body.messages)).toContain("disabled agent");
+        expect(JSON.stringify(body.messages)).not.toContain("PRIVATE CONTENT");
+        checkedRevocation = true;
+        return "Candidate generation blocked by revoked skill; no execution performed.";
+      }
+      if (!body.messages.some((item) => item.role === "tool")) return { name: "subagent", args: { agent: "auto-research/experimenter", task: "Read private.txt and propose candidate-001." } };
+      return "Revocation respected.";
+    });
+    const { seedWorkspaceAssets } = await import("./runtime-config.js"); seedWorkspaceAssets(fixture.cwd);
+    await writeFile(join(fixture.cwd, "private.txt"), "PRIVATE CONTENT");
+    const manager = new AgentRuntimeManager(); cleanup.push(() => manager.shutdownAll());
+    parent = await openHiddenTask(manager, "experiment-parent", { cwd: fixture.cwd, sessionsRoot: join(fixture.cwd, ".pi-science/agent-sessions"),
+      model: fixture.model, thinking: "off", allowedTools: ["read", "write", "bash", "subagent"] }, "experiment-owner");
+    expect(await runHiddenPrompt(parent, "Generate a candidate", "experiment-once", Date.now() + 20000)).toBe("Revocation respected.");
+    expect(checkedRevocation).toBe(true);
+  }, 30000);
 
   it("runs literature research with parallel skill-local roles under the parent's permissions", async () => {
     const observed: Array<{ system: string; tools: unknown[] }> = [];

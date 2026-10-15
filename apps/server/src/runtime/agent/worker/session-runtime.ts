@@ -149,11 +149,11 @@ export class SessionRuntime {
       // Capability checks precede discovery: a tool-free worker must not spawn
       // connectors, open connections, or materialize their credentials.
       if (options.allowedTools === undefined || options.allowedTools.some((name) => name.startsWith("mcp__"))) {
-        mcp = await AgentMcpTools.open(options.cwd, interactions, options.env ?? {}, undefined, options.allowedTools);
+        mcp = await AgentMcpTools.open(options.cwd, interactions, options.env ?? {}, undefined, options.allowedTools, options.delegatedAgent !== undefined);
       }
       const skillPolicy = options.skillPolicy ?? { mode: "inherit" };
       const subagents = new SubagentBridge(emit);
-      const budgets = executionBudgetTools(options.cwd);
+      const budgets = executionBudgetTools(options.cwd, options.budgetOperationId);
       const { harness, open } = await AgentHarness.create({
         session,
         models,
@@ -165,7 +165,12 @@ export class SessionRuntime {
           execution.inheritEnv = false;
         } })), createEditTool(), createWriteTool(),
           todoHarnessTool(session), budgets.wrap(subagentHarnessTool(subagents)), ...notebookHarnessTools(options.cwd, session.metadata.id).map(budgets.wrap), questionnaireHarnessTool(interactions), ...(mcp?.tools ?? []).map(budgets.wrap)]
-          .filter((tool) => !options.allowedTools || options.allowedTools.includes(tool.name)),
+          .filter((tool) => !options.allowedTools || options.allowedTools.includes(tool.name))
+          .map((tool) => !options.delegatedAgent ? tool : { ...tool, async execute(id, params, update, ctx, invocation, context) {
+            const permission = await subagents.request({ tool: tool.name }, context.abortSignal, "capability.requested");
+            if (!permission.success) throw new Error(permission.error ?? "Delegated capability denied");
+            return tool.execute(id, params, update, ctx, invocation, context);
+          } }),
         toolContext: { env: executionEnv },
         resources: { skills: applySkillPolicy(discovered.skills, skillPolicy), promptTemplates: templates.promptTemplates },
         systemPrompt: options.systemPrompt ?? "You are a helpful scientific research assistant.",

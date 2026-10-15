@@ -10,6 +10,7 @@ success: [<observable success criteria>]
 evidence_checks: [coverage, source_independence, citation_integrity]
 constraints: [reproducibility, no_data_leakage]
 budget:
+  research_id: <research-id> # bind execution_budget before the first costly call
   max_seconds: 600
   max_execution_calls: 20
   max_experiments: 5

@@ -63,6 +63,7 @@ export async function resolveAgentDefinition(cwd: string, name: string, policy?:
   if (!definition) throw new Error(`Unknown or disabled agent: ${name}`);
   return definition;
 }
-export function childToolAllowance(tools: string[], parent?: string[]): string[] {
-  return tools.filter((name) => (!parent || parent.includes(name)) && name !== "ask_user_question" && !name.startsWith("mcp_"));
+export function childToolAllowance(tools: string[], parent: string[] = [], agentName?: string): string[] {
+  // Until a process/filesystem sandbox exists, role overrides cannot enable candidate execution.
+  return tools.filter((name) => (agentName !== "auto-research/experimenter" || name === "read") && parent.includes(name) && name !== "ask_user_question" && (!name.startsWith("mcp_") || name.split("__").length === 3 && /^mcp__[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+$/.test(name)));
 }

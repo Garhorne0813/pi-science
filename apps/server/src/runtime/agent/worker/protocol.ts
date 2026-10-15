@@ -11,6 +11,9 @@ export interface AgentRuntimeStartOptions {
   depth?: number;
   /** Exact tool capabilities. Without an mcp__ capability, MCP discovery is skipped. */
   allowedTools?: string[];
+  /** Hidden children spend against the owning operation, never a fresh quota. */
+  budgetOperationId?: string;
+  delegatedAgent?: string;
   sessionsRoot: string;
   model: { provider: string; modelId: string };
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -39,6 +42,7 @@ export type WorkerEvent =
 const startOptionsSchema = z.object({
   cwd: z.string().min(1), sessionsRoot: z.string().min(1), sessionId: z.string().min(1).optional(),
   parentSessionId: z.string().optional(), depth: z.number().int().nonnegative().optional(), allowedTools: z.array(z.string()).optional(),
+  budgetOperationId: z.string().min(1).optional(), delegatedAgent: z.string().min(1).optional(),
   model: z.object({ provider: z.string().min(1), modelId: z.string().min(1) }).strict(),
   thinking: z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
   settings: z.object({ compaction_enabled: z.boolean().optional(), compaction_threshold_percent: z.number().min(50).max(95).optional(),

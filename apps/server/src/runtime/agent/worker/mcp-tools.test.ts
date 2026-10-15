@@ -50,6 +50,43 @@ describe("agent-core managed MCP tools", () => {
     }
   }, 20000);
 
+  it("requires explicit child preauthorization and rechecks deny, revocation, disabled connectors and identity on every call", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-child-mcp-"));
+    let mcp: AgentMcpTools | undefined;
+    try {
+      await mkdir(join(cwd, ".pi-science"));
+      const server = join(cwd, "server.mjs");
+      await writeFile(server, [
+        `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
+        `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
+        `const server = new McpServer({ name: "test", version: "1" });`,
+        `server.registerTool("lookup", { description: "Lookup", annotations: { readOnlyHint: true } }, async () => ({ content: [{ type: "text", text: "source" }] }));`,
+        `await server.connect(new StdioServerTransport());`,
+      ].join("\n"));
+      const base = { command: process.execPath, args: [server], __piScienceConnectorId: "connector_test", approveTools: true };
+      const project = async (policy: Record<string, unknown> | null) => writeFile(join(cwd, ".pi-science/mcp-runtime.json"),
+        JSON.stringify({ version: 1, project_id: "project_test", mcpServers: policy ? { science: policy } : {} }));
+      await project(base);
+      const interactions: unknown[] = [];
+      mcp = await AgentMcpTools.open(cwd, new InteractionBridge((event) => interactions.push(event)), { PATH: process.env.PATH ?? "" }, undefined,
+        ["mcp__science__lookup"], true);
+      expect(mcp.diagnostics).toEqual([]);
+      const call = () => mcp!.tools[0]!.execute("lookup", {}, () => {}, {} as never, {} as never, {} as never);
+      await expect(call()).rejects.toThrow("explicit preauthorization");
+      expect(interactions).toEqual([]); // readOnlyHint must not silently grant authorization or wait for hidden UI.
+      await project({ ...base, __piScienceAllowedTools: ["lookup"] });
+      expect(await call()).toMatchObject({ content: [{ text: "source" }] });
+      await project(base);
+      await expect(call()).rejects.toThrow("explicit preauthorization");
+      await project({ ...base, approveTools: false, excludeTools: ["lookup"] });
+      await expect(call()).rejects.toThrow("disabled or connector changed");
+      await project({ ...base, approveTools: false, __piScienceConnectorId: "replacement" });
+      await expect(call()).rejects.toThrow("disabled or connector changed");
+      await project(null);
+      await expect(call()).rejects.toThrow("disabled or connector changed");
+    } finally { await mcp?.close(); await rm(cwd, { recursive: true, force: true }); }
+  }, 20000);
+
   it("projects only each stdio connector's credentials and ordinary system variables", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-mcp-env-"));
     const previousFirst = process.env.PR115_MCP_FIRST;
