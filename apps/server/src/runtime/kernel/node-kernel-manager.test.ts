@@ -5,7 +5,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NodeKernelManager, type KernelResult } from "./node-kernel-manager.js";
+import { KernelProtocolError, NodeKernelManager, type KernelResult, type KernelStreamEvent } from "./node-kernel-manager.js";
+import {
+  boundKernelHeadText,
+  boundKernelPayload,
+  boundKernelText,
+  DEFAULT_KERNEL_OUTPUT_LIMITS,
+  KERNEL_TRUNCATION_MARKER,
+  isKernelTruncationNotice,
+  kernelOutputLimitArgs,
+  kernelOutputLimits,
+  kernelPayloadMarker,
+  type KernelOutputLimits,
+} from "./kernel-output-limits.js";
 import type { WorkspaceEnvironmentStatus } from "../workspace/workspace-environment.js";
 
 function systemPython(): string | null {
@@ -65,6 +77,23 @@ function status(workspace: string, prefix: string): WorkspaceEnvironmentStatus {
     manager: "micromamba",
     npm: { local_prefix: workspace, global_prefix: join(workspace, ".pi-science", "npm-global"), cache: join(workspace, ".pi-science", "cache", "npm") },
   };
+}
+
+/**
+ * Caps small enough that every bounded length and count stays readable in an
+ * assertion. The 128 floor guards the environment, so a smaller cap is injected
+ * as a literal object instead.
+ */
+function smallLimits(overrides: Partial<KernelOutputLimits> = {}): KernelOutputLimits {
+  return { ...kernelOutputLimits({}), stdoutChars: 64, stderrChars: 64, resultChars: 64, mimeChars: 128, outputsChars: 1024, displayOutputs: 5, ...overrides };
+}
+
+async function pythonWorkspace(label: string): Promise<{ workspace: string; environment: WorkspaceEnvironmentStatus }> {
+  const workspace = await mkdtemp(join(tmpdir(), `pi-science-kernel-${label}-`));
+  cleanup.push(workspace);
+  const prefix = join(workspace, "env");
+  await createTestEnvironment(prefix);
+  return { workspace, environment: status(workspace, prefix) };
 }
 
 describe("NodeKernelManager native execution", () => {
@@ -513,7 +542,8 @@ describe("NodeKernelManager platform interrupt semantics", () => {
 
   // Real-boundary coverage for Windows: the fake-child tests above pin the
   // win32 spawn/detach/SIGBREAK semantics, and the Python bridge tests exercise
-  // the identical stdio protocol on every platform.
+  // the identical stdio protocol on every platform. A real Rscript start costs
+  // more than the 5 s default budget for a whole test.
   it.skipIf(rscript === null)("executes cells through the real R bridge with a persistent namespace", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "pi-science-r-bridge-"));
     cleanup.push(workspace);
@@ -532,6 +562,636 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     } finally {
       await manager.shutdownAll();
     }
+  }, 30_000);
+
+});
+
+describe("NodeKernelManager output limits", () => {
+  it.skipIf(python === null)("bounds a multi-megabyte stdout and stderr and counts the dropped characters", async () => {
+    const { workspace, environment } = await pythonWorkspace("limits-streams");
+    const manager = new NodeKernelManager({ limits: smallLimits({ stdoutChars: 256, stderrChars: 256 }) });
+    try {
+      const result = await manager.execute({
+        language: "python",
+        code: "import sys\nsys.stdout.write('x' * 10_000_000)\nsys.stderr.write('y' * 10_000_000)",
+        cwd: workspace,
+        environment,
+        timeoutMs: 60_000,
+      });
+      expect(result.stdout.length).toBe(256);
+      expect(result.stdout.startsWith("x".repeat(121))).toBe(true);
+      expect(result.stdout.slice(121, 135)).toBe(KERNEL_TRUNCATION_MARKER);
+      expect(result.stdout.endsWith("x".repeat(121))).toBe(true);
+      expect(result.stderr.length).toBe(256);
+      expect(result.stderr.slice(121, 135)).toBe(KERNEL_TRUNCATION_MARKER);
+      expect(result.truncated).toEqual({ stdout_chars: 10_000_000 - 256, stderr_chars: 10_000_000 - 256 });
+    } finally {
+      await manager.shutdownAll();
+    }
   });
 
+  it.skipIf(python === null)("names a dropped payload in its own text-only notice output", async () => {
+    const { workspace, environment } = await pythonWorkspace("limits-notice");
+    const manager = new NodeKernelManager({ limits: smallLimits({ mimeChars: 512 }) });
+    try {
+      const result = await manager.execute({
+        language: "python",
+        code: ["class Mixed:", "    def _repr_html_(self): return '<p>small</p>'", "    def _repr_png_(self): return b'\\x89PNG' + b'\\x00' * 3_000_000", "    def __repr__(self): return 'Mixed()'", "Mixed()"].join("\n"),
+        cwd: workspace,
+        environment,
+        timeoutMs: 60_000,
+      });
+      const outputs = result.outputs ?? [];
+      expect(result.mime).toEqual({ "text/html": "<p>small</p>" });
+      expect(outputs[0]?.data["text/html"]).toBe("<p>small</p>");
+      // One data key is what makes the notice render as text.
+      expect(Object.keys(outputs[1]?.data ?? {})).toEqual(["text/plain"]);
+      expect(outputs[1]?.data["text/plain"]?.endsWith(kernelPayloadMarker("image/png"))).toBe(true);
+      expect(result.truncated?.rich_chars).toBe(4_000_008);
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(python === null)("clamps a multi-megabyte HTML payload to the mime cap", async () => {
+    const { workspace, environment } = await pythonWorkspace("limits-html");
+    const manager = new NodeKernelManager({ limits: smallLimits() });
+    try {
+      const result = await manager.execute({
+        language: "python",
+        code: ["class Html:", "    def _repr_html_(self):", "        return '<p>' + 'h' * 5_000_000 + '</p>'", "Html()"].join("\n"),
+        cwd: workspace,
+        environment,
+        timeoutMs: 60_000,
+      });
+      const html = result.mime["text/html"];
+      expect(html?.length).toBe(128);
+      expect(html?.startsWith("<p>")).toBe(true);
+      expect(html?.slice(57, 71)).toBe(KERNEL_TRUNCATION_MARKER);
+      expect(result.outputs?.[0]?.data["text/html"]?.length).toBe(128);
+      expect(result.truncated?.rich_chars).toBe(5_000_007 - 128);
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(python === null)("drops a payload the cell's rich budget can no longer afford", async () => {
+    const { workspace, environment } = await pythonWorkspace("limits-rich-total");
+    const manager = new NodeKernelManager({ limits: smallLimits({ mimeChars: 512, outputsChars: 600 }) });
+    try {
+      const result = await manager.execute({
+        language: "python",
+        code: [
+          "class Html:",
+          "    def __init__(self, n): self.n = n",
+          "    def _repr_html_(self): return 'a' * self.n",
+          "    def __repr__(self): return 'obj%d' % self.n",
+          "display(Html(400))",
+          "display(Html(400))",
+        ].join("\n"),
+        cwd: workspace,
+        environment,
+        timeoutMs: 60_000,
+      });
+      const outputs = result.outputs ?? [];
+      expect(outputs).toHaveLength(3);
+      expect(outputs[0]?.data["text/html"]).toBe("a".repeat(400));
+      expect(outputs[1]?.data["text/html"]).toBeUndefined();
+      expect(outputs[2]?.data).toEqual({ "text/plain": kernelPayloadMarker("text/html") });
+      expect(result.truncated?.rich_chars).toBe(400);
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(python === null)("caps the display count and stands in one notice output", async () => {
+    const { workspace, environment } = await pythonWorkspace("limits-output-count");
+    const manager = new NodeKernelManager({ limits: smallLimits({ mimeChars: 512 }) });
+    try {
+      const result = await manager.execute({
+        language: "python",
+        code: Array.from({ length: 25 }, (_value, index) => `display(${index})`).join("\n"),
+        cwd: workspace,
+        environment,
+        timeoutMs: 60_000,
+      });
+      const outputs = result.outputs ?? [];
+      expect(outputs.map((output) => output.data["text/plain"])).toEqual(["0", "1", "2", "3", KERNEL_TRUNCATION_MARKER]);
+      expect(result.truncated).toEqual({ outputs_dropped: 21 });
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(python === null)("keeps the notice bounded when a cell displays far past the cap", async () => {
+    const { workspace, environment } = await pythonWorkspace("limits-notice-bound");
+    const manager = new NodeKernelManager({ limits: smallLimits() });
+    try {
+      const result = await manager.execute({
+        language: "python",
+        code: Array.from({ length: 500 }, (_value, index) => `display(${index})`).join("\n"),
+        cwd: workspace,
+        environment,
+        timeoutMs: 60_000,
+      });
+      const outputs = result.outputs ?? [];
+      expect(outputs).toHaveLength(5);
+      expect(outputs[4]?.data["text/plain"]).toBe(KERNEL_TRUNCATION_MARKER);
+      expect(result.truncated).toEqual({ outputs_dropped: 496 });
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(python === null)("keeps the tail expression when the notice takes its slot", async () => {
+    const { workspace, environment } = await pythonWorkspace("limits-notice-tail");
+    const manager = new NodeKernelManager({ limits: smallLimits() });
+    try {
+      const result = await manager.execute({
+        language: "python",
+        code: [...Array.from({ length: 6 }, (_value, index) => `display(${index})`), "42"].join("\n"),
+        cwd: workspace,
+        environment,
+        timeoutMs: 60_000,
+      });
+      const outputs = result.outputs ?? [];
+      expect(outputs[3]).toEqual({ output_type: "execute_result", data: { "text/plain": "42" } });
+      expect(outputs[4]?.data["text/plain"]).toBe(KERNEL_TRUNCATION_MARKER);
+      expect(result.result).toBe("42");
+      expect(result.truncated).toEqual({ outputs_dropped: 3 });
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(python === null)("leaves a channel that fits its cap untouched", async () => {
+    const { workspace, environment } = await pythonWorkspace("limits-stream-fits");
+    const manager = new NodeKernelManager({ limits: smallLimits() });
+    try {
+      const exact = await manager.execute({
+        language: "python",
+        code: 'import sys; sys.stdout.write("x" * 64)',
+        cwd: workspace,
+        environment,
+        timeoutMs: 60_000,
+      });
+      expect(exact.stdout).toBe("x".repeat(64));
+      expect("truncated" in exact).toBe(false);
+
+      const past = await manager.execute({
+        language: "python",
+        code: 'import sys; sys.stdout.write("x" * 65)',
+        cwd: workspace,
+        environment,
+        timeoutMs: 60_000,
+      });
+      expect(past.stdout).toHaveLength(64);
+      expect(past.stdout.slice(25, 39)).toBe(KERNEL_TRUNCATION_MARKER);
+      expect(past.truncated).toEqual({ stdout_chars: 1 });
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(python === null)("adds no notice when the display count sits exactly at the cap", async () => {
+    const { workspace, environment } = await pythonWorkspace("limits-output-exact");
+    const manager = new NodeKernelManager({ limits: smallLimits() });
+    try {
+      const result = await manager.execute({
+        language: "python",
+        code: Array.from({ length: 5 }, (_value, index) => `display(${index})`).join("\n"),
+        cwd: workspace,
+        environment,
+        timeoutMs: 60_000,
+      });
+      expect(result.outputs?.map((output) => output.data["text/plain"])).toEqual(["0", "1", "2", "3", "4"]);
+      expect("truncated" in result).toBe(false);
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(python === null)("leaves a small cell untruncated", async () => {
+    const { workspace, environment } = await pythonWorkspace("limits-intact");
+    const manager = new NodeKernelManager({ limits: smallLimits() });
+    try {
+      const result = await manager.execute({ language: "python", code: "1+1", cwd: workspace, environment, timeoutMs: 30_000 });
+      expect(result.ok).toBe(true);
+      expect(result.result).toBe("2");
+      expect(result.stdout).toBe("");
+      expect("truncated" in result).toBe(false);
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(python === null || process.platform === "win32")("keeps an interrupted cell's partial stdout without a truncation key", async () => {
+    const { workspace, environment } = await pythonWorkspace("limits-interrupt");
+    const manager = new NodeKernelManager({ limits: smallLimits() });
+    try {
+      const outcome = await manager.execute({
+        language: "python",
+        code: "import sys\nimport time\nprint('before')\nsys.stdout.flush()\ntime.sleep(5)",
+        cwd: workspace,
+        environment,
+        notebookId: "nb-limits-interrupt",
+        timeoutMs: 700,
+      }).then(
+        (value) => ({ resolved: true as const, value }),
+        (error: Error) => ({ resolved: false as const, error }),
+      );
+      expect(outcome.resolved).toBe(true);
+      if (outcome.resolved) {
+        expect(outcome.value.interrupted).toBe(true);
+        expect(outcome.value.stdout).toBe("before\n");
+        expect("truncated" in outcome.value).toBe(false);
+      }
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(python === null)("keeps a non-BMP and control-character line inside the frame guard", async () => {
+    const { workspace, environment } = await pythonWorkspace("limits-frame-guard");
+    // The caps sit either side of the guard's 65,536 headroom: a smaller stderr cap
+    // keeps the line under it and the guard never fires.
+    const manager = new NodeKernelManager({ limits: kernelOutputLimits({ PI_SCIENCE_KERNEL_STDOUT_CHARS: "20000", PI_SCIENCE_KERNEL_STDERR_CHARS: "20000", PI_SCIENCE_KERNEL_RESULT_CHARS: "128", PI_SCIENCE_KERNEL_MIME_CHARS: "128", PI_SCIENCE_KERNEL_OUTPUTS_CHARS: "128" }) });
+    try {
+      const wide = await manager.execute({ language: "python", code: "import sys\nsys.stdout.write('\\U0001F600' * 100_000)", cwd: workspace, environment, timeoutMs: 30_000 });
+      expect(wide.ok).toBe(true);
+      // The bridge counts code points and Node counts UTF-16 code units, so Node clamps
+      // the 20,000-character value again and drops a split surrogate pair at each end.
+      expect(wide.stdout.length).toBe(19_998);
+      expect(wide.stdout.startsWith("\u{1F600}".repeat(4_996))).toBe(true);
+      expect(wide.stdout.slice(9_992, 10_006)).toBe(KERNEL_TRUNCATION_MARKER);
+      expect(wide.stdout.endsWith("\u{1F600}".repeat(4_996))).toBe(true);
+      // The bridge counts code points and the Node re-clamp counts UTF-16 code units, so
+      // the merged total is 80,000 code points dropped by the bridge plus 19,988 units
+      // dropped again by the clamp that split a surrogate pair.
+      expect(wide.truncated).toEqual({ stdout_chars: 80_000 + 19_988 });
+
+      const controls = await manager.execute({ language: "python", code: "import sys\nsys.stdout.write('\\U0001F600' * 100_000)\nsys.stderr.write('\\x01' * 25_000)\nraise ValueError('\\x01' * 25_000)", cwd: workspace, environment, timeoutMs: 30_000 });
+      expect(controls.ok).toBe(false);
+      expect(controls.interrupted).toBe(false);
+      expect(controls.stderr.length).toBe(20_000);
+      // The traceback prefix is the interpreter's, so only its bound is asserted here.
+      expect(controls.error?.length).toBe(20_000);
+      expect(controls.truncated?.stdout_chars).toBe(80_000 + 19_988);
+      expect(controls.truncated?.stderr_chars ?? 0).toBeGreaterThan(25_000 - 20_000);
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(python === null)("survives a lone surrogate in a cell's stdout", async () => {
+    const { workspace, environment } = await pythonWorkspace("limits-surrogate");
+    const manager = new NodeKernelManager({ limits: smallLimits() });
+    try {
+      const result = await manager.execute({ language: "python", code: "import sys\nsys.stdout.write('\\ud800' * 5)", cwd: workspace, environment, timeoutMs: 30_000 });
+      // JSON cannot carry an unpaired surrogate, so the bridge replaces it on the wire
+      // instead of failing the write and taking the kernel down with it.
+      expect(result.ok).toBe(true);
+      expect(result.stdout).toBe("?????");
+      expect(manager.status().active_count).toBe(1);
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(rscript === null)("bounds R stdout and the printed tail expression", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pi-science-r-limits-"));
+    cleanup.push(workspace);
+    const prefix = join(workspace, "env");
+    const binDir = join(prefix, "bin");
+    await mkdir(binDir, { recursive: true });
+    await symlink(rscript!, join(binDir, "Rscript"));
+
+    const manager = new NodeKernelManager({ limits: smallLimits({ stdoutChars: 256, stderrChars: 256, resultChars: 128 }) });
+    const environment = status(workspace, prefix);
+    try {
+      const captured = await manager.execute({ language: "r", code: 'cat(strrep("x", 1000000))', cwd: workspace, environment, timeoutMs: 30_000 });
+      expect(captured.stdout.length).toBe(256);
+      expect(captured.stdout.startsWith("x".repeat(121))).toBe(true);
+      expect(captured.stdout.slice(121, 135)).toBe(KERNEL_TRUNCATION_MARKER);
+      expect(captured.truncated?.stdout_chars).toBe(1_000_000 - 256);
+
+      // print() adds `[1] "` and a closing quote around the string.
+      const printed = await manager.execute({ language: "r", code: 'strrep("q", 1000000)', cwd: workspace, environment, timeoutMs: 30_000 });
+      expect(printed.result?.length).toBe(128);
+      expect(printed.result?.startsWith('[1] "')).toBe(true);
+      expect(printed.result?.endsWith(KERNEL_TRUNCATION_MARKER)).toBe(true);
+      expect(printed.truncated?.result_chars).toBe(1_000_006 - 128);
+
+      const intact = await manager.execute({ language: "r", code: "1+1", cwd: workspace, environment, timeoutMs: 30_000 });
+      expect(intact.result).toBe("[1] 2");
+      expect(intact.stdout).toBe("");
+      expect("truncated" in intact).toBe(false);
+
+      const failure = await manager.execute({ language: "r", code: 'stop(strrep("e", 100000))', cwd: workspace, environment, timeoutMs: 30_000 });
+      expect(failure.ok).toBe(false);
+      expect(failure.error?.length).toBe(256);
+      expect(failure.error?.slice(121, 135)).toBe(KERNEL_TRUNCATION_MARKER);
+      // R itself truncates the message buffer at 8,190 characters, so "Error: " plus
+      // the message is 8,197 and the bridge bounds that at the 256-character cap.
+      expect(failure.truncated?.stderr_chars).toBe(8_197 - 256);
+    } finally {
+      await manager.shutdownAll();
+    }
+  }, 30_000);
+});
+
+describe("NodeKernelManager output limits without an interpreter", () => {
+  interface FakeKernel { child: ChildProcess; writes: string[]; kills: (string | number)[]; answered: Set<string> }
+
+  function fakeKernel(): FakeKernel {
+    const child = new EventEmitter() as unknown as ChildProcess;
+    const stdin = new PassThrough();
+    const writes: string[] = [];
+    stdin.on("data", (chunk: Buffer) => writes.push(String(chunk)));
+    const kills: (string | number)[] = [];
+    (child as unknown as Record<string, unknown>).stdin = stdin;
+    (child as unknown as Record<string, unknown>).stdout = new PassThrough();
+    (child as unknown as Record<string, unknown>).stderr = new PassThrough();
+    (child as unknown as Record<string, unknown>).pid = 5150;
+    (child as unknown as Record<string, unknown>).exitCode = null;
+    (child as unknown as Record<string, unknown>).kill = ((signal?: string | number) => { kills.push(signal ?? "SIGTERM"); return true; }) as ChildProcess["kill"];
+    return { child, writes, kills, answered: new Set<string>() };
+  }
+
+  function fakeManager(limits: KernelOutputLimits) {
+    const spawned: { command: string; args: string[] }[] = [];
+    const kernels: FakeKernel[] = [];
+    const manager = new NodeKernelManager({
+      platform: "linux",
+      workspaceEnvironmentVariables: () => ({}),
+      interpreterAvailable: () => true,
+      limits,
+      spawnProcess: ((command: string, args: readonly string[]) => {
+        spawned.push({ command, args: [...args] });
+        const kernel = fakeKernel();
+        kernels.push(kernel);
+        return kernel.child;
+      }) as unknown as typeof import("node:child_process").spawn,
+    });
+    return { manager, kernels, spawned };
+  }
+
+  /** Answers every bridge request that has not been responded to yet. */
+  function respond(kernel: FakeKernel, overrides: Record<string, unknown> = {}): void {
+    for (const line of kernel.writes) {
+      const request = JSON.parse(line) as { id: string };
+      if (kernel.answered.has(request.id)) continue;
+      kernel.answered.add(request.id);
+      (kernel.child.stdout as PassThrough).write(`${JSON.stringify({ id: request.id, type: "result", ok: true, stdout: "", stderr: "", result: null, error: null, interrupted: false, ...overrides })}\n`);
+    }
+  }
+
+  /** Spawns through the fake, answers the health probe, and returns the cell's in-flight request. */
+  interface KernelFakeRequest { kernel: FakeKernel; id: string }
+
+  async function startCell(manager: NodeKernelManager, kernels: FakeKernel[], onEvent?: (event: KernelStreamEvent) => void): Promise<{ cell: KernelFakeRequest; result: Promise<KernelResult> }> {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-kernel-limits-fake-"));
+    cleanup.push(cwd);
+    const pending = manager.execute({ language: "python", code: "1+1", cwd, environment: status(cwd, join(cwd, "env")), kernelInstanceId: "k-limits", timeoutMs: 30_000, ...(onEvent ? { onEvent } : {}) });
+    await vi.waitFor(() => expect(kernels[0]?.writes.length).toBeGreaterThanOrEqual(1));
+    respond(kernels[0]!);
+    await vi.waitFor(() => expect(kernels[0]!.writes.length).toBeGreaterThanOrEqual(2));
+    return { cell: { kernel: kernels[0]!, id: (JSON.parse(kernels[0]!.writes.at(-1)!) as { id: string }).id }, result: pending };
+  }
+
+  async function stopFake(manager: NodeKernelManager, kernels: FakeKernel[]): Promise<void> {
+    const stopping = manager.shutdownAll().catch(() => undefined);
+    for (const kernel of kernels) kernel.child.emit("close", 0);
+    await stopping;
+  }
+
+  it("clamps an over-budget result line to the injected caps", async () => {
+    const { manager, kernels, spawned } = fakeManager(smallLimits({ stdoutChars: 64, resultChars: 64 }));
+    try {
+      const { cell, result } = await startCell(manager, kernels);
+      expect(spawned[0]?.args[1]).toBe("--limits");
+      expect(JSON.parse(spawned[0]!.args[2]!)).toEqual({ stdout_chars: 64, stderr_chars: 64, result_chars: 64, mime_chars: 128, outputs_chars: 1024, display_outputs: 5 });
+      respond(cell.kernel, { stdout: "x".repeat(1000), result: "y".repeat(1000) });
+      const value = await result;
+      expect(value.stdout.length).toBe(64);
+      expect(value.stdout.slice(25, 39)).toBe(KERNEL_TRUNCATION_MARKER);
+      expect(value.result?.length).toBe(64);
+      expect(value.result?.slice(50, 64)).toBe(KERNEL_TRUNCATION_MARKER);
+      expect(value.truncated).toEqual({ stdout_chars: 1000 - 64, result_chars: 1000 - 64 });
+    } finally {
+      await stopFake(manager, kernels);
+    }
+  });
+
+  it("degrades a report that carries no counts", async () => {
+    const { manager, kernels } = fakeManager(smallLimits());
+    try {
+      const { cell, result } = await startCell(manager, kernels);
+      respond(cell.kernel, { stdout: "small", truncated: { stdout_chars: -5, rich_chars: "lots" } });
+      const value = await result;
+      expect(value.stdout).toBe("small");
+      expect(value.truncated).toBeUndefined();
+    } finally {
+      await stopFake(manager, kernels);
+    }
+  });
+
+  it("drops an over-cap payload into its own text-only notice output", async () => {
+    const { manager, kernels } = fakeManager(smallLimits());
+    try {
+      const { cell, result } = await startCell(manager, kernels);
+      respond(cell.kernel, { mime: { "text/html": "<p>small</p>", "image/png": "A".repeat(4096) } });
+      const value = await result;
+      expect(value.mime).toEqual({ "text/html": "<p>small</p>" });
+      expect(value.outputs).toEqual([{ output_type: "display_data", data: { "text/plain": kernelPayloadMarker("image/png") } }]);
+      expect(value.truncated).toEqual({ rich_chars: 4096 });
+    } finally {
+      await stopFake(manager, kernels);
+    }
+  });
+
+  it("delivers four payloads and one notice when the display count is over cap", async () => {
+    const { manager, kernels } = fakeManager(smallLimits());
+    try {
+      const { cell, result } = await startCell(manager, kernels);
+      respond(cell.kernel, { outputs: Array.from({ length: 25 }, (_value, index) => ({ output_type: "display_data", data: { "text/plain": String(index) } })) });
+      const value = await result;
+      expect(value.outputs?.map((output) => output.data["text/plain"])).toEqual(["0", "1", "2", "3", KERNEL_TRUNCATION_MARKER]);
+      expect(value.truncated).toEqual({ outputs_dropped: 21 });
+    } finally {
+      await stopFake(manager, kernels);
+    }
+  });
+
+  it("adds no notice when the display count sits exactly at the cap", async () => {
+    const { manager, kernels } = fakeManager(smallLimits());
+    try {
+      const { cell, result } = await startCell(manager, kernels);
+      respond(cell.kernel, { outputs: Array.from({ length: 5 }, (_value, index) => ({ output_type: "display_data", data: { "text/plain": String(index) } })) });
+      const value = await result;
+      expect(value.outputs?.map((output) => output.data["text/plain"])).toEqual(["0", "1", "2", "3", "4"]);
+      expect(value.truncated).toBeUndefined();
+    } finally {
+      await stopFake(manager, kernels);
+    }
+  });
+
+  it("fails the cell and kills the child when a line exceeds the frame guard", async () => {
+    const { manager, kernels } = fakeManager({ ...smallLimits(), frameChars: 4096 });
+    try {
+      const { cell, result } = await startCell(manager, kernels);
+      // The killed child has to close for the manager's stop() to settle.
+      const closed = vi.waitFor(() => expect(cell.kernel.kills).toContain("SIGTERM")).then(() => { cell.kernel.child.emit("close", 0); });
+      (cell.kernel.child.stdout as PassThrough).write(`${JSON.stringify({ id: cell.id, type: "stream", stream: "stdout", text: "z".repeat(5000) })}\n`);
+      const failure = await result.then(() => null, (error: Error) => error);
+      await closed;
+      expect(failure).toBeInstanceOf(KernelProtocolError);
+      expect(failure?.message).toBe("Kernel protocol line exceeded 4096 characters");
+      expect(cell.kernel.kills).toContain("SIGTERM");
+      expect(manager.status().active_count).toBe(0);
+    } finally {
+      await stopFake(manager, kernels);
+    }
+  });
+
+  it("stops forwarding a stream channel once its budget is spent", async () => {
+    const { manager, kernels } = fakeManager(smallLimits({ stdoutChars: 64 }));
+    const events: KernelStreamEvent[] = [];
+    try {
+      const { cell, result } = await startCell(manager, kernels, (event) => events.push(event));
+      const stdout = cell.kernel.child.stdout as PassThrough;
+      stdout.write(`${JSON.stringify({ id: cell.id, type: "stream", stream: "stdout", text: "x".repeat(100) })}\n`);
+      stdout.write(`${JSON.stringify({ id: cell.id, type: "stream", stream: "stdout", text: "x".repeat(100) })}\n`);
+      await vi.waitFor(() => expect(events.length).toBe(2));
+      respond(cell.kernel);
+      const value = await result;
+      expect(events.map((event) => event.text)).toEqual(["x".repeat(64), KERNEL_TRUNCATION_MARKER]);
+      // A stream drop is not a payload the cell failed to deliver, so it adds no count.
+      expect(value.truncated).toBeUndefined();
+    } finally {
+      await stopFake(manager, kernels);
+    }
+  });
+});
+
+describe("kernel output limits", () => {
+  it("defaults every cap and derives the frame guard from them", () => {
+    expect(kernelOutputLimits({})).toEqual({
+      stdoutChars: 65_536,
+      stderrChars: 65_536,
+      resultChars: 262_144,
+      mimeChars: 1_048_576,
+      outputsChars: 2_097_152,
+      displayOutputs: 20,
+      frameChars: 21_692_416,
+    });
+  });
+
+  it("reads each cap from the environment", () => {
+    const limits = kernelOutputLimits({
+      PI_SCIENCE_KERNEL_STDOUT_CHARS: "128",
+      PI_SCIENCE_KERNEL_STDERR_CHARS: "129",
+      PI_SCIENCE_KERNEL_RESULT_CHARS: "130",
+      PI_SCIENCE_KERNEL_MIME_CHARS: "131",
+      PI_SCIENCE_KERNEL_OUTPUTS_CHARS: "132",
+    });
+    expect(limits).toMatchObject({ stdoutChars: 128, stderrChars: 129, resultChars: 130, mimeChars: 131, outputsChars: 132 });
+    expect(limits.frameChars).toBe(6 * (128 + 2 * 129 + 130 + 131 + 132) + 65_536);
+  });
+
+  it("recognizes a payload notice by the same predicate as a count notice", () => {
+    expect(isKernelTruncationNotice(kernelPayloadMarker("image/png"))).toBe(true);
+    expect(isKernelTruncationNotice(KERNEL_TRUNCATION_MARKER)).toBe(true);
+    expect(isKernelTruncationNotice("plain output")).toBe(false);
+  });
+
+  it("ignores a configured cap below the marker floor", () => {
+    expect(kernelOutputLimits({ PI_SCIENCE_KERNEL_STDOUT_CHARS: "8" }).stdoutChars).toBe(DEFAULT_KERNEL_OUTPUT_LIMITS.stdoutChars);
+    expect(kernelOutputLimits({ PI_SCIENCE_KERNEL_STDOUT_CHARS: "127" }).stdoutChars).toBe(DEFAULT_KERNEL_OUTPUT_LIMITS.stdoutChars);
+    expect(kernelOutputLimits({ PI_SCIENCE_KERNEL_STDOUT_CHARS: "128" }).stdoutChars).toBe(128);
+  });
+
+  it("keeps the default for a value that is not a positive integer", () => {
+    const limits = kernelOutputLimits({
+      PI_SCIENCE_KERNEL_STDOUT_CHARS: "0",
+      PI_SCIENCE_KERNEL_STDERR_CHARS: "-3",
+      PI_SCIENCE_KERNEL_RESULT_CHARS: "many",
+      PI_SCIENCE_KERNEL_MIME_CHARS: "1.5",
+      PI_SCIENCE_KERNEL_OUTPUTS_CHARS: "",
+    });
+    expect(limits).toEqual(kernelOutputLimits({}));
+  });
+
+  it("recomputes the frame guard when a cap rises", () => {
+    expect(kernelOutputLimits({ PI_SCIENCE_KERNEL_RESULT_CHARS: "4000000" }).frameChars).toBe(6 * (65_536 + 2 * 65_536 + 4_000_000 + 1_048_576 + 2_097_152) + 65_536);
+  });
+
+  it("counts the error channel, and five kinds of character, in the frame guard", () => {
+    const limits = kernelOutputLimits({ PI_SCIENCE_KERNEL_STDOUT_CHARS: "128", PI_SCIENCE_KERNEL_STDERR_CHARS: "20000", PI_SCIENCE_KERNEL_RESULT_CHARS: "128", PI_SCIENCE_KERNEL_MIME_CHARS: "128", PI_SCIENCE_KERNEL_OUTPUTS_CHARS: "128" });
+    // stdout + stderr + error + result + mime + outputs, each bounded at its cap and
+    // worst-case escaped to six characters per character: a compliant line can reach this.
+    expect(limits.frameChars).toBeGreaterThanOrEqual(6 * (limits.stdoutChars + limits.stderrChars + limits.stderrChars + limits.resultChars + limits.mimeChars + limits.outputsChars));
+  });
+
+  it("passes the caps to a bridge as parseable argv JSON", () => {
+    const args = kernelOutputLimitArgs(kernelOutputLimits({ PI_SCIENCE_KERNEL_MIME_CHARS: "177" }));
+    expect(args[0]).toBe("--limits");
+    expect(JSON.parse(args[1]!)).toMatchObject({ mime_chars: 177, stdout_chars: 65_536, display_outputs: 20 });
+  });
+
+  it("keeps a worst-case result line inside the derived frame guard", () => {
+    // C0 control characters escape to six characters and raw non-BMP characters are two
+    // UTF-16 code units, at every cap at once.
+    const limits = kernelOutputLimits({ PI_SCIENCE_KERNEL_STDOUT_CHARS: "20000", PI_SCIENCE_KERNEL_STDERR_CHARS: "20000", PI_SCIENCE_KERNEL_RESULT_CHARS: "128", PI_SCIENCE_KERNEL_MIME_CHARS: "128", PI_SCIENCE_KERNEL_OUTPUTS_CHARS: "128" });
+    const line = JSON.stringify({
+      id: "0".repeat(36),
+      type: "result",
+      ok: true,
+      stdout: "\u0001".repeat(20_000),
+      stderr: "\u0001".repeat(20_000),
+      error: "\u0001".repeat(20_000),
+      result: "\u{1F600}".repeat(128),
+      mime: { "text/html": "\u0001".repeat(128) },
+      outputs: [{ output_type: "display_data", data: { "text/html": "\u0001".repeat(128) } }],
+    });
+    expect(line.length).toBeLessThanOrEqual(limits.frameChars);
+    // The derivation before this fix omitted the error channel, so it rejected this line.
+    expect(line.length).toBeGreaterThan(6 * (limits.stdoutChars + limits.stderrChars + limits.resultChars + limits.mimeChars + limits.outputsChars) + 65_536);
+  });
+
+  it("never leaves an unpaired surrogate when it clamps a non-BMP value", () => {
+    const paired = (text: string): boolean => {
+      for (let index = 0; index < text.length; index += 1) {
+        const unit = text.charCodeAt(index);
+        const previous = text.charCodeAt(index - 1);
+        const next = text.charCodeAt(index + 1);
+        if (unit >= 0xd800 && unit <= 0xdbff && !(next >= 0xdc00 && next <= 0xdfff)) return false;
+        if (unit >= 0xdc00 && unit <= 0xdfff && !(previous >= 0xd800 && previous <= 0xdbff)) return false;
+      }
+      return true;
+    };
+    for (const cap of [128, 65, 64, 63, 20, 17, 15, 14, 8, 1]) {
+      for (const clamped of [boundKernelText("\u{1F600}".repeat(64), cap), boundKernelHeadText("\u{1F600}".repeat(64), cap)]) {
+        expect(clamped.length).toBeLessThanOrEqual(cap);
+        expect(paired(clamped)).toBe(true);
+      }
+    }
+  });
+
+  it("clamps a text value to its cap and leaves a value within the cap byte-identical", () => {
+    const clamped = boundKernelText("x".repeat(1000), 64);
+    expect(clamped.length).toBe(64);
+    expect(clamped.slice(25, 39)).toBe(KERNEL_TRUNCATION_MARKER);
+    expect(boundKernelText(clamped, 64)).toBe(clamped);
+    expect(boundKernelText("x".repeat(64), 64)).toBe("x".repeat(64));
+  });
+
+  it("names a dropped payload's mime type and keeps a text payload's head", () => {
+    expect(boundKernelPayload("p".repeat(1000), "image/png", 64)).toBeNull();
+    expect(boundKernelPayload("j".repeat(1000), "application/json", 64)).toBeNull();
+    expect(boundKernelPayload("h".repeat(1000), "text/html", 64)?.length).toBe(64);
+    expect(boundKernelPayload("s".repeat(1000), "image/svg+xml", 64)?.length).toBe(64);
+    expect(boundKernelPayload("h".repeat(10), "text/html", 64)).toBe("h".repeat(10));
+    expect(kernelPayloadMarker("image/png")).toBe("\n… [truncated: image/png]");
+  });
 });

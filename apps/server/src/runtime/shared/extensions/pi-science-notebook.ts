@@ -7,6 +7,8 @@
  * visible to the browser and to non-agent callers.
  */
 
+import { isKernelTruncationNotice } from "../../kernel/kernel-output-limits.js";
+
 const MAX_CELLS_PER_CALL = 50;
 const MAX_SOURCE_CHARS = 30_000;
 const MAX_OUTPUT_CHARS = 12_000;
@@ -268,6 +270,10 @@ function kernelOutputs(result: Record<string, unknown>, executionCount: number):
   });
 }
 
+function isTruncationNotice(output: unknown): boolean {
+  return isRecord(output) && isRecord(output.data) && isKernelTruncationNotice(text(output.data["text/plain"]));
+}
+
 function notebookExecutionOutputs(result: Record<string, unknown>, executionCount: number): unknown[] {
   const outputs: unknown[] = [];
   const stdout = text(result.stdout);
@@ -277,7 +283,9 @@ function notebookExecutionOutputs(result: Record<string, unknown>, executionCoun
 
   const richOutputs = kernelOutputs(result, executionCount);
   if (richOutputs.length > 0) {
-    outputs.push(...richOutputs);
+    // A truncation notice leads the rich outputs: the kernel collects it last, and the
+    // 20-output cut below would otherwise drop it from the saved notebook.
+    outputs.push(...richOutputs.filter(isTruncationNotice), ...richOutputs.filter((output) => !isTruncationNotice(output)));
   } else {
     const mime: Record<string, string> = {};
     if (isRecord(result.mime)) {

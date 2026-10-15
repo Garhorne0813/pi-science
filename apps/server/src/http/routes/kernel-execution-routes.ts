@@ -15,6 +15,7 @@ import {
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { WorkspaceEnvironmentService } from "../../runtime/workspace/workspace-environment.js";
 import type { KernelStreamEvent, NodeKernelManager } from "../../runtime/kernel/node-kernel-manager.js";
+import { boundKernelHeadText } from "../../runtime/kernel/kernel-output-limits.js";
 
 const executeCellRequestSchema = z.object({
   language: z.enum(["python", "r"]),
@@ -150,6 +151,7 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
           output_preview: preview(result.result),
           mime: result.mime,
           outputs: result.outputs ?? [],
+          truncated: result.truncated ?? {},
           ...(error ? { error } : {}),
           ...(outputEvidence.failures.length > 0 ? { artifact_publish_errors: outputEvidence.failures } : {}),
         },
@@ -242,7 +244,7 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
         producer: "node-kernel-gateway",
         result: {
           ok: result.ok, http_status: 200, stdout_preview: preview(result.stdout), stderr_preview: preview(result.stderr), output_preview: preview(result.result),
-          mime: result.mime, outputs: result.outputs ?? [], ...(error ? { error } : {}),
+          mime: result.mime, outputs: result.outputs ?? [], truncated: result.truncated ?? {}, ...(error ? { error } : {}),
           ...(outputEvidence.failures.length > 0 ? { artifact_publish_errors: outputEvidence.failures } : {}),
         },
         files: { written: outputEvidence.written },
@@ -357,5 +359,5 @@ function withExecutionId(value: unknown, executionId: string): Record<string, un
 
 function preview(value: unknown): string {
   if (value === null || value === undefined) return "";
-  return String(value).slice(0, MAX_RESULT_PREVIEW_CHARS);
+  return boundKernelHeadText(String(value), MAX_RESULT_PREVIEW_CHARS);
 }

@@ -289,6 +289,7 @@ pnpm --filter frontend test:uat:office
 | Scientific connectors, credentials and tool policy | [MCP management](docs/mcp-management-implementation.md) |
 | Research orchestration and deterministic evaluation | [Research-loop ADR](docs/adr-research-loop-subagents.md) |
 | Writing project skills | [Skill authoring](docs/skill-authoring.md) |
+| Cell output caps and truncation | [Kernel output limits](docs/kernel-output-limits.md) |
 
 Implementation notes are linked from the architecture reference. Documents without an English counterpart are available in their original language.
 
