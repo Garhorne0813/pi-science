@@ -74,7 +74,9 @@ MCP connector credential APIs are independent and remain available.
 
 Existing `/api/provider-views`, `/api/settings/providers`, `/api/settings/config`
 and model-selection DTOs remain for the current application, sourced only from
-native configuration. Settings returns no old custom-provider entries. Default
+native configuration. Settings returns no old custom-provider entries. Native aliases are resolved consistently by Settings, model-selection, ordinary
+session defaults and hidden research/review/title Worker startup; this projection
+never rewrites the saved default. Default
 selection and each session's selection remain independent; an unavailable saved
 default is reported, never silently substituted or cleared. Live session capability
 projection remains read-only and may observe its pinned revision until reload.
@@ -90,6 +92,7 @@ older Settings-only installations can configure providers directly in the new UI
 | Simple enabled provider, nonempty catalog, supported transport, one binding at priority 100 | migrated if all checks pass |
 | Existing native ID | existing; never overwritten |
 | Empty custom catalog | blocked / empty_model_catalog |
+| Target schema rejects a converted Provider ID/config (including query/hash/userinfo URL or duplicate models) | blocked / native_schema_incompatible; classify before apply, permitting explicit exclusion |
 | Endpoint bound to more than one provider | blocked / shared_endpoint |
 | Cross-provider or MCP-owned/shared/unsupported credential | blocked / shared_or_unsupported_credential |
 | Explicit native endpoint/gateway | blocked / native_endpoint_transport; transport equivalence unproven |

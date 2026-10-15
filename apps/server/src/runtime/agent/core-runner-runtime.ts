@@ -1,3 +1,4 @@
+import { canonicalRuntimeModelRef } from "./model-ref.js";
 import { CredentialStore } from "../../model-resources/credential-store.js";
 import { projectedEnvironmentNames } from "../shared/extensions/pi-science-mcp.js";
 import { loadDefaultPiConfig, seedWorkspaceAssets } from "../agent/runtime-config.js";
@@ -38,6 +39,7 @@ class CoreTaskRuntime implements TaskRuntime {
 export async function openCoreRunner(manager: AgentRuntimeManager, environments: Pick<WorkspaceEnvironmentService, "environment">,
   cwd: string, key: string, owner: string, purpose: "research" | "review", server: { backendUrl?: string; internalToken?: string } = {}): Promise<TaskRuntime> {
   const config = loadDefaultPiConfig();
+  if (config.model) config.model = canonicalRuntimeModelRef(config.model);
   const index = config.model?.indexOf("/") ?? -1;
   if (index <= 0) throw new Error("Agent-core runner requires a configured model");
   seedWorkspaceAssets(cwd);

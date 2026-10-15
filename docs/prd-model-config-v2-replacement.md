@@ -20,7 +20,7 @@ models.json + CredentialStore + Pi 0.99.2 registry 成为唯一模型配置权�
 
 完整 App 对旧 Provider/Model/Endpoint/Binding/Credential CRUD 和旧 Settings API Key/custom-provider 入口所有方法返回 410 model_config_retired，并指向新 API；请求在验证/发现/网络访问和写盘前终止。旧 CRUD 不再在 App 注册为有效资源操作。
 
-/api/provider-views、/api/settings/config、/api/settings/providers 与模型选择接口继续提供当前前端所需的读取形状，只从新配置构造。Default Model 与已有 Session Model 的所有权继续独立；旧默认模型不自动替换，不可用时明确显示 unavailable_model。
+/api/provider-views、/api/settings/config、/api/settings/providers 与模型选择接口继续提供当前前端所需的读取形状，只从新配置构造。新配置中的显式别名在 Settings、模型选择、普通会话及 research/review/title Worker 启动中采用同一解析规则；只投影，不改写保存的默认值。Default Model 与已有 Session Model 的所有权继续独立；旧默认模型不自动替换，不可用时明确显示 unavailable_model。
 
 ## 4. 显式一次性导入
 
@@ -28,6 +28,7 @@ GET /api/model-config/migration 只读报告；POST 必须提交 native revision
 
 - 可证明等价的简单资源标为 migrated；新系统已经配置的 ID 标为 existing，不覆盖。
 - 无法证明等价的条目标为 blocked，并列出原因；不写入 legacy_providers，不创建旧路由。
+- 转换结果必须先通过目标 Provider ID 与完整 ProviderConfig Schema；不兼容 URL（包括 query/hash/userinfo）、重复模型及其他格式差异在 plan 阶段报告 native_schema_incompatible，不得等到 apply 拖累健康资源。
 - 共享 Endpoint、跨 Provider/MCP Credential、空自定义目录、native Gateway、内置 Provider 的显式 Endpoint/不明确协议、多 Binding/priority/policy、禁用/OAuth/不支持能力均阻断自动转换。
 - 默认 apply 在存在 blocked 条目时拒绝；只有 excluded_provider_ids 与报告阻断项完全匹配时才允许导入健康子集，避免静默丢弃。排除项在新系统中不可用，须手工重建。
 - 只导入目标存在的新模型别名；不导入指向被排除资源的别名。备份、source fingerprint、revision、锁、完整结构校验与原子提交继续执行。旧资源与凭证所有权不变。

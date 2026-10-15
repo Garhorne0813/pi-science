@@ -2,7 +2,7 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { createHash } from "node:crypto";
 import { withFileWriteLock } from "../storage/persistence.js";
 import { modelResourcePath } from "../model-resources/model-resource-repository.js";
-import type { ModelResourceState, ModelConfigSnapshot, ProviderConfig } from "@pi-science/contracts";
+import { modelConfigSchema, type ModelResourceState, type ProviderConfig } from "@pi-science/contracts";
 import { ModelResourceRepository } from "../model-resources/model-resource-repository.js";
 import { ModelConfigService, configError, isAllowedModelEnvRef } from "./model-config-service.js";
 
@@ -17,7 +17,8 @@ export class ModelConfigMigration {
     const rows: Array<{ provider_id: string; status: "migrated" | "blocked" | "existing"; reasons: string[]; model_count: number }> = [];
     for (const provider of state.providers) {
       const models = state.models.filter((model) => model.provider_id === provider.id);
-      if (next.config.providers[provider.id]) { rows.push({ provider_id: provider.id, status: "existing", reasons: [], model_count: models.length }); continue; }
+      if (!modelConfigSchema.safeParse({ providers: { [provider.id]: {} } }).success) { rows.push({ provider_id: provider.id, status: "blocked", reasons: ["native_schema_incompatible"], model_count: models.length }); continue; }
+      if (Object.hasOwn(next.config.providers, provider.id)) { rows.push({ provider_id: provider.id, status: "existing", reasons: [], model_count: models.length }); continue; }
       const bindings = state.bindings.filter((binding) => binding.provider_id === provider.id);
       const binding = bindings[0];
       const endpoint = binding && state.endpoints.find((endpoint) => endpoint.id === binding.endpoint_id);
@@ -61,14 +62,16 @@ export class ModelConfigMigration {
           ...(model.capabilities.context_window ? { contextWindow: model.capabilities.context_window } : {}),
           ...(model.capabilities.max_output_tokens ? { maxTokens: model.capabilities.max_output_tokens } : {}),
         } : {}) }));
-      next.config.providers[provider.id] = config;
+      const parsed = modelConfigSchema.safeParse({ providers: { [provider.id]: config } });
+      if (!parsed.success) { rows.push({ provider_id: provider.id, status: "blocked", reasons: ["native_schema_incompatible"], model_count: models.length }); continue; }
+      next.config.providers[provider.id] = parsed.data.providers[provider.id]!;
       if (ref) next.credential_refs[provider.id] = ref;
       if (provider.auth_kind === "none") next.keyless_providers.push(provider.id);
       rows.push({ provider_id: provider.id, status: "migrated", reasons: [], model_count: models.length });
     }
     // Builtin keys live in credential_refs without a Provider entity in the old graph.
     for (const [id, ref] of Object.entries(state.credential_refs)) {
-      if (state.providers.some((provider) => provider.id === id) || next.config.providers[id]) continue;
+      if (state.providers.some((provider) => provider.id === id) || Object.hasOwn(next.config.providers, id)) continue;
       const provider = builtin.getProvider(id);
       const credential = credentials.find((item) => item.id === ref);
       const reasons: string[] = [];

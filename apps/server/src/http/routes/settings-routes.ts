@@ -296,8 +296,9 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
     const catalog = await modelCatalog(nodeSessionService, config, cwdValue, runtimeCatalog, snapshot);
     const catalogById = new Map(catalog.available.map((model) => [model.id, model]));
     let available = catalog.available;
-    const configured = typeof config.model === "string" && available.some((item) => item.id === config.model) ? config.model : "";
-    const unavailableModel = typeof config.model === "string" && config.model && !configured ? config.model : null;
+    const modelRef = typeof config.model === "string" && config.model ? canonicalRuntimeModelRef(config.model) : null;
+    const configured = modelRef && available.some((item) => item.id === modelRef) ? modelRef : "";
+    const unavailableModel = modelRef && !configured ? modelRef : null;
     let thinking = configured ? String(config.thinking ?? "high") : "off";
     if (configured && cwdValue) {
       const actual = await nodeSessionService.availableThinkingLevels(cwdValue, configured);
