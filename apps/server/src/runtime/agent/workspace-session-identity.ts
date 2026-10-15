@@ -12,5 +12,13 @@ export function workspaceIdentity(cwd: string): string {
 /** Transcripts may retain the caller's original spelling from before canonicalization. */
 export async function listWorkspaceSessions(repo: JsonlSessionRepo, cwd: string): Promise<JsonlSessionMetadata[]> {
   const identity = workspaceIdentity(cwd);
-  return (await repo.list({}, BACKGROUND_CONTEXT)).filter((item) => workspaceIdentity(item.cwd) === identity);
+  for (let attempt = 0; ; attempt++) {
+    try { return (await repo.list({}, BACKGROUND_CONTEXT)).filter((item) => workspaceIdentity(item.cwd) === identity); }
+    catch (error) {
+      // Core lists then lstats entries, including atomic-write temporary files.
+      // Parallel child creation can rename one between those operations.
+      if (attempt >= 3 || !(error instanceof Error) || !/ENOENT:.*lstat ['"].*\.jsonl\.tmp['"]/.test(error.message)) throw error;
+      await new Promise((done) => setTimeout(done, 25));
+    }
+  }
 }

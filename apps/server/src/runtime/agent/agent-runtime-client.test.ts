@@ -64,6 +64,14 @@ describe("AgentCoreRuntimeClient", () => {
       expect(toolEnvironment(environment)).not.toHaveProperty("NODE_EXTRA_CA_CERTS");
     } finally { vi.unstubAllEnvs(); }
   });
+  it("forwards operator sandbox settings while rejecting workspace and credential overrides", () => {
+    vi.stubEnv("PI_SCIENCE_SANDBOX_ENABLED", "1"); vi.stubEnv("PI_SCIENCE_SANDBOX_PYTHON", "/trusted/python");
+    try {
+      const environment = workerEnvironment({ PI_SCIENCE_SANDBOX_ENABLED: "0", PI_SCIENCE_SANDBOX_PYTHON: "/workspace/evil" }, ["PI_SCIENCE_SANDBOX_PYTHON"]);
+      expect(environment).toMatchObject({ PI_SCIENCE_SANDBOX_ENABLED: "1", PI_SCIENCE_SANDBOX_PYTHON: "/trusted/python" });
+      expect(toolEnvironment(environment)).not.toHaveProperty("PI_SCIENCE_SANDBOX_ENABLED");
+    } finally { vi.unstubAllEnvs(); }
+  });
   it("creates a durable session in a child process and reopens it", async () => {
     const start = await options();
     const first = await AgentCoreRuntimeClient.start(start, 15_000);

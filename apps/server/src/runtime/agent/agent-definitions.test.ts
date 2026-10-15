@@ -55,6 +55,7 @@ it("delegates only exact MCP capabilities in the effective parent set", () => {
 });
 
 it("enforces the experimenter's safe fallback even if a project role declares execution or writes", () => {
-  const tools = ["read", "write", "edit", "bash", "notebook_run", "mcp__science__execute", "subagent"];
-  expect(childToolAllowance(tools, tools, "auto-research/experimenter")).toEqual(["read"]);
+  const tools = ["read", "sandbox_run", "write", "edit", "bash", "notebook_run", "mcp__science__execute", "subagent"];
+  expect(childToolAllowance(tools, tools, "auto-research/experimenter")).toEqual(["read", "sandbox_run"]);
+  expect(childToolAllowance(tools, ["read", "bash"], "auto-research/experimenter")).toEqual(["read"]);
 });

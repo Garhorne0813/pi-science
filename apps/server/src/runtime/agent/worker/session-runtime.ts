@@ -1,4 +1,5 @@
 import { executionBudgetTools } from "./execution-budget.js";
+import { sandboxRunTool, sandboxInstallation, candidateReadTool } from "./sandbox-tool.js";
 import { randomUUID } from "node:crypto";
 import { decodeCommand, decodeNotification } from "./command-contract.js";
 import { isAbsolute, join, resolve } from "node:path";
@@ -160,7 +161,7 @@ export class SessionRuntime {
         model,
         thinkingLevel: clampThinkingLevel(model, options.thinking ?? "high"),
         compaction: resolveCompaction(model.contextWindow, options.settings).compaction,
-        tools: [budgets.tool, createReadTool(), budgets.wrap(createBashTool({ prepare: (execution) => {
+        tools: [budgets.tool, candidateReadTool(createReadTool(), { cwd: options.cwd, sessionId: session.metadata.id, budgetOperationId: options.budgetOperationId, candidateId: options.sandboxCandidateId, delegatedAgent: options.delegatedAgent }), budgets.wrap(sandboxRunTool({ cwd: options.cwd, sessionId: session.metadata.id, budgetOperationId: options.budgetOperationId, candidateId: options.sandboxCandidateId, delegatedAgent: options.delegatedAgent }, sandboxInstallation())), budgets.wrap(createBashTool({ prepare: (execution) => {
           execution.env = environment;
           execution.inheritEnv = false;
         } })), createEditTool(), createWriteTool(),

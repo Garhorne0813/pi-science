@@ -1,0 +1,57 @@
+name: sandbox acceptance
+on:
+  pull_request:
+    paths:
+      - 'apps/server/src/runtime/agent/**'
+      - 'apps/server/package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/sandbox-acceptance.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sandbox:
+    name: ${{ matrix.os == 'macos-latest' && 'macOS fail-closed fallback' || 'Linux real srt acceptance' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.16.0
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install trusted test dependencies
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update
+            sudo apt-get install -y bubblewrap socat ripgrep
+            # Dedicated ephemeral CI runner; Ubuntu's AppArmor default blocks user namespaces.
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          else
+            brew install socat ripgrep
+          fi
+          python -m pip install numpy==2.3.5
+          pnpm install --frozen-lockfile
+      - name: Validate Linux real srt or the blocked macOS fallback
+        shell: bash
+        run: |
+          export PI_SCIENCE_SANDBOX_TEST=1
+          export PI_SCIENCE_SANDBOX_PYTHON="$(python -c 'import os,sys; print(os.path.realpath(sys.executable))')"
+          export PI_SCIENCE_SANDBOX_PYTHON_ROOT="$(python -c 'import os,sys; print(os.path.realpath(sys.base_prefix))')"
+          export PI_SCIENCE_SANDBOX_SOCAT="$(command -v socat)"
+          export PI_SCIENCE_SANDBOX_RIPGREP="$(command -v rg)"
+          pnpm --filter @pi-science/server exec vitest run src/runtime/agent/worker/sandbox-tool.test.ts src/runtime/agent/agent-core-tools.test.ts --reporter=default --reporter=junit --outputFile.junit=sandbox-acceptance.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sandbox-acceptance-${{ matrix.os }}
+          path: apps/server/sandbox-acceptance.xml

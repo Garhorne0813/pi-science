@@ -34,11 +34,11 @@ export class SubagentBridge {
 
 export function subagentHarnessTool(bridge: SubagentBridge): AgentHarnessTool<{ env: NodeExecutionEnv }> {
   return {
-    name: "subagent", label: "Subagent", description: "Delegate a task to a named workspace agent (single), a sequential chain, or a bounded parallel group. The parent synthesizes the results. Async and workflow modes are unavailable.",
+    name: "subagent", label: "Subagent", description: "Delegate a task to a named workspace agent (single), a sequential chain, or a bounded parallel group. The parent synthesizes the results. For sandbox execution, assign candidate_id on each Experimenter task; the child cannot change this assignment. Async and workflow modes are unavailable.",
     parameters: Type.Object({
-      agent: Type.Optional(Type.String()), task: Type.Optional(Type.String()),
-      chain: Type.Optional(Type.Array(Type.Object({ agent: Type.String(), task: Type.String() }), { maxItems: 8 })),
-      tasks: Type.Optional(Type.Array(Type.Object({ agent: Type.String(), task: Type.String() }), { maxItems: 4 })),
+      agent: Type.Optional(Type.String()), task: Type.Optional(Type.String()), candidate_id: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$" })),
+      chain: Type.Optional(Type.Array(Type.Object({ agent: Type.String(), task: Type.String(), candidate_id: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$" })) }), { maxItems: 8 })),
+      tasks: Type.Optional(Type.Array(Type.Object({ agent: Type.String(), task: Type.String(), candidate_id: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$" })) }), { maxItems: 4 })),
     }),
     async execute(_id, params, onUpdate, _ctx, invocation, context) {
       const cached = await invocation.getMemo("subagent-result");

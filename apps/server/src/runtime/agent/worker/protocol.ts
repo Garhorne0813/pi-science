@@ -14,6 +14,8 @@ export interface AgentRuntimeStartOptions {
   /** Hidden children spend against the owning operation, never a fresh quota. */
   budgetOperationId?: string;
   delegatedAgent?: string;
+  /** Assigned by authenticated parent dispatch; never inferred from child task text. */
+  sandboxCandidateId?: string;
   sessionsRoot: string;
   model: { provider: string; modelId: string };
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -42,6 +44,7 @@ export type WorkerEvent =
 const startOptionsSchema = z.object({
   cwd: z.string().min(1), sessionsRoot: z.string().min(1), sessionId: z.string().min(1).optional(),
   parentSessionId: z.string().optional(), depth: z.number().int().nonnegative().optional(), allowedTools: z.array(z.string()).optional(),
+  sandboxCandidateId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/).optional(),
   budgetOperationId: z.string().min(1).optional(), delegatedAgent: z.string().min(1).optional(),
   model: z.object({ provider: z.string().min(1), modelId: z.string().min(1) }).strict(),
   thinking: z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).optional(),

@@ -48,3 +48,14 @@ it("reopens an alias-spelled transcript in a canonical worker without including 
     await rm(root, { recursive: true, force: true });
   }
 }, 20000);
+
+it("retries only vanished atomic session temporary files during parallel child creation", async () => {
+  let calls = 0;
+  const race = new Error("Failed to list sessions directory: ENOENT: no such file or directory, lstat '/sessions/run.jsonl.tmp'");
+  const repo = { list: async () => { if (++calls === 1) throw race; return []; } } as unknown as JsonlSessionRepo;
+  expect(await listWorkspaceSessions(repo, process.cwd())).toEqual([]); expect(calls).toBe(2);
+  const persistent = { list: async () => { throw race; } } as unknown as JsonlSessionRepo;
+  await expect(listWorkspaceSessions(persistent, process.cwd())).rejects.toThrow(race);
+  const denied = { list: async () => { throw new Error("EACCES: permissions"); } } as unknown as JsonlSessionRepo;
+  await expect(listWorkspaceSessions(denied, process.cwd())).rejects.toThrow("EACCES");
+});

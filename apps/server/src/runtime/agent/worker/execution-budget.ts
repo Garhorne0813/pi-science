@@ -99,11 +99,11 @@ export function executionBudgetTools(cwd: string, inheritedOperationId?: string)
       const abortSignal = context.abortSignal ? AbortSignal.any([context.abortSignal, controller.signal]) : controller.signal;
       try {
         let boundedParams = params;
-        if (original.name === "notebook_run" && params && typeof params === "object") {
+        if (["notebook_run", "sandbox_run"].includes(original.name) && params && typeof params === "object") {
           const remainingSeconds = Math.floor((budget.deadline - Date.now()) / 1000);
           if (remainingSeconds < 1) throw new Error("Execution time budget exhausted");
           const values = params as { timeout_seconds?: number };
-          boundedParams = { ...values, timeout_seconds: Math.min(600, remainingSeconds, values.timeout_seconds ?? 120) };
+          boundedParams = { ...values, timeout_seconds: Math.min(original.name === "sandbox_run" ? 120 : 600, remainingSeconds, values.timeout_seconds ?? (original.name === "sandbox_run" ? 60 : 120)) };
         }
         return await original.execute(id, boundedParams, update, ctx, invocation, { ...context, abortSignal });
       }

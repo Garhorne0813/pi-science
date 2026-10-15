@@ -15,7 +15,7 @@ test("desktop rail reveals labels above adjacent panes without shifting the layo
   if (testInfo.project.name === "desktop-dark") {
     await page.addInitScript(() => localStorage.setItem("pi-science.theme", JSON.stringify("dark")));
   }
-  await page.goto(`${root}/research`);
+  await page.goto(`${root}/knowledge`);
   const rail = page.locator(RAIL);
   const railSlot = page.locator("[data-workspace-rail-slot]");
   const main = page.locator("#main-content");
@@ -43,8 +43,8 @@ test("desktop rail reveals labels above adjacent panes without shifting the layo
   });
   await expect(railSlot).toHaveCSS("width", "60px");
   await expect(rail).toHaveCSS("width", "60px");
-  const research = rail.getByRole("link", { name: "Research", exact: true });
-  await research.hover();
+  const knowledge = rail.getByRole("link", { name: KNOWLEDGE });
+  await knowledge.hover();
   await expect(rail).toHaveCSS("width", "220px");
   const railBrand = rail.locator(".workspace-rail-brand");
   await expect(railBrand).toHaveCSS("opacity", "1");
@@ -54,7 +54,7 @@ test("desktop rail reveals labels above adjacent panes without shifting the layo
   for (const [property, value] of Object.entries(brandStyle)) {
     expect(await railBrand.evaluate((element, key) => getComputedStyle(element)[key as keyof CSSStyleDeclaration], property)).toBe(value);
   }
-  await expect(research.locator(".workspace-rail-label")).toHaveCSS("opacity", "1");
+  await expect(knowledge.locator(".workspace-rail-label")).toHaveCSS("opacity", "1");
   for (const label of await rail.locator(".workspace-rail-label").all()) {
     await expect(label).toHaveCSS("text-align", "left");
   }
@@ -64,14 +64,14 @@ test("desktop rail reveals labels above adjacent panes without shifting the layo
   await page.mouse.move(700, 300);
   await expect(rail).toHaveCSS("width", "60px");
   // A pointer click retains DOM focus, but must not pin the overlay open.
-  await research.click();
+  await knowledge.click();
   await page.mouse.move(700, 300);
   await expect(rail).toHaveCSS("width", "60px");
   await page.getByRole("link", { name: "Skip to content", exact: true }).focus();
-  for (let i = 0; i < 4; i++) await page.keyboard.press("Tab");
-  await expect(research).toBeFocused();
+  for (let i = 0; i < 3; i++) await page.keyboard.press("Tab");
+  await expect(knowledge).toBeFocused();
   await expect(rail).toHaveCSS("width", "220px");
-  await expect(research.locator(".workspace-rail-label")).toHaveCSS("opacity", "1");
+  await expect(knowledge.locator(".workspace-rail-label")).toHaveCSS("opacity", "1");
   await main.focus();
   await expect(rail).toHaveCSS("width", "60px");
   await page.screenshot({ path: testInfo.outputPath("rail-collapsed.png") });
@@ -80,13 +80,13 @@ test("desktop rail reveals labels above adjacent panes without shifting the layo
 
 test("mobile rail stays compact on hover and keyboard focus", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile", "Mobile compact rail coverage");
-  await page.goto(`${root}/research`);
+  await page.goto(`${root}/knowledge`);
   const rail = page.locator(RAIL);
-  const research = rail.getByRole("link", { name: "Research", exact: true });
-  await research.hover();
-  await research.focus();
+  const knowledge = rail.getByRole("link", { name: KNOWLEDGE });
+  await knowledge.hover();
+  await knowledge.focus();
   await expect(rail).toHaveCSS("width", "58px");
-  await expect(research.locator(".workspace-rail-label")).toHaveCSS("opacity", "0");
+  await expect(knowledge.locator(".workspace-rail-label")).toHaveCSS("opacity", "0");
   await page.screenshot({ path: testInfo.outputPath("rail-mobile.png") });
 });
 

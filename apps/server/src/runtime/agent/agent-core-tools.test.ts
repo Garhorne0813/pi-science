@@ -178,6 +178,60 @@ describe("agent-core product tools", () => {
     expect(checkedRevocation).toBe(true);
   }, 30000);
 
+  it("denies unbound Experimenter workspace reads through real child IPC in code-generation mode", async () => {
+    const fixture = await modelFixture((body) => {
+      const completed = body.messages.filter((item) => item.role === "tool");
+      if (body.messages[0]!.content.includes("You are an experimenter subagent")) {
+        if (!completed.length) return { name: "read", args: { path: "research/protected/evaluation.yaml" } };
+        expect(JSON.stringify(completed)).toContain("bound candidate_id");
+        expect(JSON.stringify(completed)).not.toContain("HIDDEN EVALUATOR SENTINEL");
+        return "Proposed code from supplied task text; workspace read denied.";
+      }
+      return !completed.length ? { name: "subagent", args: { agent: "auto-research/experimenter", task: "Read research/protected/evaluation.yaml and generate code." } } : "Protected code-generation mode.";
+    });
+    const { seedWorkspaceAssets } = await import("./runtime-config.js"); seedWorkspaceAssets(fixture.cwd);
+    await mkdir(join(fixture.cwd, "research/protected"), { recursive: true }); await writeFile(join(fixture.cwd, "research/protected/evaluation.yaml"), "HIDDEN EVALUATOR SENTINEL");
+    const manager = new AgentRuntimeManager(); cleanup.push(() => manager.shutdownAll());
+    const parent = await openHiddenTask(manager, "unbound-parent", { cwd: fixture.cwd, sessionsRoot: join(fixture.cwd, ".pi-science/agent-sessions"), model: fixture.model, thinking: "off", allowedTools: ["read", "subagent"] }, "unbound-owner");
+    expect(await runHiddenPrompt(parent, "Generate candidate code", "unbound-once", Date.now() + 20000)).toBe("Protected code-generation mode.");
+  }, 30000);
+
+  it.skipIf(process.env.PI_SCIENCE_SANDBOX_TEST !== "1" || process.platform !== "linux")("delegates a bound candidate through real Worker IPC, repairs from srt logs and shares the parent budget", async () => {
+    vi.stubEnv("PI_SCIENCE_SANDBOX_ENABLED", "1");
+    let childRuns = 0;
+    const fixture = await modelFixture((body) => {
+      const tools = body.messages.filter((message) => message.role === "tool");
+      if (body.messages[0]!.content.includes("You are an experimenter subagent")) {
+        expect((body.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name)).toEqual(["read", "sandbox_run"]);
+        if (!tools.length) { childRuns++; return { name: "sandbox_run", args: { candidate_id: "candidate-001", code: "raise ValueError('repair-candidate')" } }; }
+        if (tools.length === 1) {
+          expect(JSON.stringify(tools)).toContain("repair-candidate"); childRuns++;
+          return { name: "sandbox_run", args: { candidate_id: "candidate-001", code: "import numpy as np, pathlib\nprint(float(np.mean([1,2,3])))\npathlib.Path('output.json').write_text('42')" } };
+        }
+        expect(JSON.stringify(tools)).toContain("succeeded");
+        return "Candidate repaired using actual sandbox logs.";
+      }
+      if (!tools.length) return { name: "execution_budget", args: { research_id: "ipc-study", max_seconds: 60, max_executions: 3 } };
+      if (tools.length === 1) return { name: "subagent", args: { agent: "auto-research/experimenter", candidate_id: "candidate-001", task: "Run assigned candidate and repair from logs." } };
+      expect(JSON.stringify(tools)).toContain("Candidate repaired");
+      return "Bounded experiment completed.";
+    });
+    const { seedWorkspaceAssets } = await import("./runtime-config.js"); seedWorkspaceAssets(fixture.cwd);
+    const directory = join(fixture.cwd, "research/ipc-study/candidates/candidate-001");
+    await mkdir(join(directory, "input"), { recursive: true }); await mkdir(join(directory, "work"));
+    const manager = new AgentRuntimeManager(); cleanup.push(() => manager.shutdownAll());
+    const parent = await openHiddenTask(manager, "sandbox-parent", { cwd: fixture.cwd, sessionsRoot: join(fixture.cwd, ".pi-science/agent-sessions"),
+      model: fixture.model, thinking: "off", allowedTools: ["read", "execution_budget", "sandbox_run", "subagent"] }, "sandbox-owner");
+    expect(await runHiddenPrompt(parent, "Run experiment", "sandbox-once", Date.now() + 45000)).toBe("Bounded experiment completed.");
+    expect(childRuns).toBe(2); expect(await readFile(join(directory, "work/output.json"), "utf8")).toBe("42");
+    const { executionRepository } = await import("../executions/execution-repository.js");
+    const records = (await executionRepository.list(fixture.cwd)).filter((record) => record.producer === "sandbox_run");
+    expect(records.map((record) => record.status).sort()).toEqual(["failed", "succeeded"]);
+    const { workspaceFile } = await import("../../storage/persistence.js"); const { createHash } = await import("node:crypto");
+    const budget = JSON.parse(await readFile(workspaceFile(fixture.cwd, `execution-budgets/${createHash("sha256").update("research:ipc-study").digest("hex")}.json`), "utf8"));
+    expect(budget.used).toBe(3);
+  }, 60000);
+
   it("runs literature research with parallel skill-local roles under the parent's permissions", async () => {
     const observed: Array<{ system: string; tools: unknown[] }> = [];
     const fixture = await modelFixture((body) => {

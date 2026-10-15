@@ -8,7 +8,7 @@ import type { AgentCoreRuntimeClient } from "./agent-runtime-client.js";
 import type { AgentRuntimeStartOptions } from "./worker/protocol.js";
 import type { RuntimeEvent } from "./agent-runtime-types.js";
 
-const task = z.object({ agent: z.string().regex(AGENT_NAME_PATTERN), task: z.string().min(1).max(200_000) }).strict();
+const task = z.object({ agent: z.string().regex(AGENT_NAME_PATTERN), task: z.string().min(1).max(200_000), candidate_id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/).optional() }).strict();
 const paramsSchema = z.union([task, z.object({ chain: z.array(task).min(1).max(8) }).strict(), z.object({ tasks: z.array(task).min(1).max(4) }).strict()]);
 /** Child requests travel over the owning worker's authenticated IPC connection. */
 export function bindSubagentDispatch(manager: AgentRuntimeManager, parent: AgentCoreRuntimeClient, options: AgentRuntimeStartOptions): () => Promise<void> {
@@ -57,7 +57,7 @@ export function bindSubagentDispatch(manager: AgentRuntimeManager, parent: Agent
           keys.add(key);
           try {
             const child = await openHiddenTask(manager, key, { ...options, sessionId: undefined, systemPrompt: prompt,
-              depth: (options.depth ?? 0) + 1, allowedTools, delegatedAgent: item.agent,
+              depth: (options.depth ?? 0) + 1, allowedTools, delegatedAgent: item.agent, sandboxCandidateId: item.candidate_id,
               budgetOperationId: options.budgetOperationId ?? String(event.operationId), skillPolicy: policy ?? { mode: "inherit" } }, parent.sessionId);
             if (cancelled.has(id) || parent.isClosed) throw new Error("Subagent cancelled");
             const authorize = (request: RuntimeEvent) => {

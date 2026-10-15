@@ -15,9 +15,9 @@ it("ships a validated declarative protocol with three bounded roles and no unive
   expect(review).toContain("PASS/PARTIAL/FAIL"); expect(review).toContain("override objective failure");
 });
 
-it("keeps candidate generation read-only until sandbox enforcement exists and declares exact retrieval tools", async () => {
+it("declares only bounded sandbox execution with code-generation fallback and exact retrieval tools", async () => {
   const experimenter = await readFile(join(root, "agents/experimenter.md"), "utf8");
-  expect(experimenter).toContain("tools: [read]"); expect(experimenter).toContain('execution_mode="code-generation"');
+  expect(experimenter).toContain("tools: [read, sandbox_run]"); expect(experimenter).toContain('execution_mode="code-generation"');
   const researcher = await readFile(join(root, "agents/researcher.md"), "utf8");
   for (const name of ["web_search", "fetch_content", "get_search_content", "source_check"]) expect(researcher).toContain(`mcp__web-access__${name}`);
   for (const name of ["search_crossref", "search_pubmed", "search_arxiv", "search_biorxiv_preprints", "get_europe_pmc_full_text"]) expect(researcher).toContain(`mcp__paper-search__${name}`);
