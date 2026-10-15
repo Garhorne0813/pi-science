@@ -18,6 +18,46 @@
 }
 
 .sidebar-tab-list { container-type: inline-size; }
+
+.workspace-brand {
+  @apply text-[18px] font-semibold leading-6 tracking-[-0.03em];
+}
+
+/* Match the context header's page coordinates: rail width + panel padding
+   + header padding horizontally, card padding + header padding vertically.
+   The containing brand box already starts at (8px, --space-panel). */
+.workspace-rail-brand {
+  position: absolute;
+  left: calc(var(--rail-width) + var(--space-panel));
+  top: calc(var(--space-card) + 0.25rem - var(--space-panel));
+  white-space: nowrap;
+  text-align: left;
+}
+
+/* Expand the desktop primary rail above the context/main panes without
+   changing the width reserved by its layout slot. Keyboard focus offers the
+   same labels; touch-sized rails keep their original compact presentation. */
+.workspace-rail {
+  transition: width var(--motion-normal) var(--ease-standard), box-shadow var(--motion-normal) var(--ease-standard);
+}
+.workspace-rail-label {
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-standard);
+}
+@media (min-width: 768px) {
+  .workspace-rail:has(:focus-visible) {
+    width: 220px;
+    box-shadow: var(--shadow-pop);
+  }
+  .workspace-rail:has(:focus-visible) .workspace-rail-label { opacity: 1; }
+}
+@media (min-width: 768px) and (hover: hover) {
+  .workspace-rail:hover {
+    width: 220px;
+    box-shadow: var(--shadow-pop);
+  }
+  .workspace-rail:hover .workspace-rail-label { opacity: 1; }
+}
 @container (max-width: 220px) {
   .sidebar-tab-icon { display: none; }
 }

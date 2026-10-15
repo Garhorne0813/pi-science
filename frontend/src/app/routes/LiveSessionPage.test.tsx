@@ -17,7 +17,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { ComponentType, ReactNode, Ref } from "react";
+import type { Ref } from "react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { VirtuosoHandle } from "react-virtuoso";
 
@@ -664,92 +664,51 @@ describe("turn-completion effects", () => {
 });
 
 
-describe("stable Virtuoso footer", () => {
-  it("uses the wired Footer, keeps its identity stable, and renders updated context", async () => {
-    type FooterContext = {
-      renderInteractionPrompt: () => ReactNode;
-      working: boolean;
-      pendingInteraction: PendingInteraction | null;
-    };
-    type VirtuosoProps = {
-      context?: FooterContext;
-      components?: { Footer?: ComponentType<{ context: FooterContext }> };
-    };
-    const latestProps = () => virtuosoProps.at(-1) as VirtuosoProps | undefined;
-
-    useRuntimeStore.setState({
-      thread: { blocks: [userBlock("u1", "Earlier question")], index: { u1: 0 }, loaded: true },
-    });
+describe("Composer interaction dock", () => {
+  it.each([false, true])("renders a single stable form outside Virtuoso (messages: %s)", async (messages) => {
+    if (messages) useRuntimeStore.setState({ thread: { blocks: [userBlock("u1", "Earlier question")], index: { u1: 0 }, loaded: true } });
     await renderReady();
-    await waitFor(() => expect(latestProps()?.components?.Footer).toBeDefined());
-
-    const initial = latestProps();
-    if (!initial?.components?.Footer || !initial.context) throw new Error("Virtuoso Footer was not wired");
-    const Footer = initial.components.Footer;
-    const footerView = render(<Footer context={initial.context} />);
-
-    act(() => { useRuntimeStore.setState({ working: true }); });
-    await waitFor(() => expect(latestProps()?.context?.working).toBe(true));
-    const workingProps = latestProps();
-    expect(workingProps?.components?.Footer).toBe(Footer);
-    if (!workingProps?.context) throw new Error("updated Virtuoso context was not captured");
-    footerView.rerender(<Footer context={workingProps.context} />);
-    expect(footerView.container).not.toHaveTextContent("Thinking");
-
-    act(() => { useRuntimeStore.setState({
-      thread: { blocks: [
-        userBlock("u1", "Earlier question"),
-        { kind: "agent", id: "process", parts: [{ id: "p1", text: "Checking the request." }] },
-        { kind: "agent", id: "answer", partial: true, parts: [{ id: "p2", text: "Here is the answer." }] },
-      ], index: {}, loaded: true },
-    }); });
-    expect(footerView.container).not.toHaveTextContent("Thinking");
-    act(() => { useRuntimeStore.setState({
-      thread: { blocks: [...useRuntimeStore.getState().thread.blocks, userBlock("u2", "Next question")], index: {}, loaded: true },
-    }); });
-    expect(footerView.container).not.toHaveTextContent("Thinking");
-
-    const interaction: PendingInteraction = {
-      requestId: "questionnaire-request",
-      method: "input",
-      title: "Questionnaire",
-      questionnaire: true,
-      toolCallId: "questionnaire-tool",
-    };
-    const questionnaire: PendingQuestionnaire = {
-      toolCallId: "questionnaire-tool",
-      questions: [{
-        question: "Which mode should we use?",
-        header: "Mode",
-        multiSelect: false,
-        options: [
-          { label: "Fast", description: "Run quickly." },
-          { label: "Careful", description: "Run with extra checks." },
-        ],
-      }],
-    };
+    const interaction: PendingInteraction = { requestId: "request", method: "input", title: "Questionnaire", questionnaire: true, toolCallId: "tool" };
+    const questionnaire: PendingQuestionnaire = { toolCallId: "tool", questions: [{ question: "Which mode?", header: "Mode", multiSelect: false, options: [{ label: "Fast", description: "Run quickly." }] }] };
+    const input = textarea();
+    fireEvent.change(input, { target: { value: "Keep my chat draft" } });
     act(() => { useRuntimeStore.setState({ pendingInteraction: interaction, pendingQuestionnaire: questionnaire }); });
-    await waitFor(() => expect(latestProps()?.context?.pendingInteraction).toBe(interaction));
-    const questionnaireProps = latestProps();
-    expect(questionnaireProps?.components?.Footer).toBe(Footer);
-    expect(questionnaireProps?.context?.renderInteractionPrompt).not.toBe(initial.context.renderInteractionPrompt);
-    if (!questionnaireProps?.context) throw new Error("questionnaire Virtuoso context was not captured");
-    footerView.rerender(<Footer context={questionnaireProps.context} />);
-    expect(footerView.container).toHaveTextContent("Which mode should we use?");
+    const form = await screen.findByRole("region", { name: "Answer a few questions" });
+    expect(screen.getAllByRole("region", { name: "Answer a few questions" })).toHaveLength(1);
+    expect(input).not.toBeVisible();
+    expect(input).toBeInTheDocument();
+    expect(input).toHaveValue("Keep my chat draft");
+    expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
+    expect((virtuosoProps.at(-1) as { components?: { Footer?: unknown } } | undefined)?.components?.Footer).toBeUndefined();
+    fireEvent.click(screen.getByRole("radio", { name: "Fast" }));
+    act(() => { useRuntimeStore.setState({ working: true, pendingQuestionnaire: { ...questionnaire, questions: [...questionnaire.questions] } }); });
+    expect(form).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Fast" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Collapse" }));
+    expect(input).not.toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /Continue answering/ }));
+    act(() => { useRuntimeStore.setState({ pendingInteraction: null }); });
+    expect(input).not.toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Preparing the question");
+    act(() => { useRuntimeStore.setState({ pendingQuestionnaire: null }); });
+    expect(screen.queryByRole("region", { name: "Answer a few questions" })).not.toBeInTheDocument();
+    expect(input).toBeVisible();
+    expect(input).toHaveValue("Keep my chat draft");
+    expect(input).toHaveFocus();
+  });
 
-    const option = within(footerView.container).getByRole("button", { name: /Fast/ });
-    fireEvent.click(option);
-    expect(option).toHaveAttribute("aria-pressed", "true");
-
-    act(() => { useRuntimeStore.setState({ working: false }); });
-    await waitFor(() => expect(latestProps()?.context?.working).toBe(false));
-    const settledProps = latestProps();
-    expect(settledProps?.components?.Footer).toBe(Footer);
-    if (!settledProps?.context) throw new Error("settled Virtuoso context was not captured");
-    footerView.rerender(<Footer context={settledProps.context} />);
-    const selectedOption = within(footerView.container).getAllByRole("button", { name: /Fast/ }).find((button) => button.hasAttribute("aria-pressed"));
-    expect(selectedOption).toHaveAttribute("aria-pressed", "true");
-    expect(within(footerView.container).getByRole("region", { name: "Answer a few questions" })).toBeInTheDocument();
+  it.each(["editor", "button"])("preserves another visible %s's focus when the question finishes", async (kind) => {
+    await renderReady();
+    const interaction: PendingInteraction = { requestId: "focus-request", method: "input", title: "Questionnaire", questionnaire: true, toolCallId: "focus-tool" };
+    const questionnaire: PendingQuestionnaire = { toolCallId: "focus-tool", questions: [{ question: "Which mode?", header: "Mode", multiSelect: false, options: [{ label: "Fast", description: "Run quickly." }] }] };
+    act(() => { useRuntimeStore.setState({ pendingInteraction: interaction, pendingQuestionnaire: questionnaire }); });
+    await screen.findByRole("region", { name: "Answer a few questions" });
+    render(kind === "editor" ? <div role="textbox" aria-label="File editor" contentEditable suppressContentEditableWarning /> : <button type="button">Open files</button>);
+    const other = kind === "editor" ? screen.getByRole("textbox", { name: "File editor" }) : screen.getByRole("button", { name: "Open files" });
+    other.focus();
+    act(() => { useRuntimeStore.setState({ pendingInteraction: null, pendingQuestionnaire: null }); });
+    expect(other).toHaveFocus();
+    expect(textarea()).toBeVisible();
   });
 });
 

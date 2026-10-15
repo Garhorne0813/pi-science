@@ -24,6 +24,17 @@ pnpm --filter frontend check:sse-budget         # build + browser SSE lifecycle 
 pnpm --filter frontend test:sse-budget          # same gate against an existing dist/ (what CI runs)
 ```
 
+The Linux quality job also runs `sidebar.spec.ts` for desktop-light, mobile
+and tablet, plus the collapsed-rail screenshot across all five desktop/tablet
+projects. The screenshot gate uses `--update-snapshots=none`: a missing or changed
+baseline fails CI. Screenshots and diffs are uploaded as
+`workspace-sidebar-interactions` before the performance suite runs.
+
+```bash
+pnpm --filter frontend exec playwright test --config playwright.visual.config.ts sidebar.spec.ts --project desktop-light --project mobile --project tablet
+pnpm --filter frontend exec playwright test --config playwright.visual.config.ts app-shell.visual.spec.ts --grep "collapsed context panel" --project desktop-light --project desktop-dark --project desktop-lg --project tablet --project wide --update-snapshots=none
+```
+
 The Playwright `webServer` block starts the fixture mock server
 (`tests/visual/fixtures/mock-server.mjs`) for the duration of the run and
 serves a fixed `/api/*` surface from `tests/visual/fixtures/data.mjs`
@@ -65,6 +76,8 @@ the app — the theme is user-controlled and defaults to light.
   project. Every baseline update must be reviewed: a `test:visual:update` run
   with unrelated pixel drift means the fixture is not deterministic —
   investigate before committing.
+- Collapsed-rail screenshots have separate Linux and macOS baselines; keep
+  platform-specific font rendering differences out of cross-platform comparisons.
 - Screenshot failures produce a diff image in `tests/visual/.artifacts/`.
 - A baseline that flakes (passes once, fails on a clean re-run) must be
   deleted and rebuilt rather than kept as a false green.

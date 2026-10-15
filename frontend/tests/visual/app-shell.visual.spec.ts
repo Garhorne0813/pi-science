@@ -41,5 +41,9 @@ test("collapsed context panel leaves a stable primary rail", async ({ page }, te
   await expect(page.locator("#workspace-context-panel")).toHaveAttribute("hidden");
   // The Rail is permanent: collapsing the panel must not take navigation away.
   await expect(page.locator('nav[aria-label="Primary navigation"]').getByRole("link", { name: "Conversations", exact: true })).toBeVisible();
+  // The pointer can remain over the Rail toggle after collapsing the panel.
+  // Capture the compact state after leaving its hover overlay.
+  await page.mouse.move(700, 300);
+  await expect(page.locator('nav[aria-label="Primary navigation"]')).toHaveCSS("width", "60px");
   await screenshot(page, "sidebar-collapsed.png");
 });

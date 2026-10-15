@@ -216,7 +216,7 @@ export function ProjectsLayout() {
           <div className="flex h-full min-h-0 flex-col px-panel py-card">
             <header className="mb-2 flex shrink-0 items-start gap-2 px-2 py-1">
               <Link ref={headerLinkRef} to="/" title={activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")} className="flex min-w-0 flex-1 flex-col text-text">
-                <span className="text-[18px] font-semibold leading-6 tracking-[-0.03em]">pi-science</span>
+                <span className="workspace-brand">pi-science</span>
                 <span className="truncate text-xs font-normal leading-4 text-muted">{activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")}</span>
               </Link>
               {isWorkspace && <IconButton icon={ChevronsLeft} label={t("shell.collapseContextPanel")} title={t("shell.collapseContextPanel")} aria-controls="workspace-context-panel" aria-expanded={!contextPanelCollapsed} onClick={closeContextPanel} />}

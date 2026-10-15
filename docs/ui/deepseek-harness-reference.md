@@ -217,6 +217,15 @@ owner should confirm or revise them:
   `.context-tab[aria-selected=true]::after` (`left:5px;right:5px;height:2px`);
   the `2px` active bar itself reuses the confirmed conversation-tabs value from
   `ConversationRoot.module.css` `.tabs`.
+- Hover/focus-expanded workspace Rail width: `220px` (Pi-Science
+  interaction proposal, not an upstream measurement). The reserved rail slot
+  remains `60px` desktop / `58px` mobile; at desktop widths (>=768px) the Rail
+  expands as a floating layer above adjacent panes and displays each primary
+  action's translated label. Hover applies only on hover-capable devices;
+  visible keyboard focus also reveals labels; pointer clicks do not keep
+  the overlay open after the pointer leaves. Mobile remains icon-only. Expansion
+  uses `--motion-normal` / `--ease-standard` and `--shadow-pop`; reduced-motion
+  preferences are honored by the shared motion override.
 - Rail count badge: minimum width `17px`, height `17px`, radius `9px`,
   `--accent-fg` ink on `--accent-fill`, `text-ui-micro` type (`0.625rem`). V4
   Pi-Science proposal citing prototype `.rail-button .count`
@@ -338,7 +347,7 @@ has not supplied a task description; the UI does not invent a task from a path.
 ### Live process disclosure
 
 Each active turn owns one status header, including the initial thinking state.
-The virtual list footer contains only interaction controls. The current answer
+Pending interaction controls live above the Composer, outside the virtual list. The current answer
 streams outside the process panel. Intermediate prose is available in the
 process panel; short prose used as the current subtitle is not repeated there.
 Execution details are a separate, initially collapsed disclosure. Completion,
@@ -390,3 +399,58 @@ parent menu using a negative offset equal to the measured trigger width.
 Adjacent menus cannot fit in a 375 px viewport; the previous submenu extended
 past its left edge. Existing menu widths, collision padding, surfaces and
 spacing stay in use. Above `sm`, the existing 4 px side offset applies.
+
+### Pi-Science proposal: compact Composer question mode
+
+The final accepted interaction is Composer replacement, superseding the earlier
+proposal to place a separate Ask User card above a visible Composer. While a
+question is pending, both expanded and collapsed modes keep the ordinary input
+hidden; answering or cancelling restores it. Acceptance checks must cover this
+replacement behavior rather than requiring a visible input placeholder.
+
+Pending interactions replace the Composer in its existing seat. The ordinary
+Composer stays mounted but hidden to preserve unsent text, attachments and
+mentions. Structured questions share the Composer width and 22px radius, with
+16px mobile / 32px desktop gutters and 8px bottom spacing. The expanded card
+has one question heading, a text position indicator, a collapse control, quiet
+numbered option rows (36px minimum height, 12px horizontal padding) and one
+action row. Selected rows use the semantic selected surface. Short desktop
+questions target 220–280px; the card is capped at min(320px, 50dvh), with only
+the body scrolling. Unusually long question headings scroll within 80px. Mobile uses min(360px, 60dvh), wrapping labels and actions.
+Collapsed mode is a single 40px minimum row with completion count and resume.
+
+Descriptions appear through the option info button as a short hover/focus
+tooltip (280px max width, three-line excerpt). Clicking opens a nonmodal, collision-aware detail
+popover: 420px max width, 16px viewport gutters, max height min(360px, 50dvh,
+available space). Markdown scrolls within it. The detail popover uses existing
+popover surface/shadow tokens and does not change the question card height.
+The question, review, notes and custom editors use existing 12/16px spacing.
+No new animation is introduced. Escape closes details before collapsing;
+cancellation is a separate labeled action. Permission controls retain their
+existing allow/deny semantics within the same seat.
+
+Blank custom drafts never clear a saved selection, multi-select answer or custom
+answer. Navigation and submission apply nonempty custom drafts; an empty editor
+falls back to the saved answer. An unanswered question still fails validation.
+Every failed validation explicitly requests heading focus and resets body scroll,
+even when the current question does not change. On question completion, Composer
+focus is restored only from body, a detached node or hidden/inert content; another
+visible editor or control keeps focus.
+
+Single-select questions follow the WAI-ARIA APG radio group keyboard pattern:
+Right/Down select and focus the next radio, Left/Up the previous, wrapping at
+both ends. The selected radio alone has tabIndex 0, or the first radio when
+none is selected; other radios have tabIndex -1. Space selects the focused
+radio. The custom answer button is outside the radiogroup and its arrow cycle,
+with its own Tab stop. Option detail buttons remain separately keyboard
+accessible. Multi-select checkboxes keep independent Tab stops and their
+existing focus-only arrow navigation; Space toggles each checkbox independently.
+
+For single-select options, all radio buttons precede all detail buttons in DOM
+order. Two aligned CSS subgrids share the same option rows: radios in the main
+column and their information buttons in the existing 32px end column. Rows grow
+together when labels wrap, without measuring or writing absolute positions. Tab
+enters the checked radio (or first), then visits each available detail button in
+option order, then the custom entry; Shift+Tab reverses that order. Details stay
+visually beside their options and retain Enter/Space activation and Escape focus
+return. Checkbox rows keep their existing interleaved checkbox/detail DOM order.

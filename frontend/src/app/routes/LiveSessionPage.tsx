@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, ReactNode, Ref } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -7,7 +7,6 @@ import type { VirtuosoHandle, VirtuosoProps } from "react-virtuoso";
 import { getClient, getSessionName } from "../../lib/client/pi-science-client";
 import { queryClient } from "../../lib/client/query-client";
 import { useRuntimeStore } from "../../lib/agent-runtime";
-import type { PendingInteraction } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
 import { cn } from "../../lib/ui";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace";
@@ -15,8 +14,7 @@ import { projectKnowledgeApi, useReviewPolicy } from "../../lib/knowledge";
 import { agentActionTextByBlock } from "../../lib/conversation";
 import { ConversationComposer } from "../../components/conversation/ConversationComposer";
 import { ConversationWelcome } from "../../components/conversation/ConversationWelcome";
-import { InteractionPrompt } from "../../components/conversation/InteractionPrompt";
-import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
+import { ConversationInteractionDock } from "../../components/conversation/ConversationInteractionDock";
 import { renderTurn } from "../../components/conversation/ConversationBlocks";
 import { buildTurnPresentations, type TurnPresentation } from "../../lib/conversation/turn-presentation";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
@@ -31,12 +29,7 @@ import { useComposer } from "../../hooks/useComposer";
 import { useConversationScroll } from "../../hooks/useConversationScroll";
 import type { ThreadBlock } from "../../types/thread";
 
-type ConversationVirtuosoContext = {
-  renderInteractionPrompt: () => ReactNode;
-  working: boolean;
-  pendingInteraction: PendingInteraction | null;
-};
-type ConversationVirtuosoProps = VirtuosoProps<TurnPresentation, ConversationVirtuosoContext> & { ref?: Ref<VirtuosoHandle> };
+type ConversationVirtuosoProps = VirtuosoProps<TurnPresentation, unknown> & { ref?: Ref<VirtuosoHandle> };
 const LazyVirtuoso = lazy(() => import("react-virtuoso").then(({ Virtuoso }) => ({
   default: Virtuoso as unknown as ComponentType<ConversationVirtuosoProps>,
 })));
@@ -54,35 +47,6 @@ export function renderConversationTurnSlot(
   render: (turn: TurnPresentation) => ReactNode,
 ): ReactNode {
   return turn ? render(turn) : null;
-}
-
-/**
- * Keep the virtual-list footer component type stable. Defining Footer inline
- * inside LiveSessionPage would give Virtuoso a new component type whenever a
- * scroll update re-renders the page, unmounting the questionnaire and losing
- * its local answer state.
- */
-export function ConversationFooter() {
-  const pendingInteraction = useRuntimeStore((s) => s.pendingInteraction);
-  const pendingQuestionnaire = useRuntimeStore((s) => s.pendingQuestionnaire);
-  const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
-
-  return (
-    <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-6 pt-2">
-      {pendingQuestionnaire && pendingInteraction?.questionnaire ? (
-        <QuestionnairePrompt
-          questionnaire={pendingQuestionnaire}
-          interaction={pendingInteraction}
-          onRespond={respondToInteraction}
-        />
-      ) : pendingInteraction ? (
-        <InteractionPrompt
-          interaction={pendingInteraction}
-          onRespond={respondToInteraction}
-        />
-      ) : null}
-    </div>
-  );
 }
 
 export function LiveSessionPage() {
@@ -122,6 +86,7 @@ export function LiveSessionPage() {
   const pendingQuestionnaire = useRuntimeStore((s) => s.pendingQuestionnaire);
   const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
   const interactionPending = Boolean(pendingInteraction || pendingQuestionnaire);
+  const previousInteraction = useRef({ pending: interactionPending, session: activeSessionId, cwd: workspaceCwd });
   const [reviewingProject, setReviewingProject] = useState(false);
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
   const removeWorkspaceReference = useUiStore((state) => state.removeWorkspaceReference);
@@ -218,30 +183,18 @@ export function LiveSessionPage() {
       scroll.startNewTurn();
     },
   });
+  useEffect(() => {
+    const previous = previousInteraction.current;
+    previousInteraction.current = { pending: interactionPending, session: activeSessionId, cwd: workspaceCwd };
+    const focused = document.activeElement;
+    const canRestoreFocus = !focused || focused === document.body || !focused.isConnected || Boolean(focused.closest("[hidden], [inert], [aria-hidden='true']"));
+    if (previous.pending && !interactionPending && previous.session === activeSessionId && previous.cwd === workspaceCwd && canRestoreFocus) composer.inputRef.current?.focus({ preventScroll: true });
+  }, [interactionPending, activeSessionId, workspaceCwd, composer.inputRef]);
   const modelControlsDisabled = working || interactionPending || reviewingProject || model.configuringModel;
   // The reviewer already runs on every settled turn when the workspace opted in, so the manual
   // button would only duplicate it. Until the policy is known, show the manual button: it is the
   // shipped default and the only control that does something when auto review is off.
   const autoReviewOn = useReviewPolicy(workspaceCwd).data?.auto_review === true;
-
-  const renderInteractionPrompt = () => {
-    if (pendingQuestionnaire && pendingInteraction?.questionnaire) {
-      return (
-        <QuestionnairePrompt
-          questionnaire={pendingQuestionnaire}
-          interaction={pendingInteraction}
-          onRespond={respondToInteraction}
-        />
-      );
-    }
-    if (!pendingInteraction) return null;
-    return (
-      <InteractionPrompt
-        interaction={pendingInteraction}
-        onRespond={respondToInteraction}
-      />
-    );
-  };
 
   const handleProjectReview = async () => {
     if (reviewingProject || working || interactionPending) return;
@@ -258,7 +211,7 @@ export function LiveSessionPage() {
   };
 
   // Empty new conversation: welcome copy sits directly above a vertically centered composer.
-  const showWelcome = thread.blocks.length === 0 && !working && status !== "connecting" && !research.draft && !research.activeLoop;
+  const showWelcome = thread.blocks.length === 0 && !working && status !== "connecting" && !research.draft && !research.activeLoop && !interactionPending;
   const activeSession = sessions.find((session) => session.id === activeSessionId);
   // A paged history can be loaded without its user messages. `thread.loaded`
   // only means that a page arrived; it does not mean this is a new session.
@@ -314,7 +267,7 @@ export function LiveSessionPage() {
           the welcome copy hangs off its bottom edge. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         {/* Thread */}
-        <div className={cn("flex-1 overflow-hidden [overflow-anchor:none]", showWelcome && "flex flex-col justify-end")}>
+        <div className={cn("min-h-0 flex-1 overflow-hidden [overflow-anchor:none]", showWelcome && "flex flex-col justify-end")}>
           {/* 824 = 760 composer column + the px-8 gutters, so thread content lines up with the composer's edges.
               w-full is required: an auto horizontal margin on a flex item suppresses the stretch,
               which would shrink this column to its widest child and centre it. */}
@@ -348,7 +301,6 @@ export function LiveSessionPage() {
                   initialItemCount={Math.min(turns.length, 20)}
                   startReached={() => void handleLoadOlder()}
                   increaseViewportBy={{ top: 600, bottom: 800 }}
-                  context={{ renderInteractionPrompt, working, pendingInteraction }}
                   components={{
                     Header: () => (
                       <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-2 pt-6">
@@ -363,7 +315,6 @@ export function LiveSessionPage() {
                         {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{research.error}</div>}
                       </div>
                     ),
-                    Footer: ConversationFooter,
                   }}
                   itemContent={(_index, turn) => renderConversationTurnSlot(turn, (safeTurn) => (
                     <div className="mx-auto w-full max-w-[calc(var(--conversation-content-width)+4rem)] px-8 pb-3">
@@ -398,7 +349,6 @@ export function LiveSessionPage() {
                 {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
                 {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
                 {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{research.error}</div>}
-                {renderInteractionPrompt()}
                 {working && !pendingInteraction && <ThinkingActivity className="py-4" />}
               </>
             )}
@@ -410,34 +360,44 @@ export function LiveSessionPage() {
           <ConversationNavRail items={userNavItems} rootRef={scrollRef} onSelect={handleNavSelect} />
         )}
 
-        <ConversationComposer
-          workspaceCwd={workspaceCwd}
-          status={status}
-          activeSessionId={activeSessionId}
-          sessionStats={sessionStats}
-          contextTokens={contextTokens}
-          contextWindow={contextWindow}
-          contextPercent={contextPercent}
-          compactionEnabled={compactionEnabled}
-          compactionThresholdPercent={compactionThresholdPercent}
-          working={working}
-          promptDeliveryNotice={promptDeliveryNotice}
-          interactionPending={interactionPending}
-          reviewingProject={reviewingProject}
-          reviewNotice={reviewNotice}
-          autoReviewOn={autoReviewOn}
-          modelControlsDisabled={modelControlsDisabled}
-          showWelcome={showWelcome}
-          showScrollDown={showScrollDown}
-          composer={composer}
-          model={model}
-          research={research}
-          modePicker={modePicker}
-          onScrollToBottom={scrollToBottom}
-          onReview={() => void handleProjectReview()}
-          onAbort={abort}
-          onRemoveWorkspaceReference={removeWorkspaceReference}
-        />
+        <div className="shrink-0">
+          <ConversationInteractionDock
+            key={JSON.stringify([workspaceCwd, activeSessionId, pendingInteraction?.requestId, pendingInteraction?.toolCallId])}
+            interaction={pendingInteraction}
+            questionnaire={pendingQuestionnaire}
+            onRespond={respondToInteraction}
+          />
+          <div hidden={interactionPending}>
+            <ConversationComposer
+              workspaceCwd={workspaceCwd}
+              status={status}
+              activeSessionId={activeSessionId}
+              sessionStats={sessionStats}
+              contextTokens={contextTokens}
+              contextWindow={contextWindow}
+              contextPercent={contextPercent}
+              compactionEnabled={compactionEnabled}
+              compactionThresholdPercent={compactionThresholdPercent}
+              working={working}
+              promptDeliveryNotice={promptDeliveryNotice}
+              interactionPending={interactionPending}
+              reviewingProject={reviewingProject}
+              reviewNotice={reviewNotice}
+              autoReviewOn={autoReviewOn}
+              modelControlsDisabled={modelControlsDisabled}
+              showWelcome={showWelcome}
+              showScrollDown={showScrollDown}
+              composer={composer}
+              model={model}
+              research={research}
+              modePicker={modePicker}
+              onScrollToBottom={scrollToBottom}
+              onReview={() => void handleProjectReview()}
+              onAbort={abort}
+              onRemoveWorkspaceReference={removeWorkspaceReference}
+            />
+          </div>
+        </div>
 
         {showWelcome && <div className="flex-1" aria-hidden />}
       </div>

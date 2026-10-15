@@ -108,6 +108,15 @@ describe("Node control plane", () => {
     expect(response.json()).toEqual({ status: "ok", service: "pi-science-server", control_plane: "node", active_agent_workers: 0, active_kernels: 0 });
   });
 
+  it("does not expose the removed literature HTTP endpoints", async () => {
+    const app = buildApp(config("http://127.0.0.1:1"));
+    openApps.push(app);
+    for (const route of ["/api/literature/search", "/api/literature/approve"]) {
+      const response = await app.inject({ method: "POST", url: route, payload: {} });
+      expect(response.statusCode).toBe(404);
+    }
+  });
+
   it("protects the control-plane API when a per-launch token is configured", async () => {
     const app = buildApp(config("http://127.0.0.1:1", { internalToken: "test-control-token", requireInternalToken: true }));
     openApps.push(app);

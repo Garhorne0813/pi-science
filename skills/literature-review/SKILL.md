@@ -1,17 +1,16 @@
 ---
 name: literature-review
-description: Find, verify, and synthesize scientific literature with traceable citations. Works with zero configuration by querying the public Crossref, arXiv, and PubMed APIs directly via curl, prefers the pi-science control-plane literature gateway (/api/literature/search, which adds caching, rate limiting, egress audit and a sensitive-term gate over PubMed, GenBank, arXiv, PubChem and UniProt), and prefers configured literature MCP connectors when they are available. Use for literature searches, evidence tables, paper comparisons, and review-ready summaries.
-version: 0.2.1
+description: Find, verify, and synthesize scientific literature with traceable citations. Use configured MCP tools for literature and scientific data retrieval, including Crossref, PubMed, arXiv, GenBank, PubChem, and UniProt. Use for literature searches, evidence tables, paper comparisons, and review-ready summaries.
+version: 0.3.0
 license: Apache-2.0
 category: research
 requirements:
+  - name: literature-mcp
+    kind: service
+    description: An enabled MCP connector providing the requested literature or scientific data tools. The built-in Paper Search connector is enabled by default; specialized scientific data connectors must be enabled as needed.
   - name: network
     kind: service
-    description: Outbound HTTPS access to public literature APIs (api.crossref.org, export.arxiv.org, eutils.ncbi.nlm.nih.gov, rest.uniprot.org, pubchem.ncbi.nlm.nih.gov), or a configured literature MCP connector that performs retrieval.
-  - name: curl
-    kind: command
-    optional: true
-    description: Used for the zero-configuration direct API path. Not needed when a literature MCP connector handles retrieval.
+    description: Outbound HTTPS access from the MCP service to the selected public provider API.
 risk: low
 third_party:
   - kind: service
@@ -33,6 +32,21 @@ third_party:
     info_url: https://www.ncbi.nlm.nih.gov/books/NBK25501/
     privacy_url: https://www.nlm.nih.gov/web_policies.html
   - kind: service
+    name: bioRxiv / medRxiv API
+    provider: Cold Spring Harbor Laboratory
+    license: provider-terms
+    info_url: https://api.biorxiv.org/
+  - kind: service
+    name: Europe PMC API
+    provider: Europe PMC
+    license: provider-terms
+    info_url: https://europepmc.org/RestfulWebService
+  - kind: service
+    name: ENA Browser API
+    provider: EMBL-EBI
+    license: provider-terms
+    info_url: https://www.ebi.ac.uk/ena/browser/api/
+  - kind: service
     name: UniProtKB REST API
     provider: UniProt Consortium
     license: provider-terms
@@ -50,60 +64,24 @@ Ground every claim in retrieval results from a live provider. Never answer from 
 
 ## Retrieval strategy
 
-1. Preferred path: if literature MCP tools are configured in this session (for example `literature.search` / `literature.fetch`, or another literature connector), use them first.
-2. Local gateway: otherwise, prefer the pi-science control-plane gateway (`POST /api/literature/search` on the control plane, port 8787 by default). It queries the same public APIs (NCBI E-utilities incl. GenBank, arXiv, PubChem, UniProt) through one audited, cached, rate-limited path, and it hard-blocks sensitive queries before anything leaves the machine.
-3. Zero-configuration fallback: if neither MCP tools nor the gateway are reachable, query the public HTTP APIs below directly with `curl` from the shell. No credentials or setup are required.
-4. Failure handling: if a provider fails (non-2xx status, timeout, malformed payload), report that provider's failure explicitly and continue with the remaining providers. Never silently substitute memory for a failed or missing provider; if all providers fail, say so and stop.
+1. Use MCP tools available in this session for all retrieval. The built-in Paper Search connector is enabled by default and covers Crossref, PubMed, arXiv, bioRxiv/medRxiv, and Europe PMC open-access text. Other configured MCP connectors can provide equivalent capabilities. Follow the connector's tool permissions and data-egress settings.
+2. Choose the provider and tool for the requested task. Scientific data connectors are disabled by default; enable the relevant connector in Pi-Science MCP settings when needed, then make its tools available to the session.
+3. If a required tool is unavailable or its connector is disabled, report the missing capability and identify the connector to enable. Do not silently substitute another provider, use a shell command or direct HTTP request as a fallback, or invent results. If no suitable retrieval tool is available, stop and explain what must be configured.
+4. If a provider fails (non-2xx status, timeout, malformed payload), report that provider's failure explicitly and continue with other suitable available MCP tools. Never silently substitute memory for a failed or missing provider; if all suitable providers fail, say so and stop.
 
-## Local literature gateway (pi-science control plane)
+## MCP tools and provider coverage
 
-    curl -s -X POST http://127.0.0.1:8787/api/literature/search \
-      -H 'Content-Type: application/json' \
-      -d '{"query": "<terms>", "providers": ["pubmed", "genbank", "arxiv", "pubchem", "uniprot"]}'
+Use the actual tool names exposed by the session; the runtime may add a connector prefix. The built-in connectors provide:
 
-The response is JSON. `"blocked": false` means results came back:
+| Connector | Tools | Coverage |
+| --- | --- | --- |
+| Paper Search | `search_crossref`, `search_pubmed`, `search_arxiv` | Crossref DOI and publication metadata, PubMed articles, arXiv preprints |
+| Paper Search | `search_biorxiv_preprints`, `get_europe_pmc_full_text` | bioRxiv/medRxiv preprints and bounded Europe PMC open-access full text |
+| Protein Records | `search_uniprot_proteins`, `get_uniprot_entry`, `get_uniprot_sequence` | UniProtKB protein records and sequences |
+| Nucleotide Archives | `search_genbank_sequences`, `get_genbank_sequence`, `get_ena_sequence` | GenBank nucleotide records and GenBank/ENA sequences |
+| Chemistry | `search_pubchem_compounds`, `get_pubchem_compound` | PubChem compound properties and synonyms |
 
-    {"blocked": false, "results": [{"provider": "pubmed", "query": "<terms>", "hitCount": 10, "records": [{"id": "...", "title": "...", "url": "..."}], "retrievedAt": "...", "responseHash": "...", "cached": false}], "failures": []}
-
-Sensitive queries are blocked by default — the gateway answers
-`{"blocked": true, "categories": [...], "terms": [...]}` and **no request leaves the machine**. Categories include DNA/protein sequences, compound identifiers and clinical identifiers. To proceed deliberately, first call the approval endpoint for the exact query and its matched categories, then re-run the search with the returned token:
-
-    curl -s -X POST http://127.0.0.1:8787/api/literature/approve \
-      -H 'Content-Type: application/json' \
-      -d '{"query": "<terms>", "categories": ["<matched-category>"]}'
-
-    → {"approvedToken": "...", "expiresAt": "..."}
-
-The token is single-use (consumed by the first search that uses it) and expires after 5 minutes; it only covers that exact query and those categories. Every outbound request is recorded in the egress audit regardless. When the gateway is unreachable (different port, standalone agent session), fall back to the direct API cheatsheet below.
-
-The gateway port follows `PI_SCIENCE_PORT` (default 8787). The gateway covers PubMed, GenBank, arXiv, PubChem, and UniProt — the same public APIs as the direct paths below (plus GenBank, PubChem and UniProt), except Crossref, which remains direct-curl-only. Results from the two paths are interchangeable for the providers they share.
-
-## Direct API cheatsheet (curl)
-
-URL-encode query terms (spaces as `+` or `%20`). Replace `<terms>` with the encoded query.
-
-Crossref (DOI-registered articles, books, preprints; JSON, records under `message.items`):
-
-    curl -s "https://api.crossref.org/works?query=<terms>&rows=10&select=DOI,title,author,issued,container-title,is-referenced-by-count"
-
-Append `&mailto=<contact-email>` to join Crossref's polite pool (the conventional way to get more reliable service), e.g. `&mailto=you@example.org`.
-
-arXiv (preprints; response is Atom XML — parse `<entry>` elements for `id`, `title`, `author`, `published`):
-
-    curl -s "https://export.arxiv.org/api/query?search_query=all:<terms>&max_results=10"
-
-Use `https://` (or add `-L`): plain `http://export.arxiv.org` answers with an empty 301 redirect body. Sorting: `&sortBy=relevance` (default) or `&sortBy=submittedDate&sortOrder=descending` for the newest work. Field prefixes narrow the search: `ti:`, `au:`, `abs:`, `cat:` (e.g. `search_query=ti:<terms>+AND+cat:cs.LG`).
-
-PubMed E-utilities (biomedical literature; two-step — search for ids, then fetch metadata):
-
-    curl -s "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=<terms>&retmode=json&retmax=10"
-
-then, with the returned `idlist`:
-
-    curl -s "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=<id1>,<id2>&retmode=json"
-    curl -s "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=<id1>&rettype=abstract&retmode=text"
-
-Rate limit: without an API key NCBI allows about 3 requests/second — space out calls; with `&api_key=...` the limit rises to 10/second.
+Crossref retrieval uses `search_crossref`, including DOI-oriented searches. For an exact UniProt accession, prefer `get_uniprot_entry`; use `search_uniprot_proteins` when an accession is unknown. Request sequence output only when needed. Keep pagination and output bounds appropriate to the task, and retain provider identifiers and retrieval metadata from the MCP response.
 
 ## Result handling
 

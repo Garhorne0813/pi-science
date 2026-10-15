@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Eye, ListChecks, Loader2, MessageSquareText, PenLine, Send, Sparkles } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ListChecks, Loader2, MessageSquareText, PenLine, Send } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
 import { cn } from "../../lib/ui";
-import type { PendingInteraction, PendingQuestionnaire, QuestionnaireQuestion } from "../../lib/agent-runtime";
+import type { PendingInteraction, PendingQuestionnaire } from "../../lib/agent-runtime";
+import { QuestionnaireOptionDetails } from "./QuestionnaireOptionDetails";
 
 type QuestionnaireAnswer = {
   questionIndex: number;
@@ -14,474 +14,209 @@ type QuestionnaireAnswer = {
   notes?: string;
   preview?: string;
 };
-
 type InteractionResponse = { value?: string; confirmed?: boolean; cancelled?: boolean };
-
-function emptyAnswers(questions: QuestionnaireQuestion[]): Array<QuestionnaireAnswer | null> {
-  return questions.map(() => null);
-}
-
-function answerLabel(answer: QuestionnaireAnswer | null, noneLabel: string, customLabel: string): string {
-  if (!answer) return "";
-  if (answer.kind === "multi") return answer.selected?.length ? answer.selected.join(", ") : noneLabel;
-  return answer.answer || customLabel;
-}
-
-function replaceAt<T>(values: T[], index: number, value: T): T[] {
-  return values.map((current, currentIndex) => currentIndex === index ? value : current);
-}
-
-export function QuestionnairePrompt({
-  questionnaire,
-  interaction,
-  onRespond,
-}: {
+type Props = {
   questionnaire: PendingQuestionnaire;
   interaction: PendingInteraction;
   onRespond: (response: InteractionResponse) => void | Promise<void>;
-}) {
+  onProgress?: (answered: number) => void;
+  onCollapse?: () => void;
+  active?: boolean;
+};
+function replaceAt<T>(values: T[], index: number, value: T): T[] {
+  return values.map((current, currentIndex) => currentIndex === index ? value : current);
+}
+function answerLabel(answer: QuestionnaireAnswer | null, noneLabel: string): string {
+  if (!answer) return "";
+  return answer.kind === "multi" ? answer.selected?.join(", ") || noneLabel : answer.answer || "";
+}
+export function QuestionnairePrompt(props: Props) {
+  return <QuestionnaireForm key={JSON.stringify([props.interaction.requestId, props.questionnaire.toolCallId])} {...props} />;
+}
+function QuestionnaireForm({ questionnaire, interaction, onRespond, onProgress, onCollapse, active = true }: Props) {
   const { t } = useTranslation();
+  const id = useId();
   const questions = questionnaire.questions;
-  const [openIndex, setOpenIndex] = useState(0);
-  const [summaryOpen, setSummaryOpen] = useState(false);
-  const [answers, setAnswers] = useState<Array<QuestionnaireAnswer | null>>(() => emptyAnswers(questions));
+  const [index, setIndex] = useState(0);
+  const [review, setReview] = useState(false);
+  const [answers, setAnswers] = useState<Array<QuestionnaireAnswer | null>>(() => questions.map(() => null));
   const [notes, setNotes] = useState<string[]>(() => questions.map(() => ""));
   const [notesOpen, setNotesOpen] = useState<boolean[]>(() => questions.map(() => false));
-  const [customDrafts, setCustomDrafts] = useState<string[]>(() => questions.map(() => ""));
+  const [drafts, setDrafts] = useState<string[]>(() => questions.map(() => ""));
   const [customOpen, setCustomOpen] = useState<boolean[]>(() => questions.map(() => false));
-  const [hoveredOption, setHoveredOption] = useState<number | null>(null);
-  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setOpenIndex(0);
-    setSummaryOpen(false);
-    setAnswers(emptyAnswers(questionnaire.questions));
-    setNotes(questionnaire.questions.map(() => ""));
-    setNotesOpen(questionnaire.questions.map(() => false));
-    setCustomDrafts(questionnaire.questions.map(() => ""));
-    setCustomOpen(questionnaire.questions.map(() => false));
-    setHoveredOption(null);
-    setPreviewIndex(null);
-    setSubmitting(false);
-    setSubmitError(null);
-  }, [questionnaire.toolCallId, questionnaire.questions]);
-
-  if (questions.length === 0) return null;
-
+  const [error, setError] = useState<string | null>(null);
+  const submittingRef = useRef(false);
+  const [focusRequest, setFocusRequest] = useState(0);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const answeredCount = answers.filter(Boolean).length;
-  const canSubmit = answeredCount === questions.length && !submitting;
-  const noneLabel = t("questionnaire.none");
-  const customLabel = t("questionnaire.custom");
-  const componentId = interaction.requestId.replace(/[^a-zA-Z0-9_-]/g, "-");
+  useEffect(() => { onProgress?.(answeredCount); }, [answeredCount, onProgress]);
+  useEffect(() => {
+    if (!focusRequest) return;
+    headingRef.current?.focus({ preventScroll: true });
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+  }, [focusRequest]);
 
-  const updateAnswer = (index: number, answer: QuestionnaireAnswer | null) => {
-    setAnswers((previous) => replaceAt(previous, index, answer));
+  const question = questions[index];
+  if (!question) return null;
+  const answer = answers[index] ?? null;
+  const effectiveAnswers = () => answers.map((current, questionIndex) => customOpen[questionIndex]
+    ? drafts[questionIndex]?.trim() ? { questionIndex, question: questions[questionIndex]!.question, kind: "custom" as const, answer: drafts[questionIndex]!.trim() } : current
+    : current);
+  const commitCustom = () => {
+    const next = effectiveAnswers();
+    setAnswers(next);
+    if (customOpen[index] && next[index]) setCustomOpen((previous) => replaceAt(previous, index, false));
+    return next;
   };
-
-  const openQuestion = (index: number) => {
-    setSummaryOpen(false);
-    setOpenIndex(Math.max(0, Math.min(index, questions.length - 1)));
-    setHoveredOption(null);
-    setPreviewIndex(null);
+  const goTo = (next: number) => {
+    commitCustom();
+    setError(null);
+    setFocusRequest((previous) => previous + 1);
+    setReview(false);
+    setIndex(next);
   };
-
-  const openNextUnanswered = (fromIndex: number) => {
-    // Always return to the first incomplete question, even when the user
-    // answered a later accordion row out of order.
-    const nextIndex = questions.findIndex((_, index) => index !== fromIndex && !answers[index]);
-    if (nextIndex >= 0) openQuestion(nextIndex);
-    else setSummaryOpen(true);
+  const choose = (optionIndex: number) => {
+    if (submittingRef.current) return;
+    const option = question.options[optionIndex]!;
+    const selected = answer?.kind === "multi" ? answer.selected ?? [] : [];
+    const next: QuestionnaireAnswer = question.multiSelect
+      ? { questionIndex: index, question: question.question, kind: "multi", answer: null, selected: selected.includes(option.label) ? selected.filter((label) => label !== option.label) : [...selected, option.label] }
+      : { questionIndex: index, question: question.question, kind: "option", answer: option.label, ...(option.preview ? { preview: option.preview } : {}) };
+    setAnswers((previous) => replaceAt(previous, index, next));
+    setCustomOpen((previous) => replaceAt(previous, index, false));
+    setError(null);
   };
-
-  const chooseOption = (questionIndex: number, optionIndex: number) => {
-    const question = questions[questionIndex];
-    const option = question?.options[optionIndex];
-    if (!question || !option) return;
-
-    const previousAnswer = answers[questionIndex] ?? null;
-    if (question.multiSelect) {
-      const previous = previousAnswer?.kind === "multi" ? previousAnswer.selected ?? [] : [];
-      const selected = previous.includes(option.label)
-        ? previous.filter((label) => label !== option.label)
-        : [...previous, option.label];
-      updateAnswer(questionIndex, {
-        questionIndex,
-        question: question.question,
-        kind: "multi",
-        answer: null,
-        selected,
-      });
-      if (option.preview) setPreviewIndex(optionIndex);
-      if (!selected.includes(option.label) && previewIndex === optionIndex) setPreviewIndex(null);
-      setHoveredOption(null);
-      setCustomOpen((previous) => replaceAt(previous, questionIndex, false));
-      return;
-    }
-
-    updateAnswer(questionIndex, {
-      questionIndex,
-      question: question.question,
-      kind: "option",
-      answer: option.label,
-      ...(option.preview ? { preview: option.preview } : {}),
-    });
-    setPreviewIndex(option.preview ? optionIndex : null);
-    setHoveredOption(null);
-    setCustomOpen((previous) => replaceAt(previous, questionIndex, false));
-    if (!previousAnswer) openNextUnanswered(questionIndex);
-  };
-
-  const toggleCustomAnswer = (questionIndex: number) => {
-    const isOpen = Boolean(customOpen[questionIndex]);
-    const existingAnswer = answers[questionIndex];
-    setCustomOpen((previous) => replaceAt(previous, questionIndex, !isOpen));
-    if (!isOpen && existingAnswer?.kind === "custom") {
-      setCustomDrafts((previous) => replaceAt(previous, questionIndex, existingAnswer.answer ?? ""));
-    }
-    setHoveredOption(null);
-    setPreviewIndex(null);
-  };
-
-  const cancelCustomAnswer = (questionIndex: number) => {
-    setCustomDrafts((previous) => replaceAt(previous, questionIndex, ""));
-    setCustomOpen((previous) => replaceAt(previous, questionIndex, false));
-  };
-
-  const saveCustomAnswer = (questionIndex: number) => {
-    const question = questions[questionIndex];
-    if (!question) return;
-    const wasAnswered = Boolean(answers[questionIndex]);
-    updateAnswer(questionIndex, {
-      questionIndex,
-      question: question.question,
-      kind: "custom",
-      answer: customDrafts[questionIndex] ?? "",
-    });
-    setCustomOpen((previous) => replaceAt(previous, questionIndex, false));
-    setHoveredOption(null);
-    setPreviewIndex(null);
-    if (!wasAnswered) openNextUnanswered(questionIndex);
-  };
-
-  const markEmptyMulti = (questionIndex: number) => {
-    const question = questions[questionIndex];
-    if (!question?.multiSelect) return;
-    const wasAnswered = Boolean(answers[questionIndex]);
-    updateAnswer(questionIndex, {
-      questionIndex,
-      question: question.question,
-      kind: "multi",
-      answer: null,
-      selected: [],
-    });
-    setCustomOpen((previous) => replaceAt(previous, questionIndex, false));
-    setHoveredOption(null);
-    setPreviewIndex(null);
-    if (!wasAnswered) openNextUnanswered(questionIndex);
-  };
-
-  const selectedPreviewIndex = (question: QuestionnaireQuestion, questionIndex: number): number | null => {
-    const answer = answers[questionIndex];
-    if (answer?.kind === "option") {
-      const index = question.options.findIndex((option) => option.label === answer.answer && option.preview);
-      return index >= 0 ? index : null;
-    }
-    if (answer?.kind === "multi") {
-      const selected = new Set(answer.selected ?? []);
-      if (previewIndex !== null && selected.has(question.options[previewIndex]?.label ?? "") && question.options[previewIndex]?.preview) {
-        return previewIndex;
-      }
-      const index = question.options.findIndex((option) => selected.has(option.label) && option.preview);
-      return index >= 0 ? index : null;
-    }
-    return null;
-  };
-
-  const previewVisibleFor = (question: QuestionnaireQuestion, questionIndex: number, optionIndex: number): boolean => {
-    if (!question.options[optionIndex]?.preview) return false;
-    if (hoveredOption !== null) return hoveredOption === optionIndex;
-    return selectedPreviewIndex(question, questionIndex) === optionIndex || previewIndex === optionIndex;
-  };
-
   const respond = async (response: InteractionResponse) => {
-    if (submitting) return;
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
-    setSubmitError(null);
-    try {
-      await onRespond(response);
-    } catch (cause) {
-      setSubmitError(cause instanceof Error && cause.message ? cause.message : t("interaction.responseFailed"));
+    setError(null);
+    try { await onRespond(response); }
+    catch (cause) {
+      submittingRef.current = false;
       setSubmitting(false);
+      setError(cause instanceof Error && cause.message ? cause.message : t("interaction.responseFailed"));
     }
   };
-
   const submit = () => {
-    if (!canSubmit) return;
-    const payload = {
-      cancelled: false,
-      answers: answers.flatMap((answer, index) => answer ? [{ ...answer, notes: notes[index]?.trim() || undefined }] : []),
-    };
-    void respond({ value: JSON.stringify(payload) });
-  };
-
-  const previous = () => {
-    if (summaryOpen) {
-      setSummaryOpen(false);
+    if (submittingRef.current) return;
+    const next = commitCustom();
+    const missing = next.findIndex((value) => !value);
+    if (missing >= 0) {
+      setFocusRequest((previous) => previous + 1);
+      setReview(false);
+      setIndex(missing);
+      setError(t("questionnaire.answerRequired", { number: missing + 1 }));
       return;
     }
-    if (openIndex > 0) openQuestion(openIndex - 1);
+    void respond({ value: JSON.stringify({ cancelled: false, answers: next.map((value, questionIndex) => ({ ...value!, notes: notes[questionIndex]?.trim() || undefined })) }) });
+  };
+  const toggleCustom = () => {
+    if (!customOpen[index] && answer?.kind === "custom") setDrafts((previous) => replaceAt(previous, index, answer.answer ?? ""));
+    setCustomOpen((previous) => replaceAt(previous, index, !previous[index]));
+  };
+  const selectedRadioIndex = !customOpen[index] && answer?.kind === "option" ? question.options.findIndex((option) => option.label === answer.answer) : -1;
+  const radioEntryIndex = Math.max(0, selectedRadioIndex);
+  const focusOption = (from: number, key: string) => {
+    if (submittingRef.current) return;
+    const total = question.options.length + (question.multiSelect ? 1 : 0);
+    if (!total) return;
+    const next = key === "Home" ? 0 : key === "End" ? total - 1 : (from + (key === "ArrowDown" || key === "ArrowRight" ? 1 : -1) + total) % total;
+    if (!question.multiSelect) choose(next);
+    optionRefs.current[next]?.focus();
   };
 
-  const next = () => {
-    if (openIndex < questions.length - 1) openQuestion(openIndex + 1);
+  const isOptionSelected = (optionIndex: number) => {
+    const option = question.options[optionIndex]!;
+    return Boolean(!customOpen[index] && (question.multiSelect ? answer?.kind === "multi" && answer.selected?.includes(option.label) : answer?.kind === "option" && answer.answer === option.label));
   };
+  const optionButton = (optionIndex: number) => {
+    const option = question.options[optionIndex]!;
+    const selected = isOptionSelected(optionIndex);
+    return <button key={`${index}-${optionIndex}`} ref={(node) => { optionRefs.current[optionIndex] = node; }} type="button" role={question.multiSelect ? "checkbox" : "radio"} tabIndex={question.multiSelect || optionIndex === radioEntryIndex ? 0 : -1} aria-checked={selected} onClick={() => choose(optionIndex)} onKeyDown={(event) => {
+      if (["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) { event.preventDefault(); focusOption(optionIndex, event.key); }
+    }} className={cn("flex min-h-9 min-w-0 items-start gap-3 px-3 py-2 text-left text-sm text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent", question.multiSelect ? "flex-1 rounded-input" : "w-full rounded-l-input", !question.multiSelect && (selected ? "bg-surface-selected" : "hover:bg-surface-2"))}>
+      <span className="w-4 shrink-0 text-muted" aria-hidden="true">{selected ? <Check size={14} className="mt-0.5 text-accent" /> : `${optionIndex + 1}.`}</span><span className="min-w-0 flex-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{option.label}</span>
+    </button>;
+  };
+  const optionGridRow = `1 / span ${Math.max(1, question.options.length)}`;
 
   return (
-    <section data-request-id={interaction.requestId} className="ui-card-flat animate-fadeIn overflow-hidden rounded-card border-accent/35" aria-label={t("questionnaire.title")}>
-      <header className="border-b border-faint bg-accent/5 px-4 py-2 sm:px-5">
-        <div className="flex items-center gap-2">
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent-fill text-accent-fg">
-            <Sparkles size={13} />
-          </span>
-          <div className="min-w-0 text-sm font-semibold text-text">{t("questionnaire.title")}</div>
-        </div>
-        <div
-          className="mt-1 overflow-hidden rounded-full bg-accent/15"
-          role="progressbar"
-          aria-label={t("questionnaire.progress", { answered: answeredCount, total: questions.length })}
-          aria-valuemin={0}
-          aria-valuemax={questions.length}
-          aria-valuenow={answeredCount}
-        >
-          <div className="h-1 rounded-full bg-accent transition-[width]" style={{ width: `${(answeredCount / questions.length) * 100}%` }} />
-        </div>
+    <section data-request-id={interaction.requestId} aria-label={t("questionnaire.title")} className="flex max-h-[min(360px,60dvh)] min-h-0 flex-col overflow-hidden rounded-composer border border-border bg-surface sm:max-h-[min(320px,50dvh)]" onKeyDown={(event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing) { event.preventDefault(); submit(); }
+    }}>
+      <header className="flex shrink-0 items-start gap-3 px-4 pb-2 pt-3">
+        <h3 id={`${id}-heading`} ref={headingRef} tabIndex={-1} className="max-h-20 min-w-0 flex-1 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words text-sm font-medium text-text outline-none">{review ? t("questionnaire.review") : question.question}</h3>
+        <span className="shrink-0 pt-0.5 text-xs tabular-nums text-muted" aria-label={t("questionnaire.position", { current: index + 1, total: questions.length })}>{index + 1} / {questions.length}</span>
+        {onCollapse && <button type="button" onClick={onCollapse} aria-label={t("interaction.collapse")} className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted hover:bg-surface-2"><ChevronDown size={15} /></button>}
+        <span className="sr-only" role="status">{t("questionnaire.progress", { answered: answeredCount, total: questions.length })}</span>
       </header>
-
-      <div className="space-y-1.5 px-3 py-1.5 sm:px-4">
-        {questions.map((question, questionIndex) => {
-          const isOpen = openIndex === questionIndex;
-          const answer = answers[questionIndex] ?? null;
-          const answered = Boolean(answer);
-          const questionLabel = question.header || t("questionnaire.question", { number: questionIndex + 1 });
-
-          return (
-            <div key={`${question.question}-${questionIndex}`} className={cn("overflow-hidden rounded-input border transition-colors", isOpen ? "border-accent/35 bg-surface" : "border-border bg-surface-2/20")}>
-              <button
-                id={`questionnaire-header-${componentId}-${questionIndex}`}
-                type="button"
-                aria-expanded={isOpen}
-                aria-controls={`questionnaire-panel-${componentId}-${questionIndex}`}
-                onClick={() => openQuestion(questionIndex)}
-                className="flex w-full items-start gap-2.5 px-2.5 py-1.5 text-left transition-colors hover:bg-accent/5 sm:px-3"
-              >
-                <span className={cn("mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold", answered ? "bg-ok/10 text-ok-text" : "bg-accent/10 text-accent")}>
-                  {answered ? <Check size={13} /> : questionIndex + 1}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[11px] font-medium uppercase tracking-[0.06em] text-accent">{questionLabel}</span>
-                  <span className="block whitespace-pre-wrap break-words text-sm font-medium leading-snug text-text">{question.question}</span>
-                  {!isOpen && answered && (
-                    <span className="mt-0.5 block truncate text-xs text-muted">{answerLabel(answer, noneLabel, customLabel)}</span>
-                  )}
-                </span>
-                <ChevronDown size={16} className={cn("mt-1 shrink-0 text-muted transition-transform", isOpen && "rotate-180 text-accent")} />
-              </button>
-
-              {isOpen && (
-                <div
-                  id={`questionnaire-panel-${componentId}-${questionIndex}`}
-                  role="region"
-                  aria-labelledby={`questionnaire-header-${componentId}-${questionIndex}`}
-                  className="px-2.5 pb-2.5 sm:px-3"
-                >
-                  <div className="grid gap-1.5">
-                    {question.options.map((option, optionIndex) => {
-                      const selected = question.multiSelect
-                        ? answer?.kind === "multi" && answer.selected?.includes(option.label)
-                        : answer?.kind === "option" && answer.answer === option.label;
-                      const showPreview = previewVisibleFor(question, questionIndex, optionIndex);
-
-                      return (
-                        <div
-                          key={`${option.label}-${optionIndex}`}
-                          onMouseEnter={() => { if (option.preview) setHoveredOption(optionIndex); }}
-                          onMouseLeave={() => setHoveredOption(null)}
-                        >
-                          <button
-                            type="button"
-                            aria-pressed={Boolean(selected)}
-                            onFocus={() => { if (option.preview) setHoveredOption(optionIndex); }}
-                            onBlur={() => setHoveredOption(null)}
-                            onClick={() => chooseOption(questionIndex, optionIndex)}
-                            className={cn(
-                              "group flex w-full items-start gap-2.5 rounded-input border px-2.5 py-1.5 text-left transition-colors",
-                              selected ? "border-accent bg-accent/10 ring-1 ring-accent/25" : "border-border bg-surface hover:border-accent/55 hover:bg-accent/5",
-                            )}
-                          >
-                            <span className={cn(
-                              "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center border text-[10px]",
-                              question.multiSelect ? "rounded" : "rounded-full",
-                              selected ? "border-accent bg-accent-fill text-accent-fg" : "border-border bg-surface-2 text-muted group-hover:border-accent/50",
-                            )}>
-                              {question.multiSelect
-                                ? selected && <Check size={11} />
-                                : selected && <span className="h-1.5 w-1.5 rounded-full bg-accent-fg" />}
-                            </span>
-                            <span className="min-w-0 flex-1">
-                              <span className="flex items-center gap-1.5 text-sm font-medium text-text">
-                                <span className="truncate">{option.label}</span>
-                                {option.preview && (
-                                  <span className="shrink-0 text-accent">
-                                    <Eye size={12} aria-label={t("questionnaire.hasPreview")} />
-                                  </span>
-                                )}
-                              </span>
-                              {option.description && <span className="mt-0.5 block text-xs leading-snug text-muted">{option.description}</span>}
-                            </span>
-                          </button>
-                          {showPreview && option.preview && (
-                            <div className="mt-1 max-h-44 overflow-auto rounded-input border border-accent/25 bg-accent/5 px-2.5 py-1.5 text-xs text-text">
-                              <MarkdownViewer>{option.preview}</MarkdownViewer>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-
-                    <button
-                      type="button"
-                      aria-expanded={customOpen[questionIndex]}
-                      aria-pressed={answer?.kind === "custom" || customOpen[questionIndex]}
-                      onClick={() => toggleCustomAnswer(questionIndex)}
-                      className={cn(
-                        "flex w-full items-center gap-2.5 rounded-input border border-dashed px-2.5 py-1.5 text-left text-sm transition-colors",
-                        answer?.kind === "custom" || customOpen[questionIndex] ? "border-accent bg-accent/10 text-text" : "border-border text-muted hover:border-accent/55 hover:text-text",
-                      )}
-                    >
-                      <PenLine size={14} className="ml-0.5 shrink-0 text-accent" />
-                      <span className="truncate">{t("questionnaire.custom")}</span>
-                    </button>
-
-                    {question.multiSelect && (
-                      <button type="button" onClick={() => markEmptyMulti(questionIndex)} className="self-start px-1 text-xs text-muted underline decoration-border underline-offset-2 hover:text-text">
-                        {t("questionnaire.none")}
-                      </button>
-                    )}
+      <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3">
+        <fieldset disabled={submitting} className="m-0 min-w-0 border-0 p-0 pb-1">
+          {review ? (
+            <div className="space-y-1" aria-label={t("questionnaire.review")}>
+              {questions.map((item, questionIndex) => <button key={questionIndex} type="button" onClick={() => goTo(questionIndex)} className="flex w-full items-start gap-3 rounded-input px-3 py-2 text-left text-sm hover:bg-surface-2">
+                <span className="text-muted">{questionIndex + 1}.</span><span className="min-w-0 flex-1 break-words"><span className="block text-text">{item.question}</span><span className="text-xs text-muted">{answers[questionIndex] ? answerLabel(answers[questionIndex]!, t("questionnaire.none")) : t("questionnaire.unanswered")}</span></span>{answers[questionIndex] && <Check size={14} className="shrink-0 text-ok-text" />}
+              </button>)}
+            </div>
+          ) : (
+            <>
+              {question.multiSelect && <p className="px-3 pb-1 text-xs text-muted">{t("questionnaire.multiSelect")}</p>}
+              {question.multiSelect ? (
+                <div role="group" aria-labelledby={`${id}-heading`}>
+                  {question.options.map((option, optionIndex) => <div key={`${index}-${optionIndex}`} className={cn("flex min-w-0 items-center rounded-input", isOptionSelected(optionIndex) ? "bg-surface-selected" : "hover:bg-surface-2")}>
+                    {optionButton(optionIndex)}
+                    <QuestionnaireOptionDetails option={option} active={active} disabled={submitting} />
+                  </div>)}
+                </div>
+              ) : (
+                <div className="grid grid-cols-[minmax(0,1fr)_2rem]" style={{ gridTemplateRows: `repeat(${Math.max(1, question.options.length)}, auto)` }}>
+                  <div role="radiogroup" aria-labelledby={`${id}-heading`} className="col-start-1 grid min-w-0 [grid-template-rows:subgrid]" style={{ gridRow: optionGridRow }}>
+                    {question.options.map((_, optionIndex) => optionButton(optionIndex))}
                   </div>
-
-                  {customOpen[questionIndex] && (
-                    <div className="mt-2 rounded-input border border-accent/30 bg-accent/5 p-2.5">
-                      <label htmlFor={`questionnaire-custom-${componentId}-${questionIndex}`} className="mb-1 flex items-center gap-1.5 text-xs font-medium text-text"><PenLine size={12} className="text-accent" />{t("questionnaire.customLabel")}</label>
-                      <textarea
-                        id={`questionnaire-custom-${componentId}-${questionIndex}`}
-                        autoFocus
-                        value={customDrafts[questionIndex] ?? ""}
-                        onChange={(event) => setCustomDrafts((previous) => replaceAt(previous, questionIndex, event.target.value))}
-                        rows={2}
-                        placeholder={t("questionnaire.customPlaceholder")}
-                        className="w-full resize-y rounded-input border border-border bg-surface px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent"
-                      />
-                      <div className="mt-1.5 flex justify-end gap-1.5">
-                        <button type="button" onClick={() => cancelCustomAnswer(questionIndex)} className="rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2">{t("common.cancel")}</button>
-                        <button type="button" onClick={() => saveCustomAnswer(questionIndex)} className="rounded-input bg-accent-fill px-2.5 py-1 text-xs text-accent-fg">{t("questionnaire.saveAnswer")}</button>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="mt-2">
-                    <button
-                      type="button"
-                      aria-expanded={notesOpen[questionIndex]}
-                      onClick={() => setNotesOpen((previous) => replaceAt(previous, questionIndex, !previous[questionIndex]))}
-                      className="flex max-w-full items-center gap-1.5 rounded-input px-1 py-0.5 text-xs text-muted transition-colors hover:bg-surface-2 hover:text-text"
-                    >
-                      <MessageSquareText size={12} className="shrink-0 text-accent" />
-                      {notes[questionIndex]?.trim() && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" aria-hidden="true" />}
-                      <span className="truncate">{notes[questionIndex]?.trim() || t("questionnaire.notes")}</span>
-                    </button>
-                    {notesOpen[questionIndex] && (
-                      <div className="mt-1.5">
-                        <label className="sr-only" htmlFor={`questionnaire-notes-${componentId}-${questionIndex}`}>{t("questionnaire.notes")}</label>
-                        <textarea
-                          id={`questionnaire-notes-${componentId}-${questionIndex}`}
-                          value={notes[questionIndex] ?? ""}
-                          onChange={(event) => setNotes((previous) => replaceAt(previous, questionIndex, event.target.value))}
-                          rows={2}
-                          placeholder={t("questionnaire.notesPlaceholder")}
-                          className="w-full resize-y rounded-input border border-border bg-surface-2/35 px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent"
-                        />
-                      </div>
-                    )}
+                  <div className="col-start-2 grid [grid-template-rows:subgrid]" style={{ gridRow: optionGridRow }}>
+                    {question.options.map((option, optionIndex) => <div key={`${index}-${optionIndex}`} className={cn("flex items-center justify-center rounded-r-input", isOptionSelected(optionIndex) ? "bg-surface-selected" : "hover:bg-surface-2")}>
+                      <QuestionnaireOptionDetails option={option} active={active} disabled={submitting} />
+                    </div>)}
                   </div>
                 </div>
               )}
-            </div>
-          );
-        })}
+              <button ref={(node) => { optionRefs.current[question.options.length] = node; }} type="button" aria-expanded={Boolean(customOpen[index])} aria-controls={`${id}-custom`} onClick={toggleCustom} onKeyDown={(event) => {
+                  if (question.multiSelect && ["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) { event.preventDefault(); focusOption(question.options.length, event.key); }
+                }} className={cn("flex min-h-9 w-full items-center gap-3 rounded-input px-3 py-2 text-left text-sm hover:bg-surface-2", customOpen[index] || answer?.kind === "custom" ? "bg-surface-selected text-text" : "text-muted")}><PenLine size={14} className="shrink-0" />{t("questionnaire.custom")}</button>
+              {customOpen[index] && <div id={`${id}-custom`} className="px-3 pb-2 pt-1">
+                <label htmlFor={`${id}-answer`} className="sr-only">{t("questionnaire.customLabel")}</label>
+                <textarea id={`${id}-answer`} autoFocus rows={2} value={drafts[index] ?? ""} onChange={(event) => setDrafts((previous) => replaceAt(previous, index, event.target.value))} placeholder={t("questionnaire.customPlaceholder")} className="w-full resize-none rounded-input border border-border bg-surface px-3 py-2 text-sm text-text outline-none focus:border-accent" />
+                <div className="mt-1 flex justify-end gap-2">
+                  <button type="button" onClick={() => { setDrafts((previous) => replaceAt(previous, index, "")); setCustomOpen((previous) => replaceAt(previous, index, false)); }} className="rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2">{t("common.cancel")}</button>
+                  <button type="button" disabled={!drafts[index]?.trim()} onClick={() => { commitCustom(); setError(null); }} className="rounded-input px-2 py-1 text-xs text-accent hover:bg-surface-2">{t("questionnaire.saveAnswer")}</button>
+                </div>
+              </div>}
+              {question.multiSelect && <button type="button" onClick={() => { setAnswers((previous) => replaceAt(previous, index, { questionIndex: index, question: question.question, kind: "multi", answer: null, selected: [] })); setCustomOpen((previous) => replaceAt(previous, index, false)); setError(null); }} className="px-3 py-1 text-xs text-muted underline underline-offset-2">{t("questionnaire.none")}</button>}
+              {notesOpen[index] && <div className="px-3 py-2">
+                <label htmlFor={`${id}-notes`} className="sr-only">{t("questionnaire.notes")}</label>
+                <textarea id={`${id}-notes`} autoFocus rows={2} value={notes[index] ?? ""} onChange={(event) => setNotes((previous) => replaceAt(previous, index, event.target.value))} placeholder={t("questionnaire.notesPlaceholder")} className="w-full resize-none rounded-input border border-border bg-surface px-3 py-2 text-sm text-text outline-none focus:border-accent" />
+              </div>}
+            </>
+          )}
+        </fieldset>
       </div>
-
-      <footer className="border-t border-faint">
-        <div className="px-4 pt-1.5 sm:px-5">
-          <button
-            type="button"
-            aria-label={summaryOpen ? t("questionnaire.hideReview") : t("questionnaire.review")}
-            aria-expanded={summaryOpen}
-            onClick={() => setSummaryOpen((open) => !open)}
-            className="flex w-full items-center gap-1.5 rounded-input px-1 py-1 text-left text-xs text-muted transition-colors hover:bg-surface-2 hover:text-text"
-          >
-            <ListChecks size={13} className="text-accent" />
-            <span>{summaryOpen ? t("questionnaire.hideReview") : t("questionnaire.review")}</span>
-            <span className="text-[11px] text-muted">{t("questionnaire.progress", { answered: answeredCount, total: questions.length })}</span>
-            <ChevronDown size={14} className={cn("ml-auto transition-transform", summaryOpen && "rotate-180")} />
-          </button>
-        </div>
-
-        {summaryOpen && (
-          <div className="space-y-1 px-4 pb-1.5 pt-1 sm:px-5">
-            {questions.map((question, questionIndex) => {
-              const answer = answers[questionIndex] ?? null;
-              return (
-                <button
-                  key={`${question.question}-summary-${questionIndex}`}
-                  type="button"
-                  onClick={() => openQuestion(questionIndex)}
-                  className="flex w-full items-start gap-2 rounded-input border border-border bg-surface-2/35 px-2.5 py-1.5 text-left transition-colors hover:border-accent/50"
-                >
-                  <span className="w-5 shrink-0 text-[11px] font-mono text-muted">{questionIndex + 1}</span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-medium text-text">{question.header || t("questionnaire.question", { number: questionIndex + 1 })}</span>
-                    <span className="block whitespace-pre-wrap break-words text-xs text-text">{question.question}</span>
-                    <span className="block truncate text-xs text-muted">{answer ? answerLabel(answer, noneLabel, customLabel) : t("questionnaire.unanswered")}</span>
-                  </span>
-                  {answer ? <Check size={13} className="mt-0.5 shrink-0 text-ok-text" /> : <span className="mt-0.5 shrink-0 text-[11px] text-warn-text">—</span>}
-                </button>
-              );
-            })}
+      <footer className="shrink-0 bg-surface px-4 pb-3 pt-2">
+        {error && <p role="alert" className="mb-2 text-xs text-error-text">{error}</p>}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1">
+            {!review && <button type="button" disabled={submitting} aria-expanded={Boolean(notesOpen[index])} aria-label={t("questionnaire.notes")} onClick={() => setNotesOpen((previous) => replaceAt(previous, index, !previous[index]))} className="flex items-center gap-1 rounded-input px-1 py-1 text-xs text-muted hover:text-text"><MessageSquareText size={13} />{t(notes[index]?.trim() ? "questionnaire.editNotes" : "questionnaire.addNotes")}</button>}
+            {questions.length > 1 && <button type="button" disabled={submitting} aria-label={t(review ? "questionnaire.hideReview" : "questionnaire.review")} aria-expanded={review} onClick={() => { commitCustom(); setFocusRequest((previous) => previous + 1); setReview(!review); }} className="flex items-center gap-1 rounded-input px-1 py-1 text-xs text-muted hover:text-text"><ListChecks size={13} />{t(review ? "questionnaire.hideReview" : "questionnaire.review")}</button>}
           </div>
-        )}
-
-        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 sm:px-5">
-          <div className="flex items-center gap-1.5">
-            <button type="button" onClick={previous} disabled={openIndex === 0 && !summaryOpen} className="inline-flex items-center gap-1 rounded-input border border-border px-2 py-1 text-xs text-muted transition-colors hover:bg-surface-2 disabled:opacity-40">
-              <ChevronLeft size={13} />{t("common.back")}
-            </button>
-            <button type="button" onClick={next} disabled={openIndex === questions.length - 1} className="inline-flex items-center gap-1 rounded-input border border-border px-2 py-1 text-xs text-muted transition-colors hover:bg-surface-2 disabled:opacity-40">
-              {t("common.next")}<ChevronRight size={13} />
-            </button>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <button type="button" disabled={submitting} onClick={() => void respond({ cancelled: true })} className="inline-flex items-center rounded-input border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:bg-surface-2 hover:text-text disabled:opacity-50">
-              {t("common.cancel")}
-            </button>
-            <button type="button" onClick={submit} disabled={!canSubmit} className="inline-flex items-center gap-1.5 rounded-input bg-accent-fill px-3 py-1 text-xs text-accent-fg disabled:opacity-50">
-              {submitting ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
-              {submitting ? t("questionnaire.submitting") : t("questionnaire.submit")}
-            </button>
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+            <button type="button" disabled={submitting} onClick={() => void respond({ cancelled: true })} className="rounded-input px-1 py-1 text-xs text-muted hover:text-text">{t("questionnaire.cancel")}</button>
+            {index > 0 && !review && <button type="button" disabled={submitting} onClick={() => goTo(index - 1)} className="flex items-center gap-1 rounded-input px-1 py-1 text-xs text-muted hover:text-text"><ChevronLeft size={13} />{t("common.back")}</button>}
+            {index < questions.length - 1 && !review ? <button type="button" disabled={submitting} onClick={() => goTo(index + 1)} className="flex items-center gap-1 rounded-full bg-accent-fill px-3 py-1.5 text-xs text-accent-fg disabled:opacity-50">{t("common.next")}<ChevronRight size={13} /></button> : <button type="button" disabled={submitting} onClick={submit} className="inline-flex items-center gap-1.5 rounded-full bg-accent-fill px-3 py-1.5 text-xs text-accent-fg disabled:opacity-50" title={t("questionnaire.submitShortcut")}>{submitting ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}{t(submitting ? "questionnaire.submitting" : "questionnaire.submit")}</button>}
           </div>
         </div>
-        {submitError && <p role="alert" className="mx-4 mb-2 rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text sm:mx-5">{submitError}</p>}
       </footer>
     </section>
   );

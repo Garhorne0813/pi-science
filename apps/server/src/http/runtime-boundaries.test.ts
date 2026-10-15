@@ -8,6 +8,8 @@ describe("runtime route boundaries", () => {
     expect(runtimeOwner("/api/sessions/session-1/events")).toBe("node-control-plane");
     expect(routeBoundary("/api/model-selection/default")?.availability).toBe("native");
     expect(routeBoundary("/api/unknown-route")).toBeUndefined();
+    expect(routeBoundary("/api/literature/search")).toBeUndefined();
+    expect(routeBoundary("/api/literature/approve")).toBeUndefined();
   });
 
   it("leaves no scientific-runtime compatibility proxies", () => {

@@ -101,6 +101,20 @@ jobs:
         if: runner.os == 'Linux'
         run: pnpm --filter frontend exec playwright test --config playwright.visual.config.ts --grep @accessibility
 
+      - name: Run workspace sidebar interaction tests
+        if: runner.os == 'Linux'
+        run: |
+          pnpm --filter frontend exec playwright test --config playwright.visual.config.ts sidebar.spec.ts --project desktop-light --project mobile --project tablet --output tests/visual/.artifacts/sidebar
+          pnpm --filter frontend exec playwright test --config playwright.visual.config.ts app-shell.visual.spec.ts --grep "collapsed context panel" --project desktop-light --project desktop-dark --project desktop-lg --project tablet --project wide --update-snapshots=none --output tests/visual/.artifacts/rail-baseline
+
+      - name: Upload workspace sidebar screenshots
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-sidebar-interactions
+          path: frontend/tests/visual/.artifacts
+          if-no-files-found: ignore
+
       - name: Enforce Settings browser performance budgets
         if: runner.os == 'Linux'
         run: pnpm --filter frontend exec playwright test --config playwright.visual.config.ts settings-performance.spec.ts model-selection-performance.spec.ts --project desktop-light --project mobile
