@@ -1,3 +1,5 @@
+import { ModelConfigService, modelConfigBackend } from "../../../model-config/model-config-service.js";
+import { ModelRegistryService } from "../../../model-config/model-registry-service.js";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { createProvider, getSupportedThinkingLevels, lazyApi, type Api, type Model, type ProviderStreams } from "@earendil-works/pi-ai";
 import { CredentialStore, type CredentialRuntimeValue } from "../../../model-resources/credential-store.js";
@@ -14,6 +16,20 @@ const implementations: Record<string, ProviderStreams> = {
 
 /** Resolve the same managed provider credentials shown by Settings for Pi's built-in providers. */
 export function agentModels(settings: RuntimeSettings = {}) {
+  const backend = settings.modelConfigBackend ?? modelConfigBackend();
+  if (backend === "legacy" || backend === "shadow") return legacyAgentModels(settings);
+  const service = new ModelConfigService();
+  const snapshot = settings.modelConfigSnapshot ?? service.readSync();
+  const models = new ModelRegistryService(service).compile(snapshot, snapshot.legacy_providers.length ? legacyAgentModels(settings) : undefined, settings.modelConfigAllowPrivate);
+  for (const provider of models.getProviders()) {
+    const catalog = provider.getModels().map((model) => ({ ...model, contextWindow: resolveContextWindow(`${model.provider}/${model.id}`, model.contextWindow, settings) }));
+    models.setProvider({ ...provider, getModels: () => catalog });
+  }
+  return models;
+}
+
+/** Compatibility adapter for explicitly retained complex routes. */
+export function legacyAgentModels(settings: RuntimeSettings = {}) {
   const resources = new ModelResourceRepository();
   const credentials = new CredentialStore();
   const state = resources.readSync();

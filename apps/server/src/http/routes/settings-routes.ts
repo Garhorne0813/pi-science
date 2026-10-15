@@ -188,13 +188,6 @@ function normalizeThinkingLevels(value: unknown): string[] | null {
   return THINKING_LEVELS.filter((level) => seen.has(level));
 }
 
-/** Set-equality for thinking level lists (order-independent), used to decide
- *  whether a persisted model hint already matches the runtime's actual set. */
-function sameLevelList(a: unknown, b: unknown): boolean {
-  const left = new Set(Array.isArray(a) ? a.map(String) : []);
-  const right = new Set(Array.isArray(b) ? b.map(String) : []);
-  return left.size === right.size && [...left].every((level) => right.has(level));
-}
 
 /** Clamp a requested thinking level to the model's supported list, mirroring
  *  the frontend `clampThinkingLevel`: keep the request when supported,
@@ -282,7 +275,7 @@ async function modelCatalog(nodeSessionService: NodeSessionService, config: Sett
       const runtimeById = new Map(runtimeModels.map((item) => [String(item.id), item]));
       for (const raw of [...catalogEntries, ...customModels(config)]) {
         const source: Record<string, unknown> = { ...raw, id: canonicalRuntimeModelRef(String(raw.id)) };
-        const existing = runtimeById.get(String(source.id));
+        const existing = runtimeById.get(String(source.id)) ?? runtimeById.get(String(source.id).replace(/^custom-/, "user-"));
         if (!existing) continue;
         if (existing.reasoning === undefined) existing.reasoning = source.reasoning ?? false;
         if (!Array.isArray(existing.thinking_levels) || existing.thinking_levels.length === 0) existing.thinking_levels = source.thinking_levels;
@@ -558,7 +551,6 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
   }
   app.get("/api/settings/providers", async () => { const config = await load(); return { providers: await providerInventory(nodeSessionService, config, "", modelResources, runtimeCatalog) }; });
   app.get("/api/settings/config", async (request) => {
-    await modelResources?.ensureMigrated();
     const config = await load();
     const cwdValue = query(request, "cwd", "");
     // Request-scoped snapshot: inventory and capabilities observe the same
@@ -597,7 +589,6 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
     const configured = typeof config.model === "string" && available.some((item) => item.id === config.model) ? config.model : "";
     const unavailableModel = typeof config.model === "string" && config.model && !configured ? config.model : null;
     let thinking = configured ? String(config.thinking ?? "high") : "off";
-    let runtimeLevelsApplied = false;
     if (configured && cwdValue) {
       const actual = await nodeSessionService.availableThinkingLevels(cwdValue, configured);
       if (actual.success && actual.data && typeof actual.data === "object") {
@@ -606,66 +597,15 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
         // Only apply runtime levels when the runtime verified it is running
         // the configured model; a different model's levels must never leak in.
         if (levels && data.model === configured) {
-          runtimeLevelsApplied = true;
           const selected = available.find((item) => item.id === configured);
           if (selected) { selected.thinking_levels = levels; selected.reasoning = levels.length > 1 || levels[0] !== "off"; }
           const effective = clampThinking(thinking, levels);
-          // Self-heal: persist the corrected level so a later cold read (no
-          // live runtime) keeps the same value. Never touch a config whose
-          // model changed while this request was in flight; no runtime reload.
-          if (effective !== thinking) { thinking = effective; await mutate((current) => { if (String(current.model ?? "") !== configured) return; current.thinking = effective; }); }
+          thinking = effective;
         }
       }
     }
-    // Self-heal the runtime's authoritative model capabilities into the
-    // persisted config: the live catalog's context window for the configured
-    // model, and for custom providers the per-model hint. Only a runtime
-    // entry may overwrite (capability_source "Pi runtime"); the model identity
-    // is re-checked inside the write so a concurrent model change never leaks.
     const selected = available.find((item) => item.id === configured);
-    if (configured && selected && selected.capability_source === "Pi runtime") {
-      const runtimeContextWindow = Number(selected.context_window ?? 0);
-      if (Number.isInteger(runtimeContextWindow) && runtimeContextWindow >= 4096) {
-        const provider = String(selected.provider ?? "");
-        const modelName = String(selected.model ?? "");
-        if (modelResources && provider.startsWith("user-") && modelName) {
-          await modelResources.applyRuntimeCapabilities(provider, modelName, {
-            ...(Number.isInteger(runtimeContextWindow) && runtimeContextWindow >= 4096 ? { context_window: runtimeContextWindow } : {}),
-            ...(runtimeLevelsApplied ? { reasoning: selected.reasoning === true, thinking_levels: Array.isArray(selected.thinking_levels) ? [...selected.thinking_levels] : [] } : {}),
-          });
-          if (Number(config.model_context_window ?? 0) !== runtimeContextWindow) {
-            await mutate((current) => { if (current.model === configured) current.model_context_window = runtimeContextWindow; });
-          }
-          config.model_context_window = runtimeContextWindow;
-        } else {
-          const providerId = provider.startsWith("custom-") ? provider.slice("custom-".length) : "";
-          const entry = providerId && modelName ? (config.custom_providers ?? []).find((candidate) => candidate.id === providerId) : undefined;
-          const storedHint = entry?.model_hints?.[modelName] as Record<string, unknown> | undefined;
-          const hintNeedsWrite = Boolean(entry) && (
-            storedHint?.context_window !== runtimeContextWindow
-            || (runtimeLevelsApplied && (storedHint?.reasoning !== (selected.reasoning === true) || storedHint?.source !== "pi-runtime" || !sameLevelList(storedHint?.thinking_levels, selected.thinking_levels)))
-          );
-          if (Number(config.model_context_window ?? 0) !== runtimeContextWindow || hintNeedsWrite) {
-            await mutate((current) => {
-              if (String(current.model ?? "") !== configured) return;
-              if (Number(current.model_context_window ?? 0) !== runtimeContextWindow) current.model_context_window = runtimeContextWindow;
-              const currentEntry = providerId && modelName ? (current.custom_providers ?? []).find((candidate) => candidate.id === providerId) : undefined;
-              if (currentEntry) {
-                const hints: Record<string, unknown> = { ...(currentEntry.model_hints?.[modelName] ?? {}) };
-                hints.context_window = runtimeContextWindow;
-                if (runtimeLevelsApplied) {
-                  hints.reasoning = selected.reasoning === true;
-                  hints.thinking_levels = Array.isArray(selected.thinking_levels) ? [...selected.thinking_levels] : [];
-                  hints.source = "pi-runtime";
-                }
-                currentEntry.model_hints = { ...(currentEntry.model_hints ?? {}), [modelName]: hints } as NonNullable<Settings["custom_providers"]>[number]["model_hints"];
-              }
-            });
-            config.model_context_window = runtimeContextWindow;
-          }
-        }
-      }
-    }
+    if (selected?.context_window) config.model_context_window = Number(selected.context_window);
     const progressAppearance = progressAppearanceSchema.safeParse(config.progress_appearance ?? {});
     const effectiveProgressAppearance = progressAppearance.success ? progressAppearance.data : defaultProgressAppearance;
     const providers = await providerInventory(nodeSessionService, config, cwdValue, modelResources, runtimeCatalog, snapshot);

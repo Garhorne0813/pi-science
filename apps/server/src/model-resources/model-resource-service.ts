@@ -1,3 +1,4 @@
+import { modelConfigBackend } from "../model-config/model-config-service.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -206,6 +207,7 @@ export class ModelResourceService {
   }
 
   async ensureMigrated(): Promise<MigrationResult> {
+    if (modelConfigBackend() === "pi_ai_v1") return { migrated: false, provider_count: 0, model_count: 0, endpoint_count: 0, binding_count: 0, warnings: [] };
     if (!this.migrationPromise) this.migrationPromise = migrateLegacyModelResources(this.repository, this.credentials, this.settings).catch((error) => {
       this.migrationPromise = undefined;
       throw error;

@@ -339,7 +339,7 @@ describe("native control-plane business routes", () => {
     expect(stored).toMatchObject({ model: "deepseek/deepseek-v4-flash", thinking: "high" });
   });
 
-  it("persists the runtime-clamped thinking level on GET config (self-heal)", async () => {
+  it("projects the runtime-clamped thinking level on GET without persisting it", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
@@ -354,14 +354,13 @@ describe("native control-plane business routes", () => {
     const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
     expect(settings.statusCode).toBe(200);
     expect(settings.json()).toMatchObject({ model: "openrouter/openai/gpt-5.1", thinking: "high" });
-    // The corrected level is durable: a cold read (no live runtime) must see
-    // the same value, and the GET self-heal never triggers a runtime reload.
+    // GET projects effective values without changing durable defaults.
     const stored = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"));
-    expect(stored).toMatchObject({ model: "openrouter/openai/gpt-5.1", thinking: "high" });
+    expect(stored).toMatchObject({ model: "openrouter/openai/gpt-5.1", thinking: "max" });
     expect(reload).not.toHaveBeenCalled();
   });
 
-  it("corrects and persists the context window from the live runtime catalog on GET config", async () => {
+  it("projects the live context window without persisting it on GET config", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
@@ -376,15 +375,15 @@ describe("native control-plane business routes", () => {
     const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
     expect(settings.statusCode).toBe(200);
     expect(settings.json()).toMatchObject({ model: "openrouter/openai/gpt-5.1", model_context_window: 200000 });
-    // The corrected window is durable; GET self-heal never reloads the runtime.
+    // The saved window remains untouched; GET never reloads the runtime.
     const stored = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"));
-    expect(stored).toMatchObject({ model: "openrouter/openai/gpt-5.1", model_context_window: 200000 });
+    expect(stored).toMatchObject({ model: "openrouter/openai/gpt-5.1", model_context_window: 128000 });
     expect(reload).not.toHaveBeenCalled();
   });
 
   // Several disk-backed round trips exceed 5s on Windows runners. Keep a
   // functional integration timeout; benchmark tests enforce latency budgets.
-  it("persists runtime capabilities into custom provider model hints on GET config", async () => {
+  it("projects runtime capabilities without changing custom provider model hints on GET config", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
@@ -411,10 +410,10 @@ describe("native control-plane business routes", () => {
     // The per-model hint is corrected in place: window always, reasoning and
     // levels only when the runtime verified the configured model identity.
     const stored = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"));
-    expect(stored).toMatchObject({ model: "user-local-provider/local-model", model_context_window: 262144 });
+    expect(stored).toMatchObject({ model: "user-local-provider/local-model", model_context_window: 64000 });
     const resources = new (await import("../../model-resources/model-resource-service.js")).ModelResourceService();
     const canonical = (await resources.listModels()).find((item) => item.id === "user-local-provider/local-model");
-    expect(canonical?.capabilities).toMatchObject({ context_window: 262144, reasoning: true, thinking_levels: ["off", "high"] });
+    expect(canonical?.capabilities.context_window).toBe(64000);
     const paths = [join(process.env.PI_SCIENCE_HOME, "config.json"), join(process.env.PI_SCIENCE_HOME, "model-resources.json")];
     const fingerprints = () => Promise.all(paths.map(async (path) => ({ content: await readFile(path, "utf8"), mtime: (await stat(path, { bigint: true })).mtimeNs })));
     const before = await fingerprints();
@@ -426,16 +425,16 @@ describe("native control-plane business routes", () => {
     expect(settingsWrite).not.toHaveBeenCalled();
     expect(resourceWrite).not.toHaveBeenCalled();
     expect(await fingerprints()).toEqual(before);
-    // A real capability change must still self-heal once, then remain stable.
+    // Even changed runtime capabilities only affect the response.
     modelRead.mockResolvedValue({ success: true, data: { models: [{ provider: "user-local-provider", id: "local-model", reasoning: true, contextWindow: 524288, thinkingLevelMap: { off: "off", high: "high" } }] } });
     expect((await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` })).json().model_context_window).toBe(524288);
-    expect(settingsWrite).toHaveBeenCalledOnce();
-    expect(resourceWrite).toHaveBeenCalledOnce();
+    expect(settingsWrite).not.toHaveBeenCalled();
+    expect(resourceWrite).not.toHaveBeenCalled();
     const repaired = await fingerprints();
-    expect(JSON.parse(repaired[1]!.content).models[0].capabilities.context_window).toBe(524288);
+    expect(repaired).toEqual(before);
     await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
-    expect(settingsWrite).toHaveBeenCalledOnce();
-    expect(resourceWrite).toHaveBeenCalledOnce();
+    expect(settingsWrite).not.toHaveBeenCalled();
+    expect(resourceWrite).not.toHaveBeenCalled();
     expect(await fingerprints()).toEqual(repaired);
 
   }, 30000);

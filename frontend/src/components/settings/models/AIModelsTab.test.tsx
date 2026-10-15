@@ -61,6 +61,7 @@ function connectionApi(failFirstSave = false, missingBinding = false, saveError 
     let body: unknown = { ok: true };
     let status = 200;
     if (url === "/api/provider-views") body = queryClient.getQueryData(modelResourceKeys.providerViews(null));
+    else if (url === "/api/model-config/providers/user-lab") body = { id: "user-lab", legacy: true, editable: true, endpoint: { id: "endpoint-lab", base_url: "https://lab.example/v1", protocol: "openai", health: "unknown", enabled } };
     else if (url === "/api/endpoints") body = { endpoints: [{ id: "endpoint-lab", name: "Lab", base_url: "https://lab.example/v1", protocol: "openai", health: "unknown", credential_ref: null, owner_provider_id: "user-lab", enabled }] };
     else if (url === "/api/provider-endpoint-bindings") body = { bindings: missingBinding ? [] : [{ id: "binding-lab", provider_id: "user-lab", endpoint_id: "endpoint-lab" }] };
     else if (method === "PUT" && url === "/api/endpoints/endpoint-lab/enabled?enabled=true") {

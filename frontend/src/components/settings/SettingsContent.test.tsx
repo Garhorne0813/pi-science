@@ -262,6 +262,7 @@ describe("SettingsContent", () => {
       const url = String(input);
       if (url.startsWith("/api/provider-views")) return jsonResponse(providerViewsFixture({ model: "", thinking: "off", api_keys: {}, custom_providers: [], available_models: [], compaction_enabled: true, compaction_threshold_percent: 85,
         providers: [{ id: "user-lab", name: "Lab", custom: true, enabled: true, models: ["model-a"], has_key: repaired, credential_status: repaired ? "configured" : "needs_key" }] } as SettingsConfig));
+      if (url === "/api/model-config/providers/user-lab") return jsonResponse({ id: "user-lab", editable: true, legacy: true, endpoint: { id: "lab-endpoint", base_url: "https://lab.example/v1", protocol: "openai", health: "unknown", enabled: true } });
       if (url === "/api/endpoints") return jsonResponse({ endpoints: [{ id: "lab-endpoint", base_url: "https://lab.example/v1", protocol: "openai", health: "unknown" }] });
       if (url === "/api/provider-endpoint-bindings") return jsonResponse({ bindings: [{ provider_id: "user-lab", endpoint_id: "lab-endpoint" }] });
       if (url === "/api/custom-providers/user-lab" && init.method === "PUT") { repaired = true; return jsonResponse({ ok: true }); }
@@ -286,7 +287,7 @@ describe("SettingsContent", () => {
     expect(screen.getByRole("button", { name: "Light" })).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith("/api/provider-views"))).toHaveLength(1));
     fireEvent.click(screen.getByRole("tab", { name: "General" }));
     fireEvent.click(screen.getByRole("button", { name: "Dark" }));
     expect(useUiStore.getState().theme).toBe("dark");

@@ -1,3 +1,4 @@
+import { NativeModelSettings, useModelConfig } from "./NativeModelSettings";
 import { memo, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Check, ChevronDown, ChevronRight, Ellipsis, Eye, EyeOff, Loader2, PlugZap, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -26,7 +27,13 @@ type ConnectTarget = { id: string; name: string; kind: "builtin" | "custom" } | 
 
 const EMPTY_CUSTOM = { name: "", baseUrl: "", protocol: "openai" as "openai" | "anthropic" | "ollama", authKind: "api_key" as "api_key" | "none", apiKey: "" };
 
-export function AIModelsTab({ scope = null, apiKeyInput, setApiKeyInput, showKey, setShowKey, saving, saveKey, deleteKey, onConfigReload }: AIModelsTabProps) {
+export function AIModelsTab(props: AIModelsTabProps) {
+  const configuration = useModelConfig();
+  if (configuration.data?.backend === "pi_ai_v1") return <NativeModelSettings onConfigReload={props.onConfigReload} />;
+  return <LegacyAIModelsTab {...props} />;
+}
+
+function LegacyAIModelsTab({ scope = null, apiKeyInput, setApiKeyInput, showKey, setShowKey, saving, saveKey, deleteKey, onConfigReload }: AIModelsTabProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -259,21 +266,18 @@ function ManageConnectionDrawer({ service, onClose, onConfigReload }: { service:
   const canEditAuth = service.auth?.api_key_supported !== false || service.auth.kind === "none";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const endpointRead = useQuery({ queryKey: modelResourceKeys.endpoints, queryFn: modelResourcesApi.endpoints, enabled: service.custom, staleTime: 0 });
-  const bindingRead = useQuery({ queryKey: modelResourceKeys.bindings(), queryFn: () => modelResourcesApi.bindings(), enabled: service.custom, staleTime: 0 });
-  const binding = bindingRead.data?.bindings.find((item) => item.provider_id === service.id || item.provider_id === `user-${service.id}`);
-  const ownedEndpoints = endpointRead.data?.endpoints.filter((item) => item.owner_provider_id === service.id) ?? [];
-  const endpoint = binding ? endpointRead.data?.endpoints.find((item) => item.id === binding.endpoint_id) : ownedEndpoints.length === 1 ? ownedEndpoints[0] : undefined;
+  const connection = useQuery({ queryKey: ["model-config", "connection", service.id], queryFn: () => modelResourcesApi.connection(service.id), enabled: service.custom, staleTime: 0 });
+  const endpoint = connection.data?.endpoint;
   useEffect(() => { if (endpoint?.base_url) setBaseUrl(endpoint.base_url); }, [endpoint?.base_url]);
   const enableEndpoint = async () => {
     if (!endpoint || busy) return;
     setBusy(true); setError(null);
-    try { await modelResourcesApi.setEndpointEnabled(endpoint.id, true); await endpointRead.refetch(); await onConfigReload(); }
+    try { await modelResourcesApi.setEndpointEnabled(endpoint.id, true); await connection.refetch(); await onConfigReload(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(false); }
   };
   const save = async () => {
-    if (!name.trim() || !baseUrl.trim()) return;
+    if (!name.trim() || !baseUrl.trim() || connection.data?.editable === false) return;
     setBusy(true);
     setError(null);
     try { await modelResourcesApi.updateCustomProvider(service.id, { name: name.trim(), base_url: baseUrl.trim(), ...(canEditAuth && (apiKey.trim() || authKind !== initialAuth) ? { auth: authKind === "none" ? { kind: "none" } : { kind: "api_key", secret: apiKey.trim() } } : {}) }); onClose(); void onConfigReload(); }
@@ -281,7 +285,7 @@ function ManageConnectionDrawer({ service, onClose, onConfigReload }: { service:
     finally { setBusy(false); }
   };
   return <Modal title={t("settings.models.editConnection", { defaultValue: "Edit connection" })} onClose={onClose}>
-    <div className="space-y-4"><Field label={t("settings.resources.name", { defaultValue: "Name" })}><input value={name} onChange={(event) => setName(event.target.value)} className={inputClass} /></Field><Field label={t("settings.models.baseUrl", { defaultValue: "Base URL" })}><input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} className={cn(inputClass, "font-mono")} /></Field>{canEditAuth && <Field label={t("settings.resources.auth")}><SettingsSelectMenu variant="field" ariaLabel={t("settings.resources.auth")} value={authKind} options={[{ value: "api_key", label: t("settings.resources.managedKey") }, { value: "none", label: t("settings.resources.noAuth") }]} onSelect={setAuthKind} /></Field>}{canEditAuth && authKind === "api_key" && <><Field label={t("settings.resources.apiKey")}><SecretInput value={apiKey} visible={showApiKey} onChange={setApiKey} onToggle={() => setShowApiKey((value) => !value)} /></Field><p className="text-ui-caption text-muted">{t("settings.redesign.keepCredential")}</p></>}{!canEditAuth && <p className="text-ui-caption text-muted">{t("settings.redesign.oauthUnavailable")}</p>}{endpoint?.enabled === false && <div className="space-y-2"><p className="text-ui-caption text-muted">{t("settings.providerView.reason.disabled_endpoint")}</p><button type="button" disabled={busy} onClick={() => void enableEndpoint()} className="min-h-9 rounded-input border border-border px-3 text-ui-caption text-link hover:bg-surface-hover disabled:opacity-40">{t("settings.providerView.enableEndpoint")}</button></div>}{endpoint && <DetailGroup title={t("settings.models.advanced", { defaultValue: "Advanced" })}><DetailRow label={t("settings.models.protocol", { defaultValue: "Protocol" })} value={endpoint.protocol} /><DetailRow label={t("settings.models.health", { defaultValue: "Health check" })} value={endpoint.health} /></DetailGroup>}{error && <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-ui-meta text-error-text">{error}</p>}<div className="flex justify-end gap-2"><button type="button" onClick={onClose} className="min-h-9 rounded-input px-3 text-ui-meta text-muted hover:text-text">{t("common.cancel", { defaultValue: "Cancel" })}</button><button type="button" disabled={busy || !name.trim() || !baseUrl.trim() || canEditAuth && authKind === "api_key" && authKind !== initialAuth && !apiKey.trim()} onClick={() => void save()} className="min-h-9 rounded-input bg-accent-fill px-3 text-ui-meta font-medium text-accent-fg disabled:opacity-40">{t("common.save", { defaultValue: "Save" })}</button></div></div>
+    <div className="space-y-4">{connection.data?.editable === false && <p role="alert" className="text-ui-caption text-muted">{t("settings.native.legacy")}</p>}{connection.error && <p role="alert">{connection.error.message}</p>}<Field label={t("settings.resources.name", { defaultValue: "Name" })}><input value={name} onChange={(event) => setName(event.target.value)} className={inputClass} /></Field><Field label={t("settings.models.baseUrl", { defaultValue: "Base URL" })}><input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} className={cn(inputClass, "font-mono")} /></Field>{canEditAuth && <Field label={t("settings.resources.auth")}><SettingsSelectMenu variant="field" ariaLabel={t("settings.resources.auth")} value={authKind} options={[{ value: "api_key", label: t("settings.resources.managedKey") }, { value: "none", label: t("settings.resources.noAuth") }]} onSelect={setAuthKind} /></Field>}{canEditAuth && authKind === "api_key" && <><Field label={t("settings.resources.apiKey")}><SecretInput value={apiKey} visible={showApiKey} onChange={setApiKey} onToggle={() => setShowApiKey((value) => !value)} /></Field><p className="text-ui-caption text-muted">{t("settings.redesign.keepCredential")}</p></>}{!canEditAuth && <p className="text-ui-caption text-muted">{t("settings.redesign.oauthUnavailable")}</p>}{endpoint?.enabled === false && <div className="space-y-2"><p className="text-ui-caption text-muted">{t("settings.providerView.reason.disabled_endpoint")}</p><button type="button" disabled={busy} onClick={() => void enableEndpoint()} className="min-h-9 rounded-input border border-border px-3 text-ui-caption text-link hover:bg-surface-hover disabled:opacity-40">{t("settings.providerView.enableEndpoint")}</button></div>}{endpoint && <DetailGroup title={t("settings.models.advanced", { defaultValue: "Advanced" })}><DetailRow label={t("settings.models.protocol", { defaultValue: "Protocol" })} value={endpoint.protocol} /><DetailRow label={t("settings.models.health", { defaultValue: "Health check" })} value={endpoint.health} /></DetailGroup>}{error && <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-ui-meta text-error-text">{error}</p>}<div className="flex justify-end gap-2"><button type="button" onClick={onClose} className="min-h-9 rounded-input px-3 text-ui-meta text-muted hover:text-text">{t("common.cancel", { defaultValue: "Cancel" })}</button><button type="button" disabled={busy || connection.data?.editable === false || !name.trim() || !baseUrl.trim() || canEditAuth && authKind === "api_key" && authKind !== initialAuth && !apiKey.trim()} onClick={() => void save()} className="min-h-9 rounded-input bg-accent-fill px-3 text-ui-meta font-medium text-accent-fg disabled:opacity-40">{t("common.save", { defaultValue: "Save" })}</button></div></div>
   </Modal>;
 }
 

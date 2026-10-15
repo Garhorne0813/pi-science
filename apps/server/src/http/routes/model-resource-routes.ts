@@ -1,3 +1,6 @@
+import { nativeProviderViews } from "../../model-config/provider-config-view.js";
+import { modelConfigBackend } from "../../model-config/model-config-service.js";
+import { registerModelConfigRoutes } from "./model-config-routes.js";
 import { agentModelCatalog } from "../../runtime/agent/worker/agent-models.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
@@ -41,11 +44,13 @@ function queryValue(request: { query: unknown }, name: string): string | undefin
  * kept in model-endpoint-routes.ts so its old response aliases can remain
  * available during the migration window. */
 export function registerModelResourceRoutes(app: FastifyInstance, resources: ModelResourceService, nodeSessionService: NodeSessionService): void {
+  registerModelConfigRoutes(app, resources, nodeSessionService);
   app.get("/api/provider-views", async (request, reply) => {
     try {
       const raw = (request.query as { cwd?: unknown }).cwd;
       if (raw !== undefined && (typeof raw !== "string" || !raw)) return reply.code(400).send({ code: "invalid_resource", error: "cwd must be a nonempty string" });
       const cwd = raw ? await validateWorkspaceCwd(raw as string) : "";
+      if (modelConfigBackend() === "pi_ai_v1") return { providers: await nativeProviderViews(), catalog_status: "ready" };
       await resources.ensureMigrated();
       // Management must remain available when Core cannot list selectable
       // models. An unavailable catalog is unknown, not an empty catalog.

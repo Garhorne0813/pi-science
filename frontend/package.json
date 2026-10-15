@@ -11,6 +11,7 @@
     "test:sse-budget": "node scripts/check-sse-connection-budget.mjs",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.app.json --noEmit",
+    "test:uat:model-config": "node scripts/uat-model-config.mjs",
     "test:uat:conversation": "node scripts/uat-conversation.mjs",
     "test:uat:knowledge": "node scripts/uat-project-knowledge.mjs",
     "test:uat:notebook": "node scripts/uat-notebook.mjs",
