@@ -173,7 +173,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   }
   if (config.nodeExecutions !== false) registerExecutionRoutes(app, jobs);
   if (config.nodeExecutions !== false) registerKernelExecutionRoutes(app, config, environments, kernels);
-  registerNotebookRoutes(app, notebooks);
+  registerNotebookRoutes(app, notebooks, config.internalToken);
   if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, sqliteEnabled ? workspaces : undefined, sqliteEnabled ? mcp : undefined, nodeSessionService);
   if (config.nodeProject !== false) registerProjectRoutes(app, projectReview);
   app.addHook("onReady", async () => {

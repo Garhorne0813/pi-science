@@ -71,6 +71,8 @@ const fakeKernels = {
 } as unknown as NodeKernelManager;
 
 function kernelModules() {
+  // This fake does not start an OS sandbox; characterize native gateway evidence.
+  vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "trusted-host");
   return { ...createServerModules(config("http://127.0.0.1:1")), kernels: fakeKernels };
 }
 
@@ -246,8 +248,9 @@ describe("Node control plane", () => {
     const execution = await app.inject({ method: "GET", url: `/api/executions/${response.json().execution_id}?cwd=${encodeURIComponent(workspace)}` });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ ok: true, artifact_publish_errors: [{ path: "cell-output.csv", code: "EISDIR" }] });
-    expect(execution.json()).toMatchObject({ status: "succeeded", result: { artifact_publish_errors: [{ path: "cell-output.csv", code: "EISDIR" }] } });
+    const code = process.platform === "win32" ? expect.stringMatching(/^(EISDIR|EPERM|EACCES)$/) : "EISDIR";
+    expect(response.json()).toMatchObject({ ok: true, artifact_publish_errors: [{ path: "cell-output.csv", code }] });
+    expect(execution.json()).toMatchObject({ status: "succeeded", result: { artifact_publish_errors: response.json().artifact_publish_errors } });
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }, 30_000);
 

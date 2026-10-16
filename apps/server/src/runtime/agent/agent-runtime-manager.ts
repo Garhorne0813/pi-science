@@ -48,6 +48,7 @@ export async function closeIdleWorkspaceRuntimes(cwd: string): Promise<void> {
 
 /** Owns one child process per durable session and deduplicates concurrent opens. */
 export class AgentRuntimeManager {
+  constructor(private readonly onWorkerExit?: (cwd: string, sessionId: string) => Promise<void>) {}
   private readonly runtimes = new Map<string, AgentCoreRuntimeClient>();
   private readonly pendingStarts = new Map<string, Promise<AgentCoreRuntimeClient>>();
   private readonly owners = new Map<string, string>();
@@ -128,7 +129,8 @@ export class AgentRuntimeManager {
       for (const [identity, owner] of processOwners) if (owner === slot) processOwners.delete(identity);
     };
     runtime.once("exit", release);
-    const drain = bindSubagentDispatch(this, runtime, options);
+    const dispatchDrain = bindSubagentDispatch(this, runtime, options);
+    const drain = async () => { await dispatchDrain(); await this.onWorkerExit?.(options.cwd, runtime.sessionId); };
     this.dispatchDrains.set(runtime, drain);
     runtime.once("exit", () => {
       const done = () => this.dispatchDrains.delete(runtime);

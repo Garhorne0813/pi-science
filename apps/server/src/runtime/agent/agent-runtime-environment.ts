@@ -7,7 +7,8 @@ const TOOL_ENV_KEYS = new Set([
   "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME",
 ]);
 
-export function toolEnvironment(environment: Record<string, string | undefined>): Record<string, string> {
+const WINDOWS_TOOL_ENV_KEYS = new Set([...TOOL_ENV_KEYS].map((key) => key.toLowerCase()));
+export function toolEnvironment(environment: Record<string, string | undefined>, platform = process.platform): Record<string, string> {
   return Object.fromEntries(Object.entries(environment)
-    .filter((entry): entry is [string, string] => TOOL_ENV_KEYS.has(entry[0]) && entry[1] !== undefined));
+    .filter((entry): entry is [string, string] => (platform === "win32" ? WINDOWS_TOOL_ENV_KEYS.has(entry[0].toLowerCase()) : TOOL_ENV_KEYS.has(entry[0])) && entry[1] !== undefined));
 }

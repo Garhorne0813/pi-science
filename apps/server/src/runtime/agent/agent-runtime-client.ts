@@ -22,7 +22,7 @@ type WorkerRequest =
 const DEFAULT_TIMEOUT_MS = 30_000;
 const SYSTEM_ENV_KEYS = ["PATH", "HOME", "USER", "TMPDIR", "TEMP", "TMP", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "PI_SCIENCE_HOME", "PI_SCIENCE_STATE_ROOT",
   // Trusted launch configuration; never accept workspace overrides.
-  "PI_SCIENCE_SANDBOX_ENABLED", "PI_SCIENCE_SANDBOX_PYTHON", "PI_SCIENCE_SANDBOX_PYTHON_ROOT", "PI_SCIENCE_SANDBOX_SOCAT", "PI_SCIENCE_SANDBOX_RIPGREP",
+  "PI_SCIENCE_EXECUTION_MODE", "PI_SCIENCE_SANDBOX_RUNTIME_PATHS", "PI_SCIENCE_SANDBOX_ENABLED", "PI_SCIENCE_SANDBOX_PYTHON", "PI_SCIENCE_SANDBOX_PYTHON_ROOT", "PI_SCIENCE_SANDBOX_SOCAT", "PI_SCIENCE_SANDBOX_RIPGREP",
   "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy",
   "NODE_USE_ENV_PROXY", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR",
 ] as const;
@@ -48,7 +48,7 @@ export function workerEnvironment(overrides: Record<string, string> = {}, creden
     return value === undefined ? [] : [[name, value]];
   }));
   const allowed = new Set([...WORKSPACE_ENV_KEYS, ...credentialEnvNames]);
-  const workspace = Object.fromEntries(Object.entries(overrides).filter(([name]) => allowed.has(name) && !name.startsWith("PI_SCIENCE_SANDBOX_")));
+  const workspace = Object.fromEntries(Object.entries(overrides).filter(([name]) => allowed.has(name) && name !== "PI_SCIENCE_EXECUTION_MODE" && !name.startsWith("PI_SCIENCE_SANDBOX_")));
   return { ...system, ...workspace };
 }
 

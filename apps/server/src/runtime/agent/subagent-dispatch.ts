@@ -39,6 +39,7 @@ export function bindSubagentDispatch(manager: AgentRuntimeManager, parent: Agent
       const keys = new Set<string>(); active.set(id, keys);
       const deadline = Date.now() + 10 * 60_000;
       const execute = async (item: z.infer<typeof task>, index: number, previous = "") => {
+        if (options.sandboxCandidateId && item.candidate_id && options.sandboxCandidateId !== item.candidate_id) throw new Error("Child cannot widen its inherited candidate sandbox");
         const key = `subagent:${options.cwd}:${parent.sessionId}:${event.operationId}:${event.invocationId}:${index}`;
         const resultPath = workspaceFile(options.cwd, `agent-task-results/${createHash("sha256").update(key).digest("hex")}.json`);
         return withFileWriteLock(resultPath, async () => {
@@ -57,7 +58,7 @@ export function bindSubagentDispatch(manager: AgentRuntimeManager, parent: Agent
           keys.add(key);
           try {
             const child = await openHiddenTask(manager, key, { ...options, sessionId: undefined, systemPrompt: prompt,
-              depth: (options.depth ?? 0) + 1, allowedTools, delegatedAgent: item.agent, sandboxCandidateId: item.candidate_id,
+              depth: (options.depth ?? 0) + 1, allowedTools, delegatedAgent: item.agent, sandboxCandidateId: options.sandboxCandidateId ?? item.candidate_id,
               budgetOperationId: options.budgetOperationId ?? String(event.operationId), skillPolicy: policy ?? { mode: "inherit" } }, parent.sessionId);
             if (cancelled.has(id) || parent.isClosed) throw new Error("Subagent cancelled");
             const authorize = (request: RuntimeEvent) => {

@@ -6,6 +6,9 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface, type Interface } from "node:readline";
 import { metadataRoot } from "../../storage/persistence.js";
+import { toolEnvironment } from "../agent/agent-runtime-environment.js";
+import { workspacePolicy, type SandboxPolicy } from "../sandbox/policy.js";
+import { killSandboxGroup, launcherPath, prepareSandbox, type PreparedSandbox } from "../sandbox/process.js";
 import {
   environmentPythonExecutable,
   workspaceEnvironmentVariables,
@@ -47,6 +50,9 @@ export interface KernelExecuteOptions {
   environmentRevisionId?: string | null;
   timeoutMs: number;
   onEvent?: (event: KernelStreamEvent) => void;
+  /** Trusted internal binding, never accepted from the HTTP request body. */
+  sandboxPolicy?: SandboxPolicy;
+  abortSignal?: AbortSignal;
 }
 
 export interface KernelSessionSnapshot {
@@ -57,6 +63,7 @@ export interface KernelSessionSnapshot {
   cwd: string;
   environmentRevisionId: string | null;
   alive: boolean;
+  sandboxPolicyId: string | null;
 }
 
 export interface KernelManagerStatus {
@@ -78,6 +85,7 @@ const PYTHON_BRIDGE = fileURLToPath(new URL("./bridges/kernel_bridge.py", import
 const R_BRIDGE = fileURLToPath(new URL("./bridges/kernel_bridge.R", import.meta.url));
 const HEALTH_CHECK_CODE = "1+1";
 const INTERRUPT_GRACE_MS = 2_000;
+const MAX_KERNEL_OUTPUT_BYTES = 16 * 1024 * 1024;
 
 class KernelTimeoutError extends Error {
   constructor(message: string) {
@@ -101,7 +109,7 @@ function kernelIdentity(options: KernelExecuteOptions): string {
 }
 
 function sessionKey(options: KernelExecuteOptions): string {
-  return [options.cwd, kernelIdentity(options), options.environmentRevisionId ?? "legacy", options.language].join("\0");
+  return [options.cwd, kernelIdentity(options), options.environmentRevisionId ?? "legacy", options.language, options.sandboxPolicy!.id].join("\0");
 }
 
 function matchesShutdown(options: KernelExecuteOptions, scope: KernelShutdownScope): boolean {
@@ -127,6 +135,8 @@ function defaultKillProcessTree(pid: number): void {
 }
 
 export class NodeKernelManager {
+  private readonly admissionTails = new Map<string, Promise<void>>();
+  private readonly requests = new Set<KernelStartState>();
   private readonly sessions = new Map<string, NodeKernelSession>();
   private readonly starting = new Map<string, { state: KernelStartState; promise: Promise<NodeKernelSession> }>();
   private readonly notebookShutdowns = new Set<KernelShutdownScope>();
@@ -144,14 +154,45 @@ export class NodeKernelManager {
   }
 
   async execute(options: KernelExecuteOptions): Promise<KernelResult> {
+    if (this.stoppingAll || [...this.notebookShutdowns].some((scope) => matchesShutdown(options, scope))) throw new Error("Kernel shutdown is in progress");
+    const request: KernelStartState = { options, controller: new AbortController() };
+    this.requests.add(request);
+    // Reserve submission order before any async policy or cold-start work.
+    // Include policy/environment transitions in the same logical-kernel queue.
+    const key = [resolve(options.cwd), kernelIdentity(options), options.language].join("\0");
+    const run = (this.admissionTails.get(key) ?? Promise.resolve()).then(() => this.executeAuthorized({ ...options, abortSignal: options.abortSignal ? AbortSignal.any([options.abortSignal, request.controller.signal]) : request.controller.signal }));
+    const tail = run.then(() => undefined, () => undefined);
+    this.admissionTails.set(key, tail);
+    try { return await run; }
+    finally { this.requests.delete(request); if (this.admissionTails.get(key) === tail) this.admissionTails.delete(key); }
+  }
+
+  private async executeAuthorized(options: KernelExecuteOptions): Promise<KernelResult> {
+    options.abortSignal?.throwIfAborted();
+    options = { ...options, environmentRevisionId: options.environmentRevisionId ?? options.environment.revision_id,
+      sandboxPolicy: options.sandboxPolicy ?? await workspacePolicy(options.cwd, options.environmentRevisionId ?? options.environment.revision_id) };
+    options.abortSignal?.throwIfAborted();
     const key = sessionKey(options);
+    // A changed authorization/environment must retire the old namespace and process.
+    for (const [oldKey, old] of this.sessions) if (oldKey !== key && old.cwd === options.cwd && old.language === options.language && (old.kernelInstanceId ?? old.sessionId ?? old.notebookId ?? "default") === kernelIdentity(options)) {
+      this.sessions.delete(oldKey); await old.stop();
+    }
+    for (const [oldKey, pending] of this.starting) if (oldKey !== key && pending.state.options.cwd === options.cwd && pending.state.options.language === options.language && kernelIdentity(pending.state.options) === kernelIdentity(options)) {
+      pending.state.controller.abort(); await pending.promise.catch(() => undefined);
+    }
+    options.abortSignal?.throwIfAborted();
     const session = await this.ensureSession(key, options);
+    const abort = () => { void session.stop(); };
+    options.abortSignal?.addEventListener("abort", abort, { once: true });
     try {
+      options.abortSignal?.throwIfAborted();
       return await session.execute(options);
     } catch (error) {
       if (this.sessions.get(key) === session) this.sessions.delete(key);
       await session.stop().catch(() => undefined);
       throw error;
+    } finally {
+      options.abortSignal?.removeEventListener("abort", abort);
     }
   }
 
@@ -177,7 +218,7 @@ export class NodeKernelManager {
       if (this.sessions.get(key) === stale) this.sessions.delete(key);
     }
     if (state.controller.signal.aborted) throw kernelStartCancelledError();
-    const session = await NodeKernelSession.start(options, this.deps, state.controller.signal);
+    const session = await NodeKernelSession.start(options, this.deps, options.abortSignal ? AbortSignal.any([state.controller.signal, options.abortSignal]) : state.controller.signal);
     if (state.controller.signal.aborted || this.starting.get(key)?.state !== state) {
       await session.stop().catch(() => undefined);
       throw kernelStartCancelledError();
@@ -201,6 +242,7 @@ export class NodeKernelManager {
   async shutdownNotebook(notebookId: string, cwd?: string, language?: string): Promise<void> {
     const scope: KernelShutdownScope = { notebookId, ...(cwd ? { cwd: resolve(cwd) } : {}), ...(language ? { language } : {}) };
     this.notebookShutdowns.add(scope);
+    for (const request of this.requests) if (matchesShutdown(request.options, scope)) request.controller.abort();
     try {
       const starts = [...this.starting.values()].filter(({ state }) => matchesShutdown(state.options, scope));
       for (const { state } of starts) state.controller.abort();
@@ -229,6 +271,16 @@ export class NodeKernelManager {
     return interrupted;
   }
 
+  /** Called by the owning server when a Worker exits, including unexpected death. */
+  async shutdownOwner(cwd: string, owner: string): Promise<void> {
+    for (const request of this.requests) if (request.options.cwd === cwd && request.options.sandboxPolicy?.owner === owner) request.controller.abort();
+    const starts = [...this.starting.values()].filter(({ state }) => state.options.cwd === cwd && state.options.sandboxPolicy?.owner === owner);
+    for (const { state } of starts) state.controller.abort();
+    const sessions: NodeKernelSession[] = [];
+    for (const [key, session] of this.sessions) if (session.cwd === cwd && session.owner === owner) { this.sessions.delete(key); sessions.push(session); }
+    await Promise.all([...sessions.map((session) => session.stop()), ...starts.map(({ promise }) => promise.then(() => undefined, () => undefined))]);
+  }
+
   shutdownAll(): Promise<void> {
     if (this.stoppingAll) return this.stoppingAll;
     const stopping = this.stopAll().finally(() => {
@@ -239,6 +291,7 @@ export class NodeKernelManager {
   }
 
   private async stopAll(): Promise<void> {
+    for (const request of this.requests) request.controller.abort();
     const starts = [...this.starting.values()];
     for (const { state } of starts) state.controller.abort();
     const sessions = [...this.sessions.values()];
@@ -256,6 +309,8 @@ class NodeKernelSession {
   private readonly stderrTail: string[] = [];
   private tail: Promise<void> = Promise.resolve();
   private stopPromise?: Promise<void>;
+  private sandbox?: PreparedSandbox;
+  private outputBytes = 0;
 
   private constructor(
     private readonly options: KernelExecuteOptions,
@@ -278,6 +333,9 @@ class NodeKernelSession {
       return session;
     } catch (error) {
       await session.stop().catch(() => undefined);
+      // Shutdown can win while asynchronous setup is still preparing files.
+      await session.sandbox?.cleanup().catch(() => undefined);
+      if (session.rCodeFile) await rm(session.rCodeFile, { force: true }).catch(() => undefined);
       throw signal?.aborted ? kernelStartCancelledError() : error;
     } finally {
       signal?.removeEventListener("abort", stopOnAbort);
@@ -296,6 +354,7 @@ class NodeKernelSession {
   get cwd(): string { return this.options.cwd; }
   get language(): KernelLanguage { return this.options.language; }
   get environmentRevisionId(): string | null { return this.options.environmentRevisionId ?? null; }
+  get owner(): string | undefined { return this.options.sandboxPolicy?.owner; }
 
   snapshot(): KernelSessionSnapshot {
     return {
@@ -306,6 +365,7 @@ class NodeKernelSession {
       cwd: this.cwd,
       environmentRevisionId: this.environmentRevisionId,
       alive: !this.exited,
+      sandboxPolicyId: this.options.sandboxPolicy?.id ?? null,
     };
   }
 
@@ -316,7 +376,7 @@ class NodeKernelSession {
     // healthy process and its namespace for nothing.
     if (this.pending.size === 0) return false;
     try {
-      child.kill(this.interruptSignal());
+      if (this.sandbox) child.send("interrupt"); else child.kill(this.interruptSignal());
       return true;
     } catch {
       return false;
@@ -342,7 +402,7 @@ class NodeKernelSession {
     this.pending.clear();
     const child = this.child;
     this.child = undefined;
-    if (child && child.exitCode === null) {
+    if (child && child.exitCode === null && child.signalCode == null) {
       if (this.deps.platform === "win32" && child.pid !== undefined) {
         // Detached Windows kernels form their own process group; killing only
         // the direct child (TerminateProcess) would orphan grandchildren, so
@@ -356,6 +416,9 @@ class NodeKernelSession {
           const failsafe = setTimeout(finish, 2_000);
           failsafe.unref?.();
         });
+      } else if (this.sandbox) {
+        killSandboxGroup(child.pid);
+        await new Promise<void>((done) => { child.once("close", done); });
       } else {
         child.kill("SIGTERM");
         await new Promise<void>((resolve) => {
@@ -376,6 +439,7 @@ class NodeKernelSession {
     this.reader?.close();
     this.reader = undefined;
     if (this.rCodeFile) await rm(this.rCodeFile, { force: true }).catch(() => undefined);
+    await this.sandbox?.cleanup();
   }
 
   private async start(signal?: AbortSignal): Promise<void> {
@@ -388,21 +452,37 @@ class NodeKernelSession {
       await writeFile(this.rCodeFile, "", "utf8");
     }
     if (signal?.aborted) throw kernelStartCancelledError();
-    const env = this.deps.workspaceEnvironmentVariables(this.options.environment);
-    const child = this.deps.spawnProcess(executable, args, {
-      cwd: this.options.cwd,
+    if (this.options.sandboxPolicy!.mode === "required") {
+      if (this.options.language !== "python") throw new Error("Sandboxed R kernels have not passed platform acceptance");
+      const prepared = await prepareSandbox(this.options.sandboxPolicy!, [executable, "-I", "-B", PYTHON_BRIDGE], [this.options.environment.prefix, PYTHON_BRIDGE], 86_400, PYTHON_BRIDGE);
+      if (signal?.aborted || this.stopPromise) { await prepared.cleanup(); throw kernelStartCancelledError(); }
+      this.sandbox = prepared;
+    }
+    // Native compatibility still needs safe OS loader settings (SystemRoot/PATH
+    // on Windows). Keep credentials excluded rather than passing an empty base.
+    const env = this.sandbox?.env ?? this.deps.workspaceEnvironmentVariables(this.options.environment, toolEnvironment(process.env));
+    const child = this.deps.spawnProcess(this.sandbox ? process.execPath : executable, this.sandbox ? [launcherPath, this.sandbox.manifest] : args, {
+      cwd: this.options.sandboxPolicy!.cwd,
       env,
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: this.sandbox ? ["pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"],
       // A new process group lets Windows deliver CTRL_BREAK_EVENT (SIGBREAK)
       // to the kernel alone instead of terminating the whole tree.
-      ...(this.deps.platform === "win32" ? { detached: true } : {}),
+      ...(this.sandbox || this.deps.platform === "win32" ? { detached: true } : {}),
     });
     this.child = child;
     this.exited = false;
+    const accountOutput = (chunk: Buffer) => {
+      this.outputBytes += chunk.length;
+      if (this.outputBytes <= MAX_KERNEL_OUTPUT_BYTES) return;
+      for (const pending of this.pending.values()) pending.reject(new Error("Kernel output exceeds 16 MiB cell limit"));
+      this.pending.clear(); void this.stop();
+    };
+    child.stdout!.on("data", accountOutput);
+    child.stderr?.on("data", accountOutput);
     this.reader = createInterface({ input: child.stdout! });
     this.reader.on("line", (line) => this.handleLine(line));
     child.stderr?.on("data", (chunk) => {
-      const text = String(chunk);
+      const text = String(chunk).slice(-4096);
       this.stderrTail.push(text);
       if (this.stderrTail.length > 50) this.stderrTail.splice(0, this.stderrTail.length - 50);
     });
@@ -419,6 +499,7 @@ class NodeKernelSession {
       this.pending.clear();
       this.reader?.close();
       this.reader = undefined;
+      if (this.sandbox) { killSandboxGroup(child.pid); void this.sandbox.cleanup().catch(() => undefined); }
     });
     if (signal?.aborted) throw kernelStartCancelledError();
 
@@ -443,6 +524,7 @@ class NodeKernelSession {
     const child = this.child;
     if (!child || child.exitCode !== null || this.exited) throw new Error("Kernel process is not running");
     const id = randomUUID();
+    this.outputBytes = 0;
     let resolveResult!: (result: KernelResult) => void;
     let rejectResult!: (error: Error) => void;
     const result = new Promise<KernelResult>((resolve, reject) => {
@@ -486,7 +568,7 @@ class NodeKernelSession {
     const pending = this.pending.get(id);
     if (!pending) return null;
     try {
-      child.kill(this.interruptSignal());
+      if (this.sandbox) child.send("interrupt"); else child.kill(this.interruptSignal());
     } catch {
       return null;
     }

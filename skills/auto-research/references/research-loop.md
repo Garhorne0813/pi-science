@@ -1,9 +1,3 @@
-# Parent-controlled iteration
+# Compatibility reference
 
-Understand → protocol → optional baseline/evaluator → review design → select subquestions → gather evidence/experiment → evaluate → review → decide → report. This is a method, not a separate scheduler or fixed multi-agent pipeline.
-
-Delegate independent subquestions in a bounded parallel `subagent.tasks` call when useful. Supply goal, subquestion, protocol version, source excerpts/paths, constraints and expected structured output. Same-role instances may investigate theory, candidate datasets, failure cases or competing explanations. Use Experimenter for one explicitly assigned candidate. Operator-enabled, platform-validated sandbox_run permits bounded Python debugging; otherwise retain code-generation mode. Bind the research budget and prepare separate candidate input/work directories before delegation. See experimental-research.md and experiment-safety.md. Respect existing four-task parallel, depth-two and ten-minute child deadline limits and the narrower generic execution budget.
-
-After every experiment, save parameters, input/data/evaluator digests, environment, random seed, outputs, objective metrics, uncertainty and run/artifact references. Keep a ledger of completed IDs. A retry checks existing durable results first. Save pending work without pretending it finished.
-
-Stop when objective success and no blockers coexist; when coverage is sufficient and repeated rounds add no material evidence/improvement; when runtime or experiment budgets exhaust; or when required data/approval is missing. Record an explicit stop reason and remaining gaps. Resume in the original conversation from state.json and saved results; no unattended execution guarantee.
+The current protocol is maintained in [research-protocol.md](research-protocol.md). Read that module; this historical path contains no independent rules.

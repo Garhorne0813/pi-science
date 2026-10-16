@@ -325,7 +325,7 @@ export default function registerPiScienceNotebook(pi: any) {
         if (!isRecord(params) || typeof params.path !== "string") throw new Error("path is required");
         const cwd = workspaceCwd(ctx);
         const includeOutputs = params.include_outputs !== false;
-        const payload = notebookDocument(await requestJson(`/api/notebooks/document?${documentQuery(cwd, params.path, includeOutputs)}`, {}, signal));
+        const payload = notebookDocument(await requestJson(`/api/notebooks/document?${documentQuery(cwd, params.path, includeOutputs)}`, { headers: ctx?.sandboxGrant ? { "x-pi-science-sandbox-grant": ctx.sandboxGrant } : {} }, signal));
         const selected = Array.isArray(params.cell_ids) && params.cell_ids.length > 0
           ? new Set(params.cell_ids.map(text))
           : undefined;
@@ -359,7 +359,7 @@ export default function registerPiScienceNotebook(pi: any) {
           ? params.expected_cell_revisions
           : undefined;
         if (!expectedSha && !expectedCellRevisions) {
-          const current = notebookDocument(await requestJson(`/api/notebooks/document?${documentQuery(cwd, params.path, false)}`, {}, signal));
+          const current = notebookDocument(await requestJson(`/api/notebooks/document?${documentQuery(cwd, params.path, false)}`, { headers: ctx?.sandboxGrant ? { "x-pi-science-sandbox-grant": ctx.sandboxGrant } : {} }, signal));
           expectedSha = current.sha256;
         }
         const body = {
@@ -396,7 +396,7 @@ export default function registerPiScienceNotebook(pi: any) {
       try {
         if (!isRecord(params) || typeof params.path !== "string" || !Array.isArray(params.cell_ids) || params.cell_ids.length === 0) throw new Error("path and at least one cell_id are required");
         const cwd = workspaceCwd(ctx);
-        const notebook = notebookDocument(await requestJson(`/api/notebooks/document?${documentQuery(cwd, params.path, false)}`, {}, signal));
+        const notebook = notebookDocument(await requestJson(`/api/notebooks/document?${documentQuery(cwd, params.path, false)}`, { headers: ctx?.sandboxGrant ? { "x-pi-science-sandbox-grant": ctx.sandboxGrant } : {} }, signal));
         const requestedIds = params.cell_ids.map(text);
         const byId = new Map(notebook.document.cells.map((cell) => [text(cell.id), cell]));
         const cells = requestedIds.map((id) => {
@@ -421,7 +421,7 @@ export default function registerPiScienceNotebook(pi: any) {
           try {
             result = await requestJson<Record<string, unknown>>(`/api/kernels/execute?cwd=${encodeURIComponent(cwd)}`, {
               method: "POST",
-              headers: { "content-type": "application/json" },
+              headers: { "content-type": "application/json", ...(ctx?.sandboxGrant ? { "x-pi-science-sandbox-grant": ctx.sandboxGrant } : {}) },
               body: JSON.stringify({
                 language,
                 code: sourceText(cell.source),
@@ -460,7 +460,7 @@ export default function registerPiScienceNotebook(pi: any) {
             try {
               const persisted: Record<string, unknown> = await requestJson<Record<string, unknown>>(`/api/notebooks/output?cwd=${encodeURIComponent(cwd)}`, {
                 method: "POST",
-                headers: { "content-type": "application/json" },
+                headers: { "content-type": "application/json", ...(ctx?.sandboxGrant ? { "x-pi-science-sandbox-grant": ctx.sandboxGrant } : {}) },
                 body: JSON.stringify({
                   path: notebook.path,
                   expected_sha256: notebookRevision,

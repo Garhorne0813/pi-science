@@ -40,6 +40,8 @@ export interface PublishWorkspaceArtifactOptions {
   notebookPath?: string | null;
   cellId?: string | null;
   onFailure?: (failure: WorkspaceArtifactPublishFailure) => void;
+  /** Trusted execution adapters may capture an already-authorized, stable file handle. */
+  captureFile?: (target: string) => Promise<{ sha256: string; size: number }>;
 }
 
 export interface WorkspaceArtifactPublishFailure {
@@ -143,7 +145,7 @@ async function publishWorkspaceArtifact(
 
   let digest: { sha256: string; size: number };
   try {
-    digest = await hashFile(target);
+    digest = options.captureFile ? await options.captureFile(target) : await hashFile(target);
   } catch (error) {
     if (isMissingFileError(error)) return null;
     throw error;
@@ -154,7 +156,7 @@ async function publishWorkspaceArtifact(
   // Capture the exact bytes addressed by the manifest hash before publishing
   // metadata. If the file changes between hashing and capture, fail rather
   // than creating a version whose historical preview points at other bytes.
-  await persistArtifactFile(workspace, target, digest.sha256);
+  if (!options.captureFile) await persistArtifactFile(workspace, target, digest.sha256);
   return withFileWriteLock(workspaceFile(cwd, "artifacts.jsonl"), async () => {
     const artifacts = await readJsonLines<ArtifactManifest>(workspaceFile(cwd, "artifacts.jsonl"));
     const previous = artifacts.filter((item) => item.artifact_id === artifactId).at(-1);

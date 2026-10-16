@@ -190,6 +190,7 @@ describe("agent-core worker mutations", () => {
   });
 
   it("does not give ordinary bash processes model, server, or inherited credentials", async () => {
+    vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "trusted-host");
     vi.stubEnv("PR115_PARENT_SECRET", "parent-test-secret");
     const { parts } = await runtime();
     const bash = (await parts.harness.getTools(context)).find((tool) => tool.name === "bash")!;

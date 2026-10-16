@@ -61,6 +61,64 @@ async function modelFixture(answer: (body: { messages: Array<{ role: string; con
 }
 
 describe("agent-core product tools", () => {
+  it.skipIf(process.env.PI_SCIENCE_SANDBOX_TEST !== "1" || process.platform !== "linux")("runs main and authorized child Bash without any enabled Skill", async () => {
+    const fixture = await modelFixture((body) => {
+      if (body.messages[0]!.content.includes("You are an isolated runner")) return body.messages.some((message) => message.role === "tool") ? "Child isolated." : { name: "bash", args: { command: "printf child > child.txt; ! cat .pi-science/protected; echo child-isolated" } };
+      const tools = body.messages.filter((message) => message.role === "tool");
+      if (!tools.length) return { name: "bash", args: { command: "printf main > main.txt; echo main-isolated" } };
+      if (tools.length === 1) return { name: "subagent", args: { agent: "runner", task: "Run your authorized Bash command." } };
+      expect(tools.at(-1)!.content).toContain("Child isolated."); return "Main and child completed.";
+    });
+    await mkdir(join(fixture.cwd, ".pi/agents"), { recursive: true });
+    await writeFile(join(fixture.cwd, ".pi/agents/runner.md"), "---\nname: runner\ndescription: Isolated command runner\ntools: [bash]\n---\nYou are an isolated runner.");
+    await writeFile(join(fixture.cwd, ".pi-science/protected"), "SECRET");
+    const manager = new AgentRuntimeManager(); cleanup.push(() => manager.shutdownAll());
+    const parent = await openHiddenTask(manager, "universal-parent", { cwd: fixture.cwd, sessionsRoot: join(fixture.cwd, ".pi-science/agent-sessions"), model: fixture.model, thinking: "off", allowedTools: ["bash", "subagent"], skillPolicy: { mode: "none" } }, "universal-owner");
+    expect(await runHiddenPrompt(parent, "Run main and child", "universal-once", Date.now() + 30_000)).toBe("Main and child completed.");
+    expect(await readFile(join(fixture.cwd, "main.txt"), "utf8")).toBe("main");
+    expect(await readFile(join(fixture.cwd, "child.txt"), "utf8")).toBe("child");
+    const { executionRepository } = await import("../executions/execution-repository.js");
+    expect((await executionRepository.list(fixture.cwd)).filter((record) => record.producer === "bash").map((record) => record.status)).toEqual(["succeeded", "succeeded"]);
+  }, 45_000);
+
+  it.skipIf(process.env.PI_SCIENCE_SANDBOX_TEST !== "1" || process.platform !== "linux")("repairs a candidate through universal Bash, independently evaluates it and obtains Reviewer stop advice", async () => {
+    let repairs = 0; let score: number | undefined;
+    const fixture = await modelFixture(async (body) => {
+      const system = body.messages[0]!.content;
+      const results = body.messages.filter((message) => message.role === "tool");
+      if (system.includes("You are an experimenter subagent")) {
+        expect((body.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name)).toEqual(["read", "bash"]);
+        if (!results.length) { repairs++; return { name: "bash", args: { command: "python3 -I -c \"raise ValueError('repair-me')\"" } }; }
+        if (results.length === 1) { expect(results[0]!.content).toContain("repair-me"); repairs++; return { name: "bash", args: { command: "python3 -I -c \"import json,pathlib; pathlib.Path('output.json').write_text(json.dumps({'prediction': 42})); print('repaired')\"" } }; }
+        return "Candidate repaired with actual Bash output.";
+      }
+      if (system.includes("You are an independent reviewer")) { expect(score).toBe(0); return "PASS. Stop: independent evaluation met the frozen target."; }
+      if (!results.length) return { name: "execution_budget", args: { research_id: "universal-study", max_seconds: 45, max_executions: 4 } };
+      if (results.length === 1) return { name: "subagent", args: { agent: "auto-research/experimenter", candidate_id: "one", task: "Generate a prediction, execute and repair from real errors." } };
+      if (results.length === 2) {
+        // Trusted harness evaluator is outside every candidate's sandbox and never supplied to the child.
+        const { execFile } = await import("node:child_process"); const { promisify } = await import("node:util");
+        const evaluated = await promisify(execFile)(process.env.PI_SCIENCE_SANDBOX_PYTHON!, ["-I", join(fixture.cwd, "research/universal-study/evaluator.py"), join(fixture.cwd, "research/universal-study/candidates/one/work/output.json")]);
+        score = Number(evaluated.stdout);
+        return { name: "subagent", args: { agent: "auto-research/reviewer", task: `Review independent evaluator loss=${score}; target=0. Recommend stopping or continuing.` } };
+      }
+      expect(results.at(-1)!.content).toContain("Stop"); return "Stopped after independent evaluation and review.";
+    });
+    const { seedWorkspaceAssets } = await import("./runtime-config.js"); seedWorkspaceAssets(fixture.cwd);
+    const directory = join(fixture.cwd, "research/universal-study/candidates/one");
+    await mkdir(join(directory, "input"), { recursive: true }); await mkdir(join(directory, "work"));
+    await writeFile(join(fixture.cwd, "research/universal-study/evaluator.py"), "import json,sys\nprint((json.load(open(sys.argv[1]))['prediction']-42)**2)");
+    const manager = new AgentRuntimeManager(); cleanup.push(() => manager.shutdownAll());
+    const parent = await openHiddenTask(manager, "candidate-bash-parent", { cwd: fixture.cwd, sessionsRoot: join(fixture.cwd, ".pi-science/agent-sessions"), model: fixture.model, thinking: "off", allowedTools: ["read", "bash", "execution_budget", "subagent"] }, "candidate-bash-owner");
+    expect(await runHiddenPrompt(parent, "Execute, evaluate and review", "candidate-bash-once", Date.now() + 45_000)).toBe("Stopped after independent evaluation and review.");
+    expect(repairs).toBe(2); expect(score).toBe(0);
+    const { executionRepository } = await import("../executions/execution-repository.js");
+    expect((await executionRepository.list(fixture.cwd)).filter((record) => record.producer === "bash").map((record) => record.status).sort()).toEqual(["failed", "succeeded"]);
+    const { workspaceFile } = await import("../../storage/persistence.js"); const { createHash } = await import("node:crypto");
+    const budget = JSON.parse(await readFile(workspaceFile(fixture.cwd, `execution-budgets/${createHash("sha256").update("research:universal-study").digest("hex")}.json`), "utf8"));
+    expect(budget.used).toBe(4);
+  }, 60_000);
+
   it("serializes todo calls, replays once, restores history and respects an older branch", async () => {
     const cwd = await workspace();
     const env = new NodeExecutionEnv({ cwd });
@@ -156,7 +214,7 @@ describe("agent-core product tools", () => {
       const system = body.messages[0]!.content;
       if (system.includes("You are an experimenter subagent")) {
         const names = (body.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name);
-        expect(names).toEqual(["read"]);
+        expect(names).toEqual(["read", "bash"]);
         if (!body.messages.some((item) => item.role === "tool")) {
           await parent.sendCommand("set_skill_policy", { policy: { mode: "none" } });
           return { name: "read", args: { path: "private.txt" } };
@@ -196,7 +254,7 @@ describe("agent-core product tools", () => {
     expect(await runHiddenPrompt(parent, "Generate candidate code", "unbound-once", Date.now() + 20000)).toBe("Protected code-generation mode.");
   }, 30000);
 
-  it.skipIf(process.env.PI_SCIENCE_SANDBOX_TEST !== "1" || process.platform !== "linux")("delegates a bound candidate through real Worker IPC, repairs from srt logs and shares the parent budget", async () => {
+  it.skipIf(process.env.PI_SCIENCE_SANDBOX_TEST !== "1" || process.platform !== "linux")("keeps an explicit legacy role compatible through real Worker IPC, repair and the shared budget", async () => {
     vi.stubEnv("PI_SCIENCE_SANDBOX_ENABLED", "1");
     let childRuns = 0;
     const fixture = await modelFixture((body) => {
@@ -218,6 +276,8 @@ describe("agent-core product tools", () => {
     });
     const { seedWorkspaceAssets } = await import("./runtime-config.js"); seedWorkspaceAssets(fixture.cwd);
     const directory = join(fixture.cwd, "research/ipc-study/candidates/candidate-001");
+    const role = join(fixture.cwd, ".pi/skills/auto-research/agents/experimenter.md");
+    await writeFile(role, (await readFile(role, "utf8")).replace("tools: [read, bash, notebook_read, notebook_run]", "tools: [read, sandbox_run]"));
     await mkdir(join(directory, "input"), { recursive: true }); await mkdir(join(directory, "work"));
     const manager = new AgentRuntimeManager(); cleanup.push(() => manager.shutdownAll());
     const parent = await openHiddenTask(manager, "sandbox-parent", { cwd: fixture.cwd, sessionsRoot: join(fixture.cwd, ".pi-science/agent-sessions"),
@@ -275,6 +335,8 @@ describe("agent-core product tools", () => {
   }, 20000);
 
   it("executes a task-specific numerical evaluator, preserves results on resume and reports validity blockers separately", async () => {
+    // This legacy evaluator intentionally uses administrator-authorized host execution.
+    vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "trusted-host");
     const evaluator = `const fs = require('node:fs'); const assert = require('node:assert/strict');
 const rmse = (values, truth) => Math.sqrt(values.reduce((sum, x, i) => sum + (x - truth[i]) ** 2, 0) / truth.length);
 assert.equal(rmse([1, 3], [1, 3]), 0); assert.equal(rmse([2, 4], [1, 3]), 1);
@@ -304,6 +366,8 @@ fs.writeFileSync('research/quant/result.json', JSON.stringify(result)); console.
     const parent = await openHiddenTask(manager, "quant-parent", options, "quant-owner");
     const result = await runHiddenPrompt(parent, "/skill:auto-research Compare numerical predictions", "quant-once", Date.now() + 20000);
     expect(result).toContain("leakage blocks a success claim");
+    const { executionRepository } = await import("../executions/execution-repository.js");
+    expect((await executionRepository.list(fixture.cwd)).find((record) => record.producer === "bash")?.result.error).toBeUndefined();
     expect(JSON.parse(await readFile(join(fixture.cwd, "research/quant/baseline.json"), "utf8"))).toMatchObject({ value: 1, evaluator_version: 1 });
     expect(JSON.parse(await readFile(join(fixture.cwd, "research/quant/result.json"), "utf8"))).toMatchObject({ value: 0, evaluator_version: 1 });
     const originalRequests = fixture.requests(); await manager.stop("quant-parent");

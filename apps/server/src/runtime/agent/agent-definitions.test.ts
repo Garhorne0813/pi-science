@@ -1,8 +1,9 @@
-import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, symlink, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { discoverAgentDefinitions, resolveAgentDefinition, childToolAllowance } from "./agent-definitions.js";
+import { packagedSkillsRoot } from "./runtime-config.js";
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
 async function workspace() { const cwd = await mkdtemp(join(tmpdir(), "agent-definitions-")); roots.push(cwd); return cwd; }
@@ -54,8 +55,20 @@ it("delegates only exact MCP capabilities in the effective parent set", () => {
   expect(childToolAllowance(tools)).toEqual([]);
 });
 
-it("enforces the experimenter's safe fallback even if a project role declares execution or writes", () => {
+it("caps the experimenter at candidate-bound tools even if a project role declares writes or MCP", () => {
   const tools = ["read", "sandbox_run", "write", "edit", "bash", "notebook_run", "mcp__science__execute", "subagent"];
-  expect(childToolAllowance(tools, tools, "auto-research/experimenter")).toEqual(["read", "sandbox_run"]);
-  expect(childToolAllowance(tools, ["read", "bash"], "auto-research/experimenter")).toEqual(["read"]);
+  expect(childToolAllowance(tools, tools, "auto-research/experimenter")).toEqual(["read", "sandbox_run", "bash", "notebook_run"]);
+  expect(childToolAllowance(tools, ["read", "bash"], "auto-research/experimenter")).toEqual(["read", "bash"]);
+});
+
+it("discovers only Bash/Notebook for the default Experimenter and preserves explicit legacy declarations", async () => {
+  const cwd = await workspace();
+  await put(cwd, ".pi/skills/auto-research/SKILL.md", "---\nname: auto-research\ndescription: Research\nlicense: Apache-2.0\n---\nProtocol");
+  const path = ".pi/skills/auto-research/agents/experimenter.md";
+  await put(cwd, path, await readFile(join(packagedSkillsRoot(), "auto-research/agents/experimenter.md"), "utf8"));
+  const parent = ["read", "bash", "notebook_read", "notebook_run", "sandbox_run", "write"];
+  expect(childToolAllowance((await resolveAgentDefinition(cwd, "auto-research/experimenter")).tools, parent, "auto-research/experimenter"))
+    .toEqual(["read", "bash", "notebook_read", "notebook_run"]);
+  await put(cwd, path, "---\nname: experimenter\ntools: [read, sandbox_run, write]\n---\nPreserved legacy declaration");
+  expect(childToolAllowance((await resolveAgentDefinition(cwd, "auto-research/experimenter")).tools, parent, "auto-research/experimenter")).toEqual(["read", "sandbox_run"]);
 });

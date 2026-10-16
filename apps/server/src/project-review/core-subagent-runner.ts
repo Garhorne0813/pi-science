@@ -5,10 +5,10 @@ import type { WorkspaceEnvironmentService } from "../runtime/workspace/workspace
 import type { TaskRuntime as AgentRuntime } from "../runtime/agent/runner-transport.js";
 
 export class CoreReviewSubagentRunner extends ReviewTaskRunner {
-  private readonly core = new AgentRuntimeManager();
+  private readonly core: AgentRuntimeManager;
   private readonly keys = new Map<string, string>();
   constructor(environments: Pick<WorkspaceEnvironmentService, "environment">,
-    private readonly server: { backendUrl?: string; internalToken?: string } = {}) { super(environments); }
+    private readonly server: { backendUrl?: string; internalToken?: string; onWorkerExit?: (cwd: string, sessionId: string) => Promise<void> } = {}) { super(environments); this.core = new AgentRuntimeManager(server.onWorkerExit); }
   protected override async startProcess(cwd: string, key: string, owner: string): Promise<AgentRuntime> {
     this.keys.set(key, `review:${cwd}:${key}`);
     return openCoreRunner(this.core, this.environments, cwd, key, owner, "review", this.server);

@@ -64,6 +64,7 @@ export async function resolveAgentDefinition(cwd: string, name: string, policy?:
   return definition;
 }
 export function childToolAllowance(tools: string[], parent: string[] = [], agentName?: string): string[] {
-  // Candidate execution is available only through the fail-closed sandbox tool.
-  return tools.filter((name) => (agentName !== "auto-research/experimenter" || name === "read" || name === "sandbox_run") && parent.includes(name) && name !== "ask_user_question" && (!name.startsWith("mcp_") || name.split("__").length === 3 && /^mcp__[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+$/.test(name)));
+  // The builtin role declares Bash/Notebook. Keep sandbox_run in the ceiling only
+  // for explicit legacy role definitions; never inject it into a new role.
+  return tools.filter((name) => (agentName !== "auto-research/experimenter" || ["read", "sandbox_run", "bash", "notebook_read", "notebook_run"].includes(name)) && parent.includes(name) && name !== "ask_user_question" && (!name.startsWith("mcp_") || name.split("__").length === 3 && /^mcp__[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+$/.test(name)));
 }

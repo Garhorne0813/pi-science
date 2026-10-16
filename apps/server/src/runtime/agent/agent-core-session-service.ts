@@ -92,7 +92,7 @@ function failed(error: unknown): RuntimeResult<never> {
 
 /** One AgentHarness worker per v4 session. */
 export class AgentCoreSessionService {
-  private readonly manager = new AgentRuntimeManager();
+  private readonly manager: AgentRuntimeManager;
   private readonly repository = new AgentSessionRepository();
   private readonly registry = new AgentSessionRegistry();
   private readonly live = new Map<string, Live>();
@@ -109,8 +109,8 @@ export class AgentCoreSessionService {
   constructor(
     private readonly events: ConversationEventHub,
     private readonly environments: Pick<WorkspaceEnvironmentService, "environment">,
-    private readonly server: { backendUrl?: string; internalToken?: string } = {},
-  ) { this.turns = new DurableTurnLifecycle(events); }
+    private readonly server: { backendUrl?: string; internalToken?: string; onWorkerExit?: (cwd: string, sessionId: string) => Promise<void> } = {},
+  ) { this.manager = new AgentRuntimeManager(server.onWorkerExit); this.turns = new DurableTurnLifecycle(events); }
 
   configureProductLifecycle(hooks: ProductHooks): void { this.hooks = hooks; }
 

@@ -28,6 +28,32 @@ async function fixture() {
 }
 const execute = (tool: ReturnType<typeof sandboxRunTool>, id: string, code: string, context = BACKGROUND_CONTEXT, timeout_seconds = 10) => tool.execute(id, { candidate_id: "candidate-001", code, timeout_seconds }, () => {}, env, invocation(id), context);
 
+it.each(["succeeded", "failed", "cancelled", "timed_out", "lost"] as const)("recovers a historical %s result without an executor and refuses changed input or a new invocation", async (status) => {
+  const { identity, cwd } = await fixture(); const code = "raise RuntimeError('must not run')";
+  const executionId = executionIdFor("sandbox_run", "session", "owner", "historical");
+  await executionRepository.start(cwd, { execution_id: executionId, kind: "tool", surface: "python", producer: "sandbox_run", correlation: { candidate_id: "candidate-001" }, request: { code_sha256: createHash("sha256").update(code).digest("hex") } });
+  const result = { execution_id: executionId, status, stdout: "historical output", artifact_refs: [{ artifact_id: "historical-artifact", version: 2 }] };
+  await executionRepository.finish(cwd, executionId, { status, producer: "sandbox_run", result });
+  const tool = sandboxRunTool(identity, undefined);
+  expect((await execute(tool, "historical", code)).details).toEqual(result);
+  await expect(execute(tool, "historical", "print('changed')")).rejects.toThrow("different input");
+  await expect(execute(tool, "new", code)).rejects.toThrow("Sandbox unavailable");
+  await expect(execute(sandboxRunTool({ ...identity, candidateId: "other" }, undefined), "historical", code)).rejects.toThrow("not authorized");
+  expect(await executionRepository.list(cwd)).toHaveLength(1);
+});
+
+it("reconciles only the identical unfinished legacy invocation as lost with execution disabled", async () => {
+  const { identity, cwd } = await fixture(); const code = "print('must not replay')";
+  const id = executionIdFor("sandbox_run", "session", "owner", "unfinished");
+  await executionRepository.start(cwd, { execution_id: id, kind: "tool", surface: "python", producer: "sandbox_run", correlation: { candidate_id: "candidate-001" }, request: { code_sha256: createHash("sha256").update(code).digest("hex") } });
+  const tool = sandboxRunTool(identity, undefined);
+  await expect(execute(tool, "another-invocation", code)).rejects.toThrow("Sandbox unavailable");
+  expect((await executionRepository.get(cwd, id))?.status).toBe("running");
+  expect((await execute(tool, "unfinished", code)).details).toMatchObject({ status: "lost", stdout: "" });
+  expect((await executionRepository.get(cwd, id))?.status).toBe("lost");
+  expect(await executionRepository.list(cwd)).toHaveLength(1);
+});
+
 it("refuses disabled execution, invalid paths, unknown candidate and unassigned children", async () => {
   const { identity } = await fixture();
   await expect(execute(sandboxRunTool(identity, undefined), "disabled", "print(1)")).rejects.toThrow("Sandbox unavailable");
@@ -61,6 +87,19 @@ it("restricts the assigned child's read tool to regular candidate files", async 
   const call = (path: string) => read.execute("read", { path }, () => {}, env, invocation("read"), BACKGROUND_CONTEXT);
   await expect(call("research/study-1/evaluation.yaml")).rejects.toThrow("outside");
   await writeFile(join(directory, "input/data.txt"), "data"); expect((await call(join(directory, "input/data.txt"))).details).toEqual({ allowed: true });
+});
+it.skipIf(process.platform !== "linux")("keeps an authorized read pinned when an idle kernel swaps its path for an evaluator link", async () => {
+  const { identity, directory, budget, cwd } = await fixture();
+  const path = join(directory, "work/read.txt"); const secret = join(cwd, "research/study-1/secret.txt");
+  await writeFile(path, "approved"); await writeFile(secret, "EVALUATOR SECRET");
+  const original = { ...budget.tool, name: "read", async execute(_id: string, _params: unknown, _update: unknown, ctx: { env: NodeExecutionEnv }) {
+    await rm(path); await symlink(secret, path);
+    const read = await ctx.env.readBinaryFile(path, BACKGROUND_CONTEXT);
+    if (!read.ok) throw read.error;
+    return { content: [{ type: "text" as const, text: Buffer.from(read.value).toString("utf8") }], details: {} };
+  } };
+  const result = await candidateReadTool(original, identity).execute("read", { path }, () => {}, env, invocation("read"), BACKGROUND_CONTEXT);
+  expect(result.content).toEqual([{ type: "text", text: "approved" }]);
 });
 it.each(["0", "1"])("refuses unbound Experimenter reads even with sandbox enable flag %s", async (enabled) => {
   vi.stubEnv("PI_SCIENCE_SANDBOX_ENABLED", enabled);

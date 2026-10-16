@@ -1,6 +1,9 @@
+import { constants } from "node:fs";
+import { authorizeKernelPolicy, SANDBOX_GRANT_HEADER } from "../../runtime/sandbox/kernel-authorization.js";
+import type { SandboxPolicy } from "../../runtime/sandbox/policy.js";
 import { randomUUID } from "node:crypto";
-import { chmod, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
-import { relative, sep } from "node:path";
+import { chmod, readFile, rename, stat, unlink, writeFile, open } from "node:fs/promises";
+import { relative, sep, dirname } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { withFileWriteLock } from "../../storage/persistence.js";
@@ -85,7 +88,26 @@ function responseDocument(document: NotebookDocument, includeOutputs: boolean): 
   };
 }
 
-async function readNotebook(root: string, requestedPath: string): Promise<{
+
+/** Candidate notebook files are top-level regular files under immutable input/work roots.
+ * No-follow opens prevent an idle untrusted kernel from swapping a file for a link. */
+function assertCandidateNotebookPath(target: string, policy: SandboxPolicy | undefined, write: boolean): void {
+  if (policy?.scope !== "candidate") return;
+  if (!(write ? policy.writePaths : policy.readPaths).includes(dirname(target))) throw new Error("Notebook path escapes the assigned candidate top-level input/work");
+}
+async function readNotebookFile(target: string, policy?: SandboxPolicy) {
+  const file = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const metadata = await file.stat();
+    if (!metadata.isFile() || policy?.scope === "candidate" && metadata.nlink !== 1) throw new Error("Notebook requires a single-link regular file");
+    if (metadata.size > MAX_NOTEBOOK_BYTES) throw new Error(`Notebook is too large to read (${metadata.size} bytes)`);
+    const bytes = Buffer.alloc(metadata.size); let offset = 0;
+    while (offset < bytes.length) { const read = await file.read(bytes, offset, bytes.length - offset, offset); if (!read.bytesRead) break; offset += read.bytesRead; }
+    return { metadata, raw: bytes.subarray(0, offset).toString("utf8") };
+  } finally { await file.close(); }
+}
+
+async function readNotebook(root: string, requestedPath: string, policy?: SandboxPolicy): Promise<{
   target: string;
   path: string;
   raw: string;
@@ -93,10 +115,8 @@ async function readNotebook(root: string, requestedPath: string): Promise<{
   sha256: string;
 }> {
   const target = await resolveWorkspaceFile(root, requestedPath);
-  const metadata = await stat(target);
-  if (!metadata.isFile()) throw new Error(`Notebook path is not a file: ${requestedPath}`);
-  if (metadata.size > MAX_NOTEBOOK_BYTES) throw new Error(`Notebook is too large to read (${metadata.size} bytes)`);
-  const raw = await readFile(target, "utf8");
+  assertCandidateNotebookPath(target, policy, false);
+  const { raw } = await readNotebookFile(target, policy);
   const path = relativeNotebookPath(root, target);
   const document = normalizeNotebookDocument(parseNotebookDocument(raw), path);
   return { target, path, raw, document, sha256: notebookSha256(raw) };
@@ -198,7 +218,7 @@ async function writeNotebookAtomically(target: string, content: string, mode?: n
   }
 }
 
-export function registerNotebookRoutes(app: FastifyInstance, notebooks: NotebookService): void {
+export function registerNotebookRoutes(app: FastifyInstance, notebooks: NotebookService, internalToken?: string): void {
   app.get("/api/notebooks/document", async (request, reply) => {
     const query = request.query as { cwd?: unknown; path?: unknown; include_outputs?: unknown };
     let root: string;
@@ -210,7 +230,9 @@ export function registerNotebookRoutes(app: FastifyInstance, notebooks: Notebook
       return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
     }
     try {
-      const notebook = await readNotebook(root, path);
+      const grant = request.headers[SANDBOX_GRANT_HEADER];
+      const policy = grant === undefined ? undefined : await authorizeKernelPolicy(root, undefined, grant, internalToken);
+      const notebook = await readNotebook(root, path, policy);
       return {
         path: notebook.path,
         sha256: notebook.sha256,
@@ -247,12 +269,12 @@ export function registerNotebookRoutes(app: FastifyInstance, notebooks: Notebook
     }
 
     try {
+      const grant = request.headers[SANDBOX_GRANT_HEADER];
+      const policy = grant === undefined ? undefined : await authorizeKernelPolicy(root, undefined, grant, internalToken);
       const target = await resolveWorkspaceFile(root, path);
+      assertCandidateNotebookPath(target, policy, true);
       const result = await withFileWriteLock(target, async () => {
-        const metadata = await stat(target);
-        if (!metadata.isFile()) throw new Error(`Notebook path is not a file: ${path}`);
-        if (metadata.size > MAX_NOTEBOOK_BYTES) throw new Error(`Notebook is too large to edit (${metadata.size} bytes)`);
-        const raw = await readFile(target, "utf8");
+        const { metadata, raw } = await readNotebookFile(target, policy);
         const actualSha = notebookSha256(raw);
         if (expectedSha && expectedSha.toLowerCase() !== actualSha) throw new NotebookRevisionConflict(expectedSha, actualSha);
         const normalized = normalizeNotebookDocument(parseNotebookDocument(raw), relativeNotebookPath(root, target));
@@ -320,12 +342,12 @@ export function registerNotebookRoutes(app: FastifyInstance, notebooks: Notebook
     if (expectedSha !== undefined && !/^[0-9a-f]{64}$/i.test(expectedSha)) return reply.code(400).send({ error: "expected_sha256 must be a SHA-256 hex digest" });
 
     try {
+      const grant = request.headers[SANDBOX_GRANT_HEADER];
+      const policy = grant === undefined ? undefined : await authorizeKernelPolicy(root, undefined, grant, internalToken);
       const target = await resolveWorkspaceFile(root, path);
+      assertCandidateNotebookPath(target, policy, true);
       const result = await withFileWriteLock(target, async () => {
-        const metadata = await stat(target);
-        if (!metadata.isFile()) throw new Error(`Notebook path is not a file: ${path}`);
-        if (metadata.size > MAX_NOTEBOOK_BYTES) throw new Error(`Notebook is too large to edit (${metadata.size} bytes)`);
-        const raw = await readFile(target, "utf8");
+        const { metadata, raw } = await readNotebookFile(target, policy);
         const actualSha = notebookSha256(raw);
         if (expectedSha && expectedSha.toLowerCase() !== actualSha) throw new NotebookRevisionConflict(expectedSha, actualSha);
         const normalized = normalizeNotebookDocument(parseNotebookDocument(raw), relativeNotebookPath(root, target));

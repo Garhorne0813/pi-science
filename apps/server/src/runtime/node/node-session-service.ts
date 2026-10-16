@@ -55,7 +55,7 @@ export class NodeSessionService {
     private readonly projectReview: Pick<ProjectReviewService, "run"> | null = null,
     private readonly statsEventStore: StatsEventStore = durableEventStore,
     private readonly modelResources: Pick<ModelResourceService, "ensureMigrated" | "isModelAvailable"> | null = null,
-    agentCoreServer: { backendUrl?: string; internalToken?: string } = {},
+    agentCoreServer: { backendUrl?: string; internalToken?: string; onWorkerExit?: (cwd: string, sessionId: string) => Promise<void> } = {},
   ) {
     this.agentCore = new AgentCoreSessionService(eventHub, environments, agentCoreServer);
     this.agentCore.configureProductLifecycle({
