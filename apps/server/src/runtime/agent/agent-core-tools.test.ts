@@ -93,30 +93,39 @@ describe("agent-core product tools", () => {
         return "Candidate repaired with actual Bash output.";
       }
       if (system.includes("You are an independent reviewer")) { expect(score).toBe(0); return "PASS. Stop: independent evaluation met the frozen target."; }
-      if (!results.length) return { name: "execution_budget", args: { research_id: "universal-study", max_seconds: 45, max_executions: 4 } };
-      if (results.length === 1) return { name: "subagent", args: { agent: "auto-research/experimenter", candidate_id: "one", task: "Generate a prediction, execute and repair from real errors." } };
-      if (results.length === 2) {
-        // Trusted harness evaluator is outside every candidate's sandbox and never supplied to the child.
-        const { execFile } = await import("node:child_process"); const { promisify } = await import("node:util");
-        const evaluated = await promisify(execFile)(process.env.PI_SCIENCE_SANDBOX_PYTHON!, ["-I", join(fixture.cwd, "research/universal-study/evaluator.py"), join(fixture.cwd, "research/universal-study/candidates/one/work/output.json")]);
-        score = Number(evaluated.stdout);
-        return { name: "subagent", args: { agent: "auto-research/reviewer", task: `Review independent evaluator loss=${score}; target=0. Recommend stopping or continuing.` } };
+      if (!results.length) return { name: "execution_budget", args: { research_id: "universal-study", max_seconds: 45, max_executions: 8 } };
+      if (results.length === 1) return { name: "bash", args: { command: "python3 -I research/universal-study/evaluator.py research/universal-study/baseline-input.json research/universal-study/baseline.json" } };
+      if (results.length === 2) { expect(results[1]!.content).toContain('"loss": 1764'); return { name: "subagent", args: { agent: "auto-research/experimenter", candidate_id: "one", task: "Generate a prediction, execute and repair from real errors." } }; }
+      if (results.length === 3) return { name: "bash", args: { command: "python3 -I research/universal-study/evaluator.py research/universal-study/candidates/one/work/output.json research/universal-study/result.json" } };
+      if (results.length === 4) {
+        score = JSON.parse(results[3]!.content.split("\n")[0]!).loss;
+        return { name: "subagent", args: { agent: "auto-research/reviewer", task: `Review Parent evaluator loss=${score}; baseline=1764, target=0. Recommend stopping or continuing.` } };
       }
       expect(results.at(-1)!.content).toContain("Stop"); return "Stopped after independent evaluation and review.";
     });
     const { seedWorkspaceAssets } = await import("./runtime-config.js"); seedWorkspaceAssets(fixture.cwd);
     const directory = join(fixture.cwd, "research/universal-study/candidates/one");
     await mkdir(join(directory, "input"), { recursive: true }); await mkdir(join(directory, "work"));
-    await writeFile(join(fixture.cwd, "research/universal-study/evaluator.py"), "import json,sys\nprint((json.load(open(sys.argv[1]))['prediction']-42)**2)");
+    await writeFile(join(fixture.cwd, "research/universal-study/baseline-input.json"), '{"prediction":0}');
+    await writeFile(join(fixture.cwd, "research/universal-study/evaluator.py"), "import json,sys,hashlib,pathlib\nscore=lambda value:(value-42)**2\nassert score(42)==0 and score(0)==1764\nsource=pathlib.Path(sys.argv[1]).read_bytes()\nresult={'loss':score(json.loads(source)['prediction']),'validity':True,'evaluator_digest':hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),'data_digest':hashlib.sha256(source).hexdigest(),'environment':sys.version}\npathlib.Path(sys.argv[2]).write_text(json.dumps(result))\nprint(json.dumps(result))");
     const manager = new AgentRuntimeManager(); cleanup.push(() => manager.shutdownAll());
     const parent = await openHiddenTask(manager, "candidate-bash-parent", { cwd: fixture.cwd, sessionsRoot: join(fixture.cwd, ".pi-science/agent-sessions"), model: fixture.model, thinking: "off", allowedTools: ["read", "bash", "execution_budget", "subagent"] }, "candidate-bash-owner");
     expect(await runHiddenPrompt(parent, "Execute, evaluate and review", "candidate-bash-once", Date.now() + 45_000)).toBe("Stopped after independent evaluation and review.");
     expect(repairs).toBe(2); expect(score).toBe(0);
     const { executionRepository } = await import("../executions/execution-repository.js");
-    expect((await executionRepository.list(fixture.cwd)).filter((record) => record.producer === "bash").map((record) => record.status).sort()).toEqual(["failed", "succeeded"]);
+    expect((await executionRepository.list(fixture.cwd)).filter((record) => record.producer === "bash").map((record) => record.status).sort()).toEqual(["failed", "succeeded", "succeeded", "succeeded"]);
     const { workspaceFile } = await import("../../storage/persistence.js"); const { createHash } = await import("node:crypto");
     const budget = JSON.parse(await readFile(workspaceFile(fixture.cwd, `execution-budgets/${createHash("sha256").update("research:universal-study").digest("hex")}.json`), "utf8"));
-    expect(budget.used).toBe(4);
+    expect(budget.used).toBe(6);
+    const records = await executionRepository.list(fixture.cwd);
+    const evaluated = records.find((record) => (record.request.command as string[] | undefined)?.some((arg) => arg.includes("work/output.json")))!;
+    expect(evaluated).toMatchObject({ status: "succeeded", runtime: { execution_mode: "required" }, artifacts: [expect.objectContaining({ relation: "output" })] });
+    const version = JSON.parse(await readFile(join(fixture.cwd, "research/universal-study/result.json"), "utf8"));
+    expect(version.evaluator_digest).toMatch(/^[a-f0-9]{64}$/);
+    await manager.stop("candidate-bash-parent");
+    const reopened = await openHiddenTask(manager, "candidate-bash-parent", { cwd: fixture.cwd, sessionsRoot: join(fixture.cwd, ".pi-science/agent-sessions"), model: fixture.model, thinking: "off", allowedTools: ["read", "bash", "execution_budget", "subagent"] }, "candidate-bash-owner");
+    expect(await runHiddenPrompt(reopened, "Execute, evaluate and review", "candidate-bash-once", Date.now() + 10_000)).toBe("Stopped after independent evaluation and review.");
+    expect(await executionRepository.list(fixture.cwd)).toHaveLength(records.length);
   }, 60_000);
 
   it("serializes todo calls, replays once, restores history and respects an older branch", async () => {

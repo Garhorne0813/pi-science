@@ -8,6 +8,7 @@ import { createInterface, type Interface } from "node:readline";
 import { metadataRoot } from "../../storage/persistence.js";
 import { toolEnvironment } from "../agent/agent-runtime-environment.js";
 import { workspacePolicy, type SandboxPolicy } from "../sandbox/policy.js";
+import { bindRuntimeReadPolicy } from "../sandbox/read-grants.js";
 import { killSandboxGroup, launcherPath, prepareSandbox, type PreparedSandbox } from "../sandbox/process.js";
 import {
   environmentPythonExecutable,
@@ -171,6 +172,7 @@ export class NodeKernelManager {
     options.abortSignal?.throwIfAborted();
     options = { ...options, environmentRevisionId: options.environmentRevisionId ?? options.environment.revision_id,
       sandboxPolicy: options.sandboxPolicy ?? await workspacePolicy(options.cwd, options.environmentRevisionId ?? options.environment.revision_id) };
+    options.sandboxPolicy = await bindRuntimeReadPolicy(options.sandboxPolicy!);
     options.abortSignal?.throwIfAborted();
     const key = sessionKey(options);
     // A changed authorization/environment must retire the old namespace and process.

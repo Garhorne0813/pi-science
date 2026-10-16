@@ -79,12 +79,62 @@ it.skipIf(process.platform !== "linux")("captures only authorized regular output
   await expect(sandboxArtifactCapture(cwd, policy)(join(work, "huge.txt"))).rejects.toThrow("bounded single-link");
 });
 describe.skipIf(process.env.PI_SCIENCE_SANDBOX_TEST !== "1" || process.platform !== "linux")("real universal Linux sandbox", () => {
+  it("retires a persistent kernel namespace when the shared operator policy changes", async () => {
+    vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "required");
+    const cwd = await fixture(); const control = await realpath(await mkdtemp(join(tmpdir(), "pi-kernel-policy-"))); roots.push(control);
+    const prefix = join(control, "runtime"); await mkdir(join(prefix, "bin"), { recursive: true });
+    for (const name of ["python", "python3"]) await symlink("/usr/bin/python3", join(prefix, "bin", name));
+    const protectedRoot = join(control, "protected"); const extra = join(control, "extra"); await mkdir(protectedRoot); await mkdir(extra);
+    const bridge = fileURLToPath(new URL("../kernel/bridges/kernel_bridge.py", import.meta.url));
+    const dependencies = [prefix, bridge, ...[process.env.PI_SCIENCE_SANDBOX_SOCAT, process.env.PI_SCIENCE_SANDBOX_RIPGREP, process.env.PI_SCIENCE_SANDBOX_PYTHON_ROOT].filter((path): path is string => !!path)];
+    const file = join(control, "policy.json"); const save = (protectedRoots: string[]) => writeFile(file, JSON.stringify({ schemaVersion: 1, dependencyRoots: dependencies, protectedRoots }), { mode: 0o600 });
+    await save([protectedRoot]); vi.stubEnv("PI_SCIENCE_SANDBOX_READ_POLICY", file);
+    const manager = new NodeKernelManager(); managers.push(manager);
+    const options = { cwd, language: "python" as const, environment: { ...environment(cwd), prefix, python: join(prefix, "bin/python3") }, notebookId: "policy-change", timeoutMs: 10_000 };
+    const hidden = join(protectedRoot, "labels.json"); await writeFile(hidden, "PRIVATE_DATA");
+    const probe = `try:\n open(${JSON.stringify(hidden)}); raise AssertionError('private root readable')\nexcept OSError: pass\n`;
+    expect(JSON.stringify((await bash(cwd, `test ! -r '${hidden}' && echo private-root-denied`, "before-policy")).content)).toContain("private-root-denied");
+    expect(await manager.execute({ ...options, code: probe + "old_state=42" })).toMatchObject({ ok: true });
+    const originalId = manager.status().sessions[0]!.sandboxPolicyId;
+    await save([protectedRoot, extra]);
+    expect(JSON.stringify((await bash(cwd, `test ! -r '${hidden}' && echo private-root-denied`, "after-policy")).content)).toContain("private-root-denied");
+    expect(await manager.execute({ ...options, code: probe + "'old_state' in globals()" })).toMatchObject({ ok: true, result: "False" });
+    expect(manager.status().sessions[0]!.sandboxPolicyId).not.toBe(originalId); expect(manager.status().active_count).toBe(1);
+    const app = Fastify();
+    registerKernelExecutionRoutes(app, { internalToken: "test-secret", upstreamTimeoutMs: 1000 } as ServerConfig, { ensure: async () => options.environment } as unknown as WorkspaceEnvironmentService, manager);
+    try {
+      const response = await app.inject({ method: "POST", url: `/api/kernels/execute?cwd=${encodeURIComponent(cwd)}`, payload: { language: "python", notebook_id: options.notebookId, code: "1+1" } });
+      expect(response.statusCode).toBe(200); expect(response.json()).toMatchObject({ ok: true, result: "2" });
+      const execution = await executionRepository.get(cwd, response.json().execution_id);
+      expect(execution?.runtime.sandbox_policy_id).toBe(manager.status().sessions[0]!.sandboxPolicyId);
+    } finally { await app.close(); }
+  }, 30_000);
+  it("enforces the shared operator read policy in a real Bash sandbox and rejects conflicting reloads", async () => {
+    vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "required");
+    const cwd = await fixture();
+    const control = await realpath(await mkdtemp(join(tmpdir(), "pi-read-policy-"))); roots.push(control);
+    const protectedRoot = join(control, "private-data"); await mkdir(protectedRoot, { mode: 0o700 });
+    const secret = join(protectedRoot, "holdout.json"); await writeFile(secret, "PRIVATE_HOLDOUT");
+    const policyFile = join(control, "policy.json");
+    const dependencies = [...JSON.parse(process.env.PI_SCIENCE_SANDBOX_RUNTIME_PATHS ?? "[]") as string[],
+      ...[process.env.PI_SCIENCE_SANDBOX_SOCAT, process.env.PI_SCIENCE_SANDBOX_RIPGREP, process.env.PI_SCIENCE_SANDBOX_PYTHON_ROOT].filter((path): path is string => !!path)];
+    await writeFile(policyFile, JSON.stringify({ schemaVersion: 1, dependencyRoots: dependencies, protectedRoots: [protectedRoot] }), { mode: 0o600 });
+    vi.stubEnv("PI_SCIENCE_SANDBOX_READ_POLICY", policyFile);
+    const { shellQuote } = await import("./process.js");
+    const output = await bash(cwd, `test ! -r ${shellQuote(secret)} && echo shared-policy-isolated`, "shared-policy");
+    expect(output.content).toEqual([expect.objectContaining({ text: expect.stringContaining("shared-policy-isolated") })]);
+    await writeFile(policyFile, JSON.stringify({ schemaVersion: 1, dependencyRoots: [...dependencies, control], protectedRoots: [protectedRoot] }));
+    await expect(bash(cwd, "touch escaped", "conflicting-read-policy")).rejects.toThrow("Protected paths overlap");
+    await expect(readFile(join(cwd, "escaped"))).rejects.toThrow();
+  }, 30_000);
   it("records actual Bash exits, timeout and Abort in durable execution evidence", async () => {
     const cwd = await fixture(); vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "required");
     for (const [id, command, code] of [["exit7", "exit 7", 7], ["false", "false", 1]] as const) {
-      await expect(bash(cwd, command, id)).rejects.toThrow(`code ${code}`);
+      const failure = await bash(cwd, command, id).then(() => { throw new Error("Expected command failure"); }, (error: Error) => error);
+      expect(failure.message).toContain(`code ${code}`);
       const record = (await executionRepository.list(cwd)).find((entry) => entry.correlation?.tool_call_id === id);
       expect(record).toMatchObject({ status: "failed", result: { exit_code: code } });
+      expect(failure.message).toContain(JSON.stringify({ execution_id: record!.execution_id, artifact_refs: record!.artifacts }));
     }
     await expect(bash(cwd, "sleep 30", "timeout", undefined, 0.5)).rejects.toThrow(/timed out/);
     expect((await executionRepository.list(cwd)).find((entry) => entry.correlation?.tool_call_id === "timeout")).toMatchObject({ status: "timed_out", result: { execution_error_code: "timeout" } });
@@ -98,7 +148,7 @@ describe.skipIf(process.env.PI_SCIENCE_SANDBOX_TEST !== "1" || process.platform 
   it("runs Bash without a skill, keeps child commands isolated and records policy evidence", async () => {
     const cwd = await fixture(); vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "required"); vi.stubEnv("OPENAI_API_KEY", "host-secret");
     const result = await bash(cwd, "set -e; cat data.txt; printf output > result.txt; test -z \"$OPENAI_API_KEY\"; if grep SECRET token.json; then exit 44; fi; if cat .pi-science/secret; then exit 44; fi; if cat research/evaluator/secret; then exit 44; fi; bash -c 'test ! -r /etc/passwd'; echo isolated");
-    expect(result.content).toEqual([expect.objectContaining({ text: expect.stringContaining("isolated") })]);
+    expect(result.content).toEqual(expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining("isolated") })]));
     expect(await readFile(join(cwd, "result.txt"), "utf8")).toBe("output");
     expect((await executionRepository.list(cwd))[0]?.runtime).toMatchObject({ execution_mode: "required", sandbox_policy_id: expect.any(String) });
     expect((await executionRepository.list(cwd))[0]?.artifacts).toHaveLength(1);
@@ -179,11 +229,11 @@ describe.skipIf(process.env.PI_SCIENCE_SANDBOX_TEST !== "1" || process.platform 
       const result = await notebook.execute("notebook", { path: notebookPath, cell_ids: ["a", "b"] }, () => {}, { env: new NodeExecutionEnv({ cwd }) }, invocation("notebook"), BACKGROUND_CONTEXT);
       expect(result.isError).not.toBe(true);
       expect(JSON.parse(await readFile(join(cwd, notebookPath), "utf8")).cells[1].outputs).toEqual([expect.objectContaining({ output_type: "stream", text: "42\n" })]);
-      const blocked = await app.inject({ method: "POST", url, payload: { language: "python", notebook_id: "same", session_id: "forged-owner", source: "agent", sandboxPolicy: { mode: "trusted-host" }, code: "open('research/study/candidates/one/input/value.txt').read()" } });
+      const blocked = await app.inject({ method: "POST", url, payload: { language: "python", notebook_id: "same", session_id: "forged-owner", source: "agent", sandboxPolicy: { mode: "trusted-host" }, code: "open('.pi-science/secret').read()" } });
       expect(blocked.json().ok).toBe(false);
       const candidateBash = sandboxBashTool(identity);
       const run = (id: string, command: string, context = BACKGROUND_CONTEXT) => candidateBash.execute(id, { command }, () => {}, { env: new NodeExecutionEnv({ cwd }) }, invocation(id), context);
-      expect((await run("candidate", "python3 -I -c \"print(open('../input/value.txt').read())\"; ! cat ../../../evaluator/secret")).content).toEqual([expect.objectContaining({ text: expect.stringContaining("approved") })]);
+      expect((await run("candidate", "python3 -I -c \"print(open('../input/value.txt').read())\"; ! cat ../../../evaluator/secret")).content).toEqual(expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining("approved") }), expect.objectContaining({ text: expect.stringContaining('"execution_id"') })]));
       const controller = new AbortController(); setTimeout(() => controller.abort(), 300);
       await expect(run("abort", "python3 -I -c 'while True: pass'", { ...BACKGROUND_CONTEXT, abortSignal: controller.signal })).rejects.toThrow();
       await manager.shutdownOwner(cwd, identity.sessionId);

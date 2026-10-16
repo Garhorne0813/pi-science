@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { sandboxCandidate, type SandboxIdentity } from "../agent/worker/sandbox-tool.js";
 import { identifyPolicy, workspacePolicy } from "./policy.js";
+import { bindRuntimeReadPolicy } from "./read-grants.js";
 
 export const SANDBOX_GRANT_HEADER = "x-pi-science-sandbox-grant";
 const bindingSchema = z.object({ cwd: z.string(), sessionId: z.string(), budgetOperationId: z.string(), candidateId: z.string().optional(), delegatedAgent: z.string().optional(), expires: z.number() }).strict();
@@ -16,6 +17,10 @@ export function workerKernelGrant(identity: SandboxIdentity, operationId: string
   return `${payload}.${createHmac("sha256", secret).update(payload).digest("base64url")}`;
 }
 export async function authorizeKernelPolicy(cwd: string, revision: string | undefined, grant: unknown, secret: string | undefined) {
+  return bindRuntimeReadPolicy(await authorizedKernelPolicy(cwd, revision, grant, secret));
+}
+
+async function authorizedKernelPolicy(cwd: string, revision: string | undefined, grant: unknown, secret: string | undefined) {
   if (grant === undefined) return workspacePolicy(cwd, revision);
   if (typeof grant !== "string" || grant.length > 4096 || !secret) throw new Error("Invalid kernel sandbox authorization");
   const [payload, signature, extra] = grant.split(".");
@@ -29,5 +34,5 @@ export async function authorizeKernelPolicy(cwd: string, revision: string | unde
     return identifyPolicy({ ...await workspacePolicy(cwd, revision), owner: binding.sessionId });
   }
   const candidate = await sandboxCandidate(binding, binding.budgetOperationId, binding.candidateId);
-  return identifyPolicy({ mode: "required", scope: "candidate", owner: binding.sessionId, cwd: candidate.work, readPaths: [candidate.input, candidate.work], writePaths: [candidate.work], denyPaths: [], network: { mode: "none" }, ...(revision ? { environmentRevision: revision } : {}) });
+  return identifyPolicy({ mode: "required", scope: "candidate", researchId: candidate.researchId, owner: binding.sessionId, cwd: candidate.work, readPaths: [candidate.input, candidate.work], writePaths: [candidate.work], denyPaths: [], network: { mode: "none" }, ...(revision ? { environmentRevision: revision } : {}) });
 }

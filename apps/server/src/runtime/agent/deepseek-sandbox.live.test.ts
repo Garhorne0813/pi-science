@@ -33,7 +33,9 @@ it.skipIf(process.env.PI_SCIENCE_DEEPSEEK_LIVE_TEST !== "1")("runs real DeepSeek
     const modelId = "deepseek-flash";
     await resources.updateModel(provider.id, modelId, { enabled: true, capabilities: { reasoning: false, context_window: 128000 } });
     await writeJsonAtomic(configPath("config.json"), { ...await readJson(configPath("config.json"), {}), model: `${provider.id}/${modelId}`, thinking: "off" });
-    const runtime = await openHiddenTask(manager, "deepseek-live", { cwd, sessionsRoot: join(cwd, ".pi-science/agent-sessions"), model: { provider: provider.id, modelId }, thinking: "off", allowedTools: ["bash", "subagent"], skillPolicy: { mode: "none" } }, "live-test-owner");
+    // Worker environments deliberately exclude ambient provider secrets. Pass this
+    // environment-backed credential explicitly, as the production session adapter does.
+    const runtime = await openHiddenTask(manager, "deepseek-live", { cwd, sessionsRoot: join(cwd, ".pi-science/agent-sessions"), model: { provider: provider.id, modelId }, env: { DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY }, thinking: "off", allowedTools: ["bash", "subagent"], skillPolicy: { mode: "none" } }, "live-test-owner");
     const command = "set -e; test -z \"$DEEPSEEK_API_KEY\"; test ! -r .pi-science/protected; printf main-isolated > main.txt; echo main-isolated";
     const childCommand = command.replaceAll("main", "child");
     const output = await runHiddenPrompt(runtime, `Execute exactly these steps, without extra tool calls: (1) Call bash with command ${JSON.stringify(command)}. (2) Call subagent with agent='runner' and task asking it to call bash exactly once with command ${JSON.stringify(childCommand)}. (3) Summarize the actual results. Stop if any step fails; do not retry.`, "live-once", Date.now() + 180_000);

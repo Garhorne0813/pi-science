@@ -3,6 +3,10 @@ on:
   pull_request:
     paths:
       - 'apps/server/src/runtime/agent/**'
+      - 'apps/server/src/runtime/sandbox/**'
+      - 'apps/server/src/runtime/kernel/**'
+      - 'apps/server/src/runtime/executions/**'
+      - 'apps/server/src/runtime/artifacts/**'
       - 'apps/server/package.json'
       - 'pnpm-lock.yaml'
       - '.github/workflows/sandbox-acceptance.yml'
@@ -49,7 +53,7 @@ jobs:
           export PI_SCIENCE_SANDBOX_PYTHON_ROOT="$(python -c 'import os,sys; print(os.path.realpath(sys.base_prefix))')"
           export PI_SCIENCE_SANDBOX_SOCAT="$(command -v socat)"
           export PI_SCIENCE_SANDBOX_RIPGREP="$(command -v rg)"
-          pnpm --filter @pi-science/server exec vitest run src/runtime/agent/worker/sandbox-tool.test.ts src/runtime/agent/agent-core-tools.test.ts --reporter=default --reporter=junit --outputFile.junit=sandbox-acceptance.xml
+          pnpm --filter @pi-science/server exec vitest run src/runtime/agent/worker/sandbox-tool.test.ts src/runtime/agent/agent-core-tools.test.ts src/runtime/sandbox/universal-sandbox.test.ts --reporter=default --reporter=junit --outputFile.junit=sandbox-acceptance.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:

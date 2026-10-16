@@ -431,11 +431,14 @@ describe("NodeKernelManager platform interrupt semantics", () => {
       (value) => ({ resolved: true as const, value }),
       (error: Error) => ({ resolved: false as const, error }),
     );
-    const survivor = manager.execute({ language: "python", code: "2+2", cwd, environment: env, notebookId: "nb-survivor", timeoutMs: 30_000 }).then(
-      (value) => ({ resolved: true as const, value }),
-      (error: Error) => ({ resolved: false as const, error }),
-    );
     try {
+      // Both starts remain pending, but filesystem scheduling must not decide
+      // which fake child the cancellation assertions identify as the target.
+      await waitForRequest(sessions, 1);
+      const survivor = manager.execute({ language: "python", code: "2+2", cwd, environment: env, notebookId: "nb-survivor", timeoutMs: 30_000 }).then(
+        (value) => ({ resolved: true as const, value }),
+        (error: Error) => ({ resolved: false as const, error }),
+      );
       await vi.waitFor(() => { expect(sessions).toHaveLength(2); expect(sessions.every((session) => session.writes.length >= 1)).toBe(true); });
       const shutdown = manager.shutdownNotebook("nb-target", cwd);
       await vi.waitFor(() => expect(sessions[0]!.kills).toContain("SIGTERM"));

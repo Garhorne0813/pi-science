@@ -49,8 +49,13 @@ export function validateManifest(manifest) {
     for (const executionId of experiment.execution_ids) if (!owns(manifest.executions, executionId) || manifest.executions[executionId].candidate_id !== experiment.candidate_id) fail("experiment execution is missing or belongs to another candidate");
     if (experiment.status === "completed") {
       const evaluation = experiment.evaluation;
-      fields(evaluation, ["source", "execution_id", "result_artifact", "evaluator_digest", "data_digest"], "evaluation");
-      if (evaluation.source !== "external_operator") fail("production evaluator API is unavailable; independent operator evidence is required");
+      const evidence = ["source", "execution_id", "result_artifact", "evaluator_digest", "data_digest"];
+      if (!["parent_tool", "external_operator", "trusted_evaluator"].includes(evaluation.source)) fail("independent evaluation evidence is required");
+      fields(evaluation, evaluation.source === "trusted_evaluator" ? [...evidence, "evaluation_id", "evaluator_revision_id", "environment_revision", "environment_digest", "protocol_revision", "input_sha256"] : evidence, "evaluation");
+      if (evaluation.source === "trusted_evaluator") {
+        for (const key of ["evaluation_id", "evaluator_revision_id", "environment_revision", "protocol_revision"]) text(evaluation[key], key);
+        digest(evaluation.environment_digest, "environment_digest"); digest(evaluation.input_sha256, "input_sha256");
+      }
       if (!experiment.execution_ids.includes(evaluation.execution_id)) fail("evaluation execution must be linked to the experiment");
       artifact(evaluation.result_artifact); digest(evaluation.evaluator_digest, "evaluator_digest"); digest(evaluation.data_digest, "data_digest");
       if (!manifest.executions[evaluation.execution_id].artifact_refs.some((ref) => ref.artifact_id === evaluation.result_artifact.artifact_id && ref.version === evaluation.result_artifact.version)) fail("evaluation artifact does not belong to its execution");

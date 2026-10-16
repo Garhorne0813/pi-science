@@ -1,10 +1,11 @@
+import { workspaceFileTool } from "./workspace-file-tool.js";
 import { executionBudgetTools } from "./execution-budget.js";
 import { sandboxBashTool } from "./sandbox-bash.js";
 import { sandboxRunTool, sandboxInstallation, candidateReadTool } from "./sandbox-tool.js";
 import { randomUUID } from "node:crypto";
 import { decodeCommand, decodeNotification } from "./command-contract.js";
 import { isAbsolute, join, resolve } from "node:path";
-import { listWorkspaceSessions } from "../workspace-session-identity.js";
+import { listWorkspaceSessions, retrySessionDirectory } from "../workspace-session-identity.js";
 import { AgentHarness, BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv, createEditTool, createReadTool, createWriteTool, laneConfig, laneState, loadSkills, type AgentHarness as Harness, type AgentLane, type JsonlSessionMetadata, type Session, type WatchHandle, type LaneSnapshot, type Skill } from "@earendil-works/pi-agent-core/node";
 import { agentModelCatalog, agentModels } from "./agent-models.js";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
@@ -129,7 +130,7 @@ export class SessionRuntime {
             if (!metadata) throw new Error(`agent session not found: ${options.sessionId}`);
             return repo.open(metadata, context);
           })()
-        : await repo.create({ cwd: options.cwd, ...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {}) }, context);
+        : await retrySessionDirectory(() => repo.create({ cwd: options.cwd, ...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {}) }, context));
       const saved = (await session.getValue(appliedRuntimeSettings, context))?.value;
       const recovering = (await session.getValue(laneState("main"), context))?.value.currentOperationId;
       // A requested model can be gone from the catalog while the session still has a usable
@@ -162,7 +163,7 @@ export class SessionRuntime {
         model,
         thinkingLevel: clampThinkingLevel(model, options.thinking ?? "high"),
         compaction: resolveCompaction(model.contextWindow, options.settings).compaction,
-        tools: [budgets.tool, candidateReadTool(createReadTool(), { cwd: options.cwd, sessionId: session.metadata.id, budgetOperationId: options.budgetOperationId, candidateId: options.sandboxCandidateId, delegatedAgent: options.delegatedAgent }), budgets.wrap(sandboxRunTool({ cwd: options.cwd, sessionId: session.metadata.id, budgetOperationId: options.budgetOperationId, candidateId: options.sandboxCandidateId, delegatedAgent: options.delegatedAgent }, sandboxInstallation())), budgets.wrap(sandboxBashTool({ cwd: options.cwd, sessionId: session.metadata.id, budgetOperationId: options.budgetOperationId, candidateId: options.sandboxCandidateId, delegatedAgent: options.delegatedAgent }, environment)), createEditTool(), createWriteTool(),
+        tools: [budgets.tool, candidateReadTool(workspaceFileTool(createReadTool(), options.cwd, skillPaths), { cwd: options.cwd, sessionId: session.metadata.id, budgetOperationId: options.budgetOperationId, candidateId: options.sandboxCandidateId, delegatedAgent: options.delegatedAgent }), budgets.wrap(sandboxRunTool({ cwd: options.cwd, sessionId: session.metadata.id, budgetOperationId: options.budgetOperationId, candidateId: options.sandboxCandidateId, delegatedAgent: options.delegatedAgent }, sandboxInstallation())), budgets.wrap(sandboxBashTool({ cwd: options.cwd, sessionId: session.metadata.id, budgetOperationId: options.budgetOperationId, candidateId: options.sandboxCandidateId, delegatedAgent: options.delegatedAgent }, environment)), workspaceFileTool(createEditTool(), options.cwd, skillPaths), workspaceFileTool(createWriteTool(), options.cwd, skillPaths),
           todoHarnessTool(session), budgets.wrap(subagentHarnessTool(subagents)), ...notebookHarnessTools(options.cwd, session.metadata.id, { cwd: options.cwd, sessionId: session.metadata.id, budgetOperationId: options.budgetOperationId, candidateId: options.sandboxCandidateId, delegatedAgent: options.delegatedAgent }).map(budgets.wrap), questionnaireHarnessTool(interactions), ...(mcp?.tools ?? []).map(budgets.wrap)]
           .filter((tool) => !options.allowedTools || options.allowedTools.includes(tool.name))
           .map((tool) => !options.delegatedAgent ? tool : { ...tool, async execute(id, params, update, ctx, invocation, context) {

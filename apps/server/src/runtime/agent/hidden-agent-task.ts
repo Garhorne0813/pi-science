@@ -8,6 +8,7 @@ import type { AgentRuntimeManager } from "./agent-runtime-manager.js";
 import type { AgentRuntimeStartOptions } from "./worker/protocol.js";
 import type { AgentCoreRuntimeClient } from "./agent-runtime-client.js";
 import type { RuntimeEvent } from "./agent-runtime-types.js";
+import { retrySessionDirectory } from "./workspace-session-identity.js";
 import { promptOperationId } from "./agent-message.js";
 
 /** Persist child ownership before any activation/admission; reopening uses the same v4 file. */
@@ -25,7 +26,7 @@ async function openHiddenTaskAdmitted(manager: AgentRuntimeManager, key: string,
     const env = new NodeExecutionEnv({ cwd: options.cwd });
     const repo = new JsonlSessionRepo({ fileSystem: env, sessionsRoot: options.sessionsRoot });
     try {
-      const session = await repo.create({ cwd: options.cwd, parentSessionId: parent }, BACKGROUND_CONTEXT);
+      const session = await retrySessionDirectory(() => repo.create({ cwd: options.cwd, parentSessionId: parent }, BACKGROUND_CONTEXT));
       const id = session.metadata.id;
       await session.close(BACKGROUND_CONTEXT);
       // The newly committed session already owns its path. Scanning the whole

@@ -33,6 +33,10 @@ jobs:
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Test native Windows file read boundary
+        if: runner.os == 'Windows'
+        run: pnpm --filter @pi-science/server exec vitest run src/runtime/sandbox/file-read.test.ts src/runtime/agent/worker/workspace-file-tool.test.ts
+
       - name: Lint frontend
         run: pnpm --filter frontend lint
 
@@ -155,6 +159,9 @@ jobs:
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Test native macOS file read boundary
+        run: pnpm --filter @pi-science/server exec vitest run src/runtime/sandbox/file-read.test.ts src/runtime/agent/worker/workspace-file-tool.test.ts
 
       - name: Test macOS launcher lifecycle
         run: bash scripts/test-launcher.sh

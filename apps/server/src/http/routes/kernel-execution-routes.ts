@@ -124,7 +124,7 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
         ...(body.cell_id ? { cell_id: body.cell_id } : {}),
       },
       runtime: {
-        sandbox_policy_id: policy.id, execution_mode: policy.mode, sandbox: policy.mode === "required" ? SANDBOX_RUNTIME : "trusted-host",
+        ...(policy.researchId ? { research_id: policy.researchId } : {}), sandbox_policy_id: policy.id, execution_mode: policy.mode, sandbox: policy.mode === "required" ? SANDBOX_RUNTIME : "trusted-host",
         cwd,
         gateway_timeout_ms: kernelTimeoutMs,
         environment_id: environment.environment_id ?? "legacy-venv",
@@ -229,7 +229,7 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
         ...(body.notebook_path ? { notebook_path: body.notebook_path } : {}), ...(body.cell_id ? { cell_id: body.cell_id } : {}),
       },
       runtime: {
-        sandbox_policy_id: policy.id, execution_mode: policy.mode, sandbox: policy.mode === "required" ? SANDBOX_RUNTIME : "trusted-host",
+        ...(policy.researchId ? { research_id: policy.researchId } : {}), sandbox_policy_id: policy.id, execution_mode: policy.mode, sandbox: policy.mode === "required" ? SANDBOX_RUNTIME : "trusted-host",
         cwd, gateway_timeout_ms: kernelTimeoutMs, environment_id: environment.environment_id ?? "legacy-venv",
         environment_revision_id: environment.revision_id ?? "legacy-venv", environment_prefix: environment.prefix,
         ...(body.kernel_instance_id ? { kernel_instance_id: body.kernel_instance_id } : {}),

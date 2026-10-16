@@ -5,7 +5,7 @@ import { expect, it } from "vitest";
 import { BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { AgentCoreRuntimeClient } from "./agent-runtime-client.js";
 import { AgentSessionRepository } from "./agent-session-repository.js";
-import { listWorkspaceSessions, workspaceIdentity } from "./workspace-session-identity.js";
+import { listWorkspaceSessions, retrySessionDirectory, workspaceIdentity } from "./workspace-session-identity.js";
 
 it("reopens an alias-spelled transcript in a canonical worker without including another workspace", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-science-workspace-identity-"));
@@ -54,6 +54,9 @@ it("retries only vanished atomic session temporary files during parallel child c
   const race = new Error("Failed to list sessions directory: ENOENT: no such file or directory, lstat '/sessions/run.jsonl.tmp'");
   const repo = { list: async () => { if (++calls === 1) throw race; return []; } } as unknown as JsonlSessionRepo;
   expect(await listWorkspaceSessions(repo, process.cwd())).toEqual([]); expect(calls).toBe(2);
+  let creates = 0;
+  expect(await retrySessionDirectory(async () => { if (++creates === 1) throw race; return "created"; })).toBe("created");
+  expect(creates).toBe(2);
   const persistent = { list: async () => { throw race; } } as unknown as JsonlSessionRepo;
   await expect(listWorkspaceSessions(persistent, process.cwd())).rejects.toThrow(race);
   const denied = { list: async () => { throw new Error("EACCES: permissions"); } } as unknown as JsonlSessionRepo;

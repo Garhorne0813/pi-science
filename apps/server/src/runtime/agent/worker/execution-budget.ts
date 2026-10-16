@@ -6,18 +6,7 @@ import type { AgentHarnessTool, NodeExecutionEnv } from "@earendil-works/pi-agen
 import { withFileWriteLock, workspaceFile, writeJsonAtomic } from "../../../storage/persistence.js";
 
 type Tool = AgentHarnessTool<{ env: NodeExecutionEnv }>;
-interface Budget { deadline: number; maxExecutions: number; used: number }
-const MAX_SECONDS = 3600;
-const MAX_EXECUTIONS = 100;
-const budgetSchema = z.object({ deadline: z.number().finite().positive(), maxExecutions: z.number().int().min(1).max(MAX_EXECUTIONS), used: z.number().int().min(0).max(MAX_EXECUTIONS) }).strict();
-async function readBudget(path: string): Promise<Budget | null> {
-  let text: string;
-  try { text = await readFile(path, "utf8"); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
-  const parsed = budgetSchema.safeParse(JSON.parse(text));
-  if (!parsed.success) throw new Error("Invalid saved execution budget; refusing to reset its limits");
-  return parsed.data;
-}
-
+import { readBudget, MAX_SECONDS, MAX_EXECUTIONS } from "../../executions/execution-budget.js";
 /** Generic operation-scoped admission and deadlines, durable across worker recovery. */
 export function executionBudgetTools(cwd: string, inheritedOperationId?: string): { tool: Tool; wrap: (tool: Tool) => Tool } {
   const pathFor = (id: string) => workspaceFile(cwd, `execution-budgets/${createHash("sha256").update(id).digest("hex")}.json`);

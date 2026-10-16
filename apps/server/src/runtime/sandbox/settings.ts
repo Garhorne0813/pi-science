@@ -1,11 +1,12 @@
 import { constants } from "node:fs";
 import { access, readFile, realpath } from "node:fs/promises";
-import { dirname, isAbsolute, join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isWithin, type SandboxPolicy } from "./policy.js";
+import { pathsOverlap, runtimeDependencyGrants, runtimeReadPolicy, runtimeReadPolicyId, sandboxRuntimeRoot } from "./read-grants.js";
+export { srtCli } from "./read-grants.js";
 
 export const SANDBOX_RUNTIME = "@anthropic-ai/sandbox-runtime@0.0.79";
-export const srtCli = fileURLToPath(import.meta.resolve("@anthropic-ai/sandbox-runtime")).replace(/index\.js$/, "cli.js");
 export interface RuntimeInstallation { socat?: string; ripgrep?: string }
 export function runtimeInstallation(): RuntimeInstallation {
   return { socat: process.env.PI_SCIENCE_SANDBOX_SOCAT, ripgrep: process.env.PI_SCIENCE_SANDBOX_RIPGREP };
@@ -18,7 +19,7 @@ export function bashDependencies(): string[] {
 /** Exact-version Linux configuration shared by one-shot and persistent processes. */
 export async function processSettings(policy: SandboxPolicy, dependencies: string[], installation = runtimeInstallation()) {
   if (process.platform !== "linux") throw new Error("Sandbox execution is disabled on this platform");
-  const root = dirname(dirname(srtCli));
+  const root = sandboxRuntimeRoot;
   // Workloads must not rewrite the launcher/service code or its runtime and gain
   // host execution on a later call. A checkout used as the server installation
   // cannot simultaneously be its untrusted writable workspace.
@@ -28,29 +29,30 @@ export async function processSettings(policy: SandboxPolicy, dependencies: strin
   if (manifest.version !== "0.0.79") throw new Error("Sandbox runtime version has not been validated");
   if (!["x64", "arm64"].includes(process.arch)) throw new Error("Unsupported sandbox architecture");
   await access(join(root, "vendor/seccomp", process.arch, "apply-seccomp"), constants.X_OK);
-  const system = ["/usr/bin", "/usr/lib", "/usr/lib64", "/bin", "/lib", "/lib64", "/etc/ld.so.cache", "/dev/null", "/dev/urandom", "/dev/random"];
-  const reads: string[] = [];
-  for (const path of system) {
-    try { reads.push(await realpath(path)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  const readPolicy = await runtimeReadPolicy();
+  if (policy.operatorReadPolicyId && policy.operatorReadPolicyId !== runtimeReadPolicyId(readPolicy)) throw new Error("Operator read policy changed before sandbox startup");
+  if (readPolicy.file && policy.writePaths.some((write) => pathsOverlap(write, readPolicy.file!))) throw new Error("Operator read policy must be outside writable sandbox paths");
+  const dependencyReads = await runtimeDependencyGrants(readPolicy, dependencies);
+  const reads = [...readPolicy.systemReads, ...dependencyReads];
+  for (const path of [...reads, ...policy.readPaths, ...policy.writePaths]) {
+    if (readPolicy.protectedRoots.some((protectedPath) => pathsOverlap(path, protectedPath))) throw new Error("Protected paths overlap sandbox runtime read grants");
   }
-  for (const path of dependencies) {
-    if (!isAbsolute(path) || path === "/" || ["/home", "/opt", "/usr", "/usr/local"].includes(path)) throw new Error("Dependencies require explicit narrow absolute paths");
-    const canonical = await realpath(path);
-    if (["/", "/home", "/Users", "/opt", "/usr", "/usr/local"].includes(canonical)) throw new Error("Dependencies require explicit narrow absolute paths");
-    if (policy.writePaths.some((write) => isWithin(write, canonical) || isWithin(canonical, write))) throw new Error("Runtime dependencies must be outside writable sandbox paths");
-    reads.push(canonical);
+  for (const canonical of dependencyReads) {
+    if (policy.writePaths.some((write) => pathsOverlap(write, canonical))) throw new Error("Runtime dependencies must be outside writable sandbox paths");
   }
   for (const binary of [installation.socat, installation.ripgrep]) if (binary) {
     if (!isAbsolute(binary)) throw new Error("Sandbox helper paths must be absolute");
+    if (readPolicy.protectedRoots.some((protectedPath) => pathsOverlap(binary, protectedPath))) throw new Error("Protected paths overlap sandbox runtime read grants");
     const canonical = await realpath(binary);
     if (policy.writePaths.some((write) => isWithin(write, canonical))) throw new Error("Sandbox helpers must be outside writable sandbox paths");
+    await runtimeDependencyGrants(readPolicy, [canonical]);
     await access(canonical, constants.X_OK);
   }
   const literal = (path: string) => ({ path, literal: true as const });
   return {
     network: { allowedDomains: [], deniedDomains: [], allowUnixSockets: [], allowAllUnixSockets: false, allowLocalBinding: false },
-    filesystem: { denyRead: ["/", ...policy.denyPaths].map(literal), allowRead: [...new Set([...reads, join(root, "vendor/seccomp"), ...(installation.socat ? [installation.socat] : []), ...policy.readPaths])].map(literal),
-      allowWrite: policy.writePaths.map(literal), denyWrite: [...policy.denyPaths, ...dependencies, "/tmp/claude", "/private/tmp/claude"].map(literal), allowGitConfig: false },
+    filesystem: { denyRead: ["/", ...readPolicy.protectedRoots, ...policy.denyPaths].map(literal), allowRead: [...new Set([...reads, join(root, "vendor/seccomp"), ...(installation.socat ? [installation.socat] : []), ...policy.readPaths])].map(literal),
+      allowWrite: policy.writePaths.map(literal), denyWrite: [...readPolicy.protectedRoots, ...policy.denyPaths, ...dependencies, "/tmp/claude", "/private/tmp/claude"].map(literal), allowGitConfig: false },
     enableWeakerNestedSandbox: false, enableWeakerNetworkIsolation: false, allowAppleEvents: false, allowPty: false,
     ripgrep: { command: installation.ripgrep ?? "/usr/bin/rg" }, ...(installation.socat ? { socatPath: installation.socat } : {}),
   };

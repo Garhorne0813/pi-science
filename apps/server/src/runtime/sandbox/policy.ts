@@ -14,7 +14,9 @@ export interface SandboxPolicy {
   denyPaths: string[];
   network: { mode: "none" };
   environmentRevision?: string;
+  operatorReadPolicyId?: string;
   owner?: string;
+  researchId?: string;
 }
 export const isWithin = (root: string, path: string) => { const part = relative(root, path); return part === "" || part !== ".." && !part.startsWith(`..${sep}`) && !isAbsolute(part); };
 export async function canonicalDirectory(path: string): Promise<string> {
@@ -23,24 +25,22 @@ export async function canonicalDirectory(path: string): Promise<string> {
   for (let current = path; dirname(current) !== current; current = dirname(current)) if (!(await lstat(current)).isDirectory()) throw new Error("Sandbox requires real directories");
   return path;
 }
-const sensitive = (name: string) => !isArtifactSurfaceablePath(name) || /^(?:research|credentials?|secrets?|evaluators?|evaluation|final[-_]?tests?|holdout)(?:$|[._-])/i.test(name);
+export const isSensitiveWorkspaceName = (name: string) => name === "node_modules" || !isArtifactSurfaceablePath(name) || /^(?:credentials?|secrets?|final[-_]?tests?|holdout)(?:$|[._-])/i.test(name);
 
 /** Enumerate protected paths instead of assuming a broad workspace read grant hides secrets.
  * Reject aliases/hardlinks: a second name for a protected inode must not reopen it. */
 async function protectedPaths(cwd: string): Promise<string[]> {
   // Include absent control paths too. srt creates deny-write placeholders at startup;
   // those placeholders must not change a persistent kernel's policy identity.
-  const denied: string[] = [".pi-science", ".pi", ".git", ".env", ".ssh", ".aws", "research", "node_modules", ".bash_profile", ".bashrc", ".claude", ".gitconfig", ".gitmodules", ".idea", ".mcp.json", ".profile", ".ripgreprc", ".vscode", ".zprofile", ".zshrc"].map((name) => join(cwd, name)); let count = 0;
+  const denied: string[] = [".pi-science", ".pi", ".git", ".env", ".ssh", ".aws", "node_modules", ".bash_profile", ".bashrc", ".claude", ".gitconfig", ".gitmodules", ".idea", ".mcp.json", ".profile", ".ripgreprc", ".vscode", ".zprofile", ".zshrc"].map((name) => join(cwd, name)); let count = 0;
   const visit = async (directory: string): Promise<void> => {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       if (++count > 100_000) throw new Error("Workspace too large to establish sandbox policy");
       const path = join(directory, entry.name);
-      if (sensitive(entry.name)) { denied.push(path); continue; }
+      if (isSensitiveWorkspaceName(entry.name)) { denied.push(path); continue; }
       const info = await lstat(path);
       if (info.isSymbolicLink() || !info.isDirectory() && (!info.isFile() || info.nlink !== 1)) { denied.push(path); continue; }
-      if (info.isDirectory() && entry.name !== "node_modules") await visit(path);
-      // Dependencies may contain links. They are not a trusted read grant.
-      if (entry.name === "node_modules") denied.push(path);
+      if (info.isDirectory()) await visit(path);
     }
   };
   await visit(cwd);

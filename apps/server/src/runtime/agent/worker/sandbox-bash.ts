@@ -45,7 +45,7 @@ export function sandboxBashTool(identity: SandboxIdentity, hostEnvironment: Reco
       try {
         if (await executionRepository.get(identity.cwd, executionId)) throw new Error("Bash invocation already recorded; inspect its result before issuing a new invocation");
         await executionRepository.start(identity.cwd, { execution_id: executionId, kind: "tool", surface: "local", producer: "bash", correlation: { session_id: identity.sessionId, operation_id: invocation.operationId, tool_call_id: invocation.invocationId, ...(identity.candidateId ? { candidate_id: identity.candidateId } : {}) },
-          request: { command: ["/bin/bash", "-c", values.command], timeout_seconds: Math.min(timeout, 600) }, runtime: { sandbox: policy.mode === "required" ? SANDBOX_RUNTIME : "trusted-host", sandbox_policy_id: policy.id, execution_mode: policy.mode, ...(revision ? { environment_revision_id: revision } : {}) } });
+          request: { ...(candidate ? { research_id: candidate.researchId } : {}), command: ["/bin/bash", "-c", values.command], timeout_seconds: Math.min(timeout, 600) }, runtime: { sandbox: policy.mode === "required" ? SANDBOX_RUNTIME : "trusted-host", sandbox_policy_id: policy.id, execution_mode: policy.mode, ...(revision ? { environment_revision_id: revision } : {}) } });
         started = true;
         const dependencies = [...new Set([...(hostEnvironment.PI_SCIENCE_ENVIRONMENT_PREFIX ? [hostEnvironment.PI_SCIENCE_ENVIRONMENT_PREFIX] : []), ...bashDependencies()])];
         prepared = policy.mode === "required" ? await prepareSandbox(policy, ["/bin/bash", "--noprofile", "--norc"], dependencies, Math.min(timeout, 600)) : undefined;
@@ -65,13 +65,15 @@ export function sandboxBashTool(identity: SandboxIdentity, hostEnvironment: Reco
         await executionRepository.finish(identity.cwd, executionId, { status: "succeeded", producer: "bash", result: { sandbox_policy_id: policy.id, exit_code: outcome.exitCode,
           output_preview: result.content.filter((part) => part.type === "text").map((part) => part.type === "text" ? part.text : "").join("\n").slice(0, 16 * 1024),
           ...(evidence.failures.length ? { artifact_publish_errors: evidence.failures } : {}) }, files: evidence.files, artifacts: evidence.artifacts });
-        return result;
+        const references = { execution_id: executionId, artifact_refs: evidence.artifacts };
+        return candidate || evidence.artifacts.length ? { ...result, content: [...result.content, { type: "text" as const, text: JSON.stringify(references) }], details: { ...result.details, ...references } } : result;
       } catch (error) {
         const timedOut = outcome.errorCode === "timeout" || context.abortSignal?.reason instanceof Error && context.abortSignal.reason.message === "Execution time budget exhausted";
         if (started) {
           const evidence = await outputs();
           await executionRepository.finish(identity.cwd, executionId, { status: timedOut ? "timed_out" : outcome.errorCode === "aborted" || context.abortSignal?.aborted ? "cancelled" : "failed", producer: "bash", result: { error: String(error), sandbox_policy_id: policy.id, ...(outcome.exitCode !== undefined ? { exit_code: outcome.exitCode } : {}), ...(outcome.errorCode ? { execution_error_code: outcome.errorCode } : {}),
             ...(evidence.failures.length ? { artifact_publish_errors: evidence.failures } : {}) }, files: evidence.files, artifacts: evidence.artifacts });
+          throw new Error(`${error instanceof Error ? error.message : String(error)}\n${JSON.stringify({ execution_id: executionId, artifact_refs: evidence.artifacts })}`, { cause: error });
         }
         throw error;
       } finally { await env?.cleanup(context); await prepared?.cleanup(); }
