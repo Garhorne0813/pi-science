@@ -4,6 +4,7 @@ import { lstat, open, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { homedir } from "node:os";
 import { canonicalDirectory, identifyPolicy, isWithin, type SandboxPolicy } from "./policy.js";
 
 export const srtCli = fileURLToPath(import.meta.resolve("@anthropic-ai/sandbox-runtime")).replace(/index\.js$/, "cli.js");
@@ -15,7 +16,7 @@ export interface RuntimeReadPolicy { systemReads: string[]; dependencyRoots?: st
 export const runtimeReadPolicyId = (policy: RuntimeReadPolicy) => createHash("sha256").update(JSON.stringify(policy)).digest("hex");
 
 export async function canonicalRuntimeDependency(path: string): Promise<string> {
-  const broad = ["/", "/home", "/Users", "/opt", "/usr", "/usr/local"];
+  const broad = [homedir(), "/", "/home", "/Users", "/opt", "/usr", "/usr/local", "/tmp", "/private/tmp", "/var", "/private"];
   if (!isAbsolute(path) || broad.includes(path)) throw new Error("Dependencies require explicit narrow absolute paths");
   const canonical = await realpath(path);
   if (broad.includes(canonical)) throw new Error("Dependencies require explicit narrow absolute paths");
@@ -25,7 +26,8 @@ export async function canonicalRuntimeDependency(path: string): Promise<string> 
 /** Optional operator-owned dependency/protected-root policy shared by ordinary runtimes. */
 export async function runtimeReadPolicy(): Promise<RuntimeReadPolicy> {
   const systemReads: string[] = [];
-  for (const path of [...systemPaths, join(sandboxRuntimeRoot, "vendor/seccomp")]) {
+  const platformPaths = process.platform === "darwin" ? ["/System/Library", "/usr/lib", "/usr/share/locale", "/private/etc/ssl", "/private/var/select", "/Library/Apple/System/Library"] : [];
+  for (const path of [...systemPaths, ...platformPaths, join(sandboxRuntimeRoot, "vendor/seccomp")]) {
     try { systemReads.push(await realpath(path)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
   const file = process.env.PI_SCIENCE_SANDBOX_READ_POLICY;

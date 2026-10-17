@@ -22,8 +22,8 @@ describe.skipIf(process.platform !== "linux")("shared operator runtime read gran
   it("derives settings from the same canonical grants and denies the shared protected roots", async () => {
     const policy = await runtimeReadPolicy(); const configured = await settings([dependency]);
     expect(configured.filesystem.allowRead.map((entry) => entry.path)).toEqual(expect.arrayContaining([...policy.systemReads, dependency]));
-    expect(configured.filesystem.denyRead.map((entry) => entry.path)).toEqual(expect.arrayContaining([protectedRoot, file]));
-    expect(configured.filesystem.denyWrite.map((entry) => entry.path)).toEqual(expect.arrayContaining([protectedRoot, file]));
+    expect(configured.filesystem.denyRead.map((entry) => typeof entry === "string" ? entry : entry.path)).toEqual(expect.arrayContaining([protectedRoot, file]));
+    expect(configured.filesystem.denyWrite.map((entry) => typeof entry === "string" ? entry : entry.path)).toEqual(expect.arrayContaining([protectedRoot, file]));
   });
   it("refuses undeclared per-workspace dependencies until the operator policy is updated", async () => {
     const extra = join(directory, "other-environment"); await mkdir(extra);

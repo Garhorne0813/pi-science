@@ -7,6 +7,9 @@ on:
       - 'apps/server/src/runtime/kernel/**'
       - 'apps/server/src/runtime/executions/**'
       - 'apps/server/src/runtime/artifacts/**'
+      - 'apps/server/src/runtime/jobs/**'
+      - 'apps/server/src/runtime/workspace/**'
+      - 'apps/server/src/mcp/**'
       - 'apps/server/package.json'
       - 'pnpm-lock.yaml'
       - '.github/workflows/sandbox-acceptance.yml'
@@ -15,7 +18,7 @@ permissions:
   contents: read
 jobs:
   sandbox:
-    name: ${{ matrix.os == 'macos-latest' && 'macOS fail-closed fallback' || 'Linux real srt acceptance' }}
+    name: ${{ matrix.os == 'macos-latest' && 'macOS Seatbelt acceptance' || 'Linux Bubblewrap acceptance' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -45,7 +48,7 @@ jobs:
           fi
           python -m pip install numpy==2.3.5
           pnpm install --frozen-lockfile
-      - name: Validate Linux real srt or the blocked macOS fallback
+      - name: Validate real platform isolation and role policies
         shell: bash
         run: |
           export PI_SCIENCE_SANDBOX_TEST=1
@@ -53,7 +56,7 @@ jobs:
           export PI_SCIENCE_SANDBOX_PYTHON_ROOT="$(python -c 'import os,sys; print(os.path.realpath(sys.base_prefix))')"
           export PI_SCIENCE_SANDBOX_SOCAT="$(command -v socat)"
           export PI_SCIENCE_SANDBOX_RIPGREP="$(command -v rg)"
-          pnpm --filter @pi-science/server exec vitest run src/runtime/agent/worker/sandbox-tool.test.ts src/runtime/agent/agent-core-tools.test.ts src/runtime/sandbox/universal-sandbox.test.ts --reporter=default --reporter=junit --outputFile.junit=sandbox-acceptance.xml
+          pnpm --filter @pi-science/server exec vitest run src/runtime/agent/worker/sandbox-tool.test.ts src/runtime/agent/agent-core-tools.test.ts src/runtime/sandbox/universal-sandbox.test.ts src/runtime/sandbox/platform-acceptance.test.ts src/runtime/sandbox/profiles.test.ts src/runtime/sandbox/network.test.ts --reporter=default --reporter=junit --outputFile.junit=sandbox-acceptance.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:

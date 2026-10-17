@@ -2,7 +2,8 @@ import { readSandboxFile, sandboxArtifactCapture } from "../../sandbox/artifacts
 import { canonicalDirectory, identifyPolicy } from "../../sandbox/policy.js";
 import { processSettings, srtCli } from "../../sandbox/settings.js";
 import { killSandboxGroup, launcherPath } from "../../sandbox/process.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { prepareMacosSupervisor, requireSandboxPlatform } from "../../sandbox/platform.js";
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
@@ -29,7 +30,7 @@ export interface SandboxProcessResult { status: "succeeded" | "failed" | "cancel
 
 /** Only server operator configuration, never workspace settings, task text or child environment. */
 export function sandboxInstallation(): SandboxInstallation | undefined {
-  if (process.env.PI_SCIENCE_SANDBOX_ENABLED !== "1" || process.platform !== "linux") return undefined;
+  if (process.env.PI_SCIENCE_SANDBOX_ENABLED !== "1" || !["linux", "darwin"].includes(process.platform)) return undefined;
   if (!process.env.PI_SCIENCE_SANDBOX_PYTHON || !process.env.PI_SCIENCE_SANDBOX_PYTHON_ROOT) throw new Error("Sandbox requires a trusted preinstalled Python and Python root");
   return { python: process.env.PI_SCIENCE_SANDBOX_PYTHON, pythonRoot: process.env.PI_SCIENCE_SANDBOX_PYTHON_ROOT,
     ...(process.env.PI_SCIENCE_SANDBOX_RIPGREP ? { ripgrep: process.env.PI_SCIENCE_SANDBOX_RIPGREP } : {}),
@@ -86,7 +87,7 @@ export function candidateReadTool(original: Tool, identity: SandboxIdentity): To
       const info = await lstat(path);
       if (!info.isFile() || info.nlink !== 1 || info.size > MAX_ARTIFACT_BYTES) throw new Error("Candidate read requires a bounded regular file");
       const policy = identifyPolicy({ mode: "required", scope: "candidate", cwd: candidate.work, readPaths: [candidate.input, candidate.work], writePaths: [candidate.work], denyPaths: [], network: { mode: "none" } });
-      if (process.platform !== "linux") return original.execute(id, { ...values, path }, update, ctx, invocation, context);
+      if (!["linux", "darwin"].includes(process.platform)) return original.execute(id, { ...values, path }, update, ctx, invocation, context);
       const bytes = await readSandboxFile(policy, path);
       const env = new Proxy(ctx.env, { get(target, property) {
         if (property === "readBinaryFile") return async (requested: string) => { if (resolve(identity.cwd, requested) !== path) throw new Error("Read is outside the assigned candidate"); return ok(bytes); };
@@ -98,7 +99,7 @@ export function candidateReadTool(original: Tool, identity: SandboxIdentity): To
 }
 
 export async function sandboxSettings(installation: SandboxInstallation, cwd: string, input: string, work: string) {
-  if (process.platform !== "linux") throw new Error("Sandbox execution is disabled on this platform: macOS descendant cleanup has not passed acceptance; use code-generation mode");
+  requireSandboxPlatform();
   if (!isAbsolute(installation.python) || !isAbsolute(installation.pythonRoot)) throw new Error("Trusted Python paths must be absolute");
   const python = await realpath(installation.python); const pythonRoot = await realpath(installation.pythonRoot);
   if (!inside(pythonRoot, python) || pythonRoot === "/" || ["/usr", "/opt", "/home", "/Users", "/usr/local"].includes(pythonRoot) || inside(cwd, pythonRoot) || inside(pythonRoot, cwd)) throw new Error("Python root must be a dedicated trusted environment outside the workspace");
@@ -109,11 +110,18 @@ export async function sandboxSettings(installation: SandboxInstallation, cwd: st
 
 /** Fixed argv, no shell input. The srt CLI quotes argv before its internal OS wrapper. */
 export async function runSandboxProcess(settings: string, python: string, work: string, timeoutSeconds: number, signal?: AbortSignal): Promise<SandboxProcessResult> {
-  if (process.platform !== "linux") throw new Error("Sandbox execution is disabled on this platform");
+  requireSandboxPlatform();
   signal?.throwIfAborted();
   const manifest = join(dirname(settings), "launch.json");
   const runtime = join(work, ".runtime");
-  await writeFile(manifest, JSON.stringify({ cli: srtCli, settings, argv: [python, "-I", "-B", join(work, "main.py")], timeoutSeconds,
+  const supervisor = await prepareMacosSupervisor(dirname(settings));
+  const lifecycleTag = `pi-science.lifecycle.${randomUUID()}`, deniedLifecycleTag = `pi-science.lifecycle.${randomUUID()}`;
+  if (supervisor) {
+    const configured = JSON.parse(await readFile(settings, "utf8"));
+    configured.network.allowMachLookup = [lifecycleTag];
+    await writeFile(settings, JSON.stringify(configured), { mode: 0o600 });
+  }
+  await writeFile(manifest, JSON.stringify({ cli: srtCli, settings, argv: [python, "-I", "-B", join(work, "main.py")], timeoutSeconds, supervisor, lifecycleTag, deniedLifecycleTag,
     env: { PATH: "/usr/bin:/bin", HOME: runtime, TMPDIR: runtime, TMP: runtime, TEMP: runtime, XDG_CACHE_HOME: runtime, LANG: "C.UTF-8", OPENBLAS_NUM_THREADS: "1", OMP_NUM_THREADS: "1" } }), { mode: 0o600 });
   return new Promise((resolveRun, reject) => {
     const child = spawn(process.execPath, [launcherPath, manifest], {

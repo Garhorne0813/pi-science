@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { builtinMcpConnectors } from "./builtin-connectors.js";
 import { mcpBaseEnvironment } from "./bindings.js";
 import { McpRepository } from "../storage/sqlite/repositories/mcp-repository.js";
@@ -16,6 +16,7 @@ import { InteractionBridge } from "../runtime/agent/worker/interaction-bridge.js
 import { toolEnvironment } from "../runtime/agent/agent-runtime-environment.js";
 
 afterEach(() => vi.unstubAllEnvs());
+beforeEach(() => vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "trusted-host"));
 
 const webAccess = () => builtinMcpConnectors().find((item) => item.connector_id === "mcp_builtin_web_access")!;
 const resultText = (result: CallToolResult) => result.content.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");

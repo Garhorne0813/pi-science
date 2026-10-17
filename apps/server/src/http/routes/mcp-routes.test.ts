@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Fastify from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { McpConnectorService } from "../../mcp/connector-service.js";
 import { McpRuntimeProjection } from "../../mcp/runtime-projection.js";
 import { McpRepository } from "../../storage/sqlite/repositories/mcp-repository.js";
@@ -13,6 +13,8 @@ import { registerMcpRoutes } from "./mcp-routes.js";
 const stores: InMemorySqliteStateStore[] = [];
 const directories: string[] = [];
 const originalHome = process.env.PI_SCIENCE_HOME;
+beforeEach(() => vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "trusted-host"));
+afterEach(() => vi.unstubAllEnvs());
 afterEach(async () => { await Promise.allSettled(stores.splice(0).map((store) => store.close())); await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); if (originalHome === undefined) delete process.env.PI_SCIENCE_HOME; else process.env.PI_SCIENCE_HOME = originalHome; });
 
 async function fixture() {

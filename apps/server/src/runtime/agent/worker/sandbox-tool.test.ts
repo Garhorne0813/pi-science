@@ -118,7 +118,7 @@ it.skipIf(process.platform !== "linux")("uses a root read deny and never accepts
   await expect(sandboxSettings({ python: join(cwd, "python/python"), pythonRoot: join(cwd, "python") }, cwd, "/input", "/work")).rejects.toThrow("dedicated");
 });
 
-it.skipIf(process.platform === "linux")("keeps macOS and Windows in code-generation mode even when an operator enables execution", async () => {
+it.skipIf(["linux", "darwin"].includes(process.platform))("keeps unsupported platforms in code-generation mode even when an operator enables execution", async () => {
   vi.stubEnv("PI_SCIENCE_SANDBOX_ENABLED", "1"); vi.stubEnv("PI_SCIENCE_SANDBOX_PYTHON", "/trusted/python"); vi.stubEnv("PI_SCIENCE_SANDBOX_PYTHON_ROOT", "/trusted");
   expect(sandboxInstallation()).toBeUndefined();
   const { identity, cwd } = await fixture();

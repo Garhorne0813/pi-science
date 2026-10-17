@@ -11,6 +11,7 @@ import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/s
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import type { McpToolSummary } from "@pi-science/contracts";
 import type { StoredMcpConnector } from "../storage/sqlite/repositories/mcp-repository.js";
+import { localMcpTransport } from "./sandbox-transport.js";
 
 export async function connectAndListMcpTools(connector: StoredMcpConnector, workspace: string): Promise<McpToolSummary[]> {
   const invalid = bindingError(connector.runtime_config, connector.credential_ref);
@@ -22,11 +23,8 @@ export async function connectAndListMcpTools(connector: StoredMcpConnector, work
   if (connector.transport === "socket") {
     transport = new UnixSocketClientTransport(connector.socket_path!);
   } else if (connector.transport === "stdio") {
-    transport = new StdioClientTransport({
-      command: connector.command!, args: connector.args,
-      cwd: resolve(workspace, connector.runtime_config.cwd ?? "."),
-      env: { ...mcpBaseEnvironment(), ...bindings(connector.runtime_config.environment), ...(connector.source === "builtin" ? builtinNetworkEnvironment() : {}) }, stderr: "pipe",
-    });
+    transport = await localMcpTransport(workspace, connector.command!, connector.args, resolve(workspace, connector.runtime_config.cwd ?? "."),
+      { ...mcpBaseEnvironment(), ...bindings(connector.runtime_config.environment), ...(connector.source === "builtin" ? builtinNetworkEnvironment() : {}) }, connector.source === "builtin" ? connector.name : undefined);
   } else if (connector.transport === "sse") {
     transport = new SSEClientTransport(new URL(connector.endpoint_url!), { requestInit: { headers }, fetch: guardedFetch });
   } else {

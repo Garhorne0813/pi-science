@@ -7,6 +7,7 @@ import { ok, type AgentHarnessTool, type NodeExecutionEnv } from "@earendil-work
 import { canonicalDirectory, isSensitiveWorkspaceName, isWithin } from "../../sandbox/policy.js";
 import { runtimeReadPolicy, pathsOverlap } from "../../sandbox/read-grants.js";
 import { readRegularFile } from "../../sandbox/file-read.js";
+import { writeSandboxFile } from "../../sandbox/file-write.js";
 
 type Tool = AgentHarnessTool<{ env: NodeExecutionEnv }>;
 /** Tools may manage research protocol/candidate files, but never service-private
@@ -34,6 +35,11 @@ export function workspaceFileTool(original: Tool, cwd: string, skillRoots: strin
       if (property === "writeFile") return async (requested: string, bytes: string | Uint8Array) => {
         const path = check(requested, true);
         await canonicalDirectory(cwd);
+        if (process.platform === "darwin") {
+          try { const info = await lstat(path); if (!info.isFile() || info.nlink !== 1) throw new Error("Writes require a single-link regular workspace file"); }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+          await writeSandboxFile(cwd, path, bytes, context.abortSignal); return ok(undefined);
+        }
         const parts = relative(cwd, path).split(/[\\/]/); const handles: FileHandle[] = [];
         let temporary: string | undefined;
         try {

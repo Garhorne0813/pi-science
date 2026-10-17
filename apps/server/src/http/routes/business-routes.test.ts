@@ -22,6 +22,7 @@ afterEach(async () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
     await Promise.all(tempDirs.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
   } finally {
+    vi.unstubAllEnvs();
     // A cleanup failure must not leak the selected runtime into the next case.
     delete process.env.PI_SCIENCE_HOME;
     delete process.env.PI_SCIENCE_WORKSPACES;
@@ -183,6 +184,9 @@ describe("native control-plane business routes", () => {
   });
 
   it("provisions an isolated Python environment inside the workspace", async () => {
+    // This compatibility fixture creates a mutable workspace venv. Required
+    // execution intentionally accepts only external immutable environments.
+    vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "trusted-host");
     const cwd = await workspace();
     const app = buildApp(config());
     apps.push(app);

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { lstat, readdir, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isArtifactSurfaceablePath } from "../artifacts/artifact-surface-policy.js";
+import { applySandboxProfile, type SandboxProfile } from "./profiles.js";
 
 /** Internal server policy. Never deserialize this type from tool/HTTP parameters. */
 export interface SandboxPolicy {
@@ -12,7 +13,9 @@ export interface SandboxPolicy {
   readPaths: string[];
   writePaths: string[];
   denyPaths: string[];
-  network: { mode: "none" };
+  network: { mode: "none" } | { mode: "allowlist"; allowedDomains: string[]; deniedDomains: string[] };
+  profile?: SandboxProfile;
+  profilePolicyId?: string;
   environmentRevision?: string;
   operatorReadPolicyId?: string;
   owner?: string;
@@ -29,7 +32,7 @@ export const isSensitiveWorkspaceName = (name: string) => name === "node_modules
 
 /** Enumerate protected paths instead of assuming a broad workspace read grant hides secrets.
  * Reject aliases/hardlinks: a second name for a protected inode must not reopen it. */
-async function protectedPaths(cwd: string): Promise<string[]> {
+export async function protectedPaths(cwd: string): Promise<string[]> {
   // Include absent control paths too. srt creates deny-write placeholders at startup;
   // those placeholders must not change a persistent kernel's policy identity.
   const denied: string[] = [".pi-science", ".pi", ".git", ".env", ".ssh", ".aws", "node_modules", ".bash_profile", ".bashrc", ".claude", ".gitconfig", ".gitmodules", ".idea", ".mcp.json", ".profile", ".ripgreprc", ".vscode", ".zprofile", ".zshrc"].map((name) => join(cwd, name)); let count = 0;
@@ -46,12 +49,13 @@ async function protectedPaths(cwd: string): Promise<string[]> {
   await visit(cwd);
   return [...new Set(denied)].sort();
 }
-export async function workspacePolicy(cwd: string, environmentRevision?: string): Promise<SandboxPolicy> {
+export async function workspacePolicy(cwd: string, environmentRevision?: string, profile: SandboxProfile = "analysis"): Promise<SandboxPolicy> {
   const mode = operatorExecutionMode();
   // Native compatibility accepts OS-normalized paths. Required execution still
   // rejects every linked component, including junctions and directory aliases.
   cwd = mode === "required" ? await canonicalDirectory(cwd) : await realpath(resolve(cwd));
-  return identifyPolicy({ mode, scope: "workspace", cwd, readPaths: [cwd], writePaths: [cwd], denyPaths: mode === "required" ? await protectedPaths(cwd) : [], network: { mode: "none" }, ...(environmentRevision ? { environmentRevision } : {}) });
+  const policy = identifyPolicy({ mode, scope: "workspace", cwd, readPaths: [cwd], writePaths: [cwd], denyPaths: mode === "required" ? await protectedPaths(cwd) : [], network: { mode: "none" }, ...(environmentRevision ? { environmentRevision } : {}) });
+  return mode === "required" ? applySandboxProfile(policy, profile) : policy;
 }
 export function identifyPolicy(policy: Omit<SandboxPolicy, "id">): SandboxPolicy {
   const { id: _oldId, ...content } = policy as SandboxPolicy;

@@ -5,10 +5,11 @@ import { relative, resolve, sep } from "node:path";
 import { persistArtifactBytes } from "../artifacts/artifact-content-store.js";
 import { snapshotWorkspace } from "../artifacts/workspace-artifact-snapshot.js";
 import { canonicalDirectory, isWithin, type SandboxPolicy } from "./policy.js";
+import { readRegularFile } from "./file-read.js";
 
 /** Candidate snapshots start at work, never at the research/evaluator root. */
 export async function snapshotSandboxOutputs(cwd: string, policy: SandboxPolicy) {
-  const snapshots = await Promise.all(policy.writePaths.map(async (root) => {
+  const snapshots = await Promise.all(policy.writePaths.filter((root) => isWithin(cwd, root)).map(async (root) => {
     const entries = await snapshotWorkspace(root);
     return entries?.filter((entry) => !policy.denyPaths.some((deny) => isWithin(deny, resolve(root, entry.path))))
       .map((entry) => ({ ...entry, path: relative(cwd, resolve(root, entry.path)).replaceAll("\\", "/") })) ?? null;
@@ -22,6 +23,7 @@ export async function readSandboxFile(policy: SandboxPolicy, target: string, max
   const root = (writeOnly ? policy.writePaths : policy.readPaths).find((path) => isWithin(path, target));
   if (!root || policy.denyPaths.some((deny) => isWithin(deny, target))) throw new Error("File is outside authorized sandbox paths");
   await canonicalDirectory(root);
+  if (process.platform === "darwin") return readRegularFile(target, maxBytes);
   let directory = await open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   try {
     const components = relative(root, target).split(sep);

@@ -10,6 +10,8 @@ import { createMcpFetch } from "../../../mcp/runtime-fetch.js";
 import { UnixSocketClientTransport } from "../../../mcp/connector-probe.js";
 import type { InteractionBridge } from "./interaction-bridge.js";
 import { toolEnvironment } from "../agent-runtime-environment.js";
+import { localMcpTransport } from "../../../mcp/sandbox-transport.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 type ServerDefinition = {
   command?: string;
@@ -90,12 +92,12 @@ export class AgentMcpTools {
       throw new Error("OAuth MCP connector requires an authorized credential binding");
     }
     if (!server.__piScienceConnectorId) throw new Error("managed MCP connector id is missing");
-    let transport: StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport | UnixSocketClientTransport;
+    let transport: Transport;
     if (server.transport === "socket" && server.socket) {
       transport = new UnixSocketClientTransport(server.socket);
     } else if ((server.transport === "stdio" || !server.transport) && server.command) {
-      transport = new StdioClientTransport({ command: server.command, args: server.args ?? [], cwd: server.cwd ?? cwd,
-        env: { ...toolEnvironment(environment), ...server.env, ...(server.__piScienceBuiltin ? builtinNetworkEnvironment() : {}) }, stderr: "pipe" });
+      transport = await localMcpTransport(cwd, server.command, server.args ?? [], server.cwd ?? cwd,
+        { ...toolEnvironment(environment), ...server.env, ...(server.__piScienceBuiltin ? builtinNetworkEnvironment() : {}) }, server.__piScienceBuiltin ? name : undefined);
     } else if ((server.transport === "sse" || server.transport === "streamable_http" || !server.transport) && server.url) {
       const connectorId = server.__piScienceConnectorId;
       const checkedFetch = createMcpFetch({ connectorId, projectId: server.__piScienceProjectId,

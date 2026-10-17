@@ -19,7 +19,9 @@ async function withRegularFile<T>(path: string, maximum: number, consume: (handl
     } else await canonicalDirectory(dirname(path));
     const entry = process.platform === "linux" ? undefined : await lstat(path, { bigint: true });
     if (entry && (!entry.isFile() || entry.nlink !== 1n || entry.size > BigInt(maximum))) throw new Error("Read requires a bounded single-link regular file");
-    const handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (process.platform === "win32" ? 0 : constants.O_NONBLOCK)); handles.push(handle);
+    // Darwin's O_NOFOLLOW_ANY refuses symlinks in every component at open,
+    // closing the parent-swap race left by a preceding realpath check.
+    const handle = await open(target, constants.O_RDONLY | (process.platform === "darwin" ? 0x20000000 : constants.O_NOFOLLOW ?? 0) | (process.platform === "win32" ? 0 : constants.O_NONBLOCK)); handles.push(handle);
     const before = await handle.stat({ bigint: true });
     if (entry && (entry.dev !== before.dev || entry.ino !== before.ino)) throw new Error("File changed before capture");
     if (!before.isFile() || before.nlink !== 1n || before.size > BigInt(maximum)) throw new Error("Read requires a bounded single-link regular file");

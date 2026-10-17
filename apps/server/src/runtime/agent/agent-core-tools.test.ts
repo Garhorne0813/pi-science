@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv, type AgentHarnessToolInvocation } from "@earendil-works/pi-agent-core/node";
 import { todoHarnessTool } from "./worker/todo-tool.js";
 import { AgentSessionRepository } from "./agent-session-repository.js";
@@ -16,6 +16,7 @@ import { ConversationEventHub } from "../events/conversation-event-hub.js";
 import { readFile } from "node:fs/promises";
 
 const cleanup: Array<() => Promise<unknown>> = [];
+beforeEach(() => vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "trusted-host"));
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
   vi.unstubAllEnvs();

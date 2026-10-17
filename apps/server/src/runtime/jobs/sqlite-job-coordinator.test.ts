@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { JobRepository } from "../../storage/sqlite/repositories/job-repository.js";
 import { WorkspaceRepository } from "../../storage/sqlite/repositories/workspace-repository.js";
 import { InMemorySqliteStateStore } from "../../storage/sqlite/state-store.js";
@@ -10,11 +10,13 @@ import { JobCoordinator } from "./job-coordinator.js";
 const coordinators: JobCoordinator[] = [];
 const stores: InMemorySqliteStateStore[] = [];
 const directories: string[] = [];
+beforeEach(() => vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "trusted-host"));
 
 afterEach(async () => {
   await Promise.allSettled(coordinators.splice(0).map((coordinator) => coordinator.shutdown()));
   await Promise.allSettled(stores.splice(0).map((store) => store.close()));
   await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  vi.unstubAllEnvs();
 });
 
 describe("SQLite-backed job coordination", () => {

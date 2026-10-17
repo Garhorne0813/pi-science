@@ -303,11 +303,11 @@ function paperSearchRuntime(): { command: string; args: string[] } {
   const here = dirname(fileURLToPath(import.meta.url));
   const compiled = resolve(here, "builtin", "paper-search-server.js");
   if (existsSync(compiled)) return { command: process.execPath, args: [compiled] };
-  // Source-mode servers run through tsx; use its CLI so the spawned MCP child
-  // can execute the TypeScript entrypoint without depending on a user Python.
+  // Use the fixed Node executable and loader rather than a package-manager
+  // shell shim, which needs broad PATH and symlink traversal permissions.
   const source = resolve(here, "builtin", "paper-search-server.ts");
-  const tsx = process.env.PI_TSX_PATH ?? resolve(here, "../../node_modules/.bin/tsx");
-  return existsSync(source) ? { command: tsx, args: [source] } : { command: process.execPath, args: [compiled] };
+  if (existsSync(source)) return process.env.PI_TSX_PATH ? { command: process.env.PI_TSX_PATH, args: [source] } : { command: process.execPath, args: ["--import", import.meta.resolve("tsx"), source] };
+  return { command: process.execPath, args: [compiled] };
 }
 
 function scientificDataRuntime(): { command: string; args: string[] } {
@@ -315,6 +315,6 @@ function scientificDataRuntime(): { command: string; args: string[] } {
   const compiled = resolve(here, "builtin", "scientific-data-server.js");
   if (existsSync(compiled)) return { command: process.execPath, args: [compiled] };
   const source = resolve(here, "builtin", "scientific-data-server.ts");
-  const tsx = process.env.PI_TSX_PATH ?? resolve(here, "../../node_modules/.bin/tsx");
-  return existsSync(source) ? { command: tsx, args: [source] } : { command: process.execPath, args: [compiled] };
+  if (existsSync(source)) return process.env.PI_TSX_PATH ? { command: process.env.PI_TSX_PATH, args: [source] } : { command: process.execPath, args: ["--import", import.meta.resolve("tsx"), source] };
+  return { command: process.execPath, args: [compiled] };
 }

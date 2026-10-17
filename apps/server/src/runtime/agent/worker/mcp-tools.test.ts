@@ -3,13 +3,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { AgentMcpTools } from "./mcp-tools.js";
 import { InteractionBridge } from "./interaction-bridge.js";
 import { CredentialStore } from "../../../model-resources/credential-store.js";
+
+// These protocol/authorization fixtures deliberately run on the host. Real
+// isolated MCP startup is covered by platform-acceptance.test.ts.
+beforeEach(() => vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "trusted-host"));
+afterEach(() => vi.unstubAllEnvs());
 
 describe("agent-core managed MCP tools", () => {
   it("scopes discovery and credential materialization to permitted connectors and exposes only permitted tools", async () => {

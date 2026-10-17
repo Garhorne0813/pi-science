@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { delimiter, join, resolve, sep } from "node:path";
 import { configPath, metadataRoot, readJson, withFileWriteLock, withWorkspaceWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
 import type { EnvironmentRepository } from "../../storage/sqlite/repositories/environment-repository.js";
+import { runEnvironmentProcess } from "../sandbox/environment-process.js";
 
 export type EnvironmentLanguage = "python" | "r";
 export type EnvironmentStatus = "creating" | "ready" | "failed" | "archived";
@@ -617,7 +618,9 @@ export class WorkspaceEnvironmentService {
       // Conda prefixes are not safely relocatable: create at the final path and
       // use registry status as the publication boundary. Failed prefixes are
       // removed before the revision is marked failed.
-      await this.run(micromamba, ["create", "--yes", "--prefix", finalPrefix, "--channel", "conda-forge", "--strict-channel-priority", ...input.packages], 20 * 60_000, this.micromambaEnvironment());
+      const cache = configPath(join("micromamba", "pkgs"));
+      await runEnvironmentProcess(micromamba, ["create", "--yes", "--prefix", finalPrefix, "--channel", "conda-forge", "--strict-channel-priority", ...input.packages], finalPrefix, cache, 20 * 60_000,
+        { MAMBA_ROOT_PREFIX: configPath("micromamba"), CONDA_PKGS_DIRS: cache, MAMBA_NO_RC: "true" });
       await this.runHealthCheck(finalPrefix, input.language);
       revision = { ...revision, status: "ready", integrity_snapshot: await integritySnapshot(finalPrefix) };
       await this.upsert(revision);
@@ -634,11 +637,11 @@ export class WorkspaceEnvironmentService {
     if (language === "r") {
       const rscript = join(environmentPaths(prefix).bin, process.platform === "win32" ? "Rscript.exe" : "Rscript");
       if (!await executable(rscript)) throw new Error("Environment health check failed: Rscript is missing");
-      await this.run(rscript, ["-e", "cat(R.version.string)"], 30_000, this.micromambaEnvironment());
+      await runEnvironmentProcess(rscript, ["-e", "cat(R.version.string)"], prefix, undefined, 30_000);
     } else {
       const python = environmentPaths(prefix).python;
       if (!await executable(python)) throw new Error("Environment health check failed: Python executable is missing");
-      await this.run(python, ["-c", "import sys; print(sys.version_info[:2])"], 30_000, this.micromambaEnvironment());
+      await runEnvironmentProcess(python, ["-I", "-B", "-c", "import sys; print(sys.version_info[:2])"], prefix, undefined, 30_000);
     }
   }
 

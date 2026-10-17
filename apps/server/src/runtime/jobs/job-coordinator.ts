@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readdir } from "node:fs/promises";
+import { readdir, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { metadataRoot, readJson, withFileWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
 import type { JobRepository } from "../../storage/sqlite/repositories/job-repository.js";
@@ -11,6 +11,9 @@ import { restrictLocalJobEnvironment, restrictResearchEnvironment } from "./job-
 import { JobLeaseManager } from "./job-lease-manager.js";
 import { ProcessSupervisor, type SpawnedJobProcess } from "./job-process-supervisor.js";
 import { isNonterminal, isTerminal, transitionJobStatus, type JobChildIdentity, type JobOwnerProcessIdentity, type JobOwnership, type JobProcessIdentity, type JobRecord, type JobRequirement, type JobStatus, publicJobRecord } from "./job-types.js";
+import { canonicalDirectory, identifyPolicy, isWithin, operatorExecutionMode, workspacePolicy } from "../sandbox/policy.js";
+import { prepareSandbox, launcherPath, type PreparedSandbox } from "../sandbox/process.js";
+import { bashDependencies, SANDBOX_RUNTIME } from "../sandbox/settings.js";
 
 export type { JobChildIdentity, JobOwnerProcessIdentity, JobOwnership, JobProcessIdentity, JobRecord, JobRequirement, JobStatus, PublicJobRecord } from "./job-types.js";
 export { publicJobRecord, isNonterminal, isTerminal, transitionJobStatus } from "./job-types.js";
@@ -66,14 +69,18 @@ export class JobCoordinator {
     const surface = typeof body.surface === "string" ? body.surface : "local";
     const platform = this.hooks.platform ?? process.platform;
     const environment = { ...(surface.startsWith("research") ? restrictResearchEnvironment(baseEnvironment, platform) : restrictLocalJobEnvironment(baseEnvironment, platform)), ...requestedEnvironment };
-    const executionCwd = typeof body.execution_cwd === "string" ? resolve(body.execution_cwd) : resolve(cwd);
+    let executionCwd = typeof body.execution_cwd === "string" ? resolve(body.execution_cwd) : resolve(cwd);
     const executionRelative = relative(resolve(cwd), executionCwd);
     if (isAbsolute(executionRelative) || executionRelative === ".." || executionRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) throw new Error("execution cwd escapes the workspace");
     const now = this.now();
     const ownership = this.leases.createOwnership(now);
     const jobId = `job_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
     const executionId = executionIdFor("job", resolve(cwd), jobId);
-    const record: JobRecord = { job_id: jobId, execution_id: executionId, command, cwd, ...(executionCwd !== resolve(cwd) ? { execution_cwd: executionCwd } : {}), surface, status: "pending", created_at: new Date(now).toISOString(), stdout: "", stderr: "", artifact_ids: [], environment: { platform: process.platform, node: process.version, prefix: environment.PI_SCIENCE_ENVIRONMENT_PREFIX, npm_prefix: environment.npm_config_prefix }, requirement, ownership };
+    const admittedRoot = operatorExecutionMode() === "required" ? await realpath(cwd) : undefined;
+    if (admittedRoot) { executionCwd = await realpath(executionCwd); if (!isWithin(admittedRoot, executionCwd)) throw new Error("Job execution cwd escapes the workspace"); }
+    const admission = admittedRoot ? identifyPolicy({ ...await workspacePolicy(admittedRoot, baseEnvironment.PI_SCIENCE_ENVIRONMENT_REVISION_ID), cwd: executionCwd }) : undefined;
+    const record: JobRecord = { job_id: jobId, execution_id: executionId, command, cwd, ...(executionCwd !== resolve(cwd) ? { execution_cwd: executionCwd } : {}), surface, status: "pending", created_at: new Date(now).toISOString(), stdout: "", stderr: "", artifact_ids: [], environment: { platform: process.platform, node: process.version, prefix: baseEnvironment.PI_SCIENCE_ENVIRONMENT_PREFIX, revision: baseEnvironment.PI_SCIENCE_ENVIRONMENT_REVISION_ID, npm_prefix: environment.npm_config_prefix,
+      ...(admission ? { sandbox: SANDBOX_RUNTIME, sandbox_policy_id: admission.id, execution_mode: "required" } : { execution_mode: "trusted-host" }) }, requirement, ownership };
     await this.executions.start(cwd, {
       execution_id: executionId,
       kind: "job",
@@ -245,16 +252,31 @@ export class JobCoordinator {
     this.leases.startHeartbeat(record, (current) => this.readCurrent(current), (current, ownership, now) => this.persistHeartbeat(current, ownership, now));
     let child: ChildProcess | undefined;
     let spawnedProcess: SpawnedJobProcess | undefined;
+    let sandbox: PreparedSandbox | undefined;
     try {
       await this.hooks.beforeSpawn?.(record);
       if (this.cancelled.has(record.job_id)) { Object.assign(record, transitionJobStatus(record, "cancelled")); return; }
+      if (record.environment.execution_mode === "required") {
+        const root = await realpath(record.cwd);
+        const cwd = await canonicalDirectory(await realpath(record.execution_cwd ?? record.cwd));
+        if (!isWithin(root, cwd)) throw new Error("Job execution cwd escapes the workspace");
+        const policy = identifyPolicy({ ...await workspacePolicy(root, typeof record.environment.revision === "string" ? record.environment.revision : undefined), cwd });
+        if (policy.id !== record.environment.sandbox_policy_id) throw new Error("Job sandbox policy changed after admission");
+        const dependencies = [...bashDependencies(), process.execPath, ...(typeof record.environment.prefix === "string" ? [record.environment.prefix] : [])];
+        // Surface labels and request environment variables cannot select a
+        // broader role, dependency prefix or execution mode.
+        const scopedEnvironment = Object.fromEntries(Object.entries(environment).filter((entry): entry is [string, string] => entry[1] !== undefined && !/^(?:PI_SCIENCE_(?:SANDBOX_.*|EXECUTION_MODE|INTERNAL_TOKEN)|NODE_OPTIONS|LD_PRELOAD|DYLD_.*)$/.test(entry[0])));
+        sandbox = await prepareSandbox(policy, record.command, dependencies, Math.max(1, Number(record.requirement.timeout_seconds ?? 3600)), undefined, undefined, scopedEnvironment);
+      }
+      const launchCommand = sandbox ? [process.execPath, launcherPath, sandbox.manifest] : record.command;
+      const launchEnvironment = sandbox?.env ?? environment;
       const spawned = this.repository
         ? await this.repository.locked(record.job_id, async () => {
           const current = await this.repository!.get(record.cwd, record.job_id);
           if (!current || isTerminal(current.status) || !this.ownershipMatches(current.ownership, record.ownership)) { if (current) Object.assign(record, current); return false; }
           await this.hooks.testBeforeAuthorizedSpawn?.(record);
           if (this.cancelled.has(record.job_id)) { Object.assign(record, transitionJobStatus(record, "cancelled")); return false; }
-          spawnedProcess = this.processes.spawn(record.job_id, record.command, record.execution_cwd ?? record.cwd, environment, Math.max(1, Number(record.requirement.timeout_seconds ?? 3600)) * 1000);
+          spawnedProcess = this.processes.spawn(record.job_id, launchCommand, record.execution_cwd ?? record.cwd, launchEnvironment, Math.max(1, Number(record.requirement.timeout_seconds ?? 3600)) * 1000);
           child = spawnedProcess.child;
           const updatedOwnership = { ...current.ownership!, child: { ...spawnedProcess.identity, ownership_generation: current.ownership!.generation, ownership_token: current.ownership!.token } };
           record.ownership = updatedOwnership;
@@ -276,7 +298,7 @@ export class JobCoordinator {
           // spawn() returns synchronously. Authorization, process creation, durable
           // child identity and local registration therefore share one per-job
           // critical section; another coordinator cannot cancel between them.
-          spawnedProcess = this.processes.spawn(record.job_id, record.command, record.execution_cwd ?? record.cwd, environment, Math.max(1, Number(record.requirement.timeout_seconds ?? 3600)) * 1000);
+          spawnedProcess = this.processes.spawn(record.job_id, launchCommand, record.execution_cwd ?? record.cwd, launchEnvironment, Math.max(1, Number(record.requirement.timeout_seconds ?? 3600)) * 1000);
           child = spawnedProcess.child;
           current.ownership = { ...current.ownership!, child: { ...spawnedProcess.identity, ownership_generation: current.ownership!.generation, ownership_token: current.ownership!.token } };
           record.ownership = current.ownership;
@@ -326,6 +348,7 @@ export class JobCoordinator {
       } finally {
         this.leases.release(record.ownership);
         this.cancelled.delete(record.job_id);
+        await sandbox?.cleanup();
       }
       await this.finishExecution(record);
     }
