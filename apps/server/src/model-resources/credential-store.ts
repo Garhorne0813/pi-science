@@ -227,6 +227,19 @@ export class CredentialStore {
     });
   }
 
+  /** OAuth renewal may change only a dedicated provider-owned grant. Check
+   * ownership under the same credential-file lock as the secret mutation. */
+  async rotateOwnedOAuth(id: string, providerId: string, secret: string): Promise<void> {
+    return this.update((state) => {
+      const record = state.credentials[id];
+      if (!record || record.metadata.kind !== "oauth" || record.metadata.backend !== "oauth" || record.metadata.owner_kind !== "provider" || record.metadata.owner_id !== providerId || record.metadata.owner_provider_id !== providerId) {
+        throw Object.assign(new Error("OAuth credential ownership changed"), { code: "credential_owner_conflict" });
+      }
+      record.secret = secret;
+      record.metadata = { ...record.metadata, updated_at: new Date().toISOString(), status: "configured" };
+    });
+  }
+
   /** Test and migration hook. Writes are still atomic and the raw value is not
    * part of the returned object. */
   async putRaw(id: string, metadata: Omit<CredentialMetadata, "id" | "status" | "created_at" | "updated_at">, secret?: string): Promise<CredentialMetadata> {

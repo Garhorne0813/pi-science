@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { modelCapabilityFields } from "./model-config.js";
 
 /** Shared contracts for the Provider/Model/Endpoint/Credential/Binding domain.
  *  Secrets are intentionally absent from every resource schema in this file. */
@@ -47,6 +48,7 @@ export const modelSchema = z.object({
 });
 
 export const modelReadSchema = modelSchema.extend({
+  capability_sources: z.record(z.enum(modelCapabilityFields), z.enum(["declared", "user_override", "default", "unknown"])).optional(),
   id: z.string().min(1),
   available: z.boolean(),
   availability_reason: z.string().optional(),
@@ -266,9 +268,10 @@ export type ModelResourceErrorCode = (typeof modelResourceErrorCodes)[number];
 
 /** Read-only management projection; routing and inference verification are independent. */
 export const providerViewSchema = z.object({
+  configured: z.boolean().optional(),
   id: z.string().min(1), name: z.string().min(1), source: z.enum(["builtin", "user"]), enabled: z.boolean(),
   status: z.enum(["ready", "needs_key", "needs_login", "invalid", "unavailable", "disabled"]),
-  auth: z.object({ kind: providerAuthKindSchema, api_key_supported: z.boolean(), login_supported: z.literal(false) }),
+  auth: z.object({ kind: providerAuthKindSchema, api_key_supported: z.boolean(), login_supported: z.boolean() }),
   credential: z.object({ state: z.enum(["ready", "needs_key", "needs_login", "invalid", "unknown"]), configured: z.boolean() }),
   routing: z.object({ selectable_model_count: z.number().int().nonnegative(), configured_model_count: z.number().int().nonnegative(), issues: z.array(z.object({ code: z.string(), resource_id: z.string().optional() })) }),
   models: z.array(modelReadSchema.extend({ input_formats: z.array(z.string()).optional() })),

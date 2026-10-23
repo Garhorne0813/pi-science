@@ -13,12 +13,12 @@ import { promptOperationId } from "./agent-message.js";
 
 /** Persist child ownership before any activation/admission; reopening uses the same v4 file. */
 export async function openHiddenTask(manager: AgentRuntimeManager, key: string, options: AgentRuntimeStartOptions, parent: string,
-  purpose: "subagent" | "review" = "subagent"): Promise<AgentCoreRuntimeClient> {
+  purpose: "subagent" | "research" | "review" = "subagent"): Promise<AgentCoreRuntimeClient> {
   return withWorkspaceAdmission(options.cwd, () => openHiddenTaskAdmitted(manager, key, options, parent, purpose));
 }
 
 async function openHiddenTaskAdmitted(manager: AgentRuntimeManager, key: string, options: AgentRuntimeStartOptions, parent: string,
-  purpose: "subagent" | "review"): Promise<AgentCoreRuntimeClient> {
+  purpose: "subagent" | "research" | "review"): Promise<AgentCoreRuntimeClient> {
   const path = workspaceFile(options.cwd, `agent-task-links/${createHash("sha256").update(key).digest("hex")}.json`);
   const sessionId = await withFileWriteLock(path, async () => {
     const saved = await readJson<{ sessionId?: string }>(path, {});

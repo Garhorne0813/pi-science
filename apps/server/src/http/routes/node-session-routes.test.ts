@@ -112,9 +112,10 @@ describe("native Node conversation routes", () => {
       expect(environment).not.toHaveBeenCalled();
       expect(beforeStart).not.toHaveBeenCalled();
       expect(service.liveSessions(cwd)).toEqual([]);
-      // Runtime requests still enforce migration and report its failure.
-      expect(await service.command("catalogue-session", cwd, "get_state")).toMatchObject({ success: false, code: "model_resources_migration_failed" });
-      expect(ensureMigrated).toHaveBeenCalledOnce();
+      // The retired legacy migration is no longer consulted; this fixture has no live
+      // worker, so the runtime command fails for that reason instead.
+      expect(await service.command("catalogue-session", cwd, "get_state")).toMatchObject({ success: false, code: "runtime_command_failed" });
+      expect(ensureMigrated).not.toHaveBeenCalled();
     } finally { await server.close(); await service.shutdownAll(); }
   });
 

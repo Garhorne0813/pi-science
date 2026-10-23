@@ -10,21 +10,27 @@ export function Modal({
   children,
   contentClassName,
   overlayClassName,
+  bodyClassName,
+  footer,
+  restoreFocusTo,
 }: {
   title: string;
   onClose: () => void;
   children: React.ReactNode;
   contentClassName?: string;
   overlayClassName?: string;
+  bodyClassName?: string;
+  footer?: React.ReactNode;
+  restoreFocusTo?: HTMLElement | null;
 }) {
   const { t } = useTranslation();
   const titleId = useId();
   const overlayRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const lastFocusedRef = useRef<HTMLElement | null>(null);
+  const lastFocusedRef = useRef<HTMLElement | null>(restoreFocusTo ?? null);
 
   useEffect(() => {
-    lastFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    lastFocusedRef.current ??= document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const siblings = [...document.body.children]
       .filter((element) => element !== overlayRef.current)
       .map((element) => ({ element, wasInert: element.hasAttribute("inert") }));
@@ -39,6 +45,8 @@ export function Modal({
   }, []);
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
+    // Portals still bubble through the Settings dialog's React tree.
+    event.stopPropagation();
     if (event.key === "Escape") {
       event.preventDefault();
       onClose();
@@ -46,7 +54,7 @@ export function Modal({
     }
     if (event.key !== "Tab") return;
     const focusables = panelRef.current?.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      'button:not(:disabled):not([tabindex="-1"]), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"]):not(:disabled)',
     );
     if (!focusables?.length) {
       event.preventDefault();
@@ -89,7 +97,8 @@ export function Modal({
               <X size={16} />
             </button>
           </header>
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
+          <div className={cn("min-h-0 flex-1 overflow-y-auto px-5 py-4", bodyClassName)}>{children}</div>
+          {footer && <footer className="shrink-0 border-t border-faint px-5 py-3">{footer}</footer>}
         </div>
     </div>,
     document.body,

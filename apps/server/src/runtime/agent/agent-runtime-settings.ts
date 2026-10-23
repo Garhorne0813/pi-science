@@ -1,7 +1,7 @@
-import { resolveAgentCompaction, type PiConfig } from "@pi-science/contracts";
+import { resolveAgentCompaction, type ModelConfigSnapshot, type ModelConfigBackend, type PiConfig } from "@pi-science/contracts";
 import { createBranchSummaryMessage, createCompactionSummaryMessage, estimateContextTokens, getLastAssistantUsage, type AgentMessage, type CompactionSettings, type Entry, type Value } from "@earendil-works/pi-agent-core";
 
-export type RuntimeSettings = Pick<PiConfig, "compaction_enabled" | "compaction_threshold_percent" | "model_context_window_override">;
+export type RuntimeSettings = Pick<PiConfig, "compaction_enabled" | "compaction_threshold_percent" | "model_context_window_override"> & { modelConfigBackend?: ModelConfigBackend; modelConfigAllowPrivate?: boolean; modelConfigSnapshot?: ModelConfigSnapshot };
 export type AppliedRuntimeSettings = {
   model: string;
   contextWindow: number;

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import i18n from "../../i18n";
 import { Modal } from "./Modal";
 
@@ -34,4 +34,14 @@ describe("Modal", () => {
     expect(trigger).toHaveFocus();
     expect(trigger.closest("div")).not.toHaveAttribute("inert");
   });
+});
+
+it("handles nested dialog keys without closing its Settings ancestor", async () => {
+  const parent = vi.fn();
+  render(<div onKeyDown={parent}><Harness /></div>);
+  fireEvent.click(screen.getByRole("button", { name: "Open modal" }));
+  const dialog = await screen.findByRole("dialog", { name: "Nested settings" });
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  expect(parent).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });

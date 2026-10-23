@@ -73,6 +73,7 @@ export type ConnectorFetchOptions = {
   allowedContentTypes?: readonly string[];
   /** Total request timeout including redirect hops. Default 30s. */
   timeoutMs?: number;
+  signal?: AbortSignal;
   method?: string;
   headers?: Record<string, string>;
   body?: BodyInit | null;
@@ -110,6 +111,7 @@ export async function safeConnectorFetch(raw: string, options: ConnectorFetchOpt
   const initialOrigin = current.origin;
   let redirects = 0;
   const controller = new AbortController();
+  const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
   const timeoutError = new Error(`connector fetch timed out after ${timeoutMs}ms`);
   const timer = setTimeout(() => controller.abort(timeoutError), timeoutMs);
   let timerOwnedByStream = false;
@@ -121,7 +123,8 @@ export async function safeConnectorFetch(raw: string, options: ConnectorFetchOpt
       // Every URL reaches this sink only after DNS-aware validation above, and
       // every redirect is independently revalidated before the next request.
       // lgtm[js/request-forgery]
-      const response = await fetch(current, { method: options.method ?? "GET", headers: hopHeaders, body: options.body, redirect: "manual", signal: controller.signal });
+      signal.throwIfAborted();
+      const response = await fetch(current, { method: options.method ?? "GET", headers: hopHeaders, body: options.body, redirect: "manual", signal });
       const location = response.headers.get("location");
       if (response.status >= 300 && response.status < 400 && location) {
         response.body?.cancel();

@@ -808,3 +808,4 @@ export * from "./model-selection.js";
 
 export * from "./mcp.js";
 export { resolveAgentCompaction } from "./agent-context.js";
+export * from "./model-config.js";

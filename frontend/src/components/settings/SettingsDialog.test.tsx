@@ -126,7 +126,7 @@ describe("SettingsDialog", () => {
     await screen.findByRole("dialog");
     const modelsTab = await screen.findByRole("tab", { name: "AI Models" });
     fireEvent.click(modelsTab);
-    expect(await screen.findByText("Model services")).toBeInTheDocument();
+    expect(await screen.findByText("My model services")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "false");
   });

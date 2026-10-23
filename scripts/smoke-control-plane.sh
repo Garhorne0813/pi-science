@@ -203,8 +203,8 @@ WORKSPACE_Q="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys
 echo "[smoke] native settings, files, artifacts, jobs, and provenance"
 SETTINGS_JSON="$(curl --fail-with-body --silent --show-error -X PUT \
     -H 'Content-Type: application/json' \
-    -d '{"provider":"openai","api_key":"smoke-secret"}' \
-    "http://127.0.0.1:${NODE_PORT}/api/settings/api-key")"
+    -d '{"revision":0,"credential":{"source":"managed","secret":"smoke-secret"}}' \
+    "http://127.0.0.1:${NODE_PORT}/api/model-config/providers/openai/credential")"
 if ! echo "$SETTINGS_JSON" | grep -q '"ok":true'; then
     echo "settings api-key write failed" >&2
     exit 40
@@ -219,10 +219,10 @@ if echo "$CONFIG_JSON" | grep -q 'smoke-secret'; then
     exit 40
 fi
 
-CUSTOM_PROVIDER_JSON="$(curl --fail-with-body --silent --show-error -X PUT \
+CUSTOM_PROVIDER_JSON="$(curl --fail-with-body --silent --show-error -X POST \
     -H 'Content-Type: application/json' \
-    -d '{"name":"Smoke Provider","base_url":"https://llm.example.com/v1","api_key":"custom-secret","api":"openai-completions","models":["smoke-model"]}' \
-    "http://127.0.0.1:${NODE_PORT}/api/settings/custom-providers/smoke-provider")"
+    -d '{"revision":1,"id":"user-smoke-provider","config":{"name":"Smoke Provider","baseUrl":"http://127.0.0.1:11434/v1","api":"openai-completions","models":[{"id":"smoke-model"}]},"credential":{"source":"managed","secret":"custom-secret"}}' \
+    "http://127.0.0.1:${NODE_PORT}/api/model-config/providers")"
 if ! echo "$CUSTOM_PROVIDER_JSON" | grep -q '"ok":true'; then
     echo "custom provider write failed" >&2
     exit 40
@@ -233,19 +233,19 @@ if echo "$CUSTOM_PROVIDER_JSON" | grep -q 'custom-secret'; then
 fi
 assert_body_contains 'user-smoke-provider/smoke-model' "http://127.0.0.1:${NODE_PORT}/api/settings/config"
 
-KEYLESS_PROVIDER_JSON="$(curl --fail-with-body --silent --show-error -X PUT \
+KEYLESS_PROVIDER_JSON="$(curl --fail-with-body --silent --show-error -X POST \
     -H 'Content-Type: application/json' \
-    -d '{"name":"Local No-Key Provider","base_url":"http://127.0.0.1:11434/v1","api":"openai-completions","models":["local-model"]}' \
-    "http://127.0.0.1:${NODE_PORT}/api/settings/custom-providers/local-no-key")"
+    -d '{"revision":2,"id":"user-local-no-key","config":{"name":"Local No-Key Provider","baseUrl":"http://127.0.0.1:11434/v1","api":"openai-completions","models":[{"id":"local-model"}]},"credential":{"source":"keyless"}}' \
+    "http://127.0.0.1:${NODE_PORT}/api/model-config/providers")"
 if ! echo "$KEYLESS_PROVIDER_JSON" | grep -q '"ok":true'; then
     echo "keyless custom provider write failed" >&2
     exit 40
 fi
 assert_body_contains 'user-local-no-key/local-model' "http://127.0.0.1:${NODE_PORT}/api/settings/config"
-curl --fail-with-body --silent --show-error -X DELETE \
-    "http://127.0.0.1:${NODE_PORT}/api/settings/custom-providers/smoke-provider" >/dev/null
-curl --fail-with-body --silent --show-error -X DELETE \
-    "http://127.0.0.1:${NODE_PORT}/api/settings/custom-providers/local-no-key" >/dev/null
+curl --fail-with-body --silent --show-error -X DELETE -H 'Content-Type: application/json' -d '{"revision":3}' \
+    "http://127.0.0.1:${NODE_PORT}/api/model-config/providers/user-smoke-provider" >/dev/null
+curl --fail-with-body --silent --show-error -X DELETE -H 'Content-Type: application/json' -d '{"revision":4}' \
+    "http://127.0.0.1:${NODE_PORT}/api/model-config/providers/user-local-no-key" >/dev/null
 
 curl --fail-with-body --silent --show-error -X POST -H 'Content-Type: application/json' \
     -d '{"filename":"uploaded.txt","content":"smoke-upload"}' \

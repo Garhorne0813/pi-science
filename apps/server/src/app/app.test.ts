@@ -6,6 +6,8 @@ import { buildApp } from "./app.js";
 import { createServerModules } from "./server-modules.js";
 import type { ServerConfig } from "../config/config.js";
 import type { KernelExecuteOptions, NodeKernelManager } from "../runtime/kernel/node-kernel-manager.js";
+import { modelConfigSnapshotSchema } from "@pi-science/contracts";
+import { ModelConfigService } from "../model-config/model-config-service.js";
 import { InMemorySqliteStateStore } from "../storage/sqlite/state-store.js";
 
 const openApps: Array<{ close(): Promise<unknown> }> = [];
@@ -146,6 +148,33 @@ describe("Node control plane", () => {
     expect((await app.inject({ method: "GET", url: "/api/health", headers: { "x-pi-science-internal-token": "test-control-token" } })).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/api/health", headers: { cookie: "pi-science-internal=test-control-token" } })).statusCode).toBe(200);
     expect((await app.inject({ method: "OPTIONS", url: "/api/health" })).statusCode).not.toBe(401);
+  });
+
+  it("rate-limits diagnostics before reading model configuration while keeping health probes available", async () => {
+    const app = buildApp(config("http://127.0.0.1:1", { internalToken: "diagnostics-token", requireInternalToken: true }));
+    openApps.push(app);
+    await app.ready();
+    const read = vi.spyOn(ModelConfigService.prototype, "readSync").mockReturnValue(modelConfigSnapshotSchema.parse({ revision: 7 }));
+    const headers = { "x-pi-science-internal-token": "diagnostics-token" };
+    try {
+      expect((await app.inject({ method: "GET", url: "/internal/diagnostics" })).statusCode).toBe(401);
+      expect(read).not.toHaveBeenCalled();
+      for (let index = 0; index < 30; index++) {
+        const response = await app.inject({ method: "GET", url: "/internal/diagnostics", headers });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toMatchObject({ model_resources: { revision: 7, provider_count: 0, model_count: 0 } });
+      }
+      const blocked = await app.inject({ method: "GET", url: "/internal/diagnostics?retry=1", headers });
+      expect(blocked.statusCode).toBe(429);
+      expect(Number(blocked.headers["retry-after"])).toBeGreaterThan(0);
+      expect(read).toHaveBeenCalledTimes(30);
+      const otherClient = await app.inject({ method: "GET", url: "/internal/diagnostics", headers, remoteAddress: "127.0.0.2" });
+      expect(otherClient.statusCode).toBe(200);
+      expect(read).toHaveBeenCalledTimes(31);
+      for (const url of ["/internal/live", "/internal/ready", "/api/health"]) {
+        expect((await app.inject({ method: "GET", url, headers })).statusCode).toBe(200);
+      }
+    } finally { read.mockRestore(); }
   });
 
   it("rate-limits job submission before arbitrary commands are launched", async () => {

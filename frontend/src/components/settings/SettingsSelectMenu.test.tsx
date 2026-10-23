@@ -18,7 +18,7 @@ describe("SettingsSelectMenu", () => {
     fireEvent.pointerDown(trigger);
     fireEvent.click(trigger);
     const menu = await screen.findByRole("menu");
-    expect(menu).toHaveClass("z-[110]");
+    expect(menu).toHaveClass("z-[130]");
   });
 
   it("shows the selected value, marks it with a check, and calls onSelect with the picked value", async () => {

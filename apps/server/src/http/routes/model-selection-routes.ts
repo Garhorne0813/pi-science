@@ -1,3 +1,4 @@
+import { ModelConfigService } from "../../model-config/model-config-service.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { modelSelectionSchema, thinkingLevelSchema, type ModelSelection } from "@pi-science/contracts";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
@@ -12,8 +13,7 @@ type SelectionCatalog = (cwd: string) => Promise<Array<Record<string, unknown>>>
 /** Selection ownership is independent of provider/capability projections. */
 export function registerModelSelectionRoutes(app: FastifyInstance, sessions: NodeSessionService, settings: SettingsStore, resources: ModelResourceService | undefined, catalog: SelectionCatalog) {
   const canonical = async (model: string | null) => {
-    await resources?.ensureMigrated();
-    return model ? (await resources?.repository.read())?.aliases[model] ?? model : null;
+    return model ? new ModelConfigService().readSync().aliases[model] ?? model : null;
   };
   const readDefault = async (): Promise<ModelSelection> => {
     const config = await settings.read();

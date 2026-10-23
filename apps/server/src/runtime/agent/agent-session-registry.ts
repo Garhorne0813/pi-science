@@ -6,7 +6,7 @@ export type AgentSessionRegistration = {
   target: string;
   source?: string;
   migration?: "copied";
-  purpose?: "conversation" | "subagent" | "review";
+  purpose?: "conversation" | "subagent" | "research" | "review";
   parentSessionId?: string;
 };
 type Registry = { version: 1; sessions: Record<string, AgentSessionRegistration> };

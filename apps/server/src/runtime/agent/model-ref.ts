@@ -1,6 +1,6 @@
-import { ModelResourceRepository } from "../../model-resources/model-resource-repository.js";
+import { ModelConfigService } from "../../model-config/model-config-service.js";
 
-/** Resolve persisted model aliases into the canonical identity used by Core. */
+/** Aliases are explicit native identity mappings, never runtime legacy reads. */
 export function canonicalRuntimeModelRef(model: string): string {
-  return new ModelResourceRepository().readSync().aliases[model] ?? model;
+  return new ModelConfigService().readSync().aliases[model] ?? model;
 }

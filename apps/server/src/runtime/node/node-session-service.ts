@@ -1,6 +1,7 @@
 import { defaultSessionApproval } from "../sandbox/approval-preferences.js";
 import type { ApprovalMode } from "@pi-science/contracts";
 import { withWorkspaceAdmission, WorkspaceLifecycleBusyError } from "../workspace/workspace-lifecycle.js";
+import { ModelConfigService } from "../../model-config/model-config-service.js";
 import type { CreateSessionRequest, PiConfig, SessionState, SessionStats } from "@pi-science/contracts";
 import { resolve } from "node:path";
 import { ConversationEventHub, conversationEventHub } from "../events/conversation-event-hub.js";
@@ -217,13 +218,8 @@ export class NodeSessionService {
   get activeCount(): number { return this.agentCore.processCount; }
   get processCount(): number { return this.agentCore.processCount; }
   private async ensureModelResources(): Promise<RuntimeFailure | null> {
-    if (!this.modelResources) return null;
-    try {
-      await this.modelResources.ensureMigrated();
-      return null;
-    } catch (error) {
-      return { error: `unable to migrate model resources: ${error instanceof Error ? error.message : String(error)}`, code: "model_resources_migration_failed" };
-    }
+    try { new ModelConfigService().readSync(); return null; }
+    catch { return { error: "Native model configuration is invalid; repair models.json", code: "invalid_model_config" }; }
   }
 
   private async backfillTiming(cwd: string, sessionId: string): Promise<SessionTiming | null> {

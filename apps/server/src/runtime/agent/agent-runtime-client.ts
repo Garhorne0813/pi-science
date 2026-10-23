@@ -1,3 +1,5 @@
+import { modelConfigSnapshotSchema } from "@pi-science/contracts";
+import { ModelConfigService, modelConfigBackend, isAllowedModelEnvRef } from "../../model-config/model-config-service.js";
 import { fork, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -81,8 +83,22 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
   }
 
   static async start(options: AgentRuntimeStartOptions, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<AgentCoreRuntimeClient> {
+    // Bind all Worker callers (sessions, titles, research and subagents) at one
+    // trusted boundary. Parent tasks may retain their already validated revision.
+    const backend = modelConfigBackend();
+    const service = new ModelConfigService();
+    const snapshot = options.settings?.modelConfigSnapshot
+      ? modelConfigSnapshotSchema.parse(options.settings.modelConfigSnapshot) : service.readSync();
+    const modelEnvironment: Record<string, string> = {};
+    for (const ref of Object.values(snapshot?.credential_refs ?? {})) {
+      const metadata = await service.credentials.metadata(ref);
+      const name = metadata?.backend === "environment" ? metadata.environment_variable : undefined;
+      if (isAllowedModelEnvRef(name) && process.env[name] !== undefined) modelEnvironment[name] = process.env[name]!;
+    }
+    const launch = { ...options, settings: { ...options.settings, modelConfigBackend: backend, modelConfigSnapshot: snapshot,
+      modelConfigAllowPrivate: options.settings?.modelConfigAllowPrivate !== false && process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0" } };
     const entry = workerEntry();
-    const env = workerEnvironment(options.env, options.credentialEnvNames);
+    const env = workerEnvironment({ ...options.env, ...modelEnvironment }, [...(options.credentialEnvNames ?? []), ...Object.keys(modelEnvironment)]);
     const child = fork(entry.path, [], {
       cwd: options.cwd,
       env,
@@ -91,7 +107,7 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
     });
     const client = new AgentCoreRuntimeClient(child, options.cwd, timeoutMs);
     try {
-      const result = await client.request({ type: "initialize", options: { ...options, env: env as Record<string, string> } }, "initialize");
+      const result = await client.request({ type: "initialize", options: { ...launch, env: env as Record<string, string> } }, "initialize");
       if (!result.success) throw new Error(result.error ?? "agent runtime initialization failed");
       const sessionId = result.data && typeof result.data === "object" ? (result.data as { sessionId?: unknown }).sessionId : undefined;
       if (typeof sessionId !== "string" || !sessionId) throw new Error("agent runtime returned no session ID");

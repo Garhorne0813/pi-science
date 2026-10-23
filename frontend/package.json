@@ -11,6 +11,8 @@
     "test:sse-budget": "node scripts/check-sse-connection-budget.mjs",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.app.json --noEmit",
+    "test:uat:model-config": "node scripts/uat-model-config.mjs",
+    "test:uat:model-discovery": "node scripts/uat-model-discovery.mjs",
     "test:uat:conversation": "node scripts/uat-conversation.mjs",
     "test:uat:slash": "node scripts/uat-slash-commands.mjs",
     "test:uat:knowledge": "node scripts/uat-project-knowledge.mjs",
@@ -21,7 +23,8 @@
     "test:visual:update": "pnpm build && playwright test --config playwright.visual.config.ts --update-snapshots",
     "test:accessibility": "pnpm build && playwright test --config playwright.visual.config.ts --grep @accessibility",
     "lint": "oxlint --deny-warnings",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:uat:model-oauth": "node scripts/uat-model-oauth.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
 import { buildApp } from "../apps/server/dist/app/app.js";
 import { createServerModules } from "../apps/server/dist/app/server-modules.js";
-import { emptyModelResourceState } from "../apps/server/dist/model-resources/model-resource-repository.js";
+import { ModelConfigService } from "../apps/server/dist/model-config/model-config-service.js";
 import { writeJsonAtomic } from "../apps/server/dist/storage/persistence.js";
 
 // Real HTTP/Core/resource reads. Constant provider/model counts isolate growth
@@ -22,17 +22,15 @@ let app;
 try {
   const modules = createServerModules(config, { sqliteEnabled: false });
   const template = await modules.modelResources.credentials.put({ id: "benchmark-key", kind: "api_key", backend: "managed", secret: "synthetic-benchmark-key" });
-  const state = emptyModelResourceState();
-  state.migration = { version: 1, completed_at: "2026-01-01T00:00:00.000Z" };
+  const native = new ModelConfigService();
+  const providers = {};
+  const references = {};
   for (let index = 0; index < 100; index++) {
     const id = `user-lab${index}`;
-    state.providers.push({ id, name: id, kind: "user", adapter: "openai-compatible", enabled: true, catalog_mode: "manual", auth_kind: "api_key", source: "user" });
-    state.endpoints.push({ id: `ep-${index}`, name: id, base_url: "http://127.0.0.1:9/v1", protocol: "openai", credential_ref: "benchmark-key", owner_provider_id: id, enabled: true, health: "unknown", data_egress: "local" });
-    state.bindings.push({ id: `bind-${index}`, provider_id: id, endpoint_id: `ep-${index}`, enabled: true, priority: 1 });
-    for (let model = 0; model < 100; model++) state.models.push({ provider_id: id, model_id: `model-${model}`, display_name: `Model ${index}-${model}`, enabled: true,
-      capabilities: { reasoning: false, thinking_levels: ["off"], context_window: 65536, max_output_tokens: 8192 }, capability_source: "manual" });
+    providers[id] = { name: `Lab ${index}`, api: "openai-completions", baseUrl: "http://127.0.0.1:9/v1", models: Array.from({ length: 100 }, (_, model) => ({ id: `model-${model}`, name: `Model ${index}-${model}`, reasoning: false, contextWindow: 65536, maxTokens: 8192 })) };
+    references[id] = "benchmark-key";
   }
-  await modules.modelResources.repository.replace(state);
+  await native.update(0, (snapshot) => { snapshot.config = { providers }; snapshot.credential_refs = references; });
   await modules.settings.update((settings) => { settings.model = "user-lab0/model-0"; settings.thinking = "off"; });
   app = buildApp(config, modules);
   const base = await app.listen({ host: "127.0.0.1", port: 0 });
@@ -42,8 +40,7 @@ try {
     const credentials = {};
     for (let index = 0; index < count; index++) credentials[`benchmark-${index}`] = { metadata: { ...template, id: `benchmark-${index}`, owner_provider_id: `user-lab${index % 100}` }, secret: `synthetic-benchmark-${index}` };
     await writeJsonAtomic(join(root, "credentials.json"), { schema_version: 1, credentials }, { mode: 0o600 });
-    for (let index = 0; index < state.endpoints.length; index++) state.endpoints[index].credential_ref = `benchmark-${index % count}`;
-    await modules.modelResources.repository.replace(state);
+    await native.update(native.readSync().revision, (snapshot) => { for (let index = 0; index < 100; index++) snapshot.credential_refs[`user-lab${index}`] = `benchmark-${index % count}`; });
     async function read() {
       const start = performance.now();
       const response = await fetch(`${base}/api/provider-views`);
@@ -55,7 +52,7 @@ try {
       return performance.now() - start;
     }
     await read();
-    const fingerprint = () => Promise.all(["credentials.json", "model-resources.json", "config.json"].map(async (file) => ({ contents: await readFile(join(root, file), "utf8"), mtime: (await stat(join(root, file), { bigint: true })).mtimeNs.toString() })));
+    const fingerprint = () => Promise.all(["credentials.json", "models.json", "config.json"].map(async (file) => ({ contents: await readFile(join(root, file), "utf8"), mtime: (await stat(join(root, file), { bigint: true })).mtimeNs.toString() })));
     const before = await fingerprint();
     const samples = [];
     for (let sample = 0; sample < 3; sample++) samples.push(await read());

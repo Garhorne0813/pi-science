@@ -1,4 +1,5 @@
 import { withWorkspaceAdmission } from "../workspace/workspace-lifecycle.js";
+import { canonicalRuntimeModelRef } from "../agent/model-ref.js";
 import { CredentialStore } from "../../model-resources/credential-store.js";
 import { createHash, randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
@@ -52,6 +53,7 @@ export class CoreTitleRuntimeFactory {
 
   private async startOnce(cwd: string): Promise<TitleRuntime> {
     const config = loadDefaultPiConfig();
+    if (config.model) config.model = canonicalRuntimeModelRef(config.model);
     const environment = await this.environments.environment(cwd);
     if (!config.model?.includes("/")) throw new Error("Title generation requires a configured model");
     const separator = config.model.indexOf("/");

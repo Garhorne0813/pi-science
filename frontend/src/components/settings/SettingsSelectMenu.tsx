@@ -11,13 +11,14 @@ export interface SettingsSelectOption {
 
 type SettingsSelectVariant = "row" | "field" | "compact";
 
-/** The settings dialog overlay sits at z-[95]; the portal menu must render
- *  above it, so the popover keeps a higher layer than any in-dialog surface.
- *  The height is capped by the viewport (Radix exposes the space it measured
- *  as `--radix-dropdown-menu-content-available-height`), so long lists scroll
+/** The settings dialog overlay sits at z-[95] and a nested modal overlay at
+ *  z-[115], so the portal menu keeps a layer above every dialog surface; a
+ *  lower layer would render behind the modal that opened it. The height is
+ *  capped by the viewport (Radix exposes the space it measured as
+ *  `--radix-dropdown-menu-content-available-height`), so long lists scroll
  *  inside the menu instead of overflowing the screen. */
 const MENU_CONTENT_CLASS =
-  "ui-popover z-[110] min-w-[13rem] max-w-[min(20rem,calc(100vw-16px))] max-h-[min(22rem,var(--radix-dropdown-menu-content-available-height))] rounded-card p-1.5 text-ui-label text-text outline-none " +
+  "ui-popover z-[130] min-w-[13rem] max-w-[min(20rem,calc(100vw-16px))] max-h-[min(22rem,var(--radix-dropdown-menu-content-available-height))] rounded-card p-1.5 text-ui-label text-text outline-none " +
   "data-[state=open]:animate-[settings-menu-in_160ms_var(--ease-standard)] data-[state=closed]:animate-[settings-menu-out_100ms_var(--ease-standard)]";
 const MENU_ITEM_CLASS =
   "flex min-h-9 cursor-default select-none items-center gap-2 rounded-input px-2.5 py-2 text-ui-label text-text outline-none transition-colors data-[highlighted]:bg-surface-hover data-[disabled]:opacity-40";
@@ -27,7 +28,7 @@ const TRIGGER_BASE =
 const TRIGGER_ROW =
   "h-9 max-w-[62%] shrink-0 px-2.5 text-sm hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent/25 data-[state=open]:bg-surface-2";
 const TRIGGER_FIELD =
-  "h-10 w-full border border-border bg-surface-2 px-3 text-xs hover:border-accent focus-visible:border-accent focus-visible:ring-1 focus-visible:ring-accent/25 data-[state=open]:border-accent";
+  "h-10 w-full border border-border bg-surface-2 px-3 text-left text-xs hover:border-accent focus-visible:border-accent focus-visible:ring-1 focus-visible:ring-accent/25 data-[state=open]:border-accent";
 const TRIGGER_COMPACT =
   "h-8 w-auto min-w-[7rem] border border-border bg-surface-2 px-2 text-xs hover:border-accent focus-visible:border-accent focus-visible:ring-1 focus-visible:ring-accent/25 data-[state=open]:border-accent";
 const TRIGGER_CLASSES: Record<SettingsSelectVariant, string> = {

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -31,13 +31,24 @@ describe("frontend static serving", () => {
     expect("type" in root).toBe(true);
     if (!("type" in root)) return;
     expect(root.type).toBe("text/html; charset=utf-8");
+    expect(root.cacheControl).toBe("no-cache");
     expect(await asText(root.stream as never)).toContain("pi-science-app");
 
     const clientRoute = await serveFrontend("/projects/example");
     expect("type" in clientRoute).toBe(true);
     if (!("type" in clientRoute)) return;
     expect(clientRoute.type).toBe("text/html; charset=utf-8");
+    expect(clientRoute.cacheControl).toBe("no-store");
     expect(await asText(clientRoute.stream as never)).toContain("pi-science-app");
+
+    // A rebuild must reach the browser: the entry document is never cached, hashed assets are.
+    await mkdir(join(dist, "assets"), { recursive: true });
+    await writeFile(join(dist, "assets", "index-abc123.js"), "console.log(1)", "utf8");
+    const asset = await serveFrontend("/assets/index-abc123.js");
+    expect("type" in asset).toBe(true);
+    if (!("type" in asset)) return;
+    expect(asset.type).toBe("text/javascript");
+    expect(asset.cacheControl).toBe("public, max-age=31536000, immutable");
   });
 
   it("blocks path traversal and reports a missing build", async () => {

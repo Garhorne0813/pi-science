@@ -302,3 +302,7 @@ Issues and pull requests are welcome. Before submitting a change, run the releva
 ## License
 
 MIT
+
+The opt-in [Pi-native model configuration backend](docs/model-config-native.md)
+adds versioned configuration, explicit credential sources and conservative legacy
+migration. The deployment default remains `legacy` until rollout gates pass.

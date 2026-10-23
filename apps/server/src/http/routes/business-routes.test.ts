@@ -1,5 +1,6 @@
 import { AgentRuntimeManager } from "../../runtime/agent/agent-runtime-manager.js";
 import { WorkspaceLifecycleBusyError } from "../../runtime/workspace/workspace-lifecycle.js";
+import { ModelConfigService } from "../../model-config/model-config-service.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { access, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -54,7 +55,7 @@ describe("native control-plane business routes", () => {
     try {
       const before = (await app.inject({ method: "GET", url: "/api/settings/providers" })).json();
       expect(before.providers).toContainEqual(expect.objectContaining({ id: "deepseek", credential_status: "needs_key" }));
-      const connected = await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "deepseek", api_key: "catalog-test-key" } });
+      const connected = await app.inject({ method: "PUT", url: "/api/model-config/providers/deepseek/credential", payload: { revision: 0, credential: { source: "managed", secret: "catalog-test-key" } } });
       expect(connected.statusCode).toBe(200);
       const listed = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
       expect(listed.available_models).toContainEqual(expect.objectContaining({ id: "deepseek/deepseek-flash", context_window: 1000000, max_output_tokens: 384000, input_formats: ["text", "image"], vision: true }));
@@ -344,7 +345,7 @@ describe("native control-plane business routes", () => {
     expect(stored).toMatchObject({ model: "deepseek/deepseek-v4-flash", thinking: "high" });
   });
 
-  it("persists the runtime-clamped thinking level on GET config (self-heal)", async () => {
+  it("projects the runtime-clamped thinking level on GET without persisting it", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
@@ -359,14 +360,13 @@ describe("native control-plane business routes", () => {
     const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
     expect(settings.statusCode).toBe(200);
     expect(settings.json()).toMatchObject({ model: "openrouter/openai/gpt-5.1", thinking: "high" });
-    // The corrected level is durable: a cold read (no live runtime) must see
-    // the same value, and the GET self-heal never triggers a runtime reload.
+    // GET projects effective values without changing durable defaults.
     const stored = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"));
-    expect(stored).toMatchObject({ model: "openrouter/openai/gpt-5.1", thinking: "high" });
+    expect(stored).toMatchObject({ model: "openrouter/openai/gpt-5.1", thinking: "max" });
     expect(reload).not.toHaveBeenCalled();
   });
 
-  it("corrects and persists the context window from the live runtime catalog on GET config", async () => {
+  it("projects the live context window without persisting it on GET config", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
@@ -381,15 +381,15 @@ describe("native control-plane business routes", () => {
     const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
     expect(settings.statusCode).toBe(200);
     expect(settings.json()).toMatchObject({ model: "openrouter/openai/gpt-5.1", model_context_window: 200000 });
-    // The corrected window is durable; GET self-heal never reloads the runtime.
+    // The saved window remains untouched; GET never reloads the runtime.
     const stored = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"));
-    expect(stored).toMatchObject({ model: "openrouter/openai/gpt-5.1", model_context_window: 200000 });
+    expect(stored).toMatchObject({ model: "openrouter/openai/gpt-5.1", model_context_window: 128000 });
     expect(reload).not.toHaveBeenCalled();
   });
 
   // Several disk-backed round trips exceed 5s on Windows runners. Keep a
   // functional integration timeout; benchmark tests enforce latency budgets.
-  it("persists runtime capabilities into custom provider model hints on GET config", async () => {
+  it("projects runtime capabilities without changing custom provider model hints on GET config", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
@@ -399,6 +399,7 @@ describe("native control-plane business routes", () => {
       model_context_window: 64000,
       custom_providers: [{ id: "local-provider", name: "Local Provider", base_url: "http://127.0.0.1:11434/v1", api: "openai-completions", models: ["local-model"], reasoning: true, context_window: 64000, model_hints: { "local-model": { reasoning: false, context_window: 64000, source: "manual" } } }],
     }), "utf8");
+    await new ModelConfigService().createProvider(0, "user-local-provider", { api: "openai-completions", baseUrl: "http://127.0.0.1:11434/v1", models: [{ id: "local-model", contextWindow: 64000, reasoning: false, thinkingLevelMap: { off: "off", minimal: null, low: null, medium: null, high: null, xhigh: null, max: null } }] }, { source: "keyless" });
     // The live runtime is the authority: it reports a larger window and the
     // actual thinking levels for the running model.
     const modelRead = vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
@@ -416,11 +417,10 @@ describe("native control-plane business routes", () => {
     // The per-model hint is corrected in place: window always, reasoning and
     // levels only when the runtime verified the configured model identity.
     const stored = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"));
-    expect(stored).toMatchObject({ model: "user-local-provider/local-model", model_context_window: 262144 });
+    expect(stored).toMatchObject({ model: "user-local-provider/local-model", model_context_window: 64000 });
     const resources = new (await import("../../model-resources/model-resource-service.js")).ModelResourceService();
-    const canonical = (await resources.listModels()).find((item) => item.id === "user-local-provider/local-model");
-    expect(canonical?.capabilities).toMatchObject({ context_window: 262144, reasoning: true, thinking_levels: ["off", "high"] });
-    const paths = [join(process.env.PI_SCIENCE_HOME, "config.json"), join(process.env.PI_SCIENCE_HOME, "model-resources.json")];
+    expect(new ModelConfigService().readSync().config.providers["user-local-provider"]?.models?.[0]?.contextWindow).toBe(64000);
+    const paths = [join(process.env.PI_SCIENCE_HOME, "config.json"), join(process.env.PI_SCIENCE_HOME, "models.json")];
     const fingerprints = () => Promise.all(paths.map(async (path) => ({ content: await readFile(path, "utf8"), mtime: (await stat(path, { bigint: true })).mtimeNs })));
     const before = await fingerprints();
     const settingsWrite = vi.spyOn(modules.settings, "update");
@@ -431,16 +431,16 @@ describe("native control-plane business routes", () => {
     expect(settingsWrite).not.toHaveBeenCalled();
     expect(resourceWrite).not.toHaveBeenCalled();
     expect(await fingerprints()).toEqual(before);
-    // A real capability change must still self-heal once, then remain stable.
+    // Even changed runtime capabilities only affect the response.
     modelRead.mockResolvedValue({ success: true, data: { models: [{ provider: "user-local-provider", id: "local-model", reasoning: true, contextWindow: 524288, thinkingLevelMap: { off: "off", high: "high" } }] } });
     expect((await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` })).json().model_context_window).toBe(524288);
-    expect(settingsWrite).toHaveBeenCalledOnce();
-    expect(resourceWrite).toHaveBeenCalledOnce();
+    expect(settingsWrite).not.toHaveBeenCalled();
+    expect(resourceWrite).not.toHaveBeenCalled();
     const repaired = await fingerprints();
-    expect(JSON.parse(repaired[1]!.content).models[0].capabilities.context_window).toBe(524288);
+    expect(repaired).toEqual(before);
     await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
-    expect(settingsWrite).toHaveBeenCalledOnce();
-    expect(resourceWrite).toHaveBeenCalledOnce();
+    expect(settingsWrite).not.toHaveBeenCalled();
+    expect(resourceWrite).not.toHaveBeenCalled();
     expect(await fingerprints()).toEqual(repaired);
 
   }, 30000);
@@ -493,11 +493,12 @@ describe("native control-plane business routes", () => {
       model: "user-local-provider/local-model",
       custom_providers: [{ id: "local-provider", name: "Local Provider", base_url: "http://127.0.0.1:11434/v1", api: "openai-completions", models: ["local-model"], reasoning: true, context_window: 64000, model_hints: { "local-model": { reasoning: true, thinking_levels: ["off", "high", "xhigh"] } } }],
     }), "utf8");
+    await new ModelConfigService().createProvider(0, "user-local-provider", { api: "openai-completions", baseUrl: "http://127.0.0.1:11434/v1", models: [{ id: "local-model", contextWindow: 64000, reasoning: true, thinkingLevelMap: { off: "off", minimal: null, low: null, medium: null, high: "high", xhigh: "xhigh", max: null } }] }, { source: "keyless" });
     // The runtime lists the model with reasoning but WITHOUT a thinkingLevelMap
     // (no capability metadata): it must not invent levels or erase the hint.
     vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
       success: true,
-      data: { models: [{ provider: "user-local-provider", id: "local-model", name: "Local Model", reasoning: true }] },
+      data: { models: [{ provider: "user-local-provider", id: "local-model", name: "Local Model" }] },
     });
     vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({ success: false, code: "not_found" });
     const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
@@ -528,7 +529,7 @@ describe("native control-plane business routes", () => {
     // No credentials -> no Go models in the selectable catalog.
     expect(before.available_models.some((model: { provider: string }) => model.provider === "opencode-go")).toBe(false);
 
-    const saved = await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "opencode-go", api_key: "oc-go-secret" } });
+    const saved = await app.inject({ method: "PUT", url: "/api/model-config/providers/opencode-go/credential", payload: { revision: 0, credential: { source: "managed", secret: "oc-go-secret" } } });
     expect(saved.statusCode).toBe(200);
     const after = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
     expect(after.providers.find((provider: { id: string }) => provider.id === "opencode-go")).toMatchObject({ credential_status: "configured", has_key: true, enabled: true });
@@ -547,12 +548,12 @@ describe("native control-plane business routes", () => {
     const app = buildApp(config());
     apps.push(app);
 
-    const oauthOnly = await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "openai-codex", api_key: "nope" } });
+    const oauthOnly = await app.inject({ method: "PUT", url: "/api/model-config/providers/openai-codex/credential", payload: { revision: 0, credential: { source: "managed", secret: "nope" } } });
     expect(oauthOnly.statusCode).toBe(400);
     expect(oauthOnly.json()).toMatchObject({ code: "provider_requires_login" });
     expect(oauthOnly.body).not.toContain("nope");
 
-    const unknown = await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "no-such-provider", api_key: "x" } });
+    const unknown = await app.inject({ method: "PUT", url: "/api/model-config/providers/no-such-provider/credential", payload: { revision: 0, credential: { source: "managed", secret: "x" } } });
     expect(unknown.statusCode).toBe(400);
     expect(unknown.json().error).toContain("Unknown provider");
 
@@ -571,7 +572,7 @@ describe("native control-plane business routes", () => {
     apps.push(app);
     // A stored OpenAI key would make the pi-ai fallback list OpenAI models;
     // an empty runtime listing must still win.
-    await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "openai", api_key: "sk-test" } });
+    await app.inject({ method: "PUT", url: "/api/model-config/providers/openai/credential", payload: { revision: 0, credential: { source: "managed", secret: "sk-test" } } });
     const settings = (await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` })).json();
     expect(settings.model_catalog_source).toBe("pi");
     expect(settings.available_models.filter((model: { custom: boolean }) => !model.custom)).toHaveLength(0);
@@ -762,7 +763,7 @@ describe("native control-plane business routes", () => {
     const cwd = await workspace();
     const home = join(cwd, "control-home"); process.env.PI_SCIENCE_HOME = home;
     const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
-    const key = await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "openai", api_key: "secret-value" } });
+    const key = await app.inject({ method: "PUT", url: "/api/model-config/providers/openai/credential", payload: { revision: 0, credential: { source: "managed", secret: "secret-value" } } });
     expect(key.statusCode).toBe(200);
     const settings = await app.inject({ method: "GET", url: "/api/settings/config" });
     expect(settings.json()).toMatchObject({ api_keys: { openai: true } });
@@ -897,10 +898,10 @@ describe("native control-plane business routes", () => {
     const modules = createServerModules(config()); const app = buildApp(config(), modules); apps.push(app); await app.ready();
     let entered!: () => void; const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
     let finish!: () => void; const finishPromise = new Promise<void>((resolve) => { finish = resolve; });
-    const migrate = modules.modelResources.ensureMigrated.bind(modules.modelResources);
-    vi.spyOn(modules.modelResources, "ensureMigrated").mockImplementation(async () => { entered(); await finishPromise; return migrate(); });
     const internals = modules.sessions as unknown as { agentCore: { create: () => Promise<{ id: string }> } };
-    vi.spyOn(internals.agentCore, "create").mockResolvedValue({ id: "new-session" });
+    // The worker spawn is the last step inside the admitted section, so holding it open
+    // keeps the workspace busy without the retired legacy model migration.
+    vi.spyOn(internals.agentCore, "create").mockImplementation(async () => { entered(); await finishPromise; return { id: "new-session" }; });
     const activeCheck = vi.spyOn(modules.sessions, "hasActiveOperations");
     const admission = modules.sessions.create({ cwd, config: { skills: [], extensions: [] } }); await enteredPromise;
     try {
@@ -1159,8 +1160,8 @@ describe("native control-plane business routes", () => {
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     const app = buildApp(config()); apps.push(app);
     const [openai, google] = await Promise.all([
-      app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "openai", api_key: "openai-secret" } }),
-      app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "google", api_key: "google-secret" } }),
+      app.inject({ method: "PUT", url: "/api/model-config/providers/openai/credential", payload: { revision: 0, credential: { source: "managed", secret: "openai-secret" } } }),
+      app.inject({ method: "PUT", url: "/api/model-config/providers/google/credential", payload: { revision: 0, credential: { source: "managed", secret: "google-secret" } } }),
     ]);
     expect(openai.statusCode).toBe(200);
     expect(google.statusCode).toBe(200);
@@ -1168,155 +1169,17 @@ describe("native control-plane business routes", () => {
     expect(settings.api_keys).toMatchObject({ openai: true, google: true });
   });
 
-  it("exposes keyless custom providers and rejects slug collisions without blocking canonical updates", async () => {
-    const cwd = await workspace();
-    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+  it("creates and updates native keyless custom providers without changing compaction behavior", async () => {
+    const cwd = await workspace(); process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     const app = buildApp(config()); apps.push(app);
-    const payload = { name: "Local Provider", base_url: "http://127.0.0.1:11434/v1", api: "openai-completions", models: ["local-model"], reasoning: true, context_window: 64000 };
-    expect((await app.inject({ method: "PUT", url: "/api/settings/custom-providers/local-provider", payload })).statusCode).toBe(200);
+    const providerConfig = { name: "Local Provider", baseUrl: "http://127.0.0.1:11434/v1", api: "openai-completions", models: [{ id: "local-model", reasoning: true, contextWindow: 64000, thinkingLevelMap: { off: "off", minimal: null, low: null, medium: null, high: null, xhigh: null, max: null } }] };
+    expect((await app.inject({ method: "POST", url: "/api/model-config/providers", payload: { revision: 0, id: "user-local-provider", config: providerConfig, credential: { source: "keyless" } } })).statusCode).toBe(200);
     const settings = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
-    expect(settings.available_models).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "user-local-provider/local-model", reasoning: true, context_window: 64000, thinking_levels: ["off"] }),
-    ]));
-    // Without explicit hints the fallback must never invent xhigh/max.
-    const fallbackLevels = settings.available_models.find((item: { id: string }) => item.id === "user-local-provider/local-model").thinking_levels;
-    expect(fallbackLevels).not.toContain("xhigh");
-    expect(fallbackLevels).not.toContain("max");
-    const compaction = await app.inject({ method: "PUT", url: "/api/settings/compaction", payload: { enabled: true, threshold_percent: 82 } });
-    expect(compaction.statusCode).toBe(200);
-    expect((await app.inject({ method: "GET", url: "/api/settings/config" })).json()).toMatchObject({ compaction_enabled: true, compaction_threshold_percent: 82 });
+    expect(settings.available_models).toEqual(expect.arrayContaining([expect.objectContaining({ id: "user-local-provider/local-model", context_window: 64000, thinking_levels: ["off"] })]));
+    expect((await app.inject({ method: "PUT", url: "/api/settings/compaction", payload: { enabled: true, threshold_percent: 82 } })).statusCode).toBe(200);
     expect((await app.inject({ method: "PUT", url: "/api/settings/compaction", payload: { enabled: true, threshold_percent: 99 } })).statusCode).toBe(400);
-    expect((await app.inject({ method: "PUT", url: "/api/settings/custom-providers/Local%20Provider", payload })).statusCode).toBe(409);
-    expect((await app.inject({ method: "PUT", url: "/api/settings/custom-providers/local-provider", payload: { ...payload, models: ["updated-model"] } })).statusCode).toBe(200);
-  });
-
-  it("preserves inline and per-model metadata from custom provider discovery", async () => {
-    const cwd = await workspace();
-    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
-    const requests: string[] = [];
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      const url = String(input);
-      requests.push(url);
-      if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [
-        { id: "inline-model", max_model_len: 800_000, reasoning: true, thinking_levels: ["off", "high"] },
-        { id: "detail-model" },
-      ] }), { status: 200, headers: { "content-type": "application/json" } });
-      if (url.endsWith("/models/detail-model")) return new Response(JSON.stringify({ id: "detail-model", context_window: 262_144, supports_reasoning: false }), { status: 200, headers: { "content-type": "application/json" } });
-      throw new Error(`unexpected discovery request: ${url}`);
-    });
-    const app = buildApp(config()); apps.push(app);
-
-    const discovered = await app.inject({
-      method: "POST",
-      url: "/api/settings/custom-providers/discover",
-      payload: { name: "Metadata API", base_url: "http://127.0.0.1:30002/v1", api_key: "secret", api: "openai-completions" },
-    });
-    expect(discovered.statusCode).toBe(200);
-    expect(discovered.json().provider).toMatchObject({
-      models: ["inline-model", "detail-model"],
-      model_hints: {
-        "inline-model": { context_window: 800_000, reasoning: true, thinking_levels: ["off", "high"], source: "models" },
-        "detail-model": { context_window: 262_144, reasoning: false, source: "model-detail" },
-      },
-    });
-
-    const provider = discovered.json().provider;
-    const saved = await app.inject({ method: "PUT", url: `/api/settings/custom-providers/${provider.id}`, payload: { ...provider, api_key: "secret", reasoning: true, context_window: 128_000 } });
-    expect(saved.statusCode).toBe(200);
-    expect(requests).toHaveLength(2);
-    const settings = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
-    expect(settings.available_models).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "user-metadata-api/inline-model", context_window: 800_000, reasoning: true }),
-      expect.objectContaining({ id: "user-metadata-api/detail-model", context_window: 262_144, reasoning: false }),
-    ]));
-  });
-
-  it("allows a slower direct-save capability probe without falling back to 128K", async () => {
-    const cwd = await workspace();
-    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const url = String(input);
-      if (!url.endsWith("/models")) throw new Error(`unexpected slow probe request: ${url}`);
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, 900);
-        init?.signal?.addEventListener("abort", () => { clearTimeout(timer); reject(init.signal?.reason); }, { once: true });
-      });
-      return new Response(JSON.stringify({ data: [{ id: "slow-model", max_model_len: 524_288, reasoning: true }] }), { status: 200, headers: { "content-type": "application/json" } });
-    });
-    const app = buildApp(config()); apps.push(app);
-
-    const saved = await app.inject({
-      method: "PUT",
-      url: "/api/settings/custom-providers/slow-provider",
-      payload: { name: "Slow Provider", base_url: "http://127.0.0.1:30003/v1", api: "openai-completions", models: ["slow-model"], context_window: 128_000, model_hints: { "slow-model": { reasoning: false, source: "manual" } } },
-    });
-    expect(saved.statusCode).toBe(200);
-    expect(saved.json().provider.model_hints["slow-model"]).toMatchObject({ context_window: 524_288, reasoning: false, source: "manual" });
-  });
-
-  it("probes OpenAI and Anthropic model capabilities with protocol-correct authentication", async () => {
-    const cwd = await workspace();
-    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
-    const calls: Array<{ url: string; headers: Headers; body: Record<string, unknown> | null }> = [];
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const url = String(input);
-      const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : null;
-      calls.push({ url, headers: new Headers(init?.headers), body });
-      if (url.endsWith("/models")) {
-        const id = url.includes("anthropic") ? "claude-private" : "openai-private";
-        return new Response(JSON.stringify({ data: [{ id }] }), { status: 200, headers: { "content-type": "application/json" } });
-      }
-      if (url.includes("/models/")) return new Response(JSON.stringify({ error: "metadata unavailable" }), { status: 404, headers: { "content-type": "application/json" } });
-      if (url.endsWith("/chat/completions")) return new Response(JSON.stringify({ error: { message: "Maximum context length is 131,072 tokens", supports_reasoning: true, thinking_levels: ["off", "medium", "high"] } }), { status: 400, headers: { "content-type": "application/json" } });
-      if (url.endsWith("/messages")) return new Response(JSON.stringify({ error: { message: "This model has a maximum context length of 200,000 tokens", supports_reasoning: true, thinking_levels: ["off", "high"] } }), { status: 400, headers: { "content-type": "application/json" } });
-      throw new Error(`unexpected probe request: ${url}`);
-    });
-    const app = buildApp(config()); apps.push(app);
-
-    const openai = await app.inject({ method: "POST", url: "/api/settings/custom-providers/discover", payload: { name: "OpenAI Local", base_url: "http://127.0.0.1/openai/v1", api_key: "openai-key", api: "openai-completions" } });
-    expect(openai.statusCode).toBe(200);
-    expect(openai.json().provider.model_hints["openai-private"]).toMatchObject({ context_window: 131_072, reasoning: true, thinking_levels: ["off", "medium", "high"], source: "openai-chat-probe" });
-
-    const anthropic = await app.inject({ method: "POST", url: "/api/settings/custom-providers/discover", payload: { name: "Anthropic Local", base_url: "http://127.0.0.1/anthropic/v1", api_key: "anthropic-key", api: "anthropic-messages" } });
-    expect(anthropic.statusCode).toBe(200);
-    expect(anthropic.json().provider.model_hints["claude-private"]).toMatchObject({ context_window: 200_000, reasoning: true, thinking_levels: ["off", "high"], source: "anthropic-probe" });
-
-    const openaiProbe = calls.find((call) => call.url.endsWith("/chat/completions"));
-    expect(openaiProbe?.headers.get("authorization")).toBe("Bearer openai-key");
-    expect(openaiProbe?.body?.max_tokens).toBe(1_000_000_000);
-    const anthropicList = calls.find((call) => call.url.endsWith("/anthropic/v1/models"));
-    const anthropicProbe = calls.find((call) => call.url.endsWith("/messages"));
-    expect(anthropicList?.headers.get("x-api-key")).toBe("anthropic-key");
-    expect(anthropicList?.headers.has("authorization")).toBe(false);
-    expect(anthropicProbe?.headers.get("x-api-key")).toBe("anthropic-key");
-    expect(anthropicProbe?.headers.get("anthropic-version")).toBe("2023-06-01");
-  });
-
-  it("probes OpenAI Responses model capabilities with the responses protocol", async () => {
-    const cwd = await workspace();
-    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
-    const calls: Array<{ url: string; headers: Headers; body: Record<string, unknown> | null }> = [];
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const url = String(input);
-      const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : null;
-      calls.push({ url, headers: new Headers(init?.headers), body });
-      if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "responses-private" }] }), { status: 200, headers: { "content-type": "application/json" } });
-      if (url.includes("/models/")) return new Response(JSON.stringify({ error: "metadata unavailable" }), { status: 404, headers: { "content-type": "application/json" } });
-      if (url.endsWith("/responses")) return new Response(JSON.stringify({ error: { message: "Maximum context length is 196,608 tokens", supports_reasoning: true, thinking_levels: ["off", "low", "max"] } }), { status: 400, headers: { "content-type": "application/json" } });
-      throw new Error(`unexpected probe request: ${url}`);
-    });
-    const app = buildApp(config()); apps.push(app);
-
-    const responses = await app.inject({ method: "POST", url: "/api/settings/custom-providers/discover", payload: { name: "Responses API", base_url: "http://127.0.0.1/responses/v1", api_key: "responses-key", api: "openai-responses" } });
-    expect(responses.statusCode).toBe(200);
-    expect(responses.json().provider.model_hints["responses-private"]).toMatchObject({ context_window: 196_608, reasoning: true, thinking_levels: ["off", "low", "max"], source: "openai-responses-probe" });
-
-    const list = calls.find((call) => call.url.endsWith("/responses/v1/models"));
-    const probe = calls.find((call) => call.url.endsWith("/responses"));
-    expect(list?.headers.get("authorization")).toBe("Bearer responses-key");
-    expect(probe?.headers.get("authorization")).toBe("Bearer responses-key");
-    // The responses protocol uses input + max_output_tokens (not messages/max_tokens).
-    expect(probe?.body).toMatchObject({ model: "responses-private", input: "ping", max_output_tokens: 1_000_000_000 });
+    expect((await app.inject({ method: "POST", url: "/api/model-config/providers", payload: { revision: 1, id: "user-local-provider", config: providerConfig } })).statusCode).toBe(409);
+    expect((await app.inject({ method: "PATCH", url: "/api/model-config/providers/user-local-provider", payload: { revision: 1, config: { ...providerConfig, models: [{ id: "updated-model" }] } } })).statusCode).toBe(200);
   });
 
   it("toggles compaction enabled without a threshold while keeping strict threshold validation", async () => {
@@ -1353,7 +1216,7 @@ describe("native control-plane business routes", () => {
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     vi.spyOn(nodeSessionService, "reloadConfiguration").mockRejectedValueOnce(new Error("forced reload failure"));
     const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
-    const response = await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "openai", api_key: "saved-secret" } });
+    const response = await app.inject({ method: "PUT", url: "/api/model-config/providers/openai/credential", payload: { revision: 0, credential: { source: "managed", secret: "saved-secret" } } });
     expect(response.statusCode).toBe(502);
     expect(response.json()).toMatchObject({ ok: false, error: expect.stringContaining("forced reload failure") });
     expect((await app.inject({ method: "GET", url: "/api/settings/config" })).json().api_keys).toMatchObject({ openai: true });
@@ -1366,7 +1229,7 @@ describe("native control-plane business routes", () => {
     await mkdir(join(cwd, ".pi", "agents"), { recursive: true });
     await writeFile(join(cwd, ".pi", "agents", "reviewer.md"), "# reviewer", "utf8");
 
-    const blocked = await app.inject({ method: "POST", url: "/api/settings/custom-providers/discover", payload: { base_url: "http://127.0.0.1:11434/v1", api_key: "secret" } });
+    const blocked = await app.inject({ method: "POST", url: "/api/model-config/discover", payload: { base_url: "http://127.0.0.1:11434/v1", api: "openai-completions", secret: "secret" } });
     expect(blocked.statusCode).toBe(400);
     expect(blocked.body).not.toContain("secret");
 
