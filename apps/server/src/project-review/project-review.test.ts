@@ -117,7 +117,7 @@ describe("POST /api/project-knowledge/review", () => {
     });
     const ledger = JSON.parse(await readFile(join(cwd, ".pi-science", "memory", "ledger.json"), "utf8")) as { proposals: Array<Record<string, unknown>> };
     expect(ledger.proposals[0]).toMatchObject({ scope: "project", approval: { required: "manual", status: "pending" } });
-    expect((ledger.proposals[0]?.source as { evidence?: unknown[] }).evidence).toEqual(expect.arrayContaining([
+    expect((ledger.proposals[0]?.source as { evidence?: unknown[] } | undefined)?.evidence).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "message", locator: "session-a@message-0" }),
       expect.objectContaining({ kind: "file", locator: "notes.md" }),
     ]));

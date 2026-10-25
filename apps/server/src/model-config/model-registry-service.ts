@@ -2,7 +2,7 @@ import { validateOutboundHttpUrl } from "../security/outbound-security.js";
 import { SettingsStore } from "../storage/settings-store.js";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { createProvider, lazyApi, type Api, type Model, type ProviderStreams } from "@earendil-works/pi-ai";
-import { DEFAULT_MODEL_CONTEXT_WINDOW, modelConfigSnapshotSchema, type ModelConfigSnapshot } from "@pi-science/contracts";
+import { DEFAULT_MODEL_CONTEXT_WINDOW, modelConfigSnapshotSchema} from "@pi-science/contracts";
 import { ModelCredentialAdapter } from "./model-credential-adapter.js";
 import { ModelConfigService, configError } from "./model-config-service.js";
 import { anthropicBaseUrl } from "./protocol-endpoints.js";

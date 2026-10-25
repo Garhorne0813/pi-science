@@ -175,3 +175,23 @@ Worker 进程提供故障隔离，**不提供 OS sandbox 保证**。工作区路
 | [会话转换](agent-core-session-conversion.md) | 离线命令、自动转换和 tombstone |
 
 CI 结果证明对应提交执行过的检查，不意味着所有外部提供商、复杂用户会话和各平台全部界面路径都已人工验收。
+
+## Workspace contracts 与 Node 运行时
+
+The workspace requires Node.js >=24.16.0 (enforced by the installer and CI).
+`@pi-science/contracts` exports `src/*.ts` for both type and runtime resolution.
+Its build emits declarations only; checked-in `.js` files are explicit re-export
+shims for `.js` imports inside the TypeScript sources, not generated copies.
+Native Node uses built-in type stripping; Vite and development/test tooling
+transform the same sources. A compiled server installation must therefore keep
+contracts source files and workspace links, not just `contracts/dist`.
+The version floor is the supported/tested repository baseline; it is not a claim
+that type stripping first appeared in that Node release.
+
+[Production-install CI](../.github/workflows/quality.yml) exercises the native
+compiled server on Linux, Windows and macOS. [Deployment](deployment.md) describes
+installation. See also [frontend runtime](frontend-agent-runtime.md),
+[verification](development-quality.md), [patch maintenance](../patches/README.md)
+and the [documentation index](README.md).
+
+See [server service boundaries](server-service-boundaries.md) for model resources, conversation event delivery and agent session protocol ownership.

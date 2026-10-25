@@ -351,7 +351,10 @@ try {
                 $remainingIdentity = @("frontend", "control") | ForEach-Object { Get-PiProcessIdentity -State $currentState -Role $_ -Checkout $ProjectDir }
                 if (@($remainingIdentity | Where-Object { $_.status -ne "already_exited" }).Count -eq 0) { Remove-Item -LiteralPath $StateFile -Force }
             }
-        } catch { }
+        } catch {
+            # Preserve unverified state; cleanup must not remove another launch.
+            Write-Verbose ("Could not verify launcher state during cleanup: " + $_.Exception.Message)
+        }
     }
     $LaunchLock.Dispose()
 }

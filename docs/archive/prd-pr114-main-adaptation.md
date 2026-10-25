@@ -31,7 +31,7 @@
 | 当前主分支提交 | `410e8daf601f330b8ce5f6c29ac0604858cd767c` |
 | 共同祖先 | `4c15bb95f26ef3c9dd8d75b45410d7f4f0b2291a` |
 | PR worktree | `/Users/cyq/.codex/worktrees/pr-114/pi-science` |
-| 本文保存位置 | `/Users/cyq/codex/pi-science/docs/prd-pr114-main-adaptation.md` |
+| 本文保存位置 | `/Users/cyq/codex/pi-science/docs/archive/prd-pr114-main-adaptation.md` |
 
 主分支提交 `410e8daf601f330b8ce5f6c29ac0604858cd767c` 已合入 PR 115。该 PR 将运行时迁移到 Agent Core。
 
@@ -480,7 +480,7 @@ pnpm --filter frontend test:accessibility
 
 ### 8.6 提交和评审
 
-1. 将本文复制到适配分支的 `docs/prd-pr114-main-adaptation.md`。
+1. 将本文复制到适配分支的 `docs/archive/prd-pr114-main-adaptation.md`。
 2. 检查暂存区只包含 PR 114、主分支合并、适配修复和必要测试。
 3. 保留主分支的 `package.json`、`pnpm-lock.yaml` 和 Agent Core 生产代码。
 4. 完成合并提交，再提交新增测试或适配修复。提交前检查工作区，避免遗漏未暂存文件。
@@ -513,7 +513,7 @@ git push origin HEAD:feat/composer-tab-completion
 - 真实输入法验收通过。
 - 本次验证结果对应最终待合并提交。
 
-测试记录写入 `docs/pr114-main-adaptation-validation.md`。记录命令、提交 SHA、退出码、失败原因和人工验收结果。该文件在实施阶段创建。
+测试记录写入 `docs/archive/pr114-main-adaptation-validation.md`。记录命令、提交 SHA、退出码、失败原因和人工验收结果。该文件在实施阶段创建。
 
 PR 描述中的旧测试结果只说明旧基线状态。不得将其复制为当前 Agent Core 基线的验证结果。任何测试失败都需要在相同基线复现并分类，不能直接标记为历史问题。
 

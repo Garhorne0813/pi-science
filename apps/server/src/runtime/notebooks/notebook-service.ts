@@ -62,7 +62,7 @@ async function findAvailablePort(): Promise<number> {
 }
 
 function packageName(spec: string): string {
-  return spec.trim().toLowerCase().match(/^[^<>=!\[\s]+/)?.[0] ?? "";
+  return spec.trim().toLowerCase().match(/^[^<>=![\s]+/)?.[0] ?? "";
 }
 
 function hasPackage(packages: unknown, name: string): boolean {

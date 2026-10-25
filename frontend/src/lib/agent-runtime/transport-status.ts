@@ -9,7 +9,7 @@
  *  offline, and exhausted recovery may change the foreground status. */
 
 import type { RuntimeStatus } from "./types";
-import { useRuntimeStore } from "./store";
+import { runtimeStore } from "./store-access";
 
 export type TransportStatus =
   | "idle"
@@ -110,7 +110,7 @@ export interface TransportEvent {
 /** Apply one transport lifecycle event to the store and record it. Returns the
  *  transition when something changed. */
 export function applyTransportEvent(event: TransportEvent): TransportTransition | null {
-  const current = useRuntimeStore.getState();
+  const current = runtimeStore.getState();
   const previousTransport = current.transportStatus;
   const previousForeground = current.status;
   const foreground = event.foreground === undefined
@@ -140,7 +140,7 @@ export function applyTransportEvent(event: TransportEvent): TransportTransition 
   };
   log.push(transition);
   if (log.length > DIAGNOSTIC_LOG_LIMIT) log.splice(0, log.length - DIAGNOSTIC_LOG_LIMIT);
-  useRuntimeStore.setState({
+  runtimeStore.setState({
     ...(previousTransport !== event.transport ? { transportStatus: event.transport } : {}),
     ...(previousForeground !== foreground ? { status: foreground } : {}),
   });

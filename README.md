@@ -306,3 +306,5 @@ MIT
 The opt-in [Pi-native model configuration backend](docs/model-config-native.md)
 adds versioned configuration, explicit credential sources and conservative legacy
 migration. The deployment default remains `legacy` until rollout gates pass.
+
+[Documentation index / 文档索引](docs/README.md) · [Development verification / 开发检查](docs/development-quality.md)

@@ -309,10 +309,10 @@ export function registerNodeSessionRoutes(
     const messages = await sessionRepository.messages(root, request.params.session_id);
     if (!messages.length) return reply.code(404).send({ ok: false, code: "not_found", error: "session not found in this workspace" });
     const filename = `session-${request.params.session_id.slice(0, 8)}`;
-    reply.header("content-disposition", `attachment; filename=\"${filename}.${format}\"`);
+    reply.header("content-disposition", `attachment; filename="${filename}.${format}"`);
     if (format === "jsonl") return reply.type("application/x-ndjson").send(messages.map((message) => JSON.stringify(message)).join("\n") + "\n");
     const rows = messages.map((message) => `<section><h2>${escapeHtml(message.role)}</h2><pre>${escapeHtml(messageText(message.content))}</pre></section>`).join("\n");
-    return reply.type("text/html; charset=utf-8").send(`<!doctype html><html><head><meta charset=\"utf-8\"><title>${escapeHtml(filename)}</title></head><body><h1>${escapeHtml(filename)}</h1>${rows}</body></html>`);
+    return reply.type("text/html; charset=utf-8").send(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(filename)}</title></head><body><h1>${escapeHtml(filename)}</h1>${rows}</body></html>`);
   });
 
   app.delete<{ Params: { session_id: string } }>("/api/sessions/:session_id", async (request, reply) => {

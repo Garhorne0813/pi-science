@@ -3,7 +3,7 @@
 import type { PiScienceClient, SessionInfo, SessionStats } from "../client/pi-science-client";
 import type { ModelSelection, CreateSessionRequest } from "@pi-science/contracts";
 import type { TransportStatus } from "./transport-status";
-import type { Thread } from "./event-fold";
+import type { Thread } from "./folding/types";
 
 export interface PendingInteraction {
   requestId: string;

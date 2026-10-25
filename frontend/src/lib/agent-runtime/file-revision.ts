@@ -11,17 +11,17 @@
 
 import { workspaceFiles } from "../workspace";
 import { generations } from "./generations";
-import { useRuntimeStore } from "./store";
+import { runtimeStore } from "./store-access";
 
 let lastKey = "";
 let lastSession: string | null = null;
 
 export function markWorkspaceFilesChanged(): void {
-  const state = useRuntimeStore.getState();
+  const state = runtimeStore.getState();
   const key = `${generations.connection}:${generations.activity}`;
   if (key === lastKey && state.activeSessionId === lastSession) return;
   lastKey = key;
   lastSession = state.activeSessionId;
   workspaceFiles.invalidate();
-  useRuntimeStore.setState({ fileRevision: (state.fileRevision ?? 0) + 1 });
+  runtimeStore.setState({ fileRevision: (state.fileRevision ?? 0) + 1 });
 }

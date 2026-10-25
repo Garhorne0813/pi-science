@@ -7,7 +7,7 @@
 本文基于提交 `8d3fa0ef`（"align artifact cards with conversation turn identity"）之后的代码
 
 > 阅读约定：**「已验证」= 有代码或运行时数据支撑；「假设」= 尚未验证。**
-> 上一份文档 `docs/artifact-card-anchor-issue-handoff.md` 里的 §7.3 与 §10.1 是两个待办项。
+> 上一份文档 `docs/archive/artifact-card-anchor-issue-handoff.md` 里的 §7.3 与 §10.1 是两个待办项。
 > **本文 Part 2 更正了 §10.1 —— 那不成立，是我的测量误判，不是产品缺陷。**
 > Part 1（§7.3）是真实的、仍未修复的问题。
 
@@ -235,7 +235,7 @@ console.log(formatTransitions(log));                  // 或 nodeRepl.write(...)
 
 - 分支 `pr-107`，HEAD `8d3fa0ef`；**该提交尚未推送到远端分支**（`origin/feat/scientific-activity-permission-artifacts` 仍停在 `e790f0f1`，本地领先 1 个提交）。
 - 本地验证（`8d3fa0ef` 上）：`typecheck` + `lint` 通过；前端 133 文件 / 1151 测试、服务端 95 文件 / 864 测试通过。服务端 `notebook-service.test.ts` 的 jupyter 用例在并行负载下偶发失败，单独重跑即过（与分析内容无关）。
-- 工作区未提交改动：`docs/artifact-card-anchor-issue-handoff.md`（对 §10.1 的更正）、`frontend/scripts/uat-conversation.mjs`（分析前即存在）。
+- 工作区未提交改动：`docs/archive/artifact-card-anchor-issue-handoff.md`（对 §10.1 的更正）、`frontend/scripts/uat-conversation.mjs`（分析前即存在）。
 - `apps/server/src/runtime/artifacts/turn-artifact-repository.ts` 的 `nextTurnOrdinal()` 在 `8d3fa0ef` 之后已无生产调用方（仅其自身测试），可清理。
 
 

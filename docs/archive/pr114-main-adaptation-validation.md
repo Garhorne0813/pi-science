@@ -1,6 +1,6 @@
 # PR 114 适配主分支验证记录
 
-日期：2026-10-09。对应 PRD：`docs/prd-pr114-main-adaptation.md`。
+日期：2026-10-09。对应 PRD：`docs/archive/prd-pr114-main-adaptation.md`。
 
 本文记录实施阶段的真实结果。所有结论都来自本次会话的命令输出或浏览器证据；未验证项单独列出。
 

@@ -1,6 +1,6 @@
 # Agent Core 通信实现记录
 
-当前实现按[产品协议说明](prd-agent-core-communication-optimization.md)运行，浏览器通过 REST/SSE 与 Node 服务通信，服务端通过结构化 IPC 管理独立 Core Worker。
+当前实现按[产品协议说明](archive/prd-agent-core-communication-optimization.md)运行，浏览器通过 REST/SSE 与 Node 服务通信，服务端通过结构化 IPC 管理独立 Core Worker。
 
 | 层 | 实现 |
 | --- | --- |
