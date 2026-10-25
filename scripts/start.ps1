@@ -142,6 +142,7 @@ function Stop-PiProcess {
         }
     } catch {
         # The process may have exited between HasExited and Stop-Process.
+        Write-Verbose "Process cleanup skipped: $($_.Exception.Message)"
     }
 }
 
