@@ -129,7 +129,11 @@ jobs:
 
       - name: Test contracts, control plane, frontend and skills
         if: runner.os != 'Windows'
-        run: pnpm test
+        # Each suite may use both runner cores. Running frontend and server
+        # together also competes with real child workers in the IPC tests.
+        run: |
+          pnpm --workspace-concurrency=1 --filter @pi-science/contracts --filter @pi-science/server --filter frontend run test --maxWorkers=2
+          pnpm test:skills
 
       - name: Check Windows worker startup before the full IPC suite
         if: runner.os == 'Windows'
