@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { readProject } from "../project/project-registry.js";
 import { sessionRepository, type SessionMessageRecord, type SessionRepository } from "../runtime/node/session-repository.js";
 import { mutateProjectState, readProjectState, timestamp, type Proposal } from "./project-state.js";
+import { buildScienceEvidence, isReportTurn, scienceReviewEnabled, scienceReviewPrompt } from "./science-review.js";
 import type { ConversationExcerpt, ExcerptMessage, ReviewProposal, ReviewSubagentRunner } from "./types.js";
 
 const MAX_MESSAGES = 40;
@@ -15,7 +16,7 @@ export class ProjectReviewBusyError extends Error {
   constructor() { super("A project review is already running for this workspace"); this.name = "ProjectReviewBusyError"; }
 }
 
-export interface ProjectReviewOptions { sessionId?: string | null; forceFullSession?: boolean; trigger?: "manual" | "auto"; turnId?: string }
+export interface ProjectReviewOptions { sessionId?: string | null; forceFullSession?: boolean; trigger?: "manual" | "auto"; turnId?: string; /** Science review mode: check the latest report turn for integrity using verified citation and execution evidence. */ mode?: "science" }
 /** Response contract consumed verbatim by the frontend ✨ Review button. */
 export interface ProjectReviewSummary { run_id: string; created: number; skipped: number; proposal_ids: string[]; message: string }
 
@@ -51,6 +52,29 @@ export class ProjectReviewService {
     if (!sessionId) return nothing("Open a conversation before running a project review");
     const excerpt = buildExcerpt(sessionId, await this.repository.messages(cwd, sessionId), options.forceFullSession === true);
     if (!excerpt.messages.length) return nothing("There is no conversation history to review yet");
+    if (options.mode === "science") {
+      const latestReport = [...excerpt.messages].reverse().find((message) => message.role === "assistant" && isReportTurn(message.text));
+      if (!latestReport) return nothing("No report-shaped assistant turn was found to review");
+      if (options.trigger === "auto" && !scienceReviewEnabled()) return nothing("Automatic science review is disabled (set PI_SCIENCE_SCIENCE_REVIEW=1 to enable)");
+      const evidence = await buildScienceEvidence(cwd, latestReport.text, sessionId);
+      const result = await this.runner.run({ run_id: runId, cwd, session_id: sessionId, excerpt, prompt: scienceReviewPrompt(excerpt, evidence) });
+      const proposed = result.output.proposals.slice(0, MAX_PROPOSALS);
+      if (!proposed.length) return nothing("The science reviewer found no integrity issues in the latest report");
+      const projectId = (await readProject(cwd).catch(() => null))?.id ?? null;
+      return await mutateProjectState(cwd, (current) => {
+        const known = new Set(current.proposals.filter((item) => item.status === "pending").map((item) => item.title.trim().toLowerCase()));
+        const created: Proposal[] = [];
+        let skipped = 0;
+        for (const item of proposed) {
+          const key = item.title.trim().toLowerCase();
+          if (known.has(key)) { skipped += 1; continue; }
+          known.add(key);
+          created.push(toProposal(item, sessionId, projectId));
+        }
+        if (created.length) current.proposals.push(...created);
+        return { run_id: runId, created: created.length, skipped, proposal_ids: created.map((item) => item.id), message: `Science review: ${reviewMessage(created.length, skipped)}` };
+      });
+    }
     if (options.trigger === "auto" && options.turnId) {
       const reserved = await mutateProjectState(cwd, (current) => {
         if (current.history.some((record) => record.id === runId && record.type === "automatic_review")) return false;

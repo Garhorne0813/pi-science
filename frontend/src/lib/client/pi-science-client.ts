@@ -188,6 +188,15 @@ export class PiScienceClient {
     return rest.generateSessionTitle(this.baseUrl, sessionId, cwd);
   }
 
+  /** Best-effort science review of the latest report turn; findings join the pending proposal queue. */
+  async requestScienceReview(sessionId: string, cwd: string, trigger: "manual" | "auto" = "auto"): Promise<void> {
+    try {
+      await rest.requestScienceReview(this.baseUrl, sessionId, cwd, trigger);
+    } catch {
+      // Silent by design, like AI titles: a failed review must never disturb the conversation.
+    }
+  }
+
   // ── SSE ──
 
   connect(sessionId: string, cwd?: string, reason?: TransportReason): void {

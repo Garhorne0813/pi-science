@@ -5,11 +5,12 @@ import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import type { AgentMessageBlock, StatusLineBlock, ThreadBlock, UserMessageBlock } from "../../types/thread";
 import { MarkdownViewer, type CodeRunner } from "../markdown-viewer/MarkdownViewer";
-import { fileInspectorFromBlock, refToArtifactBlock } from "../../lib/artifacts";
+import { pinnedFileInspector } from "../../lib/artifacts";
 import { ReferencedArtifactStrip, TurnArtifactStrip } from "./TurnArtifactStrip";
 import { referencesFromMessage, visibleUserMessage } from "../../lib/files";
 import { agentActionTextByBlock } from "../../lib/conversation";
 import { extractCitations } from "../../lib/citations";
+import { CitationChips } from "./CitationChips";
 import { parseSuggestions } from "../../lib/conversation";
 import { MessageActions } from "./MessageActions";
 import { buildTurnPresentations, turnBlockIds, type TurnPresentation } from "../../lib/conversation/turn-presentation";
@@ -75,17 +76,13 @@ function UserMessage({ block }: { block: UserMessageBlock }) {
 }
 
 function AgentMessage({ block, actionText, codeRunner }: { block: AgentMessageBlock; actionText?: string; codeRunner?: CodeRunner }) {
-  const { t } = useTranslation();
   const rawText = block.parts.map((part) => part.text).join("");
   if (!rawText) return null;
   const text = parseSuggestions(rawText).clean;
   const citations = extractCitations(text);
   return <div className="group/message">
     <MarkdownViewer variant="chat" codeRunner={codeRunner} mode={block.partial ? "streaming" : "final"}>{text}</MarkdownViewer>
-    {citations.length > 0 && <div className="mt-2 flex flex-wrap items-center gap-1.5">
-      <span className="text-[10px] text-muted">{t("conversation.sources")} ({citations.length})</span>
-      {citations.map((citation, index) => <a key={`${citation.kind}:${citation.id}`} href={citation.url} target="_blank" rel="noreferrer" title={citation.id} className="rounded-full border border-border bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted hover:text-text">{index + 1} · {shortCitationId(citation.id)}</a>)}
-    </div>}
+    {citations.length > 0 && <CitationChips citations={citations} />}
     {!block.partial && actionText && <MessageActions text={parseSuggestions(actionText).clean} timestamp={block.timestamp} />}
   </div>;
 }
@@ -95,15 +92,15 @@ function SystemBlock({ block }: { block: ThreadBlock }) {
   return null;
 }
 
-function shortCitationId(id: string): string { return id.length <= 24 ? id : `${id.slice(0, 14)}…${id.slice(-8)}`; }
-
 function StatusLine({ block }: { block: StatusLineBlock }) {
   const openInspector = useUiStore((state) => state.openInspector);
   const cwd = useRuntimeStore((state) => state.cwd);
   const tone = block.level === "error" ? "text-error-text" : block.level === "done" ? "text-ok-text" : "text-muted";
   if (block.path) {
-    const artifact = refToArtifactBlock(block.path);
-    return <button type="button" onClick={() => openInspector({ ...fileInspectorFromBlock(artifact as any), cwd } as any)} className={cn("flex items-center gap-2 text-xs hover:underline", tone)}>{block.text}</button>;
+    // Published references pin to the version that exists when clicked; the
+    // live file only shows for paths that were never published.
+    const open = () => { void pinnedFileInspector(block.path!, undefined, "workspace", cwd).then((inspector) => openInspector(inspector)); };
+    return <button type="button" onClick={open} className={cn("flex items-center gap-2 text-xs hover:underline", tone)}>{block.text}</button>;
   }
   return <div className={cn("flex items-center gap-2 text-xs", tone)}>{block.level === "info" && <Loader2 size={14} className="animate-spin text-accent" />}{block.text}</div>;
 }

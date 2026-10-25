@@ -13,6 +13,7 @@ import type {
   ThreadBlock,
 } from "../../types/thread";
 import { toWorkspaceRelativePath } from "../files/workspace-path";
+import { findPublishedVersion } from "./artifact-versions";
 
 // Re-export so existing imports from artifacts.ts keep working
 export type { ArtifactKind, ArtifactBlock, ArtifactVersion, ArtifactInspector, FilePreviewInspector, NotebookFileInspector };
@@ -263,5 +264,29 @@ export function resolveArtifactContent(
     messages: v?.messages ?? data.messages,
     environment: v?.environment ?? data.environment,
     reviewPassed: v?.reviewPassed ?? data.reviewPassed,
+  };
+}
+
+/**
+ * Resolve a chat or prose file reference to its newest published artifact
+ * version, pinning the inspector to that version's immutable bytes so later
+ * workspace edits cannot silently change what the reference shows. Falls back
+ * to the live file when the path was never published.
+ */
+export async function pinnedFileInspector(
+  path: string,
+  filename = path.split("/").pop() || path,
+  root?: FileRoot,
+  cwd?: string,
+): Promise<FilePreviewInspector | NotebookFileInspector> {
+  const inspector = fileInspectorForPath(path, filename, root, cwd);
+  if (inspector.variant !== "file" || !cwd) return inspector;
+  const published = await findPublishedVersion(cwd, path);
+  if (!published) return inspector;
+  return {
+    ...inspector,
+    sha256: published.sha256,
+    version: published.version,
+    artifactId: published.artifact_id,
   };
 }

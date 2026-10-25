@@ -37,6 +37,7 @@ function inspectorForArtifact(item: TurnArtifactItem, cwd: string) {
     ...(inspector.variant === "file" ? inspector : { variant: "file" as const, path: item.path, filename, root: "workspace" as const, cwd }),
     sha256: item.sha256,
     version: item.version,
+    ...(item.artifactId ? { artifactId: item.artifactId } : {}),
   };
 }
 

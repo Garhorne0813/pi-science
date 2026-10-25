@@ -23,7 +23,7 @@ export type ReviewResult = { proposals: ReviewProposal[] };
 export interface ExcerptMessage { id: string; role: string; text: string }
 export interface ConversationExcerpt { session_id: string; messages: ExcerptMessage[]; truncated: boolean }
 
-export interface ReviewRunRequest { run_id: string; cwd: string; session_id: string; excerpt: ConversationExcerpt }
+export interface ReviewRunRequest { run_id: string; cwd: string; session_id: string; excerpt: ConversationExcerpt; /** Optional caller-built prompt (science review mode); defaults to the knowledge review prompt. */ prompt?: string }
 export interface ReviewRunResult { run_id: string; output: ReviewResult }
 
 export interface ReviewSubagentRunner {

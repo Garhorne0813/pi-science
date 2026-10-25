@@ -11,6 +11,7 @@ Pi Science 使用 Agent Core SDK 和独立 Worker 执行对话、研究、复查
 | 子代理定义 | `.pi/agents/<name>.md` + `.pi/skills/<skill>/agents/<name>.md` + 内置角色 | frontmatter 的 tools 可收窄父工具范围；继承父模型与资源策略；深度上限 2 |
 | Auto Research | 当前 Conversation Agent + auto-research Skill | 动态子问题委派、独立 Reviewer、任务专属评价与文件检查点；旧 Research 专属运行链路已移除 |
 | execution_budget | 通用 Harness 工具 + 持久化调用预留 | 操作级时间/执行次数硬上限；工具取消信号、并发计数与恢复；不持有研究状态机 |
+| 远程算力 | `remote_machines` / `remote_execute` / `slurm_submit` / `slurm_check` worker 工具 + 控制面 `remote-compute-service` | 仅密钥认证的已注册机器（Settings → Compute）；执行/提交需会话内审批；走 bash 执行预算桶；输出上限与 Runs/provenance 记录；PBS/LSF、远程内核与双向文件同步不在范围 |
 | review runner | `CoreReviewSubagentRunner` | 复用原 5 分钟期限、一次 JSON 修复与结果校验；工具禁用 |
 | 子 Worker 资源 | `AgentRuntimeManager` | 普通会话、子代理、研究、复查共享进程级容量；`PI_SCIENCE_AGENT_MAX_WORKERS` 默认 16；跨 manager 排他归属 |
 | 技能/模板/命令 | 上游 loader 与 invocation formatter | `.pi/skills`、配置技能目录及 `.pi/prompts`；策略控制菜单与执行；refresh 更新资源；前端展示模板 |

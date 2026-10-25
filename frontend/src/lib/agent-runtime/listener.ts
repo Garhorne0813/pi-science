@@ -94,6 +94,21 @@ function clearOptimisticRetry(): void {
 const aiTitleInFlight = new Set<string>();
 const AI_TITLE_RETRY_MS = 60 * 60 * 1000;
 
+/** Science review is best-effort after report-shaped turns: the backend
+ *  re-checks the report heuristic and its own enable gate, so this stays a
+ *  cheap fire-and-forget probe that no-ops for ordinary turns. */
+const scienceReviewInFlight = new Set<string>();
+function maybeRequestScienceReview(sessionId: string, cwd?: string): void {
+  const client = _listenerClient;
+  if (!client || !cwd) return;
+  const key = `${cwd}\u0000${sessionId}`;
+  if (scienceReviewInFlight.has(key)) return;
+  scienceReviewInFlight.add(key);
+  void client.requestScienceReview(sessionId, cwd, "auto").finally(() => {
+    scienceReviewInFlight.delete(key);
+  });
+}
+
 function maybeGenerateAiTitle(sessionId: string, cwd?: string): void {
   const client = _listenerClient;
   if (!client || !cwd || hasAiTitle(cwd, sessionId)) return;
@@ -586,7 +601,10 @@ export function registerEventListener(client: PiScienceClient) {
         markWorkspaceFilesChanged();
         if (successful && state.activeSessionId && event.handledWithoutTurn !== true) {
           void resyncCompletedHistory(state.activeSessionId, state.cwd);
-          if (event.status === "completed") maybeGenerateAiTitle(state.activeSessionId, state.cwd);
+          if (event.status === "completed") {
+            maybeGenerateAiTitle(state.activeSessionId, state.cwd);
+            maybeRequestScienceReview(state.activeSessionId, state.cwd);
+          }
         }
       }
       void loadSessionsInternal();

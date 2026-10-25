@@ -295,6 +295,9 @@ export interface FilePreviewInspector {
   /** Published content to preview, independently of the current workspace file. */
   sha256?: string;
   version?: number;
+  /** Artifact identity for version diffs; present when the inspector was
+   *  opened from a published version rather than the live file. */
+  artifactId?: string;
   artifact?: ArtifactKind;
   language?: string;
   content?: string;

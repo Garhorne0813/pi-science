@@ -1,4 +1,5 @@
 import { createReadStream } from "node:fs";
+import { spawn } from "node:child_process";
 import { lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { isUtf8 } from "node:buffer";
 import { basename, dirname, extname, join, relative, sep } from "node:path";
@@ -224,13 +225,93 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
     let root: string;
     try { root = await safeWorkspace(request); } catch (error) { return reply.code(403).send({ error: String(error) }); }
     const wildcard = (request.params as { path?: string; "*"?: string }).path ?? (request.params as { "*"?: string })["*"] ?? "";
+    const recursive = queryValue(request, "recursive") === "true";
     try {
       const target = await resolveApiFile(root, wildcard);
+      const relativePath = apiPath(root, target);
+      // The workspace root and its metadata sidecar are structural; deleting
+      // either from the file browser would corrupt session/provenance state.
+      if (!relativePath || relativePath === ".pi-science" || relativePath.startsWith(".pi-science/")) {
+        return reply.code(403).send({ error: "Refusing to delete the workspace root or its .pi-science metadata directory" });
+      }
       const info = await stat(target);
-      if (info.isDirectory()) await rm(target, { recursive: false }); else await rm(target);
-      await appendJsonLine(workspaceFile(root, "provenance.jsonl"), { path: apiPath(root, target), version: 1, ts: Date.now() / 1000, tool: "file_delete", sessionId: "" });
+      if (info.isDirectory() && !recursive) {
+        try { await rm(target, { recursive: false }); }
+        catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === "ENOTEMPTY" || code === "EEXIST" || code === "ERR_FS_EISDIR") return reply.code(409).send({ error: "Folder is not empty; pass recursive=true after user confirmation" });
+          throw error;
+        }
+      } else {
+        await rm(target, { recursive: info.isDirectory() && recursive });
+      }
+      await appendJsonLine(workspaceFile(root, "provenance.jsonl"), { path: relativePath, version: 1, ts: Date.now() / 1000, tool: "file_delete", sessionId: "", ...(recursive && info.isDirectory() ? { recursive: true } : {}) });
       return { ok: true };
     } catch (error) { return reply.code(404).send({ error: String(error) }); }
+  });
+  app.post("/api/files/mkdir", async (request, reply) => {
+    let root: string;
+    try { root = await safeWorkspace(request); } catch (error) { return reply.code(403).send({ error: String(error) }); }
+    const body = (request.body ?? {}) as { path?: unknown; exclusive?: unknown };
+    const requested = String(body.path ?? "");
+    if (!requested.trim() || requested.includes("..")) return reply.code(400).send({ error: "A non-empty workspace-relative folder path is required" });
+    try {
+      const target = await resolveApiFile(root, requested);
+      const relativePath = apiPath(root, target);
+      const exclusive = body.exclusive === true;
+      try { await mkdir(target, { recursive: !exclusive }); }
+      catch (error) {
+        if (exclusive && (error as NodeJS.ErrnoException).code === "EEXIST") return reply.code(409).send({ error: `Folder already exists: ${relativePath}` });
+        throw error;
+      }
+      await appendJsonLine(workspaceFile(root, "provenance.jsonl"), { path: relativePath, version: 1, ts: Date.now() / 1000, tool: "file_mkdir", sessionId: "" });
+      return { ok: true, path: relativePath };
+    } catch (error) { return reply.code(400).send({ error: String(error) }); }
+  });
+  app.post("/api/files/create", async (request, reply) => {
+    let root: string;
+    try { root = await safeWorkspace(request); } catch (error) { return reply.code(403).send({ error: String(error) }); }
+    const body = (request.body ?? {}) as { path?: unknown };
+    const requested = String(body.path ?? "");
+    if (!requested.trim() || requested.includes("..")) return reply.code(400).send({ error: "A non-empty workspace-relative file path is required" });
+    try {
+      const target = await resolveApiFile(root, requested);
+      const relativePath = apiPath(root, target);
+      await mkdir(dirname(target), { recursive: true });
+      try { await writeFile(target, "", { flag: "wx" }); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") return reply.code(409).send({ error: `File already exists: ${relativePath}` });
+        throw error;
+      }
+      await appendJsonLine(workspaceFile(root, "provenance.jsonl"), { path: relativePath, version: 1, ts: Date.now() / 1000, tool: "file_create", sessionId: "" });
+      return { ok: true, path: relativePath };
+    } catch (error) { return reply.code(400).send({ error: String(error) }); }
+  });
+  app.post("/api/files/reveal", async (request, reply) => {
+    let root: string;
+    try { root = await safeWorkspace(request); } catch (error) { return reply.code(403).send({ error: String(error) }); }
+    const body = (request.body ?? {}) as { path?: unknown };
+    try {
+      const target = await resolveApiFile(root, String(body.path ?? ""));
+      const info = await stat(target);
+      const isDirectory = info.isDirectory();
+      let command: string;
+      let args: string[];
+      if (process.platform === "win32") {
+        command = "explorer.exe";
+        args = isDirectory ? [target] : ["/select,", target];
+      } else if (process.platform === "darwin") {
+        command = "open";
+        args = isDirectory ? [target] : ["-R", target];
+      } else {
+        command = "xdg-open";
+        args = [isDirectory ? target : dirname(target)];
+      }
+      const child = spawn(command, args, { stdio: "ignore", detached: true });
+      child.on("error", () => undefined);
+      child.unref();
+      return { ok: true, path: apiPath(root, target), is_directory: isDirectory };
+    } catch (error) { return reply.code(400).send({ error: String(error) }); }
   });
 
   app.get<{ Params: { path: string } }>("/api/files/serve/*", async (request, reply) => serveFile(request, reply, "serve"));
