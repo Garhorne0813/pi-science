@@ -210,11 +210,21 @@ it("serializes credential modify callbacks and cleans up new keys after a failed
   await service.setCredential("lab", 1, { source: "managed", secret: "zero" });
   const adapter = new ModelCredentialAdapter(service);
   const seen: Array<string | undefined> = [];
+  let entered!: () => void, release!: () => void;
+  const firstEntered = new Promise<void>((resolve) => { entered = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
   const modify = (key: string) => adapter.modify("lab", async (current) => {
     seen.push(current?.type === "api_key" ? current.key : undefined);
+    if (key === "one") { entered(); await gate; }
     return { type: "api_key", key };
   });
-  await Promise.all([modify("one"), modify("two")]);
+  // Establish the lock holder explicitly; asynchronous reads before acquisition
+  // do not guarantee that simultaneous invocations reach the lock in order.
+  const first = modify("one");
+  await firstEntered;
+  const second = modify("two");
+  release();
+  await Promise.all([first, second]);
   expect(seen).toEqual(["zero", "one"]);
   expect(await adapter.read("lab")).toEqual({ type: "api_key", key: "two" });
   const count = (await service.credentials.listMetadata()).length;

@@ -95,16 +95,19 @@ export class MemoryService {
   }
   async validateContent(cwd: string, ctx: MemoryContext, input: unknown) {
     const c = contentSchema.parse(input);
+    // Use the same canonical root as resolveWorkspaceFile, including Windows
+    // short temp paths and junctions, before checking source visibility.
+    const projectCwd = await validateWorkspaceCwd(cwd);
     if (
       c.subjectFrameId &&
-      !(await sessionRepository.findPath(cwd, c.subjectFrameId))
+      !(await sessionRepository.findPath(projectCwd, c.subjectFrameId))
     )
       throw new MemoryError(400, "Frame session does not exist");
     if (c.scope === "artifact") {
       const artifacts = await readJsonLines<{
         artifact_id: string;
         version: number;
-      }>(workspaceFile(cwd, "artifacts.jsonl"));
+      }>(workspaceFile(projectCwd, "artifacts.jsonl"));
       if (
         !artifacts.some(
           (a) =>
@@ -115,7 +118,7 @@ export class MemoryService {
         throw new MemoryError(400, "Artifact/version not found");
     }
     for (const source of c.sources) {
-      let sourceCwd = cwd;
+      let sourceCwd = projectCwd;
       if (source.projectId && source.projectId !== ctx.projectId) {
         if (ctx.actor !== "user")
           throw new MemoryError(

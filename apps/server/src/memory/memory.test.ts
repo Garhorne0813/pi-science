@@ -549,4 +549,6 @@ it("browses all authorized matches beyond legacy caps before sorting and paging"
     { status: "unknown" },
   ])
     await expect(call("browse", invalid)).rejects.toBeDefined();
-});
+  // This integration case performs hundreds of durable SQLite transactions;
+  // native Windows runners need more than Vitest's five-second unit-test default.
+}, 30_000);

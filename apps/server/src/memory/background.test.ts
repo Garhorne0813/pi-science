@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, it, expect, vi } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteStateStore } from "../storage/sqlite/state-store.js";
@@ -202,6 +202,30 @@ it("recovers an expired lease under the same logical run and prevents a second w
       costUsd: 0,
     }),
   ).rejects.toMatchObject({ statusCode: 409 });
+});
+
+it("validates file sources through workspace aliases without exposing private files", async () => {
+  const alias = join(root, "workspace-alias");
+  await symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
+  await writeFile(join(root, "preference.txt"), "Chinese replies");
+  await writeFile(join(root, ".env"), "private fixture");
+  const content = {
+    scope: "profile",
+    kind: "preference",
+    title: "Reply language",
+    body: "用户偏好中文回答",
+    evidenceLevel: "user_stated",
+    sources: [{ kind: "file", locator: "preference.txt" }],
+  };
+  expect(
+    (await memory.validateContent(alias, ctx, content)).sources[0]?.digest,
+  ).toMatch(/^[a-f0-9]{64}$/);
+  await expect(
+    memory.validateContent(alias, ctx, {
+      ...content,
+      sources: [{ kind: "file", locator: ".env" }],
+    }),
+  ).rejects.toMatchObject({ statusCode: 403 });
 });
 
 it("preserves Profile source-project identity and stops recall when source evidence changes", async () => {
