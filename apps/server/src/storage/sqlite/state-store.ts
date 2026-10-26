@@ -1,3 +1,4 @@
+import type { MemoryCommand } from "../../memory/repository.js";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
@@ -80,6 +81,17 @@ export class SqliteStateStore {
 
   async batch(statements: SqlStatement[]): Promise<SqlRunResult[]> {
     return this.request<SqlRunResult[]>({ type: "batch", statements });
+  }
+
+  async memory<T = unknown>(command: MemoryCommand): Promise<T> {
+    await this.start();
+    return this.request<T>({type: "memory", command});
+  }
+
+  /** A consistent SQLite snapshot, including committed WAL content. Destination must not exist. */
+  async backup(path: string): Promise<void> {
+    await this.start();
+    return this.request<void>({type: "backup", path});
   }
 
   async close(): Promise<void> {
@@ -212,7 +224,7 @@ export class SqliteStateStore {
     this.pending.delete(message.id);
     clearTimeout(pending.timer);
     if (message.ok) pending.resolve(message.value);
-    else pending.reject(errorFromWorker(message.error));
+    else { const error = errorFromWorker(message.error); Object.assign(error, {statusCode: message.error.statusCode}); pending.reject(error); }
   }
 
   private handleWorkerFailure(error: unknown): void {

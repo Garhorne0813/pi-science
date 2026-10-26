@@ -1,3 +1,4 @@
+import { AgentMemoryClient } from "./memory-tools.js";
 import { initialSessionApprovalSchema } from "@pi-science/contracts";
 import { readSessionApproval, saveSessionApproval, sessionApprovalPath } from "../../sandbox/session-approval.js";
 import { unlink } from "node:fs/promises";
@@ -54,6 +55,7 @@ function applySkillPolicy(skills: Skill[], policy: RuntimeSkillPolicy): Skill[] 
 
 export class SessionRuntime {
   readonly sessionId: string;
+  private memoryClient?: AgentMemoryClient;
   private approvalBarrier = false;
   private readonly lane: AgentLane;
   private readonly harness: Harness;
@@ -182,6 +184,9 @@ export class SessionRuntime {
       const skillPolicy = options.skillPolicy ?? { mode: "inherit" };
       const nativeWebTools = !candidateScoped && (options.allowedTools === undefined || options.allowedTools.some((name) => name === "web_search" || name === "web_fetch")) ? await webTools() : [];
       const budgets = executionBudgetTools(options.cwd, options.budgetOperationId, options.budgetNodeId);
+      const memoryUrl=options.env?.PI_SCIENCE_BACKEND_URL??process.env.PI_SCIENCE_BACKEND_URL;
+      const memoryToken=options.env?.PI_SCIENCE_INTERNAL_TOKEN??process.env.PI_SCIENCE_INTERNAL_TOKEN;
+      const memoryClient = !candidateScoped && !options.delegatedAgent && memoryUrl && memoryToken ? new AgentMemoryClient(options.cwd,session.metadata.id,memoryUrl,memoryToken) : undefined;
       const basePrompt = options.systemPrompt ?? "You are a helpful scientific research assistant.";
       // Resolve per invocation so policy changes and refreshes affect Bash too.
       // A standalone .md skill does not authorize its shared parent directory.
@@ -195,7 +200,7 @@ export class SessionRuntime {
         model,
         thinkingLevel: clampThinkingLevel(model, options.thinking ?? "high"),
         compaction: resolveCompaction(model.contextWindow, options.settings).compaction,
-        tools: [...(!candidateScoped && !options.delegatedAgent ? [networkAccessTool(interactions, options.cwd, session.metadata.id)] : []), budgets.tool, confinedReadTool(workspaceFileTool(createReadTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined), sandboxIdentity), budgets.wrap(sandboxBashTool(sandboxIdentity, environment, currentSkillDirectories)), workspaceFileTool(createEditTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined), workspaceFileTool(createWriteTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined),
+        tools: [...(memoryClient?.tools() ?? []), ...(!candidateScoped && !options.delegatedAgent ? [networkAccessTool(interactions, options.cwd, session.metadata.id)] : []), budgets.tool, confinedReadTool(workspaceFileTool(createReadTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined), sandboxIdentity), budgets.wrap(sandboxBashTool(sandboxIdentity, environment, currentSkillDirectories)), workspaceFileTool(createEditTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined), workspaceFileTool(createWriteTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined),
           todoHarnessTool(session), subagentControlTool(subagents), budgets.wrap(subagentHarnessTool(subagents)), ...notebookHarnessTools(options.cwd, session.metadata.id, sandboxIdentity).map(budgets.wrap), questionnaireHarnessTool(interactions), ...nativeWebTools, ...(mcp?.tools ?? []).map(budgets.wrap)]
           .filter((tool) => (!options.allowedTools || options.allowedTools.includes(tool.name)) && (!candidateScoped || childToolAllowance([tool.name], [tool.name], "candidate").length > 0))
           .map((tool) => !options.delegatedAgent ? tool : { ...tool, async execute(id, params, update, ctx, invocation, context) {
@@ -210,7 +215,7 @@ export class SessionRuntime {
         // every generation current after policy changes and refreshes without a second cache.
         systemPrompt: async (_toolContext, requestContext): Promise<string> => {
           const { skills = [] } = await harness.getResources(requestContext);
-          return [basePrompt, formatSkillsForSystemPrompt(skills)].filter(Boolean).join("\n\n");
+          return [basePrompt, await memoryClient?.prompt(), formatSkillsForSystemPrompt(skills)].filter(Boolean).join("\n\n");
         },
         steeringMode: "one-at-a-time",
         followUpMode: "one-at-a-time",
@@ -224,6 +229,8 @@ export class SessionRuntime {
       runtime.promptTemplates = templates.promptTemplates;
       runtime.subagents = subagents;
       runtime.models = models;
+      runtime.memoryClient = memoryClient;
+      if(memoryClient){const latest=(await session.findEntries(undefined,context)).findLast(entry=>entry.type==='message'&&entry.message.role==='user');if(latest?.type==='message'&&latest.message.role==='user'){const content=latest.message.content;memoryClient.query=typeof content==='string'?content:content.filter(part=>part.type==='text').map(part=>part.type==='text'?part.text:'').join('\n');}}
       runtime.runtimeEpoch = runtimeEpoch;
       runtime.eventSequence = () => eventSequence;
       const snapshot = await watch.resnapshot(context);
@@ -232,7 +239,7 @@ export class SessionRuntime {
       const available = new Set((await harness.getTools(context)).map((tool) => tool.name));
       const activeTools = snapshot.configuration.activeToolNames.filter((name) => available.has(name));
       if (available.has("request_network_access") && !activeTools.includes("request_network_access")) activeTools.push("request_network_access");
-      for (const name of ["web_search", "web_fetch"]) if (available.has(name) && !activeTools.includes(name)) activeTools.push(name);
+      for (const name of ["web_search", "web_fetch", "search_memory", "read_memory", "write_memory"]) if (available.has(name) && !activeTools.includes(name)) activeTools.push(name);
       if (activeTools.includes("subagent") && available.has("subagent_control") && !activeTools.includes("subagent_control")) activeTools.push("subagent_control");
       if (JSON.stringify(activeTools) !== JSON.stringify(snapshot.configuration.activeToolNames)) await lane.setActiveTools(activeTools, context);
       // A restored lane keeps its durable model, and the seed only applies to a lane that has
@@ -404,6 +411,7 @@ export class SessionRuntime {
               return { success: true, operationId, durableMessageId: prior.id, deduplicated: true };
             }
           }
+          if(this.memoryClient) this.memoryClient.query=message;
           const admitted = await this.lane.accept({ kind: "prompt", operationId, prompt: userPrompt(message, clientMessageId) }, context);
           if (!admitted.ok) return resultValue(admitted);
           const acceptedId = admitted.value.operationId;

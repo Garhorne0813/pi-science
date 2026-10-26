@@ -8,6 +8,7 @@ const migrationFiles = [
   { version: 2, name: "0002_mcp_connectors.sql", url: new URL("./migrations/0002_mcp_connectors.sql", import.meta.url) },
   { version: 3, name: "0003_global_mcp_settings.sql", url: new URL("./migrations/0003_global_mcp_settings.sql", import.meta.url), compatibleChecksums: ["502092b1102857c4affd53158935ed0b1b862245397077da72e25c0a547b8a96"] },
   { version: 4, name: "0004_project_mcp_tool_grants.sql", url: new URL("./migrations/0004_project_mcp_tool_grants.sql", import.meta.url), compatibleChecksums: ["d89e957d8ad3894af8b0ea976658055e2477bea5e0ba4cc13e26ef128693410c"] },
+  { version: 5, name: "0005_unified_memory.sql", url: new URL("./migrations/0005_unified_memory.sql", import.meta.url) },
 ] as const;
 
 export async function loadMigrations(): Promise<Migration[]> {

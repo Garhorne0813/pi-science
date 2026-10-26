@@ -15,7 +15,7 @@ import i18n from "../../i18n";
 import type { SessionInfo } from "../../lib/client/types";
 
 const pendingKnowledge = vi.hoisted(() => ({ count: 0 }));
-vi.mock("../../lib/knowledge", () => ({ usePendingProposalCount: () => ({ data: { pending_count: pendingKnowledge.count } }) }));
+vi.mock("../../lib/memory", () => ({ useMemorySummary: () => ({ data: { pendingCount: pendingKnowledge.count } }) }));
 
 vi.mock("../../components/sidebar/FileBrowser", () => ({ FileBrowser: () => <span>Embedded file tree</span> }));
 vi.mock("../../components/inspector/InspectorTabs", () => ({ InspectorTabs: () => <button>Inspector control</button> }));
@@ -66,7 +66,7 @@ afterEach(() => {
 });
 
 function renderWorkspaceShell(initialEntry = "/workspace/proj/runs") {
-  return render(<FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}><MemoryRouter initialEntries={[initialEntry]}><Routes><Route path="/" element={<span data-testid="projects-home">Projects home</span>} /><Route path="/workspace/:cwd" element={<WorkspaceProvider><ProjectsLayout /></WorkspaceProvider>}><Route index element={<LocationProbe />} /><Route path="session/:sessionId" element={<LocationProbe />} /><Route path="research" element={<LocationProbe />} /><Route path="runs" element={<LocationProbe />} /><Route path="knowledge" element={<LocationProbe />} /><Route path="files" element={<LocationProbe />} /></Route></Routes></MemoryRouter></FeedbackContext.Provider>);
+  return render(<FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}><MemoryRouter initialEntries={[initialEntry]}><Routes><Route path="/" element={<span data-testid="projects-home">Projects home</span>} /><Route path="/workspace/:cwd" element={<WorkspaceProvider><ProjectsLayout /></WorkspaceProvider>}><Route index element={<LocationProbe />} /><Route path="session/:sessionId" element={<LocationProbe />} /><Route path="research" element={<LocationProbe />} /><Route path="runs" element={<LocationProbe />} /><Route path="memory" element={<LocationProbe />} /><Route path="files" element={<LocationProbe />} /></Route></Routes></MemoryRouter></FeedbackContext.Provider>);
 }
 
 describe("V4 independent primary navigation and context", () => {
@@ -183,8 +183,8 @@ describe("V4 independent primary navigation and context", () => {
     expect(container.querySelector("nav")?.firstElementChild).toHaveTextContent("pi");
     expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute("href", "/");
   });
-  it("has one toggle and no duplicate primary links or panel New action", async () => { const { container } = renderWorkspaceShell(); await screen.findByRole("searchbox"); for (const name of ["Project Knowledge", "Run history"]) expect(screen.getAllByRole("link", { name })).toHaveLength(1); expect(screen.getAllByRole("button", { name: "Settings" })).toHaveLength(1); expect(screen.getAllByRole("button", { name: "New conversation" })).toHaveLength(1); expect(screen.getAllByRole("button", { name: /^(Expand|Collapse) sidebar$/ })).toHaveLength(1); expect(container.querySelector("aside")?.querySelectorAll("nav, button[title='New conversation']")).toHaveLength(0); expect(screen.queryByRole("link", { name: "Research" })).toBeNull(); });
-  it("exposes the Knowledge pending count once in the Rail accessible name", async () => { pendingKnowledge.count = 2; const { container } = renderWorkspaceShell(); await screen.findByRole("searchbox"); const item = screen.getByRole("link", { name: "Project Knowledge (2 pending proposals)" }); expect(item).toHaveAttribute("href", "/workspace/proj/knowledge"); expect(item.querySelector("span[aria-hidden='true']")?.textContent).toBe("2"); expect(container.querySelector("aside")?.textContent).not.toContain("pending proposals"); expect(screen.getAllByRole("link", { name: "Project Knowledge (2 pending proposals)" })).toHaveLength(1); });
+  it("has one toggle and no duplicate primary links or panel New action", async () => { const { container } = renderWorkspaceShell(); await screen.findByRole("searchbox"); for (const name of ["Memory", "Run history"]) expect(screen.getAllByRole("link", { name })).toHaveLength(1); expect(screen.getAllByRole("button", { name: "Settings" })).toHaveLength(1); expect(screen.getAllByRole("button", { name: "New conversation" })).toHaveLength(1); expect(screen.getAllByRole("button", { name: /^(Expand|Collapse) sidebar$/ })).toHaveLength(1); expect(container.querySelector("aside")?.querySelectorAll("nav, button[title='New conversation']")).toHaveLength(0); expect(screen.queryByRole("link", { name: "Research" })).toBeNull(); });
+  it("exposes the Knowledge pending count once in the Rail accessible name", async () => { pendingKnowledge.count = 2; const { container } = renderWorkspaceShell(); await screen.findByRole("searchbox"); const item = screen.getByRole("link", { name: "Memory (2 pending proposals)" }); expect(item).toHaveAttribute("href", "/workspace/proj/memory"); expect(item.querySelector("span[aria-hidden='true']")?.textContent).toBe("2"); expect(container.querySelector("aside")?.textContent).not.toContain("pending proposals"); expect(screen.getAllByRole("link", { name: "Memory (2 pending proposals)" })).toHaveLength(1); });
   it("full Files route claims no current Rail item and Settings only expands", async () => { const { container } = renderWorkspaceShell("/workspace/proj/files"); await screen.findByRole("searchbox"); expect(container.querySelectorAll("nav [aria-current]")).toHaveLength(0); const settings = screen.getByRole("button", { name: "Settings" }); expect(settings).toHaveAttribute("aria-expanded", "false"); expect(settings).not.toHaveAttribute("aria-current"); });
 });
 

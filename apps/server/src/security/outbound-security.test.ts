@@ -36,6 +36,16 @@ describe("validateConnectorOutboundUrl", () => {
     await expect(validateConnectorOutboundUrl("http://127.0.0.1:9000", { allowPrivate: true })).resolves.toBeInstanceOf(URL);
   });
 
+  it("leaves proxy-side DNS to the transport only when private destinations are permitted", async () => {
+    vi.stubEnv("NODE_USE_ENV_PROXY", "1"); vi.stubEnv("HTTPS_PROXY", "http://proxy:8080"); vi.stubEnv("NO_PROXY", "localhost");
+    try {
+      await expect(validateConnectorOutboundUrl("https://proxy-resolved.example/", { allowPrivate: true })).resolves.toBeInstanceOf(URL);
+      await expect(validateConnectorOutboundUrl("https://proxy-resolved.example/", { allowPrivate: false })).rejects.toThrow("ENOTFOUND");
+      vi.stubEnv("NO_PROXY", "proxy-resolved.example");
+      await expect(validateConnectorOutboundUrl("https://proxy-resolved.example/", { allowPrivate: true })).rejects.toThrow("ENOTFOUND");
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it("rejects hostnames resolving into private ranges (DNS rebinding baseline)", async () => {
     await expect(validateConnectorOutboundUrl("https://private.example.com/", { allowPrivate: false })).rejects.toThrow("private or reserved address");
     await expect(validateConnectorOutboundUrl("https://metadata.example.com/", { allowPrivate: false })).rejects.toThrow("private or reserved address");

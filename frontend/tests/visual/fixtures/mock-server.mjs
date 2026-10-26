@@ -228,22 +228,13 @@ async function handleApi(req, res, url) {
   }
 
 
-  // Knowledge badge and historical archive access.
-  if (method === "GET" && pathname === "/api/project-knowledge/proposals/count") {
-    log();
-    return json(res, 200, { pending_count: 0 });
-  }
-  if (method === "GET" && pathname === "/api/project-knowledge/events") {
-    log();
-    return sendSse(res, "knowledge");
-  }
-  if (method === "GET" && pathname === "/api/project-knowledge/policy") {
-    log();
-    return json(res, 200, {});
-  }
-  if (method === "GET" && pathname === "/api/project-memory/archives") {
-    return json(res, 200, { archives: [] });
-  }
+  // Unified Memory and independently retained research archives.
+  if(method==='GET'&&pathname==='/api/memory/summary')return json(res,200,{pendingCount:0,enabled:false});
+  if(method==='GET'&&pathname==='/api/memory/records')return json(res,200,{records:[]});
+  if(method==='GET'&&pathname==='/api/memory/reviews')return json(res,200,{records:[],proposals:[]});
+  if(method==='GET'&&pathname==='/api/memory/background-runs')return json(res,200,{runs:[]});
+  if(method==='GET'&&pathname==='/api/memory/settings')return json(res,200,{enabled:false,revision:0,review:{mode:'smart',scientificClaimsRequireHuman:true},recall:{enabled:true,maxItemsPerTurn:6,maxProfileItems:12,maxTokensPerTurn:2500},extraction:{enabled:false,model:'inherit',minMessages:3},dream:{enabled:false,mode:'manual',allowedWindow:{enabled:true,start:'00:00',end:'06:00',timeZone:'UTC'},requireIdle:true,idleMinutes:30,minNewItems:3,oncePerWindow:true,intervalHours:24,minIntervalHours:24,maxRuntimeMinutes:10,updatePolicy:'suggest_only',model:'inherit'},budget:{dailyTokens:30000,perRunTokens:6000,dailyCostUsd:1}});
+  if(method==='GET'&&pathname==='/api/project/archives')return json(res,200,{archives:[]});
   if (method === "GET" && pathname === "/api/executions") {
     log();
     return json(res, 200, { executions: [], total: 0, filtered_total: 0, offset: 0, limit: 50 });

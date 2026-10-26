@@ -74,7 +74,8 @@ async function fixture(mode: "reply" | "write" | "hold-first" | "stall-stream" |
   const publish = hub.publish.bind(hub);
   vi.spyOn(hub, "publish").mockImplementation(async (...args) => { events.push(args[2]); await publish(...args); });
   const review = { run: vi.fn().mockResolvedValue({}) };
-  const service = new NodeSessionService(hub, new SessionRepository(), { environment: async () => ({}) }, review);
+  const service = new NodeSessionService(hub, new SessionRepository(), { environment: async () => ({}) }, null);
+  service.configureMemory({settled:review.run,deleted:async()=>undefined});
   cleanup.push(() => service.shutdownAll());
   const created = await service.create({ cwd, config: { model: `${provider.id}/lab`, thinking: "off", skills: [], extensions: [] } });
   if (!("id" in created)) throw new Error(created.error);
@@ -203,7 +204,7 @@ describe("agent-core product turns", () => {
       .toBe("/notacommand keep this text"), { timeout: 15000 });
   }, 45000);
 
-  it("captures a fast tool write and publishes final stats and one automatic review", async () => {
+  it("captures a fast tool write and publishes final stats and one Memory extraction check", async () => {
     const { cwd, id, service, core, events, review } = await fixture();
     expect(await service.command(id, cwd, "prompt", { message: "write a result", client_message_id: "write-once" })).toMatchObject({ success: true });
     await vi.waitFor(() => expect(events.some((event) => event.type === "turn.artifacts")).toBe(true), { timeout: 15000 });

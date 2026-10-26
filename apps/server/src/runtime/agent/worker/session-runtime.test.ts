@@ -38,6 +38,17 @@ afterEach(async () => {
 });
 
 describe("agent-core worker mutations", () => {
+  it('registers main Memory tools from worker-only credentials while keeping tool shell credentials filtered',async()=>{
+    const tools=['search_memory','read_memory','write_memory'];
+    const {instance,parts}=await runtime(undefined,{allowedTools:tools,env:{PI_SCIENCE_BACKEND_URL:'http://127.0.0.1:1',PI_SCIENCE_INTERNAL_TOKEN:'memory-test-secret'}});
+    expect((await parts.harness.getTools(context)).map(tool=>tool.name)).toEqual(expect.arrayContaining(tools));
+    expect(await instance.command('get_state',{})).toMatchObject({data:{activeTools:expect.arrayContaining(tools)}});
+    const {toolEnvironment}=await import('../agent-runtime-environment.js');expect(toolEnvironment({PI_SCIENCE_BACKEND_URL:'url',PI_SCIENCE_INTERNAL_TOKEN:'secret'})).toEqual({});
+  });
+  it.each([{delegatedAgent:'limited-worker'},{executionScope:'candidate' as const}])('denies Memory to delegated/confined workers despite model-requested tool names: %j',async(binding)=>{
+    const {parts}=await runtime(undefined,{...binding,allowedTools:['search_memory','read_memory','write_memory'],env:{PI_SCIENCE_BACKEND_URL:'http://127.0.0.1:1',PI_SCIENCE_INTERNAL_TOKEN:'memory-test-secret'}});
+    expect((await parts.harness.getTools(context)).map(tool=>tool.name).filter(name=>name.endsWith('_memory'))).toEqual([]);
+  });
   it("exposes connector discovery failures in the runtime snapshot", async () => {
     const { instance } = await runtime(async (cwd) => {
       await mkdir(join(cwd, ".pi-science"), { recursive: true });

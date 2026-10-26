@@ -3,7 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Activity, FolderOpen, Inbox, MessageSquare, Settings, SquarePen, type LucideIcon } from "lucide-react";
 import { cn, useUiStore } from "../../lib/ui";
-import { usePendingProposalCount } from "../../lib/knowledge";
+import { useMemorySummary } from "../../lib/memory";
 import { Icon } from "../ui/Icon";
 import { preloadSettingsContent } from "../settings/settings-loading";
 import { primarySection } from "./primary-section";
@@ -27,10 +27,10 @@ function RailLink({ to, icon, label, current, count, onNavigate }: { to: string;
 }
 function KnowledgeRailLink({ cwd, current }: { cwd: string; current: boolean }) {
   const { t } = useTranslation();
-  const { data } = usePendingProposalCount(cwd);
-  const count = Number(data?.pending_count) || 0;
+  const { data } = useMemorySummary(cwd);
+  const count = Number(data?.pendingCount) || 0;
   const label = count ? `${t("nav.knowledge")} (${t("sidebar.pendingKnowledge", { count })})` : t("nav.knowledge");
-  return <RailLink to={`/workspace/${encodeURIComponent(cwd)}/knowledge`} icon={Inbox} label={label} current={current} count={count} />;
+  return <RailLink to={`/workspace/${encodeURIComponent(cwd)}/memory`} icon={Inbox} label={label} current={current} count={count} />;
 }
 export function WorkspaceRail({ cwd, toggleRef, onExpand }: { cwd: string | null; toggleRef?: Ref<HTMLButtonElement>; onExpand?: (trigger: HTMLButtonElement) => void }) {
   const { t } = useTranslation();
@@ -51,7 +51,7 @@ export function WorkspaceRail({ cwd, toggleRef, onExpand }: { cwd: string | null
       {cwd && !collapsed && <div className={brandBox}>{brandMark}<span className="workspace-rail-label workspace-rail-brand workspace-brand">pi-science</span></div>}
       {cwd && collapsed && <button key="context-toggle" ref={toggleRef} type="button" aria-label={t("shell.expandContextPanel")} title={t("shell.expandContextPanel")} aria-controls="workspace-context-panel" aria-expanded={false} onClick={event => onExpand ? onExpand(event.currentTarget) : setCollapsed(false)} className={cn(brandBox, railInteraction)}>{brandMark}<RailLabel label={t("shell.expandContextPanel")} /></button>}
       <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1.5 overflow-x-hidden overflow-y-auto px-[7px] md:px-2">
-        {cwd && <><button type="button" title={t("conversation.newSession")} aria-label={t("conversation.newSession")} onClick={() => newConversation()} className={railBox}><RailGlyph icon={SquarePen} /><RailLabel label={t("conversation.newSession")} /></button><RailLink to={root} icon={MessageSquare} label={t("sidebar.conversations")} current={section === "conversations"} onNavigate={() => useWorkspaceSidebar.getState().showConversations(cwd)} /><KnowledgeRailLink cwd={cwd} current={section === "knowledge"} /><RailLink to={`${root}/runs${runsSearch}`} icon={Activity} label={t("sidebar.runs")} current={section === "runs"} /></>}
+        {cwd && <><button type="button" title={t("conversation.newSession")} aria-label={t("conversation.newSession")} onClick={() => newConversation()} className={railBox}><RailGlyph icon={SquarePen} /><RailLabel label={t("conversation.newSession")} /></button><RailLink to={root} icon={MessageSquare} label={t("sidebar.conversations")} current={section === "conversations"} onNavigate={() => useWorkspaceSidebar.getState().showConversations(cwd)} /><KnowledgeRailLink cwd={cwd} current={section === "memory"} /><RailLink to={`${root}/runs${runsSearch}`} icon={Activity} label={t("sidebar.runs")} current={section === "runs"} /></>}
       </div>
       <div className="flex w-full shrink-0 flex-col items-center gap-1.5 px-[7px] md:px-2">
         {cwd && <RailLink to="/" icon={FolderOpen} label={t("nav.projects")} current={false} />}

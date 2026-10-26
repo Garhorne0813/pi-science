@@ -37,6 +37,18 @@ export function parseOutboundHttpUrl(raw: string): URL {
 export async function validateOutboundHttpUrl(raw: string, options: { allowPrivate?: boolean } = {}): Promise<URL> {
   const url = parseOutboundHttpUrl(raw);
   const allowPrivate = options.allowPrivate ?? process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0";
+  // In environment-proxy mode DNS belongs to the proxy. Defer only when
+  // private destinations are permitted; public-only validation still fails closed.
+  const proxy = url.protocol === "https:" ? process.env.HTTPS_PROXY ?? process.env.https_proxy ?? process.env.HTTP_PROXY ?? process.env.http_proxy : process.env.HTTP_PROXY ?? process.env.http_proxy;
+  const hostnameForProxy = url.hostname.toLowerCase();
+  const bypassProxy = (process.env.NO_PROXY ?? process.env.no_proxy ?? "").split(",").some((entry) => {
+    const rule = entry.trim().toLowerCase();
+    if (!rule) return false;
+    if (rule === "*") return true;
+    const [name, port] = rule.replace(/^\*?\./, "").split(":");
+    return (!port || port === (url.port || (url.protocol === "https:" ? "443" : "80"))) && (hostnameForProxy === name || hostnameForProxy.endsWith("." + name));
+  });
+  if (allowPrivate && process.env.NODE_USE_ENV_PROXY === "1" && proxy && !bypassProxy) return url;
   // URL.hostname keeps the brackets for IPv6 literals ("[::1]"); strip them
   // so isIP can classify the address without a DNS round-trip.
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
