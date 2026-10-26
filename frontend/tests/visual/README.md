@@ -135,9 +135,11 @@ the no-cursor recovery sentinel, document reload, execution stream resume, and
 `/api/health`.
 
 Each route is also held to its whole subscription set, not just the endpoint
-under test: a conversation route must hold exactly the conversation stream plus
-the workspace project-knowledge signal, and the executions route exactly the
-invalidation stream plus that signal. A third stream — the session header's
-executions subscription, for instance — fails the run and names itself. Set
+under test: a conversation route must hold exactly one conversation stream,
+and the executions route exactly one execution invalidation stream. Memory
+counts refresh over REST and consume no SSE socket. Any additional stream —
+the session header's executions subscription, for instance — fails the run and
+names itself. The suite also checks Memory badge catch-up and historical
+Research redirects to the Run history archives. Set
 `CHROME_PATH` or `PI_SCIENCE_SSE_BUDGET_PORT` to override the browser executable
 or port.
