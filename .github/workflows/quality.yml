@@ -68,11 +68,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
-          shellcheck -S warning scripts/*.sh scripts/fixtures/*.sh
+          shellcheck -S warning scripts/*.sh scripts/fixtures/*.sh .github/scripts/*.sh
       - name: Check PowerShell scripts
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+            Register-PSRepository -Default
+          }
           Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force -Repository PSGallery
           $issues = @(Invoke-ScriptAnalyzer -Path scripts -Recurse -Settings .github/PSScriptAnalyzerSettings.psd1)
           $issues | Format-Table -AutoSize
