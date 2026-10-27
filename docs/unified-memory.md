@@ -120,10 +120,22 @@ effect after Save and its settings-revision comparison.
 
 Memory records use a compact title/status/scope/kind and two-line preview.
 Expanding reveals full text, sources, content version, review state and history.
-Editing and history open in a responsive, focus-trapped dialog/drawer; editor
-drafts are keyed by record/revision and reset across record changes. Proposals
-show full structured content, including title/kind/category/evidence and source
-versions/hashes, with changed fields marked. Missing current content blocks approval.
+Desktop editing uses a 760px dialog with conditional scope fields, category/model
+selectors, explicit evidence labels and a fixed save footer. Drafts are keyed by
+record/revision and require confirmation before discarding unsaved changes.
+Pending changes use a compact queue and a 1000px review dialog: every changed
+field is visible, unchanged fields are expandable, body edits are marked, and
+source version/hash changes are explicitly labeled with complete values available
+in reference details. The approval footer remains visible; missing or stale
+current content blocks approval and the server still verifies revision/hash.
+History uses a version timeline and optional previous-version comparison; raw
+JSON is retained under advanced details with export. Run history defaults to
+compact localized summary rows, with measured/estimated/reserved usage and safe
+diagnostics available on expansion. File references open the current workspace
+file; session links open the corresponding conversation, and memory reference
+previews warn if the current version/hash differs from its pin. Cross-project
+references retain provenance details without opening them in the wrong project.
+Dialogs retain focus trapping and restoration.
 Explicit Agent searches return previews only (at most 20 within approximately
 6,000 serialized characters); full bodies/sources are fetched by ID on demand.
 Edit/archive/hard-delete live in the more-actions menu; deletion retains explicit

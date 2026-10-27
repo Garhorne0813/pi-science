@@ -15,6 +15,7 @@ function mount(enabled = true) {
       value={{ ...settingsSchema.parse({ enabled }), revision: 1 }}
       busy={false}
       save={save}
+      models={[{ value: "configured/model", label: "Configured model" }]}
     />,
   );
   return save;
@@ -25,11 +26,9 @@ async function mode(name: string) {
   const button = screen.getByRole("button", { name: /^Trigger mode:/ });
   fireEvent.pointerDown(button);
   fireEvent.click(button);
-  fireEvent.click(
-    await screen.findByRole("menuitemradio", { name }),
-  );
+  fireEvent.click(await screen.findByRole("menuitemradio", { name }));
 }
-it("collapses Memory and extraction options without losing edited values on save", () => {
+it("collapses Memory and extraction options without losing edited values on save", async () => {
   const save = mount(false);
   expect(
     screen.queryByRole("checkbox", {
@@ -38,24 +37,29 @@ it("collapses Memory and extraction options without losing edited values on save
   ).not.toBeInTheDocument();
   toggle("Enable Memory");
   expect(
-    screen.queryByRole("textbox", { name: "Extraction model" }),
+    screen.queryByRole("button", { name: /^Extraction model:/ }),
   ).not.toBeInTheDocument();
   toggle("Check increments after completed turns");
-  fireEvent.change(screen.getByRole("textbox", { name: "Extraction model" }), {
-    target: { value: "configured/model" },
+  const model = screen.getByRole("button", {
+    name: "Extraction model: Use default model",
   });
+  fireEvent.pointerDown(model);
+  fireEvent.click(model);
+  fireEvent.click(
+    await screen.findByRole("menuitemradio", { name: "Configured model" }),
+  );
   fireEvent.change(
     screen.getByRole("spinbutton", { name: "Minimum new messages" }),
     { target: { value: "8" } },
   );
   toggle("Check increments after completed turns");
   expect(
-    screen.queryByRole("textbox", { name: "Extraction model" }),
+    screen.queryByRole("button", { name: /^Extraction model:/ }),
   ).not.toBeInTheDocument();
   toggle("Check increments after completed turns");
-  expect(screen.getByRole("textbox", { name: "Extraction model" })).toHaveValue(
-    "configured/model",
-  );
+  expect(
+    screen.getByRole("button", { name: "Extraction model: Configured model" }),
+  ).toBeInTheDocument();
   toggle("Enable Memory");
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(save).toHaveBeenCalledWith(

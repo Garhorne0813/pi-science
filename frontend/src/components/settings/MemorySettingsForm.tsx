@@ -13,7 +13,9 @@ export function MemorySettingsForm({
   value,
   busy,
   save,
+  models = [],
 }: {
+  models?: Array<{ value: string; label: string }>;
   value: MemorySettings;
   busy: boolean;
   save: (value: Omit<MemorySettings, "revision">) => Promise<boolean>;
@@ -82,20 +84,31 @@ export function MemorySettingsForm({
       )}
       description={t("memory.modelHelp")}
     >
-      <input
-        aria-label={t(
+      <SettingsSelectMenu
+        ariaLabel={t(
           kind === "extraction"
             ? "memory.extractionModel"
             : "memory.dreamModel",
         )}
         value={s[kind].model}
-        required
+        options={[
+          { value: "inherit", label: t("memory.inheritModel") },
+          ...models,
+          ...(s[kind].model !== "inherit" &&
+          !models.some((m) => m.value === s[kind].model)
+            ? [
+                {
+                  value: s[kind].model,
+                  label: s[kind].model + " · " + t("memory.modelUnavailable"),
+                },
+              ]
+            : []),
+        ]}
         disabled={busy}
-        spellCheck={false}
-        onChange={(e) =>
-          set({ ...s, [kind]: { ...s[kind], model: e.target.value } })
-        }
-        className={inputClass + " sm:w-52"}
+        searchable
+        onSelect={(model) => set({ ...s, [kind]: { ...s[kind], model } })}
+        variant="field"
+        className="w-full sm:w-60"
       />
     </SettingsRow>
   );

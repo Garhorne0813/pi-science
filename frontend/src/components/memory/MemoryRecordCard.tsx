@@ -2,6 +2,8 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { ChevronRight, MoreHorizontal } from "lucide-react";
 import { cn } from "../../lib/ui";
 import { useTranslation } from "react-i18next";
+import { MemorySources } from "./MemorySources";
+import type { MemoryCategory } from "./memory-ui";
 import type { MemoryRecord } from "@pi-science/contracts";
 import { useRef } from "react";
 
@@ -15,8 +17,12 @@ export function MemoryRecordCard({
   onHistory,
   onApprove,
   onReject,
+  cwd,
+  categories = [],
 }: {
   record: MemoryRecord;
+  cwd?: string;
+  categories?: MemoryCategory[];
   review: boolean;
   busy: boolean;
   onEdit: () => void;
@@ -66,6 +72,9 @@ export function MemoryRecordCard({
               <p className="mt-0.5 text-ui-caption text-muted">
                 {t(`memory.scopeLabel.${r.scope}`)} ·{" "}
                 {t(`memory.kindLabel.${r.kind}`)}
+                {categories.find((c) => c.id === r.categoryId)?.name && (
+                  <> · {categories.find((c) => c.id === r.categoryId)?.name}</>
+                )}
               </p>
               <p className="mt-1 line-clamp-2 break-words text-ui-caption leading-5 text-muted group-open:hidden">
                 {r.body}
@@ -84,15 +93,12 @@ export function MemoryRecordCard({
             </p>
             {r.sources.length > 0 && (
               <div className="mt-2">
-                <h3 className="font-medium">{t("memory.sources")}</h3>
-                <ul className="mt-1 space-y-1 break-all">
-                  {r.sources.map((s, i) => (
-                    <li key={i}>
-                      {s.kind}: {s.locator} {s.version}
-                      {s.digest && " · " + s.digest.slice(0, 12)}
-                    </li>
-                  ))}
-                </ul>
+                <h3 className="font-medium">{t("memory.sourceReferences")}</h3>
+                <MemorySources
+                  sources={r.sources}
+                  cwd={cwd}
+                  projectId={r.projectId}
+                />
               </div>
             )}
           </div>

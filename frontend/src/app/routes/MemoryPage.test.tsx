@@ -23,6 +23,13 @@ const record = {
   reviewStatus: "pending",
   revision: 3,
   contentHash: "hash-3",
+  ownerId: "local-owner",
+  projectId: "project-id",
+  origin: "agent_tool",
+  evidenceLevel: "observed",
+  reviewRequired: true,
+  createdAt: 1000,
+  updatedAt: 2000,
   sources: [{ kind: "file", locator: "result.txt" }],
 };
 let requests: Array<{
@@ -35,6 +42,7 @@ let stale: boolean;
 let browsing: boolean;
 let recordRows: (typeof record)[];
 let runRows: unknown[];
+let proposalRows: unknown[];
 beforeAll(async () => {
   await i18n.changeLanguage("en");
 });
@@ -44,6 +52,11 @@ beforeEach(() => {
   browsing = false;
   recordRows = [record];
   runRows = [];
+  proposalRows = [];
+  vi.stubGlobal(
+    "confirm",
+    vi.fn(() => true),
+  );
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -72,7 +85,7 @@ beforeEach(() => {
               totalPages: 1,
             };
       else if (url.pathname.endsWith("/reviews"))
-        data = { records: recordRows, proposals: [] };
+        data = { records: recordRows, proposals: proposalRows };
       else if (url.pathname.endsWith("/background-runs"))
         data = { runs: runRows };
       else if (url.pathname.endsWith("/categories"))
@@ -126,9 +139,8 @@ it("submits approval for the displayed exact version and shows a 409 instead of 
   mount();
   await screen.findByText("Result includes limitations");
   fireEvent.click(screen.getByRole("button", { name: "Pending review (1)" }));
-  fireEvent.click(
-    screen.getByLabelText("View memory: Result includes limitations"),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Review candidate" }));
+  await screen.findByRole("dialog", { name: "Result includes limitations" });
   stale = true;
   fireEvent.click(screen.getByRole("button", { name: "Approve this version" }));
   await screen.findByRole("alert");
@@ -163,11 +175,11 @@ it("provides source fields for manually entered memories", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Create memory" }));
   fireEvent.click(screen.getByRole("button", { name: "Add source" }));
   expect(
-    screen.getByRole("combobox", { name: "Source type" }),
+    screen.getByRole("button", { name: "Source type: File" }),
   ).toBeInTheDocument();
   expect(
     screen.getByRole("textbox", {
-      name: "File path, sessionId@messageId, Run ID or Artifact ID",
+      name: "File path",
     }),
   ).toBeInTheDocument();
 });
@@ -185,7 +197,7 @@ it("keeps sources and history inside expandable details", async () => {
   expect(
     screen.getByRole("button", { name: "Version and review history" }),
   ).toBeVisible();
-  expect(screen.getByText("file: result.txt")).toBeVisible();
+  expect(screen.getAllByText("result.txt")[0]).toBeVisible();
   fireEvent.click(summary);
   expect(
     screen.getByRole("button", { name: "Version and review history" }),
@@ -341,18 +353,105 @@ it("distinguishes measured usage, estimates and holds and displays safe retry di
   await screen.findByText("Result includes limitations");
   fireEvent.click(screen.getByRole("button", { name: "Run history" }));
   expect(
-    await screen.findByText("Measured usage: 10 tokens · $0.001"),
-  ).toBeInTheDocument();
-  expect(
-    screen.getByText("Estimated unknown usage: 1000 tokens · $0.1"),
-  ).toBeInTheDocument();
-  expect(
-    screen.getByText("In-flight reservation: 0 tokens · $0"),
-  ).toBeInTheDocument();
+    await screen.findByText("Estimated unknown usage: $0.10"),
+  ).toBeVisible();
+  expect(screen.queryByText("Measured usage: $0.00")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByText("View details"));
+  expect(screen.getByText("10 tokens · $0.001")).toBeVisible();
+  expect(screen.getByText("1000 tokens · $0.10")).toBeVisible();
   expect(
     screen.getByText(/workspace · ENOENT · failures: 2/),
   ).toHaveTextContent("Next retry");
   expect(
     screen.queryByRole("button", { name: "Stop" }),
   ).not.toBeInTheDocument();
+});
+
+it("opens a complete change review and approves the displayed proposal hash/revision", async () => {
+  proposalRows = [
+    {
+      id: "p1",
+      recordId: "r1",
+      expectedRevision: 3,
+      expectedHash: "hash-3",
+      contentHash: "candidate-hash",
+      status: "pending",
+      reason: "Updated evidence",
+      current: { ...record, status: "active" },
+      candidate: {
+        ...record,
+        revision: 4,
+        title: "Revised result",
+        body: "New limitations",
+        status: "pending_review",
+      },
+    },
+  ];
+  mount();
+  await screen.findByText("Result includes limitations");
+  fireEvent.click(screen.getByRole("button", { name: "Pending review (2)" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  const modal = await screen.findByRole("dialog", { name: "Revised result" });
+  expect(within(modal).getByText("Current version")).toBeVisible();
+  expect(within(modal).getByText("New limitations")).toBeVisible();
+  fireEvent.click(
+    within(modal).getByRole("button", { name: "Approve this version" }),
+  );
+  await waitFor(() =>
+    expect(
+      requests.find((r) => r.path.endsWith("/proposals/p1/accept"))?.body,
+    ).toEqual({ expectedRevision: 3, contentHash: "candidate-hash" }),
+  );
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+  );
+});
+it.each(["stale_proposal", "revision_changed", "missing_current"])(
+  "blocks unsafe approval in the review dialog: %s",
+  async (reason) => {
+    proposalRows = [
+      {
+        id: "p1",
+        recordId: "r1",
+        expectedRevision: 3,
+        contentHash: "candidate-hash",
+        status: reason === "stale_proposal" ? reason : "pending",
+        reason: "Review",
+        current:
+          reason === "missing_current"
+            ? undefined
+            : { ...record, revision: reason === "revision_changed" ? 4 : 3 },
+        candidate: { ...record, title: "Revised result" },
+      },
+    ];
+    mount();
+    await screen.findByText("Result includes limitations");
+    fireEvent.click(screen.getByRole("button", { name: "Pending review (2)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+    const modal = await screen.findByRole("dialog", { name: "Revised result" });
+    expect(
+      within(modal).getByRole("button", { name: "Approve this version" }),
+    ).toBeDisabled();
+    expect(within(modal).getByRole("button", { name: "Reject" })).toBeEnabled();
+  },
+);
+it("keeps an unsaved editor open when discard is declined", async () => {
+  vi.stubGlobal(
+    "confirm",
+    vi.fn(() => false),
+  );
+  mount();
+  await screen.findByText("Result includes limitations");
+  fireEvent.click(screen.getByRole("button", { name: "Create memory" }));
+  const dialog = await screen.findByRole("dialog", { name: "Create memory" });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Title" }), {
+    target: { value: "Draft" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+  expect(dialog).toBeVisible();
+  expect(within(dialog).getByRole("textbox", { name: "Title" })).toHaveValue(
+    "Draft",
+  );
+  expect(window.confirm).toHaveBeenCalledWith("Discard unsaved changes?");
 });

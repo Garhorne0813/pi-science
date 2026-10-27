@@ -99,9 +99,20 @@ try {
   const card = page
     .locator("article")
     .filter({ hasText: "Preliminary measurement" });
-  await card.locator("summary").click();
-  await card.getByRole("button", { name: "Approve this version" }).click();
+  await card
+    .getByRole("button", { name: "Review candidate", exact: true })
+    .click();
+  const candidateDialog = page.getByRole("dialog", {
+    name: "Preliminary measurement",
+    exact: true,
+  });
+  await candidateDialog
+    .getByRole("button", { name: "Approve this version" })
+    .click();
   await page.getByRole("status").filter({ hasText: "Saved" }).waitFor();
+  await page.waitForFunction(
+    () => document.activeElement?.closest('nav[aria-label="Memory"]') !== null,
+  );
   const approved = (await api("/records/" + records[1].id)).record;
   assert.equal(approved.status, "active");
   assert.equal(approved.approvedContentHash, approved.contentHash);
@@ -173,7 +184,7 @@ try {
       document.activeElement?.getAttribute("aria-label") ===
       "More actions: Response format",
   );
-  await probe.locator("summary").click();
+  await probe.locator("summary").first().click();
   const historyResponse = page.waitForResponse(
     (r) =>
       r.request().method() === "GET" &&
@@ -458,13 +469,13 @@ try {
       .count(),
     0,
   );
-  const summary = compactCard.locator("summary");
+  const summary = compactCard.locator("summary").first();
   await summary.focus();
   await page.keyboard.press("Enter");
   await compactCard
     .getByRole("button", { name: "Version and review history" })
     .waitFor();
-  await compactCard.getByText(/file: result.csv/).waitFor();
+  await compactCard.getByText("result.csv", { exact: true }).first().waitFor();
   await page.screenshot({
     path: path.join(outputs, "memory-expanded.png"),
     fullPage: true,

@@ -1,15 +1,25 @@
 import { MemoryDialog } from "../../components/memory/MemoryDialog";
-import { MemoryProposalDiff } from "../../components/memory/MemoryProposalDiff";
+import { MemoryReviewRecord } from "../../components/memory/MemoryReviewRecord";
+import { MemoryEditor } from "../../components/memory/MemoryEditor";
+import {
+  MemoryHistory,
+  type MemoryHistoryData,
+} from "../../components/memory/MemoryHistory";
+import {
+  MemoryRunCard,
+  type MemoryRun as Run,
+} from "../../components/memory/MemoryRunCard";
+import { memoryButton, memoryPrimary } from "../../components/memory/memory-ui";
+import {
+  changedMemoryFields,
+  MemoryProposalDiff,
+} from "../../components/memory/MemoryProposalDiff";
 import { Settings2, Plus, Download } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import type {
-  MemoryRecord,
-  MemoryContent,
-  MemoryBrowseResult,
-} from "@pi-science/contracts";
+import type { MemoryRecord, MemoryBrowseResult } from "@pi-science/contracts";
 import { memoryRequest, useMemorySettings } from "../../lib/memory";
 import {
   MemoryBrowseControls,
@@ -22,51 +32,21 @@ type Proposal = {
   id: string;
   recordId: string;
   expectedRevision: number;
+  expectedHash?: string;
   contentHash: string;
   candidate: MemoryRecord;
   reason: string;
   current?: MemoryRecord;
 };
-type Run = {
-  id: string;
-  kind: string;
-  status: string;
-  createdAt: number;
-  startedAt?: number;
-  endedAt?: number;
-  reviewMode: string;
-  effectiveReviewMode?: string;
-  tokens?: number;
-  costUsd?: number;
-  model?: string;
-  actualModel?: string;
-  error?: string;
-  reason?: string;
-  diagnostic?: {
-    code: string;
-    stage: string;
-    failureCount: number;
-    nextScanAt: number;
-  };
-  usage?: {
-    measuredTokens: number;
-    measuredCostUsd: number;
-    estimatedTokens: number;
-    estimatedCostUsd: number;
-    reservedTokens: number;
-    reservedCostUsd: number;
-  };
-  watermark?: number;
-  sessionId?: string;
-  messageIds?: string[];
-  recordIds?: string[];
-  reservedTokens?: number;
-  windowStartLocalDate?: string;
-  timeZone?: string;
-  results?: unknown[];
-};
-const control =
-  "min-w-0 rounded-input border border-border bg-surface px-3 py-2 text-text";
+function staleProposal(p: Proposal) {
+  return (
+    p.status === "stale_proposal" ||
+    (!!p.current &&
+      (p.current.revision !== p.expectedRevision ||
+        (!!p.expectedHash && p.current.contentHash !== p.expectedHash)))
+  );
+}
+const control = memoryButton;
 export function MemoryPage() {
   const { cwd = "" } = useParams();
   const { t } = useTranslation();
@@ -134,12 +114,20 @@ export function MemoryPage() {
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<MemoryRecord | null>(null);
   const [creating, setCreating] = useState(false);
-  const [history, setHistory] = useState<{ title: string; data: unknown }>();
+  const [history, setHistory] = useState<{
+    record: MemoryRecord;
+    data: MemoryHistoryData;
+  }>();
+  const [proposalId, setProposalId] = useState<string>();
+  const [reviewRecordId, setReviewRecordId] = useState<string>();
   const historyRequest = useRef(0);
+  const reviewTabRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     setEditing(null);
     setCreating(false);
     setHistory(undefined);
+    setProposalId(undefined);
+    setReviewRecordId(undefined);
     historyRequest.current++;
   }, [cwd]);
   const key = ["memory", cwd];
@@ -212,6 +200,8 @@ export function MemoryPage() {
     <MemoryRecordCard
       key={`${r.id}:${r.revision}:${r.contentHash}:${review}`}
       record={r}
+      cwd={cwd}
+      categories={categories.data?.categories}
       review={review}
       busy={busy}
       onEdit={() => {
@@ -233,16 +223,20 @@ export function MemoryPage() {
       }}
       onHistory={() => {
         const request = ++historyRequest.current;
-        void memoryRequest(cwd, `/records/${r.id}/history`)
+        void memoryRequest<MemoryHistoryData>(cwd, `/records/${r.id}/history`)
           .then((data) => {
             if (request === historyRequest.current)
-              setHistory({ title: r.title, data });
+              setHistory({ record: r, data });
           })
           .catch((e) => setError(String(e)));
       }}
       onApprove={() => void decide(r, "approve")}
       onReject={() => void decide(r, "reject")}
     />
+  );
+  const proposal = reviews.data?.proposals.find((p) => p.id === proposalId);
+  const reviewRecord = reviews.data?.records.find(
+    (r) => r.id === reviewRecordId,
   );
   const loadError =
     records.error ?? reviews.error ?? settings.error ?? runs.error;
@@ -276,6 +270,7 @@ export function MemoryPage() {
           {["records", "reviews", "runs"].map((v) => (
             <button
               key={v}
+              ref={v === "reviews" ? reviewTabRef : undefined}
               aria-pressed={tab === v}
               className={
                 control +
@@ -421,46 +416,90 @@ export function MemoryPage() {
           <>
             <p className="text-sm text-muted">{t("memory.approvalMeaning")}</p>
             <div className="space-y-2">
-              {reviews.data?.records.map((r) => card(r, true))}
-            </div>
-            {reviews.data?.proposals.map((p) => (
-              <article
-                key={p.id}
-                className="border border-border rounded-panel p-4 space-y-3"
-              >
-                <h2>{p.candidate.title}</h2>
-                <p>{p.reason}</p>
-                <p className="text-ui-caption text-muted">
-                  {t("memory.version", { version: p.candidate.revision })}
-                </p>
-                {p.status === "stale_proposal" && (
-                  <p className="text-error-text">{t("memory.stale")}</p>
-                )}
-                <MemoryProposalDiff
-                  current={p.current}
-                  candidate={p.candidate}
-                />
-                {["accept", "reject"].map((a) => (
+              {reviews.data?.records.map((r) => (
+                <article
+                  key={r.id}
+                  data-memory-id={r.id}
+                  className="flex items-start justify-between gap-5 rounded-card border border-faint bg-surface p-4"
+                >
+                  <div className="min-w-0 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="break-words text-ui-label font-semibold">
+                        {r.title}
+                      </h2>
+                      <span className="rounded bg-accent-soft px-2 py-0.5 text-ui-caption text-accent">
+                        {t(
+                          r.status === "needs_review"
+                            ? "memory.changeRecheck"
+                            : "memory.changeNew",
+                        )}
+                      </span>
+                    </div>
+                    <p className="line-clamp-2 text-ui-caption leading-5 text-muted">
+                      {r.body}
+                    </p>
+                    <p className="text-ui-caption text-muted">
+                      {t("memory.version", { version: r.revision })} ·{" "}
+                      {t(`memory.kindLabel.${r.kind}`)}
+                    </p>
+                  </div>
                   <button
-                    key={a}
-                    className={control + " mr-2"}
-                    disabled={
-                      busy ||
-                      (a === "accept" &&
-                        (p.status === "stale_proposal" || !p.current))
-                    }
-                    onClick={() =>
-                      void mutate(`/dream/proposals/${p.id}/${a}`, "POST", {
-                        expectedRevision: p.expectedRevision,
-                        contentHash: p.contentHash,
-                      })
-                    }
+                    type="button"
+                    className={control + " shrink-0"}
+                    onClick={() => setReviewRecordId(r.id)}
                   >
-                    {t(a === "accept" ? "memory.approve" : "memory.reject")}
+                    {t("memory.reviewCandidate")}
                   </button>
-                ))}
-              </article>
-            ))}
+                </article>
+              ))}
+            </div>
+            <div className="space-y-2">
+              {reviews.data?.proposals.map((p) => (
+                <article
+                  key={p.id}
+                  className="flex items-start justify-between gap-5 rounded-card border border-faint bg-surface p-4"
+                >
+                  <div className="min-w-0 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="break-words text-ui-label font-semibold">
+                        {p.candidate.title}
+                      </h2>
+                      <span className="rounded bg-accent-soft px-2 py-0.5 text-ui-caption text-accent">
+                        {t(
+                          p.candidate.status === "archived"
+                            ? "memory.changeArchive"
+                            : "memory.changeModify",
+                        )}
+                      </span>
+                      {staleProposal(p) && (
+                        <span className="text-ui-caption text-error-text">
+                          {t("memory.stale")}
+                        </span>
+                      )}
+                    </div>
+                    {p.reason &&
+                      !["append", "replace", "remove"].includes(p.reason) && (
+                        <p className="text-ui-caption text-muted">{p.reason}</p>
+                      )}
+                    <p className="text-ui-caption text-muted">
+                      {t("memory.version", { version: p.candidate.revision })} ·{" "}
+                      {t("memory.changedFieldCount", {
+                        count: p.current
+                          ? changedMemoryFields(p.current, p.candidate).length
+                          : 0,
+                      })}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className={control + " shrink-0"}
+                    onClick={() => setProposalId(p.id)}
+                  >
+                    {t("memory.reviewChange")}
+                  </button>
+                </article>
+              ))}
+            </div>
           </>
         )}
         {tab === "runs" && (
@@ -486,364 +525,232 @@ export function MemoryPage() {
             >
               {t("memory.forceScan")}
             </button>
-            {runs.data?.runs.map((r) => (
-              <article
-                key={r.id}
-                className="border border-border rounded-panel p-4 space-y-2"
-              >
-                <h2>
-                  {r.kind} · {r.status}
-                </h2>
-                <p className="text-xs">
-                  {new Date(r.startedAt ?? r.createdAt).toLocaleString()} —{" "}
-                  {r.endedAt ? new Date(r.endedAt).toLocaleString() : "…"} ·{" "}
-                  {r.actualModel ?? r.model} ·{" "}
-                  {r.effectiveReviewMode ?? r.reviewMode} · {r.tokens ?? 0}{" "}
-                  tokens · ${r.costUsd ?? 0} · {r.windowStartLocalDate}{" "}
-                  {r.timeZone}
-                </p>
-                {r.reason && (
-                  <p>
-                    {t("memory.skipped")}: {r.reason}
-                  </p>
-                )}
-                {r.diagnostic && (
-                  <p className="text-ui-caption text-muted">
-                    {t("memory.schedulerDiagnostic", {
-                      ...r.diagnostic,
-                      count: r.diagnostic.failureCount,
-                    })}
-                    {" · "}
-                    {t("memory.retryAt")}:{" "}
-                    {new Date(r.diagnostic.nextScanAt).toLocaleString()}
-                  </p>
-                )}
-                {r.usage && (
-                  <div className="space-y-1 text-ui-caption text-muted">
-                    <p>
-                      {t("memory.usageMeasured")}: {r.usage.measuredTokens}{" "}
-                      tokens · ${r.usage.measuredCostUsd}
-                    </p>
-                    <p>
-                      {t("memory.usageEstimated")}: {r.usage.estimatedTokens}{" "}
-                      tokens · ${r.usage.estimatedCostUsd}
-                    </p>
-                    <p>
-                      {t("memory.usageReserved")}: {r.usage.reservedTokens}{" "}
-                      tokens · ${r.usage.reservedCostUsd}
-                    </p>
-                    {(r.usage.estimatedTokens > 0 ||
-                      r.usage.estimatedCostUsd > 0) && (
-                      <p>{t("memory.usageEstimateHint")}</p>
-                    )}
-                  </div>
-                )}
-                <p className="text-xs text-muted">
-                  {t("memory.readRange")}:{" "}
-                  {r.sessionId ?? r.recordIds?.length ?? 0} ·{" "}
-                  {r.watermark ?? r.messageIds?.length ?? 0} ·{" "}
-                  {t("memory.reservedTokens")}: {r.reservedTokens ?? 0}
-                </p>
-                {r.results && (
-                  <p className="text-sm">
-                    {t("memory.changes")}: {r.results.length}
-                  </p>
-                )}
-                {r.error && <p className="text-error-text">{r.error}</p>}
-                {["queued", "running"].includes(r.status) && (
-                  <button
-                    className={control}
-                    disabled={busy}
-                    onClick={() => void mutate(`/dream/runs/${r.id}/cancel`)}
-                  >
-                    {t("memory.stop")}
-                  </button>
-                )}
-                {r.status === "failed" && (
-                  <button
-                    className={control}
-                    disabled={busy}
-                    onClick={() =>
-                      void mutate(`/background-runs/${r.id}/retry`)
-                    }
-                  >
-                    {t("memory.retry")}
-                  </button>
-                )}
-              </article>
-            ))}
+            <div className="space-y-2">
+              {runs.data?.runs.map((r) => (
+                <MemoryRunCard
+                  key={r.id}
+                  run={r}
+                  busy={busy}
+                  stop={() => void mutate(`/dream/runs/${r.id}/cancel`)}
+                  retry={() => void mutate(`/background-runs/${r.id}/retry`)}
+                />
+              ))}
+            </div>
           </>
         )}
         {(creating || editing) && (
-          <MemoryDialog
-            title={
-              editing
-                ? t("memory.editRecord", { title: editing.title })
-                : t("memory.create")
-            }
+          <MemoryEditor
+            key={editing ? `${editing.id}:${editing.revision}` : "create"}
+            record={editing}
+            categories={categories.data?.categories ?? []}
+            busy={busy}
+            error={error}
             close={() => {
               setCreating(false);
               setEditing(null);
             }}
+            save={async (content) => {
+              if (
+                await mutate(
+                  editing ? `/records/${editing.id}` : "/records",
+                  editing ? "PATCH" : "POST",
+                  {
+                    content,
+                    ...(editing
+                      ? {
+                          expectedRevision: editing.revision,
+                          contentHash: editing.contentHash,
+                        }
+                      : {}),
+                  },
+                )
+              ) {
+                setCreating(false);
+                setEditing(null);
+              }
+            }}
+          />
+        )}
+        {reviewRecordId && (
+          <MemoryDialog
+            title={reviewRecord?.title ?? t("memory.reviewCandidate")}
+            fallbackFocus={() => reviewTabRef.current}
+            size="wide"
+            busy={busy}
+            close={() => setReviewRecordId(undefined)}
+            footer={
+              <div className="flex items-center justify-between gap-4">
+                <p className="max-w-xl text-ui-caption text-muted">
+                  {t("memory.approvalMeaning")}
+                </p>
+                <div className="flex shrink-0 gap-2">
+                  {["reject", "approve"].map((action) => (
+                    <button
+                      type="button"
+                      key={action}
+                      className={action === "approve" ? memoryPrimary : control}
+                      disabled={busy || !reviewRecord}
+                      onClick={async () => {
+                        if (
+                          reviewRecord &&
+                          (await decide(reviewRecord, action))
+                        )
+                          setReviewRecordId(undefined);
+                      }}
+                    >
+                      {t(
+                        action === "approve"
+                          ? "memory.approve"
+                          : "memory.reject",
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            }
           >
             {error && (
-              <p role="alert" className="text-error-text">
+              <p role="alert" className="mb-4 text-ui-label text-error-text">
                 {error}
               </p>
             )}
-            <MemoryEditor
-              key={editing ? `${editing.id}:${editing.revision}` : "create"}
-              record={editing}
-              busy={busy}
-              close={() => {
-                setCreating(false);
-                setEditing(null);
-              }}
-              save={async (content) => {
-                if (
-                  await mutate(
-                    editing ? `/records/${editing.id}` : "/records",
-                    editing ? "PATCH" : "POST",
-                    {
-                      content,
-                      ...(editing
-                        ? {
-                            expectedRevision: editing.revision,
-                            contentHash: editing.contentHash,
-                          }
-                        : {}),
-                    },
-                  )
-                ) {
-                  setCreating(false);
-                  setEditing(null);
-                }
-              }}
-            />
+            {reviewRecord ? (
+              <MemoryReviewRecord
+                record={reviewRecord}
+                cwd={cwd}
+                categories={categories.data?.categories ?? []}
+                onOpenSource={() => setReviewRecordId(undefined)}
+              />
+            ) : (
+              <p role="alert">{t("memory.candidateUnavailable")}</p>
+            )}
           </MemoryDialog>
         )}
-        {history !== undefined && (
+        {proposalId && (
           <MemoryDialog
-            title={t("memory.history") + " · " + history.title}
+            title={proposal?.candidate.title ?? t("memory.reviewChange")}
+            fallbackFocus={() => reviewTabRef.current}
+            size="wide"
+            close={() => setProposalId(undefined)}
+            busy={busy}
+            footer={
+              <div className="flex items-center justify-between gap-4">
+                <p className="max-w-xl text-ui-caption text-muted">
+                  {t("memory.approvalMeaning")}
+                </p>
+                <div className="flex shrink-0 gap-2">
+                  {["reject", "accept"].map((action) => (
+                    <button
+                      key={action}
+                      type="button"
+                      className={action === "accept" ? memoryPrimary : control}
+                      disabled={
+                        busy ||
+                        !proposal ||
+                        (action === "accept" &&
+                          (staleProposal(proposal) || !proposal.current))
+                      }
+                      onClick={async () => {
+                        if (
+                          proposal &&
+                          (await mutate(
+                            `/dream/proposals/${proposal.id}/${action}`,
+                            "POST",
+                            {
+                              expectedRevision: proposal.expectedRevision,
+                              contentHash: proposal.contentHash,
+                            },
+                          ))
+                        )
+                          setProposalId(undefined);
+                      }}
+                    >
+                      {t(
+                        action === "accept"
+                          ? "memory.approve"
+                          : "memory.reject",
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            }
+          >
+            {error && (
+              <p role="alert" className="mb-4 text-ui-label text-error-text">
+                {error}
+              </p>
+            )}
+            {proposal ? (
+              <>
+                <div className="mb-3 space-y-2">
+                  <div className="flex gap-2 text-ui-caption text-muted">
+                    <span>
+                      {t(
+                        proposal.candidate.status === "archived"
+                          ? "memory.changeArchive"
+                          : "memory.changeModify",
+                      )}
+                    </span>
+                    <span>
+                      {t("memory.version", {
+                        version: proposal.candidate.revision,
+                      })}
+                    </span>
+                  </div>
+                  {proposal.reason &&
+                    !["append", "replace", "remove"].includes(
+                      proposal.reason,
+                    ) && (
+                      <p className="text-ui-label text-muted">
+                        {proposal.reason}
+                      </p>
+                    )}
+                  {staleProposal(proposal) && (
+                    <p role="alert" className="text-ui-label text-error-text">
+                      {t("memory.stale")}
+                    </p>
+                  )}
+                </div>
+                <MemoryProposalDiff
+                  current={proposal.current}
+                  candidate={proposal.candidate}
+                  categories={categories.data?.categories}
+                  cwd={cwd}
+                  onOpenSource={() => setProposalId(undefined)}
+                />
+              </>
+            ) : (
+              <p role="alert">{t("memory.proposalUnavailable")}</p>
+            )}
+          </MemoryDialog>
+        )}
+        {history && (
+          <MemoryDialog
+            title={t("memory.history") + " · " + history.record.title}
+            size="wide"
+            scrollBody={false}
             close={() => {
               historyRequest.current++;
               setHistory(undefined);
             }}
           >
-            <pre className="min-w-0 whitespace-pre-wrap break-words text-ui-caption">
-              {JSON.stringify(history.data, null, 2)}
-            </pre>
+            <MemoryHistory
+              data={history.data}
+              current={history.record}
+              onOpenSource={() => {
+                historyRequest.current++;
+                setHistory(undefined);
+              }}
+              categories={categories.data?.categories ?? []}
+              cwd={cwd}
+            />
           </MemoryDialog>
         )}
       </div>
     </main>
   );
 }
-function MemoryEditor({
-  record,
-  busy,
-  save,
-  close,
-}: {
-  record: MemoryRecord | null;
-  busy: boolean;
-  save: (value: MemoryContent) => Promise<void>;
-  close: () => void;
-}) {
-  const { t } = useTranslation();
-  const [value, setValue] = useState<MemoryContent>(
-    record
-      ? {
-          scope: record.scope,
-          kind: record.kind,
-          title: record.title,
-          body: record.body,
-          artifactId: record.artifactId,
-          artifactVersionId: record.artifactVersionId,
-          subjectFrameId: record.subjectFrameId,
-          categoryId: record.categoryId,
-          evidenceLevel: record.evidenceLevel,
-          sources: record.sources,
-        }
-      : {
-          scope: "project",
-          kind: "preference",
-          title: "",
-          body: "",
-          evidenceLevel: "user_stated",
-          sources: [],
-        },
-  );
-  return (
-    <form
-      className="border border-border p-4 rounded-panel space-y-3"
-      onSubmit={(e) => {
-        e.preventDefault();
-        void save(value);
-      }}
-    >
-      <label className="block">
-        {t("memory.recordTitle")}
-        <input
-          required
-          className={control + " w-full"}
-          value={value.title}
-          onChange={(e) => setValue({ ...value, title: e.target.value })}
-        />
-      </label>
-      <label className="block">
-        {t("memory.body")}
-        <textarea
-          required
-          className={control + " w-full"}
-          value={value.body}
-          onChange={(e) => setValue({ ...value, body: e.target.value })}
-        />
-      </label>
-      {(["scope", "kind"] as const).map((field) => (
-        <label key={field} className="block">
-          {t(`memory.${field}`)}
-          <select
-            className={control + " ml-2"}
-            disabled={!!record && field === "scope"}
-            value={value[field]}
-            onChange={(e) => setValue({ ...value, [field]: e.target.value })}
-          >
-            {(field === "scope"
-              ? ["profile", "project", "artifact", "frame"]
-              : [
-                  "preference",
-                  "workflow",
-                  "environment",
-                  "reference",
-                  "observation",
-                  "finding",
-                  "decision",
-                ]
-            ).map((v) => (
-              <option key={v}>{v}</option>
-            ))}
-          </select>
-        </label>
-      ))}
-      {(
-        [
-          "artifactId",
-          "artifactVersionId",
-          "subjectFrameId",
-          "categoryId",
-        ] as const
-      ).map((field) => (
-        <label key={field} className="block text-sm">
-          {t(`memory.${field}`)}
-          <input
-            className={control + " w-full"}
-            value={value[field] ?? ""}
-            onChange={(e) =>
-              setValue({ ...value, [field]: e.target.value || undefined })
-            }
-          />
-        </label>
-      ))}
-      <fieldset className="space-y-2">
-        <legend>{t("memory.sources")}</legend>
-        {value.sources.map((source, index) => (
-          <div key={index} className="flex gap-2 flex-wrap">
-            <select
-              aria-label={t("memory.sourceKind")}
-              className={control}
-              value={source.kind}
-              onChange={(e) =>
-                setValue({
-                  ...value,
-                  sources: value.sources.map((s, i) =>
-                    i === index
-                      ? { ...s, kind: e.target.value as typeof source.kind }
-                      : s,
-                  ),
-                })
-              }
-            >
-              {["file", "message", "session", "run", "artifact", "memory"].map(
-                (kind) => (
-                  <option key={kind}>{kind}</option>
-                ),
-              )}
-            </select>
-            <input
-              required
-              aria-label={t("memory.sourceLocator")}
-              placeholder={t("memory.sourceLocator")}
-              className={control + " min-w-0 flex-1 basis-full sm:basis-auto"}
-              value={source.locator}
-              onChange={(e) =>
-                setValue({
-                  ...value,
-                  sources: value.sources.map((s, i) =>
-                    i === index
-                      ? { ...s, locator: e.target.value, digest: undefined }
-                      : s,
-                  ),
-                })
-              }
-            />
-            <input
-              aria-label={t("memory.sourceVersion")}
-              placeholder={t("memory.sourceVersion")}
-              className={control + " w-32"}
-              value={source.version ?? ""}
-              onChange={(e) =>
-                setValue({
-                  ...value,
-                  sources: value.sources.map((s, i) =>
-                    i === index
-                      ? {
-                          ...s,
-                          version: e.target.value || undefined,
-                          digest: undefined,
-                        }
-                      : s,
-                  ),
-                })
-              }
-            />
-            <button
-              type="button"
-              className={control}
-              onClick={() =>
-                setValue({
-                  ...value,
-                  sources: value.sources.filter((_, i) => i !== index),
-                })
-              }
-            >
-              {t("memory.removeSource")}
-            </button>
-          </div>
-        ))}
-        <button
-          type="button"
-          className={control}
-          onClick={() =>
-            setValue({
-              ...value,
-              sources: [...value.sources, { kind: "file", locator: "" }],
-            })
-          }
-        >
-          {t("memory.addSource")}
-        </button>
-      </fieldset>
-      <button disabled={busy} className={control}>
-        {t("memory.save")}
-      </button>
-      <button type="button" className={control + " ml-2"} onClick={close}>
-        {t("common.cancel")}
-      </button>
-    </form>
-  );
-}
-
 function MemoryOrganization({
   cwd,
   busy,
@@ -868,7 +775,7 @@ function MemoryOrganization({
       memoryRequest<{ autoRecall: boolean }>(cwd, "/project-settings"),
   });
   return (
-    <section className="space-y-3 border border-border p-4 rounded-panel">
+    <section className="space-y-3 border border-border p-4 rounded-card">
       <h2>{t("memory.organization")}</h2>
       <label className="flex gap-2">
         <input
