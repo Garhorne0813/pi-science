@@ -186,7 +186,7 @@ export class SessionRuntime {
       const budgets = executionBudgetTools(options.cwd, options.budgetOperationId, options.budgetNodeId);
       const memoryUrl=options.env?.PI_SCIENCE_BACKEND_URL??process.env.PI_SCIENCE_BACKEND_URL;
       const memoryToken=options.env?.PI_SCIENCE_INTERNAL_TOKEN??process.env.PI_SCIENCE_INTERNAL_TOKEN;
-      const memoryClient = !candidateScoped && !options.delegatedAgent && memoryUrl && memoryToken ? new AgentMemoryClient(options.cwd,session.metadata.id,memoryUrl,memoryToken) : undefined;
+      const memoryClient = !candidateScoped && !options.delegatedAgent && memoryUrl && memoryToken ? new AgentMemoryClient(options.cwd,session.metadata.id,memoryUrl,memoryToken,session) : undefined;
       const basePrompt = options.systemPrompt ?? "You are a helpful scientific research assistant.";
       // Resolve per invocation so policy changes and refreshes affect Bash too.
       // A standalone .md skill does not authorize its shared parent directory.

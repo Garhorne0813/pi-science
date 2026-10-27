@@ -2,8 +2,12 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type {
   AgentHarnessTool,
+  AgentHarnessToolInvocation,
   NodeExecutionEnv,
+  Session,
 } from "@earendil-works/pi-agent-core/node";
+import { operationState } from "@earendil-works/pi-agent-core/harness/session";
+import type { Context } from "@earendil-works/pi-agent-core/harness/context";
 import { memoryGrant } from "../../../memory/service.js";
 export class AgentMemoryClient {
   query = "";
@@ -12,6 +16,7 @@ export class AgentMemoryClient {
     private sessionId: string,
     private url?: string,
     private secret?: string,
+    private session?: Pick<Session, "getValue" | "getEntry">,
   ) {}
   async call(action: string, input: unknown, signal?: AbortSignal) {
     if (!this.url || !this.secret)
@@ -32,6 +37,23 @@ export class AgentMemoryClient {
     };
     if (!response.ok) throw new Error(result.error ?? "Memory request failed");
     return result;
+  }
+  private async messageSource(invocation: AgentHarnessToolInvocation, context: Context) {
+    const state = (await this.session?.getValue(operationState(invocation.operationId), context))?.value;
+    if (state?.at !== "tools" || state.batch.turnId !== invocation.turnId ||
+      !state.batch.calls.some(call => call.resultEntryId === invocation.invocationId)) {
+      throw new Error("Memory write has no active conversation source");
+    }
+    // Anchor to this tool batch, never the mutable branch tip or a model-supplied ID.
+    // This also survives worker recovery and excludes later steering/other branches.
+    let entry = await this.session!.getEntry(state.batch.assistantEntryId, context);
+    while (entry) {
+      if (entry.type === "message" && entry.message.role === "user") {
+        return { kind: "message", locator: `${this.sessionId}@${entry.id}` };
+      }
+      entry = entry.parentId ? await this.session!.getEntry(entry.parentId, context) : undefined;
+    }
+    throw new Error("Memory write has no user message source");
   }
   /** Ephemeral lower-priority context; never persisted or interpolated into system instructions. */
   async references(messages: AgentMessage[]): Promise<AgentMessage[]> {
@@ -63,7 +85,7 @@ export class AgentMemoryClient {
   tools(): AgentHarnessTool<{ env: NodeExecutionEnv }>[] {
     const source = Type.Object({
       kind: Type.Union(
-        ["message", "session", "run", "artifact", "file", "memory"].map((v) =>
+        ["run", "artifact", "file", "memory"].map((v) =>
           Type.Literal(v),
         ),
       ),
@@ -92,10 +114,9 @@ export class AgentMemoryClient {
       evidenceLevel: Type.Union(
         ["user_stated", "observed", "inferred"].map((v) => Type.Literal(v)),
       ),
-      sources: Type.Array(source),
+      sources: Type.Optional(Type.Array(source)),
       artifactId: Type.Optional(Type.String()),
       artifactVersionId: Type.Optional(Type.String()),
-      subjectFrameId: Type.Optional(Type.String()),
       categoryId: Type.Optional(Type.String()),
     });
     return [
@@ -121,7 +142,7 @@ export class AgentMemoryClient {
         name: "write_memory",
         label: "Write Memory",
         description:
-          "Append a short durable fact or propose replacing/archiving a record. No hard deletion or approval. Replace/remove require the current revision and contentHash. Frame subject must be this session. Sources must exist; message locators are message IDs from this session. Research claims always require human review.",
+          "Append a short durable fact or propose replacing/archiving a record. The runtime automatically attaches the current user message as provenance and binds frame scope to this session: never supply or guess message/session IDs. Optional sources are additional existing files, runs, artifacts or memories. Record only explicitly stated facts as user_stated; do not expand a user's identity into assumed preferences. No hard deletion or approval. Replace/remove require the current revision and contentHash. Research claims always require human review. If Memory is disabled, tell the user to enable Settings → Memory; do not work around it with files.",
         parameters: Type.Object({
           operation: Type.Union([
             Type.Literal("append"),
@@ -138,6 +159,19 @@ export class AgentMemoryClient {
     ].map((def) => ({
       ...def,
       execute: async (id, params, _update, _ctx, invocation, context) => {
+        const input = params as Record<string, unknown>;
+        let content = input.content;
+        if (def.name === "write_memory" && input.operation !== "remove") {
+          if (!content || typeof content !== "object" || Array.isArray(content))
+            throw new Error("Memory content is required");
+          const supplied = content as Record<string, unknown>;
+          const sources = supplied.sources ?? [];
+          if (!Array.isArray(sources) || sources.some(source => !source ||
+            typeof source !== "object" || !["run", "artifact", "file", "memory"].includes(source.kind)))
+            throw new Error("Message/session sources are runtime-owned; omit them from write_memory");
+          content = { ...supplied, sources: [await this.messageSource(invocation, context), ...sources],
+            ...(supplied.scope === "frame" ? { subjectFrameId: this.sessionId } : {}) };
+        }
         const result = await this.call(
           def.name === "search_memory"
             ? "search"
@@ -145,10 +179,11 @@ export class AgentMemoryClient {
               ? "read"
               : "write",
           {
-            ...(params as object),
+            ...input,
             ...(def.name === "write_memory"
               ? {
                   operationKey: `agent:${this.sessionId}:${invocation.operationId}:${id}`,
+                  ...(input.operation === "remove" ? {} : { content }),
                 }
               : {}),
           },

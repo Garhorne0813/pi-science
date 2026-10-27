@@ -6,6 +6,7 @@ import { createServerModules } from "../../app/server-modules.js";
 import { buildApp } from "../../app/app.js";
 import type { ServerConfig } from "../../config/config.js";
 import { memoryGrant, verifyMemoryGrant } from "../../memory/service.js";
+import { AgentSessionRepository } from "../../runtime/agent/agent-session-repository.js";
 let cwd: string;
 let app: ReturnType<typeof buildApp>;
 let modules: ReturnType<typeof createServerModules>;
@@ -20,6 +21,8 @@ const config: ServerConfig = {
   nodeFiles: true,
   nodePiManager: false,
   logLevel: "silent",
+  internalToken: "memory-route-test",
+  requireInternalToken: false,
 };
 const request = async (
   method: "GET" | "POST" | "PATCH" | "DELETE",
@@ -64,8 +67,25 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await app.close();
+  vi.restoreAllMocks();
   await rm(cwd, { recursive: true, force: true });
   vi.unstubAllEnvs();
+});
+it("reports disabled Memory before validating model-supplied evidence", async () => {
+  const { revision, ...settings } = (await request("GET", "/settings")).json();
+  expect((await request("PATCH", "/settings", {
+    expectedRevision: revision, settings: { ...settings, enabled: false },
+  })).statusCode).toBe(200);
+  vi.spyOn(modules.sessions, "exists").mockResolvedValue(true);
+  vi.spyOn(AgentSessionRepository.prototype, "findPath").mockResolvedValue(join(cwd, "session.jsonl"));
+  const response = await app.inject({
+    method: "POST", url: "/api/memory/agent/write",
+    headers: { "x-memory-grant": memoryGrant(cwd, "session", "memory-route-test") },
+    payload: { operation: "append", content: { ...content(),
+      sources: [{ kind: "message", locator: "invented" }] } },
+  });
+  expect(response.statusCode).toBe(409);
+  expect(response.json().error).toContain("Enable Settings → Memory");
 });
 it("uses one API and leaves retired user data untouched", async () => {
   const old = join(cwd, ".pi-science", "memory");

@@ -227,6 +227,8 @@ export function registerMemoryRoutes(
     memory.recall(ctx.cwd, ctx.context, body(req)),
   );
   route("POST", "/agent/write", async (req, ctx) => {
+    if (!(await memory.command(ctx.context, "settings")).enabled)
+      throw new MemoryError(409, "Memory is disabled. Enable Settings → Memory before saving memories.");
     const b = body(req);
     if (b.operation !== "remove")
       b.content = await memory.validateContent(ctx.cwd, ctx.context, b.content);

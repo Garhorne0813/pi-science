@@ -60,6 +60,16 @@ adoption, not proof of scientific truth.
 Sources must resolve to existing messages, sessions, execution records, published
 Artifact versions, authorized Memory records or workspace files. Source project
 IDs and canonical message locators preserve Profile provenance across projects.
+Main Agent `write_memory` calls do not accept message/session IDs. The Worker
+resolves the nearest user-message ancestor of the active tool batch and attaches
+its canonical `sessionId@messageId` source automatically. This uses durable
+invocation state rather than the latest session-wide message, so recovery,
+branching and later steering cannot change the source. Frame scope likewise
+binds to the Worker's session. Optional model-supplied sources are additional
+files, runs, artifacts or memories; all sources still undergo backend validation.
+`user_stated` content should contain only the user's explicit facts, without
+expanding an identity into assumed preferences. Disabled Memory returns an
+actionable settings error before source validation and is never auto-enabled.
 Memory-to-memory sources require an active accepted upstream record and pin its
 content revision and hash. Validation traverses a bounded, cycle-checked evidence
 chain; upstream edits, archive/rejection or deletion invalidate active dependents
@@ -282,6 +292,18 @@ It temporarily changes the isolated server's global Memory settings, restores
 them in cleanup, and does not call a paid model.
 
 ### Live model validation
+
+After building, run `node scripts/uat-memory-agent.mjs` for an opt-in test against
+the configured real provider. It copies only model configuration/credentials into
+a private temporary home, starts an isolated backend and workspace, and removes
+that home and its credentials on exit. The operator's settings and data stay
+untouched. It verifies disabled feedback, an ID-free Agent write linked to the
+exact user message, pending review of a professional identity, approval of its
+exact revision/hash, and recall in a new conversation. The synthetic report is
+written to the system temporary directory as `pi-science-memory-agent-live-report.json`.
+Use `PI_SCIENCE_LIVE_SOURCE_HOME`, `PI_SCIENCE_LIVE_MODEL` and
+`PI_SCIENCE_LIVE_REPORT` to override configuration input, model and report path.
+This command makes paid model requests; it is not part of `pnpm test`.
 
 A separate DeepSeek Flash integration exercise on 2026-10-26 verified actual
 Agent writes/search, both review modes, switching Smart to all-manual while an

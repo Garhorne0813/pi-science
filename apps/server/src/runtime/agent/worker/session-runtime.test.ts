@@ -38,6 +38,50 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
+it("binds ID-free memory writes to the actual user message on each turn", async () => {
+  const calls = vi.spyOn(AgentMemoryClient.prototype, "call").mockResolvedValue({ records: [] });
+  const { instance, parts } = await runtime(undefined, {
+    allowedTools: ["write_memory"],
+    env: { PI_SCIENCE_BACKEND_URL: "http://127.0.0.1:1", PI_SCIENCE_INTERNAL_TOKEN: "fixture" },
+    skillPolicy: { mode: "none" },
+  });
+  vi.spyOn(parts.models, "streamSimple").mockImplementation((model, request) => {
+    const done = normalizeContext(request).messages.at(-1)?.role === "toolResult";
+    const message: AssistantMessage = {
+      role: "assistant",
+      content: done ? [{ type: "text", text: "Memory submitted for review" }] : [{
+        type: "toolCall", id: "memory-call", name: "write_memory", arguments: {
+          operation: "append", content: { scope: "frame", kind: "preference", title: "Role",
+            body: "用户是算法工程师", evidenceLevel: "user_stated" },
+        },
+      }],
+      api: model.api, provider: model.provider, model: model.id,
+      stopReason: done ? "stop" : "toolUse", timestamp: Date.now(),
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    };
+    const stream = createAssistantMessageEventStream();
+    stream.push({ type: "start", partial: { ...message, content: [] } });
+    stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
+    return stream;
+  });
+  for (const text of ["记住我是算法工程师", "记住我喜欢中文回答"]) {
+    expect(await instance.command("prompt", { message: text })).toMatchObject({ success: true });
+    await vi.waitFor(async () => {
+      expect(await instance.command("get_state", {})).toMatchObject({ data: { busy: false } });
+    }, { timeout: 10000 });
+    const user = (await parts.lane.findEntries({ order: "newestFirst" }, context))
+      .find(entry => entry.type === "message" && entry.message.role === "user");
+    expect(calls.mock.calls.filter(([action]) => action === "write").at(-1)?.[1]).toMatchObject({
+      content: { subjectFrameId: instance.sessionId,
+        sources: [{ kind: "message", locator: `${instance.sessionId}@${user!.id}` }] },
+    });
+  }
+  const writes = calls.mock.calls.filter(([action]) => action === "write");
+  expect(writes).toHaveLength(2);
+  expect(writes[0]?.[1]).not.toEqual(writes[1]?.[1]);
+}, 25000);
+
 describe("agent-core worker mutations", () => {
   it('registers main Memory tools from worker-only credentials while keeping tool shell credentials filtered',async()=>{
     const tools=['search_memory','read_memory','write_memory'];
