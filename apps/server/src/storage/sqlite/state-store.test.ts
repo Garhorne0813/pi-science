@@ -63,7 +63,7 @@ function runningJob(cwd: string): JobRecord {
 describe("SQLite state store", () => {
   it("starts the worker, applies migrations, and rolls back a failed batch", async () => {
     const state = await store();
-    expect(state.diagnostics()).toMatchObject({ status: "ready", schema_version: 6 });
+    expect(state.diagnostics()).toMatchObject({ status: "ready", schema_version: 7 });
 
     await expect(state.batch([
       { sql: "INSERT INTO projects (project_id, name, manifest_version, created_at, updated_at, last_seen_at) VALUES (?, ?, 1, 1, 1, 1)", params: ["project-one", "one"] },
@@ -87,7 +87,7 @@ describe("SQLite state store", () => {
 
       reopened = new SqliteStateStore({ path });
       await expect(reopened.start()).resolves.toBeUndefined();
-      expect(reopened.diagnostics().schema_version).toBe(6);
+      expect(reopened.diagnostics().schema_version).toBe(7);
     } finally {
       await reopened?.close();
       await initial.close();

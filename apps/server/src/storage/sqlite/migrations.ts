@@ -10,6 +10,7 @@ const migrationFiles = [
   { version: 4, name: "0004_project_mcp_tool_grants.sql", url: new URL("./migrations/0004_project_mcp_tool_grants.sql", import.meta.url), compatibleChecksums: ["d89e957d8ad3894af8b0ea976658055e2477bea5e0ba4cc13e26ef128693410c"] },
   { version: 5, name: "0005_unified_memory.sql", url: new URL("./migrations/0005_unified_memory.sql", import.meta.url) },
   { version: 6, name: "0006_memory_run_usage.sql", url: new URL("./migrations/0006_memory_run_usage.sql", import.meta.url) },
+  { version: 7, name: "0007_memory_recovery.sql", url: new URL("./migrations/0007_memory_recovery.sql", import.meta.url) },
 ] as const;
 
 export async function loadMigrations(): Promise<Migration[]> {

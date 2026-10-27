@@ -134,7 +134,7 @@ flowchart LR
 
 Core 会话由 `JsonlSessionRepo` 管理。旧 v3 会话先校验和复制，再由官方 SDK 升级，原件保持不变；registry 保存归属与条目 ID 映射，删除 tombstone 防止会话被重新导入。转换可离线执行，不需要 Worker、模型密钥或网络。见[会话转换](agent-core-session-conversion.md)。
 
-Memory 记录、来源、版本、审核事件、变更提案、全文索引、提取游标与后台任务状态由同一个 SQLite StateStore 持有。迁移 `0005_unified_memory.sql` 初始化空的 Memory 域；不会导入、覆盖或删除旧 `memory/ledger.json` 和 `project-state.json`，这些文件不再是当前 Memory 的权威存储。`PROJECT.md` 是普通项目文档，批准记忆不会改写它。页面 JSON 导出用于交换和审计；完整 StateStore 一致性快照使用 `SqliteStateStore.backup(path)`，恢复须先停止服务。迁移 0006 增加逐次租约的 UTC 日用量账本；`pnpm export:legacy-memory` 可只读导出旧数据，供核对来源后手动迁移，不沿用旧审核标记。
+Memory 记录、来源、版本、审核事件、变更提案、全文索引、提取游标与后台任务状态由同一个 SQLite StateStore 持有。迁移 `0005_unified_memory.sql` 初始化空的 Memory 域；不会导入、覆盖或删除旧 `memory/ledger.json` 和 `project-state.json`，这些文件不再是当前 Memory 的权威存储。`PROJECT.md` 是普通项目文档，批准记忆不会改写它。页面 JSON 导出用于交换和审计；完整 StateStore 一致性快照使用 `SqliteStateStore.backup(path)`，恢复须先停止服务。迁移 0006 增加逐次租约的 UTC 日用量账本，0007 记录模型调用阶段，回收未使用预留、单独记录未知用量估算，并持久化安全的调度诊断与重试退避；`pnpm export:legacy-memory` 可只读导出旧数据，供核对来源后手动迁移，不沿用旧审核标记。
 
 ## 统一记忆
 

@@ -102,7 +102,9 @@ class Transaction {
     if (
       r.status === "active" &&
       scientific(r) &&
-      !(r.reviewStatus === "approved" && r.approvedContentHash === r.contentHash)
+      !(
+        r.reviewStatus === "approved" && r.approvedContentHash === r.contentHash
+      )
     ) {
       r = {
         ...r,
@@ -613,6 +615,12 @@ class Transaction {
       );
   }
   execute(action: string, i: Record<string, unknown>): unknown {
+    if (
+      ["run.reconcile", "run.claim", "run.pending", "runs", "run.get"].includes(
+        action,
+      )
+    )
+      this.reconcileUsage();
     switch (action) {
       case "settings":
         return this.settings();
@@ -880,7 +888,7 @@ class Transaction {
       }
       case "touch":
         this.run(
-          "INSERT INTO memory_dream_schedules VALUES(?,?,?,?) ON CONFLICT(owner_id,project_id) DO UPDATE SET cwd=excluded.cwd,last_interaction=excluded.last_interaction",
+          "INSERT INTO memory_dream_schedules(owner_id,project_id,cwd,last_interaction) VALUES(?,?,?,?) ON CONFLICT(owner_id,project_id) DO UPDATE SET cwd=excluded.cwd,last_interaction=excluded.last_interaction,failure_count=0,next_scan_at=0,diagnostic=NULL",
           this.ctx.ownerId,
           this.ctx.projectId,
           String(i.cwd),
@@ -892,6 +900,44 @@ class Transaction {
           "SELECT * FROM memory_dream_schedules WHERE owner_id=?",
           this.ctx.ownerId,
         );
+      case "schedule.success":
+        this.run(
+          "UPDATE memory_dream_schedules SET failure_count=0,next_scan_at=0,diagnostic=NULL WHERE owner_id=? AND project_id=?",
+          this.ctx.ownerId,
+          this.ctx.projectId,
+        );
+        return { ok: true };
+      case "schedule.error": {
+        const diagnostic = i.diagnostic as Record<string, unknown>;
+        const previous = this.one<{ failure_count: number }>(
+          "SELECT failure_count FROM memory_dream_schedules WHERE owner_id=? AND project_id=?",
+          this.ctx.ownerId,
+          this.ctx.projectId,
+        );
+        const failureCount = (previous?.failure_count ?? 0) + 1;
+        const nextScanAt =
+          Date.now() +
+          Math.min(3600000, 60000 * 2 ** Math.min(failureCount - 1, 6));
+        const safe = {
+          code: diagnostic.code,
+          stage: diagnostic.stage,
+          failureCount,
+          nextScanAt,
+        };
+        this.run(
+          "UPDATE memory_dream_schedules SET failure_count=?,next_scan_at=?,diagnostic=? WHERE owner_id=? AND project_id=?",
+          failureCount,
+          nextScanAt,
+          JSON.stringify(safe),
+          this.ctx.ownerId,
+          this.ctx.projectId,
+        );
+        return this.execute("run.skip", {
+          kind: "dream",
+          reason: "schedule_error",
+          diagnostic: safe,
+        });
+      }
       case "cursor":
         return (
           this.one<{ watermark: number }>(
@@ -917,6 +963,7 @@ class Transaction {
           kind: i.kind,
           status: "skipped",
           reason: i.reason,
+          ...(i.diagnostic ? { diagnostic: i.diagnostic } : {}),
           createdAt: now,
           reviewMode: this.settings().review.mode,
         };
@@ -969,10 +1016,74 @@ class Transaction {
               this.ctx.projectId,
             ),
           ]
-            .map((r) => JSON.parse(r.data))
+            .map((r) => this.withUsage(JSON.parse(r.data)))
             .sort((a, b) => b.createdAt - a.createdAt)
             .slice(0, 100),
         };
+      case "run.reconcile":
+        return { ok: true };
+      case "run.dispatch": {
+        const r = this.runRecord(i.id),
+          s = this.settings(),
+          now = Date.now();
+        if (
+          r.status !== "running" ||
+          r.leaseToken !== i.leaseToken ||
+          r.leaseUntil <= now ||
+          r.deadline <= now ||
+          !s.enabled ||
+          !(r.kind === "dream" ? s.dream.enabled : s.extraction.enabled)
+        )
+          throw new MemoryError(409, "Run cannot dispatch");
+        const result = this.run(
+          "UPDATE memory_run_usage SET state='dispatched',dispatched_at=? WHERE run_id=? AND lease_token=? AND state='reserved'",
+          now,
+          r.id,
+          r.leaseToken,
+        );
+        if (!result.changes)
+          throw new MemoryError(
+            409,
+            "Lease was already dispatched or released",
+          );
+        return { ok: true };
+      }
+      case "run.usage": {
+        const r = this.runRecord(i.id);
+        const usage = this.one<{
+          state: string;
+          tokens: number;
+          cost_usd: number;
+        }>(
+          "SELECT state,tokens,cost_usd FROM memory_run_usage WHERE run_id=? AND lease_token=?",
+          r.id,
+          String(i.leaseToken),
+        );
+        if (
+          !usage ||
+          !["dispatched", "estimated", "settled"].includes(usage.state) ||
+          !this.validUsage(i)
+        )
+          throw new MemoryError(409, "Invalid lease usage");
+        if (
+          usage.state === "settled" &&
+          (usage.tokens !== i.tokens || usage.cost_usd !== i.costUsd)
+        )
+          throw new MemoryError(409, "Usage already settled");
+        this.settleUsage({ ...i, id: r.id });
+        if (
+          r.leaseToken === i.leaseToken &&
+          !["queued", "running"].includes(r.status)
+        ) {
+          r.tokens = i.tokens;
+          r.costUsd = i.costUsd;
+          r.actualModel = i.model;
+          r.reservedTokens = 0;
+          r.reservedCostUsd = 0;
+          this.updateRun(r);
+        }
+        return { ok: true };
+      }
       case "run.enqueue":
         return this.enqueue(i);
       case "run.claim":
@@ -989,10 +1100,10 @@ class Transaction {
         r.status = "cancelled";
         r.endedAt = Date.now();
         this.updateRun(r);
-        return r;
+        return this.runRecord(r.id);
       }
       case "run.get":
-        return this.runRecord(i.id);
+        return this.withUsage(this.runRecord(i.id));
       case "run.retry": {
         this.user();
         const r = this.runRecord(i.id),
@@ -1045,14 +1156,7 @@ class Transaction {
           throw new MemoryError(409, "Run lease changed");
         r.status = "failed";
         r.error = String(i.error).slice(0, 2000);
-        if (
-          typeof i.tokens === "number" &&
-          Number.isFinite(i.tokens) &&
-          i.tokens >= 0 &&
-          typeof i.costUsd === "number" &&
-          Number.isFinite(i.costUsd) &&
-          i.costUsd >= 0
-        ) {
+        if (this.validUsage(i)) {
           r.tokens = i.tokens;
           r.costUsd = i.costUsd;
           r.actualModel = i.model;
@@ -1128,6 +1232,7 @@ class Transaction {
       JSON.stringify(r),
       r.id,
     );
+    if (!["queued", "running"].includes(r.status)) this.reconcileUsage();
   }
   private enqueue(i: Record<string, unknown>): unknown {
     const s = this.settings();
@@ -1226,11 +1331,74 @@ class Transaction {
     this.updateRun(r);
     return r;
   }
+  private validUsage(i: Record<string, any>) {
+    return (
+      typeof i.tokens === "number" &&
+      Number.isFinite(i.tokens) &&
+      i.tokens >= 0 &&
+      typeof i.costUsd === "number" &&
+      Number.isFinite(i.costUsd) &&
+      i.costUsd >= 0
+    );
+  }
+  private withUsage(r: Record<string, any>) {
+    if (r.status === "skipped") return r;
+    const usage = this.one(
+      "SELECT COALESCE(SUM(CASE WHEN state='settled' THEN tokens ELSE 0 END),0) measuredTokens,COALESCE(SUM(CASE WHEN state='estimated' THEN tokens ELSE 0 END),0) estimatedTokens,COALESCE(SUM(reserved_tokens),0) reservedTokens,COALESCE(SUM(CASE WHEN state='settled' THEN cost_usd ELSE 0 END),0) measuredCostUsd,COALESCE(SUM(CASE WHEN state='estimated' THEN cost_usd ELSE 0 END),0) estimatedCostUsd,COALESCE(SUM(reserved_cost_usd),0) reservedCostUsd FROM memory_run_usage WHERE run_id=?",
+      r.id,
+    );
+    return { ...r, usage };
+  }
+  private reconcileUsage() {
+    const now = Date.now();
+    const stale = this.all<{
+      lease_token: string;
+      run_id: string;
+      state: string;
+      run_status: string;
+      lease_until: number;
+    }>(
+      "SELECT u.lease_token,u.run_id,u.state,r.status run_status,r.lease_until FROM memory_run_usage u JOIN memory_dream_runs r ON r.id=u.run_id WHERE u.owner_id=? AND u.state IN ('reserved','dispatched') AND (r.status!='running' OR r.lease_until<=? OR json_extract(r.data,'$.deadline')<=? OR json_extract(r.data,'$.leaseToken') IS NOT u.lease_token)",
+      this.ctx.ownerId,
+      now,
+      now,
+    );
+    for (const u of stale) {
+      const estimated = u.state === "dispatched";
+      this.run(
+        "UPDATE memory_run_usage SET tokens=CASE WHEN ? THEN MAX(tokens,reserved_tokens) ELSE tokens END,cost_usd=CASE WHEN ? THEN MAX(cost_usd,reserved_cost_usd) ELSE cost_usd END,reserved_tokens=0,reserved_cost_usd=0,state=?,finalized_at=?,reason=? WHERE lease_token=?",
+        Number(estimated),
+        Number(estimated),
+        estimated ? "estimated" : "released",
+        now,
+        u.run_status === "running"
+          ? "lease_expired_or_superseded"
+          : u.run_status,
+        u.lease_token,
+      );
+      this.run(
+        "UPDATE memory_dream_runs SET data=json_set(data,'$.reservedTokens',0,'$.reservedCostUsd',0) WHERE id=? AND json_extract(data,'$.leaseToken')=?",
+        u.run_id,
+        u.lease_token,
+      );
+    }
+  }
   private settleUsage(r: Record<string, any>) {
+    const prior = this.one<{ state: string; tokens: number; cost_usd: number }>(
+      "SELECT state,tokens,cost_usd FROM memory_run_usage WHERE run_id=? AND lease_token=?",
+      r.id,
+      r.leaseToken,
+    );
+    if (prior?.state === "settled") {
+      if (prior.tokens !== r.tokens || prior.cost_usd !== r.costUsd)
+        throw new MemoryError(409, "Usage already settled");
+      return;
+    }
     this.run(
-      "UPDATE memory_run_usage SET tokens=?,cost_usd=?,reserved_tokens=0,reserved_cost_usd=0 WHERE run_id=? AND lease_token=?",
+      "UPDATE memory_run_usage SET tokens=?,cost_usd=?,reserved_tokens=0,reserved_cost_usd=0,state='settled',finalized_at=?,reason='measured_usage' WHERE run_id=? AND lease_token=?",
       r.tokens ?? 0,
       r.costUsd ?? 0,
+      Date.now(),
       r.id,
       r.leaseToken,
     );
@@ -1251,11 +1419,7 @@ class Transaction {
         409,
         "Cancelled, expired or disabled background run",
       );
-    if (
-      typeof i.tokens !== "number" ||
-      i.tokens > r.reservedTokens ||
-      typeof i.costUsd !== "number"
-    )
+    if (!this.validUsage(i) || Number(i.tokens) > r.reservedTokens)
       throw new MemoryError(409, "Invalid usage or token budget exceeded");
     const outputs = Array.isArray(i.outputs) ? i.outputs.slice(0, 5) : [];
     const results: unknown[] = [];

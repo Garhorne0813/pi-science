@@ -1930,5 +1930,11 @@
   "memory.evidenceLevel": "Evidence level",
   "memory.currentVersionUnavailable": "Current version unavailable. Reload before approving.",
   "memory.editRecord": "Edit memory: {{title}}",
-  "memory.status": "State"
+  "memory.status": "State",
+  "memory.usageMeasured": "Measured usage",
+  "memory.usageEstimated": "Estimated unknown usage",
+  "memory.usageReserved": "In-flight reservation",
+  "memory.usageEstimateHint": "The provider may have incurred this usage. It counts toward the daily budget until measured usage is available.",
+  "memory.schedulerDiagnostic": "{{stage}} · {{code}} · failures: {{count}}",
+  "memory.retryAt": "Next retry"
 }

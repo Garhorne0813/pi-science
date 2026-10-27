@@ -1930,5 +1930,11 @@
   "memory.evidenceLevel": "证据级别",
   "memory.currentVersionUnavailable": "无法读取当前版本，请刷新后再审核。",
   "memory.editRecord": "编辑记忆：{{title}}",
-  "memory.status": "状态"
+  "memory.status": "状态",
+  "memory.usageMeasured": "已确认用量",
+  "memory.usageEstimated": "未知用量估算",
+  "memory.usageReserved": "进行中的预留",
+  "memory.usageEstimateHint": "模型调用可能已产生此用量，收到实际用量前会计入每日预算。",
+  "memory.schedulerDiagnostic": "{{stage}} · {{code}} · 连续失败 {{count}} 次",
+  "memory.retryAt": "下次重试"
 }

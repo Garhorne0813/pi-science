@@ -15,8 +15,9 @@ export class MemoryError extends Error {
   constructor(
     readonly statusCode: number,
     message: string,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
   }
 }
 export function tokens(text: string): string[] {

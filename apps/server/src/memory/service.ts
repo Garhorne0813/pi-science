@@ -28,7 +28,7 @@ export class MemoryService {
     try {
       cwd = await validateWorkspaceCwd(cwdValue);
     } catch (error) {
-      throw new MemoryError(403, String(error));
+      throw new MemoryError(403, String(error), { cause: error });
     }
     await this.store.start();
     const workspace = await this.workspaces.rememberWorkspace(cwd, {
@@ -39,7 +39,7 @@ export class MemoryService {
     // Register project scheduling independently of the global settings screen.
     // Read/poll requests must not reset the user's idle timer.
     await this.store.run(
-      "INSERT INTO memory_dream_schedules VALUES(?,?,?,?) ON CONFLICT(owner_id,project_id) DO UPDATE SET cwd=excluded.cwd",
+      "INSERT INTO memory_dream_schedules(owner_id,project_id,cwd,last_interaction) VALUES(?,?,?,?) ON CONFLICT(owner_id,project_id) DO UPDATE SET cwd=excluded.cwd",
       [LOCAL_OWNER, workspace.project_id, cwd, Date.now()],
     );
     return {

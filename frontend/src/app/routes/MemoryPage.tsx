@@ -42,6 +42,20 @@ type Run = {
   actualModel?: string;
   error?: string;
   reason?: string;
+  diagnostic?: {
+    code: string;
+    stage: string;
+    failureCount: number;
+    nextScanAt: number;
+  };
+  usage?: {
+    measuredTokens: number;
+    measuredCostUsd: number;
+    estimatedTokens: number;
+    estimatedCostUsd: number;
+    reservedTokens: number;
+    reservedCostUsd: number;
+  };
   watermark?: number;
   sessionId?: string;
   messageIds?: string[];
@@ -492,6 +506,37 @@ export function MemoryPage() {
                   <p>
                     {t("memory.skipped")}: {r.reason}
                   </p>
+                )}
+                {r.diagnostic && (
+                  <p className="text-ui-caption text-muted">
+                    {t("memory.schedulerDiagnostic", {
+                      ...r.diagnostic,
+                      count: r.diagnostic.failureCount,
+                    })}
+                    {" · "}
+                    {t("memory.retryAt")}:{" "}
+                    {new Date(r.diagnostic.nextScanAt).toLocaleString()}
+                  </p>
+                )}
+                {r.usage && (
+                  <div className="space-y-1 text-ui-caption text-muted">
+                    <p>
+                      {t("memory.usageMeasured")}: {r.usage.measuredTokens}{" "}
+                      tokens · ${r.usage.measuredCostUsd}
+                    </p>
+                    <p>
+                      {t("memory.usageEstimated")}: {r.usage.estimatedTokens}{" "}
+                      tokens · ${r.usage.estimatedCostUsd}
+                    </p>
+                    <p>
+                      {t("memory.usageReserved")}: {r.usage.reservedTokens}{" "}
+                      tokens · ${r.usage.reservedCostUsd}
+                    </p>
+                    {(r.usage.estimatedTokens > 0 ||
+                      r.usage.estimatedCostUsd > 0) && (
+                      <p>{t("memory.usageEstimateHint")}</p>
+                    )}
+                  </div>
                 )}
                 <p className="text-xs text-muted">
                   {t("memory.readRange")}:{" "}

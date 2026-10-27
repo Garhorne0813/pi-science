@@ -192,15 +192,33 @@ computer or run after the server exits. Skips do not consume a window's run slot
 
 Extraction and Dream share one owner's UTC-day token and USD budget, with one
 concurrent background model call. Reservations use configured model prices and
-bounded input/output; unknown failure spend retains the conservative reservation.
+bounded input/output. Each claim reserves quota before provider dispatch.
 Migration 0006 journals every physical claim/lease separately on its UTC admission
 day, so cross-day retries and lease recovery retain earlier reservations and
-charge the new call to its own day. Known terminal usage settles that lease;
-unknown failure/cancellation spend retains the reservation. Legacy snapshots are
+charge the new call to its own day. Migration 0007 records whether each lease was
+actually dispatched and reconciles usage on scheduler startup/ticks, history
+reads and admission. For terminal, expired or superseded leases, unused claims
+release their token/USD holds. Dispatched attempts with unknown spend clear their
+holds and retain the conservative amount as explicit **estimated usage**, which
+still counts toward that attempt's UTC-day budget; elapsed time is not evidence
+that a provider call was free. Known usage, including a late response after
+cancellation or lease recovery, replaces the estimate for that lease without
+reviving the run or authorizing stale results. Measured settlement is idempotent.
+The dispatch marker precedes the external call, so a crash in that narrow gap is
+conservatively estimated. v6 outstanding holds have no dispatch proof and migrate
+as potentially dispatched, never silently released. Run history distinguishes
+measured, estimated and in-flight reserved amounts. Legacy snapshots are
 backfilled conservatively on their known original start day because individual
 old attempt dates were not recorded. Cooldown/interval/increment checkpoints and
 queued recovery use dedicated durable queries, never the UI's truncated history.
-A bad workspace is logged and skipped independently during scheduling.
+A bad workspace is logged and skipped independently during scheduling. Events
+retain an allowlisted error code (for example ENOENT, EACCES or SQLITE_BUSY),
+failure stage, consecutive count and next retry time; raw exception messages,
+paths and stacks are excluded. If the database cannot store the event, a safe
+structured console warning retains the project ID, code and stage. Consecutive
+failures use persistent exponential backoff from one minute up to one hour;
+success or a real project interaction resets it. Schedules are retained so a
+restored workspace can recover; passive UI polling does not reset backoff.
 Terminal runs cannot be cancelled; repeated cancellation is idempotent.
 A failed logical run can be explicitly retried at most twice within the applicable
 window and remaining budget. A force scan needs explicit confirmation and bypasses

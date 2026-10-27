@@ -205,7 +205,9 @@ overwritten or deleted. They are no longer canonical Memory stores. `PROJECT.md`
 remains an ordinary document and is not rewritten by approval. Memory JSON export
 is for interchange/audit; use `SqliteStateStore.backup(path)` for a consistent
 whole-StateStore snapshot and restore only while the service is stopped.
-Migration 0006 adds a per-lease UTC-day usage journal. A read-only
+Migration 0006 adds a per-lease UTC-day usage journal. Migration 0007 tracks provider
+dispatch, releases unused holds after interruption/expiry, records unknown spend
+as estimates, and persists safe scheduler diagnostics with retry backoff. A read-only
 `pnpm export:legacy-memory` command preserves old data for reviewed manual transfer;
 legacy approvals are never imported.
 

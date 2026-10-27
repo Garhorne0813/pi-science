@@ -34,6 +34,7 @@ let requests: Array<{
 let stale: boolean;
 let browsing: boolean;
 let recordRows: (typeof record)[];
+let runRows: unknown[];
 beforeAll(async () => {
   await i18n.changeLanguage("en");
 });
@@ -42,6 +43,7 @@ beforeEach(() => {
   stale = false;
   browsing = false;
   recordRows = [record];
+  runRows = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -71,7 +73,8 @@ beforeEach(() => {
             };
       else if (url.pathname.endsWith("/reviews"))
         data = { records: recordRows, proposals: [] };
-      else if (url.pathname.endsWith("/background-runs")) data = { runs: [] };
+      else if (url.pathname.endsWith("/background-runs"))
+        data = { runs: runRows };
       else if (url.pathname.endsWith("/categories"))
         data = {
           categories: browsing ? [{ id: "cat1", name: "Writing" }] : [],
@@ -309,4 +312,47 @@ it("opens editing in a focused modal and resets the draft when switching records
   expect(within(second).getByRole("textbox", { name: "Body" })).toHaveValue(
     "Different body",
   );
+});
+
+it("distinguishes measured usage, estimates and holds and displays safe retry diagnostics", async () => {
+  runRows = [
+    {
+      id: "cancelled-run",
+      kind: "dream",
+      status: "cancelled",
+      createdAt: 1,
+      usage: {
+        measuredTokens: 10,
+        measuredCostUsd: 0.001,
+        estimatedTokens: 1000,
+        estimatedCostUsd: 0.1,
+        reservedTokens: 0,
+        reservedCostUsd: 0,
+      },
+      diagnostic: {
+        code: "ENOENT",
+        stage: "workspace",
+        failureCount: 2,
+        nextScanAt: 100000,
+      },
+    },
+  ];
+  mount();
+  await screen.findByText("Result includes limitations");
+  fireEvent.click(screen.getByRole("button", { name: "Run history" }));
+  expect(
+    await screen.findByText("Measured usage: 10 tokens · $0.001"),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText("Estimated unknown usage: 1000 tokens · $0.1"),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText("In-flight reservation: 0 tokens · $0"),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText(/workspace · ENOENT · failures: 2/),
+  ).toHaveTextContent("Next retry");
+  expect(
+    screen.queryByRole("button", { name: "Stop" }),
+  ).not.toBeInTheDocument();
 });

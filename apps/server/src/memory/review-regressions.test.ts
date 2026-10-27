@@ -179,6 +179,7 @@ it("accounts for yesterday's failure and today's retry by individual UTC admissi
     maxCostUsd: 0.01,
   });
   const first = await call("run.claim", { id: r.id });
+  await call("run.dispatch", { id: r.id, leaseToken: first.leaseToken });
   await call("run.fail", {
     id: r.id,
     leaseToken: first.leaseToken,
@@ -210,7 +211,9 @@ it("accounts for yesterday's failure and today's retry by individual UTC admissi
     deadline,
     maxCostUsd: 0.01,
   });
-  expect(await call("run.claim", { id: next.id })).not.toBeNull();
+  const nextClaim = await call("run.claim", { id: next.id });
+  expect(nextClaim).not.toBeNull();
+  await call("run.dispatch", { id: next.id, leaseToken: nextClaim.leaseToken });
   await call("run.cancel", { id: next.id });
   const over = await call("run.enqueue", {
     kind: "dream",
@@ -449,5 +452,420 @@ it("migrates pre-journal reservations conservatively and retains their budget ch
   } finally {
     await old.close();
     await upgraded.close();
+  }
+});
+
+async function budgetRun(key: string) {
+  await configure((s) => {
+    s.budget = { dailyTokens: 1000, perRunTokens: 1000, dailyCostUsd: 0.1 };
+  });
+  const r = await call("run.enqueue", {
+    kind: "dream",
+    logicalKey: key,
+    deadline: Date.now() + 60000,
+    maxCostUsd: 0.1,
+  });
+  return call("run.claim", { id: r.id });
+}
+async function journal(leaseToken: string) {
+  return store.get<any>("SELECT * FROM memory_run_usage WHERE lease_token=?", [
+    leaseToken,
+  ]);
+}
+it.each(["cancel", "fail", "interrupted"] as const)(
+  "releases an unused claim after %s without consuming the daily budget",
+  async (terminal) => {
+    const r = await budgetRun(terminal);
+    if (terminal === "cancel") await call("run.cancel", { id: r.id });
+    else if (terminal === "fail")
+      await call("run.fail", {
+        id: r.id,
+        leaseToken: r.leaseToken,
+        error: "before provider dispatch",
+      });
+    else {
+      await store.run(
+        "UPDATE memory_dream_runs SET status='interrupted',data=json_set(data,'$.status','interrupted') WHERE id=?",
+        [r.id],
+      );
+      await call("run.reconcile");
+    }
+    expect(await journal(r.leaseToken)).toMatchObject({
+      state: "released",
+      reserved_tokens: 0,
+      reserved_cost_usd: 0,
+      tokens: 0,
+      cost_usd: 0,
+    });
+    expect(await budgetRun(terminal + "-next")).not.toBeNull();
+  },
+);
+it.each([false, true])(
+  "recovers a crash across restart; dispatched=%s",
+  async (dispatched) => {
+    const r = await budgetRun("crash");
+    if (dispatched)
+      await call("run.dispatch", { id: r.id, leaseToken: r.leaseToken });
+    await store.close();
+    store = new SqliteStateStore({ path: join(root, "state.sqlite") });
+    memory = new MemoryService(store, new WorkspaceRepository(store));
+    await store.start();
+    await store.run(
+      "UPDATE memory_dream_runs SET lease_until=0,data=json_set(data,'$.leaseUntil',0) WHERE id=?",
+      [r.id],
+    );
+    await call("run.reconcile");
+    expect(await journal(r.leaseToken)).toMatchObject({
+      state: dispatched ? "estimated" : "released",
+      reserved_tokens: 0,
+      reserved_cost_usd: 0,
+      tokens: dispatched ? 1000 : 0,
+      cost_usd: dispatched ? 0.1 : 0,
+    });
+    const reclaimed = await call("run.claim", { id: r.id });
+    if (dispatched) expect(reclaimed).toBeNull();
+    else {
+      expect(reclaimed.leaseToken).not.toBe(r.leaseToken);
+      await expect(
+        call("run.dispatch", { id: r.id, leaseToken: r.leaseToken }),
+      ).rejects.toMatchObject({ statusCode: 409 });
+    }
+  },
+);
+it("settles late measured usage after cancellation without reviving the run", async () => {
+  const r = await budgetRun("late");
+  await call("run.dispatch", { id: r.id, leaseToken: r.leaseToken });
+  const cancelled = await call("run.cancel", { id: r.id });
+  expect(await call("run.cancel", { id: r.id })).toEqual(cancelled);
+  await configure((s) => {
+    s.budget.dailyTokens = 1500;
+    s.budget.dailyCostUsd = 0.15;
+  });
+  const next = await call("run.enqueue", {
+    kind: "dream",
+    logicalKey: "after-late-usage",
+    deadline: Date.now() + 60000,
+    maxCostUsd: 0.1,
+  });
+  expect(await call("run.claim", { id: next.id })).toBeNull();
+  expect(await journal(r.leaseToken)).toMatchObject({
+    state: "estimated",
+    tokens: 1000,
+    reserved_tokens: 0,
+  });
+  await call("run.usage", {
+    id: r.id,
+    leaseToken: r.leaseToken,
+    tokens: 10,
+    costUsd: 0.001,
+  });
+  expect(await journal(r.leaseToken)).toMatchObject({
+    state: "settled",
+    tokens: 10,
+    cost_usd: 0.001,
+    reserved_tokens: 0,
+  });
+  expect(await call("run.claim", { id: next.id })).not.toBeNull();
+  const run = await call("run.get", { id: r.id });
+  expect(run).toMatchObject({
+    status: "cancelled",
+    usage: { estimatedTokens: 0, measuredTokens: 10 },
+  });
+  await expect(
+    call("run.finish", {
+      id: r.id,
+      leaseToken: r.leaseToken,
+      outputs: [],
+      tokens: 10,
+      costUsd: 0.001,
+    }),
+  ).rejects.toMatchObject({ statusCode: 409 });
+  await call("run.usage", {
+    id: r.id,
+    leaseToken: r.leaseToken,
+    tokens: 10,
+    costUsd: 0.001,
+  });
+  await expect(
+    call("run.usage", {
+      id: r.id,
+      leaseToken: r.leaseToken,
+      tokens: -1,
+      costUsd: 0,
+    }),
+  ).rejects.toMatchObject({ statusCode: 409 });
+});
+it("settles a superseded attempt without touching the replacement lease", async () => {
+  const a = await budgetRun("superseded");
+  await configure((s) => {
+    s.budget.dailyTokens = 3000;
+    s.budget.dailyCostUsd = 0.3;
+  });
+  await call("run.dispatch", { id: a.id, leaseToken: a.leaseToken });
+  await store.run(
+    "UPDATE memory_dream_runs SET lease_until=0,data=json_set(data,'$.leaseUntil',0) WHERE id=?",
+    [a.id],
+  );
+  const b = await call("run.claim", { id: a.id });
+  await call("run.usage", {
+    id: a.id,
+    leaseToken: a.leaseToken,
+    tokens: 25,
+    costUsd: 0.002,
+  });
+  expect(await journal(a.leaseToken)).toMatchObject({
+    state: "settled",
+    tokens: 25,
+  });
+  expect(await journal(b.leaseToken)).toMatchObject({
+    state: "reserved",
+    reserved_tokens: 1000,
+  });
+  expect(await call("run.get", { id: a.id })).toMatchObject({
+    status: "running",
+    leaseToken: b.leaseToken,
+    reservedTokens: 1000,
+  });
+});
+it("reconciles old v6 reservations as unknown spend, never as unused claims", async () => {
+  const { loadMigrations } = await import("../storage/sqlite/migrations.js");
+  const path = join(root, "v6.sqlite");
+  const old = new SqliteStateStore({
+    path,
+    migrations: (await loadMigrations()).filter((m) => m.version <= 6),
+  });
+  const upgraded = new SqliteStateStore({ path });
+  try {
+    await old.start();
+    const r = {
+      id: "legacy-v6",
+      kind: "dream",
+      status: "cancelled",
+      startedAt: Date.now(),
+      leaseToken: "v6-lease",
+      reservedTokens: 1000,
+      reservedCostUsd: 0.1,
+    };
+    await old.run("INSERT INTO memory_dream_runs VALUES(?,?,?,?,?,?,?,?)", [
+      r.id,
+      ctx.ownerId,
+      ctx.projectId,
+      "dream",
+      "v6",
+      "cancelled",
+      0,
+      JSON.stringify(r),
+    ]);
+    await old.run("INSERT INTO memory_run_usage VALUES(?,?,?,?,?,?,?,?)", [
+      r.leaseToken,
+      ctx.ownerId,
+      r.id,
+      0,
+      0,
+      0,
+      1000,
+      0.1,
+    ]);
+    await old.close();
+    await upgraded.memory({ context: ctx, action: "run.reconcile", input: {} });
+    expect(
+      await upgraded.get<any>("SELECT * FROM memory_run_usage"),
+    ).toMatchObject({
+      state: "estimated",
+      tokens: 1000,
+      cost_usd: 0.1,
+      reserved_tokens: 0,
+      reserved_cost_usd: 0,
+    });
+  } finally {
+    await old.close();
+    await upgraded.close();
+  }
+});
+it("records safe workspace diagnostics, backs off persistently and resumes after interaction", async () => {
+  // A separate missing path leaves this test's SQLite database available.
+  const gone = join(root, "gone");
+  await mkdir(join(gone, ".pi-science"), { recursive: true });
+  const goneCtx = (await memory.context(gone)).context;
+  await rm(gone, { recursive: true, force: true });
+  await background.tick();
+  const event = (await call("runs", {}, goneCtx)).runs.find(
+    (r: any) => r.reason === "schedule_error",
+  );
+  expect(event.diagnostic).toMatchObject({
+    code: "ENOENT",
+    stage: "workspace",
+    failureCount: 1,
+  });
+  expect(JSON.stringify(event)).not.toContain(gone);
+  const first = (await call("schedules")).find(
+    (r: any) => r.project_id === goneCtx.projectId,
+  );
+  await background.tick();
+  expect(
+    (await call("schedules")).find(
+      (r: any) => r.project_id === goneCtx.projectId,
+    ).failure_count,
+  ).toBe(1);
+  await store.run(
+    "UPDATE memory_dream_schedules SET next_scan_at=0 WHERE project_id=?",
+    [goneCtx.projectId],
+  );
+  await background.tick();
+  const second = (await call("schedules")).find(
+    (r: any) => r.project_id === goneCtx.projectId,
+  );
+  expect(second.failure_count).toBe(2);
+  expect(second.next_scan_at).toBeGreaterThan(first.next_scan_at);
+  await mkdir(join(gone, ".pi-science"), { recursive: true });
+  await call("touch", { cwd: gone }, goneCtx);
+  await background.tick();
+  expect(
+    (await call("schedules")).find(
+      (r: any) => r.project_id === goneCtx.projectId,
+    ),
+  ).toMatchObject({ failure_count: 0, next_scan_at: 0, diagnostic: null });
+});
+it.each([
+  ["EACCES", "EACCES"],
+  ["SQLITE_BUSY", "SQLITE_BUSY"],
+  ["SECRET_NOT_A_CODE", "SCHEDULER_ERROR"],
+])(
+  "retains a safe scheduler code for %s without raw messages",
+  async (code, expected) => {
+    const actual = memory.command.bind(memory);
+    vi.spyOn(memory, "command").mockImplementation(
+      async (context, action, input) => {
+        if (action === "frames")
+          throw Object.assign(
+            new Error("private path /secret and sk-private-credential"),
+            { code },
+          );
+        return actual(context, action, input);
+      },
+    );
+    try {
+      await background.tick();
+      const event = (await call("runs")).runs.find(
+        (r: any) => r.reason === "schedule_error",
+      );
+      expect(event.diagnostic).toMatchObject({
+        code: expected,
+        stage: "frame_reconciliation",
+      });
+      expect(JSON.stringify(event)).not.toMatch(/secret|credential/);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  },
+);
+it("records measured usage from a provider that returns after cancellation", async () => {
+  await seed();
+  let release!: () => void;
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  model.mockImplementationOnce(async () => {
+    await barrier;
+    return { outputs: [], tokens: 12, costUsd: 0.001, model: "fixture/model" };
+  });
+  const r = await background.enqueue(ctx, root, "dream");
+  await vi.waitFor(() => expect(model).toHaveBeenCalledTimes(1));
+  const running = await call("run.get", { id: r.id });
+  await call("run.cancel", { id: r.id });
+  release();
+  await vi.waitFor(async () =>
+    expect(await journal(running.leaseToken)).toMatchObject({
+      state: "settled",
+      tokens: 12,
+      cost_usd: 0.001,
+    }),
+  );
+  expect(await call("run.get", { id: r.id })).toMatchObject({
+    status: "cancelled",
+    usage: { estimatedTokens: 0, measuredTokens: 12 },
+  });
+});
+it("releases quota on a known preflight failure before the provider is invoked", async () => {
+  const models = await import("../runtime/agent/worker/agent-models.js");
+  const spy = vi
+    .spyOn(models, "agentModels")
+    .mockReturnValue({ getModel: () => undefined } as any);
+  await background.stop();
+  background = new MemoryBackground(
+    memory,
+    { hasActiveOperations: async () => false },
+    { list: async () => [] },
+  );
+  try {
+    const r = await call("run.enqueue", {
+      kind: "dream",
+      logicalKey: "preflight",
+      resolvedModel: "missing/model",
+      records: [],
+      deadline: Date.now() + 60000,
+      maxCostUsd: 0.1,
+    });
+    await background.tick();
+    await vi.waitFor(async () =>
+      expect(await call("run.get", { id: r.id })).toMatchObject({
+        status: "failed",
+        usage: { estimatedTokens: 0, measuredTokens: 0, reservedTokens: 0 },
+      }),
+    );
+    const saved = await call("run.get", { id: r.id });
+    expect(await journal(saved.leaseToken)).toMatchObject({
+      state: "settled",
+      cost_usd: 0,
+      reserved_cost_usd: 0,
+    });
+  } finally {
+    spy.mockRestore();
+  }
+});
+it("does not treat a zero-filled provider abort as measured zero spend", async () => {
+  const models = await import("../runtime/agent/worker/agent-models.js");
+  const completeSimple = vi.fn(async () => ({
+    stopReason: "aborted",
+    errorMessage: "transport interrupted",
+    usage: { totalTokens: 0, cost: { total: 0 } },
+    content: [],
+  }));
+  const spy = vi
+    .spyOn(models, "agentModels")
+    .mockReturnValue({
+      getModel: () => ({ cost: { input: 1, output: 1 }, maxTokens: 1000 }),
+      completeSimple,
+    } as any);
+  await background.stop();
+  background = new MemoryBackground(
+    memory,
+    { hasActiveOperations: async () => false },
+    { list: async () => [] },
+  );
+  try {
+    const r = await call("run.enqueue", {
+      kind: "dream",
+      logicalKey: "unknown-provider-abort",
+      resolvedModel: "fixture/model",
+      records: [],
+      deadline: Date.now() + 60000,
+      maxCostUsd: 0.1,
+    });
+    await background.tick();
+    await vi.waitFor(async () =>
+      expect((await call("run.get", { id: r.id })).status).toBe("failed"),
+    );
+    const saved = await call("run.get", { id: r.id });
+    expect(completeSimple).toHaveBeenCalledTimes(1);
+    expect(saved.usage.estimatedTokens).toBeGreaterThan(0);
+    expect(await journal(saved.leaseToken)).toMatchObject({
+      state: "estimated",
+      reserved_tokens: 0,
+      reserved_cost_usd: 0,
+      cost_usd: 0.1,
+    });
+  } finally {
+    spy.mockRestore();
   }
 });
