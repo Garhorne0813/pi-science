@@ -14,12 +14,14 @@ import { SettingsContent } from "./SettingsContent";
 import i18n from "../../i18n";
 let calls: Array<{ url: string; method: string; body: any }>;
 let conflict: boolean;
+let memoryEnabled: boolean;
 beforeAll(async () => {
   await i18n.changeLanguage("en");
 });
 beforeEach(() => {
   calls = [];
   conflict = false;
+  memoryEnabled = true;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -32,7 +34,16 @@ beforeEach(() => {
         JSON.stringify(
           status === 409
             ? { error: "Settings revision changed" }
-            : { ...settingsSchema.parse({ enabled: true }), revision: 4 },
+            : url.includes("/model-selection/catalog")
+              ? {
+                  available_models: [
+                    { id: "configured/model", label: "Configured model" },
+                  ],
+                }
+              : {
+                  ...settingsSchema.parse({ enabled: memoryEnabled }),
+                  revision: 4,
+                },
         ),
         { status, headers: { "content-type": "application/json" } },
       );
@@ -112,4 +123,35 @@ it("is available in application Settings with global scope even when opened insi
   expect(
     screen.queryByLabelText("Allow recall in this project"),
   ).not.toBeInTheDocument();
+});
+
+it("loads configured models during first-time setup before Memory has been saved as enabled", async () => {
+  memoryEnabled = false;
+  mount();
+  fireEvent.click(
+    await screen.findByRole("checkbox", { name: "Enable Memory" }),
+  );
+  fireEvent.click(
+    screen.getByRole("checkbox", {
+      name: "Check increments after completed turns",
+    }),
+  );
+  const model = screen.getByRole("button", {
+    name: "Extraction model: Use default model",
+  });
+  fireEvent.pointerDown(model);
+  fireEvent.click(model);
+  fireEvent.click(
+    await screen.findByRole("menuitemradio", { name: "Configured model" }),
+  );
+  expect(calls.some((c) => c.method === "PATCH")).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() =>
+    expect(
+      calls.find((c) => c.method === "PATCH")?.body.settings,
+    ).toMatchObject({
+      enabled: true,
+      extraction: { enabled: true, model: "configured/model" },
+    }),
+  );
 });

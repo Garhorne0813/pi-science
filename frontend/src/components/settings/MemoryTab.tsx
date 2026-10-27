@@ -13,7 +13,7 @@ export function MemoryTab() {
   const settings = useMemorySettings();
   const catalog = useQuery({
     ...modelSelectionApi.catalogQuery(null),
-    enabled: !!settings.data?.enabled,
+    enabled: !!settings.data,
     staleTime: 30000,
   });
   const [saving, setSaving] = useState(false);
