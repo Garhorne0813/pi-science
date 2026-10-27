@@ -80,7 +80,9 @@ function remotePayload(remote: string): string {
   return match ? match[1]!.replaceAll("'\\''", "'") : remote;
 }
 
-describe("remoteWatchdogCommand", () => {
+// The wrapper runs in the remote host's POSIX login shell; the local checks need
+// the same process-group semantics, which Windows does not provide.
+describe.skipIf(process.platform === "win32")("remoteWatchdogCommand", () => {
   it("runs the command and keeps its exit code", async () => {
     const run = await runLocal(remoteWatchdogCommand("echo ready", 30));
     expect(run.stdout).toBe("ready\n");
