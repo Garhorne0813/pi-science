@@ -462,7 +462,7 @@ it("browses all authorized matches beyond legacy caps before sorting and paging"
         "User prefers concise reply formatting",
         n % 3 === 0 ? "workflow" : "preference",
       ),
-      title: `OverflowProbe ${n}`,
+      title: "Reply style",
       ...(n % 2 === 0 ? { categoryId: category.id } : {}),
     };
     let r = (await call("write", { content: c })).record as MemoryRecord;
@@ -483,7 +483,7 @@ it("browses all authorized matches beyond legacy caps before sorting and paging"
   }
   await call(
     "write",
-    { content: { ...content(), title: "OverflowProbe foreign" } },
+    { content: { ...content(), title: "Reply style" } },
     { ...user, projectId: "other-project" },
   );
   const first = await call("browse", {});
@@ -499,7 +499,7 @@ it("browses all authorized matches beyond legacy caps before sorting and paging"
   );
   const pages = await Promise.all(
     Array.from({ length: 12 }, (_, n) =>
-      call("browse", { q: "OverflowProbe", page: n + 1, sort: "created_desc" }),
+      call("browse", { q: "reply", page: n + 1, sort: "created_desc" }),
     ),
   );
   expect(pages.every((p) => p.total === 230)).toBe(true);
@@ -511,7 +511,7 @@ it("browses all authorized matches beyond legacy caps before sorting and paging"
     totalPages: 12,
   });
   const filters = {
-    q: "OverflowProbe",
+    q: "reply",
     scope: "project",
     kind: "preference",
     status: "active",
@@ -538,7 +538,7 @@ it("browses all authorized matches beyond legacy caps before sorting and paging"
     page: 1,
     totalPages: 1,
   });
-  const defaultSearch = await call("browse", { q: "OverflowProbe" });
+  const defaultSearch = await call("browse", { q: "reply" });
   expect(defaultSearch.sort).toBe("relevance");
   for (const invalid of [
     { page: 0 },

@@ -96,6 +96,23 @@ class Transaction {
     );
     const r: MemoryRecord | undefined = row ? JSON.parse(row.data) : undefined;
     if (!r || !this.visible(r)) throw new MemoryError(404, "Memory not found");
+    return this.reconcileReview(r);
+  }
+  private reconcileReview(r: MemoryRecord): MemoryRecord {
+    if (
+      r.status === "active" &&
+      scientific(r) &&
+      !(r.reviewStatus === "approved" && r.approvedContentHash === r.contentHash)
+    ) {
+      r = {
+        ...r,
+        status: "needs_review",
+        reviewRequired: true,
+        reviewStatus: "stale",
+        updatedAt: Date.now(),
+      };
+      this.save(r, false);
+    }
     return r;
   }
   private rows(): MemoryRecord[] {
@@ -105,13 +122,79 @@ class Transaction {
       this.ctx.projectId,
     )
       .map((r) => JSON.parse(r.data) as MemoryRecord)
-      .filter((r) => this.visible(r));
+      .filter((r) => this.visible(r))
+      .map((r) => this.reconcileReview(r));
   }
   private cas(r: MemoryRecord, i: Record<string, unknown>) {
     if (r.revision !== i.expectedRevision || r.contentHash !== i.contentHash)
       throw new MemoryError(409, "Memory revision or content hash changed");
   }
+  private assertMemorySources(
+    c: MemoryContent,
+    chain = new Set<string>(),
+    remaining = { value: 64 },
+  ) {
+    for (const source of c.sources.filter((s) => s.kind === "memory")) {
+      const context = this.ctx;
+      let r: MemoryRecord;
+      try {
+        this.ctx = {
+          ...context,
+          projectId: source.projectId ?? context.projectId,
+        };
+        r = this.read(source.locator);
+      } finally {
+        this.ctx = context;
+      }
+      if (
+        r.status !== "active" ||
+        (r.reviewRequired &&
+          (r.reviewStatus !== "approved" ||
+            r.approvedContentHash !== r.contentHash)) ||
+        source.version !== String(r.revision) ||
+        source.digest !== r.contentHash
+      )
+        throw new MemoryError(409, "Memory evidence is stale or not accepted");
+      if (chain.has(r.id) || chain.size >= 8 || --remaining.value < 0)
+        throw new MemoryError(400, "Cyclic or excessive memory evidence chain");
+      const next = new Set(chain);
+      next.add(r.id);
+      this.assertMemorySources(r, next, remaining);
+    }
+  }
+  private invalidateDependents(id: string) {
+    const queue = [id];
+    const seen = new Set<string>();
+    while (queue.length) {
+      const current = queue.shift()!;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      const rows = this.all<{ data: string }>(
+        "SELECT DISTINCT r.data FROM memory_records r JOIN memory_sources s ON s.record_id=r.id AND s.revision=r.revision WHERE r.owner_id=? AND r.status='active' AND json_extract(s.data,'$.kind')='memory' AND json_extract(s.data,'$.locator')=?",
+        this.ctx.ownerId,
+        current,
+      );
+      for (const row of rows) {
+        const r = JSON.parse(row.data) as MemoryRecord;
+        r.status = "needs_review";
+        r.reviewStatus = "stale";
+        r.updatedAt = Date.now();
+        this.run(
+          "UPDATE memory_records SET status=?,data=? WHERE id=?",
+          r.status,
+          JSON.stringify(r),
+          r.id,
+        );
+        this.run("DELETE FROM memory_fts WHERE record_id=?", r.id);
+        queue.push(r.id);
+      }
+    }
+  }
   private save(r: MemoryRecord, snapshot = true) {
+    const previous = this.one<{ content_hash: string }>(
+      "SELECT content_hash FROM memory_records WHERE id=?",
+      r.id,
+    );
     this.run(
       "INSERT INTO memory_records(id,owner_id,project_id,scope,frame_id,agent_key,status,revision,content_hash,data) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,revision=excluded.revision,content_hash=excluded.content_hash,data=excluded.data",
       r.id,
@@ -153,6 +236,11 @@ class Transaction {
         r.id,
         tokens(r.title + " " + r.body).join(" "),
       );
+    if (
+      previous &&
+      (previous.content_hash !== r.contentHash || r.status !== "active")
+    )
+      this.invalidateDependents(r.id);
   }
   private audit(r: MemoryRecord, action: string) {
     this.run(
@@ -274,6 +362,7 @@ class Transaction {
         conflict = true;
       }
     }
+    this.assertMemorySources(c, new Set(old ? [old.id] : []));
     const science = scientific(c),
       protectedOld =
         !!old &&
@@ -387,6 +476,7 @@ class Transaction {
           updatedAt: Date.now(),
         } as MemoryRecord;
         this.requireEvidence(r);
+        this.assertMemorySources(r, new Set([r.id]));
         this.save(r);
         this.audit(r, "approve_proposal:" + p.id);
       } else this.audit(p.candidate, "reject_proposal:" + p.id);
@@ -408,7 +498,10 @@ class Transaction {
     this.cas(r, i);
     if (r.status !== "pending_review" && r.status !== "needs_review")
       throw new MemoryError(409, "Record is not pending review");
-    if (approve) this.requireEvidence(r);
+    if (approve) {
+      this.requireEvidence(r);
+      this.assertMemorySources(r, new Set([r.id]));
+    }
     const next = {
       ...r,
       status: approve ? "active" : "rejected",
@@ -585,6 +678,24 @@ class Transaction {
         }
         return next;
       }
+      case "agent.search": {
+        const rows = this.search(i);
+        const records = [];
+        let remaining = 6000;
+        for (const r of rows.slice(0, 20)) {
+          const { body, sources, ...metadata } = r;
+          const summary = {
+            ...metadata,
+            preview: body.slice(0, 240),
+            sourceCount: sources.length,
+          };
+          const size = JSON.stringify(summary).length;
+          if (size > remaining) continue;
+          remaining -= size;
+          records.push(summary);
+        }
+        return { records, truncated: records.length < rows.length };
+      }
       case "browse": {
         this.user();
         const query = memoryBrowseQuerySchema.parse(i);
@@ -758,7 +869,7 @@ class Transaction {
         const records: MemoryRecord[] = [];
         for (const r of [...profile, ...ranked]) {
           if (records.some((x) => x.id === r.id)) continue;
-          const size = r.title.length + r.body.length + 100;
+          const size = JSON.stringify(r).length;
           if (size > budget || (r.scope === "profile" && size > profileBudget))
             continue;
           budget -= size;
@@ -824,6 +935,26 @@ class Transaction {
         );
         return result;
       }
+      case "run.latest": {
+        const row = this.one<{ data: string }>(
+          "SELECT data FROM memory_dream_runs WHERE owner_id=? AND project_id=? AND kind=? AND json_extract(data,'$.startedAt') IS NOT NULL ORDER BY COALESCE(json_extract(data,'$.lastStartedAt'),json_extract(data,'$.startedAt')) DESC, rowid DESC LIMIT 1",
+          this.ctx.ownerId,
+          this.ctx.projectId,
+          String(i.kind),
+        );
+        if (!row) return null;
+        const r = JSON.parse(row.data);
+        return { ...r, startedAt: r.lastStartedAt ?? r.startedAt };
+      }
+      case "run.pending":
+        return {
+          runs: this.all<{ data: string }>(
+            "SELECT data FROM memory_dream_runs WHERE owner_id=? AND project_id=? AND (status='queued' OR (status='running' AND lease_until<?)) ORDER BY rowid",
+            this.ctx.ownerId,
+            this.ctx.projectId,
+            Date.now(),
+          ).map((r) => JSON.parse(r.data)),
+        };
       case "runs":
         return {
           runs: [
@@ -849,6 +980,12 @@ class Transaction {
       case "run.cancel": {
         this.user();
         const r = this.runRecord(i.id);
+        if (r.status === "cancelled") return r;
+        if (!["queued", "running"].includes(r.status))
+          throw new MemoryError(
+            409,
+            "Only queued or running runs can be cancelled",
+          );
         r.status = "cancelled";
         r.endedAt = Date.now();
         this.updateRun(r);
@@ -921,6 +1058,7 @@ class Transaction {
           r.actualModel = i.model;
           r.reservedTokens = 0;
           r.reservedCostUsd = 0;
+          this.settleUsage(r);
         }
         r.endedAt = Date.now();
         this.updateRun(r);
@@ -941,6 +1079,7 @@ class Transaction {
     }
   }
   private erase(r: MemoryRecord) {
+    this.invalidateDependents(r.id);
     this.run("DELETE FROM memory_fts WHERE record_id=?", r.id);
     this.run("DELETE FROM memory_records WHERE id=?", r.id);
     this.run(
@@ -1057,44 +1196,44 @@ class Transaction {
     )
       return null;
     const today = now - (now % 86400000);
-    const runs = this.all<{ data: string }>(
-      "SELECT data FROM memory_dream_runs WHERE owner_id=?",
+    const usage = this.one<{ tokens: number; cost: number }>(
+      "SELECT COALESCE(SUM(MAX(tokens,reserved_tokens)),0) tokens, COALESCE(SUM(MAX(cost_usd,reserved_cost_usd)),0) cost FROM memory_run_usage WHERE owner_id=? AND day=?",
       this.ctx.ownerId,
-    ).map((x) => JSON.parse(x.data));
-    const spent = runs
-      .filter((x) => x.id !== r.id && (x.startedAt ?? x.createdAt) >= today)
-      .reduce(
-        (a, x) =>
-          a +
-          (x.priorReservedTokens ?? 0) +
-          Math.max(x.tokens ?? 0, x.reservedTokens ?? 0),
-        0,
-      );
-    const cost = runs
-      .filter((x) => x.id !== r.id && (x.startedAt ?? x.createdAt) >= today)
-      .reduce(
-        (a, x) =>
-          a +
-          (x.priorReservedCostUsd ?? 0) +
-          Math.max(x.costUsd ?? 0, x.reservedCostUsd ?? 0),
-        0,
-      );
+      today,
+    )!;
     if (
-      spent + (r.priorReservedTokens ?? 0) + s.budget.perRunTokens >
-        s.budget.dailyTokens ||
-      cost + (r.priorReservedCostUsd ?? 0) + (r.maxCostUsd ?? 0) >
-        s.budget.dailyCostUsd
+      usage.tokens + s.budget.perRunTokens > s.budget.dailyTokens ||
+      usage.cost + (r.maxCostUsd ?? 0) > s.budget.dailyCostUsd
     )
       return null;
     r.status = "running";
     r.startedAt ??= now;
+    r.lastStartedAt = now;
     r.leaseUntil = Math.min(r.deadline, now + 120000);
     r.leaseToken = randomUUID();
     r.reservedTokens = s.budget.perRunTokens;
     r.reservedCostUsd = r.maxCostUsd ?? 0;
+    this.run(
+      "INSERT INTO memory_run_usage(lease_token,owner_id,run_id,day,reserved_tokens,reserved_cost_usd) VALUES(?,?,?,?,?,?)",
+      r.leaseToken,
+      this.ctx.ownerId,
+      r.id,
+      today,
+      r.reservedTokens,
+      r.reservedCostUsd,
+    );
     r.reviewMode = s.review.mode;
     this.updateRun(r);
     return r;
+  }
+  private settleUsage(r: Record<string, any>) {
+    this.run(
+      "UPDATE memory_run_usage SET tokens=?,cost_usd=?,reserved_tokens=0,reserved_cost_usd=0 WHERE run_id=? AND lease_token=?",
+      r.tokens ?? 0,
+      r.costUsd ?? 0,
+      r.id,
+      r.leaseToken,
+    );
   }
   private finish(i: Record<string, unknown>): unknown {
     const r = this.runRecord(i.id),
@@ -1174,7 +1313,7 @@ class Transaction {
             old.contentHash !== output.contentHash
           )
             throw new MemoryError(409, "stale_proposal");
-          // Dreams are deliberately suggestion-only, including when auto_low_risk is selected.
+          // Automatic changes are limited to exact, unprotected presentation duplicates.
           const duplicate = this.rows().some(
             (other) =>
               other.id !== old.id &&
@@ -1237,6 +1376,7 @@ class Transaction {
     r.reservedCostUsd = 0;
     r.results = results;
     r.effectiveReviewMode = s.review.mode;
+    this.settleUsage(r);
     this.updateRun(r);
     return r;
   }

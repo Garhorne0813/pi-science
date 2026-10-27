@@ -137,6 +137,7 @@ export function registerMemoryRoutes(
           ctx.cwd,
           ctx.context,
           pickContent(current),
+          {requirePinnedMemory:true},
         );
       }
       return memory.command(ctx.context, action, { ...body(req), id: id(req) });
@@ -160,6 +161,7 @@ export function registerMemoryRoutes(
           ctx.cwd,
           ctx.context,
           pickContent(proposal.candidate),
+          {requirePinnedMemory:true},
         );
       }
       return memory.command(
@@ -216,7 +218,7 @@ export function registerMemoryRoutes(
     memory.command(ctx.context, "export"),
   );
   route("POST", "/agent/search", async (req, ctx) =>
-    memory.command(ctx.context, "list", body(req)),
+    memory.command(ctx.context, "agent.search", body(req)),
   );
   route("POST", "/agent/read", async (req, ctx) =>
     memory.command(ctx.context, "read", body(req)),

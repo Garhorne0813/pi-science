@@ -1925,5 +1925,10 @@
   "memory.nextPage": "Next",
   "memory.applyFilters": "Apply filters",
   "memory.resetFilters": "Reset",
-  "memory.filterButton": "Filters"
+  "memory.filterButton": "Filters",
+  "memory.changed": "Changed",
+  "memory.evidenceLevel": "Evidence level",
+  "memory.currentVersionUnavailable": "Current version unavailable. Reload before approving.",
+  "memory.editRecord": "Edit memory: {{title}}",
+  "memory.status": "State"
 }

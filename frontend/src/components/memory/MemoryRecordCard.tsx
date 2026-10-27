@@ -3,6 +3,7 @@ import { ChevronRight, MoreHorizontal } from "lucide-react";
 import { cn } from "../../lib/ui";
 import { useTranslation } from "react-i18next";
 import type { MemoryRecord } from "@pi-science/contracts";
+import { useRef } from "react";
 
 export function MemoryRecordCard({
   record: r,
@@ -26,6 +27,8 @@ export function MemoryRecordCard({
   onReject: () => void;
 }) {
   const { t } = useTranslation();
+  const menuTrigger = useRef<HTMLButtonElement>(null);
+  const openingEditor = useRef(false);
   const status =
     r.status === "active" && r.reviewStatus === "approved"
       ? "approved"
@@ -34,7 +37,10 @@ export function MemoryRecordCard({
   const actionClass =
     "min-h-9 rounded-input border border-border px-3 text-ui-caption text-text transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/25 disabled:opacity-50";
   return (
-    <article className="relative min-w-0 rounded-card border border-faint bg-surface">
+    <article
+      data-memory-id={r.id}
+      className="relative min-w-0 rounded-card border border-faint bg-surface"
+    >
       <details className="group">
         <summary
           className={`cursor-pointer list-none rounded-card px-3 py-3 outline-none transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent/25 [&::-webkit-details-marker]:hidden ${review ? "" : "pr-12"}`}
@@ -120,9 +126,15 @@ export function MemoryRecordCard({
       </details>
       {!review && (
         <div className="absolute right-2 top-2">
-          <DropdownMenu.Root>
+          <DropdownMenu.Root
+            modal={false}
+            onOpenChange={(open) => {
+              if (open) openingEditor.current = false;
+            }}
+          >
             <DropdownMenu.Trigger asChild>
               <button
+                ref={menuTrigger}
                 disabled={busy}
                 aria-label={t("memory.recordActions", { title: r.title })}
                 className="flex h-9 w-9 items-center justify-center rounded-input text-muted hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/25 disabled:opacity-50"
@@ -132,6 +144,9 @@ export function MemoryRecordCard({
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
               <DropdownMenu.Content
+                onCloseAutoFocus={(event) => {
+                  if (openingEditor.current) event.preventDefault();
+                }}
                 align="end"
                 sideOffset={4}
                 collisionPadding={8}
@@ -147,7 +162,11 @@ export function MemoryRecordCard({
                   <DropdownMenu.Item
                     key={action}
                     disabled={busy}
-                    onSelect={handler}
+                    onSelect={() => {
+                      openingEditor.current = action === "edit";
+                      if (openingEditor.current) menuTrigger.current?.focus();
+                      handler();
+                    }}
                     className={`flex min-h-9 cursor-default select-none items-center rounded-input px-3 outline-none data-[highlighted]:bg-surface-hover data-[disabled]:opacity-50 ${action === "delete" ? "text-error-text" : ""}`}
                   >
                     {t(`memory.${action}`)}

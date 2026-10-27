@@ -1925,5 +1925,10 @@
   "memory.nextPage": "下一页",
   "memory.applyFilters": "应用筛选",
   "memory.resetFilters": "重置",
-  "memory.filterButton": "筛选"
+  "memory.filterButton": "筛选",
+  "memory.changed": "已修改",
+  "memory.evidenceLevel": "证据级别",
+  "memory.currentVersionUnavailable": "无法读取当前版本，请刷新后再审核。",
+  "memory.editRecord": "编辑记忆：{{title}}",
+  "memory.status": "状态"
 }

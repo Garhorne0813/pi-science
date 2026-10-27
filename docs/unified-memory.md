@@ -7,6 +7,27 @@ Migration `0005_unified_memory.sql` creates an empty Memory domain. It does not
 read, migrate, overwrite or remove existing ledger/project-state data. Back up
 those old files separately if needed; they are no longer served as Memory.
 
+## Upgrade from Ledger / Project Knowledge
+
+**Breaking change:** migration 0005 starts with empty Memory state. Existing
+ledger/project-state approval flags are not imported as new scientific approvals.
+Old files remain untouched; back up both application state and workspace metadata
+before upgrading. Stop the old application for a stable file snapshot, then run
+from this checkout:
+
+```bash
+pnpm export:legacy-memory /absolute/workspace /absolute/new-legacy-memory-export.json
+```
+
+The exporter reads the current metadata root's `memory/ledger.json` and
+`project-state.json` without modifying them, records checksums plus exact base64
+bytes and UTF-8 previews, marks the bundle `unreviewed_legacy`, and refuses to
+overwrite a destination. It does not need a model key and never enables/imports
+Memory. Review the export, recreate useful entries with their original verifiable
+sources in the Memory editor, and approve scientific content as new exact
+versions. There is no automatic bulk-import path or reuse of legacy approvals.
+Retain the original files/export until the reviewed transfer is verified.
+
 ## Enabling and reviewing
 
 Memory, Extraction and Dream start disabled. Enable Memory in application
@@ -19,9 +40,10 @@ existing control-plane token/cookie. Model-supplied owner/origin/reviewer string
 never grant authority. Main Agent tools use signed, session-bound capabilities;
 delegated/confined runtimes receive no Memory capability in this release.
 
-Smart review permits only conservatively classified language, formatting and
-similar low-risk preferences/workflows with reliable sources to activate without
-review. Ambiguous content, scientific observations/findings/decisions and changes
+Smart review auto-accepts only a closed grammar of enumerated reply-language,
+reply-format/verbosity and UI-theme preferences with a recognized presentation
+title and reliable sources. Mixed, unrecognized or operational wording requires
+review; a generic format keyword never grants acceptance. Ambiguous content, scientific observations/findings/decisions and changes
 to manually authored or approved records require human review. The semantic
 check is deliberately restrictive; it is not a scientific truth classifier.
 All-manual queues every Agent/background change. Direct user edits of ordinary
@@ -38,6 +60,11 @@ adoption, not proof of scientific truth.
 Sources must resolve to existing messages, sessions, execution records, published
 Artifact versions, authorized Memory records or workspace files. Source project
 IDs and canonical message locators preserve Profile provenance across projects.
+Memory-to-memory sources require an active accepted upstream record and pin its
+content revision and hash. Validation traverses a bounded, cycle-checked evidence
+chain; upstream edits, archive/rejection or deletion invalidate active dependents
+transitively. Approval rechecks these pins atomically; old unpinned references
+require a new revision rather than silently binding to current evidence.
 File/Artifact digests are checked again on approval and automatic recall; changed
 or missing evidence removes the record from automatic recall and flags it for
 review. Literature can be cited through a local file or published Artifact;
@@ -63,7 +90,11 @@ project, status, category and Artifact constraints restrict eligible candidates;
 hidden records cannot consume result slots. Defaults cap task recall at six,
 Profile at twelve/approximately 1,600 tokens, and total context at approximately
 2,500 tokens. The token bound uses a conservative character estimate. Recall is
-reference data, never system instructions. The per-project and per-category
+ephemeral lower-priority reference data, inserted before the actual conversation
+through the Harness context transform. Raw memory never enters the system prompt
+or the durable transcript; the system contains only a static distrust policy.
+Role-like delimiters in JSON data are escaped. This boundary regression does not
+claim that model behavior is immune to every prompt injection. The per-project and per-category
 recall switches on the Memory page can tighten the global switch. Owner-wide
 settings live in application Settings → Memory, accessible without opening a
 project. Memory itself has Memories, Pending review and Run history tabs, plus
@@ -89,6 +120,12 @@ effect after Save and its settings-revision comparison.
 
 Memory records use a compact title/status/scope/kind and two-line preview.
 Expanding reveals full text, sources, content version, review state and history.
+Editing and history open in a responsive, focus-trapped dialog/drawer; editor
+drafts are keyed by record/revision and reset across record changes. Proposals
+show full structured content, including title/kind/category/evidence and source
+versions/hashes, with changed fields marked. Missing current content blocks approval.
+Explicit Agent searches return previews only (at most 20 within approximately
+6,000 serialized characters); full bodies/sources are fetched by ID on demand.
 Edit/archive/hard-delete live in the more-actions menu; deletion retains explicit
 confirmation. New review candidates expose approve/reject only after expansion.
 Changes to existing records show current/proposed content and proposal status.
@@ -115,8 +152,9 @@ active, human-approved records. The response contains `records`, `total`, `page`
 `pageSize`, `totalPages` and `sort`. Filtering, relevance matching and sorting run
 on all authorized matches before pagination, with a stable ID tie-breaker. Empty
 results have page 1; pages past the end clamp to the last page. The former
-100/200-result caps remain only in legacy internal/tool search, not human
-browsing; automatic recall keeps its independent context limits. This is not a
+100/200-result caps remain only in internal candidate retrieval, not human
+browsing; Agent tools apply the smaller preview budget described above, and
+automatic recall keeps its independent context limits. This is not a
 large-dataset performance guarantee. Pending-review responses include current
 proposal content independently of the browser's filters/page.
 
@@ -155,6 +193,15 @@ computer or run after the server exits. Skips do not consume a window's run slot
 Extraction and Dream share one owner's UTC-day token and USD budget, with one
 concurrent background model call. Reservations use configured model prices and
 bounded input/output; unknown failure spend retains the conservative reservation.
+Migration 0006 journals every physical claim/lease separately on its UTC admission
+day, so cross-day retries and lease recovery retain earlier reservations and
+charge the new call to its own day. Known terminal usage settles that lease;
+unknown failure/cancellation spend retains the reservation. Legacy snapshots are
+backfilled conservatively on their known original start day because individual
+old attempt dates were not recorded. Cooldown/interval/increment checkpoints and
+queued recovery use dedicated durable queries, never the UI's truncated history.
+A bad workspace is logged and skipped independently during scheduling.
+Terminal runs cannot be cancelled; repeated cancellation is idempotent.
 A failed logical run can be explicitly retried at most twice within the applicable
 window and remaining budget. A force scan needs explicit confirmation and bypasses
 only the window/no-increment gates, never authorization, review or resource limits.

@@ -131,6 +131,12 @@ Application state uses `PI_SCIENCE_HOME` or `~/.pi-science`, with a checkout-loc
 
 ## Memory
 
+> **Upgrade note:** Memory starts empty; old Ledger / Project Knowledge data is
+> retained but not automatically imported. Stop the application and run
+> `pnpm export:legacy-memory /absolute/workspace /absolute/new-export.json` for a
+> read-only legacy export. Recreate useful entries with verified sources and new
+> approvals; legacy approval flags are not reused. See [upgrade steps](docs/unified-memory.md#upgrade-from-ledger--project-knowledge).
+
 Open **Settings → Memory** to enable Memory for the local user across all
 projects. Memory, automatic Extraction and Dream start disabled and have separate
 switches. Dependent controls expand when enabled; changing a switch or trigger

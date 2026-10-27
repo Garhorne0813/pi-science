@@ -30,24 +30,35 @@ export function tokens(text: string): string[] {
   }
   return [...new Set(words)];
 }
+// Automatic acceptance is a closed grammar of presentation preferences. Unknown
+// wording (including scientific instructions disguised as preferences) is reviewed.
 export function scientific(c: MemoryContent): boolean {
-  // Only explicit, narrowly scoped preference/workflow statements can bypass human review.
-  // Semantic claims disguised as a low-risk kind therefore fail closed.
   if (!["preference", "workflow"].includes(c.kind)) return true;
-  const text = c.title + " " + c.body;
-  if (
-    /实验|研究|结果|证明|显著|因果|模型|优于|假设|疗效|准确率|数据集|结论|证据|随机|异常值|样本|训练|统计|置信|概率|参数|误差|优化|剂量|分析|阈值|评估|experiment|significan|caus|hypothes|accuracy|outperform|model|dataset|evidence|result|finding|conclu|outlier|randomiz|sample|training|statistic|confidence|dosage|threshold|p-value/i.test(
-      text,
-    )
-  )
-    return true;
-  if (
-    !/语言|中文|英文|英语|简体|繁体|回答|回复|界面|深色|浅色|配色|段落|列表|命名|格式|缩进|编码|日期|日志|链接|标识|目录|文件名|路径|备份|简洁|表达|language|repl|response|theme|colou?r|format|style|naming|indent|encoding|time.?zone|date|log|link|identifier|backup|workflow summaries/i.test(
-      text,
-    )
-  )
-    return true;
-  return !/^(?:我|用户|请|偏好|习惯|使用|始终|默认|工作|项目约定|prefer|user|please|always|use |default|workflow)/i.test(
-    c.body,
-  );
+  const title = c.title.trim().toLowerCase();
+  const titles = new Set([
+    "preference",
+    "language preference",
+    "reply language",
+    "response language",
+    "answer language",
+    "reply style",
+    "response style",
+    "response format",
+    "format preference",
+    "theme preference",
+    "ui theme",
+    "语言偏好",
+    "回复语言",
+    "回答语言",
+    "回复风格",
+    "回复格式",
+    "界面主题",
+  ]);
+  if (!titles.has(title)) return true;
+  const body = c.body.trim().replace(/[。.!]$/, "");
+  const english =
+    /^(?:user prefers?|i prefer|prefer|please use|use|always use|default to) (?:chinese|simplified chinese|traditional chinese|english|(?:chinese|english) (?:replies|responses|answers)|(?:concise|brief|detailed) (?:replies|responses|answers|reply formatting)|(?:dark|light) (?:mode|theme)|(?:markdown|plain text)(?: (?:replies|responses|format))?|(?:bullet|numbered) lists)$/i;
+  const chinese =
+    /^(?:用户偏好|我偏好|请使用|默认使用|使用)(?:中文(?:回答|回复)?|简体中文|繁体中文|英文(?:回答|回复)?|英语|深色界面|浅色界面|(?:会话内)?简洁表达|简洁回复|详细回复|Markdown格式|纯文本回复|项目符号列表|编号列表)$/i;
+  return !english.test(body) && !chinese.test(body);
 }

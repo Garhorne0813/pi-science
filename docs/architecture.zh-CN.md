@@ -134,7 +134,7 @@ flowchart LR
 
 Core 会话由 `JsonlSessionRepo` 管理。旧 v3 会话先校验和复制，再由官方 SDK 升级，原件保持不变；registry 保存归属与条目 ID 映射，删除 tombstone 防止会话被重新导入。转换可离线执行，不需要 Worker、模型密钥或网络。见[会话转换](agent-core-session-conversion.md)。
 
-Memory 记录、来源、版本、审核事件、变更提案、全文索引、提取游标与后台任务状态由同一个 SQLite StateStore 持有。迁移 `0005_unified_memory.sql` 初始化空的 Memory 域；不会导入、覆盖或删除旧 `memory/ledger.json` 和 `project-state.json`，这些文件不再是当前 Memory 的权威存储。`PROJECT.md` 是普通项目文档，批准记忆不会改写它。页面 JSON 导出用于交换和审计；完整 StateStore 一致性快照使用 `SqliteStateStore.backup(path)`，恢复须先停止服务。
+Memory 记录、来源、版本、审核事件、变更提案、全文索引、提取游标与后台任务状态由同一个 SQLite StateStore 持有。迁移 `0005_unified_memory.sql` 初始化空的 Memory 域；不会导入、覆盖或删除旧 `memory/ledger.json` 和 `project-state.json`，这些文件不再是当前 Memory 的权威存储。`PROJECT.md` 是普通项目文档，批准记忆不会改写它。页面 JSON 导出用于交换和审计；完整 StateStore 一致性快照使用 `SqliteStateStore.backup(path)`，恢复须先停止服务。迁移 0006 增加逐次租约的 UTC 日用量账本；`pnpm export:legacy-memory` 可只读导出旧数据，供核对来源后手动迁移，不沿用旧审核标记。
 
 ## 统一记忆
 
@@ -161,7 +161,7 @@ flowchart LR
 
 智能审核仅允许保守规则明确识别的低风险偏好/流程直接生效，科学内容和不明确内容需人工审核；全部人工审核将所有 Agent/后台变更送审。Agent/后台修改受保护记录时先创建提案，原有效版本继续生效。批准原子比较展示版本与内容哈希，竞争提案会失效。批准表示采用，不证明科学真实性；待审核或证据已失效内容不参与自动召回。
 
-召回在主 Harness 生成时加入参考数据，不作为指令。中文单字/双字片段与英文/代码标识参与 FTS5/BM25、Jaccard 排序及倒数排名融合，不调用嵌入模型或 LLM。用户、项目、会话、产物范围及召回开关约束候选。默认任务最多 6 条、Profile 最多 12 条，总上下文约 2,500 tokens，采用保守字符估算。文件/产物证据缺失或变化时标记复核。
+召回通过 Harness 上下文转换，在对话前加入临时的低优先级参考消息；原始记忆不进入系统提示或持久对话。中文单字/双字片段与英文/代码标识参与 FTS5/BM25、Jaccard 排序及倒数排名融合，不调用嵌入模型或 LLM。用户、项目、会话、产物范围及召回开关约束候选。默认任务最多 6 条、Profile 最多 12 条，总上下文约 2,500 tokens，采用保守字符估算。文件/产物证据缺失或变化时标记复核。
 
 `MemoryBackground` 通过配置的模型路由发起独立、无工具的模型调用。Extraction 增量读取已完成对话，结果与游标原子提交；Dream 独立整理已有记忆，默认只提建议。低风险自动处理只允许归档完全重复、未受保护的非科学偏好/流程。二者共享当前用户按 UTC 日重置的 token/美元预算，后台模型调用并发上限为 1。持久逻辑键、租约、取消和提交前策略检查阻止旧 Worker 提交；运行时段、空闲要求、冷却与最大时长限制调度，主任务活跃时后台任务推迟或中断。调度器在服务进程内运行，不能唤醒电脑或在服务退出后执行。
 

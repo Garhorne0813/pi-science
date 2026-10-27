@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -32,6 +33,7 @@ let requests: Array<{
 }>;
 let stale: boolean;
 let browsing: boolean;
+let recordRows: (typeof record)[];
 beforeAll(async () => {
   await i18n.changeLanguage("en");
 });
@@ -39,6 +41,7 @@ beforeEach(() => {
   requests = [];
   stale = false;
   browsing = false;
+  recordRows = [record];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -53,21 +56,21 @@ beforeEach(() => {
       else if (url.pathname.endsWith("/records"))
         data = browsing
           ? {
-              records: [record],
+              records: recordRows,
               total: 45,
               page: Number(url.searchParams.get("page") ?? 1),
               pageSize: 20,
               totalPages: 3,
             }
           : {
-              records: [record],
-              total: 1,
+              records: recordRows,
+              total: recordRows.length,
               page: 1,
               pageSize: 20,
               totalPages: 1,
             };
       else if (url.pathname.endsWith("/reviews"))
-        data = { records: [record], proposals: [] };
+        data = { records: recordRows, proposals: [] };
       else if (url.pathname.endsWith("/background-runs")) data = { runs: [] };
       else if (url.pathname.endsWith("/categories"))
         data = {
@@ -261,4 +264,49 @@ it("requests server-side filters, sorting and pagination, resetting page after a
     expect(params.has("categoryId")).toBe(false);
     expect(params.get("page")).toBe("1");
   });
+});
+
+it("opens editing in a focused modal and resets the draft when switching records", async () => {
+  recordRows = [
+    record,
+    { ...record, id: "r2", title: "Second record", body: "Different body" },
+  ];
+  mount();
+  await screen.findByText("Second record");
+  const edit = async (title: string) => {
+    const trigger = screen.getByRole("button", {
+      name: "More actions: " + title,
+    });
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Edit" }));
+  };
+  await edit(record.title);
+  const first = await screen.findByRole("dialog", {
+    name: "Edit memory: " + record.title,
+  });
+  const title = within(first).getByRole("textbox", { name: "Title" });
+  await waitFor(() => expect(title).toHaveFocus());
+  fireEvent.change(within(first).getByRole("textbox", { name: "Body" }), {
+    target: { value: "Unsaved first draft" },
+  });
+  fireEvent.click(within(first).getByRole("button", { name: "Close" }));
+  await waitFor(() => {
+    expect(
+      screen.getByRole("button", {
+        name: "More actions: " + record.title,
+      }),
+    ).toHaveFocus();
+    expect(document.body.style.pointerEvents).not.toBe("none");
+  });
+  await edit("Second record");
+  const second = await screen.findByRole("dialog", {
+    name: "Edit memory: Second record",
+  });
+  expect(within(second).getByRole("textbox", { name: "Title" })).toHaveValue(
+    "Second record",
+  );
+  expect(within(second).getByRole("textbox", { name: "Body" })).toHaveValue(
+    "Different body",
+  );
 });

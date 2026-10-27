@@ -117,10 +117,10 @@ try {
     .click();
   await page
     .getByRole("textbox", { name: "Title", exact: true })
-    .fill("BrowserCrudProbe");
+    .fill("Response format");
   await page
     .getByRole("textbox", { name: "Body", exact: true })
-    .fill("User prefers concise replies");
+    .fill("User prefers numbered lists");
   const recordResponse = (method) =>
     page.waitForResponse(
       (r) =>
@@ -132,14 +132,14 @@ try {
   const created = await (await createdResponse).json();
   assert.ok(created.record?.id, JSON.stringify(created));
   records.push(created.record);
-  const probe = page.locator("article").filter({ hasText: "BrowserCrudProbe" });
+  const probe = page.locator("article").filter({ hasText: "Response format" });
   await probe.waitFor();
   const search = page.getByRole("textbox", {
     name: "Search memories",
     exact: true,
   });
   const searchResponse = recordResponse("GET");
-  await search.fill("BrowserCrudProbe");
+  await search.fill("numbered");
   await searchResponse;
   await page.waitForFunction(
     () => document.querySelectorAll("main article").length === 1,
@@ -149,7 +149,7 @@ try {
   const actions = async (action) => {
     await probe
       .getByRole("button", {
-        name: "More actions: BrowserCrudProbe",
+        name: "More actions: Response format",
         exact: true,
       })
       .click();
@@ -164,6 +164,15 @@ try {
   const edited = await (await editedResponse).json();
   assert.equal(edited.record?.body, "User prefers concise reply formatting");
   assert.equal(edited.record.revision, created.record.revision + 1);
+  await page.getByRole("dialog").waitFor({ state: "detached" });
+  await page.waitForFunction(
+    () => document.body.style.pointerEvents !== "none",
+  );
+  await page.waitForFunction(
+    () =>
+      document.activeElement?.getAttribute("aria-label") ===
+      "More actions: Response format",
+  );
   await probe.locator("summary").click();
   const historyResponse = page.waitForResponse(
     (r) =>
@@ -202,7 +211,7 @@ try {
     { headers },
   );
   assert.equal(missing.status, 404);
-  const list = await api("/records?q=BrowserCrudProbe");
+  const list = await api("/records?q=numbered");
   assert.equal(list.records.length, 0);
   console.log(
     "PASS: browser create, keyword search, edit, revision history, archive, delete cancellation, hard delete and 404 after deletion",
@@ -219,8 +228,8 @@ try {
         content: {
           scope: "project",
           kind: n % 2 === 0 ? "preference" : "workflow",
-          title: `BrowseProbe ${String(n).padStart(2, "0")}`,
-          body: "User prefers concise reply formatting",
+          title: "Response format",
+          body: "User prefers Markdown replies",
           evidenceLevel: "user_stated",
           sources: [],
           ...(n % 2 === 0 ? { categoryId: category.id } : {}),
@@ -241,7 +250,7 @@ try {
     name: "Search memories",
     exact: true,
   });
-  await browseSearch.fill("BrowseProbe");
+  await browseSearch.fill("Markdown");
   await page.getByText("43 memories", { exact: true }).waitFor();
   await page
     .getByRole("button", { name: "Sort: Relevance", exact: true })
@@ -268,13 +277,17 @@ try {
   await choose("Category", categoryName);
   await choose("Sort", "Recently created");
   const expected = await api(
-    `/records?q=BrowseProbe&status=active&kind=preference&scope=project&categoryId=${encodeURIComponent(category.id)}&sort=created_desc&page=1&pageSize=20`,
+    `/records?q=Markdown&status=active&kind=preference&scope=project&categoryId=${encodeURIComponent(category.id)}&sort=created_desc&page=1&pageSize=20`,
   );
-  await page.getByText(expected.records[0].title, { exact: true }).waitFor();
-  const visible = await page.locator("article h2").allTextContents();
+  await page
+    .locator(`article[data-memory-id="${expected.records[0].id}"]`)
+    .waitFor();
+  const visible = await page
+    .locator("article")
+    .evaluateAll((els) => els.map((el) => el.getAttribute("data-memory-id")));
   assert.deepEqual(
     visible,
-    expected.records.map((r) => r.title),
+    expected.records.map((r) => r.id),
   );
   await page.screenshot({
     path: path.join(outputs, "memory-filters-desktop.png"),

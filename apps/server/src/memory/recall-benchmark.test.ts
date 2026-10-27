@@ -45,11 +45,13 @@ it("evaluates Chinese/mixed-language R@1 against raw unicode61 FTS5 on the same 
             title,
             body,
             evidenceLevel: "user_stated",
-            sources: [],
+            sources: [{kind:"message",locator:"corpus@user"}],
           },
         })
       ).record;
-      expect(r.status).toBe("active");
+      // The retrieval corpus is explicitly curated; it must not define the auto-review whitelist.
+      if(r.status==="pending_review") await call("approve",{id:r.id,expectedRevision:r.revision,contentHash:r.contentHash});
+      expect((await call("read",{id:r.id})).record.status).toBe("active");
       ids.push(r.id);
       await store.run("INSERT INTO recall_baseline VALUES(?,?)", [
         r.id,

@@ -188,12 +188,11 @@ export class MemoryBackground {
           reason: "not_idle",
         });
     }
-    const existing = (
-      await this.memory.command<{ runs: BackgroundRun[] }>(ctx, "runs")
-    ).runs;
-    const recent = existing
-      .filter((r) => r.kind === kind && r.startedAt)
-      .sort((a, b) => b.startedAt - a.startedAt)[0];
+    const recent = await this.memory.command<BackgroundRun | null>(
+      ctx,
+      "run.latest",
+      { kind },
+    );
     if (
       kind === "dream" &&
       recent &&
@@ -385,58 +384,70 @@ export class MemoryBackground {
         Array<{ project_id: string; cwd: string; last_interaction: number }>
       >(base, "schedules");
       for (const entry of schedules) {
-        const { context } = await this.memory.context(entry.cwd);
-        // Reconcile deletion after a crash between the durable session tombstone and Memory cleanup.
-        const frames = await this.memory.command<string[]>(context, "frames");
-        for (const sessionId of frames)
-          if (!(await sessionRepository.findPath(entry.cwd, sessionId)))
-            await this.memory.command(context, "frame.delete", { sessionId });
-        const s = await this.memory.command<MemorySettings>(
-          context,
-          "settings",
-        );
-        if (
-          s.enabled &&
-          s.dream.enabled &&
-          s.dream.mode !== "manual" &&
-          (!s.dream.requireIdle ||
-            Date.now() - entry.last_interaction >= s.dream.idleMinutes * 60000)
-        ) {
+        try {
+          const { context } = await this.memory.context(entry.cwd);
+          // Reconcile deletion after a crash between the durable session tombstone and Memory cleanup.
+          const frames = await this.memory.command<string[]>(context, "frames");
+          for (const sessionId of frames)
+            if (!(await sessionRepository.findPath(entry.cwd, sessionId)))
+              await this.memory.command(context, "frame.delete", { sessionId });
+          const s = await this.memory.command<MemorySettings>(
+            context,
+            "settings",
+          );
+          if (
+            s.enabled &&
+            s.dream.enabled &&
+            s.dream.mode !== "manual" &&
+            (!s.dream.requireIdle ||
+              Date.now() - entry.last_interaction >=
+                s.dream.idleMinutes * 60000)
+          ) {
+            const last = await this.memory.command<BackgroundRun | null>(
+              context,
+              "run.latest",
+              { kind: "dream" },
+            );
+            if (
+              s.dream.mode !== "interval" ||
+              !last ||
+              Date.now() - last.startedAt >= s.dream.intervalHours * 3600000
+            )
+              await this.enqueue(context, entry.cwd, "dream", {
+                automatic: true,
+              });
+          }
           const runs = (
             await this.memory.command<{ runs: BackgroundRun[] }>(
               context,
-              "runs",
+              "run.pending",
             )
           ).runs;
-          const last = runs.find((r) => r.kind === "dream" && r.startedAt);
-          if (
-            s.dream.mode !== "interval" ||
-            !last ||
-            Date.now() - last.startedAt >= s.dream.intervalHours * 3600000
-          )
-            await this.enqueue(context, entry.cwd, "dream", {
-              automatic: true,
-            });
-        }
-        const runs = (
-          await this.memory.command<{ runs: BackgroundRun[] }>(context, "runs")
-        ).runs;
-        for (const run of runs.filter(
-          (r) =>
-            r.status === "queued" ||
-            (r.status === "running" && r.leaseUntil < Date.now()),
-        )) {
-          if (this.active.size || (await this.busy(entry.cwd))) break;
-          const claimed = await this.memory.command<BackgroundRun | null>(
-            context,
-            "run.claim",
-            { id: run.id },
-          );
-          if (claimed && !this.stopping) {
-            const task = this.execute(context, entry.cwd, claimed, s);
-            this.work.add(task);
-            void task.finally(() => this.work.delete(task));
+          for (const run of runs.filter(
+            (r) =>
+              r.status === "queued" ||
+              (r.status === "running" && r.leaseUntil < Date.now()),
+          )) {
+            if (this.active.size || (await this.busy(entry.cwd))) break;
+            const claimed = await this.memory.command<BackgroundRun | null>(
+              context,
+              "run.claim",
+              { id: run.id },
+            );
+            if (claimed && !this.stopping) {
+              const task = this.execute(context, entry.cwd, claimed, s);
+              this.work.add(task);
+              void task.finally(() => this.work.delete(task));
+            }
           }
+        } catch {
+          // A moved/deleted or otherwise broken project must not starve later schedules.
+          await this.memory
+            .command({ ...base, projectId: entry.project_id }, "run.skip", {
+              kind: "dream",
+              reason: "schedule_error",
+            })
+            .catch(() => undefined);
         }
       }
     } finally {

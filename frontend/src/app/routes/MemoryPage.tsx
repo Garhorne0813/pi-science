@@ -1,5 +1,7 @@
+import { MemoryDialog } from "../../components/memory/MemoryDialog";
+import { MemoryProposalDiff } from "../../components/memory/MemoryProposalDiff";
 import { Settings2, Plus, Download } from "lucide-react";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -118,7 +120,14 @@ export function MemoryPage() {
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<MemoryRecord | null>(null);
   const [creating, setCreating] = useState(false);
-  const [history, setHistory] = useState<unknown>();
+  const [history, setHistory] = useState<{ title: string; data: unknown }>();
+  const historyRequest = useRef(0);
+  useEffect(() => {
+    setEditing(null);
+    setCreating(false);
+    setHistory(undefined);
+    historyRequest.current++;
+  }, [cwd]);
   const key = ["memory", cwd];
   const records = useQuery({
     queryKey: [...key, "records", browseQuery.toString()],
@@ -208,11 +217,15 @@ export function MemoryPage() {
             contentHash: r.contentHash,
           });
       }}
-      onHistory={() =>
+      onHistory={() => {
+        const request = ++historyRequest.current;
         void memoryRequest(cwd, `/records/${r.id}/history`)
-          .then(setHistory)
-          .catch((e) => setError(String(e)))
-      }
+          .then((data) => {
+            if (request === historyRequest.current)
+              setHistory({ title: r.title, data });
+          })
+          .catch((e) => setError(String(e)));
+      }}
       onApprove={() => void decide(r, "approve")}
       onReject={() => void decide(r, "reject")}
     />
@@ -289,6 +302,7 @@ export function MemoryPage() {
                   " flex min-h-11 shrink-0 items-center justify-center"
                 }
                 aria-label={t("memory.create")}
+                disabled={busy}
                 onClick={() => {
                   setCreating(true);
                   setEditing(null);
@@ -402,37 +416,24 @@ export function MemoryPage() {
               >
                 <h2>{p.candidate.title}</h2>
                 <p>{p.reason}</p>
+                <p className="text-ui-caption text-muted">
+                  {t("memory.version", { version: p.candidate.revision })}
+                </p>
                 {p.status === "stale_proposal" && (
                   <p className="text-error-text">{t("memory.stale")}</p>
                 )}
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div>
-                    <h3>{t("memory.before")}</h3>
-                    <p className="whitespace-pre-wrap break-words">
-                      {p.current?.body ??
-                        records.data?.records.find((r) => r.id === p.recordId)
-                          ?.body}
-                    </p>
-                  </div>
-                  <div>
-                    <h3>{t("memory.after")}</h3>
-                    <p className="whitespace-pre-wrap break-words">
-                      {p.candidate.body}
-                    </p>
-                    <p className="text-xs">
-                      {p.candidate.status} ·{" "}
-                      {p.candidate.sources
-                        .map((s) => `${s.kind}: ${s.locator}`)
-                        .join("; ")}
-                    </p>
-                  </div>
-                </div>
+                <MemoryProposalDiff
+                  current={p.current}
+                  candidate={p.candidate}
+                />
                 {["accept", "reject"].map((a) => (
                   <button
                     key={a}
                     className={control + " mr-2"}
                     disabled={
-                      busy || (a === "accept" && p.status === "stale_proposal")
+                      busy ||
+                      (a === "accept" &&
+                        (p.status === "stale_proposal" || !p.current))
                     }
                     onClick={() =>
                       void mutate(`/dream/proposals/${p.id}/${a}`, "POST", {
@@ -529,44 +530,65 @@ export function MemoryPage() {
           </>
         )}
         {(creating || editing) && (
-          <MemoryEditor
-            record={editing}
-            busy={busy}
+          <MemoryDialog
+            title={
+              editing
+                ? t("memory.editRecord", { title: editing.title })
+                : t("memory.create")
+            }
             close={() => {
               setCreating(false);
               setEditing(null);
             }}
-            save={async (content) => {
-              if (
-                await mutate(
-                  editing ? `/records/${editing.id}` : "/records",
-                  editing ? "PATCH" : "POST",
-                  {
-                    content,
-                    ...(editing
-                      ? {
-                          expectedRevision: editing.revision,
-                          contentHash: editing.contentHash,
-                        }
-                      : {}),
-                  },
-                )
-              ) {
+          >
+            {error && (
+              <p role="alert" className="text-error-text">
+                {error}
+              </p>
+            )}
+            <MemoryEditor
+              key={editing ? `${editing.id}:${editing.revision}` : "create"}
+              record={editing}
+              busy={busy}
+              close={() => {
                 setCreating(false);
                 setEditing(null);
-              }
-            }}
-          />
+              }}
+              save={async (content) => {
+                if (
+                  await mutate(
+                    editing ? `/records/${editing.id}` : "/records",
+                    editing ? "PATCH" : "POST",
+                    {
+                      content,
+                      ...(editing
+                        ? {
+                            expectedRevision: editing.revision,
+                            contentHash: editing.contentHash,
+                          }
+                        : {}),
+                    },
+                  )
+                ) {
+                  setCreating(false);
+                  setEditing(null);
+                }
+              }}
+            />
+          </MemoryDialog>
         )}
         {history !== undefined && (
-          <section className="border border-border rounded-panel p-4">
-            <button className={control} onClick={() => setHistory(undefined)}>
-              {t("memory.close")}
-            </button>
-            <pre className="overflow-auto text-xs whitespace-pre-wrap">
-              {JSON.stringify(history, null, 2)}
+          <MemoryDialog
+            title={t("memory.history") + " · " + history.title}
+            close={() => {
+              historyRequest.current++;
+              setHistory(undefined);
+            }}
+          >
+            <pre className="min-w-0 whitespace-pre-wrap break-words text-ui-caption">
+              {JSON.stringify(history.data, null, 2)}
             </pre>
-          </section>
+          </MemoryDialog>
         )}
       </div>
     </main>
@@ -615,7 +637,6 @@ function MemoryEditor({
         void save(value);
       }}
     >
-      <h2>{t(record ? "memory.edit" : "memory.create")}</h2>
       <label className="block">
         {t("memory.recordTitle")}
         <input
@@ -671,7 +692,7 @@ function MemoryEditor({
         <label key={field} className="block text-sm">
           {t(`memory.${field}`)}
           <input
-            className={control + " ml-2"}
+            className={control + " w-full"}
             value={value[field] ?? ""}
             onChange={(e) =>
               setValue({ ...value, [field]: e.target.value || undefined })
@@ -772,7 +793,7 @@ function MemoryEditor({
         {t("memory.save")}
       </button>
       <button type="button" className={control + " ml-2"} onClick={close}>
-        {t("memory.close")}
+        {t("common.cancel")}
       </button>
     </form>
   );

@@ -38,7 +38,10 @@ export class MemoryService {
       throw new MemoryError(404, "Session not found in this project");
     // Register project scheduling independently of the global settings screen.
     // Read/poll requests must not reset the user's idle timer.
-    await this.store.run('INSERT INTO memory_dream_schedules VALUES(?,?,?,?) ON CONFLICT(owner_id,project_id) DO UPDATE SET cwd=excluded.cwd',[LOCAL_OWNER,workspace.project_id,cwd,Date.now()]);
+    await this.store.run(
+      "INSERT INTO memory_dream_schedules VALUES(?,?,?,?) ON CONFLICT(owner_id,project_id) DO UPDATE SET cwd=excluded.cwd",
+      [LOCAL_OWNER, workspace.project_id, cwd, Date.now()],
+    );
     return {
       cwd,
       context: {
@@ -81,6 +84,7 @@ export class MemoryService {
           cwd,
           { ...ctx, actor: "user" },
           pickContent(record),
+          { requirePinnedMemory: true },
         );
         records.push(record);
       } catch (error) {
@@ -93,7 +97,29 @@ export class MemoryService {
     }
     return { records };
   }
-  async validateContent(cwd: string, ctx: MemoryContext, input: unknown) {
+  async validateContent(
+    cwd: string,
+    ctx: MemoryContext,
+    input: unknown,
+    options: { requirePinnedMemory?: boolean } = {},
+  ) {
+    return this.validateSources(
+      cwd,
+      ctx,
+      input,
+      options.requirePinnedMemory ?? false,
+      new Set(),
+      { remaining: 64 },
+    );
+  }
+  private async validateSources(
+    cwd: string,
+    ctx: MemoryContext,
+    input: unknown,
+    requirePinned: boolean,
+    chain: Set<string>,
+    budget: { remaining: number },
+  ) {
     const c = contentSchema.parse(input);
     // Use the same canonical root as resolveWorkspaceFile, including Windows
     // short temp paths and junctions, before checking source visibility.
@@ -215,11 +241,50 @@ export class MemoryService {
           break;
         }
         case "memory": {
-          await this.command(
-            { ...ctx, projectId: source.projectId ?? ctx.projectId },
-            "read",
-            { id: source.locator },
+          const sourceCtx = {
+            ...ctx,
+            projectId: source.projectId ?? ctx.projectId,
+          };
+          const { record } = await this.command<{
+            record: import("./schema.js").MemoryRecord;
+          }>(sourceCtx, "read", { id: source.locator });
+          if (
+            record.status !== "active" ||
+            (record.reviewRequired &&
+              (record.reviewStatus !== "approved" ||
+                record.approvedContentHash !== record.contentHash))
+          )
+            throw new MemoryError(
+              409,
+              "Memory source is not active and accepted",
+            );
+          if (
+            (requirePinned && (!source.version || !source.digest)) ||
+            (source.version && source.version !== String(record.revision)) ||
+            (source.digest && source.digest !== record.contentHash)
+          )
+            throw new MemoryError(
+              409,
+              "Memory source version or content changed",
+            );
+          if (chain.has(record.id) || chain.size >= 8 || --budget.remaining < 0)
+            throw new MemoryError(
+              400,
+              "Cyclic or excessive memory evidence chain",
+            );
+          const next = new Set(chain);
+          next.add(record.id);
+          const { pickContent } = await import("./repository.js");
+          await this.validateSources(
+            sourceCwd,
+            sourceCtx,
+            pickContent(record),
+            true,
+            next,
+            budget,
           );
+          source.version = String(record.revision);
+          source.digest = record.contentHash;
           break;
         }
         case "citation":

@@ -205,6 +205,9 @@ overwritten or deleted. They are no longer canonical Memory stores. `PROJECT.md`
 remains an ordinary document and is not rewritten by approval. Memory JSON export
 is for interchange/audit; use `SqliteStateStore.backup(path)` for a consistent
 whole-StateStore snapshot and restore only while the service is stopped.
+Migration 0006 adds a per-lease UTC-day usage journal. A read-only
+`pnpm export:legacy-memory` command preserves old data for reviewed manual transfer;
+legacy approvals are never imported.
 
 ## Unified Memory
 
@@ -241,7 +244,9 @@ current version remains effective. Approval compares the displayed revision and
 content hash atomically; competing proposals become stale. Approval is adoption,
 not scientific proof. Pending or stale evidence is excluded from automatic recall.
 
-Recall adds reference data, never instructions, to the main Harness generation.
+Recall adds ephemeral lower-priority reference messages before the conversation
+through a Harness context transform; raw Memory content never enters the system
+prompt or durable transcript.
 Chinese unigrams/bigrams and ASCII/code identifiers feed FTS5/BM25 and Jaccard
 ranking with reciprocal-rank fusion; no embedding model or LLM call is needed.
 Owner/project/session/Artifact and recall switches restrict candidates. Defaults
