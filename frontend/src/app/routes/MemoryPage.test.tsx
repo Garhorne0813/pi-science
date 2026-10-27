@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -44,6 +45,7 @@ let recordRows: (typeof record)[];
 let runRows: unknown[];
 let proposalRows: unknown[];
 let editResult: unknown;
+let editResponses: Promise<Response>[];
 beforeAll(async () => {
   await i18n.changeLanguage("en");
 });
@@ -55,6 +57,7 @@ beforeEach(() => {
   runRows = [];
   proposalRows = [];
   editResult = {};
+  editResponses = [];
   vi.stubGlobal(
     "confirm",
     vi.fn(() => true),
@@ -68,9 +71,10 @@ beforeEach(() => {
       requests.push({ path: url.pathname, search: url.search, method, body });
       let data: unknown = {};
       let status = 200;
-      if (method === "PATCH" && url.pathname.endsWith("/records/r1"))
+      if (method === "PATCH" && url.pathname.endsWith("/records/r1")) {
+        if (editResponses.length) return editResponses.shift()!;
         data = editResult;
-      else if (url.pathname.endsWith("/settings"))
+      } else if (url.pathname.endsWith("/settings"))
         data = { ...settingsSchema.parse({ enabled: true }), revision: 1 };
       else if (url.pathname.endsWith("/records"))
         data = browsing
@@ -124,7 +128,12 @@ function mount(initialEntry = "/workspace/project/memory", navigation = false) {
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[initialEntry]}>
         {navigation && (
-          <Link to="/workspace/other-project/memory">Switch project</Link>
+          <>
+            <Link to="/workspace/other-project/memory">Switch project</Link>
+            <Link to="/workspace/project/memory">
+              Return to original project
+            </Link>
+          </>
         )}
         <Routes>
           <Route path="/workspace/:cwd/memory" element={<MemoryPage />} />
@@ -589,3 +598,114 @@ it("clears the previous project's error and review dialog when switching project
   expect(screen.queryByRole("status")).not.toBeInTheDocument();
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
+
+it.each([
+  { failure: false, returnToOriginal: false },
+  { failure: true, returnToOriginal: false },
+  { failure: false, returnToOriginal: true },
+  { failure: true, returnToOriginal: true },
+])(
+  "ignores deferred mutation completion after project navigation: %j",
+  async ({ failure, returnToOriginal }) => {
+    recordRows = [{ ...record, status: "active", reviewStatus: "approved" }];
+    let resolveOld!: (response: Response) => void;
+    let resolveNew!: (response: Response) => void;
+    editResponses = [
+      new Promise<Response>((resolve) => {
+        resolveOld = resolve;
+      }),
+      new Promise<Response>((resolve) => {
+        resolveNew = resolve;
+      }),
+    ];
+    mount("/workspace/project/memory", true);
+    const edit = async (body: string) => {
+      const trigger = await screen.findByRole("button", {
+        name: "More actions: " + record.title,
+      });
+      fireEvent.pointerDown(trigger);
+      fireEvent.click(trigger);
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Edit" }));
+      const dialog = await screen.findByRole("dialog", {
+        name: "Edit memory: " + record.title,
+      });
+      fireEvent.change(within(dialog).getByRole("textbox", { name: "Body" }), {
+        target: { value: body },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() =>
+        expect(
+          within(dialog).getByRole("button", { name: "Saving…" }),
+        ).toBeDisabled(),
+      );
+      return dialog;
+    };
+    await edit("Project A pending edit");
+    await waitFor(() =>
+      expect(requests.filter((r) => r.method === "PATCH")).toHaveLength(1),
+    );
+    // Simulate direct route navigation even while the busy editor is modal.
+    fireEvent.click(screen.getByText("Switch project"));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    if (returnToOriginal) {
+      fireEvent.click(
+        screen.getByRole("link", { name: "Return to original project" }),
+      );
+    }
+    const dialog = await edit("New project draft must stay open");
+    await waitFor(() =>
+      expect(requests.filter((r) => r.method === "PATCH")).toHaveLength(2),
+    );
+    await act(async () => {
+      resolveOld(
+        new Response(
+          JSON.stringify(
+            failure
+              ? { error: "Old project failure" }
+              : { proposal: { id: "old-proposal" }, record: recordRows[0] },
+          ),
+          {
+            status: failure ? 409 : 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      );
+      // Flush the old request's response parsing, cache invalidation and caller.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(dialog).toBeVisible();
+    expect(within(dialog).getByRole("textbox", { name: "Body" })).toHaveValue(
+      "New project draft must stay open",
+    );
+    expect(
+      within(dialog).getByRole("button", { name: "Saving…" }),
+    ).toBeDisabled();
+    expect(screen.getAllByRole("status", { hidden: true })).toHaveLength(1);
+    expect(screen.getByRole("status", { hidden: true })).toHaveTextContent(
+      "Unsaved changes",
+    );
+    expect(
+      screen.queryByRole("alert", { hidden: true }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "View pending review",
+        hidden: true,
+      }),
+    ).not.toBeInTheDocument();
+    await act(async () => {
+      resolveNew(
+        new Response(JSON.stringify({ record: recordRows[0] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Saved");
+  },
+);

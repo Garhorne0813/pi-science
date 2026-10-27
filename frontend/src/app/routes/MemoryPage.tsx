@@ -122,8 +122,11 @@ export function MemoryPage() {
   const [proposalId, setProposalId] = useState<string>();
   const [reviewRecordId, setReviewRecordId] = useState<string>();
   const historyRequest = useRef(0);
+  const projectGeneration = useRef(0);
   const reviewTabRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
+    projectGeneration.current++;
+    setBusy(false);
     setError("");
     setNotice("");
     setNoticeReview(false);
@@ -171,6 +174,8 @@ export function MemoryPage() {
     refetchInterval: tab === "runs" ? 3000 : false,
   });
   async function mutate(path: string, method = "POST", body?: unknown) {
+    const generation = projectGeneration.current;
+    const isCurrentProject = () => generation === projectGeneration.current;
     setBusy(true);
     setError("");
     setNotice("");
@@ -182,6 +187,9 @@ export function MemoryPage() {
         method,
         body,
       );
+      // Refresh the originating project even if its UI is no longer visible.
+      await client.invalidateQueries({ queryKey: key });
+      if (!isCurrentProject()) return false;
       setNotice(
         result.proposal
           ? t("memory.submittedForReview")
@@ -190,13 +198,12 @@ export function MemoryPage() {
             : t("memory.saved"),
       );
       setNoticeReview(!!result.proposal);
-      await client.invalidateQueries({ queryKey: key });
       return true;
     } catch (e) {
-      setError(String(e));
+      if (isCurrentProject()) setError(String(e));
       return false;
     } finally {
-      setBusy(false);
+      if (isCurrentProject()) setBusy(false);
     }
   }
   const decide = (record: MemoryRecord, action: string) =>
