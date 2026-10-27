@@ -238,12 +238,17 @@ export function MemoryPage() {
       }}
       onHistory={() => {
         const request = ++historyRequest.current;
+        const generation = projectGeneration.current;
+        const isCurrentRequest = () =>
+          generation === projectGeneration.current && request === historyRequest.current;
         void memoryRequest<MemoryHistoryData>(cwd, `/records/${r.id}/history`)
           .then((data) => {
-            if (request === historyRequest.current)
+            if (isCurrentRequest())
               setHistory({ record: r, data });
           })
-          .catch((e) => setError(String(e)));
+          .catch((e) => {
+            if (isCurrentRequest()) setError(String(e));
+          });
       }}
       onApprove={() => void decide(r, "approve")}
       onReject={() => void decide(r, "reject")}
@@ -350,9 +355,11 @@ export function MemoryPage() {
                   " flex min-h-11 shrink-0 items-center justify-center"
                 }
                 aria-label={t("memory.export")}
-                onClick={() =>
+                onClick={() => {
+                  const generation = projectGeneration.current;
                   void memoryRequest(cwd, "/export")
                     .then((value) => {
+                      if (generation !== projectGeneration.current) return;
                       const url = URL.createObjectURL(
                         new Blob([JSON.stringify(value, null, 2)], {
                           type: "application/json",
@@ -364,8 +371,10 @@ export function MemoryPage() {
                       a.click();
                       URL.revokeObjectURL(url);
                     })
-                    .catch((e) => setError(String(e)))
-                }
+                    .catch((e) => {
+                      if (generation === projectGeneration.current) setError(String(e));
+                    });
+                }}
               >
                 <Download size={16} className="sm:hidden" />
                 <span className="hidden sm:inline">{t("memory.export")}</span>

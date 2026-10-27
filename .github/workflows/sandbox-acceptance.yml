@@ -16,6 +16,7 @@ on:
       - 'pnpm-workspace.yaml'
       - 'pnpm-lock.yaml'
       - '.github/workflows/sandbox-acceptance.yml'
+      - '.github/scripts/configure-linux-sandbox.sh'
   workflow_dispatch:
 # Superseded runs for the same branch/PR do not consume another full matrix.
 concurrency:
@@ -49,8 +50,7 @@ jobs:
           if [ "$RUNNER_OS" = Linux ]; then
             sudo apt-get update
             sudo apt-get install -y bubblewrap socat ripgrep
-            # Dedicated ephemeral CI runner; Ubuntu's AppArmor default blocks user namespaces.
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+            bash .github/scripts/configure-linux-sandbox.sh
           else
             brew install socat ripgrep
           fi
@@ -60,6 +60,11 @@ jobs:
         shell: bash
         run: |
           export PI_SCIENCE_SANDBOX_TEST=1
+          if [ "$RUNNER_OS" = Linux ]; then
+            # Probe the actual helper, not merely an outer bwrap /bin/true.
+            helper="$(cd apps/server && node -p 'require("node:path").join(require("node:path").dirname(require.resolve("@anthropic-ai/sandbox-runtime/package.json")), "vendor/seccomp", process.arch, "apply-seccomp")')"
+            bwrap --unshare-user --unshare-pid --unshare-net --cap-drop ALL --ro-bind / / --dev /dev --proc /proc -- "$helper" /bin/true
+          fi
           PI_SCIENCE_SANDBOX_PYTHON="$(python -c 'import os,sys; print(os.path.realpath(sys.executable))')"
           PI_SCIENCE_SANDBOX_PYTHON_ROOT="$(python -c 'import os,sys; print(os.path.realpath(sys.base_prefix))')"
           PI_SCIENCE_SANDBOX_SOCAT="$(command -v socat)"

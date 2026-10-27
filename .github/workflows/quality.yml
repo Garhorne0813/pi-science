@@ -107,7 +107,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bubblewrap socat ripgrep
           # Dedicated ephemeral runner: Bubblewrap requires user namespaces.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bash .github/scripts/configure-linux-sandbox.sh
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
@@ -183,7 +183,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bubblewrap socat ripgrep
           # Dedicated ephemeral runner: Bubblewrap requires user namespaces.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bash .github/scripts/configure-linux-sandbox.sh
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
@@ -352,7 +352,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bubblewrap socat ripgrep
           # Dedicated ephemeral runner: Bubblewrap requires user namespaces.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bash .github/scripts/configure-linux-sandbox.sh
 
       # Intentionally omit pnpm setup: exercise the pinned bootstrap from npm.
       - name: Install and build (POSIX)

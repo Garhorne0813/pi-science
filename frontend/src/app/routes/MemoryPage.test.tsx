@@ -46,6 +46,7 @@ let runRows: unknown[];
 let proposalRows: unknown[];
 let editResult: unknown;
 let editResponses: Promise<Response>[];
+let readResponses: Map<string, Promise<Response>[]>;
 beforeAll(async () => {
   await i18n.changeLanguage("en");
 });
@@ -58,6 +59,7 @@ beforeEach(() => {
   proposalRows = [];
   editResult = {};
   editResponses = [];
+  readResponses = new Map();
   vi.stubGlobal(
     "confirm",
     vi.fn(() => true),
@@ -69,6 +71,8 @@ beforeEach(() => {
       const method = init.method ?? "GET";
       const body = init.body ? JSON.parse(String(init.body)) : undefined;
       requests.push({ path: url.pathname, search: url.search, method, body });
+      const deferredRead = method === "GET" ? readResponses.get(url.pathname)?.shift() : undefined;
+      if (deferredRead) return deferredRead;
       let data: unknown = {};
       let status = 200;
       if (method === "PATCH" && url.pathname.endsWith("/records/r1")) {
@@ -115,6 +119,51 @@ beforeEach(() => {
       });
     }),
   );
+});
+
+it.each([
+  { operation: "history", returnToOriginal: false },
+  { operation: "history", returnToOriginal: true },
+  { operation: "export", returnToOriginal: false },
+  { operation: "export", returnToOriginal: true },
+])("ignores deferred read failures after project navigation: %j", async ({ operation, returnToOriginal }) => {
+  let rejectOld!: (error: Error) => void;
+  const path = operation === "history" ? "/api/memory/records/r1/history" : "/api/memory/export";
+  readResponses.set(path, [new Promise<Response>((_resolve, reject) => { rejectOld = reject; })]);
+  mount("/workspace/project/memory", true);
+  await screen.findByText(record.title);
+  if (operation === "history") {
+    fireEvent.click(screen.getByLabelText("View memory: " + record.title));
+    fireEvent.click(screen.getByRole("button", { name: "Version and review history" }));
+  } else {
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("memory.export") }));
+  }
+  await waitFor(() => expect(requests.some(r => r.path === path)).toBe(true));
+  fireEvent.click(screen.getByRole("link", { name: "Switch project" }));
+  await waitFor(() => expect(requests.some(r => r.path.endsWith("/records") &&
+    new URLSearchParams(r.search).get("cwd") === "other-project")).toBe(true));
+  if (returnToOriginal) fireEvent.click(screen.getByRole("link", { name: "Return to original project" }));
+  await act(async () => {
+    rejectOld(new Error("Previous project read failed"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.queryByText(/Previous project read failed/)).not.toBeInTheDocument();
+});
+
+it.each(["history", "export"])("still displays a current project's %s failure", async operation => {
+  let rejectRead!: (error: Error) => void;
+  const path = operation === "history" ? "/api/memory/records/r1/history" : "/api/memory/export";
+  readResponses.set(path, [new Promise<Response>((_resolve, reject) => { rejectRead = reject; })]);
+  mount();
+  await screen.findByText(record.title);
+  if (operation === "history") {
+    fireEvent.click(screen.getByLabelText("View memory: " + record.title));
+    fireEvent.click(screen.getByRole("button", { name: "Version and review history" }));
+  } else fireEvent.click(screen.getByRole("button", { name: i18n.t("memory.export") }));
+  await waitFor(() => expect(requests.some(r => r.path === path)).toBe(true));
+  await act(async () => rejectRead(new Error("Current project read failed")));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Current project read failed");
 });
 afterEach(() => {
   cleanup();
