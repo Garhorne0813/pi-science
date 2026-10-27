@@ -124,6 +124,9 @@ export function MemoryPage() {
   const historyRequest = useRef(0);
   const reviewTabRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
+    setError("");
+    setNotice("");
+    setNoticeReview(false);
     setEditing(null);
     setCreating(false);
     setHistory(undefined);

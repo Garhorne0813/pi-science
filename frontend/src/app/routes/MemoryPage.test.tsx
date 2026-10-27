@@ -8,7 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { settingsSchema } from "@pi-science/contracts";
 import i18n from "../../i18n";
 import { MemoryPage } from "./MemoryPage";
@@ -116,13 +116,16 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
-function mount(initialEntry = "/workspace/project/memory") {
+function mount(initialEntry = "/workspace/project/memory", navigation = false) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[initialEntry]}>
+        {navigation && (
+          <Link to="/workspace/other-project/memory">Switch project</Link>
+        )}
         <Routes>
           <Route path="/workspace/:cwd/memory" element={<MemoryPage />} />
         </Routes>
@@ -466,7 +469,7 @@ it("keeps an unsaved editor open when discard is declined", async () => {
 });
 
 it.each([true, false])(
-  "reports whether a scientific edit is awaiting review: %s",
+  "reports scientific edit review state and clears it when switching projects: %s",
   async (proposed) => {
     const active = { ...record, status: "active", reviewStatus: "approved" };
     recordRows = [active];
@@ -489,7 +492,7 @@ it.each([true, false])(
       ? { proposal, record: active }
       : { record: candidate };
     if (proposed) proposalRows = [proposal];
-    mount();
+    mount("/workspace/project/memory", true);
     const trigger = await screen.findByRole("button", {
       name: "More actions: " + record.title,
     });
@@ -538,5 +541,51 @@ it.each([true, false])(
         screen.queryByRole("button", { name: "View pending review" }),
       ).not.toBeInTheDocument();
     }
+    fireEvent.click(screen.getByRole("link", { name: "Switch project" }));
+    await waitFor(() => {
+      expect(
+        requests.some(
+          (r) =>
+            new URLSearchParams(r.search).get("cwd") === "other-project" &&
+            r.path.endsWith("/records"),
+        ),
+      ).toBe(true);
+    });
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "View pending review" }),
+    ).not.toBeInTheDocument();
   },
 );
+
+it("clears the previous project's error and review dialog when switching projects", async () => {
+  mount("/workspace/project/memory", true);
+  await screen.findByText(record.title);
+  fireEvent.click(screen.getByRole("button", { name: "Pending review (1)" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review candidate" }));
+  await screen.findByRole("dialog", { name: record.title });
+  stale = true;
+  fireEvent.click(screen.getByRole("button", { name: "Approve this version" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Memory revision changed",
+  );
+  // Close the modal so navigation uses the same route component, as in the app.
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Memory revision changed",
+  );
+  fireEvent.click(screen.getByRole("link", { name: "Switch project" }));
+  await waitFor(() => {
+    expect(
+      requests.some(
+        (r) =>
+          new URLSearchParams(r.search).get("cwd") === "other-project" &&
+          r.path.endsWith("/records"),
+      ),
+    ).toBe(true);
+  });
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
