@@ -185,7 +185,7 @@ export class SessionRuntime {
       const budgets = executionBudgetTools(options.cwd, options.budgetOperationId, options.budgetNodeId);
       // Remote compute runs on registered SSH machines through the control plane;
       // confined subagents and delegated agents do not receive it.
-      const remoteCompute = !candidateScoped && !options.delegatedAgent ? remoteComputeTools(options.cwd, interactions) : undefined;
+      const remoteCompute = !candidateScoped && !options.delegatedAgent ? remoteComputeTools(options.cwd, interactions, session.metadata.id) : undefined;
       const basePrompt = options.systemPrompt ?? "You are a helpful scientific research assistant.";
       // Resolve per invocation so policy changes and refreshes affect Bash too.
       // A standalone .md skill does not authorize its shared parent directory.
