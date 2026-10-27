@@ -43,6 +43,7 @@ let browsing: boolean;
 let recordRows: (typeof record)[];
 let runRows: unknown[];
 let proposalRows: unknown[];
+let editResult: unknown;
 beforeAll(async () => {
   await i18n.changeLanguage("en");
 });
@@ -53,6 +54,7 @@ beforeEach(() => {
   recordRows = [record];
   runRows = [];
   proposalRows = [];
+  editResult = {};
   vi.stubGlobal(
     "confirm",
     vi.fn(() => true),
@@ -66,7 +68,9 @@ beforeEach(() => {
       requests.push({ path: url.pathname, search: url.search, method, body });
       let data: unknown = {};
       let status = 200;
-      if (url.pathname.endsWith("/settings"))
+      if (method === "PATCH" && url.pathname.endsWith("/records/r1"))
+        data = editResult;
+      else if (url.pathname.endsWith("/settings"))
         data = { ...settingsSchema.parse({ enabled: true }), revision: 1 };
       else if (url.pathname.endsWith("/records"))
         data = browsing
@@ -85,7 +89,10 @@ beforeEach(() => {
               totalPages: 1,
             };
       else if (url.pathname.endsWith("/reviews"))
-        data = { records: recordRows, proposals: proposalRows };
+        data = {
+          records: recordRows.filter((r) => r.status !== "active"),
+          proposals: proposalRows,
+        };
       else if (url.pathname.endsWith("/background-runs"))
         data = { runs: runRows };
       else if (url.pathname.endsWith("/categories"))
@@ -353,7 +360,9 @@ it("distinguishes measured usage, estimates and holds and displays safe retry di
   await screen.findByText("Result includes limitations");
   fireEvent.click(screen.getByRole("button", { name: "Run history" }));
   expect(
-    await screen.findByText("Estimated unknown usage: $0.10"),
+    await screen.findByText(
+      "Budget total (includes estimates / reservations): $0.101",
+    ),
   ).toBeVisible();
   expect(screen.queryByText("Measured usage: $0.00")).not.toBeInTheDocument();
   fireEvent.click(screen.getByText("View details"));
@@ -455,3 +464,79 @@ it("keeps an unsaved editor open when discard is declined", async () => {
   );
   expect(window.confirm).toHaveBeenCalledWith("Discard unsaved changes?");
 });
+
+it.each([true, false])(
+  "reports whether a scientific edit is awaiting review: %s",
+  async (proposed) => {
+    const active = { ...record, status: "active", reviewStatus: "approved" };
+    recordRows = [active];
+    const candidate = {
+      ...active,
+      body: "Revised scientific interpretation",
+      revision: 4,
+      contentHash: "hash-4",
+    };
+    const proposal = {
+      id: "edit-proposal",
+      recordId: "r1",
+      expectedRevision: 3,
+      contentHash: "hash-4",
+      status: "pending",
+      candidate,
+      current: active,
+    };
+    editResult = proposed
+      ? { proposal, record: active }
+      : { record: candidate };
+    if (proposed) proposalRows = [proposal];
+    mount();
+    const trigger = await screen.findByRole("button", {
+      name: "More actions: " + record.title,
+    });
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Edit memory: " + record.title,
+    });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Body" }), {
+      target: { value: candidate.body },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      proposed ? "Submitted for review; current version unchanged." : "Saved",
+    );
+    expect(
+      requests.find(
+        (r) => r.method === "PATCH" && r.path.endsWith("/records/r1"),
+      )?.body,
+    ).toMatchObject({
+      expectedRevision: 3,
+      contentHash: "hash-3",
+      content: { body: candidate.body },
+    });
+    if (proposed) {
+      expect(screen.getAllByText(record.body)[0]).toBeVisible();
+      expect(screen.queryByText("Saved")).not.toBeInTheDocument();
+      fireEvent.click(
+        screen.getByRole("button", { name: "View pending review" }),
+      );
+      expect(
+        await screen.findByRole("button", {
+          name: /Pending review/,
+          pressed: true,
+        }),
+      ).toBeVisible();
+      expect(
+        screen.getByRole("button", { name: "Review changes" }),
+      ).toBeVisible();
+    } else {
+      expect(
+        screen.queryByRole("button", { name: "View pending review" }),
+      ).not.toBeInTheDocument();
+    }
+  },
+);

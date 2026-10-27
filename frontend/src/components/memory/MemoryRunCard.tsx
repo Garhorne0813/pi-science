@@ -59,21 +59,16 @@ export function MemoryRunCard({
   const u = r.usage;
   const estimated = !!u && (u.estimatedTokens > 0 || u.estimatedCostUsd > 0);
   const reserved = !!u && (u.reservedTokens > 0 || u.reservedCostUsd > 0);
-  const label = estimated
-    ? "memory.usageEstimated"
-    : reserved
-      ? "memory.usageReserved"
+  const label =
+    estimated || reserved
+      ? "memory.usageTotalEstimated"
       : "memory.usageMeasured";
-  const amount = estimated
-    ? u!.estimatedCostUsd
-    : reserved
-      ? u!.reservedCostUsd
-      : (u?.measuredCostUsd ?? r.costUsd);
-  const count = estimated
-    ? u!.estimatedTokens
-    : reserved
-      ? u!.reservedTokens
-      : (u?.measuredTokens ?? r.tokens);
+  const amount = u
+    ? u.measuredCostUsd + u.estimatedCostUsd + u.reservedCostUsd
+    : r.costUsd;
+  const count = u
+    ? u.measuredTokens + u.estimatedTokens + u.reservedTokens
+    : r.tokens;
   const duration =
     r.startedAt && r.endedAt
       ? Math.max(0, Math.round((r.endedAt - r.startedAt) / 1000))
@@ -116,6 +111,14 @@ export function MemoryRunCard({
             {count !== undefined && (
               <span className="mt-1 block text-muted">
                 {count.toLocaleString()} tokens
+              </span>
+            )}
+            {reserved && (
+              <span className="mt-1 block text-muted">
+                {t("memory.usageReservedIncluded", {
+                  cost: cost(u!.reservedCostUsd),
+                  tokens: u!.reservedTokens.toLocaleString(),
+                })}
               </span>
             )}
             <span className="mt-1 block text-link group-open:hidden">

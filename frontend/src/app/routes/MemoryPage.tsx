@@ -111,6 +111,7 @@ export function MemoryPage() {
     if (filters[key]) browseQuery.set(key, filters[key]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [noticeReview, setNoticeReview] = useState(false);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<MemoryRecord | null>(null);
   const [creating, setCreating] = useState(false);
@@ -170,6 +171,7 @@ export function MemoryPage() {
     setBusy(true);
     setError("");
     setNotice("");
+    setNoticeReview(false);
     try {
       const result = await memoryRequest<Record<string, unknown>>(
         cwd,
@@ -178,10 +180,13 @@ export function MemoryPage() {
         body,
       );
       setNotice(
-        result.status === "skipped"
-          ? t("memory.skipped") + ": " + String(result.reason)
-          : t("memory.saved"),
+        result.proposal
+          ? t("memory.submittedForReview")
+          : result.status === "skipped"
+            ? t("memory.skipped") + ": " + String(result.reason)
+            : t("memory.saved"),
       );
+      setNoticeReview(!!result.proposal);
       await client.invalidateQueries({ queryKey: key });
       return true;
     } catch (e) {
@@ -290,7 +295,16 @@ export function MemoryPage() {
             {error || String(loadError)}
           </p>
         )}
-        {notice && <p role="status">{notice}</p>}
+        {notice && (
+          <div role="status" className="flex items-center gap-3">
+            <p>{notice}</p>
+            {noticeReview && (
+              <button className={control} onClick={() => setTab("reviews")}>
+                {t("memory.viewPendingReview")}
+              </button>
+            )}
+          </div>
+        )}
         {settings.data && !settings.data.enabled && (
           <p className="text-muted">{t("memory.disabled")}</p>
         )}
