@@ -1129,6 +1129,7 @@ class Transaction {
         r.status = "queued";
         r.deadline = Number(i.deadline);
         r.error = undefined;
+        this.execute("schedule.success", {});
         this.updateRun(r);
         return r;
       }
@@ -1243,6 +1244,7 @@ class Transaction {
     )
       throw new MemoryError(409, "Background feature disabled");
     const key = String(i.logicalKey);
+    if (i.automatic !== true) this.execute("schedule.success", {});
     const prior = this.one<{ data: string }>(
       "SELECT data FROM memory_dream_runs WHERE owner_id=? AND logical_key=?",
       this.ctx.ownerId,

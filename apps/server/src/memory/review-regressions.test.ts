@@ -831,12 +831,10 @@ it("does not treat a zero-filled provider abort as measured zero spend", async (
     usage: { totalTokens: 0, cost: { total: 0 } },
     content: [],
   }));
-  const spy = vi
-    .spyOn(models, "agentModels")
-    .mockReturnValue({
-      getModel: () => ({ cost: { input: 1, output: 1 }, maxTokens: 1000 }),
-      completeSimple,
-    } as any);
+  const spy = vi.spyOn(models, "agentModels").mockReturnValue({
+    getModel: () => ({ cost: { input: 1, output: 1 }, maxTokens: 1000 }),
+    completeSimple,
+  } as any);
   await background.stop();
   background = new MemoryBackground(
     memory,
@@ -868,4 +866,30 @@ it("does not treat a zero-filled provider abort as measured zero spend", async (
   } finally {
     spy.mockRestore();
   }
+});
+it("allows admitted manual runs and explicit retries to recover immediately from schedule backoff", async () => {
+  await seed();
+  model.mockRejectedValueOnce(new Error("unknown provider failure"));
+  const error = () =>
+    call("schedule.error", {
+      diagnostic: { code: "ENOENT", stage: "workspace" },
+    });
+  await error();
+  const run = await background.enqueue(ctx, root, "dream");
+  await vi.waitFor(async () =>
+    expect((await call("run.get", { id: run.id })).status).toBe("failed"),
+  );
+  expect(
+    (await call("schedules")).find((s: any) => s.project_id === ctx.projectId)
+      .next_scan_at,
+  ).toBe(0);
+  await error();
+  await background.retry(ctx, root, run.id);
+  await vi.waitFor(async () =>
+    expect((await call("run.get", { id: run.id })).status).toBe("completed"),
+  );
+  expect(model).toHaveBeenCalledTimes(2);
+  expect(
+    (await call("schedules")).find((s: any) => s.project_id === ctx.projectId),
+  ).toMatchObject({ failure_count: 0, next_scan_at: 0 });
 });

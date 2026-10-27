@@ -217,7 +217,9 @@ failure stage, consecutive count and next retry time; raw exception messages,
 paths and stacks are excluded. If the database cannot store the event, a safe
 structured console warning retains the project ID, code and stage. Consecutive
 failures use persistent exponential backoff from one minute up to one hour;
-success or a real project interaction resets it. Schedules are retained so a
+success, a real project interaction, or an admitted manual run/explicit retry
+resets it. Explicit requests still obey all normal review, idle, window and budget
+gates. Schedules are retained so a
 restored workspace can recover; passive UI polling does not reset backoff.
 Terminal runs cannot be cancelled; repeated cancellation is idempotent.
 A failed logical run can be explicitly retried at most twice within the applicable
