@@ -60,7 +60,7 @@ describe("platform utilities", () => {
     try {
       await mkdir(bin, { recursive: true });
       await writeFile(join(bin, "runner.CMD"), "@echo off\r\n", "utf8");
-      await expect(findExecutable("runner", { Path: `\"${bin}\"`, PathExt: ".CMD;.EXE" }, "win32")).resolves.toBe(join(bin, "runner.CMD"));
+      await expect(findExecutable("runner", { Path: `"${bin}"`, PathExt: ".CMD;.EXE" }, "win32")).resolves.toBe(join(bin, "runner.CMD"));
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 

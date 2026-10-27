@@ -204,7 +204,7 @@ await tab.playwright.evaluate(() => {
 
 - 分支 `pr-107`，HEAD `51a4e3a6`；已推送到 `origin/feat/scientific-activity-permission-artifacts`（本地与远端一致）。PR #107 为 31 个提交。
 - CI（该提交）：`verify` ubuntu 5m3s ✅、windows 7m13s ✅、analyze ×2 ✅、CodeQL ✅；`macOS launcher smoke` 首次 ❌、重跑 ✅ —— 已确认为**测试自身对机器速度敏感**（`scripts/start.sh` 里控制面与前端**共用同一个 `STARTUP_DEADLINE`**，`PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=3` 下控制面冷启动接近耗尽预算时，前端那次 `wait_for_health` 的轮询循环不再执行，于是输出 "did not become ready within the 3s startup deadline" 而非断言期望的 "frontend exited during startup"），本地同一提交跑 `bash scripts/test-launcher.sh` 通过。**与产品代码无关**，建议单独修该断言。
-- 本次分析**未做任何提交**。工作区未提交改动：`docs/artifact-card-anchor-issue-handoff.md`（§10.1 双滚动容器的更正）、`frontend/scripts/uat-conversation.mjs`（分析前即存在）。
+- 本次分析**未做任何提交**。工作区未提交改动：`docs/archive/artifact-card-anchor-issue-handoff.md`（§10.1 双滚动容器的更正）、`frontend/scripts/uat-conversation.mjs`（分析前即存在）。
 - 另：`apps/server/src/runtime/artifacts/turn-artifact-repository.ts` 的 `nextTurnOrdinal()` 自 `8d3fa0ef` 起已无生产调用方（仅自身测试），可清理。
 
 

@@ -67,7 +67,7 @@ async function runHiddenPromptAdmitted(runtime: AgentCoreRuntimeClient, message:
       void runtime.sendCommand("abort").catch(() => undefined);
     }, Math.max(1, deadline - Date.now()));
     cleanup = () => { clearTimeout(timer); runtime.off("event", event); runtime.off("exit", exit); };
-    finish = (error) => { cleanup(); error ? reject(error) : resolve(); };
+    finish = (error) => { cleanup(); if (error) reject(error); else resolve(); };
     runtime.on("event", event); runtime.once("exit", exit);
   });
   // Install a rejection handler while asynchronous admission is still in flight.

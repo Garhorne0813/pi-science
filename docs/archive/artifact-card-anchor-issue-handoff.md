@@ -452,7 +452,7 @@ await tab.playwright.evaluate(() => {
 >
 > 我据此得出的"卡片完全不渲染"是**两次测量错误叠加**：误判容器 + **在同一次 `evaluate` 里先设 `scrollTop` 再读 DOM**（react-virtuoso 要到下一个任务才重算窗口，因此读到的是滚动前状态）。
 >
-> 详见 `docs/pending-activity-settle-and-scroll-correction.md` 的 Part 2。下面的原始记录保留，仅作为"不要这样测"的反例。
+> 详见 `docs/archive/pending-activity-settle-and-scroll-correction.md` 的 Part 2。下面的原始记录保留，仅作为"不要这样测"的反例。
 
 实测（当时的记录）：
 
@@ -500,7 +500,7 @@ div (无 testid)                                                                
 2. `turnOrdinal` 的双重语义（会话轮次序号 vs 产物记录计数）应统一到哪一套？如果统一到 hub，重启后 hub 计数重置的问题如何解决（`newConversationId` 的注释称"ordinal 仅用于诊断"）？
 3. §6 的 `continue` 是否应该改为"暂存并在下次 attach 重试"？有无更简单的等价方案（例如把未锚定的记录挂在窗口末尾并标记 provisional）？
 4. §7.3 的 5ms settle，是事件驱动还是看门狗驱动？若是看门狗，20s 静默 + `!runtimeWorking` 的组合在长工具调用/SSE 抖动下是否会误判？
-5. ~~§10.1 的双滚动容器是否本身就是缺陷~~ —— **已结案：不存在这个缺陷**。实测只有唯一一个滚动容器（`[data-testid="virtuoso-scroller"]`），另一个是它内部 `overflow: visible` 的内容包装器，我的筛选启发式误判了它。详见 `docs/pending-activity-settle-and-scroll-correction.md` Part 2。
+5. ~~§10.1 的双滚动容器是否本身就是缺陷~~ —— **已结案：不存在这个缺陷**。实测只有唯一一个滚动容器（`[data-testid="virtuoso-scroller"]`），另一个是它内部 `overflow: visible` 的内容包装器，我的筛选启发式误判了它。详见 `docs/archive/pending-activity-settle-and-scroll-correction.md` Part 2。
 
 ---
 

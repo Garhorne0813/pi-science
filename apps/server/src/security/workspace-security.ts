@@ -41,7 +41,7 @@ export async function validateWorkspaceCwd(cwd: string): Promise<string> {
   throw new Error(`Path is not a registered workspace: ${cwd}`);
 }
 
-export async function resolveWorkspaceFile(workspace: string, relativePath: string, platform = process.platform): Promise<string> {
+export async function resolveWorkspaceFile(workspace: string, relativePath: string, _platform = process.platform): Promise<string> {
   if (!relativePath || isAbsolute(relativePath)) throw new Error("Artifact path must be relative to the workspace");
   const root = await validateWorkspaceCwd(workspace);
   const candidate = resolve(root, relativePath);

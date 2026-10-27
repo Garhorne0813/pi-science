@@ -11,15 +11,15 @@ import {
   type SessionInfo,
 } from "../client/pi-science-client";
 import { replaceBrowserSessionRoute } from "./session-navigation";
-import { emptyThread, resetTurnBuffer } from "./event-fold";
+import { emptyThread, resetTurnBuffer } from "./folding/state";
 import { generations, turnState } from "./generations";
-import { resyncCompletedHistory } from "./recovery";
+import { resyncCompletedHistory } from "./recovery/settled-history";
 import { loadSessionsInternal } from "./sessions";
-import { useRuntimeStore } from "./store";
+import { runtimeStore } from "./store-access";
 import type { SessionReplacement } from "./types";
 
 export function applySessionReplacements(replacements: SessionReplacement[]): string | null {
-  const state = useRuntimeStore.getState();
+  const state = runtimeStore.getState();
   const relevant = replacements.filter((replacement) => (
     replacement.cwd === state.cwd
     && replacement.oldId
@@ -71,7 +71,7 @@ export function applySessionReplacements(replacements: SessionReplacement[]): st
       name: getSessionName(state.cwd, nextActiveId) || undefined,
     });
   }
-  useRuntimeStore.setState({ sessions: [...sessionsById.values()], activeSessionId: nextActiveId });
+  runtimeStore.setState({ sessions: [...sessionsById.values()], activeSessionId: nextActiveId });
   if (!previousActiveId || !nextActiveId || previousActiveId === nextActiveId) return nextActiveId;
 
   ++generations.connection;
@@ -81,7 +81,7 @@ export function applySessionReplacements(replacements: SessionReplacement[]): st
   turnState.errored = false;
   const client = getClient();
   client.connect(nextActiveId, state.cwd);
-  useRuntimeStore.setState({
+  runtimeStore.setState({
     client,
     thread: emptyThread(),
     working: false,

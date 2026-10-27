@@ -6,7 +6,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 const text = (value: Awaited<ReturnType<DeepSeekWeb["search"]>>) => value.content.map(part => part.type === "text" ? part.text : "").join("\n");
 
 it("uses official Search/Fetch endpoints, Bearer authentication and provider-specific schemas", async () => {
-  const transport = vi.fn(async (url, init) => Response.json(String(url).endsWith("search") ? { results: [result] } : { title: "Article", content: "# Markdown evidence" }));
+  const transport = vi.fn(async (url, _init) => Response.json(String(url).endsWith("search") ? { results: [result] } : { title: "Article", content: "# Markdown evidence" }));
   vi.stubGlobal("fetch", transport);
   const web = new DeepSeekWeb();
   const search = await web.search({ query: "evidence", numResults: 3 }, "test-key");

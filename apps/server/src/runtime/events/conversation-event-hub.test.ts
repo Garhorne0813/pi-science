@@ -617,10 +617,6 @@ describe("central conversation event hub", () => {
     hub.bind(cwd, process, { activeSessionId: () => "session-overlap", onBusy: () => undefined, onExit: () => undefined });
     await hub.subscribe(cwd, "session-overlap", undefined, (record) => received.push(JSON.parse(record.data)));
 
-    const partial = (value: string) => ({
-      role: "assistant",
-      content: [{ type: "text", text: value }],
-    });
     const emitDelta = (delta: string, snapshot: string) => process.emit("event", {
       type: "message.updated",
       message: { id: "m-overlap" },

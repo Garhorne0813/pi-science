@@ -29,9 +29,12 @@ beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), "pi-catalog-routes-"));
   cleanups.push(home);
   process.env.PI_SCIENCE_HOME = home;
+  // Never discover the operator's real workspace tree during route tests.
+  vi.stubEnv("PI_SCIENCE_WORKSPACES", join(home, "managed-workspaces"));
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   if (originalHome === undefined) delete process.env.PI_SCIENCE_HOME;
   else process.env.PI_SCIENCE_HOME = originalHome;
   await Promise.all(cleanups.splice(0).map((path) => rm(path, {

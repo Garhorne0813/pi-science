@@ -311,3 +311,5 @@ pnpm --filter frontend test:uat:office
 MIT
 
 可选的 [Pi 原生模型配置后端](docs/model-config-native.md) 支持版本化配置、显式凭证来源和保守的旧资源迁移。发布门槛通过前，部署默认仍为 `legacy`。
+
+[Documentation index / 文档索引](docs/README.md) · [Development verification / 开发检查](docs/development-quality.md)

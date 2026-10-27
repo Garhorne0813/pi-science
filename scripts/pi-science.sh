@@ -205,7 +205,8 @@ running_supervisor() {
 }
 
 write_run_state() {
-  local pid="$1" token="$2" started="$3" temp="$RUN_DIR/.run.state.$$.$token"
+  local pid="$1" token="$2" started="$3" temp
+  temp="$RUN_DIR/.run.state.$$.$token"
   rm -rf "$temp"; mkdir "$temp"
   printf '%s\n' "$pid" > "$temp/pid"
   printf '%s\n' "$token" > "$temp/token"
@@ -218,7 +219,8 @@ write_run_state() {
 }
 
 process_tree_pids() {
-  local root="$1" previous="" current="$root"
+  local root="$1" previous="" current
+  current="$root"
   while [ "$current" != "$previous" ]; do
     previous="$current"
     while read -r pid ppid; do

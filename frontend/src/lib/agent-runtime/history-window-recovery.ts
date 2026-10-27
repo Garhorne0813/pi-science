@@ -1,5 +1,6 @@
 import type { PiScienceClient, SessionMessagePage } from "../client/pi-science-client";
-import { mergeHistoryWindow, type HistoryWindowMerge, type Thread } from "./event-fold";
+import { mergeHistoryWindow, type HistoryWindowMerge } from "./folding/history-window";
+import { type Thread } from "./folding/types";
 
 export interface RecoveryHistoryWindow extends HistoryWindowMerge {
   boundaryPage: SessionMessagePage;

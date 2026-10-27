@@ -7,12 +7,12 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
-      "@ai4s/shared": path.resolve(__dirname, "src/types/thread.ts"),
-      "@ai4s/sdk": path.resolve(__dirname, "src/types/thread.ts"),
     },
   },
   test: {
     environment: "jsdom",
+    // Date/time form assertions must be reproducible outside UTC CI runners.
+    env: { TZ: "UTC" },
     globals: true,
     setupFiles: ["./src/test-setup.ts"],
     // Playwright specs live in tests/visual and must not run under vitest.

@@ -120,16 +120,16 @@ export async function queryBiomart(input: z.infer<typeof biomartQueryInput>, dep
 }
 
 export async function searchOpenFdaLabels(input: z.infer<typeof openFdaLabelSearchInput>, dependencies: ScientificDependencies = {}) {
-  const field = input.field === "indications_and_usage" ? input.field : `openfda.${input.field}`; const url = new URL("https://api.fda.gov/drug/label.json"); url.searchParams.set("search", `${field}:\"${openFdaTerm(input.query)}\"`); url.searchParams.set("limit", String(input.limit)); url.searchParams.set("skip", String(input.skip)); addOpenFdaKey(url); const payload = await getJson("drug_regulatory", url, dependencies) as Json;
+  const field = input.field === "indications_and_usage" ? input.field : `openfda.${input.field}`; const url = new URL("https://api.fda.gov/drug/label.json"); url.searchParams.set("search", `${field}:"${openFdaTerm(input.query)}"`); url.searchParams.set("limit", String(input.limit)); url.searchParams.set("skip", String(input.skip)); addOpenFdaKey(url); const payload = await getJson("drug_regulatory", url, dependencies) as Json;
   return envelope("openfda-label", input, rows(payload.results).map(compactLabel), numeric(object(object(payload.meta).results).total), dependencies);
 }
 
 export async function getOpenFdaLabel(input: z.infer<typeof openFdaLabelInput>, dependencies: ScientificDependencies = {}) {
-  const url = new URL("https://api.fda.gov/drug/label.json"); url.searchParams.set("search", `set_id:\"${openFdaTerm(input.set_id)}\"`); url.searchParams.set("limit", "1"); addOpenFdaKey(url); const payload = await getJson("drug_regulatory", url, dependencies) as Json; const record = rows(payload.results)[0]; if (!record) throw new Error(`openFDA has no label for set_id ${input.set_id}`); return singleEnvelope("openfda-label", input, compactLabel(record), dependencies);
+  const url = new URL("https://api.fda.gov/drug/label.json"); url.searchParams.set("search", `set_id:"${openFdaTerm(input.set_id)}"`); url.searchParams.set("limit", "1"); addOpenFdaKey(url); const payload = await getJson("drug_regulatory", url, dependencies) as Json; const record = rows(payload.results)[0]; if (!record) throw new Error(`openFDA has no label for set_id ${input.set_id}`); return singleEnvelope("openfda-label", input, compactLabel(record), dependencies);
 }
 
 export async function searchDrugsFda(input: z.infer<typeof drugsFdaSearchInput>, dependencies: ScientificDependencies = {}) {
-  const fields = { active_ingredient: "products.active_ingredients.name", sponsor_name: "sponsor_name", application_number: "application_number" }; const url = new URL("https://api.fda.gov/drug/drugsfda.json"); url.searchParams.set("search", `${fields[input.field]}:\"${openFdaTerm(input.query)}\"`); url.searchParams.set("limit", String(input.limit)); url.searchParams.set("skip", String(input.skip)); addOpenFdaKey(url); const payload = await getJson("drug_regulatory", url, dependencies) as Json;
+  const fields = { active_ingredient: "products.active_ingredients.name", sponsor_name: "sponsor_name", application_number: "application_number" }; const url = new URL("https://api.fda.gov/drug/drugsfda.json"); url.searchParams.set("search", `${fields[input.field]}:"${openFdaTerm(input.query)}"`); url.searchParams.set("limit", String(input.limit)); url.searchParams.set("skip", String(input.skip)); addOpenFdaKey(url); const payload = await getJson("drug_regulatory", url, dependencies) as Json;
   return envelope("drugs-at-fda", input, rows(payload.results).map(compactDrugsFda), numeric(object(object(payload.meta).results).total), dependencies);
 }
 

@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
-import { join, resolve } from "node:path";
+import { join} from "node:path";
 import { sessionStatsSchema, type SessionStats } from "@pi-science/contracts";
 import { metadataRoot } from "../../storage/persistence.js";
 

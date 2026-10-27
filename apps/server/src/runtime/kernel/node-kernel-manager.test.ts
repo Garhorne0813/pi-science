@@ -718,7 +718,8 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     } finally {
       await manager.shutdownAll();
     }
-  });
+    // Two real executions each have a 15s budget, plus startup and shutdown.
+  }, 45_000);
 
 });
 

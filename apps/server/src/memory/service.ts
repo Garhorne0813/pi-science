@@ -87,7 +87,7 @@ export class MemoryService {
           { requirePinnedMemory: true },
         );
         records.push(record);
-      } catch (error) {
+      } catch {
         await this.command(ctx, "mark.stale", {
           id: record.id,
           expectedRevision: record.revision,

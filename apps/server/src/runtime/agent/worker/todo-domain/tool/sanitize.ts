@@ -28,6 +28,8 @@ SOFTWARE.
  * become spaces so task fields cannot change the layout, and bidi controls
  * are removed so a field cannot reorder how neighbouring output reads.
  */
+// Control bytes are intentionally matched to remove terminal escape sequences.
+/* oxlint-disable no-control-regex */
 export function sanitizeTerminalText(value: string): string {
 	return (
 		value
@@ -47,3 +49,5 @@ export function sanitizeTerminalText(value: string): string {
 			.replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
 	);
 }
+
+/* oxlint-enable no-control-regex */

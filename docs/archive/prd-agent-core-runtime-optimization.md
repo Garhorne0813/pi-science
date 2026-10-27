@@ -1,6 +1,6 @@
 # Agent Core 运行时目标与边界
 
-Pi Science 使用 `@earendil-works/pi-agent-core` 与 `pi-ai` 0.99.2，依赖精确固定。对话、子代理、研究、复查和标题生成通过独立 Worker 执行。本文替代早期阶段性迁移计划，当前实现见[运行时记录](agent-core-runtime-implementation.md)。
+Pi Science 使用 `@earendil-works/pi-agent-core` 与 `pi-ai` 0.99.2，依赖精确固定。对话、子代理、研究、复查和标题生成通过独立 Worker 执行。本文替代早期阶段性迁移计划，当前实现见[运行时记录](../agent-core-runtime-implementation.md)。
 
 ## 运行职责
 
@@ -18,7 +18,7 @@ Pi Science 使用 `@earendil-works/pi-agent-core` 与 `pi-ai` 0.99.2，依赖精
 
 ## 存储与验收
 
-旧 v3 文件通过复制和官方 SDK 写入转换为 v4；原文件保留，消息 ID 映射持久保存。删除标记阻止备份重新出现。转换命令及限制见[会话转换](agent-core-session-conversion.md)。
+旧 v3 文件通过复制和官方 SDK 写入转换为 v4；原文件保留，消息 ID 映射持久保存。删除标记阻止备份重新出现。转换命令及限制见[会话转换](../agent-core-session-conversion.md)。
 
 验收包括真实 Worker 故障、admission 对账、配置竞争、历史恢复、fork、工具能力、MCP 凭据隔离和跨平台 CI。复杂真实旧会话、R 内核和全部平台界面路径仍需独立验证。
 

@@ -36,8 +36,8 @@ describe("SessionTitleRepository", () => {
     // The superseded entry is actually removed from the file (not just shadowed).
     const file = join(cwd, ".pi-science", "session-titles.jsonl");
     const raw = await readFile(file, "utf8");
-    expect(raw.match(/\"first\"/)).toBeNull();
-    expect(raw.match(/\"second\"/)).not.toBeNull();
+    expect(raw.match(/"first"/)).toBeNull();
+    expect(raw.match(/"second"/)).not.toBeNull();
   });
 
   it("deletes a title for a session and keeps the others", async () => {
