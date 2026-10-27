@@ -32,6 +32,8 @@ export function registerComputeRoutes(app: FastifyInstance, service = remoteComp
         command: String(body.command ?? ""),
         timeout_seconds: Number(body.timeout_seconds ?? 300) || 300,
         session_id: typeof body.session_id === "string" ? body.session_id : undefined,
+        tool_call_id: typeof body.tool_call_id === "string" ? body.tool_call_id : undefined,
+        operation_id: typeof body.operation_id === "string" ? body.operation_id : undefined,
         signal: controller.signal,
       });
       await recordProvenance(cwd, {
@@ -62,6 +64,8 @@ export function registerComputeRoutes(app: FastifyInstance, service = remoteComp
         script: String(body.script ?? ""),
         name: typeof body.name === "string" ? body.name : undefined,
         session_id: typeof body.session_id === "string" ? body.session_id : undefined,
+        tool_call_id: typeof body.tool_call_id === "string" ? body.tool_call_id : undefined,
+        operation_id: typeof body.operation_id === "string" ? body.operation_id : undefined,
         signal: controller.signal,
       });
       await recordProvenance(cwd, {

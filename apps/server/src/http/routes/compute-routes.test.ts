@@ -27,19 +27,19 @@ function fakeService() {
   return {
     listMachines: vi.fn(async () => []),
     execute: vi.fn(async (): Promise<RemoteExecuteResult> => ({
-      exitCode: 0, stdout: "ok", stderr: "", stdoutTruncated: false, stderrTruncated: false,
-      timedOut: false, aborted: false, durationMs: 12,
+      exitCode: 0, stdout: "ok", stderr: "", stdoutBytes: 2, stderrBytes: 0, stdoutTruncated: false, stderrTruncated: false,
+      timedOut: false, aborted: false, remoteStop: "not_required", durationMs: 12,
       machine: { label: "gpu-box", host: "hpc", user: null, port: 22, auth_method: "key", identity_file: null },
       execution_id: "exec_test",
     })),
     slurmSubmit: vi.fn(async (): Promise<SlurmSubmitResult> => ({
       machine: { label: "cluster", host: "c", user: null, port: 22, auth_method: "key", identity_file: null },
-      job_id: "42", output_path: "slurm-42.out", error_path: "slurm-42.err", raw: "Submitted batch job 42\n", execution_id: "exec_slurm",
+      job_id: "42", output_path: "slurm-42.out", error_path: "slurm-42.err", raw: "Submitted batch job 42\n", execution_id: "exec_slurm", job_execution_id: "exec_job",
     })),
     slurmCheck: vi.fn(async (): Promise<SlurmCheckResult> => ({
       machine: { label: "cluster", host: "c", user: null, port: 22, auth_method: "key", identity_file: null },
       job_id: "42", state: "completed", raw_state: "COMPLETED", exit_code: "0:0", elapsed: "00:01:00",
-      finished: true, stdout_tail: "done", stderr_tail: null,
+      finished: true, query_status: "ok", output_path: "/home/pi/slurm-42.out", stdout_tail: "done", stderr_tail: null, job_execution_id: "exec_job",
     })),
   };
 }
@@ -55,14 +55,14 @@ describe("compute routes", () => {
     const response = await app.inject({
       method: "POST",
       url: `/api/compute/execute?cwd=${encodeURIComponent(cwd)}`,
-      payload: { machine_label: "gpu-box", command: "hostname", timeout_seconds: 60, session_id: "sess-1" },
+      payload: { machine_label: "gpu-box", command: "hostname", timeout_seconds: 60, session_id: "sess-1", tool_call_id: "call-1", operation_id: "op-1" },
     });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ exitCode: 0, execution_id: "exec_test" });
     // Canonicalize with the same function the route uses: on Windows the temp
     // dir can be an 8.3 short path that only fs/promises realpath expands.
     const canonicalCwd = await validateWorkspaceCwd(cwd);
-    expect(service.execute).toHaveBeenCalledWith(canonicalCwd, expect.objectContaining({ machine_label: "gpu-box", command: "hostname", timeout_seconds: 60, session_id: "sess-1", signal: expect.any(AbortSignal) }));
+    expect(service.execute).toHaveBeenCalledWith(canonicalCwd, expect.objectContaining({ machine_label: "gpu-box", command: "hostname", timeout_seconds: 60, session_id: "sess-1", tool_call_id: "call-1", operation_id: "op-1", signal: expect.any(AbortSignal) }));
 
     const provenance = await readFile(join(cwd, ".pi-science", "provenance.jsonl"), "utf8");
     expect(provenance).toContain("\"tool\":\"remote_execute\"");
