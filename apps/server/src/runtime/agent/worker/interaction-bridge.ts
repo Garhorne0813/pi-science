@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { RuntimeEvent, RuntimeResult } from "../agent-runtime-types.js";
 
+type McpToolGrant = { connectorId: string; toolName: string };
+
 type Pending = { resolve: (value: string | null) => void; reject: (error: Error) => void; cleanup: () => void };
 
 /** Keeps browser interaction promises inside the worker that owns the tool call. */
@@ -11,7 +13,7 @@ export class InteractionBridge {
 
   get hasPending(): boolean { return this.pending.size > 0; }
 
-  request(title: string, prefill: string, signal?: AbortSignal, options: { toolCallId?: string; method?: "input" | "confirm" | "select"; kind?: "permission"; message?: string; options?: Array<{ label: string; value: string }> } = {}): Promise<string | null> {
+  request(title: string, prefill: string, signal?: AbortSignal, options: { toolCallId?: string; method?: "input" | "confirm" | "select"; kind?: "permission"; message?: string; mcpGrant?: McpToolGrant; options?: Array<{ label: string; value: string }> } = {}): Promise<string | null> {
     if (signal?.aborted) return Promise.resolve(null);
     const id = randomUUID();
     return new Promise<string | null>((resolve, reject) => {
@@ -22,7 +24,8 @@ export class InteractionBridge {
       this.pending.set(id, { resolve, reject, cleanup: () => signal?.removeEventListener("abort", onAbort) });
       this.publish({ type: "interaction.requested", id, method: options.method ?? "input", title, prefill,
         ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
-        ...(options.options ? { options: options.options } : {}), ...(options.kind ? { kind: options.kind } : {}), ...(options.message ? { message: options.message } : {}) });
+        ...(options.options ? { options: options.options } : {}), ...(options.kind ? { kind: options.kind } : {}), ...(options.message ? { message: options.message } : {}),
+        ...(options.mcpGrant ? { mcpGrant: options.mcpGrant } : {}) });
     });
   }
 
@@ -37,8 +40,8 @@ export class InteractionBridge {
       : { success: false, code: "not_found", error: "interaction is no longer pending" };
   }
 
-  async confirmPermission(title: string, message: string, signal?: AbortSignal, toolCallId?: string): Promise<boolean> {
-    const value = await this.request(title, "", signal, { method: "confirm", kind: "permission", message, toolCallId });
+  async confirmPermission(title: string, message: string, signal?: AbortSignal, toolCallId?: string, mcpGrant?: McpToolGrant): Promise<boolean> {
+    const value = await this.request(title, "", signal, { method: "confirm", kind: "permission", message, toolCallId, mcpGrant });
     return value === "true";
   }
 
