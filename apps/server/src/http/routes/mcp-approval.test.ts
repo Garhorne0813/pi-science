@@ -767,3 +767,48 @@ it("invalidates account A's discovered catalog on credential rotation and discov
   expect(await f.mcp.tools(f.connector.connector_id)).toMatchObject({ tools: [], cached_at: null });
   expect(JSON.parse(await readFile(snapshotPath, "utf8")).mcpServers[f.connector.name].__piScienceToolCount).toBeUndefined();
 });
+
+
+it("keeps authorized live transports across cache population and expiry while still enforcing Deny", async () => {
+  const f = await fixture(true);
+  await f.approve();
+  const snapshotPath = join(metadataRoot(f.cwd), "mcp-runtime.json");
+  const snapshot = async () => JSON.parse(await readFile(snapshotPath, "utf8")).mcpServers[f.connector.name];
+  const original = await snapshot();
+  expect(original.__piScienceToolCount).toBeUndefined();
+  const events: unknown[] = [];
+  const bridge = new InteractionBridge((event) => events.push(event));
+  const before = await AgentMcpTools.open(f.cwd, bridge, { PATH: process.env.PATH ?? "" });
+  cleanups.push(() => before.close());
+  expect(before.diagnostics).toEqual([]);
+  const call = async (worker: AgentMcpTools) => {
+    const result = await worker.tools[0]!.execute("count-transition", {}, () => undefined, {} as never, {} as never, {} as never);
+    expect(result.content).toEqual([{ type: "text", text: "echo executed" }]);
+  };
+  await call(before);
+  expect(await f.mcp.probe(f.connector.connector_id)).toMatchObject({ runtime_state: "ready", tools: [{ name: "echo" }] });
+  // An unrelated tool grant republishes the newly populated count, without
+  // changing this connector or the target tool's authorization.
+  await f.mcp.setToolGrant(f.connector.connector_id, "other", "ask", f.cwd);
+  const populated = await snapshot();
+  expect(populated.__piScienceToolCount).toBe(1);
+  expect(populated.__piScienceConnectorRevision).toBe(original.__piScienceConnectorRevision);
+  expect(populated.__piScienceSettingsRevision).toBe(original.__piScienceSettingsRevision);
+  await call(before);
+  const after = await AgentMcpTools.open(f.cwd, bridge, { PATH: process.env.PATH ?? "" });
+  cleanups.push(() => after.close());
+  expect(after.diagnostics).toEqual([]);
+  await call(after);
+  const cache = (await f.repository.toolCache(f.connector.connector_id))!;
+  expect(await f.repository.replaceToolCache({ ...cache, expires_at: Date.now() - 1 })).toBe(true);
+  await f.mcp.materializeWorkspace(f.cwd);
+  expect((await snapshot()).__piScienceToolCount).toBeUndefined();
+  for (const worker of [before, after]) await call(worker);
+  expect(events).toEqual([]);
+  expect((await f.grants()).get("echo")).toBe("allow");
+  await f.mcp.setToolGrant(f.connector.connector_id, "echo", "deny", f.cwd);
+  for (const worker of [before, after]) {
+    await expect(worker.tools[0]!.execute("revoked", {}, () => undefined, {} as never, {} as never, {} as never)).rejects.toThrow("disabled");
+  }
+  bridge.close();
+});

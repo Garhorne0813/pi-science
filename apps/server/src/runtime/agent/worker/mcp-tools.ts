@@ -120,22 +120,19 @@ export class AgentMcpTools {
         ? new SSEClientTransport(new URL(server.url), { fetch: checkedFetch, requestInit })
         : new StreamableHTTPClientTransport(new URL(server.url), { fetch: checkedFetch, requestInit });
     } else throw new Error("unsupported MCP transport");
-    const connectionIdentity = (value: Record<string, unknown> | undefined) => {
-      if (!value) return "";
-      const { approveTools, includeTools, excludeTools, __piScienceAllowedTools, ...connection } = value;
-      return JSON.stringify(connection);
-    };
-    const initialIdentity = connectionIdentity(initial);
-    const connectionFingerprint = fingerprintMcpConnection(name, initial ?? {});
+    // Use the same identity as control-plane admission: mutable policy and
+    // discovery counts must not invalidate an otherwise unchanged transport.
+    const connectionIdentity = (value: Record<string, unknown> | undefined) => value ? fingerprintMcpConnection(name, value) : "";
+    const connectionFingerprint = connectionIdentity(initial);
     const currentPolicy = (toolName: string): ServerDefinition => {
       const snapshot = loadProjectedSnapshot(cwd);
       const current = snapshot.mcpServers[name] as ServerDefinition | undefined;
-      if (!current || snapshot.project_id !== server.__piScienceProjectId || connectionIdentity(current) !== initialIdentity || !visible(current, toolName)) {
+      if (!current || snapshot.project_id !== server.__piScienceProjectId || connectionIdentity(current) !== connectionFingerprint || !visible(current, toolName)) {
         throw new Error(`MCP tool disabled or connector changed: ${name}: ${toolName}; refresh the worker`);
       }
       return current;
     };
-    if (connectionIdentity(loadProjectedSnapshot(cwd).mcpServers[name]) !== initialIdentity) throw new Error("MCP connector changed during discovery");
+    if (connectionIdentity(loadProjectedSnapshot(cwd).mcpServers[name]) !== connectionFingerprint) throw new Error("MCP connector changed during discovery");
     const client = new Client({ name: "pi-science-agent-core", version: "0.1.0" });
     try {
       await beforeDeadline(client.connect(transport, { timeout: Math.min(server.requestTimeoutMs ?? 15_000, Math.max(1, deadline - Date.now())) }), deadline, client);
