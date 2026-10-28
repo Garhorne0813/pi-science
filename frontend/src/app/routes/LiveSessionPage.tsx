@@ -21,7 +21,6 @@ import { ConversationNavRail, type ConversationNavItem } from "../../components/
 import { ThinkingActivity } from "../../components/conversation/AgentActivity";
 import { visibleUserMessage } from "../../lib/files";
 import { useTranslation } from "react-i18next";
-import { ResearchModePicker } from "../../components/conversation/ResearchModePicker";
 import { useTurnEffects } from "../../hooks/useTurnEffects";
 import { useModelConfig } from "../../hooks/useModelConfig";
 import { useAutoResearch } from "../../hooks/useAutoResearch";
@@ -219,12 +218,6 @@ export function LiveSessionPage() {
     ? t("conversation.newSession")
     : getSessionName(workspaceCwd, activeSessionId) || activeSession?.name || activeSessionId.slice(0, 8);
 
-  // Workflow starters are entry points for a blank conversation. Once the
-  // first turn exists, the composer stays focused on the active conversation
-  // instead of continuing to show the onboarding shortcuts.
-  const modePicker = thread.blocks.length === 0
-    ? <ResearchModePicker className={showWelcome ? "px-0 pb-0" : undefined} selected={research.mode} disabled={working || interactionPending || reviewingProject} onSelect={(mode, prompt) => { const selected = research.mode === mode ? null : mode; research.setMode(selected); research.setPrompt(selected ? prompt : t("conversation.defaultPrompt")); composer.inputRef.current?.focus(); }} />
-    : null;
   const suggestionAnchorBlockId = (() => {
     if (suggestions.length === 0) return null;
     const agentIndex = thread.blocks.findLastIndex((block) => block.kind === "agent");
@@ -283,7 +276,6 @@ export function LiveSessionPage() {
               </div>
             )}
             {showWelcome && <ConversationWelcome />}
-            {showWelcome && modePicker}
             {thread.blocks.length > 0 ? (
               <Suspense fallback={<div ref={attachScroller} className="h-full overflow-y-auto" />}>
                 <LazyVirtuoso
@@ -381,7 +373,6 @@ export function LiveSessionPage() {
               composer={composer}
               model={model}
               research={research}
-              modePicker={modePicker}
               onScrollToBottom={scrollToBottom}
               onReview={() => void handleProjectReview()}
               onAbort={abort}
