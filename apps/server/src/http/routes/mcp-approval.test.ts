@@ -735,3 +735,35 @@ it.each(["confirm", "deny", "project-allow", "global-allow"])("treats third-part
     expect(events).toHaveLength(approval.endsWith("allow") ? 0 : 1);
   } finally { bridge.close(); await worker.close(); }
 });
+
+
+it("invalidates account A's discovered catalog on credential rotation and discovers account B's tools", async () => {
+  const f = await fixture(true);
+  await writeFile(f.connector.args[0]!, [
+    `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
+    `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
+    `const server = new McpServer({ name: "scoped-catalog", version: "1" });`,
+    `const names = process.env.TOKEN === "account-a" ? ["account_a"] : ["account_b", "account_b_extra"];`,
+    `for (const name of names) server.registerTool(name, { description: "Catalog: " + name }, async () => ({ content: [{ type: "text", text: name }] }));`,
+    `await server.connect(new StdioServerTransport());`,
+  ].join("\n"));
+  await f.mcp.setCredential(f.connector.connector_id, { revision: f.connector.revision, backend: "managed", delivery: "environment", target_name: "TOKEN", secret: "account-a" });
+  expect(await f.mcp.probe(f.connector.connector_id)).toMatchObject({ runtime_state: "ready", tools: [{ name: "account_a" }] });
+  expect((await f.mcp.tools(f.connector.connector_id)).tools).toEqual([expect.objectContaining({ name: "account_a", description: "Catalog: account_a" })]);
+  await f.mcp.materializeWorkspace(f.cwd);
+  const snapshotPath = join(metadataRoot(f.cwd), "mcp-runtime.json");
+  expect(JSON.parse(await readFile(snapshotPath, "utf8")).mcpServers[f.connector.name].__piScienceToolCount).toBe(1);
+  const current = await f.mcp.get(f.connector.connector_id);
+  await f.mcp.setCredential(f.connector.connector_id, { revision: current.revision, backend: "managed", delivery: "environment", target_name: "TOKEN", secret: "account-b" });
+  expect(await f.repository.toolCache(f.connector.connector_id)).toBeNull();
+  expect(await f.mcp.tools(f.connector.connector_id)).toMatchObject({ tools: [], cached_at: null });
+  expect(JSON.parse(await readFile(snapshotPath, "utf8")).mcpServers[f.connector.name].__piScienceToolCount).toBeUndefined();
+  expect(await f.mcp.probe(f.connector.connector_id)).toMatchObject({ runtime_state: "ready", tools: [{ name: "account_b" }, { name: "account_b_extra" }] });
+  expect((await f.mcp.tools(f.connector.connector_id)).tools.map((tool) => tool.name)).toEqual(["account_b", "account_b_extra"]);
+  await f.mcp.materializeWorkspace(f.cwd);
+  expect(JSON.parse(await readFile(snapshotPath, "utf8")).mcpServers[f.connector.name].__piScienceToolCount).toBe(2);
+  await f.mcp.removeCredential(f.connector.connector_id);
+  expect(await f.repository.toolCache(f.connector.connector_id)).toBeNull();
+  expect(await f.mcp.tools(f.connector.connector_id)).toMatchObject({ tools: [], cached_at: null });
+  expect(JSON.parse(await readFile(snapshotPath, "utf8")).mcpServers[f.connector.name].__piScienceToolCount).toBeUndefined();
+});

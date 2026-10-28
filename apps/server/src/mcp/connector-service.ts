@@ -1,10 +1,12 @@
+import { mcpConnectorFingerprint } from "./tool-cache-identity.js";
+export { mcpConnectorFingerprint } from "./tool-cache-identity.js";
 import { projectedConnectionFingerprint } from "./runtime-projection.js";
 import type { McpRuntimeConnectorRequest, McpRuntimePolicyRequest } from "./runtime-policy.js";
 import { updateWebSettings, webSettingsSchema } from "../web/settings.js";
 import { redactMcpError } from "./diagnostics.js";
 export { redactMcpError } from "./diagnostics.js";
 import { bindingError } from "./bindings.js";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, normalize } from "node:path";
@@ -77,7 +79,7 @@ export class McpConnectorService {
     }
     for (const builtin of builtinMcpConnectors()) {
       const connector = await this.repository.upsertBuiltin(builtin.connector_id, builtin.definition, builtin.enabled_by_default);
-      const cache = await this.repository.toolCache(connector.connector_id);
+      const cache = await this.repository.toolCache(connector.connector_id, connector);
       const fingerprint = mcpConnectorFingerprint(connector);
       const cachedTools = cache ? JSON.stringify(cache.tools) : null;
       const builtinTools = JSON.stringify(builtin.tools);
@@ -245,7 +247,7 @@ export class McpConnectorService {
   async tools(connectorId: string, cwd?: string | null): Promise<{ tools: McpToolSummary[]; cached_at: number | null; scope: "global" | "project" }> {
     const connector = await this.requireConnector(connectorId);
     const project = cwd ? await this.project(cwd) : null;
-    const cache = await this.repository.toolCache(connectorId);
+    const cache = await this.repository.toolCache(connectorId, connector);
     const globalGrants = await this.repository.globalToolGrants(connectorId);
     const projectGrants = project ? await this.repository.projectToolGrants(project.project_id, connectorId) : new Map<string, McpToolDecision>();
     return {
@@ -375,7 +377,8 @@ export class McpConnectorService {
       // (the launcher's cwd). Use a private disposable workspace instead.
       if (connector.source === "builtin") probeWorkspace = await mkdtemp(join(await realpath(tmpdir()), "pi-science-mcp-probe-"));
       const tools = await connectAndListMcpTools(connector, probeWorkspace ?? process.cwd());
-      await this.repository.replaceToolCache({ connector_id: connectorId, config_revision: connector.revision, fingerprint: mcpConnectorFingerprint(connector), tools, fetched_at: checkedAt, expires_at: checkedAt + 5 * 60_000 });
+      const saved = await this.repository.replaceToolCache({ connector_id: connectorId, config_revision: connector.revision, fingerprint: mcpConnectorFingerprint(connector), tools, fetched_at: checkedAt, expires_at: checkedAt + 5 * 60_000 });
+      if (!saved) return { connector_id: connectorId, runtime_state: "error", auth_state: this.authState(connector), error_code: "stale_probe", error: "Connector changed during discovery; probe again", tools: [], checked_at: checkedAt };
       return { connector_id: connectorId, runtime_state: "ready", auth_state: this.authState(connector), error_code: null, error: null, tools, checked_at: checkedAt };
     } catch (error) {
       const message = redactMcpError(error instanceof Error ? error.message : String(error)) ?? "MCP probe failed";
@@ -453,7 +456,7 @@ export class McpConnectorService {
   }
 
   private async publicConnector(connector: StoredMcpConnector): Promise<McpConnector> {
-    const cache = await this.repository.toolCache(connector.connector_id);
+    const cache = await this.repository.toolCache(connector.connector_id, connector);
     const settings: StoredMcpSettings = { connector_id: connector.connector_id, enabled: connector.enabled, include_tools: connector.include_tools, exclude_tools: connector.exclude_tools, approval_mode: connector.approval_mode, revision: connector.settings_revision, created_at: connector.created_at, updated_at: connector.updated_at };
     const { enabled: _enabled, include_tools: _includeTools, exclude_tools: _excludeTools, approval_mode: _approvalMode, settings_revision: _settingsRevision, ...definition } = connector;
     return {
@@ -605,10 +608,6 @@ function classifyProbeError(error: string | null): string {
 function sqliteConflict(error: unknown): McpServiceError {
   const message = error instanceof Error ? error.message : String(error);
   return /unique|constraint/i.test(message) ? new McpServiceError("name_conflict", "A connector with this name already exists", 409) : new McpServiceError("storage_error", message, 500);
-}
-
-export function mcpConnectorFingerprint(connector: StoredMcpConnector): string {
-  return createHash("sha256").update(JSON.stringify({ transport: connector.transport, endpoint_url: connector.endpoint_url, command: connector.command, args: connector.args, socket_path: connector.socket_path, runtime_config: connector.runtime_config, revision: connector.revision })).digest("hex");
 }
 
 function effectiveToolDecision(

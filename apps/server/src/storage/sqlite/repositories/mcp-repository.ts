@@ -1,3 +1,4 @@
+import { mcpConnectorFingerprint } from "../../../mcp/tool-cache-identity.js";
 import { randomUUID } from "node:crypto";
 import { mcpRuntimeConfigSchema, type McpConnectorCreate, type McpConnectorSettingsUpdate, type McpRuntimeConfig, type McpToolSummary } from "@pi-science/contracts";
 import type { SqliteStateStore } from "../state-store.js";
@@ -104,15 +105,15 @@ export class McpRepository {
       && JSON.stringify(existing.runtime_config) === JSON.stringify(runtimeConfig) && existing.credential_ref === credentialRef;
     if (unchanged) return existing;
     const now = Date.now();
-    const [, , result] = await this.store.batch([
+    const [, , , result] = await this.store.batch([
       ...revokeAllows(existing.connector_id, existing.revision),
+      invalidateToolCache(existing.connector_id, existing.revision),
       {
         sql: `UPDATE mcp_connectors SET display_name = ?, description = ?, source = 'builtin', transport = ?, endpoint_url = ?, command = ?, args_json = ?, socket_path = ?, runtime_config_json = ?, credential_ref = ?, revision = revision + 1, updated_at = ? WHERE connector_id = ? AND revision = ?`,
         params: [input.display_name, input.description, input.transport, input.endpoint_url ?? null, input.command ?? null, JSON.stringify(input.args), input.socket_path ?? null, JSON.stringify(runtimeConfig), credentialRef, now, existing.connector_id, existing.revision],
       },
     ]);
     if (Number(result!.changes) === 0) return this.upsertBuiltin(connectorId, input, enabledByDefault);
-    await this.store.run("DELETE FROM mcp_tool_cache WHERE connector_id = ?", [existing.connector_id]);
     return (await this.get(existing.connector_id))!;
   }
 
@@ -146,8 +147,9 @@ export class McpRepository {
 
   async update(connectorId: string, expectedRevision: number, input: Omit<McpConnectorCreate, "enabled">): Promise<StoredMcpConnector | null> {
     const now = Date.now();
-    const [, , result] = await this.store.batch([
+    const [, , , result] = await this.store.batch([
       ...revokeAllows(connectorId, expectedRevision),
+      invalidateToolCache(connectorId, expectedRevision),
       {
         sql: `UPDATE mcp_connectors SET
          name = ?, display_name = ?, description = ?, transport = ?, endpoint_url = ?, command = ?, args_json = ?, socket_path = ?,
@@ -157,16 +159,16 @@ export class McpRepository {
       },
     ]);
     if (Number(result!.changes) === 0) return null;
-    await this.store.run("DELETE FROM mcp_tool_cache WHERE connector_id = ?", [connectorId]);
     return this.get(connectorId);
   }
 
   /** Authentication changes retain discovery metadata but advance the connector
-   * revision and revoke explicit approvals for the previous credential identity. */
+   * revision, revoke explicit approvals and invalidate the old tool catalog. */
   async updateCredential(connectorId: string, expectedRevision: number, runtimeConfig: McpRuntimeConfig, credentialRef: string | null): Promise<StoredMcpConnector | null> {
     const now = Date.now();
-    const [, , result] = await this.store.batch([
+    const [, , , result] = await this.store.batch([
       ...revokeAllows(connectorId, expectedRevision),
+      invalidateToolCache(connectorId, expectedRevision),
       {
         sql: `UPDATE mcp_connectors SET runtime_config_json = ?, credential_ref = ?, revision = revision + 1, updated_at = ?
        WHERE connector_id = ? AND revision = ?`,
@@ -283,20 +285,32 @@ export class McpRepository {
     }));
   }
 
-  async toolCache(connectorId: string): Promise<StoredMcpToolCache | null> {
-    const row = await this.store.get<CacheRow>("SELECT connector_id, config_revision, fingerprint, tools_json, fetched_at, expires_at FROM mcp_tool_cache WHERE connector_id = ?", [connectorId]);
-    return row ? { ...row, tools: JSON.parse(row.tools_json) as McpToolSummary[] } : null;
+  /** Observe cached metadata and its live connector in one SQLite statement.
+   * A caller holding an older connector snapshot must not mix in newer tools. */
+  async toolCache(connectorId: string, expected?: StoredMcpConnector): Promise<StoredMcpToolCache | null> {
+    const row = await this.store.get<ConnectorRow & CacheRow>(
+      `SELECT c.*, t.config_revision, t.fingerprint, t.tools_json, t.fetched_at, t.expires_at
+       FROM mcp_connectors c JOIN mcp_tool_cache t ON t.connector_id = c.connector_id AND t.config_revision = c.revision
+       WHERE c.connector_id = ?`, [connectorId],
+    );
+    if (!row) return null;
+    const { config_revision, fingerprint, tools_json, fetched_at, expires_at, ...stored } = row;
+    if (fingerprint !== mcpConnectorFingerprint(connector(stored)) || expected && (expected.connector_id !== connectorId
+      || expected.revision !== config_revision || mcpConnectorFingerprint(expected) !== fingerprint)) return null;
+    return { connector_id: connectorId, config_revision, fingerprint, tools: JSON.parse(tools_json) as McpToolSummary[], fetched_at, expires_at };
   }
 
-  async replaceToolCache(input: StoredMcpToolCache): Promise<void> {
-    await this.store.run(
+  async replaceToolCache(input: StoredMcpToolCache): Promise<boolean> {
+    const result = await this.store.run(
       `INSERT INTO mcp_tool_cache (connector_id, config_revision, fingerprint, tools_json, resources_json, server_info_json, fetched_at, expires_at)
-       VALUES (?, ?, ?, ?, '[]', NULL, ?, ?)
+       SELECT ?, ?, ?, ?, '[]', NULL, ?, ?
+       WHERE EXISTS (SELECT 1 FROM mcp_connectors WHERE connector_id = ? AND revision = ?)
        ON CONFLICT(connector_id) DO UPDATE SET config_revision = excluded.config_revision, fingerprint = excluded.fingerprint,
          tools_json = excluded.tools_json, resources_json = excluded.resources_json, server_info_json = excluded.server_info_json,
          fetched_at = excluded.fetched_at, expires_at = excluded.expires_at`,
-      [input.connector_id, input.config_revision, input.fingerprint, JSON.stringify(input.tools), input.fetched_at, input.expires_at],
+      [input.connector_id, input.config_revision, input.fingerprint, JSON.stringify(input.tools), input.fetched_at, input.expires_at, input.connector_id, input.config_revision],
     );
+    return Number(result.changes) > 0;
   }
 }
 
@@ -323,4 +337,12 @@ function revokeAllows(connectorId: string, expectedRevision: number) {
           AND EXISTS (SELECT 1 FROM mcp_connectors WHERE connector_id = ? AND revision = ?)`,
     params: [connectorId, connectorId, expectedRevision],
   }));
+}
+
+function invalidateToolCache(connectorId: string, expectedRevision: number) {
+  return {
+    sql: `DELETE FROM mcp_tool_cache WHERE connector_id = ?
+          AND EXISTS (SELECT 1 FROM mcp_connectors WHERE connector_id = ? AND revision = ?)`,
+    params: [connectorId, connectorId, expectedRevision],
+  };
 }

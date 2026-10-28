@@ -72,7 +72,7 @@ export class McpRuntimeProjection {
       const includeTools = unique([...connector.runtime_config.include_tools, ...connector.include_tools]);
       const excludeTools = unique([...connector.runtime_config.exclude_tools, ...connector.exclude_tools, ...denied]);
       const approveTools: boolean | string[] = connector.approval_mode === "allow_all" ? (asks.length ? unique(asks) : false) : true;
-      const cache = await this.repository.toolCache(connector.connector_id);
+      const cache = await this.repository.toolCache(connector.connector_id, connector);
       const configuredToolCount = cache && cache.expires_at > Date.now() ? cache.tools.length : undefined;
       const server = projectServer(connector, includeTools, excludeTools, approveTools, projectId, configuredToolCount);
       if (allowed.length && approveTools === true) server.__piScienceAllowedTools = unique(allowed);
