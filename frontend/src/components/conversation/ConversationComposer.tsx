@@ -1,6 +1,6 @@
 import { McpDiagnosticsNotice } from "./McpDiagnosticsNotice";
 import { ApprovalModeMenu } from "./ApprovalModeMenu";
-import { lazy, Suspense, useState, type ReactNode } from "react";
+import { lazy, Suspense, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowDown, ArrowUp, File, FolderOpen, Loader2, Plus, Sparkles, Square, X } from "lucide-react";
@@ -43,7 +43,6 @@ export interface ConversationComposerProps {
   composer: ComposerState;
   model: ModelState;
   research: ResearchState;
-  modePicker: ReactNode;
   onScrollToBottom: () => void;
   onReview: () => void;
   onAbort: () => Promise<unknown>;
@@ -52,7 +51,7 @@ export interface ConversationComposerProps {
 
 /** The composer seat is kept separate from the route so streamed transcript
  * updates do not make the page's orchestration code own every control detail. */
-export function ConversationComposer({ workspaceCwd, status, activeSessionId, sessionStats, contextTokens, contextWindow, contextPercent, compactionEnabled, compactionThresholdPercent, working, promptDeliveryNotice, interactionPending, reviewingProject, reviewNotice, autoReviewOn, modelControlsDisabled, showWelcome, showScrollDown, composer, model, research, modePicker, onScrollToBottom, onReview, onAbort, onRemoveWorkspaceReference }: ConversationComposerProps) {
+export function ConversationComposer({ workspaceCwd, status, activeSessionId, sessionStats, contextTokens, contextWindow, contextPercent, compactionEnabled, compactionThresholdPercent, working, promptDeliveryNotice, interactionPending, reviewingProject, reviewNotice, autoReviewOn, modelControlsDisabled, showWelcome, showScrollDown, composer, model, research, onScrollToBottom, onReview, onAbort, onRemoveWorkspaceReference }: ConversationComposerProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { input, setInput, files, setFiles, workspaceReferences } = composer;
@@ -66,7 +65,6 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
     <div className={cn("px-4 sm:px-8 shrink-0", showWelcome ? "py-0" : "pb-1 pt-1")}>
       {!showWelcome && (
         <div className="relative mx-auto max-w-[var(--conversation-composer-width)]">
-          {modePicker}
           {showScrollDown && (
             <button
               type="button"
@@ -90,7 +88,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
             ConversationRoot composer seat gradient). The card sits at the
             bottom of the column, so the band softens the transcript edge
             scrolling into it. */}
-        {!modePicker && !interactionPending && (
+        {!interactionPending && (
           <div
             aria-hidden
             className="pointer-events-none absolute inset-x-0 bottom-full h-[var(--composer-fade-height)] bg-gradient-to-t from-[var(--bg)] to-transparent"
