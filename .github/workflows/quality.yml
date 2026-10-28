@@ -15,7 +15,8 @@ permissions:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    # Linux legs pin Ubuntu 24.04: 26.04 denies the sandbox's nested user namespace (docs/sandbox-profiles.md)
+    runs-on: ubuntu-24.04
     outputs:
       run: ${{ steps.paths.outputs.run }}
     steps:
@@ -39,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, windows-latest]
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -85,7 +86,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, windows-latest]
     # Native process tests remain serialized on Windows to avoid contention.
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 20 }}
     steps:
@@ -162,7 +163,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, windows-latest]
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -229,7 +230,7 @@ jobs:
   browser:
     needs: [changes, build]
     if: needs.changes.outputs.run == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
@@ -335,7 +336,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-latest, macos-latest]
     env:
       PI_SCIENCE_BIN_DIR: ${{ github.workspace }}/work/production-install/pi-science-bin
       PNPM_STORE_DIR: ${{ github.workspace }}/work/production-install/pi-science-store
@@ -371,7 +372,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, windows-latest]
     steps:
       - name: Require all applicable checks to succeed
         shell: bash
