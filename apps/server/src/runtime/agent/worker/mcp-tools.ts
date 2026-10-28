@@ -156,7 +156,8 @@ export class AgentMcpTools {
               const approvalStarted = Date.now();
               _onUpdate({ content: [], details: { approval: "waiting" } });
               const approved = await bridge.confirmPermission(`Allow ${name}: ${tool.name}?`,
-                `Arguments: ${JSON.stringify(params).slice(0, 4_000)}`, context.abortSignal, _toolCallId);
+                `Arguments: ${JSON.stringify(params).slice(0, 4_000)}`, context.abortSignal, _toolCallId,
+                { connectorId: server.__piScienceConnectorId!, toolName: tool.name });
               approvalMs = Date.now() - approvalStarted;
               _onUpdate({ content: [], details: { approval: "resolved" } });
               approvedByUser = approved;
