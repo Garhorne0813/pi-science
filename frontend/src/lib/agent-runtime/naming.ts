@@ -5,8 +5,8 @@ import type { ThreadBlock } from "../../types/thread";
 import { deriveSessionName, getSessionName, setSessionName } from "../client/pi-science-client";
 import { clearAiTitleAttempted, hasAiTitle, markAiTitle } from "../client/session-names";
 import { visibleUserMessage } from "../files";
-import type { Thread } from "./event-fold";
-import { useRuntimeStore } from "./store";
+import type { Thread } from "./folding/types";
+import { runtimeStore } from "./store-access";
 
 /** Backfill a display name from the first user block of freshly loaded
  *  history. Sessions created before client-side naming existed (or whose
@@ -20,7 +20,7 @@ export function backfillSessionName(cwd: string, sessionId: string, thread: Thre
   const name = firstUser ? deriveSessionName(visibleUserMessage(firstUser.text)) : "";
   if (!name) return;
   setSessionName(cwd, sessionId, name);
-  useRuntimeStore.setState((state) => ({
+  runtimeStore.setState((state) => ({
     sessions: state.sessions.map((session) => session.id === sessionId ? { ...session, name } : session),
   }));
 }
@@ -31,7 +31,7 @@ export function applyPromptSessionName(cwd: string, sessionId: string, message: 
   if (getSessionName(cwd, sessionId)) return;
   const sessionName = deriveSessionName(visibleUserMessage(message)) || "Referenced files";
   setSessionName(cwd, sessionId, sessionName);
-  useRuntimeStore.setState((state) => ({
+  runtimeStore.setState((state) => ({
     sessions: state.sessions.map((session) => session.id === sessionId ? { ...session, name: sessionName } : session),
   }));
 }
@@ -46,7 +46,7 @@ export function applyAiSessionName(cwd: string, sessionId: string, title: string
   setSessionName(cwd, sessionId, title);
   markAiTitle(cwd, sessionId);
   clearAiTitleAttempted(cwd, sessionId);
-  useRuntimeStore.setState((state) => ({
+  runtimeStore.setState((state) => ({
     sessions: state.sessions.map((session) => session.id === sessionId ? { ...session, name: title } : session),
   }));
 }

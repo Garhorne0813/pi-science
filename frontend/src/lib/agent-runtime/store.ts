@@ -1,12 +1,9 @@
-/** Agent Runtime Store — manages pi agent session state.
- *  Rewrite of open-science's useRuntimeStore for the pi-science backend.
- *
- *  This module owns nothing but the store instance: the initial state and the
- *  actions built by ./session-actions. The helper modules in this folder read
- *  and write the store through the handle exported here. */
+/** Runtime composition root: create one Zustand store, compose its actions,
+ * then bind imperative access for recovery and listening effects. */
 
 import { create } from "zustand";
-import { emptyThread } from "./event-fold";
+import { bindRuntimeStore } from "./store-access";
+import { emptyThread } from "./folding/state";
 import { createRuntimeActions } from "./session-actions";
 import type { RuntimeState } from "./types";
 
@@ -47,3 +44,6 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
   ...createRuntimeActions(set, get),
 }));
+
+// Bind after action construction; internal effects read the port only on use.
+bindRuntimeStore(useRuntimeStore);

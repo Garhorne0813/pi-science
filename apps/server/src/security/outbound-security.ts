@@ -127,7 +127,7 @@ export async function safeConnectorFetch(raw: string, options: ConnectorFetchOpt
       const response = await fetch(current, { method: options.method ?? "GET", headers: hopHeaders, body: options.body, redirect: "manual", signal });
       const location = response.headers.get("location");
       if (response.status >= 300 && response.status < 400 && location) {
-        response.body?.cancel();
+        void response.body?.cancel().catch(() => undefined);
         if (redirects >= maxRedirects) throw new Error(`too many redirects (max ${maxRedirects})`);
         const next = new URL(location, current);
         // Same-origin hops keep the caller's policy; cross-origin hops must
@@ -142,13 +142,13 @@ export async function safeConnectorFetch(raw: string, options: ConnectorFetchOpt
       if (allowedTypes?.length) {
         const contentType = (response.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
         if (contentType && !allowedTypes.some((type) => contentType === type)) {
-          response.body?.cancel();
+          void response.body?.cancel().catch(() => undefined);
           throw new Error(`unexpected content type: ${contentType}`);
         }
       }
       const contentLength = Number(response.headers.get("content-length") ?? "0");
       if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-        response.body?.cancel();
+        void response.body?.cancel().catch(() => undefined);
         throw new Error(`response exceeds size limit (${contentLength} > ${maxBytes} bytes)`);
       }
       if (!response.body) return response;

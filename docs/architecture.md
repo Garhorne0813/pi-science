@@ -289,3 +289,23 @@ are logged in `egress-audit.jsonl` unless disabled in `config.json`.
 CI results establish the checks run on that commit. They do not imply all
 external providers, complex user transcripts or every platform UI path were
 manually tested.
+
+## Workspace contracts and Node runtime
+
+The workspace requires Node.js >=24.16.0 (enforced by the installer and CI).
+`@pi-science/contracts` exports `src/*.ts` for both type and runtime resolution.
+Its build emits declarations only; checked-in `.js` files are explicit re-export
+shims for `.js` imports inside the TypeScript sources, not generated copies.
+Native Node uses built-in type stripping; Vite and development/test tooling
+transform the same sources. A compiled server installation must therefore keep
+contracts source files and workspace links, not just `contracts/dist`.
+The version floor is the supported/tested repository baseline; it is not a claim
+that type stripping first appeared in that Node release.
+
+[Production-install CI](../.github/workflows/quality.yml) exercises the native
+compiled server on Linux, Windows and macOS. [Deployment](deployment.md) describes
+installation. See also [frontend runtime](frontend-agent-runtime.md),
+[verification](development-quality.md), [patch maintenance](../patches/README.md)
+and the [documentation index](README.md).
+
+See [server service boundaries](server-service-boundaries.md) for model resources, conversation event delivery and agent session protocol ownership.

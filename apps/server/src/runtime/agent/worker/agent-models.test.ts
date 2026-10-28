@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CredentialStore } from "../../../model-resources/credential-store.js";
-import { ModelResourceRepository } from "../../../model-resources/model-resource-repository.js";
 import { agentModelCatalog, agentModels } from "./agent-models.js";
 import { ModelConfigService } from "../../../model-config/model-config-service.js";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";

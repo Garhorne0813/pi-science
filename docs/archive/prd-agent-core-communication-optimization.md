@@ -1,6 +1,6 @@
 # Agent Core 通信与产品协议
 
-当前通信链路为浏览器 REST/SSE → Node 产品服务 → Worker IPC → Core Harness。实现记录见[通信实现](agent-core-communication-implementation.md)。
+当前通信链路为浏览器 REST/SSE → Node 产品服务 → Worker IPC → Core Harness。实现记录见[通信实现](../agent-core-communication-implementation.md)。
 
 ## 协议边界
 
@@ -19,7 +19,7 @@
 
 ## 历史与配置
 
-历史投影保留消息、工具 details、轨迹和持久结果状态。旧会话首次读取会等待[原子转换](agent-core-session-conversion.md)，并发读取不能看见半转换文件。只读查询不启动模型 Worker。
+历史投影保留消息、工具 details、轨迹和持久结果状态。旧会话首次读取会等待[原子转换](../agent-core-session-conversion.md)，并发读取不能看见半转换文件。只读查询不启动模型 Worker。
 
 配置 mutation 串行提交，并以官方 lane 配置为 authority。SSE fence、应用 cursor 与不确定 admission 保护属于可靠交付合同，应保留并持续回归。
 

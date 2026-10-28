@@ -210,18 +210,31 @@ it("serializes credential modify callbacks and cleans up new keys after a failed
   await service.setCredential("lab", 1, { source: "managed", secret: "zero" });
   const adapter = new ModelCredentialAdapter(service);
   const seen: Array<string | undefined> = [];
+  const applied: string[] = [];
+  let activeCallbacks = 0;
   const modify = (key: string) => adapter.modify("lab", async (current) => {
-    seen.push(current?.type === "api_key" ? current.key : undefined);
-    return { type: "api_key", key };
+    activeCallbacks += 1;
+    try {
+      expect(activeCallbacks).toBe(1);
+      seen.push(current?.type === "api_key" ? current.key : undefined);
+      applied.push(key);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return { type: "api_key" as const, key };
+    } finally {
+      activeCallbacks -= 1;
+    }
   });
   await Promise.all([modify("one"), modify("two")]);
-  expect(seen).toEqual(["zero", "one"]);
-  expect(await adapter.read("lab")).toEqual({ type: "api_key", key: "two" });
+  // Reads before acquiring the write lock can complete in either order.
+  expect([...applied].sort()).toEqual(["one", "two"]);
+  expect(seen).toEqual(["zero", applied[0]]);
+  const committed = { type: "api_key", key: applied[1] };
+  expect(await adapter.read("lab")).toEqual(committed);
   const count = (await service.credentials.listMetadata()).length;
   vi.spyOn(service, "preflight").mockRejectedValueOnce(new Error("write failed"));
   await expect(modify("failed")).rejects.toThrow("write failed");
   expect((await service.credentials.listMetadata()).length).toBe(count);
-  expect(await adapter.read("lab")).toEqual({ type: "api_key", key: "two" });
+  expect(await adapter.read("lab")).toEqual(committed);
 });
 
 it("migrates builtin credentials without Provider rows and keeps the available catalog equivalent", async () => {

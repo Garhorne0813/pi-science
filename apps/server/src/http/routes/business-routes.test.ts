@@ -418,7 +418,6 @@ describe("native control-plane business routes", () => {
     // levels only when the runtime verified the configured model identity.
     const stored = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"));
     expect(stored).toMatchObject({ model: "user-local-provider/local-model", model_context_window: 64000 });
-    const resources = new (await import("../../model-resources/model-resource-service.js")).ModelResourceService();
     expect(new ModelConfigService().readSync().config.providers["user-local-provider"]?.models?.[0]?.contextWindow).toBe(64000);
     const paths = [join(process.env.PI_SCIENCE_HOME, "config.json"), join(process.env.PI_SCIENCE_HOME, "models.json")];
     const fingerprints = () => Promise.all(paths.map(async (path) => ({ content: await readFile(path, "utf8"), mtime: (await stat(path, { bigint: true })).mtimeNs })));

@@ -11,7 +11,7 @@ import { detectJobCapabilities, type JobCapabilityOptions, type JobCapabilityRep
 import { restrictLocalJobEnvironment, restrictResearchEnvironment } from "./job-environment.js";
 import { JobLeaseManager } from "./job-lease-manager.js";
 import { ProcessSupervisor, type SpawnedJobProcess } from "./job-process-supervisor.js";
-import { isNonterminal, isTerminal, transitionJobStatus, type JobChildIdentity, type JobOwnerProcessIdentity, type JobOwnership, type JobProcessIdentity, type JobRecord, type JobRequirement, type JobStatus, publicJobRecord } from "./job-types.js";
+import { isNonterminal, isTerminal, transitionJobStatus, type JobChildIdentity, type JobOwnerProcessIdentity, type JobOwnership, type JobProcessIdentity, type JobRecord, type JobRequirement} from "./job-types.js";
 import { canonicalDirectory, identifyPolicy, isWithin, operatorExecutionMode, workspacePolicy } from "../sandbox/policy.js";
 import { prepareSandbox, launcherPath, type PreparedSandbox } from "../sandbox/process.js";
 import { bashDependencies, SANDBOX_RUNTIME } from "../sandbox/settings.js";

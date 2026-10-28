@@ -1,6 +1,6 @@
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync} from "node:fs";
 import type { PiConfig } from "@pi-science/contracts";
 import { configRoot, metadataRoot } from "../../storage/persistence.js";
 /** Packaged builtin skills source. Read-only callers (the composer catalogue) use

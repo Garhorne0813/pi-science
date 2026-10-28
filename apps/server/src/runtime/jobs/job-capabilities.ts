@@ -163,7 +163,7 @@ function detectPackages(
 
 function normalizedPackageName(spec: string): string {
   const channelFree = spec.trim().split("::").pop() ?? spec.trim();
-  return channelFree.split(/[<>=!~\[\s]/, 1)[0]!.trim().toLowerCase().replaceAll("_", "-");
+  return channelFree.split(/[<>=!~[\s]/, 1)[0]!.trim().toLowerCase().replaceAll("_", "-");
 }
 
 function packageNamesMatch(requested: string, installed: string): boolean {
