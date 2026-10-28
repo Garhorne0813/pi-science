@@ -20,6 +20,7 @@ import { appliedRuntimeSettings, contextUsage, resolveCompaction, type AppliedRu
 import { AgentCoreEventAdapter } from "../agent-event-adapter.js";
 import { promptOperationId, userPrompt } from "../agent-message.js";
 import { notebookHarnessTools } from "./notebook-tools.js";
+import { remoteComputeTools } from "./remote-compute-tools.js";
 import { todoHarnessTool } from "./todo-tool.js";
 import { SubagentBridge, subagentHarnessTool, subagentControlTool } from "./subagent-tool.js";
 import { InteractionBridge } from "./interaction-bridge.js";
@@ -187,6 +188,9 @@ export class SessionRuntime {
       const memoryUrl=options.env?.PI_SCIENCE_BACKEND_URL??process.env.PI_SCIENCE_BACKEND_URL;
       const memoryToken=options.env?.PI_SCIENCE_INTERNAL_TOKEN??process.env.PI_SCIENCE_INTERNAL_TOKEN;
       const memoryClient = !candidateScoped && !options.delegatedAgent && memoryUrl && memoryToken ? new AgentMemoryClient(options.cwd,session.metadata.id,memoryUrl,memoryToken,session) : undefined;
+      // Remote compute runs on registered SSH machines through the control plane;
+      // confined subagents and delegated agents do not receive it.
+      const remoteCompute = !candidateScoped && !options.delegatedAgent ? remoteComputeTools(options.cwd, interactions, session.metadata.id) : undefined;
       const basePrompt = options.systemPrompt ?? "You are a helpful scientific research assistant.";
       // Resolve per invocation so policy changes and refreshes affect Bash too.
       // A standalone .md skill does not authorize its shared parent directory.
@@ -201,7 +205,7 @@ export class SessionRuntime {
         thinkingLevel: clampThinkingLevel(model, options.thinking ?? "high"),
         compaction: resolveCompaction(model.contextWindow, options.settings).compaction,
         tools: [...(memoryClient?.tools() ?? []), ...(!candidateScoped && !options.delegatedAgent ? [networkAccessTool(interactions, options.cwd, session.metadata.id)] : []), budgets.tool, confinedReadTool(workspaceFileTool(createReadTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined), sandboxIdentity), budgets.wrap(sandboxBashTool(sandboxIdentity, environment, currentSkillDirectories)), workspaceFileTool(createEditTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined), workspaceFileTool(createWriteTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined),
-          todoHarnessTool(session), subagentControlTool(subagents), budgets.wrap(subagentHarnessTool(subagents)), ...notebookHarnessTools(options.cwd, session.metadata.id, sandboxIdentity).map(budgets.wrap), questionnaireHarnessTool(interactions), ...nativeWebTools, ...(mcp?.tools ?? []).map(budgets.wrap)]
+          todoHarnessTool(session), subagentControlTool(subagents), budgets.wrap(subagentHarnessTool(subagents)), ...notebookHarnessTools(options.cwd, session.metadata.id, sandboxIdentity).map(budgets.wrap), ...(remoteCompute ? [remoteCompute.machines, budgets.wrap(remoteCompute.execute), budgets.wrap(remoteCompute.submit), remoteCompute.check] : []), questionnaireHarnessTool(interactions), ...nativeWebTools, ...(mcp?.tools ?? []).map(budgets.wrap)]
           .filter((tool) => (!options.allowedTools || options.allowedTools.includes(tool.name)) && (!candidateScoped || childToolAllowance([tool.name], [tool.name], "candidate").length > 0))
           .map((tool) => !options.delegatedAgent ? tool : { ...tool, async execute(id, params, update, ctx, invocation, context) {
             if (options.executionGrantId) await assertExecutionGrantTool(sandboxIdentity, tool.name);

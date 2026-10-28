@@ -47,6 +47,7 @@ export class ConversationEventHub {
   hasSubscribers(cwd: string, sessionId: string): boolean { return this.delivery.hasSubscribers(cwd, sessionId); }
   latestCursor(cwd: string, sessionId: string): Promise<string | null> { return this.publication.latestCursor(cwd, sessionId); }
   resolvePendingInteraction(cwd: string, sessionId: string, requestId: string): void { this.delivery.resolvePendingInteraction(cwd, sessionId, requestId); }
+  pendingInteraction(cwd: string, sessionId: string, requestId: string): Record<string, unknown> | undefined { return this.delivery.pendingInteraction(cwd, sessionId, requestId); }
   bind(cwd: string, process: RuntimeEventSource, options: BindingOptions): void { this.bindings.bind(cwd, process, options); }
   subscribe(cwd: string, sessionId: string, lastEventId: string | undefined, deliver: (record: SseEventRecord) => unknown, replay = true): Promise<() => void> {
     return this.delivery.subscribe(cwd, sessionId, lastEventId, deliver, replay);

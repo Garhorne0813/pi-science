@@ -13,9 +13,13 @@ concurrency:
 permissions:
   contents: read
 
+# sandbox-runtime 0.0.79's nested user namespace helper fails on Ubuntu 26.04
+# (/proc/self/setgroups). Pin the validated runner; retain matrix labels so
+# required check names and artifact names stay stable.
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    # Linux legs pin Ubuntu 24.04: 26.04 denies the sandbox's nested user namespace (docs/sandbox-profiles.md)
+    runs-on: ubuntu-24.04
     outputs:
       run: ${{ steps.paths.outputs.run }}
     steps:
@@ -35,11 +39,11 @@ jobs:
   static-checks:
     needs: changes
     if: needs.changes.outputs.run == 'true'
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, windows-latest]
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -84,11 +88,11 @@ jobs:
   tests:
     needs: changes
     if: needs.changes.outputs.run == 'true'
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, windows-latest]
     # Native process tests remain serialized on Windows to avoid contention.
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 20 }}
     steps:
@@ -120,7 +124,7 @@ jobs:
         run: pnpm --filter @pi-science/server exec vitest run src/runtime/sandbox/file-read.test.ts src/runtime/agent/worker/workspace-file-tool.test.ts
 
       - name: Test environment diagnostics
-        run: node --test scripts/doctor.test.mjs scripts/check-http-health.test.mjs scripts/check-linux-sandbox.test.mjs scripts/process-state.test.mjs
+        run: node --test scripts/doctor.test.mjs scripts/check-http-health.test.mjs scripts/check-linux-sandbox.test.mjs scripts/process-state.test.mjs scripts/ci-runner-pins.test.mjs
 
       - name: Test Windows process ownership
         if: runner.os == 'Windows'
@@ -161,7 +165,7 @@ jobs:
   build:
     needs: changes
     if: needs.changes.outputs.run == 'true'
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -234,7 +238,7 @@ jobs:
   browser:
     needs: [changes, build]
     if: needs.changes.outputs.run == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
@@ -335,12 +339,12 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run == 'true'
     name: production install (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-latest, macos-latest]
     env:
       PI_SCIENCE_BIN_DIR: ${{ github.workspace }}/work/production-install/pi-science-bin
       PNPM_STORE_DIR: ${{ github.workspace }}/work/production-install/pi-science-store
@@ -373,10 +377,10 @@ jobs:
     name: verify (${{ matrix.os }})
     needs: [changes, static-checks, tests, build, browser, macos-launcher, production-install]
     if: always()
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, windows-latest]
     steps:
       - name: Require all applicable checks to succeed
         shell: bash

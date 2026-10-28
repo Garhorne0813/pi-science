@@ -301,10 +301,18 @@ describe("agent-core product tools", () => {
     ].join("\n"));
     await writeFile(join(fixture.cwd, ".pi-science/mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "retrieval_project", mcpServers: {
       "fresh-library": { command: process.execPath, args: [server], approveTools: true,
-        __piScienceAllowedTools: ["search_papers", "retrieve_paper"], __piScienceConnectorId: "connector_web" },
+        __piScienceAllowedTools: ["search_papers", "retrieve_paper"], __piScienceConnectorId: "connector_web", __piScienceConnectorRevision: 1, __piScienceSettingsRevision: 1 },
     } }));
+    const authority = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ decision: "allow" }));
+    });
+    await new Promise<void>((resolve) => authority.listen(0, "127.0.0.1", resolve));
+    cleanup.push(() => new Promise<void>((resolve) => { authority.closeAllConnections(); authority.close(() => resolve()); }));
+    const policyUrl = `http://127.0.0.1:${(authority.address() as { port: number }).port}`;
     const manager = new AgentRuntimeManager(); cleanup.push(() => manager.shutdownAll());
     const parent = await openHiddenTask(manager, "retrieval-parent", { cwd: fixture.cwd, sessionsRoot: join(fixture.cwd, ".pi-science/agent-sessions"),
+      env: { PI_SCIENCE_BACKEND_URL: policyUrl },
       model: fixture.model, thinking: "off", allowedTools: ["read", "subagent", "execution_budget", "mcp__fresh-library__search_papers", "mcp__fresh-library__retrieve_paper"] }, "retrieval-owner");
     const interactions: unknown[] = []; parent.on("event", (event) => { if (event.type === "interaction.requested") interactions.push(event); });
     expect(await runHiddenPrompt(parent, "Retrieve evidence", "retrieval-once", Date.now() + 30000)).toContain("evidence saved");

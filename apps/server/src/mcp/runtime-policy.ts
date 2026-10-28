@@ -1,0 +1,38 @@
+import { z } from "zod";
+import { operatorFetch } from "../network/operator-fetch.js";
+
+export const mcpRuntimeConnectorSchema = z.object({
+  connectorId: z.string().min(1), projectId: z.string().min(1),
+  connectorRevision: z.number().int().positive(), settingsRevision: z.number().int().positive(),
+  connectionFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+export const mcpRuntimePolicySchema = mcpRuntimeConnectorSchema.extend({ toolName: z.string().min(1) });
+export type McpRuntimeConnectorRequest = z.infer<typeof mcpRuntimeConnectorSchema>;
+export type McpRuntimePolicyRequest = z.infer<typeof mcpRuntimePolicySchema>;
+
+/** Snapshots discover tools; the control plane's database admits each call.
+ * Missing/unreachable authority and stale revisions must never fall back to disk. */
+export async function authorizeMcpTool(cwd: string, expected: McpRuntimePolicyRequest, signal?: AbortSignal): Promise<"allow" | "ask"> {
+  return checkPolicy(cwd, mcpRuntimePolicySchema.parse(expected), "authorize", signal);
+}
+
+export async function authorizeMcpConnector(cwd: string, expected: McpRuntimeConnectorRequest, signal?: AbortSignal): Promise<void> {
+  if (await checkPolicy(cwd, mcpRuntimeConnectorSchema.parse(expected), "connect", signal) !== "allow") {
+    throw new Error("MCP connector discovery was not authorized");
+  }
+}
+
+async function checkPolicy(cwd: string, expected: McpRuntimeConnectorRequest, action: string, signal?: AbortSignal): Promise<"allow" | "ask"> {
+  const backend = process.env.PI_SCIENCE_BACKEND_URL;
+  if (!backend) throw new Error("MCP policy authority is unavailable; refresh the worker");
+  const url = new URL(`/api/mcp/runtime/${action}`, backend);
+  url.searchParams.set("cwd", cwd);
+  const token = process.env.PI_SCIENCE_INTERNAL_TOKEN;
+  const response = await operatorFetch(url.href, {
+    method: "POST", headers: { "Content-Type": "application/json", ...(token ? { "x-pi-science-internal-token": token } : {}) },
+    body: JSON.stringify(expected), redirect: "error",
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000),
+  });
+  if (!response.ok) throw new Error(`MCP policy changed or unavailable; refresh the worker (HTTP ${response.status})`);
+  return z.object({ decision: z.enum(["allow", "ask"]) }).parse(await response.json()).decision;
+}

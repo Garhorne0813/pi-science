@@ -1,8 +1,12 @@
+import { mcpConnectorFingerprint } from "./tool-cache-identity.js";
+export { mcpConnectorFingerprint } from "./tool-cache-identity.js";
+import { projectedConnectionFingerprint } from "./runtime-projection.js";
+import type { McpRuntimeConnectorRequest, McpRuntimePolicyRequest } from "./runtime-policy.js";
 import { updateWebSettings, webSettingsSchema } from "../web/settings.js";
 import { redactMcpError } from "./diagnostics.js";
 export { redactMcpError } from "./diagnostics.js";
 import { bindingError } from "./bindings.js";
-import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, normalize } from "node:path";
@@ -75,7 +79,7 @@ export class McpConnectorService {
     }
     for (const builtin of builtinMcpConnectors()) {
       const connector = await this.repository.upsertBuiltin(builtin.connector_id, builtin.definition, builtin.enabled_by_default);
-      const cache = await this.repository.toolCache(connector.connector_id);
+      const cache = await this.repository.toolCache(connector.connector_id, connector);
       const fingerprint = mcpConnectorFingerprint(connector);
       const cachedTools = cache ? JSON.stringify(cache.tools) : null;
       const builtinTools = JSON.stringify(builtin.tools);
@@ -122,13 +126,17 @@ export class McpConnectorService {
     const connector = await this.requireConnector(connectorId);
     if (suggestedCredential(connector).capability === "unsupported") throw new McpServiceError("credential_unsupported", "This connector does not support an API credential", 400);
     if (input.revision !== connector.revision) throw new McpServiceError("revision_conflict", "Connector was changed by another request", 409);
-    const credentialId = connector.credential_ref ?? `mcp_${connector.connector_id}`;
-    const existing = await this.credentials.getForRuntime(credentialId);
+    const existing = connector.credential_ref ? await this.credentials.getForRuntime(connector.credential_ref) : null;
     if (existing && (existing.metadata.owner_kind !== "mcp" || existing.metadata.owner_id !== connectorId)) throw new McpServiceError("credential_in_use", "Credential belongs to another resource", 409);
-    if (input.backend === "managed" && !input.secret && !existing?.secret) throw new McpServiceError("credential_required", "API key or token is required");
+    const secret = input.secret || (input.backend === "managed" ? existing?.secret : undefined);
+    if (input.backend === "managed" && !secret) throw new McpServiceError("credential_required", "API key or token is required");
+    // Published snapshots resolve credential references dynamically. Never rotate
+    // a secret in place: old snapshots must keep seeing the old identity until
+    // the database has switched references and revoked the old project Allows.
+    const credentialId = `mcp_${connectorId}_${randomUUID()}`;
     await this.credentials.put({
       id: credentialId, kind: "api_key", backend: input.backend, label: `${connector.display_name} MCP credential`,
-      ...(input.secret ? { secret: input.secret } : {}),
+      ...(secret ? { secret } : {}),
       ...(input.environment_variable ? { environment_variable: input.environment_variable } : {}),
       owner_kind: "mcp", owner_id: connectorId,
     });
@@ -137,9 +145,24 @@ export class McpConnectorService {
     if (input.delivery === "environment") runtime.environment[input.target_name] = binding;
     else runtime.headers[input.delivery === "bearer" ? "Authorization" : input.target_name] = binding;
     runtime.auth = input.delivery === "bearer" ? "bearer" : "auto";
-    const updated = await this.repository.updateCredential(connectorId, connector.revision, runtime, credentialId);
-    if (!updated) throw new McpServiceError("revision_conflict", "Connector was changed by another request", 409);
+    let updated: StoredMcpConnector | null;
+    try { updated = await this.repository.updateCredential(connectorId, connector.revision, runtime, credentialId); }
+    catch (error) {
+      // A lost database acknowledgement can hide a commit. Only discard staging
+      // when we can establish that the connector does not reference it.
+      const current = await this.repository.get(connectorId).catch(() => undefined);
+      if (current !== undefined && current?.credential_ref !== credentialId) await this.credentials.remove(credentialId);
+      throw error;
+    }
+    if (!updated) {
+      await this.credentials.remove(credentialId);
+      throw new McpServiceError("revision_conflict", "Connector was changed by another request", 409);
+    }
     await this.materializeKnownWorkspaces(); await this.reload();
+    if (connector.credential_ref) {
+      const previous = await this.credentials.metadata(connector.credential_ref);
+      if (previous?.owner_kind === "mcp" && previous.owner_id === connectorId) await this.credentials.remove(connector.credential_ref);
+    }
     return this.credentialStatus(updated);
   }
 
@@ -224,7 +247,7 @@ export class McpConnectorService {
   async tools(connectorId: string, cwd?: string | null): Promise<{ tools: McpToolSummary[]; cached_at: number | null; scope: "global" | "project" }> {
     const connector = await this.requireConnector(connectorId);
     const project = cwd ? await this.project(cwd) : null;
-    const cache = await this.repository.toolCache(connectorId);
+    const cache = await this.repository.toolCache(connectorId, connector);
     const globalGrants = await this.repository.globalToolGrants(connectorId);
     const projectGrants = project ? await this.repository.projectToolGrants(project.project_id, connectorId) : new Map<string, McpToolDecision>();
     return {
@@ -232,6 +255,38 @@ export class McpConnectorService {
       cached_at: cache?.fetched_at ?? null,
       scope: project ? "project" : "global",
     };
+  }
+
+  async authorizeRuntimeConnector(cwd: string, expected: McpRuntimeConnectorRequest): Promise<{ decision: "allow" }> {
+    const project = await this.project(cwd);
+    const connector = await this.repository.get(expected.connectorId);
+    if (project.project_id !== expected.projectId || !connector || connector.revision !== expected.connectorRevision
+      || connector.settings_revision !== expected.settingsRevision
+      || projectedConnectionFingerprint(connector, project.project_id) !== expected.connectionFingerprint) {
+      throw new McpServiceError("stale_policy", "MCP policy changed; refresh the worker", 409);
+    }
+    if (!connector.enabled || bindingError(connector.runtime_config, connector.credential_ref)) {
+      throw new McpServiceError("connector_denied", "MCP connector is disabled or has invalid bindings", 403);
+    }
+    return { decision: "allow" };
+  }
+
+  async authorizeRuntimeTool(cwd: string, expected: McpRuntimePolicyRequest): Promise<{ decision: "allow" | "ask" }> {
+    const project = await this.project(cwd);
+    const policy = await this.repository.runtimePolicy(project.project_id, expected.connectorId, expected.toolName);
+    if (project.project_id !== expected.projectId || !policy || policy.connector.revision !== expected.connectorRevision
+      || policy.connector.settings_revision !== expected.settingsRevision
+      || projectedConnectionFingerprint(policy.connector, project.project_id) !== expected.connectionFingerprint) {
+      throw new McpServiceError("stale_policy", "MCP policy changed; refresh the worker", 409);
+    }
+    const { connector, global, project: grant } = policy;
+    const includes = [...connector.runtime_config.include_tools, ...connector.include_tools];
+    const excludes = [...connector.runtime_config.exclude_tools, ...connector.exclude_tools];
+    if (!connector.enabled || global === "deny" || grant === "deny" || excludes.includes(expected.toolName)
+      || includes.length && !includes.includes(expected.toolName) || bindingError(connector.runtime_config, connector.credential_ref)) {
+      throw new McpServiceError("tool_denied", "MCP tool is disabled or denied", 403);
+    }
+    return { decision: grant ?? global ?? (connector.approval_mode === "allow_all" ? "allow" : "ask") };
   }
 
   async setToolGrant(connectorId: string, toolName: string, decision: McpToolDecision, cwd?: string | null): Promise<void> {
@@ -245,6 +300,43 @@ export class McpConnectorService {
       await this.materializeKnownWorkspaces();
     }
     await this.reload();
+  }
+
+  /** Called only with metadata from the server's live pending interaction.
+   * Confirm first; a failed/expired worker response must never leave a grant.
+   * Once confirmed, every persistence/projection failure has an explicit result. */
+  async prepareInteractionGrant(cwd: string, raw: unknown): Promise<() => Promise<{ persistentGrant: boolean | null; warning?: string }>> {
+    const grant = raw as { connectorId?: unknown; toolName?: unknown; connectorRevision?: unknown; settingsRevision?: unknown } | undefined;
+    if (!grant || typeof grant.connectorId !== "string" || typeof grant.toolName !== "string"
+      || !Number.isInteger(grant.connectorRevision) || !Number.isInteger(grant.settingsRevision)) {
+      throw new McpServiceError("stale_approval", "This MCP approval is stale; request fresh authorization", 409);
+    }
+    const { connectorId, toolName } = grant;
+    const connector = await this.requireConnector(connectorId);
+    const project = await this.project(cwd);
+    const global = await this.repository.globalToolGrants(connectorId);
+    const previous = (await this.repository.projectToolGrants(project.project_id, connectorId)).get(toolName) ?? null;
+    const included = [...connector.include_tools, ...connector.runtime_config.include_tools];
+    if (!connector.enabled || connector.revision !== grant.connectorRevision || connector.settings_revision !== grant.settingsRevision
+      || global.get(toolName) === "deny" || previous === "deny" || included.length && !included.includes(toolName)
+      || connector.exclude_tools.includes(toolName) || connector.runtime_config.exclude_tools.includes(toolName)) {
+      throw new McpServiceError("stale_approval", "MCP connector or policy changed; request fresh authorization", 409);
+    }
+    return async () => {
+      let persisted = false;
+      try {
+        persisted = await this.repository.allowPendingTool(project.project_id, connectorId, toolName, connector.revision, connector.settings_revision, previous);
+        if (!persisted) return { persistentGrant: false, warning: "This call was allowed once. MCP policy changed, so Always allow was not saved." };
+        await this.projection?.materialize(project.canonical_path, project.project_id);
+        // Live workers reread the snapshot before each call; reloading here can
+        // interrupt the very invocation that was just approved.
+        return { persistentGrant: true };
+      } catch {
+        return { persistentGrant: persisted ? true : null, warning: persisted
+          ? "Always allow was saved, but runtime policy refresh failed. Refresh the session before the next call; revoke access in MCP settings if needed."
+          : "This call was allowed once. The Always allow save could not be verified; check MCP settings before retrying or assuming access was not saved." };
+      }
+    };
   }
 
   async clearToolGrant(connectorId: string, toolName: string, cwd?: string | null): Promise<void> {
@@ -285,7 +377,8 @@ export class McpConnectorService {
       // (the launcher's cwd). Use a private disposable workspace instead.
       if (connector.source === "builtin") probeWorkspace = await mkdtemp(join(await realpath(tmpdir()), "pi-science-mcp-probe-"));
       const tools = await connectAndListMcpTools(connector, probeWorkspace ?? process.cwd());
-      await this.repository.replaceToolCache({ connector_id: connectorId, config_revision: connector.revision, fingerprint: mcpConnectorFingerprint(connector), tools, fetched_at: checkedAt, expires_at: checkedAt + 5 * 60_000 });
+      const saved = await this.repository.replaceToolCache({ connector_id: connectorId, config_revision: connector.revision, fingerprint: mcpConnectorFingerprint(connector), tools, fetched_at: checkedAt, expires_at: checkedAt + 5 * 60_000 });
+      if (!saved) return { connector_id: connectorId, runtime_state: "error", auth_state: this.authState(connector), error_code: "stale_probe", error: "Connector changed during discovery; probe again", tools: [], checked_at: checkedAt };
       return { connector_id: connectorId, runtime_state: "ready", auth_state: this.authState(connector), error_code: null, error: null, tools, checked_at: checkedAt };
     } catch (error) {
       const message = redactMcpError(error instanceof Error ? error.message : String(error)) ?? "MCP probe failed";
@@ -363,7 +456,7 @@ export class McpConnectorService {
   }
 
   private async publicConnector(connector: StoredMcpConnector): Promise<McpConnector> {
-    const cache = await this.repository.toolCache(connector.connector_id);
+    const cache = await this.repository.toolCache(connector.connector_id, connector);
     const settings: StoredMcpSettings = { connector_id: connector.connector_id, enabled: connector.enabled, include_tools: connector.include_tools, exclude_tools: connector.exclude_tools, approval_mode: connector.approval_mode, revision: connector.settings_revision, created_at: connector.created_at, updated_at: connector.updated_at };
     const { enabled: _enabled, include_tools: _includeTools, exclude_tools: _excludeTools, approval_mode: _approvalMode, settings_revision: _settingsRevision, ...definition } = connector;
     return {
@@ -515,10 +608,6 @@ function classifyProbeError(error: string | null): string {
 function sqliteConflict(error: unknown): McpServiceError {
   const message = error instanceof Error ? error.message : String(error);
   return /unique|constraint/i.test(message) ? new McpServiceError("name_conflict", "A connector with this name already exists", 409) : new McpServiceError("storage_error", message, 500);
-}
-
-export function mcpConnectorFingerprint(connector: StoredMcpConnector): string {
-  return createHash("sha256").update(JSON.stringify({ transport: connector.transport, endpoint_url: connector.endpoint_url, command: connector.command, args: connector.args, socket_path: connector.socket_path, runtime_config: connector.runtime_config, revision: connector.revision })).digest("hex");
 }
 
 function effectiveToolDecision(

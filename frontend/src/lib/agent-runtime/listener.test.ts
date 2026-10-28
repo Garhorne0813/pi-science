@@ -824,3 +824,50 @@ it("forwards approval events from the server stream without changing task activi
     expect(useRuntimeStore.getState().working).toBe(false);
   } finally { window.removeEventListener("pi-science-approval-mode-changed", received); }
 });
+
+it.each([
+  { persistentGrant: false, warning: "This call was allowed once, but Always allow could not be saved." },
+  { persistentGrant: null, warning: "The Always allow save could not be verified; check MCP settings." },
+  { persistentGrant: true, warning: "Always allow was saved, but runtime policy refresh failed." },
+])("closes the confirmed approval and displays the explicit persistence outcome: $persistentGrant", async (outcome) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/messages")) return jsonResponse({ messages: [] });
+    if (url.includes("/state")) return jsonResponse(state("session-a"));
+    if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+    if (url.includes("/interactions/")) return jsonResponse({ ok: true, ...outcome });
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  await useRuntimeStore.getState().connect("/workspace", "session-a");
+  const source = FakeEventSource.instances[0];
+  source.open();
+  source.emit("interaction.requested", { type: "interaction.requested", requestId: "approval", kind: "permission", method: "confirm",
+    mcpGrant: { connectorId: "connector", toolName: "echo" } });
+  await useRuntimeStore.getState().respondToInteraction({ confirmed: true, alwaysAllow: true });
+  expect(useRuntimeStore.getState().pendingInteraction).toBeNull();
+  expect(JSON.stringify(useRuntimeStore.getState().thread.blocks)).toContain(outcome.warning);
+  const posts = fetchMock.mock.calls.filter(([input]) => String(input).includes("/interactions/"));
+  expect(posts).toHaveLength(1);
+  expect(JSON.parse(String(posts[0][1]?.body))).toEqual({ confirmed: true, alwaysAllow: true });
+  expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/api/mcp/"))).toBe(false);
+});
+
+it("keeps Always allow pending after failed confirmation without issuing a separate grant request", async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/messages")) return jsonResponse({ messages: [] });
+    if (url.includes("/state")) return jsonResponse(state("session-a"));
+    if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+    if (url.includes("/interactions/")) return jsonResponse({ error: "Worker exited" }, 409);
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  await useRuntimeStore.getState().connect("/workspace", "session-a");
+  const source = FakeEventSource.instances[0]; source.open();
+  source.emit("interaction.requested", { type: "interaction.requested", requestId: "approval", kind: "permission", method: "confirm",
+    mcpGrant: { connectorId: "connector", toolName: "echo" } });
+  await expect(useRuntimeStore.getState().respondToInteraction({ confirmed: true, alwaysAllow: true })).rejects.toThrow(/Worker exited.*check MCP settings/);
+  expect(useRuntimeStore.getState().pendingInteraction?.requestId).toBe("approval");
+  expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/api/mcp/"))).toBe(false);
+});

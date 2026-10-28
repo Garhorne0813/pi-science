@@ -159,6 +159,7 @@ export interface SessionStats {
 }
 
 export interface InteractionResponse {
+  alwaysAllow?: boolean;
   value?: string;
   confirmed?: boolean;
   cancelled?: boolean;

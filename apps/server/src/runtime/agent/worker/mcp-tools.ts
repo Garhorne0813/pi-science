@@ -1,3 +1,5 @@
+import { fingerprintMcpConnection } from "../../../mcp/connection-identity.js";
+import { authorizeMcpConnector, authorizeMcpTool } from "../../../mcp/runtime-policy.js";
 import { redactMcpError } from "../../../mcp/diagnostics.js";
 import { readSessionApproval, sessionMode } from "../../sandbox/session-approval.js";
 import { acquireMcpCall } from "../../../mcp/call-scheduler.js";
@@ -29,6 +31,8 @@ type ServerDefinition = {
   approveTools?: boolean | string[];
   __piScienceAllowedTools?: string[];
   __piScienceConnectorId?: string;
+  __piScienceConnectorRevision?: number;
+  __piScienceSettingsRevision?: number;
   __piScienceBuiltin?: boolean;
   __piScienceProjectId?: string;
   __piScienceAllowPrivate?: boolean;
@@ -54,19 +58,12 @@ async function beforeDeadline<T>(operation: Promise<T>, deadline: number, client
   } finally { if (timer) clearTimeout(timer); }
 }
 
-function permissionRequired(server: ServerDefinition, toolName: string): boolean {
-  if (server.__piScienceAllowedTools?.includes(toolName)) return false;
-  if (server.approveTools === false) return false;
-  if (Array.isArray(server.approveTools)) return server.approveTools.includes(toolName);
-  return true;
-}
-
 function visible(server: ServerDefinition, toolName: string): boolean {
   if (server.includeTools?.length && !server.includeTools.includes(toolName)) return false;
   return !server.excludeTools?.includes(toolName);
 }
 
-/** Official MCP SDK clients owned by one session worker. Managed snapshot policy stays authoritative. */
+/** Official MCP SDK clients owned by one session worker. Discovery and dispatch are admitted by the control plane. */
 export class AgentMcpTools {
   private readonly clients: Client[] = [];
   approvalBoundProcesses = 0;
@@ -78,12 +75,20 @@ export class AgentMcpTools {
     const result = new AgentMcpTools();
     const capabilities = allowedTools === undefined ? undefined : new Set(allowedTools);
     const rawSnapshot = loadProjectedSnapshot(cwd);
-    const servers = loadProjectedServers(cwd, (name, error) => {
-      result.diagnostics.push((redactMcpError(`${name}: ${error instanceof Error ? error.message : String(error)}`) ?? "MCP discovery failed").slice(0, 2048));
-    }, (name) => capabilities === undefined || [...capabilities].some((tool) => tool.split("__").length === 3 && tool.split("__")[1] === name)) as Record<string, ServerDefinition>;
     const deadline = Date.now() + budgetMs;
-    await Promise.all(Object.entries(servers).map(async ([name, server]) => {
-      try { await result.connect(name, server, cwd, bridge, environment, deadline, capabilities, preauthorizedOnly, rawSnapshot.mcpServers[name], authorize, sessionId); }
+    await Promise.all(Object.entries(rawSnapshot.mcpServers).map(async ([name, raw]) => {
+      if (capabilities && ![...capabilities].some((tool) => tool.split("__").length === 3 && tool.split("__")[1] === name)) return;
+      try {
+        // Admit the exact raw snapshot before resolving credentials or constructing
+        // a transport. Never re-read a different snapshot after authorization.
+        await authorizeMcpConnector(cwd, {
+          connectorId: raw.__piScienceConnectorId as string, projectId: rawSnapshot.project_id,
+          connectorRevision: raw.__piScienceConnectorRevision as number, settingsRevision: raw.__piScienceSettingsRevision as number,
+          connectionFingerprint: fingerprintMcpConnection(name, raw),
+        }, AbortSignal.timeout(Math.max(1, deadline - Date.now())));
+        const server = loadProjectedServers(cwd, undefined, (candidate) => candidate === name, rawSnapshot)[name] as ServerDefinition;
+        await result.connect(name, server, cwd, bridge, environment, deadline, capabilities, preauthorizedOnly, raw, authorize, sessionId);
+      }
       catch (error) {
         const code = (error as { code?: unknown }).code;
         const status = typeof code === "number" && code >= 400 && code <= 599 ? ` (HTTP ${code})` : "";
@@ -115,21 +120,19 @@ export class AgentMcpTools {
         ? new SSEClientTransport(new URL(server.url), { fetch: checkedFetch, requestInit })
         : new StreamableHTTPClientTransport(new URL(server.url), { fetch: checkedFetch, requestInit });
     } else throw new Error("unsupported MCP transport");
-    const connectionIdentity = (value: Record<string, unknown> | undefined) => {
-      if (!value) return "";
-      const { approveTools, includeTools, excludeTools, __piScienceAllowedTools, ...connection } = value;
-      return JSON.stringify(connection);
-    };
-    const initialIdentity = connectionIdentity(initial);
+    // Use the same identity as control-plane admission: mutable policy and
+    // discovery counts must not invalidate an otherwise unchanged transport.
+    const connectionIdentity = (value: Record<string, unknown> | undefined) => value ? fingerprintMcpConnection(name, value) : "";
+    const connectionFingerprint = connectionIdentity(initial);
     const currentPolicy = (toolName: string): ServerDefinition => {
       const snapshot = loadProjectedSnapshot(cwd);
       const current = snapshot.mcpServers[name] as ServerDefinition | undefined;
-      if (!current || snapshot.project_id !== server.__piScienceProjectId || connectionIdentity(current) !== initialIdentity || !visible(current, toolName)) {
+      if (!current || snapshot.project_id !== server.__piScienceProjectId || connectionIdentity(current) !== connectionFingerprint || !visible(current, toolName)) {
         throw new Error(`MCP tool disabled or connector changed: ${name}: ${toolName}; refresh the worker`);
       }
       return current;
     };
-    if (connectionIdentity(loadProjectedSnapshot(cwd).mcpServers[name]) !== initialIdentity) throw new Error("MCP connector changed during discovery");
+    if (connectionIdentity(loadProjectedSnapshot(cwd).mcpServers[name]) !== connectionFingerprint) throw new Error("MCP connector changed during discovery");
     const client = new Client({ name: "pi-science-agent-core", version: "0.1.0" });
     try {
       await beforeDeadline(client.connect(transport, { timeout: Math.min(server.requestTimeoutMs ?? 15_000, Math.max(1, deadline - Date.now())) }), deadline, client);
@@ -145,26 +148,35 @@ export class AgentMcpTools {
           description: tool.description ?? `${name} MCP tool ${tool.name}`,
           parameters: tool.inputSchema as TSchema,
           async execute(_toolCallId, params, _onUpdate, _toolContext, _invocation, context) {
-            let policy = currentPolicy(tool.name);
+            currentPolicy(tool.name);
+            const checkAuthority = () => authorizeMcpTool(cwd, {
+              connectorId: server.__piScienceConnectorId!, projectId: server.__piScienceProjectId!, toolName: tool.name,
+              connectorRevision: server.__piScienceConnectorRevision!, settingsRevision: server.__piScienceSettingsRevision!, connectionFingerprint,
+            }, context.abortSignal);
+            const decision = await checkAuthority();
             const approvalRevision = sessionId && !preauthorizedOnly ? (await readSessionApproval(cwd, sessionId)).revision : undefined;
             const mode = sessionId && !preauthorizedOnly ? await sessionMode(cwd, sessionId) : "ask";
-            const safe = tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint !== true && (tool.annotations?.idempotentHint === true || server.__piScienceBuiltin === true);
+            // Third-party annotations are untrusted claims, never permission.
+            // The builtin flag is admitted against the database connection
+            // fingerprint before discovery and again by checkAuthority above.
+            const safe = server.__piScienceBuiltin === true && tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint !== true;
             let approvedByUser = mode === "full" || mode === "auto" && safe;
             let approvalMs = 0;
-            if (permissionRequired(policy, tool.name) && !approvedByUser) {
+            if (decision === "ask" && !approvedByUser) {
               if (preauthorizedOnly) throw new Error(`Delegated MCP tool requires explicit preauthorization in MCP settings: ${name}: ${tool.name}`);
               const approvalStarted = Date.now();
               _onUpdate({ content: [], details: { approval: "waiting" } });
               const approved = await bridge.confirmPermission(`Allow ${name}: ${tool.name}?`,
-                `Arguments: ${JSON.stringify(params).slice(0, 4_000)}`, context.abortSignal, _toolCallId);
+                `Arguments: ${JSON.stringify(params).slice(0, 4_000)}`, context.abortSignal, _toolCallId,
+                { connectorId: server.__piScienceConnectorId!, toolName: tool.name,
+                  connectorRevision: server.__piScienceConnectorRevision, settingsRevision: server.__piScienceSettingsRevision });
               approvalMs = Date.now() - approvalStarted;
               _onUpdate({ content: [], details: { approval: "resolved" } });
               approvedByUser = approved;
               if (!approved) return { content: [{ type: "text", text: "MCP tool call was declined by the user" }], details: { declined: true, scheduling: { approval_ms: approvalMs } }, isError: true };
             }
             // Approval may race with connector disable/revocation. Recheck before dispatch.
-            policy = currentPolicy(tool.name);
-            if (permissionRequired(policy, tool.name) && !approvedByUser) throw new Error("MCP authorization revoked before dispatch");
+            currentPolicy(tool.name);
             if (context.abortSignal?.aborted) throw context.abortSignal.reason;
             const slot = await acquireMcpCall(cwd, JSON.stringify([server.__piScienceProjectId, server.__piScienceConnectorId]), context.abortSignal);
             const started = Date.now();
@@ -172,9 +184,9 @@ export class AgentMcpTools {
             // Queued calls must observe revocations made while they waited.
             await authorize?.(`mcp__${name}__${tool.name}`, context.abortSignal);
             context.abortSignal?.throwIfAborted();
-            policy = currentPolicy(tool.name);
-            if (permissionRequired(policy, tool.name) && !approvedByUser) throw new Error("MCP authorization revoked before dispatch");
+            currentPolicy(tool.name);
             if (approvalRevision !== undefined && sessionId && (await readSessionApproval(cwd, sessionId)).revision !== approvalRevision) throw new Error("MCP approval revision changed while queued; request fresh authorization");
+            if (await checkAuthority() === "ask" && !approvedByUser) throw new Error("MCP authorization revoked before dispatch");
             const response = await client.callTool({ name: tool.name, arguments: params as Record<string, unknown> }, undefined,
               { signal: context.abortSignal, timeout: server.requestTimeoutMs ?? 60_000 });
             const parts = Array.isArray(response.content) ? response.content as Array<Record<string, unknown>> : [];
