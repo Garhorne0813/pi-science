@@ -1,7 +1,9 @@
+import { fingerprintMcpConnection } from "../../mcp/connection-identity.js";
+import { projectedConnectionFingerprint } from "../../mcp/runtime-projection.js";
 import { createServer } from "node:http";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import Fastify from "fastify";
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -78,7 +80,7 @@ async function fixture(withServer = false) {
   const authorize = async (connectorId = connector.connector_id) => {
     const current = (await repository.get(connectorId))!;
     return app.inject({ method: "POST", url: `/api/mcp/runtime/authorize?${new URLSearchParams({ cwd })}`,
-      payload: { projectId: snapshot.project_id, connectorId, toolName: "echo", connectorRevision: current.revision, settingsRevision: current.settings_revision } });
+      payload: { projectId: snapshot.project_id, connectorId, toolName: "echo", connectorRevision: current.revision, settingsRevision: current.settings_revision, connectionFingerprint: projectedConnectionFingerprint(current, snapshot.project_id) } });
   };
   return { cwd, repository, workspaces, projection, credentials, origin, app, mcp, connector, events, pending, notify, approve, grants, authorize };
 }
@@ -472,7 +474,7 @@ it.each(["clear", "deny"])("observes authoritative %s even when the old Allow sn
 it("authorizes against the real project and rejects stale revisions and hidden tools", async () => {
   const f = await fixture();
   const snapshot = JSON.parse(await readFile(join(metadataRoot(f.cwd), "mcp-runtime.json"), "utf8"));
-  const expected = { ...f.pending.mcpGrant, projectId: snapshot.project_id };
+  const expected = { ...f.pending.mcpGrant, projectId: snapshot.project_id, connectionFingerprint: fingerprintMcpConnection(f.connector.name, snapshot.mcpServers[f.connector.name]) };
   const check = (payload = expected) => f.app.inject({ method: "POST", url: `/api/mcp/runtime/authorize?${new URLSearchParams({ cwd: f.cwd })}`, payload });
   expect((await check()).json()).toEqual({ decision: "ask" });
   await f.approve();
@@ -518,7 +520,7 @@ it("retains runtime authorization when management routes are disabled", async ()
     expect((await app.inject({ method: "GET", url: "/api/mcp/connectors" })).statusCode).toBe(404);
     const snapshot = JSON.parse(await readFile(join(metadataRoot(f.cwd), "mcp-runtime.json"), "utf8"));
     const response = await app.inject({ method: "POST", url: `/api/mcp/runtime/authorize?${new URLSearchParams({ cwd: f.cwd })}`,
-      payload: { ...f.pending.mcpGrant, projectId: snapshot.project_id } });
+      payload: { ...f.pending.mcpGrant, projectId: snapshot.project_id, connectionFingerprint: fingerprintMcpConnection(f.connector.name, snapshot.mcpServers[f.connector.name]) } });
     expect(response.json()).toEqual({ decision: "ask" });
   } finally { await app.close(); }
 });
@@ -584,7 +586,7 @@ it("binds discovery authorization to the project, revisions, enabled state, and 
   const f = await fixture();
   const snapshot = JSON.parse(await readFile(join(metadataRoot(f.cwd), "mcp-runtime.json"), "utf8"));
   const { toolName: _tool, ...metadata } = f.pending.mcpGrant;
-  const expected = { ...metadata, projectId: snapshot.project_id };
+  const expected = { ...metadata, projectId: snapshot.project_id, connectionFingerprint: fingerprintMcpConnection(f.connector.name, snapshot.mcpServers[f.connector.name]) };
   const app = Fastify();
   registerMcpRoutes(app, f.mcp, false);
   const check = (payload = expected) => app.inject({ method: "POST", url: `/api/mcp/runtime/connect?${new URLSearchParams({ cwd: f.cwd })}`, payload });
@@ -617,4 +619,75 @@ it.each([
   expect(global.get("blocked")).toBe("deny");
   expect(global.get("review")).toBe("ask");
   expect((await f.authorize()).json()).toEqual({ decision: "ask" });
+});
+
+
+it.each(["streamable_http", "sse"])("rejects a substituted %s URL before disclosing an approved connector credential", async (transport) => {
+  const f = await fixture();
+  const collected: unknown[] = [];
+  const collector = createServer((request, response) => { collected.push(request.headers); response.writeHead(500).end(); });
+  await new Promise<void>((resolve) => collector.listen(0, "127.0.0.1", resolve));
+  cleanups.push(() => new Promise<void>((resolve, reject) => collector.close((error) => error ? reject(error) : resolve())));
+  const port = (collector.address() as { port: number }).port;
+  const connector = await f.mcp.create({ name: "remote", display_name: "Remote", transport, endpoint_url: "https://93.184.216.34/mcp", runtime_config: { allow_private: true }, enabled: true });
+  await f.mcp.setCredential(connector.connector_id, { revision: connector.revision, backend: "managed", delivery: "header", target_name: "Authorization", secret: "synthetic-bound-secret" });
+  await f.mcp.setToolGrant(connector.connector_id, "echo", "allow", f.cwd);
+  expect((await f.authorize(connector.connector_id)).json()).toEqual({ decision: "allow" });
+  const path = join(metadataRoot(f.cwd), "mcp-runtime.json");
+  const snapshot = JSON.parse(await readFile(path, "utf8"));
+  const raw = snapshot.mcpServers.remote;
+  const legitimate = structuredClone(raw);
+  raw.url = `http://127.0.0.1:${port}/collect`;
+  expect(raw.__piScienceConnectorRevision).toBe(legitimate.__piScienceConnectorRevision);
+  expect(raw.__piScienceHeaders).toEqual(legitimate.__piScienceHeaders);
+  await writeFile(path, JSON.stringify(snapshot));
+  const credentials = vi.spyOn(CredentialStore.prototype, "readSync");
+  const worker = await AgentMcpTools.open(f.cwd, new InteractionBridge(() => undefined), {}, undefined, ["mcp__remote__echo"]);
+  try {
+    expect(worker.tools).toEqual([]);
+    expect(worker.diagnostics).toEqual([expect.stringContaining("HTTP 409")]);
+    expect(credentials).not.toHaveBeenCalled();
+    expect(collected).toEqual([]);
+    // Even a direct dispatch admission request with the unchanged IDs/revisions
+    // must reject the substituted definition rather than trust its saved Allow.
+    const response = await f.app.inject({ method: "POST", url: `/api/mcp/runtime/authorize?${new URLSearchParams({ cwd: f.cwd })}`,
+      payload: { connectorId: connector.connector_id, projectId: snapshot.project_id, toolName: "echo",
+        connectorRevision: raw.__piScienceConnectorRevision, settingsRevision: raw.__piScienceSettingsRevision,
+        connectionFingerprint: fingerprintMcpConnection("remote", raw) } });
+    expect(response.statusCode).toBe(409);
+  } finally { await worker.close(); }
+});
+
+it.each(["command", "args", "cwd", "builtin", "environment", "credential", "prefix", "allow-private", "name", "extra-field"])("rejects snapshot %s substitution before starting an approved stdio connector", async (change) => {
+  const f = await fixture(true);
+  await f.mcp.setCredential(f.connector.connector_id, { revision: f.connector.revision, backend: "managed", delivery: "environment", target_name: "TOKEN", secret: "synthetic-bound-secret" });
+  await f.mcp.setToolGrant(f.connector.connector_id, "echo", "allow", f.cwd);
+  expect((await f.authorize()).json()).toEqual({ decision: "allow" });
+  const marker = join(f.cwd, "started");
+  const script = `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`;
+  const replacement = join(f.cwd, process.platform === "win32" ? "replacement.exe" : "replacement-executable");
+  if (change === "command") await copyFile(process.execPath, replacement);
+  await writeFile(f.connector.args[0]!, `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "started");\n` + await readFile(f.connector.args[0]!, "utf8"));
+  const path = join(metadataRoot(f.cwd), "mcp-runtime.json");
+  const snapshot = JSON.parse(await readFile(path, "utf8"));
+  const raw = snapshot.mcpServers[f.connector.name];
+  if (change === "command") raw.command = replacement;
+  if (change === "args") raw.args = ["-e", script];
+  if (change === "cwd") raw.cwd = f.cwd;
+  if (change === "builtin") raw.__piScienceBuiltin = true;
+  if (change === "environment") raw.__piScienceEnvironment.TOKEN = { kind: "environment", name: "SUBSTITUTED_TOKEN" };
+  if (change === "credential") raw.__piScienceEnvironment.TOKEN.credential_ref = "another-credential";
+  if (change === "prefix") raw.__piScienceEnvironment.TOKEN.prefix = "substituted-prefix";
+  if (change === "allow-private") raw.__piScienceAllowPrivate = true;
+  if (change === "name") { snapshot.mcpServers.substituted = raw; delete snapshot.mcpServers[f.connector.name]; }
+  if (change === "extra-field") raw.env = { TOKEN: "injected" };
+  await writeFile(path, JSON.stringify(snapshot));
+  const credentials = vi.spyOn(CredentialStore.prototype, "readSync");
+  const worker = await AgentMcpTools.open(f.cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "" });
+  try {
+    expect(worker.tools).toEqual([]);
+    expect(worker.diagnostics).toEqual([expect.stringContaining("HTTP 409")]);
+    expect(credentials).not.toHaveBeenCalled();
+    await expect(readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  } finally { await worker.close(); }
 });

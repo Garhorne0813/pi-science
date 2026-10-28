@@ -4,6 +4,7 @@ import { operatorFetch } from "../network/operator-fetch.js";
 export const mcpRuntimeConnectorSchema = z.object({
   connectorId: z.string().min(1), projectId: z.string().min(1),
   connectorRevision: z.number().int().positive(), settingsRevision: z.number().int().positive(),
+  connectionFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 export const mcpRuntimePolicySchema = mcpRuntimeConnectorSchema.extend({ toolName: z.string().min(1) });
 export type McpRuntimeConnectorRequest = z.infer<typeof mcpRuntimeConnectorSchema>;

@@ -50,7 +50,7 @@ describe("agent-core worker mutations", () => {
       } }));
     });
     expect(admit).toHaveBeenCalledWith(expect.any(String), {
-      connectorId: "missing-connector", projectId: "project_test", connectorRevision: 1, settingsRevision: 1,
+      connectorId: "missing-connector", projectId: "project_test", connectorRevision: 1, settingsRevision: 1, connectionFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
     }, expect.any(AbortSignal));
     expect(await instance.command("get_state", {})).toMatchObject({ success: true, data: { mcpDiagnostics: ["unavailable: Missing MCP environment variable: PI_TEST_MISSING_MCP_TOKEN"] } });
   });

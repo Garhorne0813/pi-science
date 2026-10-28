@@ -3,7 +3,7 @@ import { operatorFetch } from "../network/operator-fetch.js";
 import { authorizeMcpConnector, authorizeMcpTool } from "./runtime-policy.js";
 
 vi.mock("../network/operator-fetch.js", () => ({ operatorFetch: vi.fn() }));
-const expected = { connectorId: "connector", projectId: "project", toolName: "echo", connectorRevision: 2, settingsRevision: 1 };
+const expected = { connectorId: "connector", projectId: "project", toolName: "echo", connectorRevision: 2, settingsRevision: 1, connectionFingerprint: "0".repeat(64) };
 beforeEach(() => {
   vi.stubEnv("PI_SCIENCE_BACKEND_URL", "http://127.0.0.1:8787");
   vi.stubEnv("PI_SCIENCE_INTERNAL_TOKEN", "synthetic-policy-token");

@@ -1,3 +1,4 @@
+import { fingerprintMcpConnection } from "./connection-identity.js";
 import { bindingError } from "./bindings.js";
 import { lstat, mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -122,6 +123,11 @@ function projectServer(
     ...(Object.keys(runtime.environment).length ? { __piScienceEnvironment: runtime.environment } : {}),
     ...(Object.keys(runtime.headers).length ? { __piScienceHeaders: runtime.headers } : {}),
   };
+}
+
+/** Reconstruct identity from SQLite, never from a caller-supplied snapshot hash. */
+export function projectedConnectionFingerprint(connector: StoredMcpConnector, projectId: string): string {
+  return fingerprintMcpConnection(connector.name, { ...projectServer(connector, [], [], true, projectId) });
 }
 
 async function atomicSnapshot(cwd: string, payload: unknown): Promise<void> {

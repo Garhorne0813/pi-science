@@ -1,3 +1,4 @@
+import { projectedConnectionFingerprint } from "./runtime-projection.js";
 import type { McpRuntimeConnectorRequest, McpRuntimePolicyRequest } from "./runtime-policy.js";
 import { updateWebSettings, webSettingsSchema } from "../web/settings.js";
 import { redactMcpError } from "./diagnostics.js";
@@ -258,7 +259,8 @@ export class McpConnectorService {
     const project = await this.project(cwd);
     const connector = await this.repository.get(expected.connectorId);
     if (project.project_id !== expected.projectId || !connector || connector.revision !== expected.connectorRevision
-      || connector.settings_revision !== expected.settingsRevision) {
+      || connector.settings_revision !== expected.settingsRevision
+      || projectedConnectionFingerprint(connector, project.project_id) !== expected.connectionFingerprint) {
       throw new McpServiceError("stale_policy", "MCP policy changed; refresh the worker", 409);
     }
     if (!connector.enabled || bindingError(connector.runtime_config, connector.credential_ref)) {
@@ -271,7 +273,8 @@ export class McpConnectorService {
     const project = await this.project(cwd);
     const policy = await this.repository.runtimePolicy(project.project_id, expected.connectorId, expected.toolName);
     if (project.project_id !== expected.projectId || !policy || policy.connector.revision !== expected.connectorRevision
-      || policy.connector.settings_revision !== expected.settingsRevision) {
+      || policy.connector.settings_revision !== expected.settingsRevision
+      || projectedConnectionFingerprint(policy.connector, project.project_id) !== expected.connectionFingerprint) {
       throw new McpServiceError("stale_policy", "MCP policy changed; refresh the worker", 409);
     }
     const { connector, global, project: grant } = policy;

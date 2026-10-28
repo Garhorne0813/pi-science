@@ -1,3 +1,4 @@
+import { fingerprintMcpConnection } from "../../../mcp/connection-identity.js";
 import { authorizeMcpConnector, authorizeMcpTool } from "../../../mcp/runtime-policy.js";
 import { redactMcpError } from "../../../mcp/diagnostics.js";
 import { readSessionApproval, sessionMode } from "../../sandbox/session-approval.js";
@@ -83,6 +84,7 @@ export class AgentMcpTools {
         await authorizeMcpConnector(cwd, {
           connectorId: raw.__piScienceConnectorId as string, projectId: rawSnapshot.project_id,
           connectorRevision: raw.__piScienceConnectorRevision as number, settingsRevision: raw.__piScienceSettingsRevision as number,
+          connectionFingerprint: fingerprintMcpConnection(name, raw),
         }, AbortSignal.timeout(Math.max(1, deadline - Date.now())));
         const server = loadProjectedServers(cwd, undefined, (candidate) => candidate === name, rawSnapshot)[name] as ServerDefinition;
         await result.connect(name, server, cwd, bridge, environment, deadline, capabilities, preauthorizedOnly, raw, authorize, sessionId);
@@ -124,6 +126,7 @@ export class AgentMcpTools {
       return JSON.stringify(connection);
     };
     const initialIdentity = connectionIdentity(initial);
+    const connectionFingerprint = fingerprintMcpConnection(name, initial ?? {});
     const currentPolicy = (toolName: string): ServerDefinition => {
       const snapshot = loadProjectedSnapshot(cwd);
       const current = snapshot.mcpServers[name] as ServerDefinition | undefined;
@@ -151,7 +154,7 @@ export class AgentMcpTools {
             currentPolicy(tool.name);
             const checkAuthority = () => authorizeMcpTool(cwd, {
               connectorId: server.__piScienceConnectorId!, projectId: server.__piScienceProjectId!, toolName: tool.name,
-              connectorRevision: server.__piScienceConnectorRevision!, settingsRevision: server.__piScienceSettingsRevision!,
+              connectorRevision: server.__piScienceConnectorRevision!, settingsRevision: server.__piScienceSettingsRevision!, connectionFingerprint,
             }, context.abortSignal);
             const decision = await checkAuthority();
             const approvalRevision = sessionId && !preauthorizedOnly ? (await readSessionApproval(cwd, sessionId)).revision : undefined;
