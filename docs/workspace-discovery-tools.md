@@ -1,6 +1,6 @@
 # Workspace discovery tools
 
-The native Harness tools `ls`, `glob`, and `grep` operate inside the current workspace, including in full sessions. They do not search home directories or external Skill roots. Candidate/confined agents do not receive them. Workspace delegates remain subject to parent active tools, role declarations and the existing per-call capability approval.
+The native Harness tools `ls`, `glob`, and `grep` operate inside the current workspace, including in full sessions. Explicit paths under `.pi/skills` additionally permit read-only exploration of the current Harness's enabled local skill resources. They do not search home directories or external Skill roots. Candidate/confined agents do not receive them. Workspace delegates remain subject to parent active tools, role declarations and the existing per-call capability approval.
 
 ```text
 ls({path: "data"})
@@ -12,7 +12,7 @@ Paths are relative to the workspace and use `/`. Absolute, Windows drive/UNC, pa
 
 ## Implementation and boundaries
 
-Shared read authorization comes from `runtime/sandbox/workspace-read-authorization.ts`. Existing file tools retain full-mode and Skill-root behavior. Discovery uses the narrower workspace boundary and omits protected subtrees without exposing their names or counts. Hidden entries, sensitive names, symlinks, special files and multi-link files are excluded independently of ignore patterns. Protected-root ancestors may be enumerated without granting access to their protected descendants.
+Shared read authorization comes from `runtime/sandbox/workspace-read-authorization.ts`. Existing file tools retain full-mode and Skill-root behavior. Discovery uses the workspace boundary with narrowly granted local skill resources and omits protected subtrees without exposing their names or counts. Ordinary hidden entries, sensitive names, symlinks, special files and multi-link files are excluded independently of ignore patterns. Protected-root ancestors may be enumerated without granting access to their protected descendants.
 
 Linux traversal pins every ancestor using `O_DIRECTORY | O_NOFOLLOW` and reads through `/proc/self/fd`. macOS opens directories with `O_DIRECTORY | O_NOFOLLOW_ANY` and enumerates/inspects entries through a Node-API bridge using `fdopendir` and `fstatat(AT_SYMLINK_NOFOLLOW)`. Both backends keep the directory descriptor open until enumeration and final identity checks finish. File contents use the existing bounded `readRegularFile` descriptor reader. Returned entries undergo a final validation through pinned parents and a freshly loaded operator policy. The tools do not start a shell/search process, write workspace files, make network requests or consume Bash execution budgets.
 
@@ -51,6 +51,16 @@ Linux and macOS are enabled. macOS requires the locally built native directory m
 Tests cover native filesystem traversal, symlinks/hardlinks, protected paths, a concurrent helper process swapping a directory for an external symlink, strict inputs, ignore rules, Unicode/control text, resource budgets, cancellation and session migration. The sandbox acceptance workflow also runs these tests alongside existing OS isolation tests. Its Linux job builds the server and runs `apps/server/scripts/verify-workspace-discovery.mjs` inside Bubblewrap with a read-only host root and no network; only its disposable `/tmp` is writable. Passing these tests does not claim native macOS/Windows support or exhaustive proof against every filesystem race.
 
 For rollback, remove the independent tool registration, migration hook and discovery modules, keeping existing file tools. No workspace data/index migration is created. The SDK version marker can remain inert.
+
+## Boundaries inside `.pi`
+
+Ordinary workspace listing/searching omits `.pi`. An explicit `ls({path: ".pi"})` exposes only navigation toward enabled local skills; it does not list prompts, agents, settings, or other configuration. Explicit `ls`/`glob`/`grep` under `.pi/skills` expose only resources supplied by the current Harness, not every directory on disk. `glob` and `grep` reject `.pi` itself as a recursive search root. External skill roots remain outside discovery's workspace boundary.
+
+An enabled directory skill's `SKILL.md` grants read-only access to that directory's ordinary resource files. An enabled standalone Markdown skill grants only its exact file, with minimal parent navigation. It never grants its sibling files or shared container. Credential-like names, other hidden descendants, protected service data, symlinks and hardlinks remain excluded. Explicit skill searches start their ignore scope at the skill resource boundary, so a workspace `.gitignore` entry for `.pi/` does not disable authorized resource inspection; ignore rules inside the selected scope still apply.
+
+`read` uses the same current Harness resource list, including exact standalone files; disabled or removed skills lose resource access after the corresponding policy change or refresh. `write`/`edit` continue to reject skill resources and other `.pi` paths. Bash retains its existing session sandbox rules, with directory skill resources granted read-only in required sandbox mode; standalone skills do not grant their shared parent directory. Confined workers retain their explicit execution grants, and `.pi-science` remains service-owned.
+
+The resource list is supplied by trusted runtime code on every tool call and passed privately to the discovery Worker; it is not a model-supplied parameter. Models cannot authorize additional roots by adding tool arguments.
 
 ## macOS build and verification
 

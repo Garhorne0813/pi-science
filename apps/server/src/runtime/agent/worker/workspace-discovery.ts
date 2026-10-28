@@ -1,10 +1,11 @@
 import { lstat } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, win32 } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import ignore, { type Ignore } from "ignore";
 import picomatch from "picomatch";
 import type { RE2 } from "re2-wasm";
-import { workspaceReadBoundary } from "../../sandbox/workspace-read-authorization.js";
+import { workspaceReadBoundary, workspaceSkillResources } from "../../sandbox/workspace-read-authorization.js";
+import { isWithin } from "../../sandbox/policy.js";
 import { readRegularFile } from "../../sandbox/file-read.js";
 import { directory } from "./workspace-discovery-directory.js";
 import { operatorExecutionMode } from "../../sandbox/policy.js";
@@ -46,7 +47,7 @@ const preview = (value: string, matchIndex: number) => {
 };
 const MAX_FILE = 8 * 1024 * 1024;
 
-export async function discover(operation: Operation, cwd: string, input: DiscoveryInput, signal?: AbortSignal) {
+export async function discover(operation: Operation, cwd: string, input: DiscoveryInput, signal?: AbortSignal, skillFiles: string[] = []) {
   if (!discoveryBackendAvailable()) throw new DiscoveryError("tool_unavailable");
   try { operatorExecutionMode(); } catch { throw new DiscoveryError("tool_unavailable"); }
   const start = performance.now();
@@ -56,7 +57,15 @@ export async function discover(operation: Operation, cwd: string, input: Discove
   };
   checkpoint();
   const requested = discoveryPath(cwd, input.path ?? ".");
-  const boundary = await workspaceReadBoundary("discovery").catch(() => { throw new DiscoveryError("tool_unavailable"); });
+  const pi = join(cwd, ".pi"); const skills = join(pi, "skills");
+  // Explicit navigation is required: ordinary workspace searches never descend
+  // into .pi. Recursive searches of .pi itself would include unrelated config.
+  const resourceRequest = input.path !== undefined && isWithin(pi, requested);
+  if (resourceRequest && requested === pi && operation !== "ls") throw new DiscoveryError("access_denied");
+  const resources = resourceRequest ? workspaceSkillResources(cwd, skillFiles) : { files: [], directories: [] };
+  const skillRoots = resources.files;
+  const ignoreRoot = resourceRequest ? resources.directories.find(root => isWithin(root, requested)) ?? skills : cwd;
+  const boundary = await workspaceReadBoundary("discovery", skillRoots).catch(() => { throw new DiscoveryError("tool_unavailable"); });
   const authorize = (path: string) => { try { return boundary(path, cwd); } catch { throw new DiscoveryError("access_denied"); } };
   const target = authorize(requested);
   const pathOf = (path: string) => relative(cwd, path).replaceAll("\\", "/");
@@ -182,8 +191,8 @@ export async function discover(operation: Operation, cwd: string, input: Discove
     // Ancestor ignore rules also apply when a narrower path is requested.
     const inherited: Rule[] = [];
     const parents: string[] = [];
-    for (let parent = dirname(target); parent !== dirname(cwd) && parent.startsWith(cwd); parent = dirname(parent)) parents.unshift(parent);
-    if (target !== cwd && operation !== "ls") for (const parent of parents) {
+    for (let parent = dirname(target); parent !== dirname(ignoreRoot) && isWithin(ignoreRoot, parent); parent = dirname(parent)) parents.unshift(parent);
+    if (target !== ignoreRoot && operation !== "ls") for (const parent of parents) {
       try { inherited.push({ base: parent, rules: ignore().add(await readIgnore(parent)) }); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error instanceof DiscoveryError ? error : new DiscoveryError("access_denied");
@@ -199,7 +208,7 @@ export async function discover(operation: Operation, cwd: string, input: Discove
     if (error instanceof DiscoveryError) throw error;
     throw new DiscoveryError((error as NodeJS.ErrnoException).code === "ENOENT" ? "not_found" : "access_denied");
   }
-  const finalBoundary = await workspaceReadBoundary("discovery").catch(() => { throw new DiscoveryError("tool_unavailable"); });
+  const finalBoundary = await workspaceReadBoundary("discovery", skillRoots).catch(() => { throw new DiscoveryError("tool_unavailable"); });
   const finalPaths = new Map<string, Array<{ path: string; directory: boolean }>>();
   for (const item of resultItems) {
     const name = typeof item === "string" ? item : item.path;

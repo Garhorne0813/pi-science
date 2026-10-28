@@ -440,6 +440,45 @@ describe("agent-core worker mutations", () => {
     expect(refreshed.readPaths).not.toContain(review);
   }, 20_000);
 
+  it.skipIf(!discoveryBackend.discoveryBackendAvailable())("shares current skill boundaries across exploration and read while keeping all .pi resources read-only", async () => {
+    const { instance, parts } = await runtime(async cwd => {
+      for (const name of ["review", "disabled", "secrets"]) {
+        await mkdir(join(cwd, ".pi/skills", name), { recursive: true });
+        await writeFile(join(cwd, ".pi/skills", name, "SKILL.md"), `---\nname: ${name}\ndescription: A test skill\n---\nGuidance.`);
+      }
+      await writeFile(join(cwd, ".pi/skills/review/helper.py"), "print('approved guidance')");
+      await writeFile(join(cwd, ".pi/skills/loose.md"), "---\nname: loose\ndescription: Standalone guidance\n---\nStandalone instructions.");
+      await writeFile(join(cwd, ".pi/skills/sibling.txt"), "PRIVATE");
+      await writeFile(join(cwd, ".pi/settings.json"), "PRIVATE");
+    }, { skillPolicy: { mode: "allowlist", skills: ["review", "loose"] } });
+    const tools = await parts.harness.getTools(context);
+    const invoke = (name: string, args: unknown) => tools.find(tool => tool.name === name)!.execute("skill-boundary", args, () => {}, { env: parts.executionEnv },
+      { operationId: "skill-boundary", invocationId: "call", turnId: "turn", getMemo: async () => undefined, setMemo: async () => {} }, context);
+    const result = await invoke("ls", { path: ".pi/skills" });
+    expect(JSON.stringify(result)).toContain("review/");
+    expect(JSON.stringify(result)).toContain("loose.md");
+    expect(JSON.stringify(result)).not.toMatch(/disabled|sibling/);
+    expect(JSON.stringify(await invoke("read", { path: ".pi/skills/review/helper.py" }))).toContain("approved guidance");
+    expect(JSON.stringify(await invoke("read", { path: ".pi/skills/loose.md" }))).toContain("Standalone instructions");
+    for (const path of [".pi/settings.json", ".pi/skills/sibling.txt", ".pi/skills/disabled/SKILL.md"]) {
+      await expect(invoke("read", { path })).rejects.toThrow();
+      await expect(invoke("grep", { path, pattern: "." })).rejects.toThrow("access_denied");
+    }
+    for (const name of ["write", "edit"]) await expect(invoke(name, { path: ".pi/skills/review/helper.py", content: "changed", edits: [{ oldText: "approved", newText: "changed" }] })).rejects.toThrow("read-only");
+    expect(await instance.command("set_skill_policy", { policy: { mode: "none" } })).toMatchObject({ success: true });
+    await expect(invoke("read", { path: ".pi/skills/loose.md" })).rejects.toThrow();
+    await expect(invoke("read", { path: ".pi/skills/review/helper.py" })).rejects.toThrow();
+    await expect(invoke("ls", { path: ".pi/skills" })).rejects.toThrow("access_denied");
+    expect(await instance.command("set_skill_policy", { policy: { mode: "inherit" } })).toMatchObject({ success: true });
+    await rm(join(parts.executionEnv.cwd, ".pi/skills/review/SKILL.md"));
+    expect(await instance.command("refresh_skills", {})).toMatchObject({ success: true });
+    await expect(invoke("read", { path: ".pi/skills/review/helper.py" })).rejects.toThrow();
+    await expect(invoke("ls", { path: ".pi/skills/review" })).rejects.toThrow("access_denied");
+    await expect(invoke("read", { path: ".pi/skills/secrets/SKILL.md" })).rejects.toThrow();
+    await expect(invoke("ls", { path: ".pi/skills/secrets" })).rejects.toThrow("access_denied");
+    expect(JSON.stringify(await invoke("read", { path: ".pi/skills/loose.md" }))).toContain("Standalone instructions");
+  }, 20_000);
+
   it("does not give ordinary bash processes model, server, or inherited credentials", async () => {
     vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "trusted-host");
     vi.stubEnv("PR115_PARENT_SECRET", "parent-test-secret");

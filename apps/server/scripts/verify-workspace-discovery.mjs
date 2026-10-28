@@ -19,5 +19,16 @@ await writeFile(cwd+'/long.txt','😀'.repeat(5000)+'needle');
 assert.deepEqual((await runDiscovery('grep',cwd,{path:'long.txt',pattern:'needle',limit:100})).details.result.matches,[{path:'long.txt',line:1,column:5001,text:'😀'.repeat(128)+'needle'}]);
 const controller = new AbortController(); const cancelled = runDiscovery('grep',cwd,{pattern:'.',limit:100},controller.signal); setTimeout(()=>controller.abort(),10);
 await assert.rejects(cancelled,/cancelled/);
+const skill = cwd+'/.pi/skills/review';
+await mkdir(skill,{recursive:true});
+await writeFile(skill+'/SKILL.md','review guidance');
+await writeFile(skill+'/helper.py',"print('guidance')");
+await writeFile(cwd+'/.pi/settings.json','PRIVATE');
+const skillFiles = [skill+'/SKILL.md'];
+assert.deepEqual((await runDiscovery('ls',cwd,{path:'.pi',limit:100},undefined,skillFiles)).details.result.entries,[{path:'.pi/skills/',type:'directory'}]);
+assert.deepEqual((await runDiscovery('glob',cwd,{path:'.pi/skills',pattern:'**/*.py',limit:100},undefined,skillFiles)).details.result.files,['.pi/skills/review/helper.py']);
+assert.equal((await runDiscovery('grep',cwd,{path:'.pi/skills',pattern:'guidance',limit:100},undefined,skillFiles)).details.result.matches.length,2);
+await assert.rejects(runDiscovery('ls',cwd,{path:'.pi/skills',limit:100}),/access_denied/);
+await assert.rejects(runDiscovery('grep',cwd,{path:'.pi/settings.json',pattern:'.',limit:100},undefined,skillFiles),/access_denied/);
 console.log('PASS: compiled ls/glob/grep + ignore, links, secrets, long Unicode match windows, and cancellation');
 } finally { await rm(root, { recursive: true, force: true }); }

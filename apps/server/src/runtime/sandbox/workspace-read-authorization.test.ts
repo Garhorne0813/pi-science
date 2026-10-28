@@ -39,3 +39,24 @@ it("applies trusted protected roots and sensitive-name visibility across platfor
   expect(() => discovery(root, workspace)).toThrow("outside");
   expect(discovery(join(workspace, "data.csv"), workspace)).toBe(join(workspace, "data.csv"));
 });
+
+it("limits .pi navigation to granted skill resources, without granting siblings or sensitive descendants", async () => {
+  root = await realpath(await mkdtemp(join(tmpdir(), "skill-read-boundary-")));
+  const workspace = join(root, "workspace"); const skill = join(workspace, ".pi/skills/review");
+  const files = [join(skill, "SKILL.md"), join(workspace, ".pi/skills/loose.md"), join(root, "external/SKILL.md")];
+  const discovery = await workspaceReadBoundary("discovery", files);
+  const ordinary = await workspaceReadBoundary("discovery");
+  for (const path of [".pi", ".pi/skills", ".pi/skills/review", ".pi/skills/review/helper.py", ".pi/skills/loose.md"]) {
+    expect(discovery(join(workspace, path), workspace)).toBe(join(workspace, path));
+    expect(() => ordinary(join(workspace, path), workspace)).toThrow();
+  }
+  for (const path of [".pi/settings.json", ".pi/prompts", ".pi/agents", ".pi/skills/disabled/SKILL.md", ".pi/skills/sibling.md", ".pi/skills/review/credentials.json", ".pi/skills/review/.env", ".pi-science/state.json"]) {
+    expect(() => discovery(join(workspace, path), workspace)).toThrow();
+  }
+  expect(() => discovery(files[2]!, workspace)).toThrow();
+  const protectedDiscovery = await workspaceReadBoundary("discovery", [join(workspace, ".pi/skills/secrets/SKILL.md")]);
+  expect(() => protectedDiscovery(join(workspace, ".pi/skills/secrets"), workspace)).toThrow();
+  vi.spyOn(readGrants, "runtimeReadPolicy").mockResolvedValue({ systemReads: [], protectedRoots: [skill] });
+  const denied = await workspaceReadBoundary("discovery", files);
+  expect(() => denied(join(skill, "SKILL.md"), workspace)).toThrow("Protected");
+});

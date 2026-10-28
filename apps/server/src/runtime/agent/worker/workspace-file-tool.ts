@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, rename, unlink, type FileHandle } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { dirname, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { ok, type AgentHarnessTool, type NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { canonicalDirectory, isSensitiveWorkspaceName, isWithin } from "../../sandbox/policy.js";
 import { runtimeReadPolicy, pathsOverlap } from "../../sandbox/read-grants.js";
@@ -20,8 +20,10 @@ import { writeSandboxFile } from "../../sandbox/file-write.js";
 type Tool = AgentHarnessTool<{ env: NodeExecutionEnv }>;
 /** Tools may manage research protocol/candidate files, but never service-private
  * state, protected assets or aliases escaping the workspace. Skill roots are read-only. */
-export function workspaceFileTool(original: Tool, cwd: string, skillRoots: string[], sessionId?: string): Tool {
+export function workspaceFileTool(original: Tool, cwd: string, skillRoots: string[], sessionId?: string, currentSkillFiles?: () => Promise<string[]>): Tool {
   return { ...original, async execute(id, params, update, ctx, invocation, context) {
+    const skillFiles = await currentSkillFiles?.();
+    const readableSkills = skillFiles ? skillFiles.filter(file => basename(file) === "SKILL.md" && dirname(file) !== join(cwd, ".pi", "skills")).map(dirname) : skillRoots;
     const authorizeRead = await workspaceReadBoundary();
     const full = await sessionMode(cwd, sessionId) === "full";
     const home = full ? await realpath(homedir()) : cwd;
@@ -35,7 +37,7 @@ export function workspaceFileTool(original: Tool, cwd: string, skillRoots: strin
       if (write && pathsOverlap(fileURLToPath(new URL("../../../../", import.meta.url)), path)) throw new Error("Trusted server installation is not writable by file tools");
       if (protectedRoots.some((root) => pathsOverlap(root, path))) throw new Error("Protected service data is unavailable to file tools");
       if (write && skillRoots.some((root) => pathsOverlap(root, path))) throw new Error("Skill resources are read-only");
-      const readRoot = !write ? skillRoots.find((root) => isWithin(root, path)) : undefined;
+      const readRoot = !write ? readableSkills.find((root) => isWithin(root, path)) ?? (skillFiles?.includes(path) ? dirname(path) : undefined) : undefined;
       const root = readRoot ?? (full && isWithin(home, path) ? home : cwd);
       if (!write) return authorizeRead(path, root);
       if (!isWithin(root, path) || relative(root, path).split(/[\\/]/).some(isSensitiveWorkspaceName)) throw new Error("File access is outside authorized workspace data");

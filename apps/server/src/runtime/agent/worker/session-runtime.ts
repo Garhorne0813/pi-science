@@ -3,6 +3,8 @@ import { initialSessionApprovalSchema } from "@pi-science/contracts";
 import { readSessionApproval, saveSessionApproval, sessionApprovalPath } from "../../sandbox/session-approval.js";
 import { unlink } from "node:fs/promises";
 import { assertExecutionGrantTool } from "../../sandbox/execution-grants.js";
+import { isWithin } from "../../sandbox/policy.js";
+import { workspaceSkillResources } from "../../sandbox/workspace-read-authorization.js";
 import { childToolAllowance } from "../agent-definitions.js";
 import { networkAccessTool } from "./network-access-tool.js";
 import { discoveryToolsVersion, migrateDiscoveryTools } from "./discovery-tool-migration.js";
@@ -203,17 +205,20 @@ export class SessionRuntime {
       const basePrompt = options.systemPrompt ?? "You are a helpful scientific research assistant.";
       // Resolve per invocation so policy changes and refreshes affect Bash too.
       // A standalone .md skill does not authorize its shared parent directory.
-      const currentSkillDirectories = async (): Promise<string[]> => {
+      const currentSkillFiles = async (): Promise<string[]> => {
         const { skills = [] } = await harness.getResources(context);
-        return skills.filter((skill) => basename(skill.filePath) === "SKILL.md").map((skill) => dirname(skill.filePath));
+        const files = skills.map(skill => skill.filePath);
+        const local = workspaceSkillResources(options.cwd, files).files;
+        return files.filter(file => !isWithin(join(options.cwd, ".pi"), file) || local.includes(file));
       };
+      const currentSkillDirectories = async (): Promise<string[]> => (await currentSkillFiles()).filter(file => basename(file) === "SKILL.md" && dirname(file) !== join(options.cwd, ".pi", "skills")).map(dirname);
       const { harness, open } = await AgentHarness.create({
         session,
         models,
         model,
         thinkingLevel: clampThinkingLevel(model, options.thinking ?? "high"),
         compaction: resolveCompaction(model.contextWindow, options.settings).compaction,
-        tools: [...(!candidateScoped && discoveryAvailable ? workspaceDiscoveryTools({ cwd: options.cwd }) : []), ...(memoryClient?.tools() ?? []), ...(!candidateScoped && !options.delegatedAgent ? [networkAccessTool(interactions, options.cwd, session.metadata.id)] : []), budgets.tool, confinedReadTool(workspaceFileTool(createReadTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined), sandboxIdentity), budgets.wrap(sandboxBashTool(sandboxIdentity, environment, currentSkillDirectories)), workspaceFileTool(createEditTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined), workspaceFileTool(createWriteTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined),
+        tools: [...(!candidateScoped && discoveryAvailable ? workspaceDiscoveryTools({ cwd: options.cwd, skillFiles: currentSkillFiles }) : []), ...(memoryClient?.tools() ?? []), ...(!candidateScoped && !options.delegatedAgent ? [networkAccessTool(interactions, options.cwd, session.metadata.id)] : []), budgets.tool, confinedReadTool(workspaceFileTool(createReadTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined, currentSkillFiles), sandboxIdentity), budgets.wrap(sandboxBashTool(sandboxIdentity, environment, currentSkillDirectories)), workspaceFileTool(createEditTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined), workspaceFileTool(createWriteTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined),
           todoHarnessTool(session), subagentControlTool(subagents), budgets.wrap(subagentHarnessTool(subagents)), ...notebookHarnessTools(options.cwd, session.metadata.id, sandboxIdentity).map(budgets.wrap), ...(remoteCompute ? [remoteCompute.machines, budgets.wrap(remoteCompute.execute), budgets.wrap(remoteCompute.submit), remoteCompute.check] : []), questionnaireHarnessTool(interactions), ...nativeWebTools, ...(mcp?.tools ?? []).map(budgets.wrap)]
           .filter((tool) => (!options.allowedTools || options.allowedTools.includes(tool.name)) && (!candidateScoped || childToolAllowance([tool.name], [tool.name], "candidate").length > 0))
           .map((tool) => !options.delegatedAgent ? tool : { ...tool, async execute(id, params, update, ctx, invocation, context) {
