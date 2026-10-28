@@ -118,7 +118,7 @@ jobs:
         run: pnpm --filter @pi-science/server exec vitest run src/runtime/sandbox/file-read.test.ts src/runtime/agent/worker/workspace-file-tool.test.ts
 
       - name: Test environment diagnostics
-        run: node --test scripts/doctor.test.mjs scripts/check-http-health.test.mjs scripts/check-linux-sandbox.test.mjs scripts/process-state.test.mjs
+        run: node --test scripts/doctor.test.mjs scripts/check-http-health.test.mjs scripts/check-linux-sandbox.test.mjs scripts/process-state.test.mjs scripts/ci-runner-pins.test.mjs
 
       - name: Test Windows process ownership
         if: runner.os == 'Windows'
