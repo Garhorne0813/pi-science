@@ -509,3 +509,14 @@ describe("Node control plane", () => {
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 });
+
+
+it("binds worker policy authority to the actual listening address with an ephemeral port", async () => {
+  const settings = config("", { nodeSettings: false });
+  const modules = createServerModules(settings, { sqliteEnabled: false });
+  const configureBackend = vi.spyOn(modules, "configureBackendUrl");
+  const app = buildApp(settings, modules);
+  openApps.push(app);
+  const address = await app.listen({ host: "127.0.0.1", port: 0 });
+  expect(configureBackend).toHaveBeenCalledWith(address);
+});

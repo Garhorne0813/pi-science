@@ -207,6 +207,15 @@ export class ConversationProjection {
         const explicitKind = interactionKind(eventField(event, "kind"));
         const kind = explicitKind
           ?? (markedPermissionTitle ? "permission" : method === "confirm" ? "confirmation" : "question");
+        const rawGrant = eventField(event, "mcpGrant");
+        const grant = rawGrant && typeof rawGrant === "object" && !Array.isArray(rawGrant)
+          ? rawGrant as Record<string, unknown> : null;
+        const mcpGrant = kind === "permission" && method === "confirm"
+          && typeof grant?.connectorId === "string" && grant.connectorId
+          && typeof grant?.toolName === "string" && grant.toolName
+          ? { connectorId: grant.connectorId, toolName: grant.toolName,
+            ...(Number.isInteger(grant.connectorRevision) ? { connectorRevision: grant.connectorRevision } : {}),
+            ...(Number.isInteger(grant.settingsRevision) ? { settingsRevision: grant.settingsRevision } : {}) } : undefined;
         const type = "interaction.requested";
         const requestId = String(eventField(event, "id") ?? eventField(event, "requestId") ?? "");
         const questionnaireId = method !== "confirm" ? browserQuestionnaireRequestId(rawTitle) : null;
@@ -225,6 +234,7 @@ export class ConversationProjection {
           operation: cap(eventField(event, "operation"), 500),
           scope: cap(eventField(event, "scope"), 500),
           effect: cap(eventField(event, "effect"), 500),
+          ...(mcpGrant ? { mcpGrant } : {}),
         };
         if (method === "confirm") return [common];
         if (["select", "input", "editor"].includes(method)) {

@@ -7,6 +7,10 @@ export class ConversationDelivery {
   private readonly subscribers = new Map<string, Set<Subscriber>>();
   private readonly pendingInteractions = new Map<string, SseEventRecord[]>();
   constructor(private readonly eventStore: EventStore) {}
+  pendingInteraction(cwd: string, sessionId: string, requestId: string): Record<string, unknown> | undefined {
+    return this.pendingInteractions.get(streamKey(cwd, sessionId))?.map(recordPayload)
+      .find((payload) => payload?.type === "interaction.requested" && payload.requestId === requestId) ?? undefined;
+  }
   hasSubscribers(cwd: string, sessionId: string): boolean {
     return (this.subscribers.get(streamKey(cwd, sessionId))?.size ?? 0) > 0;
   }

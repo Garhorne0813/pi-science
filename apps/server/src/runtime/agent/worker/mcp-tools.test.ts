@@ -1,3 +1,4 @@
+import { writeJsonAtomic } from "../../../storage/persistence.js";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +12,17 @@ import { AgentMcpTools } from "./mcp-tools.js";
 import { InteractionBridge } from "./interaction-bridge.js";
 import { acquireMcpCall } from "../../../mcp/call-scheduler.js";
 import { CredentialStore } from "../../../model-resources/credential-store.js";
+
+// These SDK fixtures model policy in their synthetic snapshot. Database-backed
+// authority and publication failures are exercised by mcp-approval.test.ts.
+vi.mock("../../../mcp/runtime-policy.js", async () => {
+  const { loadProjectedSnapshot } = await import("../../shared/extensions/pi-science-mcp.js");
+  return { authorizeMcpConnector: vi.fn(async () => undefined), authorizeMcpTool: vi.fn(async (cwd: string, expected: { connectorId: string; toolName: string }) => {
+    const server = Object.values(loadProjectedSnapshot(cwd).mcpServers).find((value) => value.__piScienceConnectorId === expected.connectorId)!;
+    return (server.__piScienceAllowedTools as string[] | undefined)?.includes(expected.toolName) || server.approveTools === false
+      || Array.isArray(server.approveTools) && !server.approveTools.includes(expected.toolName) ? "allow" : "ask";
+  }) };
+});
 
 // These protocol/authorization fixtures deliberately run on the host. Real
 // isolated MCP startup is covered by platform-acceptance.test.ts.
@@ -70,8 +82,8 @@ describe("agent-core managed MCP tools", () => {
         `await server.connect(new StdioServerTransport());`,
       ].join("\n"));
       const base = { command: process.execPath, args: [server], __piScienceConnectorId: "connector_test", approveTools: true };
-      const project = async (policy: Record<string, unknown> | null) => writeFile(join(cwd, ".pi-science/mcp-runtime.json"),
-        JSON.stringify({ version: 1, project_id: "project_test", mcpServers: policy ? { science: policy } : {} }));
+      const project = async (policy: Record<string, unknown> | null) => writeJsonAtomic(join(cwd, ".pi-science/mcp-runtime.json"),
+        { version: 1, project_id: "project_test", mcpServers: policy ? { science: policy } : {} });
       await project(base);
       const interactions: unknown[] = [];
       mcp = await AgentMcpTools.open(cwd, new InteractionBridge((event) => interactions.push(event)), { PATH: process.env.PATH ?? "" }, undefined,
@@ -159,7 +171,7 @@ describe("agent-core managed MCP tools", () => {
       ].join("\n"));
       await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test",
         mcpServers: { local: { command: process.execPath, args: [server], approveTools: true,
-          __piScienceConnectorId: "connector_test", includeTools: ["echo"] } } }));
+          __piScienceConnectorId: "connector_test", __piScienceConnectorRevision: 7, __piScienceSettingsRevision: 3, includeTools: ["echo"] } } }));
       const interactions: Array<Record<string, unknown>> = [];
       const bridge = new InteractionBridge((event) => interactions.push(event));
       mcp = await AgentMcpTools.open(cwd, bridge, { PATH: process.env.PATH ?? "" });
@@ -168,7 +180,7 @@ describe("agent-core managed MCP tools", () => {
       const updates: unknown[] = [];
       const pending = mcp.tools[0]!.execute("call-1", { value: "hello" }, (update) => { updates.push(update); },
         {} as never, {} as never, { abortSignal: undefined } as never);
-      expect(interactions).toMatchObject([{ type: "interaction.requested", kind: "permission", method: "confirm", id: expect.any(String) }]);
+      await vi.waitFor(() => expect(interactions).toMatchObject([{ type: "interaction.requested", kind: "permission", method: "confirm", id: expect.any(String) }]));
       bridge.notify("extension_ui_response", { id: interactions[0]!.id, confirmed: true });
       const result = await pending;
       expect(result.content).toEqual([{ type: "text", text: "hello" }]);
@@ -176,7 +188,7 @@ describe("agent-core managed MCP tools", () => {
         { content: [], details: { approval: "waiting" } },
         { content: [], details: { approval: "resolved" } },
       ]);
-      expect(interactions[0]).toMatchObject({ toolCallId: "call-1" });
+      expect(interactions[0]).toMatchObject({ toolCallId: "call-1", mcpGrant: { connectorId: "connector_test", toolName: "echo", connectorRevision: 7, settingsRevision: 3 } });
       expect(result.details).toMatchObject({ scheduling: { approval_ms: expect.any(Number), execution_ms: expect.any(Number) } });
     } finally {
       await mcp?.close();
@@ -185,11 +197,13 @@ describe("agent-core managed MCP tools", () => {
   }, 20_000);
 
   it.each([
-    { mode: "ask", safe: true, asks: true },
-    { mode: "auto", safe: true, asks: false },
-    { mode: "auto", safe: false, asks: true },
-    { mode: "full", safe: false, asks: false },
-  ] as const)("applies $mode to safe=$safe tools using session-owned policy", async ({ mode, safe, asks }) => {
+    { mode: "ask", safe: true, builtin: true, asks: true },
+    { mode: "auto", safe: true, builtin: false, asks: true },
+    { mode: "auto", safe: true, builtin: true, asks: false },
+    { mode: "auto", safe: false, builtin: true, asks: true },
+    { mode: "auto", safe: false, builtin: false, asks: true },
+    { mode: "full", safe: false, builtin: false, asks: false },
+  ] as const)("applies $mode to safe=$safe builtin=$builtin tools using session-owned policy", async ({ mode, safe, builtin, asks }) => {
     const cwd = await mkdtemp(join(tmpdir(), "mcp-approval-mode-"));
     vi.stubEnv("PI_SCIENCE_HOME", join(cwd, "service-private"));
     let mcp: AgentMcpTools | undefined;
@@ -203,7 +217,7 @@ describe("agent-core managed MCP tools", () => {
         `server.registerTool("echo", { description: "Echo", annotations: ${JSON.stringify(safe ? { readOnlyHint: true, destructiveHint: false, idempotentHint: true } : {})} }, async () => ({ content: [{ type: "text", text: "ok" }] }));`,
         `await server.connect(new StdioServerTransport());`,
       ].join("\n"));
-      const definition = { command: process.execPath, args: [server], approveTools: true, __piScienceConnectorId: "connector_mode" };
+      const definition = { command: process.execPath, args: [server], approveTools: true, __piScienceConnectorId: "connector_mode", ...(builtin ? { __piScienceBuiltin: true } : {}) };
       await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_mode", mcpServers: { local: definition } }));
       const { saveSessionApproval } = await import("../../sandbox/session-approval.js");
       await saveSessionApproval(cwd, "mode-session", mode, 0);

@@ -179,7 +179,7 @@ export class PiScienceClient {
     requestId: string,
     response: InteractionResponse,
     cwd?: string,
-  ): Promise<void> {
+  ): Promise<{ persistentGrant?: boolean | null; warning?: string }> {
     return rest.respondToInteraction(this.baseUrl, sessionId, requestId, response, cwd);
   }
 

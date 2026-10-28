@@ -202,6 +202,13 @@ descendants, deadline enforcement, installation writes, real MCP and Jobs.
 The sandbox acceptance workflow runs both macOS and Linux. A skipped suite is
 not platform acceptance.
 
+CI pins every Linux runner in the quality and sandbox-acceptance workflows to
+the Ubuntu 24.04 runner image because `ubuntu-latest` moved to Ubuntu 26.04,
+whose AppArmor policy denies the capability the sandbox needs inside its
+nested user namespace, so apply-seccomp fails on `/proc/self/setgroups` and
+every sandboxed call is refused. The pin is a CI compatibility fix, not
+support for 26.04. Hosts that cannot satisfy the sandbox still fail closed.
+
 
 ## Writable operator-config ancestors
 

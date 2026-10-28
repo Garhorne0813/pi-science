@@ -1,3 +1,4 @@
+import { builtinMcpConnectors } from "../../mcp/builtin-connectors.js";
 import { SettingsStore } from "../../storage/settings-store.js";
 import { readWebSettings } from "../../web/settings.js";
 import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
@@ -6,7 +7,7 @@ import { join } from "node:path";
 import Fastify from "fastify";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import * as connectorProbe from "../../mcp/connector-probe.js";
-import { McpConnectorService } from "../../mcp/connector-service.js";
+import { McpConnectorService, mcpConnectorFingerprint } from "../../mcp/connector-service.js";
 import { McpRuntimeProjection } from "../../mcp/runtime-projection.js";
 import { McpRepository } from "../../storage/sqlite/repositories/mcp-repository.js";
 import { WorkspaceRepository } from "../../storage/sqlite/repositories/workspace-repository.js";
@@ -17,7 +18,7 @@ const stores: InMemorySqliteStateStore[] = [];
 const directories: string[] = [];
 const originalHome = process.env.PI_SCIENCE_HOME;
 beforeEach(() => vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "trusted-host"));
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 afterEach(async () => { await Promise.allSettled(stores.splice(0).map((store) => store.close())); await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); if (originalHome === undefined) delete process.env.PI_SCIENCE_HOME; else process.env.PI_SCIENCE_HOME = originalHome; });
 
 async function fixture() {
@@ -28,7 +29,7 @@ async function fixture() {
   const service = new McpConnectorService(repository, new WorkspaceRepository(store), new SettingsStore(), undefined, new McpRuntimeProjection(repository));
   const app = Fastify({ logger: false }); registerMcpRoutes(app, service);
   await service.materializeWorkspace(cwd);
-  return { app, cwd, service };
+  return { app, cwd, service, store };
 }
 
 describe("canonical MCP routes", () => {
@@ -74,7 +75,7 @@ describe("canonical MCP routes", () => {
   it("manages connector credentials without exposing them in runtime snapshots", async () => {
     const { app, cwd, service } = await fixture();
     const connector = await service.create({ name: "remote-auth", display_name: "Remote auth", transport: "streamable_http", endpoint_url: "https://93.184.216.34/mcp", runtime_config: {}, enabled: false });
-    await service.repository.replaceToolCache({ connector_id: connector.connector_id, config_revision: connector.revision, fingerprint: "stable", tools: [{ name: "search", title: "Search", description: "", read_only: true, decision: "ask" }], fetched_at: 1, expires_at: Number.MAX_SAFE_INTEGER });
+    await service.repository.replaceToolCache({ connector_id: connector.connector_id, config_revision: connector.revision, fingerprint: mcpConnectorFingerprint((await service.repository.get(connector.connector_id))!), tools: [{ name: "search", title: "Search", description: "", read_only: true, decision: "ask" }], fetched_at: 1, expires_at: Number.MAX_SAFE_INTEGER });
     const saved = await app.inject({ method: "PUT", url: `/api/mcp/connectors/${connector.connector_id}/credential`, payload: { backend: "managed", delivery: "bearer", target_name: "Authorization", secret: "super-secret-token", revision: connector.revision } });
     expect(saved.statusCode).toBe(200);
     expect(saved.json()).toMatchObject({ configured: true, backend: "managed", delivery: "bearer", target_name: "Authorization" });
@@ -83,7 +84,7 @@ describe("canonical MCP routes", () => {
     const snapshot = await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8");
     expect(snapshot).not.toContain("super-secret-token");
     expect(JSON.parse(snapshot).mcpServers["remote-auth"].__piScienceHeaders.Authorization).toMatchObject({ kind: "credential", prefix: "Bearer " });
-    expect((await service.repository.toolCache(connector.connector_id))?.tools).toHaveLength(1);
+    expect(await service.repository.toolCache(connector.connector_id)).toBeNull();
     const updated = (await service.get(connector.connector_id));
     const removed = await app.inject({ method: "DELETE", url: `/api/mcp/connectors/${connector.connector_id}/credential` });
     expect(removed.statusCode).toBe(200);
@@ -109,7 +110,7 @@ describe("canonical MCP routes", () => {
     await mkdir(join(otherCwd, ".pi-science"));
     await service.materializeWorkspace(otherCwd);
     const connector = await service.create({ name: "scoped", display_name: "Scoped", transport: "stdio", command: process.execPath, runtime_config: {}, enabled: true });
-    await service.repository.replaceToolCache({ connector_id: connector.connector_id, config_revision: connector.revision, fingerprint: "test", tools: [{ name: "safe", title: "Safe", description: "", read_only: true, decision: "ask" }], fetched_at: 1, expires_at: Number.MAX_SAFE_INTEGER });
+    await service.repository.replaceToolCache({ connector_id: connector.connector_id, config_revision: connector.revision, fingerprint: mcpConnectorFingerprint((await service.repository.get(connector.connector_id))!), tools: [{ name: "safe", title: "Safe", description: "", read_only: true, decision: "ask" }], fetched_at: 1, expires_at: Number.MAX_SAFE_INTEGER });
     await service.setToolGrant(connector.connector_id, "safe", "allow");
 
     const projectDeny = await app.inject({ method: "PUT", url: `/api/mcp/connectors/${connector.connector_id}/tools/safe?cwd=${encodeURIComponent(cwd)}`, payload: { decision: "deny" } });
@@ -288,4 +289,102 @@ describe("canonical MCP routes", () => {
       .toMatchObject({ approveTools: true, __piScienceAllowedTools: ["search_pubmed"] });
     await app.close();
   });
+});
+
+
+it.each([
+  { change: "endpoint", fresh: false }, { change: "endpoint", fresh: true },
+  { change: "credential", fresh: false }, { change: "credential", fresh: true },
+])("discards delayed discovery after $change changes (fresh cache: $fresh)", async ({ change, fresh }) => {
+  const { app, cwd, service, store } = await fixture();
+  try {
+    const created = await service.create({ name: "racing", display_name: "Racing", transport: "streamable_http", endpoint_url: "https://93.184.216.34/mcp", runtime_config: {}, enabled: true });
+    await service.setCredential(created.connector_id, { revision: created.revision, backend: "managed", delivery: "bearer", target_name: "Authorization", secret: "synthetic-account-a" });
+    const before = (await service.repository.get(created.connector_id))!;
+    const oldTools = [{ name: "account_a", description: "Account A catalog", decision: "ask" as const }];
+    const cache = { connector_id: before.connector_id, config_revision: before.revision, fingerprint: mcpConnectorFingerprint(before), tools: oldTools, fetched_at: Date.now(), expires_at: Number.MAX_SAFE_INTEGER };
+    expect(await service.repository.replaceToolCache(cache)).toBe(true);
+    let enter!: () => void, release!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(connectorProbe, "connectAndListMcpTools").mockImplementationOnce(async (connector) => {
+      expect(connector.revision).toBe(before.revision);
+      enter(); await blocked; return oldTools;
+    });
+    const pending = service.probe(before.connector_id);
+    try {
+      await entered;
+      if (change === "endpoint") await service.update(before.connector_id, { revision: before.revision, endpoint_url: "https://93.184.216.34/new-endpoint" });
+      else await service.setCredential(before.connector_id, { revision: before.revision, backend: "managed", delivery: "bearer", target_name: "Authorization", secret: "synthetic-account-b" });
+      expect(await store.get("SELECT config_revision FROM mcp_tool_cache WHERE connector_id = ?", [before.connector_id])).toBeNull();
+      const after = (await service.repository.get(before.connector_id))!;
+      expect(after.revision).toBeGreaterThan(before.revision);
+      const freshTools = [{ name: "account_b", decision: "ask" as const }, { name: "account_b_extra", decision: "ask" as const }];
+      if (fresh) expect(await service.repository.replaceToolCache({ ...cache, config_revision: after.revision, fingerprint: mcpConnectorFingerprint(after), tools: freshTools })).toBe(true);
+      release();
+      expect(await pending).toMatchObject({ runtime_state: "error", error_code: "stale_probe", tools: [] });
+      expect((await service.tools(before.connector_id)).tools.map((tool) => tool.name)).toEqual(fresh ? ["account_b", "account_b_extra"] : []);
+      expect(await service.repository.toolCache(before.connector_id, before)).toBeNull();
+      const saved = await store.get<{ config_revision: number }>("SELECT config_revision FROM mcp_tool_cache WHERE connector_id = ?", [before.connector_id]);
+      expect(saved?.config_revision ?? null).toBe(fresh ? after.revision : null);
+      await service.materializeWorkspace(cwd);
+      const projected = JSON.parse(await readFile(join(cwd, ".pi-science/mcp-runtime.json"), "utf8"));
+      expect(projected.mcpServers.racing.__piScienceToolCount).toBe(fresh ? 2 : undefined);
+    } finally { release(); await pending; }
+  } finally { await app.close(); }
+});
+
+it.each(["revision", "fingerprint"])("ignores legacy cached tools with a mismatched %s in lists and projected counts", async (mismatch) => {
+  const { app, cwd, service, store } = await fixture();
+  try {
+    const created = await service.create({ name: "legacy-cache", display_name: "Legacy", transport: "stdio", command: process.execPath, runtime_config: {}, enabled: true });
+    const connector = (await service.repository.get(created.connector_id))!;
+    await service.repository.replaceToolCache({ connector_id: connector.connector_id, config_revision: connector.revision, fingerprint: mcpConnectorFingerprint(connector), tools: [{ name: "old_catalog", decision: "ask" }], fetched_at: Date.now(), expires_at: Number.MAX_SAFE_INTEGER });
+    expect((await service.tools(connector.connector_id)).tools).toHaveLength(1);
+    await service.materializeWorkspace(cwd);
+    expect(JSON.parse(await readFile(join(cwd, ".pi-science/mcp-runtime.json"), "utf8")).mcpServers[connector.name].__piScienceToolCount).toBe(1);
+    await store.run(mismatch === "revision" ? "UPDATE mcp_connectors SET revision = revision + 1 WHERE connector_id = ?" : "UPDATE mcp_tool_cache SET fingerprint = 'obsolete' WHERE connector_id = ?", [connector.connector_id]);
+    expect(await service.repository.toolCache(connector.connector_id)).toBeNull();
+    const response = await app.inject({ method: "GET", url: `/api/mcp/connectors/${connector.connector_id}/tools` });
+    expect(response.json()).toMatchObject({ tools: [], cached_at: null });
+    expect(await service.get(connector.connector_id)).toMatchObject({ tool_count: 0, runtime_state: "unknown" });
+    await service.materializeWorkspace(cwd);
+    expect(JSON.parse(await readFile(join(cwd, ".pi-science/mcp-runtime.json"), "utf8")).mcpServers[connector.name].__piScienceToolCount).toBeUndefined();
+  } finally { await app.close(); }
+});
+
+it("keeps the current cache when an optimistic update fails or a definition transaction rolls back", async () => {
+  const { app, service } = await fixture();
+  try {
+    const created = await service.create({ name: "stable-cache", display_name: "Stable", transport: "stdio", command: process.execPath, runtime_config: {}, enabled: true });
+    await service.update(created.connector_id, { revision: created.revision, args: ["new"] });
+    const current = (await service.repository.get(created.connector_id))!;
+    const cache = { connector_id: current.connector_id, config_revision: current.revision, fingerprint: mcpConnectorFingerprint(current), tools: [{ name: "fresh_catalog", decision: "ask" as const }], fetched_at: Date.now(), expires_at: Number.MAX_SAFE_INTEGER };
+    expect(await service.repository.replaceToolCache(cache)).toBe(true);
+    expect(await service.repository.update(current.connector_id, created.revision, current)).toBeNull();
+    expect(await service.repository.updateCredential(current.connector_id, created.revision, current.runtime_config, null)).toBeNull();
+    const other = await service.create({ name: "conflicting-name", display_name: "Other", transport: "stdio", command: process.execPath, runtime_config: {}, enabled: false });
+    await expect(service.repository.update(current.connector_id, current.revision, { ...current, name: other.name })).rejects.toThrow();
+    expect(await service.repository.toolCache(current.connector_id)).toMatchObject(cache);
+    expect(await service.repository.replaceToolCache({ ...cache, config_revision: created.revision })).toBe(false);
+    expect(await service.repository.toolCache(current.connector_id)).toMatchObject(cache);
+  } finally { await app.close(); }
+});
+
+
+it("keeps builtin metadata for an unchanged definition and invalidates it on an upgrade", async () => {
+  const { app, service, store } = await fixture();
+  try {
+    const builtin = builtinMcpConnectors()[0]!;
+    const before = await service.repository.upsertBuiltin(builtin.connector_id, builtin.definition, true);
+    const cache = { connector_id: before.connector_id, config_revision: before.revision, fingerprint: mcpConnectorFingerprint(before), tools: builtin.tools, fetched_at: Date.now(), expires_at: Number.MAX_SAFE_INTEGER };
+    await service.repository.replaceToolCache(cache);
+    await service.repository.upsertBuiltin(builtin.connector_id, builtin.definition, true);
+    expect(await service.repository.toolCache(before.connector_id)).toMatchObject(cache);
+    const after = await service.repository.upsertBuiltin(builtin.connector_id, { ...builtin.definition, args: [...builtin.definition.args, "upgrade"] }, true);
+    expect(after.revision).toBeGreaterThan(before.revision);
+    expect(await store.get("SELECT config_revision FROM mcp_tool_cache WHERE connector_id = ?", [before.connector_id])).toBeNull();
+    expect(await service.repository.replaceToolCache(cache)).toBe(false);
+    expect(await service.repository.toolCache(before.connector_id)).toBeNull();
+  } finally { await app.close(); }
 });

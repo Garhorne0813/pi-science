@@ -125,7 +125,7 @@ Application state uses `PI_SCIENCE_HOME` or `~/.pi-science`, with a checkout-loc
 | Scientific files | Native previews for molecular structures, FITS, genomics, phase data, 3D models, tables, office documents, media, and code |
 | Reproducibility | Live session-scoped execution records, artifact hashes, generating code and diffs, environment snapshots, provenance history, and reproduce actions |
 | Memory | SQLite records, version-bound human review, scoped recall, optional Extraction/Dream, and shared budgets (disabled by default) |
-| Computation | Shared versioned Micromamba environments, isolated Python/R Session kernels, executable `.ipynb` files, agent notebook cell read/edit/run tools, conversation-linked runs, and an optional app-managed Jupyter Lab |
+| Computation | Shared versioned Micromamba environments, isolated Python/R Session kernels, executable `.ipynb` files, agent notebook cell read/edit/run tools, conversation-linked runs, an optional app-managed Jupyter Lab, and agent-driven remote execution on registered SSH machines (ad-hoc commands and Slurm batch jobs) |
 | Extensibility | Pi skills, prompt templates, MCP servers, subagents, custom model providers, and managed endpoints |
 | Workspace safety | Project-scoped metadata, validated paths, isolated session state, and controlled outbound provider discovery |
 

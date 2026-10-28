@@ -6,7 +6,7 @@ import type { PendingInteraction, PendingQuestionnaire } from "../../lib/agent-r
 import { QuestionnairePrompt } from "./QuestionnairePrompt";
 import { InteractionPrompt } from "./InteractionPrompt";
 
-type Response = { value?: string; confirmed?: boolean; cancelled?: boolean };
+type Response = { value?: string; confirmed?: boolean; cancelled?: boolean; alwaysAllow?: boolean };
 type Props = {
   interaction: PendingInteraction | null;
   questionnaire: PendingQuestionnaire | null;

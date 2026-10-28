@@ -9,6 +9,8 @@ import { sessionTitleRepository } from "../../runtime/node/session-titles.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { AiTitleService } from "../../runtime/title/ai-title-service.js";
 import { PromptRequestRepository, isPromptDeliveryIndeterminate } from "../../runtime/node/prompt-request-repository.js";
+import { McpServiceError, type McpConnectorService } from "../../mcp/connector-service.js";
+import type { ConversationEventHub } from "../../runtime/events/conversation-event-hub.js";
 
 function cwd(request: { query: unknown }): string {
   const value = (request.query as { cwd?: unknown }).cwd;
@@ -65,6 +67,7 @@ export function registerNodeSessionRoutes(
   sessionRepository: SessionRepository,
   aiTitleService?: AiTitleService,
   titles: SessionTitleRepository = sessionTitleRepository,
+  approvals?: { mcp: McpConnectorService; events: ConversationEventHub },
 ): void {
   const promptRequests = new PromptRequestRepository(sessionRepository);
   app.post("/api/sessions", async (request, reply) => {
@@ -271,14 +274,27 @@ export function registerNodeSessionRoutes(
 
   app.post<{ Params: { session_id: string; request_id: string } }>("/api/sessions/:session_id/interactions/:request_id", async (request, reply) => {
     return admitSessionRequest(request, reply, async () => {
-    const body = (request.body ?? {}) as { cancelled?: unknown; confirmed?: unknown; value?: unknown };
+    const body = (request.body ?? {}) as { cancelled?: unknown; confirmed?: unknown; value?: unknown; alwaysAllow?: unknown };
+    let saveGrant: (() => Promise<{ persistentGrant: boolean | null; warning?: string }>) | undefined;
+    if (body.alwaysAllow === true) {
+      const workspace = await validateWorkspaceCwd(cwd(request));
+      const pending = approvals?.events.pendingInteraction(workspace, request.params.session_id, request.params.request_id);
+      if (body.confirmed !== true || body.cancelled === true || pending?.kind !== "permission" || pending.method !== "confirm" || !approvals) {
+        return reply.code(409).send({ ok: false, code: "stale_approval", error: "No matching pending MCP approval" });
+      }
+      try { saveGrant = await approvals.mcp.prepareInteractionGrant(workspace, pending.mcpGrant); }
+      catch (error) {
+        if (error instanceof McpServiceError) return reply.code(error.status).send({ ok: false, code: error.code, error: error.message });
+        throw error;
+      }
+    }
     const payload: Record<string, unknown> = { id: request.params.request_id };
     if (body.cancelled === true) payload.cancelled = true;
     else if (typeof body.confirmed === "boolean") payload.confirmed = body.confirmed;
     else if (body.value !== undefined) payload.value = body.value;
     else payload.cancelled = true;
     const result = await nodeSessionService.notify(request.params.session_id, cwd(request), "extension_ui_response", payload);
-    return result.success ? { ok: true } : sendFailure(reply, result);
+    return result.success ? { ok: true, ...(saveGrant ? await saveGrant() : {}) } : sendFailure(reply, result);
     });
   });
 
