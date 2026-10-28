@@ -1,14 +1,15 @@
 import { execFileSync, spawn } from "node:child_process";
-import { link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, unlink, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BACKGROUND_CONTEXT, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import * as safeRead from "../../sandbox/file-read.js";
 import { discover, discoveryBackendAvailable, discoveryPath } from "./workspace-discovery.js";
 import { workspaceDiscoveryTools } from "./workspace-discovery-tools.js";
 
 const roots: string[] = [];
-afterEach(async () => { vi.unstubAllEnvs(); await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 async function workspace() { const root = await mkdtemp(join(await import("node:fs/promises").then((fs) => fs.realpath(tmpdir())), "discovery-")); roots.push(root); return root; }
 async function put(root: string, path: string, text: string | Buffer) { await mkdir(join(root, path, ".."), { recursive: true }); await writeFile(join(root, path), text); }
 const run = (root: string, operation: "ls" | "glob" | "grep", input = {}) => discover(operation, root, { limit: 100, ...input });
@@ -39,6 +40,29 @@ describe.skipIf(!discoveryBackendAvailable())("workspace discovery on real Linux
     expect((await run(root, "grep", { pattern: "a.b", literal: true, path: "data/α.txt" })).details.result.matches).toEqual([{ path: "data/α.txt", line: 3, text: "a.b" }]);
     expect((await run(root, "grep", { pattern: "absent" })).details.result).toMatchObject({ matches: [], truncated: false });
     expect((await run(root, "grep", { pattern: ".", limit: 1 })).details.result).toMatchObject({ matches: [{ line: 1 }], truncated: true });
+  });
+  it.each(["single", "recursive"] as const)("reports unreadable files as errors in %s grep", async (scope) => {
+    const root = await workspace(); await put(root, "a.txt", "matching content");
+    await chmod(join(root, "a.txt"), 0);
+    try { await expect(run(root, "grep", { path: scope === "single" ? "a.txt" : ".", pattern: "absent" })).rejects.toMatchObject({ code: "access_denied", message: "access_denied" }); }
+    finally { await chmod(join(root, "a.txt"), 0o600); }
+  });
+  it.each(["single", "recursive"] as const)("reports files removed before capture in %s grep", async (scope) => {
+    const root = await workspace(); await put(root, "a.txt", "matching content");
+    const original = safeRead.readRegularFile; const target = join(root, "a.txt");
+    vi.spyOn(safeRead, "readRegularFile").mockImplementation(async (path, maximum) => {
+      if (path === target) await unlink(target);
+      return original(path, maximum);
+    });
+    await expect(run(root, "grep", { path: scope === "single" ? "a.txt" : ".", pattern: "absent" })).rejects.toMatchObject({ code: "not_found", message: "not_found" });
+  });
+  it.each(["single", "recursive"] as const)("sanitizes capture integrity and I/O failures in %s grep", async (scope) => {
+    const root = await workspace(); await put(root, "a.txt", "matching content");
+    const original = safeRead.readRegularFile;
+    for (const failure of [Object.assign(new Error("I/O failure at /private/service-state"), { code: "EIO" }), new Error("File changed during capture")]) {
+      vi.spyOn(safeRead, "readRegularFile").mockImplementation((path, maximum) => path === join(root, "a.txt") ? Promise.reject(failure) : original(path, maximum));
+      await expect(run(root, "grep", { path: scope === "single" ? "a.txt" : ".", pattern: "absent" })).rejects.toMatchObject({ code: "access_denied", message: "access_denied" });
+    }
   });
   it("hides sensitive names, protected roots, file and directory aliases, special files and hardlinks", async () => {
     const root = await workspace(); const outside = await workspace();

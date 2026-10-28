@@ -104,7 +104,12 @@ export async function discover(operation: Operation, cwd: string, input: Discove
       if (scanned + info.size > 64 * 1024 * 1024) throw new DiscoveryError("resource_limit");
       bytes = await read(path, Math.min(MAX_FILE, 64 * 1024 * 1024 - scanned));
       scanned += bytes.length;
-    } catch (error) { if (error instanceof DiscoveryError) throw error; return; }
+    } catch (error) {
+      if (error instanceof DiscoveryError) throw error;
+      // A failed capture is not evidence of a complete search with no matches.
+      // Abort directory searches too, rather than silently hiding missing data.
+      throw new DiscoveryError((error as NodeJS.ErrnoException).code === "ENOENT" ? "not_found" : "access_denied");
+    }
     if (bytes.includes(0)) return;
     let text: string;
     try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return; }
@@ -156,8 +161,8 @@ export async function discover(operation: Operation, cwd: string, input: Discove
         checkpoint(); if (++visited > 20_000) throw new DiscoveryError("resource_limit");
         const child = resolve(path, entry.name);
         if (!allowed(child) || entry.name.startsWith(".")) continue;
-        const info = await lstat(`${pinned}/${entry.name}`).catch(() => undefined);
-        if (!info || !(info.isDirectory() || info.isFile() && info.nlink === 1)) continue;
+        const info = await lstat(`${pinned}/${entry.name}`);
+        if (!(info.isDirectory() || info.isFile() && info.nlink === 1)) continue;
         const dir = info.isDirectory();
         if (operation !== "ls" && ignored(rules, child, dir)) continue;
         children.push({ name: entry.name, dir });
@@ -168,8 +173,8 @@ export async function discover(operation: Operation, cwd: string, input: Discove
         const absolute = resolve(path, child.name);
         if (!allowed(absolute)) continue;
         // Reopen via the pinned parent before publishing names.
-        const info = await lstat(`${pinned}/${child.name}`).catch(() => undefined);
-        if (!info || (child.dir ? !info.isDirectory() : !info.isFile() || info.nlink !== 1)) continue;
+        const info = await lstat(`${pinned}/${child.name}`);
+        if (child.dir ? !info.isDirectory() : !info.isFile() || info.nlink !== 1) throw new DiscoveryError("access_denied");
         if (operation === "ls") { if (!push({ path: pathOf(absolute) + (child.dir ? "/" : ""), type: child.dir ? "directory" : "file" })) return; }
         else if (child.dir) await walk(absolute, depth + 1, rules);
         else await search(absolute);

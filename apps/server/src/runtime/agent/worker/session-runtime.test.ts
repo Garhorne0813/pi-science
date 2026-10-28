@@ -6,6 +6,7 @@ import { BACKGROUND_CONTEXT, type AgentLane, type AgentHarness, type NodeExecuti
 import { createAssistantMessageEventStream, getSystemMessageText, normalizeContext, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentRuntimeStartOptions } from "./protocol.js";
 import type { agentModels } from "./agent-models.js";
+import * as discoveryBackend from "./workspace-discovery-contract.js";
 import { SessionRuntime } from "./session-runtime.js";
 import { AgentMcpTools } from "./mcp-tools.js";
 import { networkGrantsPath, readNetworkGrants } from "../../sandbox/network-grants.js";
@@ -427,7 +428,7 @@ it("blocks prompts and bypass-lane follow-ups until the committed revision relea
 });
 
 
-it("migrates an old read-enabled session once and preserves manually disabled discovery tools", async () => {
+it.skipIf(!discoveryBackend.discoveryBackendAvailable())("migrates an old read-enabled session once and preserves manually disabled discovery tools", async () => {
   const cwd = resolve(await mkdtemp(join(tmpdir(), "runtime-discovery-migration-"))); roots.push(cwd);
   const options = { cwd, sessionsRoot: join(cwd, ".pi-science/agent-sessions"), model: { provider: "openai", modelId: "gpt-4.1-mini" } };
   const fatal = (error: unknown) => { throw error; };
@@ -466,4 +467,41 @@ it("defers discovery migration while the durable lane has a recovering operation
     await migrateDiscoveryTools(session, new Set(["ls", "glob", "grep"]), true);
     expect(await session.getValue(discoveryToolsVersion, context)).toBeUndefined();
   } finally { await session.setValue(address, state, context); }
+});
+
+
+it.each([undefined, ["read", "ls", "glob", "grep"]])("withholds discovery without an available backend (allowlist %j)", async (allowedTools) => {
+  vi.spyOn(discoveryBackend, "discoveryBackendAvailable").mockReturnValue(false);
+  const { instance, parts } = await runtime(undefined, { allowedTools });
+  const state = await instance.command("get_state", {});
+  const registered = (await parts.harness.getTools(context)).map((tool) => tool.name);
+  for (const name of ["ls", "glob", "grep"]) {
+    expect(registered).not.toContain(name);
+    expect((state as { data: { activeTools: string[] } }).data.activeTools).not.toContain(name);
+  }
+  const session = (instance as unknown as { session: import("@earendil-works/pi-agent-core/node").Session }).session;
+  const { discoveryToolsVersion } = await import("./discovery-tool-migration.js");
+  expect(await session.getValue(discoveryToolsVersion, context)).toBeUndefined();
+});
+
+it("removes saved discovery selections on an unsupported backend without marking migration complete", async () => {
+  const { instance: old, parts } = await runtime(undefined, { allowedTools: ["read"] });
+  const cwd = (old as unknown as { metadata: { cwd: string } }).metadata.cwd;
+  await parts.lane.setActiveTools(["read", "ls", "glob", "grep"], context);
+  const sessionId = old.sessionId; await old.close();
+  vi.spyOn(discoveryBackend, "discoveryBackendAvailable").mockReturnValue(false);
+  const reopened = await SessionRuntime.open({ cwd, sessionsRoot: join(cwd, ".pi-science/agent-sessions"), sessionId,
+    model: { provider: "openai", modelId: "gpt-4.1-mini" },
+  }, () => {}, (error) => { throw error; }); runtimes.push(reopened);
+  const state = await reopened.command("get_state", {});
+  for (const name of ["ls", "glob", "grep"]) expect((state as { data: { activeTools: string[] } }).data.activeTools).not.toContain(name);
+  const session = (reopened as unknown as { session: import("@earendil-works/pi-agent-core/node").Session }).session;
+  const { discoveryToolsVersion } = await import("./discovery-tool-migration.js");
+  expect(await session.getValue(discoveryToolsVersion, context)).toBeUndefined();
+});
+
+it.skipIf(process.platform === "linux")("keeps discovery inactive on the native unsupported platform", async () => {
+  const { instance } = await runtime();
+  const state = await instance.command("get_state", {});
+  for (const name of ["ls", "glob", "grep"]) expect((state as { data: { activeTools: string[] } }).data.activeTools).not.toContain(name);
 });
