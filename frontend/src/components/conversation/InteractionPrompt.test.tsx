@@ -60,6 +60,43 @@ describe("InteractionPrompt", () => {
     resolveResponse();
   });
 
+  it("confirms once with Enter on the focused permission dialog, but not while composing or on buttons", () => {
+    const onRespond = vi.fn(() => new Promise<void>(() => undefined));
+    render(<InteractionPrompt interaction={{ requestId: "mcp-enter", kind: "permission", method: "confirm", title: "Run MCP search" }} onRespond={onRespond} />);
+
+    const dialog = screen.getByRole("alertdialog", { name: "Approval required" });
+    fireEvent.keyDown(dialog, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(screen.getByRole("button", { name: "Allow once" }), { key: "Enter" });
+    expect(onRespond).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(dialog, { key: "Enter" });
+    fireEvent.keyDown(dialog, { key: "Enter" });
+    expect(onRespond).toHaveBeenCalledTimes(1);
+    expect(onRespond).toHaveBeenCalledWith({ confirmed: true });
+    expect(screen.getByRole("button", { name: "Allow once" })).toBeDisabled();
+  });
+
+  it("exposes persistent permission only for a managed MCP tool and tracks its pending action", () => {
+    const onRespond = vi.fn(() => new Promise<void>(() => undefined));
+    const grant = { connectorId: "connector_papers", toolName: "search" };
+    render(<InteractionPrompt interaction={{
+      requestId: "mcp-persistent", kind: "permission", method: "confirm", title: "Run MCP search", mcpGrant: grant,
+    }} onRespond={onRespond} />);
+
+    const always = screen.getByRole("button", { name: "Always allow" });
+    expect(always).toHaveAttribute("title", "Always allow this MCP tool in the current project");
+    fireEvent.click(always);
+    expect(onRespond).toHaveBeenCalledWith({ confirmed: true, alwaysAllow: true });
+    expect(always).toBeDisabled();
+    expect(always.querySelector(".animate-spin")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Allow once" }).querySelector(".animate-spin")).toBeNull();
+  });
+
+  it("never shows persistent permission for a generic confirmation", () => {
+    render(<InteractionPrompt interaction={{ requestId: "install", kind: "permission", method: "confirm", title: "Install scipy" }} onRespond={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Always allow" })).not.toBeInTheDocument();
+  });
+
   it("shows pending feedback on the confirmation action that was actually chosen", () => {
     const onRespond = vi.fn(() => new Promise<void>(() => undefined));
     render(<InteractionPrompt interaction={{ requestId: "install-2", kind: "permission", method: "confirm", title: "Install scipy" }} onRespond={onRespond} />);
