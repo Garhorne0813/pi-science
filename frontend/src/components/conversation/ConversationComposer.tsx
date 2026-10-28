@@ -88,7 +88,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
             ConversationRoot composer seat gradient). The card sits at the
             bottom of the column, so the band softens the transcript edge
             scrolling into it. */}
-        {!interactionPending && (
+        {!showWelcome && !interactionPending && (
           <div
             aria-hidden
             className="pointer-events-none absolute inset-x-0 bottom-full h-[var(--composer-fade-height)] bg-gradient-to-t from-[var(--bg)] to-transparent"
