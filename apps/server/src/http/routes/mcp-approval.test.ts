@@ -75,7 +75,12 @@ async function fixture(withServer = false) {
   vi.stubEnv("PI_SCIENCE_BACKEND_URL", origin);
   const approve = (requestId = "request", payload = { confirmed: true, alwaysAllow: true }, workspace = cwd) => app.inject({ method: "POST", url: `/api/sessions/session/interactions/${requestId}?${new URLSearchParams({ cwd: workspace })}`, payload });
   const grants = () => repository.projectToolGrants(snapshot.project_id, connector.connector_id);
-  return { cwd, repository, workspaces, projection, credentials, origin, app, mcp, connector, events, pending, notify, approve, grants };
+  const authorize = async (connectorId = connector.connector_id) => {
+    const current = (await repository.get(connectorId))!;
+    return app.inject({ method: "POST", url: `/api/mcp/runtime/authorize?${new URLSearchParams({ cwd })}`,
+      payload: { projectId: snapshot.project_id, connectorId, toolName: "echo", connectorRevision: current.revision, settingsRevision: current.settings_revision } });
+  };
+  return { cwd, repository, workspaces, projection, credentials, origin, app, mcp, connector, events, pending, notify, approve, grants, authorize };
 }
 
 it("binds Always allow to a live request and persists only in its project after confirmation", async () => {
@@ -232,6 +237,9 @@ it("expires project Allow on credential addition, replacement and removal while 
   const f = await fixture();
   await f.approve();
   await f.mcp.setToolGrant(f.connector.connector_id, "blocked", "deny", f.cwd);
+  await f.mcp.setToolGrant(f.connector.connector_id, "blocked", "deny");
+  await f.mcp.setToolGrant(f.connector.connector_id, "review", "ask");
+  await f.mcp.setToolGrant(f.connector.connector_id, "echo", "allow");
   for (const secret of ["synthetic-first-key", "synthetic-replacement-key", null]) {
     if (secret) {
       const connector = await f.mcp.get(f.connector.connector_id);
@@ -239,6 +247,11 @@ it("expires project Allow on credential addition, replacement and removal while 
     } else await f.mcp.removeCredential(f.connector.connector_id);
     expect((await f.grants()).get("echo")).toBeUndefined();
     expect((await f.grants()).get("blocked")).toBe("deny");
+    expect((await f.repository.globalToolGrants(f.connector.connector_id)).get("echo")).toBeUndefined();
+    expect((await f.repository.globalToolGrants(f.connector.connector_id)).get("blocked")).toBe("deny");
+    expect((await f.repository.globalToolGrants(f.connector.connector_id)).get("review")).toBe("ask");
+    expect((await f.authorize()).json()).toEqual({ decision: "ask" });
+    await f.mcp.setToolGrant(f.connector.connector_id, "echo", "allow");
     await f.mcp.setToolGrant(f.connector.connector_id, "echo", "allow", f.cwd);
   }
 });
@@ -247,10 +260,12 @@ it("does not revoke fresh project grants when an optimistic configuration/creden
   const f = await fixture();
   await f.mcp.update(f.connector.connector_id, { revision: f.connector.revision, args: ["new-server.js"] });
   await f.mcp.setToolGrant(f.connector.connector_id, "echo", "allow", f.cwd);
+  await f.mcp.setToolGrant(f.connector.connector_id, "echo", "allow");
   await expect(f.mcp.update(f.connector.connector_id, { revision: f.connector.revision, args: ["stale-server.js"] })).rejects.toMatchObject({ code: "revision_conflict" });
   const current = await f.repository.get(f.connector.connector_id);
   expect(await f.repository.updateCredential(f.connector.connector_id, f.connector.revision, current!.runtime_config, null)).toBeNull();
   expect((await f.grants()).get("echo")).toBe("allow");
+  expect((await f.repository.globalToolGrants(f.connector.connector_id)).get("echo")).toBe("allow");
 });
 
 it("expires builtin project Allow only when its definition revision changes", async () => {
@@ -259,23 +274,33 @@ it("expires builtin project Allow only when its definition revision changes", as
   const connector = await f.repository.upsertBuiltin(builtin.connector_id, builtin.definition, true);
   await f.mcp.setToolGrant(connector.connector_id, "echo", "allow", f.cwd);
   await f.mcp.setToolGrant(connector.connector_id, "blocked", "deny", f.cwd);
+  await f.mcp.setToolGrant(connector.connector_id, "echo", "allow");
+  await f.mcp.setToolGrant(connector.connector_id, "blocked", "deny");
+  await f.mcp.setToolGrant(connector.connector_id, "review", "ask");
   const projectId = JSON.parse(await readFile(join(metadataRoot(f.cwd), "mcp-runtime.json"), "utf8")).project_id;
   await f.repository.upsertBuiltin(builtin.connector_id, builtin.definition, true);
   expect((await f.repository.projectToolGrants(projectId, connector.connector_id)).get("echo")).toBe("allow");
+  expect((await f.repository.globalToolGrants(connector.connector_id)).get("echo")).toBe("allow");
   await f.repository.upsertBuiltin(builtin.connector_id, { ...builtin.definition, args: [...builtin.definition.args, "changed-builtin"] }, true);
   expect((await f.repository.projectToolGrants(projectId, connector.connector_id)).get("echo")).toBeUndefined();
   expect((await f.repository.projectToolGrants(projectId, connector.connector_id)).get("blocked")).toBe("deny");
+  expect((await f.repository.globalToolGrants(connector.connector_id)).get("echo")).toBeUndefined();
+  expect((await f.repository.globalToolGrants(connector.connector_id)).get("blocked")).toBe("deny");
+  expect((await f.repository.globalToolGrants(connector.connector_id)).get("review")).toBe("ask");
+  expect((await f.authorize(connector.connector_id)).json()).toEqual({ decision: "ask" });
 });
 
 
 it("rolls back grant revocation when the connector update cannot commit", async () => {
   const f = await fixture();
   await f.approve();
+  await f.mcp.setToolGrant(f.connector.connector_id, "echo", "allow");
   const other = await f.mcp.create({ name: "other-connector", display_name: "Other", transport: "stdio", command: process.execPath, runtime_config: {}, enabled: false });
   const current = await f.repository.get(f.connector.connector_id);
   await expect(f.repository.update(f.connector.connector_id, f.connector.revision, { ...current!, name: other.name })).rejects.toThrow();
   expect((await f.grants()).get("echo")).toBe("allow");
   expect((await f.repository.get(f.connector.connector_id))?.revision).toBe(f.connector.revision);
+  expect((await f.repository.globalToolGrants(f.connector.connector_id)).get("echo")).toBe("allow");
 });
 
 it("expires Allow in every project while leaving other connectors' grants intact", async () => {
@@ -572,4 +597,24 @@ it("binds discovery authorization to the project, revisions, enabled state, and 
     vi.spyOn(f.repository, "get").mockResolvedValueOnce({ ...connector, enabled: false });
     expect((await check()).statusCode).toBe(403);
   } finally { await app.close(); }
+});
+
+
+it.each([
+  { command: "changed-executable" },
+  { transport: "streamable_http", command: null, endpoint_url: "https://93.184.216.34/mcp" },
+  { args: ["changed-server.js"] },
+])("requires approval again after globally allowed connector identity changes: %j", async (change) => {
+  const f = await fixture();
+  await f.mcp.setToolGrant(f.connector.connector_id, "echo", "allow");
+  await f.mcp.setToolGrant(f.connector.connector_id, "blocked", "deny");
+  await f.mcp.setToolGrant(f.connector.connector_id, "review", "ask");
+  expect((await f.grants()).has("echo")).toBe(false);
+  expect((await f.authorize()).json()).toEqual({ decision: "allow" });
+  await f.mcp.update(f.connector.connector_id, { revision: f.connector.revision, ...change });
+  const global = await f.repository.globalToolGrants(f.connector.connector_id);
+  expect(global.has("echo")).toBe(false);
+  expect(global.get("blocked")).toBe("deny");
+  expect(global.get("review")).toBe("ask");
+  expect((await f.authorize()).json()).toEqual({ decision: "ask" });
 });

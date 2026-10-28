@@ -1,3 +1,4 @@
+import * as mcpPolicy from "../../../mcp/runtime-policy.js";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -39,12 +40,18 @@ afterEach(async () => {
 
 describe("agent-core worker mutations", () => {
   it("exposes connector discovery failures in the runtime snapshot", async () => {
+    // This test isolates diagnostics after connector admission. Authority/stale
+    // snapshot rejection is covered by the database-backed MCP approval suite.
+    const admit = vi.spyOn(mcpPolicy, "authorizeMcpConnector").mockResolvedValue(undefined);
     const { instance } = await runtime(async (cwd) => {
       await mkdir(join(cwd, ".pi-science"), { recursive: true });
       await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test", mcpServers: {
-        unavailable: { command: process.execPath, args: [], __piScienceConnectorId: "missing-connector", __piScienceEnvironment: { TOKEN: { kind: "environment", name: "PI_TEST_MISSING_MCP_TOKEN" } } },
+        unavailable: { command: process.execPath, args: [], __piScienceConnectorId: "missing-connector", __piScienceConnectorRevision: 1, __piScienceSettingsRevision: 1, __piScienceEnvironment: { TOKEN: { kind: "environment", name: "PI_TEST_MISSING_MCP_TOKEN" } } },
       } }));
     });
+    expect(admit).toHaveBeenCalledWith(expect.any(String), {
+      connectorId: "missing-connector", projectId: "project_test", connectorRevision: 1, settingsRevision: 1,
+    }, expect.any(AbortSignal));
     expect(await instance.command("get_state", {})).toMatchObject({ success: true, data: { mcpDiagnostics: ["unavailable: Missing MCP environment variable: PI_TEST_MISSING_MCP_TOKEN"] } });
   });
 
