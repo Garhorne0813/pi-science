@@ -176,7 +176,7 @@ describe("agent-core managed MCP tools", () => {
         { content: [], details: { approval: "waiting" } },
         { content: [], details: { approval: "resolved" } },
       ]);
-      expect(interactions[0]).toMatchObject({ toolCallId: "call-1" });
+      expect(interactions[0]).toMatchObject({ toolCallId: "call-1", mcpGrant: { connectorId: "connector_test", toolName: "echo" } });
       expect(result.details).toMatchObject({ scheduling: { approval_ms: expect.any(Number), execution_ms: expect.any(Number) } });
     } finally {
       await mcp?.close();
