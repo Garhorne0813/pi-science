@@ -99,7 +99,7 @@ export function createCommandActions(set: SetState, get: GetState): Pick<Runtime
         throw error;
       }
     },
-    respondToInteraction: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => {
+    respondToInteraction: (response: { value?: string; confirmed?: boolean; cancelled?: boolean; alwaysAllow?: boolean }) => {
       const { activeSessionId, cwd, pendingInteraction } = get();
       if (!activeSessionId || !pendingInteraction) return Promise.resolve();
       const requestId = pendingInteraction.requestId;
@@ -110,10 +110,18 @@ export function createCommandActions(set: SetState, get: GetState): Pick<Runtime
         ++generations.activity;
         ++generations.localMutation;
         try {
+          if (response.alwaysAllow) {
+            const grant = pendingInteraction.mcpGrant;
+            if (response.confirmed !== true || pendingInteraction.kind !== "permission" || !grant) {
+              throw new Error("This interaction does not support persistent MCP approval");
+            }
+            // Save before confirming: failures must keep the prompt open for retry.
+            await getClient().allowMcpToolForProject(cwd, grant.connectorId, grant.toolName);
+          }
           await getClient().respondToInteraction(
             activeSessionId,
             requestId,
-            response,
+            { value: response.value, confirmed: response.confirmed, cancelled: response.cancelled },
             cwd,
           );
           const current = get();
