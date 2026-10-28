@@ -247,6 +247,43 @@ export class McpConnectorService {
     await this.reload();
   }
 
+  /** Called only with metadata from the server's live pending interaction.
+   * Confirm first; a failed/expired worker response must never leave a grant.
+   * Once confirmed, every persistence/projection failure has an explicit result. */
+  async prepareInteractionGrant(cwd: string, raw: unknown): Promise<() => Promise<{ persistentGrant: boolean | null; warning?: string }>> {
+    const grant = raw as { connectorId?: unknown; toolName?: unknown; connectorRevision?: unknown; settingsRevision?: unknown } | undefined;
+    if (!grant || typeof grant.connectorId !== "string" || typeof grant.toolName !== "string"
+      || !Number.isInteger(grant.connectorRevision) || !Number.isInteger(grant.settingsRevision)) {
+      throw new McpServiceError("stale_approval", "This MCP approval is stale; request fresh authorization", 409);
+    }
+    const { connectorId, toolName } = grant;
+    const connector = await this.requireConnector(connectorId);
+    const project = await this.project(cwd);
+    const global = await this.repository.globalToolGrants(connectorId);
+    const previous = (await this.repository.projectToolGrants(project.project_id, connectorId)).get(toolName) ?? null;
+    const included = [...connector.include_tools, ...connector.runtime_config.include_tools];
+    if (!connector.enabled || connector.revision !== grant.connectorRevision || connector.settings_revision !== grant.settingsRevision
+      || global.get(toolName) === "deny" || previous === "deny" || included.length && !included.includes(toolName)
+      || connector.exclude_tools.includes(toolName) || connector.runtime_config.exclude_tools.includes(toolName)) {
+      throw new McpServiceError("stale_approval", "MCP connector or policy changed; request fresh authorization", 409);
+    }
+    return async () => {
+      let persisted = false;
+      try {
+        persisted = await this.repository.allowPendingTool(project.project_id, connectorId, toolName, connector.revision, connector.settings_revision, previous);
+        if (!persisted) return { persistentGrant: false, warning: "This call was allowed once. MCP policy changed, so Always allow was not saved." };
+        await this.projection?.materialize(project.canonical_path, project.project_id);
+        // Live workers reread the snapshot before each call; reloading here can
+        // interrupt the very invocation that was just approved.
+        return { persistentGrant: true };
+      } catch {
+        return { persistentGrant: persisted ? true : null, warning: persisted
+          ? "Always allow was saved, but runtime policy refresh failed. Refresh the session before the next call; revoke access in MCP settings if needed."
+          : "This call was allowed once. The Always allow save could not be verified; check MCP settings before retrying or assuming access was not saved." };
+      }
+    };
+  }
+
   async clearToolGrant(connectorId: string, toolName: string, cwd?: string | null): Promise<void> {
     await this.requireConnector(connectorId);
     if (cwd) {

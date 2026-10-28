@@ -213,7 +213,9 @@ export class ConversationProjection {
         const mcpGrant = kind === "permission" && method === "confirm"
           && typeof grant?.connectorId === "string" && grant.connectorId
           && typeof grant?.toolName === "string" && grant.toolName
-          ? { connectorId: grant.connectorId, toolName: grant.toolName } : undefined;
+          ? { connectorId: grant.connectorId, toolName: grant.toolName,
+            ...(Number.isInteger(grant.connectorRevision) ? { connectorRevision: grant.connectorRevision } : {}),
+            ...(Number.isInteger(grant.settingsRevision) ? { settingsRevision: grant.settingsRevision } : {}) } : undefined;
         const type = "interaction.requested";
         const requestId = String(eventField(event, "id") ?? eventField(event, "requestId") ?? "");
         const questionnaireId = method !== "confirm" ? browserQuestionnaireRequestId(rawTitle) : null;

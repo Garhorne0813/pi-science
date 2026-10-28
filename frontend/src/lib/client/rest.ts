@@ -309,7 +309,7 @@ export async function respondToInteraction(
   requestId: string,
   response: InteractionResponse,
   cwd?: string,
-): Promise<void> {
+): Promise<{ persistentGrant?: boolean | null; warning?: string }> {
   const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
   const res = await request(
     `${baseUrl}/api/sessions/${sessionId}/interactions/${encodeURIComponent(requestId)}${params}`,
@@ -324,18 +324,7 @@ export async function respondToInteraction(
   if (!res.ok || data.ok === false) {
     throw new Error(responseError(data, `Interaction response failed: ${res.statusText}`));
   }
-}
-
-/** Persist a single MCP tool permission for this project's future calls. */
-export async function allowMcpToolForProject(baseUrl: string, cwd: string, connectorId: string, toolName: string): Promise<void> {
-  const res = await request(
-    `${baseUrl}/api/mcp/connectors/${encodeURIComponent(connectorId)}/tools/${encodeURIComponent(toolName)}?${new URLSearchParams({ cwd })}`,
-    { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision: "allow" }) },
-  );
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.ok === false) {
-    throw new Error(responseError(data, `Saving MCP permission failed: ${res.statusText}`));
-  }
+  return { persistentGrant: data.persistentGrant, warning: data.warning };
 }
 
 /** Ask the control plane to generate an AI title for a session (Pi runtime). */

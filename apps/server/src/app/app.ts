@@ -153,7 +153,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeSse || config.nodePiManager) registerSseRoutes(app, nodeSessionService, events);
   if (config.nodeFiles) registerFileReadRoutes(app);
   const titleRuntimes = new CoreTitleRuntimeFactory(undefined, environments);
-  if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository, new AiTitleService(titleRuntimes));
+  if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository, new AiTitleService(titleRuntimes), undefined, sqliteEnabled ? { mcp, events } : undefined);
   if (config.nodeJobs !== false) {
     // Keep command execution rate-limited without throttling read-only control
     // plane routes. The child scope ensures the plugin's onRoute hook sees the

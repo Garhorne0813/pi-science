@@ -159,7 +159,7 @@ describe("agent-core managed MCP tools", () => {
       ].join("\n"));
       await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test",
         mcpServers: { local: { command: process.execPath, args: [server], approveTools: true,
-          __piScienceConnectorId: "connector_test", includeTools: ["echo"] } } }));
+          __piScienceConnectorId: "connector_test", __piScienceConnectorRevision: 7, __piScienceSettingsRevision: 3, includeTools: ["echo"] } } }));
       const interactions: Array<Record<string, unknown>> = [];
       const bridge = new InteractionBridge((event) => interactions.push(event));
       mcp = await AgentMcpTools.open(cwd, bridge, { PATH: process.env.PATH ?? "" });
@@ -176,7 +176,7 @@ describe("agent-core managed MCP tools", () => {
         { content: [], details: { approval: "waiting" } },
         { content: [], details: { approval: "resolved" } },
       ]);
-      expect(interactions[0]).toMatchObject({ toolCallId: "call-1", mcpGrant: { connectorId: "connector_test", toolName: "echo" } });
+      expect(interactions[0]).toMatchObject({ toolCallId: "call-1", mcpGrant: { connectorId: "connector_test", toolName: "echo", connectorRevision: 7, settingsRevision: 3 } });
       expect(result.details).toMatchObject({ scheduling: { approval_ms: expect.any(Number), execution_ms: expect.any(Number) } });
     } finally {
       await mcp?.close();

@@ -206,6 +206,22 @@ export class McpRepository {
     await this.store.run("DELETE FROM mcp_project_tool_grants WHERE project_id = ? AND connector_id = ? AND tool_name = ?", [projectId, connectorId, toolName]);
   }
 
+  /** Compare and set in one statement: approval must never authorize a newer
+   * connector or overwrite a policy change made while confirmation was in flight. */
+  async allowPendingTool(projectId: string, connectorId: string, toolName: string, revision: number, settingsRevision: number, previous: McpToolDecision | null): Promise<boolean> {
+    const result = await this.store.run(
+      `INSERT INTO mcp_project_tool_grants (project_id, connector_id, tool_name, decision, updated_at)
+       SELECT ?, ?, ?, 'allow', ? WHERE EXISTS (
+         SELECT 1 FROM mcp_connectors WHERE connector_id = ? AND revision = ? AND settings_revision = ? AND enabled = 1
+       ) AND NOT EXISTS (
+         SELECT 1 FROM mcp_global_tool_grants WHERE connector_id = ? AND tool_name = ? AND decision = 'deny'
+       ) AND (SELECT decision FROM mcp_project_tool_grants WHERE project_id = ? AND connector_id = ? AND tool_name = ?) IS ?
+       ON CONFLICT(project_id, connector_id, tool_name) DO UPDATE SET decision = excluded.decision, updated_at = excluded.updated_at`,
+      [projectId, connectorId, toolName, Date.now(), connectorId, revision, settingsRevision, connectorId, toolName, projectId, connectorId, toolName, previous],
+    );
+    return Number(result.changes) > 0;
+  }
+
   async globalToolGrants(connectorId: string): Promise<Map<string, McpToolDecision>> {
     const rows = await this.store.all<{ tool_name: string; decision: McpToolDecision }>("SELECT tool_name, decision FROM mcp_global_tool_grants WHERE connector_id = ?", [connectorId]);
     return new Map(rows.map((row) => [row.tool_name, row.decision]));

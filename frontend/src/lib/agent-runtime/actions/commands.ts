@@ -110,18 +110,10 @@ export function createCommandActions(set: SetState, get: GetState): Pick<Runtime
         ++generations.activity;
         ++generations.localMutation;
         try {
-          if (response.alwaysAllow) {
-            const grant = pendingInteraction.mcpGrant;
-            if (response.confirmed !== true || pendingInteraction.kind !== "permission" || !grant) {
-              throw new Error("This interaction does not support persistent MCP approval");
-            }
-            // Save before confirming: failures must keep the prompt open for retry.
-            await getClient().allowMcpToolForProject(cwd, grant.connectorId, grant.toolName);
-          }
-          await getClient().respondToInteraction(
+          const result = await getClient().respondToInteraction(
             activeSessionId,
             requestId,
-            { value: response.value, confirmed: response.confirmed, cancelled: response.cancelled },
+            response,
             cwd,
           );
           const current = get();
@@ -148,13 +140,21 @@ export function createCommandActions(set: SetState, get: GetState): Pick<Runtime
             set({ ...remaining, working: true, turnLifecycle: remaining.pendingInteraction ? "waiting" : "active", status: "ready", thread });
             ensureTurnWatchdog();
           }
+          if (result?.warning) {
+            appendRuntimeError(new Error(result.warning), activeSessionId, cwd);
+          }
         } catch (error) {
+          // A lost HTTP response can hide a completed save. Never imply that
+          // Deny/retry rolls back permanent access when the outcome is unknown.
+          const failure = response.alwaysAllow
+            ? new Error(`${error instanceof Error ? error.message : "Approval failed"}. Always allow could not be confirmed; check MCP settings before retrying or denying this request.`)
+            : error;
           const current = get();
           if (current.activeSessionId === activeSessionId && current.cwd === cwd) {
-            appendRuntimeError(error, activeSessionId, cwd);
+            appendRuntimeError(failure, activeSessionId, cwd);
             set({ status: "error" });
           }
-          throw error;
+          throw failure;
         }
       })();
       _interactionResponsePromises.set(key, operation);

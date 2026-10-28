@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { RuntimeEvent, RuntimeResult } from "../agent-runtime-types.js";
 
-type McpToolGrant = { connectorId: string; toolName: string };
+type McpToolGrant = { connectorId: string; toolName: string; connectorRevision?: number; settingsRevision?: number };
 
 type Pending = { resolve: (value: string | null) => void; reject: (error: Error) => void; cleanup: () => void };
 

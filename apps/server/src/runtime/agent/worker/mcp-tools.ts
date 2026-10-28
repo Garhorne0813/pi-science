@@ -29,6 +29,8 @@ type ServerDefinition = {
   approveTools?: boolean | string[];
   __piScienceAllowedTools?: string[];
   __piScienceConnectorId?: string;
+  __piScienceConnectorRevision?: number;
+  __piScienceSettingsRevision?: number;
   __piScienceBuiltin?: boolean;
   __piScienceProjectId?: string;
   __piScienceAllowPrivate?: boolean;
@@ -157,7 +159,8 @@ export class AgentMcpTools {
               _onUpdate({ content: [], details: { approval: "waiting" } });
               const approved = await bridge.confirmPermission(`Allow ${name}: ${tool.name}?`,
                 `Arguments: ${JSON.stringify(params).slice(0, 4_000)}`, context.abortSignal, _toolCallId,
-                { connectorId: server.__piScienceConnectorId!, toolName: tool.name });
+                { connectorId: server.__piScienceConnectorId!, toolName: tool.name,
+                  connectorRevision: server.__piScienceConnectorRevision, settingsRevision: server.__piScienceSettingsRevision });
               approvalMs = Date.now() - approvalStarted;
               _onUpdate({ content: [], details: { approval: "resolved" } });
               approvedByUser = approved;
