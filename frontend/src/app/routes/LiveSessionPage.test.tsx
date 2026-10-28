@@ -413,7 +413,7 @@ describe("conversation without workflow shortcuts", () => {
     renderWorkspaceLanding();
     await screen.findByTestId("model-control");
 
-    for (const label of ["Research Loop", "Optimize", "Compare approaches", "Evaluate", "Reproduce experiment"]) {
+    for (const label of ["Research loop", "Optimize", "Compare approaches", "Evaluate results", "Reproduce experiment"]) {
       expect(screen.queryByRole("button", { name: label })).toBeNull();
     }
   });
