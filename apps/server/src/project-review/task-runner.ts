@@ -25,7 +25,7 @@ export abstract class ReviewTaskRunner implements ReviewSubagentRunner {
 
     try {
       await process.initialize();
-      let response = await promptAndWait(reviewPrompt(request.excerpt));
+      let response = await promptAndWait(request.prompt ?? reviewPrompt(request.excerpt));
       let parseError: unknown;
       for (let attempt = 0; attempt <= REPAIR_ATTEMPTS; attempt += 1) {
         try { return { run_id: request.run_id, output: parseReviewResult(response) }; }
