@@ -14,7 +14,7 @@ async function workspace() { const root = await mkdtemp(join(await import("node:
 async function put(root: string, path: string, text: string | Buffer) { await mkdir(join(root, path, ".."), { recursive: true }); await writeFile(join(root, path), text); }
 const run = (root: string, operation: "ls" | "glob" | "grep", input = {}) => discover(operation, root, { limit: 100, ...input });
 
-describe.skipIf(!discoveryBackendAvailable())("workspace discovery on real Linux descriptors", () => {
+describe.skipIf(!discoveryBackendAvailable())("workspace discovery on real native descriptors", () => {
   it("lists one level, sorts paths, preserves Unicode, and bounds results", async () => {
     const root = await workspace();
     await put(root, "z.csv", "x"); await put(root, "a/data.csv", "x"); await put(root, "中文 空格.csv", "x");

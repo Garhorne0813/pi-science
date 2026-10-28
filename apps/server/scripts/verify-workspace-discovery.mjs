@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile, symlink, link } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, symlink, link, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runDiscovery } from '../dist/runtime/agent/worker/workspace-discovery-runner.js';
-const root = await mkdtemp('/tmp/discovery-acceptance-');
+const root = await mkdtemp(join(await realpath(tmpdir()), 'discovery-acceptance-'));
+try {
 const cwd = root + '/workspace'; const outside = root + '/private';
 await mkdir(cwd); await mkdir(outside); await mkdir(cwd + '/data'); await mkdir(cwd + '/holdout');
 await writeFile(cwd+'/data/sample.csv','temperature,humidity\n10,20\n');
@@ -17,3 +20,4 @@ assert.deepEqual((await runDiscovery('grep',cwd,{path:'long.txt',pattern:'needle
 const controller = new AbortController(); const cancelled = runDiscovery('grep',cwd,{pattern:'.',limit:100},controller.signal); setTimeout(()=>controller.abort(),10);
 await assert.rejects(cancelled,/cancelled/);
 console.log('PASS: compiled ls/glob/grep + ignore, links, secrets, long Unicode match windows, and cancellation');
+} finally { await rm(root, { recursive: true, force: true }); }

@@ -4,10 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/copy-kernel-bridges.mjs && node scripts/copy-sqlite-assets.mjs && node scripts/build-web-core.mjs",
-    "dev": "tsx watch src/app/main.ts",
+    "build:native": "node scripts/build-workspace-discovery-native.mjs",
+    "build": "node scripts/build-workspace-discovery-native.mjs && tsc -p tsconfig.build.json && node scripts/copy-kernel-bridges.mjs && node scripts/copy-sqlite-assets.mjs && node scripts/build-web-core.mjs",
+    "dev": "node scripts/build-workspace-discovery-native.mjs && tsx watch src/app/main.ts",
     "start": "node dist/app/main.js",
-    "test": "vitest run",
+    "test": "node scripts/build-workspace-discovery-native.mjs && vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "oxlint --deny-warnings src && pnpm lint:async",
     "lint:async": "oxlint --type-aware --deny-warnings --config .oxlintrc.async.json src"

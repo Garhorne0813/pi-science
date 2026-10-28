@@ -1,3 +1,5 @@
+import { darwinDirectory } from "./workspace-discovery-native.js";
+
 export type Operation = "ls" | "glob" | "grep";
 export interface DiscoveryInput { path?: string; pattern?: string; glob?: string; ignoreCase?: boolean; literal?: boolean; limit: number }
 export interface DiscoveryResult {
@@ -11,4 +13,4 @@ export interface DiscoveryResult {
 export class DiscoveryError extends Error {
   constructor(readonly code: string) { super(code); }
 }
-export const discoveryBackendAvailable = () => process.platform === "linux";
+export const discoveryBackendAvailable = () => process.platform === "linux" || process.platform === "darwin" && darwinDirectory !== undefined;

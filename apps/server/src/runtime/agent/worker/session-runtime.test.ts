@@ -631,7 +631,55 @@ it("removes saved discovery selections on an unsupported backend without marking
   expect(await session.getValue(discoveryToolsVersion, context)).toBeUndefined();
 });
 
-it.skipIf(process.platform === "linux")("keeps discovery inactive on the native unsupported platform", async () => {
+it.skipIf(!discoveryBackend.discoveryBackendAvailable())("registers and activates all three discovery tools on the native supported platform", async () => {
+  const { instance, parts } = await runtime();
+  expect((await parts.harness.getTools(context)).map(tool => tool.name)).toEqual(expect.arrayContaining(["ls", "glob", "grep"]));
+  expect(await instance.command("get_state", {})).toMatchObject({ data: { activeTools: expect.arrayContaining(["ls", "glob", "grep"]) } });
+});
+
+it.skipIf(!discoveryBackend.discoveryBackendAvailable())("executes model-requested ls, glob and grep through the native session harness", async () => {
+  const { instance, parts } = await runtime(async cwd => {
+    await mkdir(join(cwd, "data"));
+    await writeFile(join(cwd, "data/sample.csv"), "temperature,humidity\n10,20\n");
+    await writeFile(join(cwd, "data/skip.csv"), "PRIVATE\n");
+    await writeFile(join(cwd, ".gitignore"), "data/skip.csv\n");
+  }, { skillPolicy: { mode: "none" } });
+  const plan: Array<{ name: string; arguments: Record<string, string> }> = [
+    { name: "ls", arguments: { path: "." } },
+    { name: "glob", arguments: { pattern: "**/*.csv" } },
+    { name: "grep", arguments: { pattern: "temperature" } },
+  ];
+  let latest: ReturnType<typeof normalizeContext> | undefined;
+  let turns = 0;
+  vi.spyOn(parts.models, "streamSimple").mockImplementation((model, request) => {
+    latest = normalizeContext(request);
+    const step = plan[turns++];
+    const message: AssistantMessage = {
+      role: "assistant", content: step ? [{ type: "toolCall", id: `discovery-${turns}`, ...step }] : [{ type: "text", text: "Discovery complete" }],
+      api: model.api, provider: model.provider, model: model.id,
+      stopReason: step ? "toolUse" : "stop", timestamp: Date.now(),
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    };
+    const stream = createAssistantMessageEventStream();
+    stream.push({ type: "start", partial: { ...message, content: [] } });
+    stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
+    return stream;
+  });
+  expect(await instance.command("prompt", { message: "Discover the CSV and its temperature column." })).toMatchObject({ success: true });
+  await vi.waitFor(async () => {
+    expect(turns).toBe(4);
+    expect(await instance.command("get_state", {})).toMatchObject({ data: { busy: false } });
+  }, { timeout: 15000 });
+  const results = latest!.messages.filter(message => message.role === "toolResult");
+  expect(results.map(result => result.toolName)).toEqual(["ls", "glob", "grep"]);
+  expect(results.every(result => !result.isError)).toBe(true);
+  const data = results.map(result => JSON.parse(result.content.filter(block => block.type === "text").map(block => block.text).join("")));
+  expect(data[0].entries).toEqual([{ path: "data/", type: "directory" }]);
+  expect(data[1].files).toEqual(["data/sample.csv"]);
+  expect(data[2].matches).toEqual([{ path: "data/sample.csv", line: 1, column: 1, text: "temperature,humidity" }]);
+}, 20000);
+
+it.skipIf(discoveryBackend.discoveryBackendAvailable())("keeps discovery inactive on the native unsupported platform", async () => {
   const { instance } = await runtime();
   const state = await instance.command("get_state", {});
   for (const name of ["ls", "glob", "grep"]) expect((state as { data: { activeTools: string[] } }).data.activeTools).not.toContain(name);
