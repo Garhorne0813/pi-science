@@ -21,7 +21,7 @@ export function executionBudgetTools(cwd: string, inheritedOperationId?: string,
       return { content: [{ type: "text", text: JSON.stringify(details) }], details };
     },
   };
-  const kindFor = (name: string): ExecutionKind => name.startsWith("mcp__") ? "mcp" : name === "subagent" ? "subagent" : name === "bash" ? "bash" : "notebook";
+  const kindFor = (name: string): ExecutionKind => name.startsWith("mcp__") ? "mcp" : name === "subagent" ? "subagent" : name === "bash" || name === "remote_execute" || name === "slurm_submit" ? "bash" : "notebook";
   const wrap = (original: Tool): Tool => ({ ...original,
     async execute(id, params, update, ctx, invocation, context) {
       const owner = ledger(invocation.operationId);

@@ -21,6 +21,15 @@ describe("InteractionPrompt", () => {
     expect(onRespond).toHaveBeenCalledWith({ confirmed: true });
   });
 
+  it("renders the whole command it will run, in a scrollable block", () => {
+    const onRespond = vi.fn();
+    const command = `echo start\n${"sleep 1; ".repeat(120)}echo done`;
+    render(<InteractionPrompt interaction={{ requestId: "remote-1", kind: "permission", method: "confirm", title: "Allow remote execution on gpu-box", message: `The agent wants to run this command on gpu-box:\n\n${command}` }} onRespond={onRespond} />);
+    const message = screen.getByText(/echo start/, { exact: false });
+    expect(message.textContent).toContain("echo done");
+    expect(message).toHaveClass("max-h-80", "overflow-auto", "whitespace-pre-wrap");
+  });
+
   it("moves focus to the permission alertdialog when it appears", () => {
     const onRespond = vi.fn();
     render(<InteractionPrompt interaction={{ requestId: "install-focus", kind: "permission", method: "confirm", title: "Install scipy" }} onRespond={onRespond} />);
