@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, writeFile, symlink, link } from 'node:fs/promises';
+import { runDiscovery } from '../dist/runtime/agent/worker/workspace-discovery-runner.js';
+const root = await mkdtemp('/tmp/discovery-acceptance-');
+const cwd = root + '/workspace'; const outside = root + '/private';
+await mkdir(cwd); await mkdir(outside); await mkdir(cwd + '/data'); await mkdir(cwd + '/holdout');
+await writeFile(cwd+'/data/sample.csv','temperature,humidity\n10,20\n');
+await writeFile(cwd+'/data/skip.csv','PRIVATE\n'); await writeFile(cwd+'/.gitignore','data/skip.csv\n');
+await writeFile(cwd+'/.env','PRIVATE'); await writeFile(cwd+'/holdout/labels.txt','PRIVATE');
+await writeFile(outside+'/secret.txt','PRIVATE'); await symlink(outside,cwd+'/alias'); await link(outside+'/secret.txt',cwd+'/hard.txt');
+assert.deepEqual((await runDiscovery('ls',cwd,{limit:200})).details.result.entries,[{path:'data/',type:'directory'}]);
+assert.deepEqual((await runDiscovery('glob',cwd,{pattern:'**/*.csv',limit:500})).details.result.files,['data/sample.csv']);
+assert.deepEqual((await runDiscovery('grep',cwd,{pattern:'temperature',limit:100})).details.result.matches,[{path:'data/sample.csv',line:1,text:'temperature,humidity'}]);
+assert.deepEqual((await runDiscovery('grep',cwd,{pattern:'PRIVATE',limit:100})).details.result.matches,[]);
+const controller = new AbortController(); const cancelled = runDiscovery('grep',cwd,{pattern:'.',limit:100},controller.signal); setTimeout(()=>controller.abort(),10);
+await assert.rejects(cancelled,/cancelled/);
+console.log('PASS: compiled ls/glob/grep + ignore, links, secrets, and cancellation');

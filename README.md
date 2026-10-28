@@ -27,6 +27,7 @@ Pi-Science brings AI conversations, scientific computation, data previews and pr
 - **Keep execution evidence.** Runs record code, environment revisions, artifact hashes and provenance so results can be inspected and reproduced.
 - **Research in Conversation.** The Auto Research skill guides dynamic subquestions, independent review and task-specific evaluation, with saved checkpoints and runtime tool budgets.
 - **Find scientific sources.** Built-in connectors retrieve papers and scientific data, with linked citation metadata you can verify.
+- **Explore workspace files.** Native read-only `ls`, `glob` and `grep` discover files and search text with bounded output and `.gitignore` support. Currently enabled on Linux; linked, hidden, sensitive and protected paths are excluded. See [tool limits and platform status](docs/workspace-discovery-tools.md).
 - **Use ordinary project folders.** Research files stay in your workspace. Model requests and external connector calls use the services you configure.
 
 Conversations run concurrently in isolated Agent Core Worker processes. AgentHarness owns execution and durable sessions; Pi-Science adds the scientific workspace and product interface.

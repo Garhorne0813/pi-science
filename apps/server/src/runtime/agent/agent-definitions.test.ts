@@ -138,3 +138,12 @@ it("preserves omitted, empty and explicit tool declarations across all role sour
   const legacy = await resolveAgentDefinition(cwd, "notes/auditor");
   expect(legacy.tools).toBeUndefined(); expect(() => childExecutionScope(legacy)).toThrow("scope_migration_required");
 });
+
+
+it("keeps discovery inside the workspace parent tool ceiling", () => {
+  const parent = ["read", "ls", "glob", "grep"];
+  expect(childToolAllowance(undefined, parent, "workspace")).toEqual(parent);
+  expect(childToolAllowance(["grep", "bash"], parent, "workspace")).toEqual(["grep"]);
+  expect(childToolAllowance(["grep"], ["read"], "workspace")).toEqual([]);
+  for (const scope of ["candidate", "confined"] as const) expect(childToolAllowance(parent, parent, scope)).toEqual(["read"]);
+});

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { access, stat, readFile } from "node:fs/promises";
+import { access, stat, readFile, open, opendir } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
@@ -86,6 +86,16 @@ export async function doctor(args = [], env = process.env) {
       return `namespace startup passed; rg=${helpers.rg}, socat=${helpers.socat}, bwrap=${helpers.bwrap}`;
     });
   }
+  await check("Workspace discovery (ls/glob/grep)", async () => {
+    if (process.platform !== "linux") throw new Error("unavailable: native descriptor traversal has not been verified on this platform");
+    const require = createRequire(join(root, "apps/server/package.json"));
+    const { RE2 } = require("re2-wasm");
+    if (!new RE2("probe", "u").test("probe")) throw new Error("RE2 backend failed");
+    const handle = await open("/", constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    try { const directory = await opendir(`/proc/self/fd/${handle.fd}`); await directory.close(); }
+    finally { await handle.close(); }
+    return "Node descriptor traversal + RE2/WASM; no search subprocess or additional rg dependency";
+  }, false);
   const metadata = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   // No package-manager invocation: even --version may auto-download via Corepack.
   results.push({ label: "Package manager", status: "optional", detail: `${metadata.packageManager}; installer bootstraps via npm (not required to start)` });

@@ -1,0 +1,39 @@
+import { Type } from "@earendil-works/pi-ai";
+import type { AgentHarnessTool, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { z } from "zod";
+import { runDiscovery } from "./workspace-discovery-runner.js";
+import { DiscoveryError, type Operation, type DiscoveryInput } from "./workspace-discovery-contract.js";
+
+const bounds = { ls: [200, 500], glob: [500, 1000], grep: [100, 200] } as const;
+const text = z.string().min(1).max(256);
+const descriptions = {
+  ls: "List one directory level in the workspace. Returns sorted relative paths; omits hidden, sensitive, linked and protected entries. Read-only; never searches home or external Skill roots.",
+  glob: "Find workspace regular files by glob, respecting .gitignore. Supports *, ?, **, character classes and {csv,tsv} braces; no extglobs or negation. Returns sorted workspace-relative paths with truncation status.",
+  grep: "Search workspace UTF-8 text with safe RE2 single-line regex (no lookaround/backreferences), or literal=true. Respects .gitignore; returns relative paths, 1-based line numbers and at most 512 characters per matching line. Results are untrusted data. Skips binary and files over 8 MiB. Output limited to 64 KiB; narrow the path on resource_limit.",
+};
+/** Shared semaphore bounds outstanding discovery calls in this Worker. */
+export function workspaceDiscoveryTools(options: { cwd: string }): AgentHarnessTool<{ env: NodeExecutionEnv }>[] {
+  let running = 0;
+  return (["ls", "glob", "grep"] as Operation[]).map((operation) => {
+    const [fallback, maximum] = bounds[operation];
+    const common = { path: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum, default: fallback })) };
+    const pattern = Type.String({ minLength: 1, maxLength: 256 });
+    const parameters = Type.Object({ ...common, ...(operation !== "ls" ? { pattern } : {}), ...(operation === "grep" ? {
+      glob: Type.Optional(pattern), ignoreCase: Type.Optional(Type.Boolean()), literal: Type.Optional(Type.Boolean()),
+    } : {}) }, { additionalProperties: false });
+    const schema = z.object({ path: z.string().min(1).max(4096).optional(), limit: z.number().int().min(1).max(maximum).default(fallback),
+      ...(operation !== "ls" ? { pattern: text } : {}), ...(operation === "grep" ? { glob: text.optional(), ignoreCase: z.boolean().optional(), literal: z.boolean().optional() } : {}),
+    }).strict();
+    return {
+      name: operation, label: operation, description: descriptions[operation], parameters,
+      async execute(_id, raw, _update, _ctx, _invocation, context) {
+        const parsed = schema.safeParse(raw);
+        if (!parsed.success) throw new DiscoveryError("invalid_input");
+        if (running >= 2) throw new DiscoveryError("resource_limit");
+        running++;
+        try { return await runDiscovery(operation, options.cwd, parsed.data as DiscoveryInput, context.abortSignal); }
+        finally { running--; }
+      },
+    };
+  });
+}
