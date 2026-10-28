@@ -28,3 +28,7 @@ describe("activity grouping", () => {
     expect(groups).toHaveLength(3);
   });
 });
+
+it("groups ls glob and grep as exploration", () => {
+  expect(groupActivityBlocks([tool("ls", "ls"), tool("glob", "glob"), tool("grep", "grep")])).toMatchObject([{ kind: "exploration", blocks: [{ id: "ls" }, { id: "glob" }, { id: "grep" }] }]);
+});

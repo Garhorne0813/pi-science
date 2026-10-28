@@ -5,6 +5,9 @@ import { unlink } from "node:fs/promises";
 import { assertExecutionGrantTool } from "../../sandbox/execution-grants.js";
 import { childToolAllowance } from "../agent-definitions.js";
 import { networkAccessTool } from "./network-access-tool.js";
+import { discoveryToolsVersion, migrateDiscoveryTools } from "./discovery-tool-migration.js";
+import { discoveryBackendAvailable } from "./workspace-discovery-contract.js";
+import { workspaceDiscoveryTools } from "./workspace-discovery-tools.js";
 import { workspaceFileTool } from "./workspace-file-tool.js";
 import { executionBudgetTools, watchExecutionDeadline } from "./execution-budget.js";
 import { sandboxBashTool } from "./sandbox-bash.js";
@@ -173,6 +176,12 @@ export class SessionRuntime {
       const templates = await loadPromptTemplates(executionEnv, join(options.cwd, ".pi", "prompts"), context);
       const subagents = new SubagentBridge(emit);
       const candidateScoped = !!options.executionGrantId || !!options.sandboxCandidateId || options.executionScope === "candidate" || options.executionScope === "confined";
+      // Migrate before Harness opens its lane: the SDK caches lane configuration.
+      // The migration and its version are one durable SDK transaction.
+      const discoveryAvailable = discoveryBackendAvailable();
+      const discoveryEligible = discoveryAvailable && !candidateScoped && !options.delegatedAgent && options.allowedTools === undefined;
+      if (created && discoveryEligible) await session.setValue(discoveryToolsVersion, 1, context);
+      else await migrateDiscoveryTools(session, new Set(["ls", "glob", "grep"]), discoveryEligible);
       const sandboxIdentity: SandboxIdentity = { cwd: options.cwd, sessionId: session.metadata.id, budgetOperationId: options.budgetOperationId, candidateId: options.sandboxCandidateId, budgetNodeId: options.budgetNodeId, executionGrantId: options.executionGrantId, delegatedAgent: options.delegatedAgent, executionScope: options.executionScope ?? (candidateScoped ? "confined" : "workspace") };
       // Capability checks precede discovery: a tool-free worker must not spawn
       // connectors, open connections, or materialize their credentials.
@@ -204,7 +213,7 @@ export class SessionRuntime {
         model,
         thinkingLevel: clampThinkingLevel(model, options.thinking ?? "high"),
         compaction: resolveCompaction(model.contextWindow, options.settings).compaction,
-        tools: [...(memoryClient?.tools() ?? []), ...(!candidateScoped && !options.delegatedAgent ? [networkAccessTool(interactions, options.cwd, session.metadata.id)] : []), budgets.tool, confinedReadTool(workspaceFileTool(createReadTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined), sandboxIdentity), budgets.wrap(sandboxBashTool(sandboxIdentity, environment, currentSkillDirectories)), workspaceFileTool(createEditTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined), workspaceFileTool(createWriteTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined),
+        tools: [...(!candidateScoped && discoveryAvailable ? workspaceDiscoveryTools({ cwd: options.cwd }) : []), ...(memoryClient?.tools() ?? []), ...(!candidateScoped && !options.delegatedAgent ? [networkAccessTool(interactions, options.cwd, session.metadata.id)] : []), budgets.tool, confinedReadTool(workspaceFileTool(createReadTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined), sandboxIdentity), budgets.wrap(sandboxBashTool(sandboxIdentity, environment, currentSkillDirectories)), workspaceFileTool(createEditTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined), workspaceFileTool(createWriteTool(), options.cwd, skillPaths, !candidateScoped && !options.delegatedAgent ? session.metadata.id : undefined),
           todoHarnessTool(session), subagentControlTool(subagents), budgets.wrap(subagentHarnessTool(subagents)), ...notebookHarnessTools(options.cwd, session.metadata.id, sandboxIdentity).map(budgets.wrap), ...(remoteCompute ? [remoteCompute.machines, budgets.wrap(remoteCompute.execute), budgets.wrap(remoteCompute.submit), remoteCompute.check] : []), questionnaireHarnessTool(interactions), ...nativeWebTools, ...(mcp?.tools ?? []).map(budgets.wrap)]
           .filter((tool) => (!options.allowedTools || options.allowedTools.includes(tool.name)) && (!candidateScoped || childToolAllowance([tool.name], [tool.name], "candidate").length > 0))
           .map((tool) => !options.delegatedAgent ? tool : { ...tool, async execute(id, params, update, ctx, invocation, context) {
