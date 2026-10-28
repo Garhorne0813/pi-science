@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { CredentialStore } from "../../model-resources/credential-store.js";
+import { loadProjectedServers } from "../../runtime/shared/extensions/pi-science-mcp.js";
 import { McpConnectorService } from "../../mcp/connector-service.js";
 import { AgentMcpTools } from "../../runtime/agent/worker/mcp-tools.js";
 import { InteractionBridge } from "../../runtime/agent/worker/interaction-bridge.js";
@@ -42,14 +44,15 @@ async function fixture(withServer = false) {
   const repository = new McpRepository(store);
   const workspaces = new WorkspaceRepository(store);
   const projection = new McpRuntimeProjection(repository);
-  const mcp = new McpConnectorService(repository, workspaces, new SettingsStore(), undefined, projection);
+  const credentials = new CredentialStore();
+  const mcp = new McpConnectorService(repository, workspaces, new SettingsStore(), undefined, projection, credentials);
   await mcp.materializeWorkspace(cwd);
   const serverScript = join(cwd, "echo.mjs");
   if (withServer) await writeFile(serverScript, [
     `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
     `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
     `const server = new McpServer({ name: "approval-test", version: "1" });`,
-    `server.registerTool("echo", { description: "Test echo" }, async () => ({ content: [{ type: "text", text: "echo executed" }] }));`,
+    `server.registerTool("echo", { description: "Test echo" }, async () => ({ content: [{ type: "text", text: process.env.TOKEN ?? "echo executed" }] }));`,
     `await server.connect(new StdioServerTransport());`,
   ].join("\n"));
   const connector = await mcp.create({ args: withServer ? [serverScript] : [], name: "approval-test", display_name: "Approval test", transport: "stdio", command: process.execPath, runtime_config: {}, enabled: true });
@@ -67,7 +70,7 @@ async function fixture(withServer = false) {
   registerNodeSessionRoutes(app, { notify } as unknown as NodeSessionService, sessionRepository, undefined, undefined, { mcp, events });
   const approve = (requestId = "request", payload = { confirmed: true, alwaysAllow: true }, workspace = cwd) => app.inject({ method: "POST", url: `/api/sessions/session/interactions/${requestId}?${new URLSearchParams({ cwd: workspace })}`, payload });
   const grants = () => repository.projectToolGrants(snapshot.project_id, connector.connector_id);
-  return { cwd, repository, workspaces, projection, mcp, connector, events, pending, notify, approve, grants };
+  return { cwd, repository, workspaces, projection, credentials, mcp, connector, events, pending, notify, approve, grants };
 }
 
 it("binds Always allow to a live request and persists only in its project after confirmation", async () => {
@@ -284,4 +287,106 @@ it("expires Allow in every project while leaving other connectors' grants intact
   expect((await f.grants()).has("echo")).toBe(false);
   expect((await f.repository.projectToolGrants(otherProject, f.connector.connector_id)).has("echo")).toBe(false);
   expect((await f.repository.projectToolGrants(otherProject, untouched.connector_id)).get("echo")).toBe("allow");
+});
+
+
+it.each(["failure", "conflict"])("keeps old approved identity observable while a staged credential rotation ends in %s", async (outcome) => {
+  const f = await fixture(true);
+  await f.mcp.setCredential(f.connector.connector_id, { revision: f.connector.revision, backend: "managed", delivery: "environment", target_name: "TOKEN", secret: "synthetic-old-secret" });
+  await f.mcp.setToolGrant(f.connector.connector_id, "echo", "allow", f.cwd);
+  const before = (await f.repository.get(f.connector.connector_id))!;
+  let staged: string | null = null;
+  vi.spyOn(f.repository, "updateCredential").mockImplementationOnce(async (_id, _revision, _runtime, credentialRef) => {
+    staged = credentialRef;
+    expect(staged).not.toBe(before.credential_ref);
+    expect((await f.credentials.getForRuntime(staged!))?.secret).toBe("synthetic-new-secret");
+    expect((await f.credentials.getForRuntime(before.credential_ref!))?.secret).toBe("synthetic-old-secret");
+    expect((loadProjectedServers(f.cwd)[f.connector.name]!.env as Record<string, string>).TOKEN).toBe("synthetic-old-secret");
+    expect((await f.grants()).get("echo")).toBe("allow");
+    const events: unknown[] = [];
+    const worker = await AgentMcpTools.open(f.cwd, new InteractionBridge((event) => events.push(event)), { PATH: process.env.PATH ?? "" });
+    try {
+      expect(worker.diagnostics).toEqual([]);
+      const result = await worker.tools[0]!.execute("during-rotation", {}, () => undefined, {} as never, {} as never, {} as never);
+      expect(result.content).toEqual([{ type: "text", text: "synthetic-old-secret" }]);
+      expect(events).toEqual([]);
+    } finally { await worker.close(); }
+    if (outcome === "failure") throw new Error("injected database failure after staging");
+    return null;
+  });
+  await expect(f.mcp.setCredential(f.connector.connector_id, { revision: before.revision, backend: "managed", delivery: "environment", target_name: "TOKEN", secret: "synthetic-new-secret" })).rejects.toThrow();
+  expect(staged).not.toBeNull();
+  expect(await f.credentials.metadata(staged!)).toBeNull();
+  expect((await f.repository.get(f.connector.connector_id))?.credential_ref).toBe(before.credential_ref);
+  expect((await f.grants()).get("echo")).toBe("allow");
+  expect((loadProjectedServers(f.cwd)[f.connector.name]!.env as Record<string, string>).TOKEN).toBe("synthetic-old-secret");
+}, 20_000);
+
+it.each(["lost-acknowledgement", "projection-failure"])("retains a committed credential and revoked grants after %s", async (failure) => {
+  const f = await fixture();
+  await f.mcp.setCredential(f.connector.connector_id, { revision: f.connector.revision, backend: "managed", delivery: "environment", target_name: "TOKEN", secret: "synthetic-old-secret" });
+  await f.mcp.setToolGrant(f.connector.connector_id, "echo", "allow", f.cwd);
+  const before = (await f.repository.get(f.connector.connector_id))!;
+  if (failure === "lost-acknowledgement") {
+    const update = f.repository.updateCredential.bind(f.repository);
+    vi.spyOn(f.repository, "updateCredential").mockImplementationOnce(async (...args) => {
+      await update(...args);
+      throw new Error("commit succeeded but acknowledgement was lost");
+    });
+  } else vi.spyOn(f.projection, "materialize").mockRejectedValueOnce(new Error("projection failed"));
+  await expect(f.mcp.setCredential(f.connector.connector_id, { revision: before.revision, backend: "managed", delivery: "environment", target_name: "TOKEN", secret: "synthetic-new-secret" })).rejects.toThrow();
+  const committed = (await f.repository.get(f.connector.connector_id))!;
+  expect(committed.credential_ref).not.toBe(before.credential_ref);
+  expect((await f.credentials.getForRuntime(committed.credential_ref!))?.secret).toBe("synthetic-new-secret");
+  expect((await f.grants()).get("echo")).toBeUndefined();
+  // A failed publication still resolves the old identity, never the staged one.
+  expect((loadProjectedServers(f.cwd)[f.connector.name]!.env as Record<string, string>).TOKEN).toBe("synthetic-old-secret");
+  await f.mcp.materializeWorkspace(f.cwd);
+  expect((loadProjectedServers(f.cwd)[f.connector.name]!.env as Record<string, string>).TOKEN).toBe("synthetic-new-secret");
+  const snapshot = JSON.parse(await readFile(join(metadataRoot(f.cwd), "mcp-runtime.json"), "utf8"));
+  expect(snapshot.mcpServers[f.connector.name].__piScienceAllowedTools ?? []).not.toContain("echo");
+});
+
+it("publishes a fresh credential reference before retiring the old one, preserving an omitted managed secret", async () => {
+  const f = await fixture();
+  await f.mcp.setCredential(f.connector.connector_id, { revision: f.connector.revision, backend: "managed", delivery: "environment", target_name: "TOKEN", secret: "synthetic-preserved-secret" });
+  await f.mcp.setToolGrant(f.connector.connector_id, "echo", "allow", f.cwd);
+  const before = (await f.repository.get(f.connector.connector_id))!;
+  await f.mcp.setCredential(f.connector.connector_id, { revision: before.revision, backend: "managed", delivery: "environment", target_name: "NEW_TOKEN" });
+  const after = (await f.repository.get(f.connector.connector_id))!;
+  expect(after.credential_ref).not.toBe(before.credential_ref);
+  expect(await f.credentials.metadata(before.credential_ref!)).toBeNull();
+  expect((await f.credentials.getForRuntime(after.credential_ref!))?.secret).toBe("synthetic-preserved-secret");
+  expect((loadProjectedServers(f.cwd)[f.connector.name]!.env as Record<string, string>).NEW_TOKEN).toBe("synthetic-preserved-secret");
+  expect((await f.grants()).get("echo")).toBeUndefined();
+});
+
+
+it("keeps concurrent rotations isolated and removes only the unpublished losing credential", async () => {
+  const f = await fixture();
+  await f.mcp.setCredential(f.connector.connector_id, { revision: f.connector.revision, backend: "managed", delivery: "environment", target_name: "TOKEN", secret: "synthetic-old-secret" });
+  await f.mcp.setToolGrant(f.connector.connector_id, "echo", "allow", f.cwd);
+  const before = (await f.repository.get(f.connector.connector_id))!;
+  const bothStaged = deferred();
+  const update = f.repository.updateCredential.bind(f.repository);
+  const staged: string[] = [];
+  vi.spyOn(f.repository, "updateCredential").mockImplementation(async (...args) => {
+    staged.push(args[3]!);
+    if (staged.length === 2) bothStaged.resolve();
+    await bothStaged.promise;
+    return update(...args);
+  });
+  const outcomes = await Promise.allSettled(["synthetic-first-secret", "synthetic-second-secret"].map((secret) => f.mcp.setCredential(f.connector.connector_id, {
+    revision: before.revision, backend: "managed", delivery: "environment", target_name: "TOKEN", secret,
+  })));
+  expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+  expect(new Set(staged).size).toBe(2);
+  const committed = (await f.repository.get(f.connector.connector_id))!;
+  const active = (await f.credentials.getForRuntime(committed.credential_ref!))!;
+  expect(active.secret).toMatch(/^synthetic-(first|second)-secret$/);
+  const losing = staged.find((id) => id !== committed.credential_ref)!;
+  expect(await f.credentials.metadata(losing)).toBeNull();
+  expect(await f.credentials.metadata(before.credential_ref!)).toBeNull();
+  expect((loadProjectedServers(f.cwd)[f.connector.name]!.env as Record<string, string>).TOKEN).toBe(active.secret);
+  expect((await f.grants()).get("echo")).toBeUndefined();
 });

@@ -2,7 +2,7 @@ import { updateWebSettings, webSettingsSchema } from "../web/settings.js";
 import { redactMcpError } from "./diagnostics.js";
 export { redactMcpError } from "./diagnostics.js";
 import { bindingError } from "./bindings.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, normalize } from "node:path";
@@ -122,13 +122,17 @@ export class McpConnectorService {
     const connector = await this.requireConnector(connectorId);
     if (suggestedCredential(connector).capability === "unsupported") throw new McpServiceError("credential_unsupported", "This connector does not support an API credential", 400);
     if (input.revision !== connector.revision) throw new McpServiceError("revision_conflict", "Connector was changed by another request", 409);
-    const credentialId = connector.credential_ref ?? `mcp_${connector.connector_id}`;
-    const existing = await this.credentials.getForRuntime(credentialId);
+    const existing = connector.credential_ref ? await this.credentials.getForRuntime(connector.credential_ref) : null;
     if (existing && (existing.metadata.owner_kind !== "mcp" || existing.metadata.owner_id !== connectorId)) throw new McpServiceError("credential_in_use", "Credential belongs to another resource", 409);
-    if (input.backend === "managed" && !input.secret && !existing?.secret) throw new McpServiceError("credential_required", "API key or token is required");
+    const secret = input.secret || (input.backend === "managed" ? existing?.secret : undefined);
+    if (input.backend === "managed" && !secret) throw new McpServiceError("credential_required", "API key or token is required");
+    // Published snapshots resolve credential references dynamically. Never rotate
+    // a secret in place: old snapshots must keep seeing the old identity until
+    // the database has switched references and revoked the old project Allows.
+    const credentialId = `mcp_${connectorId}_${randomUUID()}`;
     await this.credentials.put({
       id: credentialId, kind: "api_key", backend: input.backend, label: `${connector.display_name} MCP credential`,
-      ...(input.secret ? { secret: input.secret } : {}),
+      ...(secret ? { secret } : {}),
       ...(input.environment_variable ? { environment_variable: input.environment_variable } : {}),
       owner_kind: "mcp", owner_id: connectorId,
     });
@@ -137,9 +141,24 @@ export class McpConnectorService {
     if (input.delivery === "environment") runtime.environment[input.target_name] = binding;
     else runtime.headers[input.delivery === "bearer" ? "Authorization" : input.target_name] = binding;
     runtime.auth = input.delivery === "bearer" ? "bearer" : "auto";
-    const updated = await this.repository.updateCredential(connectorId, connector.revision, runtime, credentialId);
-    if (!updated) throw new McpServiceError("revision_conflict", "Connector was changed by another request", 409);
+    let updated: StoredMcpConnector | null;
+    try { updated = await this.repository.updateCredential(connectorId, connector.revision, runtime, credentialId); }
+    catch (error) {
+      // A lost database acknowledgement can hide a commit. Only discard staging
+      // when we can establish that the connector does not reference it.
+      const current = await this.repository.get(connectorId).catch(() => undefined);
+      if (current !== undefined && current?.credential_ref !== credentialId) await this.credentials.remove(credentialId);
+      throw error;
+    }
+    if (!updated) {
+      await this.credentials.remove(credentialId);
+      throw new McpServiceError("revision_conflict", "Connector was changed by another request", 409);
+    }
     await this.materializeKnownWorkspaces(); await this.reload();
+    if (connector.credential_ref) {
+      const previous = await this.credentials.metadata(connector.credential_ref);
+      if (previous?.owner_kind === "mcp" && previous.owner_id === connectorId) await this.credentials.remove(connector.credential_ref);
+    }
     return this.credentialStatus(updated);
   }
 
