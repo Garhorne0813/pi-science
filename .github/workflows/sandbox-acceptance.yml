@@ -16,7 +16,8 @@ on:
       - 'pnpm-workspace.yaml'
       - 'pnpm-lock.yaml'
       - '.github/workflows/sandbox-acceptance.yml'
-      - '.github/scripts/configure-linux-sandbox.sh'
+      - '.github/scripts/*linux*sandbox*'
+      - '.github/scripts/probe-linux-seccomp.mjs'
   workflow_dispatch:
 # Superseded runs for the same branch/PR do not consume another full matrix.
 concurrency:
@@ -51,14 +52,22 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = Linux ]; then
-            sudo apt-get update
-            sudo apt-get install -y bubblewrap socat ripgrep
-            bash .github/scripts/configure-linux-sandbox.sh
+            bash .github/scripts/prepare-linux-sandbox.sh
           else
             brew install socat ripgrep
           fi
           python -m pip install numpy==2.3.5
           pnpm install --frozen-lockfile
+      - name: Probe complete Linux sandbox startup
+        if: runner.os == 'Linux'
+        run: node .github/scripts/probe-linux-seccomp.mjs
+      - name: Validate compiled discovery in a read-only Linux sandbox
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          pnpm --filter @pi-science/contracts build
+          pnpm --filter @pi-science/server build
+          bwrap --ro-bind / / --tmpfs /tmp --proc /proc --dev /dev --unshare-net --setenv PI_SCIENCE_HOME /tmp/discovery-service -- node apps/server/scripts/verify-workspace-discovery.mjs
       - name: Validate real platform isolation and role policies
         shell: bash
         run: |
@@ -73,7 +82,7 @@ jobs:
           PI_SCIENCE_SANDBOX_SOCAT="$(command -v socat)"
           PI_SCIENCE_SANDBOX_RIPGREP="$(command -v rg)"
           export PI_SCIENCE_SANDBOX_PYTHON PI_SCIENCE_SANDBOX_PYTHON_ROOT PI_SCIENCE_SANDBOX_SOCAT PI_SCIENCE_SANDBOX_RIPGREP
-          pnpm --filter @pi-science/server exec vitest run src/runtime/agent/worker/confined-read-tool.test.ts src/runtime/agent/agent-core-tools.test.ts src/runtime/sandbox/universal-sandbox.test.ts src/runtime/sandbox/execution-scope.test.ts src/runtime/sandbox/execution-grants.test.ts src/runtime/agent/subagent-dispatch.test.ts src/runtime/sandbox/platform-acceptance.test.ts src/runtime/sandbox/skill-resources.test.ts src/runtime/sandbox/session-approval.test.ts src/runtime/sandbox/profiles.test.ts src/runtime/sandbox/network.test.ts src/runtime/sandbox/network-grants.test.ts src/runtime/agent/worker/network-access-tool.test.ts src/runtime/executions/execution-budget.test.ts src/runtime/agent/worker/execution-budget.test.ts src/mcp/call-scheduler.test.ts --reporter=default --reporter=junit --outputFile.junit=sandbox-acceptance.xml
+          pnpm --filter @pi-science/server exec vitest run src/runtime/agent/worker/workspace-discovery.test.ts src/runtime/sandbox/workspace-read-authorization.test.ts src/runtime/agent/worker/session-runtime.test.ts src/runtime/agent/agent-definitions.test.ts src/runtime/agent/worker/confined-read-tool.test.ts src/runtime/agent/agent-core-tools.test.ts src/runtime/sandbox/universal-sandbox.test.ts src/runtime/sandbox/execution-scope.test.ts src/runtime/sandbox/execution-grants.test.ts src/runtime/agent/subagent-dispatch.test.ts src/runtime/sandbox/platform-acceptance.test.ts src/runtime/sandbox/skill-resources.test.ts src/runtime/sandbox/session-approval.test.ts src/runtime/sandbox/profiles.test.ts src/runtime/sandbox/network.test.ts src/runtime/sandbox/network-grants.test.ts src/runtime/agent/worker/network-access-tool.test.ts src/runtime/executions/execution-budget.test.ts src/runtime/agent/worker/execution-budget.test.ts src/mcp/call-scheduler.test.ts --reporter=default --reporter=junit --outputFile.junit=sandbox-acceptance.xml
       - name: Measure per-Bash Skill policy scans
         shell: bash
         run: pnpm --filter @pi-science/server exec tsx scripts/benchmark-skill-resources.ts > skill-resource-performance.json

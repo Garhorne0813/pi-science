@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Thread } from "../../agent-runtime/event-fold";
 import type { ThreadBlock } from "../../../types/thread";
-import { latestByRevision, LEGACY_STREAM_EPOCH, projectConversation } from "./adapter";
+import { activityKind, latestByRevision, LEGACY_STREAM_EPOCH, projectConversation } from "./adapter";
 
 function thread(blocks: ThreadBlock[], foldState?: Thread["foldState"]): Thread {
   return { blocks, index: Object.fromEntries(blocks.map((block, index) => [block.id, index])), loaded: true, ...(foldState ? { foldState } : {}) };
@@ -67,4 +67,8 @@ describe("conversation projection adapter", () => {
       { id: "b", revision: 3, value: "new" },
     ]);
   });
+});
+
+it.each(["ls", "glob", "grep"])("classifies %s as a file activity", (tool) => {
+  expect(activityKind({ kind: "tool", id: tool, callId: tool, tool, status: "done" })).toBe("file");
 });

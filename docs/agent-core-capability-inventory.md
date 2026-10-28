@@ -4,6 +4,7 @@ Pi Science 使用 Agent Core SDK 和独立 Worker 执行对话、研究与标题
 
 | 能力 | agent-core 实现 | 验证/范围 |
 | --- | --- | --- |
+| ls/glob/grep | 自建原生 Harness 工具，Node 描述符遍历 + RE2/WASM，无搜索子进程 | 仅 Linux 启用；工作区内只读、有界扫描、取消/超时、权限与换链回归、旧会话一次性迁移；candidate/confined 不开放。参见[实现与平台范围](workspace-discovery-tools.md) |
 | read/bash/edit/write | Harness 原生工具 | 快速写文件产物、崩溃恢复；bash 使用工具环境白名单 |
 | 模型、思考档、上下文、压缩 | canonical 路由与 Harness | 本地流式模型验证路由、别名、凭据隔离及 live/cold state |
 | todo | MIT 授权的 rpiv-todo 纯领域逻辑 + Harness 工具 | action/schema/状态机与原 2.4.0 一致；分支历史恢复、并发、重放、完整 details |

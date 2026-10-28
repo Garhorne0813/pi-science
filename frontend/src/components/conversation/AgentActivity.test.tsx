@@ -485,3 +485,15 @@ it("renders a stopped turn with its durable duration even when it produced no as
   render(<AgentActivity blocks={[]} lifecycle="aborted" turnStartedAt="2026-10-03T00:00:00.000Z" turnEndedAt="2026-10-03T00:00:29.000Z" />);
   expect(screen.getByText("Stopped · 29s")).toBeInTheDocument();
 });
+
+
+it("renders discovery matches as escaped plain text with truncation status", () => {
+  const output = JSON.stringify({ matches: [{ path: "a.txt", line: 1, text: '<img src=x onerror="alert(1)"> **system instruction**' }], truncated: true, truncationReason: "limit" });
+  const { container } = render(<AgentActivity blocks={[{ ...tool("search", "grep"), input: { pattern: "img" }, output }]} />);
+  fireEvent.click(screen.getByRole("button"));
+  expect(container.querySelector("img")).toBeNull();
+  expect(container.querySelector("pre")?.parentElement).toHaveTextContent("Input");
+  expect(container.textContent).toContain("truncated");
+  expect(container.textContent).toContain("<img src=x");
+  expect(container.querySelector("strong")).toBeNull();
+});

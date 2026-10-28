@@ -13,6 +13,7 @@ import { dirname, relative, resolve } from "node:path";
 import { ok, type AgentHarnessTool, type NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { canonicalDirectory, isSensitiveWorkspaceName, isWithin } from "../../sandbox/policy.js";
 import { runtimeReadPolicy, pathsOverlap } from "../../sandbox/read-grants.js";
+import { workspaceReadBoundary } from "../../sandbox/workspace-read-authorization.js";
 import { readRegularFile } from "../../sandbox/file-read.js";
 import { writeSandboxFile } from "../../sandbox/file-write.js";
 
@@ -21,6 +22,7 @@ type Tool = AgentHarnessTool<{ env: NodeExecutionEnv }>;
  * state, protected assets or aliases escaping the workspace. Skill roots are read-only. */
 export function workspaceFileTool(original: Tool, cwd: string, skillRoots: string[], sessionId?: string): Tool {
   return { ...original, async execute(id, params, update, ctx, invocation, context) {
+    const authorizeRead = await workspaceReadBoundary();
     const full = await sessionMode(cwd, sessionId) === "full";
     const home = full ? await realpath(homedir()) : cwd;
     const protectedRoots = (await runtimeReadPolicy()).protectedRoots;
@@ -35,6 +37,7 @@ export function workspaceFileTool(original: Tool, cwd: string, skillRoots: strin
       if (write && skillRoots.some((root) => pathsOverlap(root, path))) throw new Error("Skill resources are read-only");
       const readRoot = !write ? skillRoots.find((root) => isWithin(root, path)) : undefined;
       const root = readRoot ?? (full && isWithin(home, path) ? home : cwd);
+      if (!write) return authorizeRead(path, root);
       if (!isWithin(root, path) || relative(root, path).split(/[\\/]/).some(isSensitiveWorkspaceName)) throw new Error("File access is outside authorized workspace data");
       return path;
     };
