@@ -183,6 +183,10 @@ export class PiScienceClient {
     return rest.respondToInteraction(this.baseUrl, sessionId, requestId, response, cwd);
   }
 
+  async allowMcpToolForProject(cwd: string, connectorId: string, toolName: string): Promise<void> {
+    return rest.allowMcpToolForProject(this.baseUrl, cwd, connectorId, toolName);
+  }
+
   /** Ask the control plane to generate an AI title via an isolated Pi runtime. */
   async generateSessionTitle(sessionId: string, cwd: string): Promise<string | null> {
     return rest.generateSessionTitle(this.baseUrl, sessionId, cwd);
