@@ -3,7 +3,7 @@ import type { ToolCallBlock } from "../../types/thread";
 export type ActivityTranslator = (key: string, values?: Record<string, unknown>) => string;
 
 const DEFAULT_LABELS: Record<string, string> = {
-  "conversation.activity.read": "Reading {{target}}", "conversation.activity.search": "Searching for {{target}}", "conversation.activity.list": "Listing {{target}}", "conversation.activity.write": "Updating {{target}}", "conversation.activity.run": "Running {{target}}", "conversation.activity.webSearch": "Searching the web for {{target}}", "conversation.activity.remoteExecute": "Running {{target}} on the remote machine", "conversation.activity.slurmSubmit": "Submitting Slurm job {{target}}", "conversation.activity.slurmCheck": "Checking Slurm job {{target}}", "conversation.activity.remoteMachines": "Listing remote machines", "conversation.activity.tool": "Running {{tool}}",
+  "conversation.activity.read": "Reading {{target}}", "conversation.activity.search": "Searching for {{target}}", "conversation.activity.list": "Listing {{target}}", "conversation.activity.write": "Updating {{target}}", "conversation.activity.run": "Running {{target}}", "conversation.activity.webSearch": "Searching the web for {{target}}", "conversation.activity.tool": "Running {{tool}}",
 };
 
 export function presentToolActivity(block: ToolCallBlock, translate: ActivityTranslator = defaultTranslate): string {
@@ -17,10 +17,6 @@ export function presentToolActivity(block: ToolCallBlock, translate: ActivityTra
   if (["find", "ls", "list_files"].includes(tool)) return translate("conversation.activity.list", { target: shortPath(text(input.path) || text(input.directory) || "workspace files") });
   if (["edit", "write", "write_file", "apply_patch"].includes(tool)) return translate("conversation.activity.write", { target: shortPath(text(input.path) || text(input.file_path) || "file") });
   if (["web_search", "tavily_search", "search_web"].includes(tool)) return translate("conversation.activity.webSearch", { target: trim(text(input.query) || "sources") });
-  if (tool === "remote_execute") return translate("conversation.activity.remoteExecute", { target: `${text(input.machine)} · ${trim(text(input.command), 48)}` });
-  if (tool === "slurm_submit") return translate("conversation.activity.slurmSubmit", { target: `${text(input.machine)} · ${text(input.name) || "job"}` });
-  if (tool === "slurm_check") return translate("conversation.activity.slurmCheck", { target: `${text(input.machine)} · ${text(input.job_id)}` });
-  if (tool === "remote_machines") return translate("conversation.activity.remoteMachines", {});
   if (["bash", "python", "run_code", "execute"].includes(tool)) return description || translate("conversation.activity.run", { target: tool });
   return description || translate("conversation.activity.tool", { tool: block.tool.replace(/[_-]+/g, " ").trim() || "tool" });
 }

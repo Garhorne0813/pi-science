@@ -26,7 +26,7 @@ export function PermissionCard({ interaction, submitting, selectedOption, select
       <div className="min-w-0 flex-1">
         <div id={`permission-${interaction.requestId}`} className="text-xs font-semibold uppercase tracking-wide text-accent">{t("interaction.approvalRequired")}</div>
         <div className="mt-1 text-sm font-medium text-text">{interaction.operation || interaction.title}</div>
-        {interaction.message && <div className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-muted">{interaction.message}</div>}
+        {interaction.message && <div className="mt-1 text-sm leading-relaxed text-muted">{interaction.message}</div>}
         {(interaction.scope || interaction.effect) && <dl className="mt-3 grid gap-1.5 text-xs sm:grid-cols-[auto_1fr]">
           {interaction.scope && <><dt className="font-medium text-muted">{t("interaction.scope")}</dt><dd className="text-text">{interaction.scope}</dd></>}
           {interaction.effect && <><dt className="font-medium text-muted">{t("interaction.effect")}</dt><dd className="text-text">{interaction.effect}</dd></>}
