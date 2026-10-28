@@ -121,6 +121,20 @@ export class McpRepository {
     return row ? connector(row) : null;
   }
 
+  /** One SQLite statement observes connector identity and both grant scopes
+   * together, even when another connection is rotating credentials or revoking. */
+  async runtimePolicy(projectId: string, connectorId: string, toolName: string) {
+    const row = await this.store.get<ConnectorRow & { global_decision: McpToolDecision | null; project_decision: McpToolDecision | null }>(
+      `SELECT c.*, g.decision AS global_decision, p.decision AS project_decision FROM mcp_connectors c
+       LEFT JOIN mcp_global_tool_grants g ON g.connector_id = c.connector_id AND g.tool_name = ?
+       LEFT JOIN mcp_project_tool_grants p ON p.connector_id = c.connector_id AND p.tool_name = ? AND p.project_id = ?
+       WHERE c.connector_id = ?`, [toolName, toolName, projectId, connectorId],
+    );
+    if (!row) return null;
+    const { global_decision, project_decision, ...stored } = row;
+    return { connector: connector(stored), global: global_decision, project: project_decision };
+  }
+
   async getByName(name: string): Promise<StoredMcpConnector | null> {
     const row = await this.store.get<ConnectorRow>("SELECT * FROM mcp_connectors WHERE name = ? COLLATE NOCASE", [name]);
     return row ? connector(row) : null;

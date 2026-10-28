@@ -1,3 +1,4 @@
+import { authorizeMcpTool } from "../../../mcp/runtime-policy.js";
 import { redactMcpError } from "../../../mcp/diagnostics.js";
 import { readSessionApproval, sessionMode } from "../../sandbox/session-approval.js";
 import { acquireMcpCall } from "../../../mcp/call-scheduler.js";
@@ -54,13 +55,6 @@ async function beforeDeadline<T>(operation: Promise<T>, deadline: number, client
       }),
     ]);
   } finally { if (timer) clearTimeout(timer); }
-}
-
-function permissionRequired(server: ServerDefinition, toolName: string): boolean {
-  if (server.__piScienceAllowedTools?.includes(toolName)) return false;
-  if (server.approveTools === false) return false;
-  if (Array.isArray(server.approveTools)) return server.approveTools.includes(toolName);
-  return true;
 }
 
 function visible(server: ServerDefinition, toolName: string): boolean {
@@ -147,13 +141,18 @@ export class AgentMcpTools {
           description: tool.description ?? `${name} MCP tool ${tool.name}`,
           parameters: tool.inputSchema as TSchema,
           async execute(_toolCallId, params, _onUpdate, _toolContext, _invocation, context) {
-            let policy = currentPolicy(tool.name);
+            currentPolicy(tool.name);
+            const checkAuthority = () => authorizeMcpTool(cwd, {
+              connectorId: server.__piScienceConnectorId!, projectId: server.__piScienceProjectId!, toolName: tool.name,
+              connectorRevision: server.__piScienceConnectorRevision!, settingsRevision: server.__piScienceSettingsRevision!,
+            }, context.abortSignal);
+            const decision = await checkAuthority();
             const approvalRevision = sessionId && !preauthorizedOnly ? (await readSessionApproval(cwd, sessionId)).revision : undefined;
             const mode = sessionId && !preauthorizedOnly ? await sessionMode(cwd, sessionId) : "ask";
             const safe = tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint !== true && (tool.annotations?.idempotentHint === true || server.__piScienceBuiltin === true);
             let approvedByUser = mode === "full" || mode === "auto" && safe;
             let approvalMs = 0;
-            if (permissionRequired(policy, tool.name) && !approvedByUser) {
+            if (decision === "ask" && !approvedByUser) {
               if (preauthorizedOnly) throw new Error(`Delegated MCP tool requires explicit preauthorization in MCP settings: ${name}: ${tool.name}`);
               const approvalStarted = Date.now();
               _onUpdate({ content: [], details: { approval: "waiting" } });
@@ -167,8 +166,7 @@ export class AgentMcpTools {
               if (!approved) return { content: [{ type: "text", text: "MCP tool call was declined by the user" }], details: { declined: true, scheduling: { approval_ms: approvalMs } }, isError: true };
             }
             // Approval may race with connector disable/revocation. Recheck before dispatch.
-            policy = currentPolicy(tool.name);
-            if (permissionRequired(policy, tool.name) && !approvedByUser) throw new Error("MCP authorization revoked before dispatch");
+            currentPolicy(tool.name);
             if (context.abortSignal?.aborted) throw context.abortSignal.reason;
             const slot = await acquireMcpCall(cwd, JSON.stringify([server.__piScienceProjectId, server.__piScienceConnectorId]), context.abortSignal);
             const started = Date.now();
@@ -176,9 +174,9 @@ export class AgentMcpTools {
             // Queued calls must observe revocations made while they waited.
             await authorize?.(`mcp__${name}__${tool.name}`, context.abortSignal);
             context.abortSignal?.throwIfAborted();
-            policy = currentPolicy(tool.name);
-            if (permissionRequired(policy, tool.name) && !approvedByUser) throw new Error("MCP authorization revoked before dispatch");
+            currentPolicy(tool.name);
             if (approvalRevision !== undefined && sessionId && (await readSessionApproval(cwd, sessionId)).revision !== approvalRevision) throw new Error("MCP approval revision changed while queued; request fresh authorization");
+            if (await checkAuthority() === "ask" && !approvedByUser) throw new Error("MCP authorization revoked before dispatch");
             const response = await client.callTool({ name: tool.name, arguments: params as Record<string, unknown> }, undefined,
               { signal: context.abortSignal, timeout: server.requestTimeoutMs ?? 60_000 });
             const parts = Array.isArray(response.content) ? response.content as Array<Record<string, unknown>> : [];

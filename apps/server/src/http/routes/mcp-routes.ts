@@ -1,3 +1,4 @@
+import { mcpRuntimePolicySchema } from "../../mcp/runtime-policy.js";
 import { mcpToolGrantUpdateSchema } from "@pi-science/contracts";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
@@ -25,7 +26,14 @@ function failure(reply: FastifyReply, error: unknown): unknown {
   throw error;
 }
 
-export function registerMcpRoutes(app: FastifyInstance, service: McpConnectorService): void {
+export function registerMcpRoutes(app: FastifyInstance, service: McpConnectorService, managementEnabled = true): void {
+  app.post("/api/mcp/runtime/authorize", async (request, reply) => {
+    try { return await service.authorizeRuntimeTool(cwd(request), mcpRuntimePolicySchema.parse(request.body)); }
+    catch (error) { return failure(reply, error); }
+  });
+
+  if (!managementEnabled) return;
+
   app.get("/api/mcp/connectors", async (request, reply) => {
     try { return await service.list(optionalCwd(request)); }
     catch (error) { return failure(reply, error); }

@@ -41,6 +41,14 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     genReqId: (request) => request.headers["x-request-id"]?.toString() || randomUUID(),
   });
 
+  app.addHook("onListen", async () => {
+    const address = app.server.address();
+    if (address && typeof address !== "string") {
+      const host = address.address === "0.0.0.0" ? "127.0.0.1" : address.address === "::" ? "::1" : address.address;
+      modules.configureBackendUrl?.(`http://${host.includes(":") ? `[${host}]` : host}:${address.port}`);
+    }
+  });
+
   nodeSessionService.configureLogging((level, message) => app.log[level](message));
   events.configureLogging((level, message) => app.log[level](message));
 
@@ -168,7 +176,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);
   if (config.nodeArtifacts !== false) registerTurnArtifactRoutes(app);
   if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings, modelResources, runtimeCatalog, sqliteEnabled ? mcp : undefined);
-  if (config.nodeSettings !== false && sqliteEnabled) registerMcpRoutes(app, mcp);
+  if (sqliteEnabled) registerMcpRoutes(app, mcp, config.nodeSettings !== false);
   if (config.nodeSettings !== false) {
     registerModelResourceRoutes(app, modelResources, nodeSessionService);
   }

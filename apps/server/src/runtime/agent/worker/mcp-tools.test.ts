@@ -1,3 +1,4 @@
+import { writeJsonAtomic } from "../../../storage/persistence.js";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +12,17 @@ import { AgentMcpTools } from "./mcp-tools.js";
 import { InteractionBridge } from "./interaction-bridge.js";
 import { acquireMcpCall } from "../../../mcp/call-scheduler.js";
 import { CredentialStore } from "../../../model-resources/credential-store.js";
+
+// These SDK fixtures model policy in their synthetic snapshot. Database-backed
+// authority and publication failures are exercised by mcp-approval.test.ts.
+vi.mock("../../../mcp/runtime-policy.js", async () => {
+  const { loadProjectedSnapshot } = await import("../../shared/extensions/pi-science-mcp.js");
+  return { authorizeMcpTool: vi.fn(async (cwd: string, expected: { connectorId: string; toolName: string }) => {
+    const server = Object.values(loadProjectedSnapshot(cwd).mcpServers).find((value) => value.__piScienceConnectorId === expected.connectorId)!;
+    return (server.__piScienceAllowedTools as string[] | undefined)?.includes(expected.toolName) || server.approveTools === false
+      || Array.isArray(server.approveTools) && !server.approveTools.includes(expected.toolName) ? "allow" : "ask";
+  }) };
+});
 
 // These protocol/authorization fixtures deliberately run on the host. Real
 // isolated MCP startup is covered by platform-acceptance.test.ts.
@@ -70,8 +82,8 @@ describe("agent-core managed MCP tools", () => {
         `await server.connect(new StdioServerTransport());`,
       ].join("\n"));
       const base = { command: process.execPath, args: [server], __piScienceConnectorId: "connector_test", approveTools: true };
-      const project = async (policy: Record<string, unknown> | null) => writeFile(join(cwd, ".pi-science/mcp-runtime.json"),
-        JSON.stringify({ version: 1, project_id: "project_test", mcpServers: policy ? { science: policy } : {} }));
+      const project = async (policy: Record<string, unknown> | null) => writeJsonAtomic(join(cwd, ".pi-science/mcp-runtime.json"),
+        { version: 1, project_id: "project_test", mcpServers: policy ? { science: policy } : {} });
       await project(base);
       const interactions: unknown[] = [];
       mcp = await AgentMcpTools.open(cwd, new InteractionBridge((event) => interactions.push(event)), { PATH: process.env.PATH ?? "" }, undefined,
@@ -168,7 +180,7 @@ describe("agent-core managed MCP tools", () => {
       const updates: unknown[] = [];
       const pending = mcp.tools[0]!.execute("call-1", { value: "hello" }, (update) => { updates.push(update); },
         {} as never, {} as never, { abortSignal: undefined } as never);
-      expect(interactions).toMatchObject([{ type: "interaction.requested", kind: "permission", method: "confirm", id: expect.any(String) }]);
+      await vi.waitFor(() => expect(interactions).toMatchObject([{ type: "interaction.requested", kind: "permission", method: "confirm", id: expect.any(String) }]));
       bridge.notify("extension_ui_response", { id: interactions[0]!.id, confirmed: true });
       const result = await pending;
       expect(result.content).toEqual([{ type: "text", text: "hello" }]);

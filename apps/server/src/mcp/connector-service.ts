@@ -1,3 +1,4 @@
+import type { McpRuntimePolicyRequest } from "./runtime-policy.js";
 import { updateWebSettings, webSettingsSchema } from "../web/settings.js";
 import { redactMcpError } from "./diagnostics.js";
 export { redactMcpError } from "./diagnostics.js";
@@ -251,6 +252,23 @@ export class McpConnectorService {
       cached_at: cache?.fetched_at ?? null,
       scope: project ? "project" : "global",
     };
+  }
+
+  async authorizeRuntimeTool(cwd: string, expected: McpRuntimePolicyRequest): Promise<{ decision: "allow" | "ask" }> {
+    const project = await this.project(cwd);
+    const policy = await this.repository.runtimePolicy(project.project_id, expected.connectorId, expected.toolName);
+    if (project.project_id !== expected.projectId || !policy || policy.connector.revision !== expected.connectorRevision
+      || policy.connector.settings_revision !== expected.settingsRevision) {
+      throw new McpServiceError("stale_policy", "MCP policy changed; refresh the worker", 409);
+    }
+    const { connector, global, project: grant } = policy;
+    const includes = [...connector.runtime_config.include_tools, ...connector.include_tools];
+    const excludes = [...connector.runtime_config.exclude_tools, ...connector.exclude_tools];
+    if (!connector.enabled || global === "deny" || grant === "deny" || excludes.includes(expected.toolName)
+      || includes.length && !includes.includes(expected.toolName) || bindingError(connector.runtime_config, connector.credential_ref)) {
+      throw new McpServiceError("tool_denied", "MCP tool is disabled or denied", 403);
+    }
+    return { decision: grant ?? global ?? (connector.approval_mode === "allow_all" ? "allow" : "ask") };
   }
 
   async setToolGrant(connectorId: string, toolName: string, decision: McpToolDecision, cwd?: string | null): Promise<void> {

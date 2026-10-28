@@ -38,6 +38,7 @@ export interface ServerModules {
   readonly environmentRepository: EnvironmentRepository;
   readonly jobRepository: JobRepository;
   readonly sqliteEnabled: boolean;
+  configureBackendUrl?: (url: string) => void;
   readonly mcp: McpConnectorService;
 }
 
@@ -69,14 +70,15 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
   const modelResources = new ModelResourceService({ settings, runtimeCatalog });
   const coreServer = { backendUrl: config ? `http://127.0.0.1:${config.port}` : undefined, internalToken: config?.internalToken, onWorkerExit: (cwd: string, owner: string) => kernels.shutdownOwner(cwd, owner), hasApprovalResources: (cwd: string, owner: string) => kernels.hasOwner(cwd, owner), revokeApprovalResources: (cwd: string, owner: string) => kernels.revokeOwner(cwd, owner) };
   const projectReview = new ProjectReviewService(new CoreReviewSubagentRunner(environments, coreServer), sessionRepository);
-  const sessions = new NodeSessionService(events, sessionRepository, environments, projectReview, undefined, modelResources, {
+  const sessionServer = {
     backendUrl: config ? `http://127.0.0.1:${config.port}` : undefined,
     internalToken: config?.internalToken,
     onWorkerExit: coreServer.onWorkerExit,
-  });
+  };
+  const sessions = new NodeSessionService(events, sessionRepository, environments, projectReview, undefined, modelResources, sessionServer);
   const mcpRepository = new McpRepository(stateStore);
   const mcp = new McpConnectorService(mcpRepository, workspaces, settings, sessions, new McpRuntimeProjection(mcpRepository));
   if (sqliteEnabled) sessions.configureBeforeRuntimeStart((cwd) => mcp.materializeWorkspace(cwd));
   const jobs = new JobCoordinator(environments, {}, undefined, sqliteEnabled ? jobRepository : undefined);
-  return { sessions, events, sessionRepository, runtimeCatalog, settings, modelResources, jobs, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled, mcp };
+  return { sessions, events, sessionRepository, runtimeCatalog, settings, modelResources, jobs, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled, mcp, configureBackendUrl: (url: string) => { coreServer.backendUrl = url; sessionServer.backendUrl = url; } };
 }

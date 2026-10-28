@@ -1,3 +1,4 @@
+import { registerMcpRoutes } from "./mcp-routes.js";
 import Fastify from "fastify";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -67,10 +68,13 @@ async function fixture(withServer = false) {
     return { success: true };
   });
   const app = Fastify(); cleanups.push(() => app.close());
+  registerMcpRoutes(app, mcp);
   registerNodeSessionRoutes(app, { notify } as unknown as NodeSessionService, sessionRepository, undefined, undefined, { mcp, events });
+  const origin = await app.listen({ host: "127.0.0.1", port: 0 });
+  vi.stubEnv("PI_SCIENCE_BACKEND_URL", origin);
   const approve = (requestId = "request", payload = { confirmed: true, alwaysAllow: true }, workspace = cwd) => app.inject({ method: "POST", url: `/api/sessions/session/interactions/${requestId}?${new URLSearchParams({ cwd: workspace })}`, payload });
   const grants = () => repository.projectToolGrants(snapshot.project_id, connector.connector_id);
-  return { cwd, repository, workspaces, projection, credentials, mcp, connector, events, pending, notify, approve, grants };
+  return { cwd, repository, workspaces, projection, credentials, origin, app, mcp, connector, events, pending, notify, approve, grants };
 }
 
 it("binds Always allow to a live request and persists only in its project after confirmation", async () => {
@@ -323,10 +327,12 @@ it.each(["failure", "conflict"])("keeps old approved identity observable while a
 }, 20_000);
 
 it.each(["lost-acknowledgement", "projection-failure"])("retains a committed credential and revoked grants after %s", async (failure) => {
-  const f = await fixture();
+  const f = await fixture(true);
   await f.mcp.setCredential(f.connector.connector_id, { revision: f.connector.revision, backend: "managed", delivery: "environment", target_name: "TOKEN", secret: "synthetic-old-secret" });
   await f.mcp.setToolGrant(f.connector.connector_id, "echo", "allow", f.cwd);
   const before = (await f.repository.get(f.connector.connector_id))!;
+  const alreadyOpen = await AgentMcpTools.open(f.cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "" });
+  cleanups.push(() => alreadyOpen.close());
   if (failure === "lost-acknowledgement") {
     const update = f.repository.updateCredential.bind(f.repository);
     vi.spyOn(f.repository, "updateCredential").mockImplementationOnce(async (...args) => {
@@ -341,6 +347,15 @@ it.each(["lost-acknowledgement", "projection-failure"])("retains a committed cre
   expect((await f.grants()).get("echo")).toBeUndefined();
   // A failed publication still resolves the old identity, never the staged one.
   expect((loadProjectedServers(f.cwd)[f.connector.name]!.env as Record<string, string>).TOKEN).toBe("synthetic-old-secret");
+  // Both existing and newly opened workers must refuse the executable old
+  // snapshot before publication recovery, despite its old Allow and credential.
+  const stale = await AgentMcpTools.open(f.cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "" });
+  try {
+    for (const worker of [alreadyOpen, stale]) {
+      expect(worker.diagnostics).toEqual([]);
+      await expect(worker.tools[0]!.execute("stale-identity", {}, () => undefined, {} as never, {} as never, {} as never)).rejects.toThrow("MCP policy changed");
+    }
+  } finally { await stale.close(); }
   await f.mcp.materializeWorkspace(f.cwd);
   expect((loadProjectedServers(f.cwd)[f.connector.name]!.env as Record<string, string>).TOKEN).toBe("synthetic-new-secret");
   const snapshot = JSON.parse(await readFile(join(metadataRoot(f.cwd), "mcp-runtime.json"), "utf8"));
@@ -389,4 +404,97 @@ it("keeps concurrent rotations isolated and removes only the unpublished losing 
   expect(await f.credentials.metadata(before.credential_ref!)).toBeNull();
   expect((loadProjectedServers(f.cwd)[f.connector.name]!.env as Record<string, string>).TOKEN).toBe(active.secret);
   expect((await f.grants()).get("echo")).toBeUndefined();
+});
+
+
+it("blocks old and newly opened workers when a connector update commits but snapshot publication fails", async () => {
+  const f = await fixture(true);
+  await f.approve();
+  const before = await AgentMcpTools.open(f.cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "" });
+  try {
+    vi.spyOn(f.projection, "materialize").mockRejectedValueOnce(new Error("snapshot publication failed"));
+    await expect(f.mcp.update(f.connector.connector_id, { revision: f.connector.revision, args: [...f.connector.args, "changed"] })).rejects.toThrow("publication failed");
+    const after = await AgentMcpTools.open(f.cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "" });
+    try {
+      for (const worker of [before, after]) {
+        expect(worker.diagnostics).toEqual([]);
+        await expect(worker.tools[0]!.execute("stale-server", {}, () => undefined, {} as never, {} as never, {} as never)).rejects.toThrow("MCP policy changed");
+      }
+    } finally { await after.close(); }
+  } finally { await before.close(); }
+}, 20_000);
+
+it.each(["clear", "deny"])("observes authoritative %s even when the old Allow snapshot remains published", async (change) => {
+  const f = await fixture(true);
+  await f.approve();
+  vi.spyOn(f.projection, "materialize").mockRejectedValueOnce(new Error("snapshot publication failed"));
+  await expect(change === "clear" ? f.mcp.clearToolGrant(f.connector.connector_id, "echo", f.cwd)
+    : f.mcp.setToolGrant(f.connector.connector_id, "echo", "deny", f.cwd)).rejects.toThrow("publication failed");
+  const events: Array<Record<string, unknown>> = [];
+  const bridge = new InteractionBridge((event) => events.push(event));
+  const worker = await AgentMcpTools.open(f.cwd, bridge, { PATH: process.env.PATH ?? "" });
+  try {
+    const call = worker.tools[0]!.execute("revoked", {}, () => undefined, {} as never, {} as never, {} as never);
+    if (change === "deny") await expect(call).rejects.toThrow("HTTP 403");
+    else {
+      await vi.waitFor(() => expect(events).toHaveLength(1));
+      bridge.notify("extension_ui_response", { id: events[0]!.id, confirmed: false });
+      expect(await call).toMatchObject({ isError: true, details: { declined: true } });
+    }
+  } finally { bridge.close(); await worker.close(); }
+}, 20_000);
+
+
+it("authorizes against the real project and rejects stale revisions and hidden tools", async () => {
+  const f = await fixture();
+  const snapshot = JSON.parse(await readFile(join(metadataRoot(f.cwd), "mcp-runtime.json"), "utf8"));
+  const expected = { ...f.pending.mcpGrant, projectId: snapshot.project_id };
+  const check = (payload = expected) => f.app.inject({ method: "POST", url: `/api/mcp/runtime/authorize?${new URLSearchParams({ cwd: f.cwd })}`, payload });
+  expect((await check()).json()).toEqual({ decision: "ask" });
+  await f.approve();
+  expect((await check()).json()).toEqual({ decision: "allow" });
+  expect((await check({ ...expected, projectId: "another-project" })).statusCode).toBe(409);
+  expect((await check({ ...expected, connectorRevision: expected.connectorRevision + 1 })).statusCode).toBe(409);
+  await f.mcp.setToolGrant(f.connector.connector_id, "echo", "deny", f.cwd);
+  expect((await check()).statusCode).toBe(403);
+});
+
+
+it("does not dispatch from an Allow snapshot when the policy database is unavailable", async () => {
+  const f = await fixture(true);
+  await f.approve();
+  const worker = await AgentMcpTools.open(f.cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "" });
+  vi.spyOn(f.repository, "runtimePolicy").mockRejectedValueOnce(new Error("database unavailable"));
+  try {
+    await expect(worker.tools[0]!.execute("offline", {}, () => undefined, {} as never, {} as never, {} as never)).rejects.toThrow("HTTP 500");
+  } finally { await worker.close(); }
+});
+
+it("rechecks authoritative grants after initial authorization and immediately before dispatch", async () => {
+  const f = await fixture(true);
+  await f.approve();
+  const atDispatch = deferred(), releaseDispatch = deferred();
+  const worker = await AgentMcpTools.open(f.cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "" }, undefined, undefined, false,
+    async () => { atDispatch.resolve(); await releaseDispatch.promise; });
+  const call = worker.tools[0]!.execute("revoked-in-flight", {}, () => undefined, {} as never, {} as never, {} as never);
+  const rejected = expect(call).rejects.toThrow("authorization revoked before dispatch");
+  try {
+    await atDispatch.promise;
+    vi.spyOn(f.projection, "materialize").mockRejectedValueOnce(new Error("snapshot publication failed"));
+    await expect(f.mcp.clearToolGrant(f.connector.connector_id, "echo", f.cwd)).rejects.toThrow("publication failed");
+  } finally { releaseDispatch.resolve(); }
+  try { await rejected; } finally { await worker.close(); }
+});
+
+it("retains runtime authorization when management routes are disabled", async () => {
+  const f = await fixture();
+  const app = Fastify();
+  registerMcpRoutes(app, f.mcp, false);
+  try {
+    expect((await app.inject({ method: "GET", url: "/api/mcp/connectors" })).statusCode).toBe(404);
+    const snapshot = JSON.parse(await readFile(join(metadataRoot(f.cwd), "mcp-runtime.json"), "utf8"));
+    const response = await app.inject({ method: "POST", url: `/api/mcp/runtime/authorize?${new URLSearchParams({ cwd: f.cwd })}`,
+      payload: { ...f.pending.mcpGrant, projectId: snapshot.project_id } });
+    expect(response.json()).toEqual({ decision: "ask" });
+  } finally { await app.close(); }
 });
