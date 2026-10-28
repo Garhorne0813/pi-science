@@ -85,7 +85,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # The real Linux sandbox needs a nested user namespace, and Ubuntu 26.04
+        # (ubuntu-latest since 2026-10-27) refuses the gid map write for it:
+        # "apply-seccomp: write /proc/self/setgroups ... Permission denied".
+        # Pin the image the sandbox is verified on until the runtime supports it.
+        os: [ubuntu-24.04, windows-latest]
     # Native process tests remain serialized on Windows to avoid contention.
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 20 }}
     steps:
@@ -162,7 +166,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Same nested user namespace requirement as the tests job. The
+        # control-plane smoke test starts the sandbox, so it fails on 26.04.
+        os: [ubuntu-24.04, windows-latest]
     timeout-minutes: 20
     steps:
       - name: Checkout

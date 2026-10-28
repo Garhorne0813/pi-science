@@ -69,6 +69,8 @@ export interface SettingsConfig {
   available_models: AvailableModel[];
   model_catalog_source?: "pi" | "fallback";
   compaction_enabled: boolean;
+  /** Opt-in automatic citation verification on every settled turn. */
+  citation_auto_verify?: boolean;
   compaction_threshold_percent: number;
   model_context_window?: number | null;
   model_context_window_override?: { model: string; context_window: number } | null;

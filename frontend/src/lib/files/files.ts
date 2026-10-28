@@ -94,7 +94,7 @@ function artifactFileQuery(
 
 /** Encode a workspace path without hiding separators inside %2F. This keeps
  * wildcard routes and browser/proxy path handling consistent across files. */
-function encodeWorkspacePath(path: string): string {
+export function encodeWorkspacePath(path: string): string {
   return path.replaceAll("\\", "/").split("/").map(encodeURIComponent).join("/");
 }
 

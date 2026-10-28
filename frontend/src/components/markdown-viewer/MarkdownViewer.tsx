@@ -12,7 +12,7 @@ import { notebookRuntime, type CellResult } from "@/lib/notebook";
 import { RunnableCodeBlock } from "../conversation/RunnableCodeBlock";
 import { CodeViewer } from "../code-viewer/CodeViewer";
 import { CodeBlockFrame } from "./CodeBlockFrame";
-import { fileInspectorForPath } from "@/lib/artifacts";
+import { pinnedFileInspector } from "@/lib/artifacts";
 import { resolveMarkdownResource, type MarkdownResourceContext } from "@/lib/files/markdown-resources";
 import { useUiStore } from "@/lib/ui";
 import {
@@ -513,7 +513,9 @@ export function MarkdownViewer({
     const resolved = resolveMarkdownResource(href, context);
     if (resolved.kind !== "workspace") return;
     const filename = resolved.path.split(/[\\/]/).at(-1) || resolved.path;
-    openInspector(fileInspectorForPath(resolved.path, filename, context.root, cwd));
+    // Chat file links pin to the newest published version so later edits cannot
+    // silently change what the sentence referenced.
+    void pinnedFileInspector(resolved.path, filename, context.root, cwd).then((inspector) => openInspector(inspector));
   }, [context, cwd, openInspector]);
   const components = useMemo<Components>(() => ({
     p: ({ children }) => <p className={s.p}>{children}</p>,

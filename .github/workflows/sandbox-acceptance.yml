@@ -32,7 +32,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # Same platform reason as quality.yml: Ubuntu 26.04 refuses the nested
+        # user namespace apply-seccomp creates for its PID and mount unshare.
+        os: [ubuntu-24.04, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Folder, FolderOpen, File, FileSpreadsheet, FileText, Image, BookOpen, ChevronRight, ChevronDown, RefreshCw, Loader2, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn, copyTextToClipboard, useUiStore } from "../../lib/ui";
-import { fileInspectorForPath } from "../../lib/artifacts";
+import { pinnedFileInspector } from "../../lib/artifacts";
 import { absoluteWorkspacePath } from "../../lib/files/workspace-path";
 import { SIDEBAR_FILE_LIMIT, sortFileEntries, workspaceFiles } from "../../lib/workspace";
 import { useFeedback } from "../feedback/feedback-context";
@@ -235,7 +235,9 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
       toggleFolder(entry.path);
       return;
     }
-    openInspector(fileInspectorForPath(entry.path, entry.name, undefined, cwd));
+    // File-tree clicks resolve the newest published version first so the
+    // inspector shows the version badge and diff controls for artifacts.
+    void pinnedFileInspector(entry.path, entry.name, undefined, cwd).then((inspector) => openInspector(inspector));
   };
 
   const toggleFolder = useCallback(async (dirPath: string) => {
