@@ -2,7 +2,8 @@
 // Dependency discovery and a bounded, offline Bubblewrap namespace probe.
 import { constants } from "node:fs";
 import { access, realpath, stat } from "node:fs/promises";
-import { delimiter, isAbsolute, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
@@ -30,15 +31,33 @@ export async function resolveSandboxTool(name, environment = process.env) {
   throw new Error(`${override !== undefined ? `${variable}=${override} is not executable` : `Linux sandbox helper '${name}' was not found on PATH`}.\n${installationHelp}`);
 }
 
-export function probeLinuxSandbox(bwrap, run = spawnSync) {
+function probeNamespaces(bwrap, command, label, run) {
   const result = run(bwrap, [
     "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid", "--unshare-net",
-    "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--", "/bin/true",
+    "--cap-drop", "ALL", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--", ...command,
   ], { encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 64 * 1024, stdio: ["ignore", "pipe", "pipe"] });
   if (result.error || result.status !== 0) {
     const detail = result.error?.message || result.stderr?.trim() || `exit ${result.status}, signal ${result.signal ?? "none"}`;
-    throw new Error(`Linux sandbox startup check failed: ${detail}\nBubblewrap must be allowed to create user, mount, PID and network namespaces. Check your container/host namespace and AppArmor policies. Pi-Science will not disable isolation automatically.`);
+    throw new Error(`${label} startup check failed: ${detail}\nBubblewrap must be allowed to create user, mount, PID and network namespaces. Check your container/host namespace and AppArmor policies, including restrictions on Bubblewrap child processes. Pi-Science will not disable isolation automatically.`);
   }
+}
+
+export function probeLinuxSandbox(bwrap, run = spawnSync) {
+  probeNamespaces(bwrap, ["/bin/true"], "Linux sandbox", run);
+}
+
+export async function checkLinuxSeccomp(environment = process.env, run = spawnSync) {
+  const bwrap = await resolveSandboxTool("bwrap", environment);
+  const require = createRequire(new URL("../apps/server/package.json", import.meta.url));
+  let helper;
+  try {
+    const runtimeRoot = resolve(dirname(require.resolve("@anthropic-ai/sandbox-runtime")), "..");
+    helper = join(runtimeRoot, "vendor/seccomp", process.arch, "apply-seccomp");
+    await access(helper, constants.X_OK);
+  } catch {
+    throw new Error("Linux nested seccomp helper is unavailable; reinstall the server dependencies for this architecture.");
+  }
+  probeNamespaces(bwrap, [helper, "/bin/true"], "Linux nested seccomp", run);
 }
 
 export async function checkLinuxSandbox(environment = process.env) {

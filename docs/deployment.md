@@ -39,6 +39,14 @@ nearest existing ancestor without creating them. Optional scientific environment
 and provider setup are reported separately. Run it before startup: occupied ports
 are reported as conflicts even if another Pi-Science instance owns them.
 
+On Linux in required mode, `doctor` checks both outer Bubblewrap namespaces and
+the installed runtime’s nested `apply-seccomp` helper, offline, with a 10-second
+limit for each probe. An outer namespace success alone does not establish that
+the nested helper can start. Failures report namespace/AppArmor restrictions,
+including restrictions on Bubblewrap child processes; diagnostics never change
+AppArmor or other system policy. Install server dependencies before running this
+check. An explicit `trusted-host` selection skips both sandbox probes.
+
 POSIX readiness and status probes use the required Node.js runtime, so starting the application does not require `curl`. Each HTTP request has a 2-second wall-clock limit covering connection, headers and body, capped by the remaining shared startup deadline. After the deadline, startup rolls back its owned services without another probe.
 
 ## Failure recovery

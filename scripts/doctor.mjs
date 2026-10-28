@@ -7,7 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import net from "node:net";
-import { checkLinuxSandbox } from "./check-linux-sandbox.mjs";
+import { checkLinuxSandbox, checkLinuxSeccomp } from "./check-linux-sandbox.mjs";
 import { resolveFrontendDist } from "./resolve-frontend-dist.mjs";
 
 export function supportedNode(version) {
@@ -83,7 +83,8 @@ export async function doctor(args = [], env = process.env) {
     await check("Linux sandbox", async () => {
       if (env.PI_SCIENCE_EXECUTION_MODE === "trusted-host") return "skipped: operator explicitly selected trusted-host mode";
       const helpers = await checkLinuxSandbox(env);
-      return `namespace startup passed; rg=${helpers.rg}, socat=${helpers.socat}, bwrap=${helpers.bwrap}`;
+      await checkLinuxSeccomp(env);
+      return `namespace and nested seccomp startup passed; rg=${helpers.rg}, socat=${helpers.socat}, bwrap=${helpers.bwrap}`;
     });
   }
   await check("Workspace discovery (ls/glob/grep)", async () => {

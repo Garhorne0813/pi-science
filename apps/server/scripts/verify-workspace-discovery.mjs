@@ -10,8 +10,10 @@ await writeFile(cwd+'/.env','PRIVATE'); await writeFile(cwd+'/holdout/labels.txt
 await writeFile(outside+'/secret.txt','PRIVATE'); await symlink(outside,cwd+'/alias'); await link(outside+'/secret.txt',cwd+'/hard.txt');
 assert.deepEqual((await runDiscovery('ls',cwd,{limit:200})).details.result.entries,[{path:'data/',type:'directory'}]);
 assert.deepEqual((await runDiscovery('glob',cwd,{pattern:'**/*.csv',limit:500})).details.result.files,['data/sample.csv']);
-assert.deepEqual((await runDiscovery('grep',cwd,{pattern:'temperature',limit:100})).details.result.matches,[{path:'data/sample.csv',line:1,text:'temperature,humidity'}]);
+assert.deepEqual((await runDiscovery('grep',cwd,{pattern:'temperature',limit:100})).details.result.matches,[{path:'data/sample.csv',line:1,column:1,text:'temperature,humidity'}]);
 assert.deepEqual((await runDiscovery('grep',cwd,{pattern:'PRIVATE',limit:100})).details.result.matches,[]);
+await writeFile(cwd+'/long.txt','😀'.repeat(5000)+'needle');
+assert.deepEqual((await runDiscovery('grep',cwd,{path:'long.txt',pattern:'needle',limit:100})).details.result.matches,[{path:'long.txt',line:1,column:5001,text:'😀'.repeat(128)+'needle'}]);
 const controller = new AbortController(); const cancelled = runDiscovery('grep',cwd,{pattern:'.',limit:100},controller.signal); setTimeout(()=>controller.abort(),10);
 await assert.rejects(cancelled,/cancelled/);
-console.log('PASS: compiled ls/glob/grep + ignore, links, secrets, and cancellation');
+console.log('PASS: compiled ls/glob/grep + ignore, links, secrets, long Unicode match windows, and cancellation');

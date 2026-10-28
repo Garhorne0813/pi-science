@@ -35,11 +35,30 @@ describe.skipIf(!discoveryBackendAvailable())("workspace discovery on real Linux
   it("searches regex/literals, case, file filters and single files without duplicate lines", async () => {
     const root = await workspace(); await put(root, "data/α.txt", "first\nAlpha Alpha\na.b\nacb\n");
     expect((await run(root, "grep", { pattern: "alpha|first", ignoreCase: true, glob: "**/*.txt" })).details.result.matches).toEqual([
-      { path: "data/α.txt", line: 1, text: "first" }, { path: "data/α.txt", line: 2, text: "Alpha Alpha" },
+      { path: "data/α.txt", line: 1, column: 1, text: "first" }, { path: "data/α.txt", line: 2, column: 1, text: "Alpha Alpha" },
     ]);
-    expect((await run(root, "grep", { pattern: "a.b", literal: true, path: "data/α.txt" })).details.result.matches).toEqual([{ path: "data/α.txt", line: 3, text: "a.b" }]);
+    expect((await run(root, "grep", { pattern: "a.b", literal: true, path: "data/α.txt" })).details.result.matches).toEqual([{ path: "data/α.txt", line: 3, column: 1, text: "a.b" }]);
     expect((await run(root, "grep", { pattern: "absent" })).details.result).toMatchObject({ matches: [], truncated: false });
     expect((await run(root, "grep", { pattern: ".", limit: 1 })).details.result).toMatchObject({ matches: [{ line: 1 }], truncated: true });
+  });
+  it("shows the first match in long Unicode lines with original 1-based columns", async () => {
+    const root = await workspace();
+    const prefix = "😀".repeat(5000);
+    await put(root, "long.txt", prefix + "needle" + "界".repeat(900) + "needle\n" + "😀tail\n");
+    const matches = (await run(root, "grep", { pattern: "needle|tail" })).details.result.matches!;
+    expect(matches).toEqual([
+      { path: "long.txt", line: 1, column: 5001, text: "😀".repeat(128) + "needle" + "界".repeat(378) },
+      { path: "long.txt", line: 2, column: 2, text: "😀tail" },
+    ]);
+    expect(Array.from(matches[0]!.text)).toHaveLength(512);
+  });
+  it("keeps late and end-of-line matches visible after sanitizing controls", async () => {
+    const root = await workspace();
+    await put(root, "long.txt", "\x1b[31m" + "x".repeat(5000) + "needle\x1b[0m\n");
+    expect((await run(root, "grep", { pattern: "needle" })).details.result.matches).toEqual([
+      { path: "long.txt", line: 1, column: 5006, text: "x".repeat(128) + "needle" },
+    ]);
+    expect((await run(root, "grep", { pattern: "$" })).details.result.matches![0]!.text).toBe("x".repeat(122) + "needle");
   });
   it.each(["single", "recursive"] as const)("reports unreadable files as errors in %s grep", async (scope) => {
     const root = await workspace(); await put(root, "a.txt", "matching content");

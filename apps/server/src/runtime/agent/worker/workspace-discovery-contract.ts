@@ -3,7 +3,7 @@ export interface DiscoveryInput { path?: string; pattern?: string; glob?: string
 export interface DiscoveryResult {
   entries?: Array<{ path: string; type: "file" | "directory" }>;
   files?: string[];
-  matches?: Array<{ path: string; line: number; text: string }>;
+  matches?: Array<{ path: string; line: number; column: number; text: string }>;
   truncated: boolean;
   limit: number;
   truncationReason?: "limit" | "bytes" | "scan_budget";

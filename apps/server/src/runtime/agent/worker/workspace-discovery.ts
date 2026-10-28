@@ -43,10 +43,22 @@ async function directory<T>(path: string, consume: (pinned: string) => Promise<T
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 // eslint-disable-next-line no-control-regex -- Explicitly strip terminal control bytes from untrusted text.
 const clean = (value: string) => value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
-const preview = (value: string) => {
-  let result = "", length = 0;
-  for (const character of clean(value)) { if (length++ === 512) break; result += character; }
-  return result;
+const preview = (value: string, matchIndex: number) => {
+  // re2-wasm reports indexes in Unicode code points, including astral characters.
+  // Map the original match to sanitized text so removed controls cannot shift it
+  // outside the window. Keep allocations bounded by the existing file budget.
+  let units = 0, position = 0;
+  for (const character of value) { if (position++ >= matchIndex) break; units += character.length; }
+  let before = 0;
+  for (const _character of clean(value.slice(0, units))) before++;
+  const start = Math.max(0, before - 128);
+  let result = "", length = 0; position = 0;
+  for (const character of clean(value)) {
+    if (position++ < start) continue;
+    if (length++ === 512) break;
+    result += character;
+  }
+  return { column: matchIndex + 1, text: result };
 };
 const MAX_FILE = 8 * 1024 * 1024;
 
@@ -77,7 +89,7 @@ export async function discover(operation: Operation, cwd: string, input: Discove
   let truncationReason: "limit" | "bytes" | "scan_budget" | undefined;
   const entries: Array<{ path: string; type: "file" | "directory" }> = [];
   const files: string[] = [];
-  const matches: Array<{ path: string; line: number; text: string }> = [];
+  const matches: NonNullable<DiscoveryResult["matches"]> = [];
   const resultItems = operation === "ls" ? entries : operation === "glob" ? files : matches;
   let outputBytes = 256;
   const push = (value: typeof resultItems[number]) => {
@@ -118,9 +130,10 @@ export async function discover(operation: Operation, cwd: string, input: Discove
     while (offset < text.length) {
       const end = text.indexOf("\n", offset);
       const value = text.slice(offset, end < 0 ? text.length : end).replace(/\r$/, "");
-      if (regex!.test(value)) {
+      const match = regex!.exec(value);
+      if (match) {
         authorize(path);
-        if (!push({ path: name, line, text: preview(value) })) return;
+        if (!push({ path: name, line, ...preview(value, match.index) })) return;
       }
       offset = end < 0 ? text.length : end + 1; line++;
       if (line % 128 === 0) { await setImmediate(); checkpoint(); }

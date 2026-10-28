@@ -127,8 +127,8 @@ it.skipIf(process.env.PI_SCIENCE_DISCOVERY_LIVE_TEST !== "1")("validates discove
         const result = (name: string) => JSON.parse(results.find((message) => message.toolName === name)!.content.map((part) => part.text ?? "").join(""));
         expect(result("glob")).toMatchObject({ files: ["data/raw/sample.csv"], truncated: false });
         expect(result("grep").matches).toEqual([
-          { path: "analysis/prepare.py", line: 2, text: "frame = pd.read_csv('data/raw/sample.csv')" },
-          { path: "analysis/report.R", line: 1, text: "data <- read.table('data/results/summary.tsv', header=TRUE)" },
+          { path: "analysis/prepare.py", line: 2, column: 12, text: "frame = pd.read_csv('data/raw/sample.csv')" },
+          { path: "analysis/report.R", line: 1, column: 9, text: "data <- read.table('data/results/summary.tsv', header=TRUE)" },
         ]);
         expect(answer).toContain("data/raw/sample.csv"); expect(answer).toContain("analysis/prepare.py");
       } else if (scenario === "parallel_denials") {
