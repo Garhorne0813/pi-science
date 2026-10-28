@@ -358,11 +358,20 @@ function correlationFor(input: { session_id?: string; tool_call_id?: string; ope
 const QUEUE_STATE = /^[A-Z_]+$/;
 const ACCOUNT_ROW = /^([A-Z_]+)\|([^|]*)\|([^|]*)$/;
 
+// The probe frames each answer as marker + exit code + marker + body. C0 markers keep
+// scheduler text from impersonating a frame, so they are read as delimiters, not matched.
+function framedBody(text: string | undefined, marker: string): string | null {
+  if (!text?.startsWith(marker)) return null;
+  const rest = text.slice(1);
+  const end = rest.indexOf(marker);
+  return end > 0 && /^\d+$/.test(rest.slice(0, end)) ? rest.slice(end + 1) : null;
+}
+
 function parseSchedulerQuery(stdout: string): { queueText: string; acctText: string } | null {
   const [queuePart, acctPart] = stdout.split("\x02");
-  const queue = queuePart === undefined ? null : /^\x01\d+\x01([\s\S]*)$/.exec(queuePart);
-  const acct = acctPart === undefined ? null : /^\x03\d+\x03([\s\S]*)$/.exec(acctPart);
-  return queue && acct ? { queueText: queue[1] ?? "", acctText: acct[1] ?? "" } : null;
+  const queue = framedBody(queuePart, "\x01");
+  const acct = framedBody(acctPart, "\x03");
+  return queue !== null && acct !== null ? { queueText: queue, acctText: acct } : null;
 }
 
 function schedulerLines(text: string): string[] {
