@@ -1,8 +1,8 @@
-import { chmod, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { chmod, link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { identifyPolicy } from "./policy.js";
-import { bindRuntimeReadPolicy, runtimeReadPolicy, runtimeReadPolicyId } from "./read-grants.js";
+import { bindRuntimeReadPolicy, runtimeDependencyGrants, runtimeReadPolicy, runtimeReadPolicyId } from "./read-grants.js";
 import { processSettings } from "./settings.js";
 import { workerEnvironment } from "../agent/agent-runtime-client.js";
 
@@ -75,5 +75,16 @@ describe.skipIf(process.platform !== "linux")("shared operator runtime read gran
     await save(["/usr"], [protectedRoot]); await expect(runtimeReadPolicy()).rejects.toThrow("narrow absolute");
     const alias = join(directory, "root-alias"); await symlink("/", alias); await save([alias], [protectedRoot]); await expect(runtimeReadPolicy()).rejects.toThrow("narrow absolute");
     await save([dependency], [protectedRoot]); const value = JSON.parse(await readFile(file, "utf8")); await writeFile(file, JSON.stringify({ ...value, allowAll: true })); await expect(runtimeReadPolicy()).rejects.toThrow();
+  });
+});
+
+describe.skipIf(process.platform !== "darwin")("darwin shared library grants", () => {
+  it("grants the shared libraries a dynamically linked runtime loads at launch", async () => {
+    const node = await realpath(process.execPath);
+    const grants = await runtimeDependencyGrants(await runtimeReadPolicy(), [node]);
+    expect(grants).toContain(node);
+    for (const grant of grants) expect(grant.startsWith("/usr/lib") || grant.startsWith("/System")).toBe(false);
+    const prefixLib = await realpath(join(dirname(node), "..", "lib")).catch(() => undefined);
+    if (prefixLib) expect(grants).toContain(prefixLib);
   });
 });

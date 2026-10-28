@@ -1,5 +1,7 @@
 import { constants } from "node:fs";
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { lstat, open, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,13 +58,61 @@ export async function runtimeReadPolicy(): Promise<RuntimeReadPolicy> {
   return { systemReads: [...new Set(systemReads)], dependencyRoots, protectedRoots: [...new Set(protectedRoots)], file };
 }
 
+const runFile = promisify(execFile);
+const sharedLibraryCache = new Map<string, { stamp: string; roots: string[] }>();
+const systemLibraryRoots = ["/usr/lib", "/System", "/Library/Apple"];
+/** Every path component a loader traverses, plus the link targets it resolves.
+ * Seatbelt checks each component, so a symlinked Homebrew prefix needs the link
+ * itself and its Cellar target, not only the final library file. */
+async function pathChain(path: string): Promise<string[]> {
+  const chain: string[] = [];
+  let current = "";
+  for (const part of path.split("/").filter(Boolean)) {
+    current += `/${part}`;
+    chain.push(current);
+    const target = await realpath(current).catch(() => undefined);
+    if (target && target !== current) chain.push(target);
+  }
+  return chain;
+}
+/** Shared libraries a dynamically linked executable loads at launch. Cached on
+ * the binary identity so repeated sandbox preparation does not respawn otool. */
+export async function executableReadRoots(executable: string): Promise<string[]> {
+  if (process.platform !== "darwin") return [];
+  const canonical = await realpath(executable);
+  const info = await lstat(canonical);
+  if (!info.isFile()) return [];
+  const stamp = `${info.mtimeMs}:${info.size}`;
+  const cached = sharedLibraryCache.get(canonical);
+  if (cached?.stamp === stamp) return cached.roots;
+  const roots = new Set<string>();
+  try { const prefixLib = await realpath(join(dirname(canonical), "..", "lib")); if ((await lstat(prefixLib)).isDirectory()) roots.add(prefixLib); }
+  catch { /* installations without a prefix lib keep the binary grant */ }
+  try {
+    const { stdout } = await runFile("/usr/bin/otool", ["-L", canonical], { timeout: 5_000, maxBuffer: 256 * 1024 });
+    for (const line of stdout.split("\n").slice(1)) {
+      const path = line.trim().split(" ")[0];
+      if (!path?.startsWith("/") || systemLibraryRoots.some((root) => isWithin(root, path))) continue;
+      try { for (const entry of await pathChain(path)) roots.add(entry); } catch { /* optional library is absent */ }
+    }
+  } catch { /* otool unavailable: keep the prefix lib grant */ }
+  const resolved = [...roots].sort();
+  sharedLibraryCache.set(canonical, { stamp, roots: resolved });
+  return resolved;
+}
+
 export async function runtimeDependencyGrants(policy: RuntimeReadPolicy, dependencies: string[]): Promise<string[]> {
-  const roots = await Promise.all(dependencies.map(canonicalRuntimeDependency));
+  const direct = await Promise.all(dependencies.map(canonicalRuntimeDependency));
+  const roots = new Set(direct);
+  // A dynamically linked runtime needs its shared libraries, not only the entry
+  // binary. Homebrew Node keeps libnode and friends outside the executable dir,
+  // so granting `node` alone leaves dyld rejected inside the sandbox.
+  for (const dependency of direct) for (const extra of await executableReadRoots(dependency)) roots.add(extra);
   for (const path of roots) {
     if (policy.protectedRoots.some((protectedPath) => pathsOverlap(path, protectedPath))) throw new Error("Protected paths overlap sandbox runtime read grants");
     if (policy.dependencyRoots && ![...policy.systemReads, ...policy.dependencyRoots].some((root) => isWithin(root, path))) throw new Error("Runtime dependency is outside the shared operator read policy");
   }
-  return [...new Set(roots)];
+  return [...roots];
 }
 
 /** Bind the effective operator policy before recording/using a kernel policy.

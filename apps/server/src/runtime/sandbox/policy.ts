@@ -25,11 +25,23 @@ export interface SandboxPolicy {
   executionGrant?: { id: string; sources: Array<{ path: string; sha256: string }>; deadline: number; budget: { path: string; nodeId: string; ownerHash: string } };
 }
 export const isWithin = (root: string, path: string) => { const part = relative(root, path); return part === "" || part !== ".." && !part.startsWith(`..${sep}`) && !isAbsolute(part); };
+// macOS ships two system aliases: /var and /tmp resolve under /private. They are
+// platform spelling, not attacker-controlled links, so `/var/folders/...` from
+// os.tmpdir() must stay usable. Every other divergence remains rejected.
+const systemAlias = (path: string, canonical: string): boolean => process.platform === "darwin"
+  && (path === "/var" || path.startsWith("/var/") || path === "/tmp" || path.startsWith("/tmp/"))
+  && canonical === `/private${path}`;
 export async function canonicalDirectory(path: string): Promise<string> {
   const normalized = process.platform === "win32" ? resolve(path).toLowerCase() === path.replaceAll("/", "\\").toLowerCase() : resolve(path) === path;
-  if (!isAbsolute(path) || !normalized || relative(path, await realpath(path)) !== "") throw new Error("Sandbox directory aliases and symlinks are forbidden");
-  for (let current = path; dirname(current) !== current; current = dirname(current)) if (!(await lstat(current)).isDirectory()) throw new Error("Sandbox requires real directories");
-  return path;
+  if (!isAbsolute(path) || !normalized) throw new Error("Sandbox directory aliases and symlinks are forbidden");
+  const canonical = await realpath(path);
+  // Keep the caller's spelling unless a platform alias was accepted; Windows
+  // realpath may change drive case and the path normalizer must preserve it.
+  const aliased = relative(path, canonical) !== "";
+  if (aliased && !systemAlias(path, canonical)) throw new Error("Sandbox directory aliases and symlinks are forbidden");
+  const resolved = aliased ? canonical : path;
+  for (let current = resolved; dirname(current) !== current; current = dirname(current)) if (!(await lstat(current)).isDirectory()) throw new Error("Sandbox requires real directories");
+  return resolved;
 }
 export const isSensitiveWorkspaceName = (name: string) => name === "node_modules" || !isArtifactSurfaceablePath(name) || /^(?:credentials?|secrets?|final[-_]?tests?|holdout)(?:$|[._-])/i.test(name);
 
