@@ -159,7 +159,10 @@ export class AgentMcpTools {
             const decision = await checkAuthority();
             const approvalRevision = sessionId && !preauthorizedOnly ? (await readSessionApproval(cwd, sessionId)).revision : undefined;
             const mode = sessionId && !preauthorizedOnly ? await sessionMode(cwd, sessionId) : "ask";
-            const safe = tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint !== true && (tool.annotations?.idempotentHint === true || server.__piScienceBuiltin === true);
+            // Third-party annotations are untrusted claims, never permission.
+            // The builtin flag is admitted against the database connection
+            // fingerprint before discovery and again by checkAuthority above.
+            const safe = server.__piScienceBuiltin === true && tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint !== true;
             let approvedByUser = mode === "full" || mode === "auto" && safe;
             let approvalMs = 0;
             if (decision === "ask" && !approvedByUser) {

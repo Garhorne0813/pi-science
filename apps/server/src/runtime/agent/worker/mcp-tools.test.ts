@@ -197,11 +197,13 @@ describe("agent-core managed MCP tools", () => {
   }, 20_000);
 
   it.each([
-    { mode: "ask", safe: true, asks: true },
-    { mode: "auto", safe: true, asks: false },
-    { mode: "auto", safe: false, asks: true },
-    { mode: "full", safe: false, asks: false },
-  ] as const)("applies $mode to safe=$safe tools using session-owned policy", async ({ mode, safe, asks }) => {
+    { mode: "ask", safe: true, builtin: true, asks: true },
+    { mode: "auto", safe: true, builtin: false, asks: true },
+    { mode: "auto", safe: true, builtin: true, asks: false },
+    { mode: "auto", safe: false, builtin: true, asks: true },
+    { mode: "auto", safe: false, builtin: false, asks: true },
+    { mode: "full", safe: false, builtin: false, asks: false },
+  ] as const)("applies $mode to safe=$safe builtin=$builtin tools using session-owned policy", async ({ mode, safe, builtin, asks }) => {
     const cwd = await mkdtemp(join(tmpdir(), "mcp-approval-mode-"));
     vi.stubEnv("PI_SCIENCE_HOME", join(cwd, "service-private"));
     let mcp: AgentMcpTools | undefined;
@@ -215,7 +217,7 @@ describe("agent-core managed MCP tools", () => {
         `server.registerTool("echo", { description: "Echo", annotations: ${JSON.stringify(safe ? { readOnlyHint: true, destructiveHint: false, idempotentHint: true } : {})} }, async () => ({ content: [{ type: "text", text: "ok" }] }));`,
         `await server.connect(new StdioServerTransport());`,
       ].join("\n"));
-      const definition = { command: process.execPath, args: [server], approveTools: true, __piScienceConnectorId: "connector_mode" };
+      const definition = { command: process.execPath, args: [server], approveTools: true, __piScienceConnectorId: "connector_mode", ...(builtin ? { __piScienceBuiltin: true } : {}) };
       await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_mode", mcpServers: { local: definition } }));
       const { saveSessionApproval } = await import("../../sandbox/session-approval.js");
       await saveSessionApproval(cwd, "mode-session", mode, 0);
