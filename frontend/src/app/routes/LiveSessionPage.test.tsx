@@ -408,23 +408,32 @@ describe("composer send-failure restore", () => {
   });
 });
 
-describe("conversation research workflows", () => {
-  it("sends compare as a structured conversation task instead of creating a loop", async () => {
+describe("conversation without workflow shortcuts", () => {
+  it("does not render the five research shortcut buttons for a new conversation", async () => {
+    renderWorkspaceLanding();
+    await screen.findByTestId("model-control");
+
+    for (const label of ["Research Loop", "Optimize", "Compare approaches", "Evaluate", "Reproduce experiment"]) {
+      expect(screen.queryByRole("button", { name: label })).toBeNull();
+    }
+  });
+
+  it("sends a natural-language research prompt without adding a workflow prefix", async () => {
     const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
     useUiStore.getState().addWorkspaceReference({ cwd: CWD, path: "methods/results.csv", name: "results.csv", isDir: false });
     renderWorkspaceLanding();
     await screen.findByTestId("model-control");
-    fireEvent.click(screen.getByRole("button", { name: "Compare approaches" }));
     act(() => { useRuntimeStore.getState().setDraft("Compare method A and method B"); });
     fireEvent.click(sendButton());
 
-    await waitFor(() => expect(sendPrompt).toHaveBeenCalledWith(expect.stringContaining("[Workflow: compare]")));
+    await waitFor(() => expect(sendPrompt).toHaveBeenCalledTimes(1));
+    expect(sendPrompt.mock.calls[0][0]).toContain("Compare method A and method B");
     expect(sendPrompt.mock.calls[0][0]).toContain("methods/results.csv");
-    expect(screen.queryByText("Confirm Compare approaches")).toBeNull();
+    expect(sendPrompt.mock.calls[0][0]).not.toContain("[Workflow:");
   });
 
-  it("hides workflow starters after a conversation has already begun", async () => {
+  it("keeps the shortcuts hidden after a conversation has begun", async () => {
     useRuntimeStore.setState({
       thread: {
         blocks: [{ kind: "user", id: "u1", text: "Earlier analysis", timestamp: new Date().toISOString() }],
@@ -439,15 +448,15 @@ describe("conversation research workflows", () => {
     expect(screen.queryByRole("button", { name: "Reproduce experiment" })).toBeNull();
   });
 
-  it("starts optimize in Conversation with auto-research and no research API", async () => {
+  it("still sends explicitly typed auto-research skill commands", async () => {
     const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
-    renderWorkspaceLanding(); await screen.findByTestId("model-control");
-    fireEvent.click(screen.getByRole("button", { name: "Optimize" }));
-    act(() => { useRuntimeStore.getState().setDraft("Minimize model latency"); });
+    renderWorkspaceLanding();
+    await screen.findByTestId("model-control");
+    act(() => { useRuntimeStore.getState().setDraft("/skill:auto-research Minimize model latency"); });
     fireEvent.click(sendButton());
-    await waitFor(() => expect(sendPrompt).toHaveBeenCalledWith("/skill:auto-research [Workflow: optimize]\nMinimize model latency"));
-    expect(screen.queryByRole("button", { name: "Create and start" })).toBeNull();
+
+    await waitFor(() => expect(sendPrompt).toHaveBeenCalledWith("/skill:auto-research Minimize model latency"));
     expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("research-loop"))).toBe(false);
   });
 });
