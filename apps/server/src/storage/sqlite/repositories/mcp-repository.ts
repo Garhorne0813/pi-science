@@ -104,10 +104,14 @@ export class McpRepository {
       && JSON.stringify(existing.runtime_config) === JSON.stringify(runtimeConfig) && existing.credential_ref === credentialRef;
     if (unchanged) return existing;
     const now = Date.now();
-    await this.store.run(
-      `UPDATE mcp_connectors SET display_name = ?, description = ?, source = 'builtin', transport = ?, endpoint_url = ?, command = ?, args_json = ?, socket_path = ?, runtime_config_json = ?, credential_ref = ?, revision = revision + 1, updated_at = ? WHERE connector_id = ?`,
-      [input.display_name, input.description, input.transport, input.endpoint_url ?? null, input.command ?? null, JSON.stringify(input.args), input.socket_path ?? null, JSON.stringify(runtimeConfig), credentialRef, now, existing.connector_id],
-    );
+    const [, result] = await this.store.batch([
+      revokeProjectAllows(existing.connector_id, existing.revision),
+      {
+        sql: `UPDATE mcp_connectors SET display_name = ?, description = ?, source = 'builtin', transport = ?, endpoint_url = ?, command = ?, args_json = ?, socket_path = ?, runtime_config_json = ?, credential_ref = ?, revision = revision + 1, updated_at = ? WHERE connector_id = ? AND revision = ?`,
+        params: [input.display_name, input.description, input.transport, input.endpoint_url ?? null, input.command ?? null, JSON.stringify(input.args), input.socket_path ?? null, JSON.stringify(runtimeConfig), credentialRef, now, existing.connector_id, existing.revision],
+      },
+    ]);
+    if (Number(result!.changes) === 0) return this.upsertBuiltin(connectorId, input, enabledByDefault);
     await this.store.run("DELETE FROM mcp_tool_cache WHERE connector_id = ?", [existing.connector_id]);
     return (await this.get(existing.connector_id))!;
   }
@@ -128,28 +132,34 @@ export class McpRepository {
 
   async update(connectorId: string, expectedRevision: number, input: Omit<McpConnectorCreate, "enabled">): Promise<StoredMcpConnector | null> {
     const now = Date.now();
-    const result = await this.store.run(
-      `UPDATE mcp_connectors SET
+    const [, result] = await this.store.batch([
+      revokeProjectAllows(connectorId, expectedRevision),
+      {
+        sql: `UPDATE mcp_connectors SET
          name = ?, display_name = ?, description = ?, transport = ?, endpoint_url = ?, command = ?, args_json = ?, socket_path = ?,
          runtime_config_json = ?, credential_ref = ?, revision = revision + 1, updated_at = ?
        WHERE connector_id = ? AND revision = ?`,
-      [input.name, input.display_name, input.description, input.transport, input.endpoint_url ?? null, input.command ?? null, JSON.stringify(input.args), input.socket_path ?? null, JSON.stringify(input.runtime_config), input.credential_ref ?? null, now, connectorId, expectedRevision],
-    );
-    if (Number(result.changes) === 0) return null;
+        params: [input.name, input.display_name, input.description, input.transport, input.endpoint_url ?? null, input.command ?? null, JSON.stringify(input.args), input.socket_path ?? null, JSON.stringify(input.runtime_config), input.credential_ref ?? null, now, connectorId, expectedRevision],
+      },
+    ]);
+    if (Number(result!.changes) === 0) return null;
     await this.store.run("DELETE FROM mcp_tool_cache WHERE connector_id = ?", [connectorId]);
     return this.get(connectorId);
   }
 
-  /** Authentication bindings do not change the connector's tool contract, so keep
-   * its discovery cache while still advancing the optimistic-lock revision. */
+  /** Authentication changes retain discovery metadata but advance the connector
+   * revision and revoke project approvals for the previous credential identity. */
   async updateCredential(connectorId: string, expectedRevision: number, runtimeConfig: McpRuntimeConfig, credentialRef: string | null): Promise<StoredMcpConnector | null> {
     const now = Date.now();
-    const result = await this.store.run(
-      `UPDATE mcp_connectors SET runtime_config_json = ?, credential_ref = ?, revision = revision + 1, updated_at = ?
+    const [, result] = await this.store.batch([
+      revokeProjectAllows(connectorId, expectedRevision),
+      {
+        sql: `UPDATE mcp_connectors SET runtime_config_json = ?, credential_ref = ?, revision = revision + 1, updated_at = ?
        WHERE connector_id = ? AND revision = ?`,
-      [JSON.stringify(runtimeConfig), credentialRef, now, connectorId, expectedRevision],
-    );
-    return Number(result.changes) > 0 ? this.get(connectorId) : null;
+        params: [JSON.stringify(runtimeConfig), credentialRef, now, connectorId, expectedRevision],
+      },
+    ]);
+    return Number(result!.changes) > 0 ? this.get(connectorId) : null;
   }
 
   async delete(connectorId: string): Promise<boolean> {
@@ -288,4 +298,15 @@ function collisionSafeBuiltinName(name: string, connectorId: string): string {
 
 function connectorSettings(connector: StoredMcpConnector): StoredMcpSettings {
   return { connector_id: connector.connector_id, enabled: connector.enabled, include_tools: connector.include_tools, exclude_tools: connector.exclude_tools, approval_mode: connector.approval_mode, revision: connector.settings_revision, created_at: connector.created_at, updated_at: connector.updated_at };
+}
+
+/** Project Allow trusts the approved connector revision. Revoke it in the same
+ * transaction as every configuration/credential revision change; retain Deny/Ask.
+ * Checking the old revision makes an unsuccessful optimistic update a no-op. */
+function revokeProjectAllows(connectorId: string, expectedRevision: number) {
+  return {
+    sql: `DELETE FROM mcp_project_tool_grants WHERE connector_id = ? AND decision = 'allow'
+          AND EXISTS (SELECT 1 FROM mcp_connectors WHERE connector_id = ? AND revision = ?)`,
+    params: [connectorId, connectorId, expectedRevision],
+  };
 }

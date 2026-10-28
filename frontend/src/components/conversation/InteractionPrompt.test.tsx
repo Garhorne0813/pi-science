@@ -84,7 +84,7 @@ describe("InteractionPrompt", () => {
     }} onRespond={onRespond} />);
 
     const always = screen.getByRole("button", { name: "Always allow" });
-    expect(always).toHaveAttribute("title", "Always allow this MCP tool in the current project");
+    expect(always).toHaveAttribute("title", "Always allow this MCP tool in the current project. Changing connector configuration or credentials requires approval again.");
     fireEvent.click(always);
     expect(onRespond).toHaveBeenCalledWith({ confirmed: true, alwaysAllow: true });
     expect(always).toBeDisabled();

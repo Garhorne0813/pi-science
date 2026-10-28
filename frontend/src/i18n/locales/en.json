@@ -1109,7 +1109,7 @@
   "interaction.effect": "Effect",
   "interaction.allowOnce": "Allow once",
   "interaction.allowAlways": "Always allow",
-  "interaction.allowAlwaysScope": "Always allow this MCP tool in the current project",
+  "interaction.allowAlwaysScope": "Always allow this MCP tool in the current project. Changing connector configuration or credentials requires approval again.",
   "interaction.deny": "Deny",
   "skills.title": "Skills",
   "skills.descriptionPrefix": "Agent skills extend what the AI can do. Skills are loaded from",

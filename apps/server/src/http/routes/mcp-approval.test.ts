@@ -1,9 +1,12 @@
 import Fastify from "fastify";
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { McpConnectorService } from "../../mcp/connector-service.js";
+import { AgentMcpTools } from "../../runtime/agent/worker/mcp-tools.js";
+import { InteractionBridge } from "../../runtime/agent/worker/interaction-bridge.js";
+import { builtinMcpConnectors } from "../../mcp/builtin-connectors.js";
 import { McpRuntimeProjection } from "../../mcp/runtime-projection.js";
 import { ConversationEventHub } from "../../runtime/events/conversation-event-hub.js";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
@@ -29,7 +32,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function fixture() {
+async function fixture(withServer = false) {
   const cwd = await realpath(await mkdtemp(join(tmpdir(), "pi-science-mcp-approval-")));
   cleanups.push(() => rm(cwd, { recursive: true, force: true }));
   await mkdir(join(cwd, ".pi-science"));
@@ -41,7 +44,15 @@ async function fixture() {
   const projection = new McpRuntimeProjection(repository);
   const mcp = new McpConnectorService(repository, workspaces, new SettingsStore(), undefined, projection);
   await mcp.materializeWorkspace(cwd);
-  const connector = await mcp.create({ name: "approval-test", display_name: "Approval test", transport: "stdio", command: process.execPath, runtime_config: {}, enabled: true });
+  const serverScript = join(cwd, "echo.mjs");
+  if (withServer) await writeFile(serverScript, [
+    `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
+    `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
+    `const server = new McpServer({ name: "approval-test", version: "1" });`,
+    `server.registerTool("echo", { description: "Test echo" }, async () => ({ content: [{ type: "text", text: "echo executed" }] }));`,
+    `await server.connect(new StdioServerTransport());`,
+  ].join("\n"));
+  const connector = await mcp.create({ args: withServer ? [serverScript] : [], name: "approval-test", display_name: "Approval test", transport: "stdio", command: process.execPath, runtime_config: {}, enabled: true });
   const snapshot = JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8"));
   const server = snapshot.mcpServers[connector.name];
   const events = new ConversationEventHub();
@@ -165,4 +176,112 @@ it.each(["project", "global"])("keeps a concurrent %s Deny authoritative after a
   const server = snapshot.mcpServers[f.connector.name];
   expect(server.excludeTools).toContain("echo");
   expect(server.__piScienceAllowedTools ?? []).not.toContain("echo");
+});
+
+
+it("requires approval in a new worker after a successfully approved connector changes", async () => {
+  const f = await fixture(true);
+  expect((await f.approve()).json()).toEqual({ ok: true, persistentGrant: true });
+  const events: Array<Record<string, unknown>> = [];
+  const bridge = new InteractionBridge((event) => events.push(event));
+  const before = await AgentMcpTools.open(f.cwd, bridge, { PATH: process.env.PATH ?? "" });
+  try {
+    expect(before.diagnostics).toEqual([]);
+    const result = await before.tools[0]!.execute("before", {}, () => undefined, {} as never, {} as never, {} as never);
+    expect(result.content).toEqual([{ type: "text", text: "echo executed" }]);
+    expect(events).toEqual([]);
+  } finally { await before.close(); }
+
+  await f.mcp.update(f.connector.connector_id, { revision: f.connector.revision, args: [...f.connector.args, "changed-server-identity"] });
+  expect((await f.grants()).has("echo")).toBe(false);
+  const after = await AgentMcpTools.open(f.cwd, bridge, { PATH: process.env.PATH ?? "" });
+  try {
+    expect(after.diagnostics).toEqual([]);
+    const call = after.tools[0]!.execute("after", {}, () => undefined, {} as never, {} as never, {} as never);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0]).toMatchObject({ kind: "permission", mcpGrant: { connectorId: f.connector.connector_id, toolName: "echo" } });
+    bridge.notify("extension_ui_response", { id: events[0]!.id, confirmed: false });
+    expect(await call).toMatchObject({ isError: true, details: { declined: true } });
+  } finally { bridge.close(); await after.close(); }
+}, 20_000);
+
+it.each([
+  { command: "changed-executable" },
+  { transport: "streamable_http", command: null, endpoint_url: "https://93.184.216.34/mcp" },
+  { args: ["changed-server.js"] },
+])("expires project Allow when connection configuration changes: %j", async (change) => {
+  const f = await fixture();
+  await f.approve();
+  await f.mcp.setToolGrant(f.connector.connector_id, "blocked", "deny", f.cwd);
+  await f.mcp.update(f.connector.connector_id, { revision: f.connector.revision, ...change });
+  expect((await f.grants()).get("echo")).toBeUndefined();
+  expect((await f.grants()).get("blocked")).toBe("deny");
+  const snapshot = JSON.parse(await readFile(join(metadataRoot(f.cwd), "mcp-runtime.json"), "utf8"));
+  expect(snapshot.mcpServers[f.connector.name].__piScienceAllowedTools ?? []).not.toContain("echo");
+});
+
+it("expires project Allow on credential addition, replacement and removal while retaining Deny", async () => {
+  const f = await fixture();
+  await f.approve();
+  await f.mcp.setToolGrant(f.connector.connector_id, "blocked", "deny", f.cwd);
+  for (const secret of ["synthetic-first-key", "synthetic-replacement-key", null]) {
+    if (secret) {
+      const connector = await f.mcp.get(f.connector.connector_id);
+      await f.mcp.setCredential(f.connector.connector_id, { revision: connector.revision, backend: "managed", delivery: "environment", target_name: "TOKEN", secret });
+    } else await f.mcp.removeCredential(f.connector.connector_id);
+    expect((await f.grants()).get("echo")).toBeUndefined();
+    expect((await f.grants()).get("blocked")).toBe("deny");
+    await f.mcp.setToolGrant(f.connector.connector_id, "echo", "allow", f.cwd);
+  }
+});
+
+it("does not revoke fresh project grants when an optimistic configuration/credential update fails", async () => {
+  const f = await fixture();
+  await f.mcp.update(f.connector.connector_id, { revision: f.connector.revision, args: ["new-server.js"] });
+  await f.mcp.setToolGrant(f.connector.connector_id, "echo", "allow", f.cwd);
+  await expect(f.mcp.update(f.connector.connector_id, { revision: f.connector.revision, args: ["stale-server.js"] })).rejects.toMatchObject({ code: "revision_conflict" });
+  const current = await f.repository.get(f.connector.connector_id);
+  expect(await f.repository.updateCredential(f.connector.connector_id, f.connector.revision, current!.runtime_config, null)).toBeNull();
+  expect((await f.grants()).get("echo")).toBe("allow");
+});
+
+it("expires builtin project Allow only when its definition revision changes", async () => {
+  const f = await fixture();
+  const builtin = builtinMcpConnectors()[0]!;
+  const connector = await f.repository.upsertBuiltin(builtin.connector_id, builtin.definition, true);
+  await f.mcp.setToolGrant(connector.connector_id, "echo", "allow", f.cwd);
+  await f.mcp.setToolGrant(connector.connector_id, "blocked", "deny", f.cwd);
+  const projectId = JSON.parse(await readFile(join(metadataRoot(f.cwd), "mcp-runtime.json"), "utf8")).project_id;
+  await f.repository.upsertBuiltin(builtin.connector_id, builtin.definition, true);
+  expect((await f.repository.projectToolGrants(projectId, connector.connector_id)).get("echo")).toBe("allow");
+  await f.repository.upsertBuiltin(builtin.connector_id, { ...builtin.definition, args: [...builtin.definition.args, "changed-builtin"] }, true);
+  expect((await f.repository.projectToolGrants(projectId, connector.connector_id)).get("echo")).toBeUndefined();
+  expect((await f.repository.projectToolGrants(projectId, connector.connector_id)).get("blocked")).toBe("deny");
+});
+
+
+it("rolls back grant revocation when the connector update cannot commit", async () => {
+  const f = await fixture();
+  await f.approve();
+  const other = await f.mcp.create({ name: "other-connector", display_name: "Other", transport: "stdio", command: process.execPath, runtime_config: {}, enabled: false });
+  const current = await f.repository.get(f.connector.connector_id);
+  await expect(f.repository.update(f.connector.connector_id, f.connector.revision, { ...current!, name: other.name })).rejects.toThrow();
+  expect((await f.grants()).get("echo")).toBe("allow");
+  expect((await f.repository.get(f.connector.connector_id))?.revision).toBe(f.connector.revision);
+});
+
+it("expires Allow in every project while leaving other connectors' grants intact", async () => {
+  const f = await fixture();
+  await f.approve();
+  const otherCwd = join(f.cwd, "other-project");
+  await mkdir(join(otherCwd, ".pi-science"), { recursive: true });
+  await f.mcp.materializeWorkspace(otherCwd);
+  await f.mcp.setToolGrant(f.connector.connector_id, "echo", "allow", otherCwd);
+  const otherProject = JSON.parse(await readFile(join(metadataRoot(otherCwd), "mcp-runtime.json"), "utf8")).project_id;
+  const untouched = await f.mcp.create({ name: "untouched", display_name: "Untouched", transport: "stdio", command: process.execPath, runtime_config: {}, enabled: true });
+  await f.mcp.setToolGrant(untouched.connector_id, "echo", "allow", otherCwd);
+  await f.mcp.update(f.connector.connector_id, { revision: f.connector.revision, args: ["changed-server.js"] });
+  expect((await f.grants()).has("echo")).toBe(false);
+  expect((await f.repository.projectToolGrants(otherProject, f.connector.connector_id)).has("echo")).toBe(false);
+  expect((await f.repository.projectToolGrants(otherProject, untouched.connector_id)).get("echo")).toBe("allow");
 });

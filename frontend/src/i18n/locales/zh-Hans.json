@@ -1109,7 +1109,7 @@
   "interaction.effect": "影响",
   "interaction.allowOnce": "允许一次",
   "interaction.allowAlways": "始终允许",
-  "interaction.allowAlwaysScope": "在当前项目中始终允许此 MCP 工具",
+  "interaction.allowAlwaysScope": "在当前项目中始终允许此 MCP 工具。连接器配置或凭据变更后需要重新审批。",
   "interaction.deny": "拒绝",
   "skills.title": "技能",
   "skills.descriptionPrefix": "Agent 技能可扩展 AI 的能力。技能加载自",
