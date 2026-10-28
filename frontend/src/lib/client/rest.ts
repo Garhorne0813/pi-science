@@ -326,6 +326,18 @@ export async function respondToInteraction(
   }
 }
 
+/** Persist a single MCP tool permission for this project's future calls. */
+export async function allowMcpToolForProject(baseUrl: string, cwd: string, connectorId: string, toolName: string): Promise<void> {
+  const res = await request(
+    `${baseUrl}/api/mcp/connectors/${encodeURIComponent(connectorId)}/tools/${encodeURIComponent(toolName)}?${new URLSearchParams({ cwd })}`,
+    { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision: "allow" }) },
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    throw new Error(responseError(data, `Saving MCP permission failed: ${res.statusText}`));
+  }
+}
+
 /** Ask the control plane to generate an AI title for a session (Pi runtime). */
 export async function generateSessionTitle(baseUrl: string, sessionId: string, cwd: string): Promise<string | null> {
   const res = await request(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/title?cwd=${encodeURIComponent(cwd)}`, {
