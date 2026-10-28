@@ -13,9 +13,12 @@ concurrency:
 permissions:
   contents: read
 
+# sandbox-runtime 0.0.79's nested user namespace helper fails on Ubuntu 26.04
+# (/proc/self/setgroups). Pin the validated runner; retain matrix labels so
+# required check names and artifact names stay stable.
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       run: ${{ steps.paths.outputs.run }}
     steps:
@@ -35,7 +38,7 @@ jobs:
   static-checks:
     needs: changes
     if: needs.changes.outputs.run == 'true'
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -81,7 +84,7 @@ jobs:
   tests:
     needs: changes
     if: needs.changes.outputs.run == 'true'
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -158,7 +161,7 @@ jobs:
   build:
     needs: changes
     if: needs.changes.outputs.run == 'true'
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -229,7 +232,7 @@ jobs:
   browser:
     needs: [changes, build]
     if: needs.changes.outputs.run == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
@@ -330,7 +333,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run == 'true'
     name: production install (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -368,7 +371,7 @@ jobs:
     name: verify (${{ matrix.os }})
     needs: [changes, static-checks, tests, build, browser, macos-launcher, production-install]
     if: always()
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]

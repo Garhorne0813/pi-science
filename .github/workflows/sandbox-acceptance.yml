@@ -24,10 +24,13 @@ concurrency:
 
 permissions:
   contents: read
+# sandbox-runtime 0.0.79's nested user namespace helper fails on Ubuntu 26.04
+# (/proc/self/setgroups). Pin the validated runner; retain matrix labels so
+# required check names and artifact names stay stable.
 jobs:
   sandbox:
     name: ${{ matrix.os == 'macos-latest' && 'macOS Seatbelt acceptance' || 'Linux Bubblewrap acceptance' }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
