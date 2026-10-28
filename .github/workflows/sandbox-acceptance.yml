@@ -16,6 +16,8 @@ on:
       - 'pnpm-workspace.yaml'
       - 'pnpm-lock.yaml'
       - '.github/workflows/sandbox-acceptance.yml'
+      - '.github/scripts/*linux*sandbox*'
+      - '.github/scripts/probe-linux-seccomp.mjs'
   workflow_dispatch:
 # Superseded runs for the same branch/PR do not consume another full matrix.
 concurrency:
@@ -47,15 +49,15 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = Linux ]; then
-            sudo apt-get update
-            sudo apt-get install -y bubblewrap socat ripgrep
-            # Dedicated ephemeral CI runner; Ubuntu's AppArmor default blocks user namespaces.
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+            bash .github/scripts/prepare-linux-sandbox.sh
           else
             brew install socat ripgrep
           fi
           python -m pip install numpy==2.3.5
           pnpm install --frozen-lockfile
+      - name: Probe complete Linux sandbox startup
+        if: runner.os == 'Linux'
+        run: node .github/scripts/probe-linux-seccomp.mjs
       - name: Validate compiled discovery in a read-only Linux sandbox
         if: runner.os == 'Linux'
         shell: bash

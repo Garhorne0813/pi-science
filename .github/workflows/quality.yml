@@ -103,14 +103,14 @@ jobs:
 
       - name: Install required Linux sandbox dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap socat ripgrep
-          # Dedicated ephemeral runner: Bubblewrap requires user namespaces.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        run: bash .github/scripts/prepare-linux-sandbox.sh
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Probe complete Linux sandbox startup
+        if: runner.os == 'Linux'
+        run: node .github/scripts/probe-linux-seccomp.mjs
 
       - name: Test native Windows file read boundary
         if: runner.os == 'Windows'
@@ -179,14 +179,14 @@ jobs:
 
       - name: Install required Linux sandbox dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap socat ripgrep
-          # Dedicated ephemeral runner: Bubblewrap requires user namespaces.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        run: bash .github/scripts/prepare-linux-sandbox.sh
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Probe complete Linux sandbox startup
+        if: runner.os == 'Linux'
+        run: node .github/scripts/probe-linux-seccomp.mjs
 
       - name: Build all JavaScript packages
         run: pnpm build
@@ -348,11 +348,7 @@ jobs:
           node-version: 24.16.0
       - name: Install required Linux sandbox dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap socat ripgrep
-          # Dedicated ephemeral runner: Bubblewrap requires user namespaces.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        run: bash .github/scripts/prepare-linux-sandbox.sh
 
       # Intentionally omit pnpm setup: exercise the pinned bootstrap from npm.
       - name: Install and build (POSIX)
