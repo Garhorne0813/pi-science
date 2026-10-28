@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { McpEnvironmentBinding } from "./runtime-projection-types.js";
 import type { McpRepository, McpToolDecision, StoredMcpConnector } from "../storage/sqlite/repositories/mcp-repository.js";
 import { validateWorkspaceCwd } from "../security/workspace-security.js";
-import { metadataRoot, writeJsonAtomic } from "../storage/persistence.js";
+import { metadataRoot, withFileWriteLock, writeJsonAtomic } from "../storage/persistence.js";
 
 export const MCP_RUNTIME_SNAPSHOT = ".pi-science/mcp-runtime.json";
 // Bump when the managed MCP implementation changes its tool/resource contract.
@@ -47,6 +47,14 @@ export class McpRuntimeProjection {
 
   async materialize(cwd: string, projectId: string): Promise<void> {
     const workspace = await validateWorkspaceCwd(cwd);
+    const directory = await snapshotDirectory(workspace);
+    // Lock before reading policy, through publication. Every queued publisher
+    // rereads current grants, so an older Allow cannot overwrite a newer Deny.
+    // The shared file lock also coordinates separate projection instances/processes.
+    return withFileWriteLock(join(directory, "mcp-runtime.json"), () => this.materializeLocked(workspace, projectId));
+  }
+
+  private async materializeLocked(workspace: string, projectId: string): Promise<void> {
     const connectors = (await this.repository.list()).filter((item) => item.enabled);
     const mcpServers: Record<string, ProjectedMcpServer> = {};
     for (const connector of connectors) {
@@ -117,11 +125,16 @@ function projectServer(
 }
 
 async function atomicSnapshot(cwd: string, payload: unknown): Promise<void> {
+  const directory = await snapshotDirectory(cwd);
+  await writeJsonAtomic(join(directory, "mcp-runtime.json"), payload, { mode: 0o600 });
+}
+
+async function snapshotDirectory(cwd: string): Promise<string> {
   const directory = metadataRoot(cwd);
   try { if ((await lstat(directory)).isSymbolicLink()) throw new Error("Workspace .pi-science directory must not be a symbolic link"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   await mkdir(directory, { recursive: true });
-  await writeJsonAtomic(join(directory, "mcp-runtime.json"), payload, { mode: 0o600 });
+  return directory;
 }
 
 function unique(values: string[]): string[] { return [...new Set(values)].sort(); }

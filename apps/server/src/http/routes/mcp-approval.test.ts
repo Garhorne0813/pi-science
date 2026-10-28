@@ -1,5 +1,5 @@
 import Fastify from "fastify";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -11,6 +11,7 @@ import { sessionRepository } from "../../runtime/node/session-repository.js";
 import { McpRepository } from "../../storage/sqlite/repositories/mcp-repository.js";
 import { WorkspaceRepository } from "../../storage/sqlite/repositories/workspace-repository.js";
 import { InMemorySqliteStateStore } from "../../storage/sqlite/state-store.js";
+import { metadataRoot } from "../../storage/persistence.js";
 import { SettingsStore } from "../../storage/settings-store.js";
 import { registerNodeSessionRoutes } from "./node-session-routes.js";
 
@@ -22,8 +23,14 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 async function fixture() {
-  const cwd = await mkdtemp(join(tmpdir(), "pi-science-mcp-approval-"));
+  const cwd = await realpath(await mkdtemp(join(tmpdir(), "pi-science-mcp-approval-")));
   cleanups.push(() => rm(cwd, { recursive: true, force: true }));
   await mkdir(join(cwd, ".pi-science"));
   vi.stubEnv("PI_SCIENCE_HOME", join(cwd, "control"));
@@ -47,9 +54,9 @@ async function fixture() {
   });
   const app = Fastify(); cleanups.push(() => app.close());
   registerNodeSessionRoutes(app, { notify } as unknown as NodeSessionService, sessionRepository, undefined, undefined, { mcp, events });
-  const approve = (requestId = "request", payload = { confirmed: true, alwaysAllow: true }) => app.inject({ method: "POST", url: `/api/sessions/session/interactions/${requestId}?${new URLSearchParams({ cwd })}`, payload });
+  const approve = (requestId = "request", payload = { confirmed: true, alwaysAllow: true }, workspace = cwd) => app.inject({ method: "POST", url: `/api/sessions/session/interactions/${requestId}?${new URLSearchParams({ cwd: workspace })}`, payload });
   const grants = () => repository.projectToolGrants(snapshot.project_id, connector.connector_id);
-  return { cwd, repository, projection, mcp, connector, events, pending, notify, approve, grants };
+  return { cwd, repository, workspaces, projection, mcp, connector, events, pending, notify, approve, grants };
 }
 
 it("binds Always allow to a live request and persists only in its project after confirmation", async () => {
@@ -108,4 +115,54 @@ it("explicitly reports a saved grant when projection fails after commit", async 
   expect((await f.approve()).json()).toMatchObject({ ok: true, persistentGrant: true, warning: expect.stringContaining("was saved") });
   expect((await f.grants()).get("echo")).toBe("allow");
   expect(f.events.pendingInteraction(f.cwd, "session", "request")).toBeUndefined();
+});
+
+
+it("finds canonical pending approvals when the HTTP request uses a workspace alias", async () => {
+  const f = await fixture();
+  const alias = join(f.cwd, "workspace-alias");
+  await symlink(f.cwd, alias, process.platform === "win32" ? "junction" : "dir");
+  expect((await f.approve("request", { confirmed: true, alwaysAllow: true }, alias)).json())
+    .toEqual({ ok: true, persistentGrant: true });
+  expect(f.events.pendingInteraction(f.cwd, "session", "request")).toBeUndefined();
+  expect((await f.grants()).get("echo")).toBe("allow");
+});
+
+it.each(["project", "global"])("keeps a concurrent %s Deny authoritative after an older Allow projection finishes", async (scope) => {
+  const f = await fixture();
+  // A separate service/projection instance must participate in the same lock.
+  const otherProjection = new McpRuntimeProjection(f.repository);
+  const otherService = new McpConnectorService(f.repository, f.workspaces, new SettingsStore(), undefined, otherProjection);
+  const denyProjection = vi.spyOn(otherProjection, "materialize");
+  const capturedAllow = deferred();
+  const releaseAllow = deferred();
+  const readCache = f.repository.toolCache.bind(f.repository);
+  vi.spyOn(f.repository, "toolCache").mockImplementationOnce(async (id) => {
+    const cache = await readCache(id);
+    // All grant reads have completed, but the old snapshot has not been published.
+    capturedAllow.resolve();
+    await releaseAllow.promise;
+    return cache;
+  });
+  const approval = f.approve();
+  let deny: Promise<void> | undefined;
+  try {
+    await capturedAllow.promise;
+    // The lock must span policy reads and publication, including across processes.
+    const owner = JSON.parse(await readFile(join(metadataRoot(f.cwd), "mcp-runtime.json.lock"), "utf8"));
+    expect(owner.pid).toBe(process.pid);
+    deny = otherService.setToolGrant(f.connector.connector_id, "echo", "deny", scope === "project" ? f.cwd : undefined);
+    await vi.waitFor(async () => {
+      const grants = scope === "project" ? await f.grants() : await f.repository.globalToolGrants(f.connector.connector_id);
+      expect(grants.get("echo")).toBe("deny");
+      expect(denyProjection).toHaveBeenCalled();
+    });
+  } finally {
+    releaseAllow.resolve();
+    await Promise.all([approval, deny]);
+  }
+  const snapshot = JSON.parse(await readFile(join(metadataRoot(f.cwd), "mcp-runtime.json"), "utf8"));
+  const server = snapshot.mcpServers[f.connector.name];
+  expect(server.excludeTools).toContain("echo");
+  expect(server.__piScienceAllowedTools ?? []).not.toContain("echo");
 });
