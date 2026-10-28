@@ -17,7 +17,7 @@ import { CredentialStore } from "../../../model-resources/credential-store.js";
 // authority and publication failures are exercised by mcp-approval.test.ts.
 vi.mock("../../../mcp/runtime-policy.js", async () => {
   const { loadProjectedSnapshot } = await import("../../shared/extensions/pi-science-mcp.js");
-  return { authorizeMcpTool: vi.fn(async (cwd: string, expected: { connectorId: string; toolName: string }) => {
+  return { authorizeMcpConnector: vi.fn(async () => undefined), authorizeMcpTool: vi.fn(async (cwd: string, expected: { connectorId: string; toolName: string }) => {
     const server = Object.values(loadProjectedSnapshot(cwd).mcpServers).find((value) => value.__piScienceConnectorId === expected.connectorId)!;
     return (server.__piScienceAllowedTools as string[] | undefined)?.includes(expected.toolName) || server.approveTools === false
       || Array.isArray(server.approveTools) && !server.approveTools.includes(expected.toolName) ? "allow" : "ask";

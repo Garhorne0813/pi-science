@@ -1,4 +1,4 @@
-import { authorizeMcpTool } from "../../../mcp/runtime-policy.js";
+import { authorizeMcpConnector, authorizeMcpTool } from "../../../mcp/runtime-policy.js";
 import { redactMcpError } from "../../../mcp/diagnostics.js";
 import { readSessionApproval, sessionMode } from "../../sandbox/session-approval.js";
 import { acquireMcpCall } from "../../../mcp/call-scheduler.js";
@@ -62,7 +62,7 @@ function visible(server: ServerDefinition, toolName: string): boolean {
   return !server.excludeTools?.includes(toolName);
 }
 
-/** Official MCP SDK clients owned by one session worker. Managed snapshot policy stays authoritative. */
+/** Official MCP SDK clients owned by one session worker. Discovery and dispatch are admitted by the control plane. */
 export class AgentMcpTools {
   private readonly clients: Client[] = [];
   approvalBoundProcesses = 0;
@@ -74,12 +74,19 @@ export class AgentMcpTools {
     const result = new AgentMcpTools();
     const capabilities = allowedTools === undefined ? undefined : new Set(allowedTools);
     const rawSnapshot = loadProjectedSnapshot(cwd);
-    const servers = loadProjectedServers(cwd, (name, error) => {
-      result.diagnostics.push((redactMcpError(`${name}: ${error instanceof Error ? error.message : String(error)}`) ?? "MCP discovery failed").slice(0, 2048));
-    }, (name) => capabilities === undefined || [...capabilities].some((tool) => tool.split("__").length === 3 && tool.split("__")[1] === name)) as Record<string, ServerDefinition>;
     const deadline = Date.now() + budgetMs;
-    await Promise.all(Object.entries(servers).map(async ([name, server]) => {
-      try { await result.connect(name, server, cwd, bridge, environment, deadline, capabilities, preauthorizedOnly, rawSnapshot.mcpServers[name], authorize, sessionId); }
+    await Promise.all(Object.entries(rawSnapshot.mcpServers).map(async ([name, raw]) => {
+      if (capabilities && ![...capabilities].some((tool) => tool.split("__").length === 3 && tool.split("__")[1] === name)) return;
+      try {
+        // Admit the exact raw snapshot before resolving credentials or constructing
+        // a transport. Never re-read a different snapshot after authorization.
+        await authorizeMcpConnector(cwd, {
+          connectorId: raw.__piScienceConnectorId as string, projectId: rawSnapshot.project_id,
+          connectorRevision: raw.__piScienceConnectorRevision as number, settingsRevision: raw.__piScienceSettingsRevision as number,
+        }, AbortSignal.timeout(Math.max(1, deadline - Date.now())));
+        const server = loadProjectedServers(cwd, undefined, (candidate) => candidate === name, rawSnapshot)[name] as ServerDefinition;
+        await result.connect(name, server, cwd, bridge, environment, deadline, capabilities, preauthorizedOnly, raw, authorize, sessionId);
+      }
       catch (error) {
         const code = (error as { code?: unknown }).code;
         const status = typeof code === "number" && code >= 400 && code <= 599 ? ` (HTTP ${code})` : "";

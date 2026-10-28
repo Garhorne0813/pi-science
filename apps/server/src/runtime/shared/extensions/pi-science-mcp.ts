@@ -9,8 +9,7 @@ type ProjectedServer = Record<string, unknown> & { __piScienceEnvironment?: Reco
 type ProjectedSnapshot = { version: 1; project_id: string; mcpServers: Record<string, ProjectedServer> };
 
 export function loadProjectedServers(workspace: string, onBindingError?: (name: string, error: unknown) => void,
-  acceptServer: (name: string) => boolean = () => true): Record<string, Record<string, unknown>> {
-  const projected = loadProjectedSnapshot(workspace);
+  acceptServer: (name: string) => boolean = () => true, projected = loadProjectedSnapshot(workspace)): Record<string, Record<string, unknown>> {
   return Object.fromEntries(Object.entries(projected.mcpServers ?? {}).flatMap(([name, raw]) => {
     // Scope before resolving any environment/header credential bindings.
     if (!acceptServer(name)) return [];

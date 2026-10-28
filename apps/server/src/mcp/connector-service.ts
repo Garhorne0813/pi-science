@@ -1,4 +1,4 @@
-import type { McpRuntimePolicyRequest } from "./runtime-policy.js";
+import type { McpRuntimeConnectorRequest, McpRuntimePolicyRequest } from "./runtime-policy.js";
 import { updateWebSettings, webSettingsSchema } from "../web/settings.js";
 import { redactMcpError } from "./diagnostics.js";
 export { redactMcpError } from "./diagnostics.js";
@@ -252,6 +252,19 @@ export class McpConnectorService {
       cached_at: cache?.fetched_at ?? null,
       scope: project ? "project" : "global",
     };
+  }
+
+  async authorizeRuntimeConnector(cwd: string, expected: McpRuntimeConnectorRequest): Promise<{ decision: "allow" }> {
+    const project = await this.project(cwd);
+    const connector = await this.repository.get(expected.connectorId);
+    if (project.project_id !== expected.projectId || !connector || connector.revision !== expected.connectorRevision
+      || connector.settings_revision !== expected.settingsRevision) {
+      throw new McpServiceError("stale_policy", "MCP policy changed; refresh the worker", 409);
+    }
+    if (!connector.enabled || bindingError(connector.runtime_config, connector.credential_ref)) {
+      throw new McpServiceError("connector_denied", "MCP connector is disabled or has invalid bindings", 403);
+    }
+    return { decision: "allow" };
   }
 
   async authorizeRuntimeTool(cwd: string, expected: McpRuntimePolicyRequest): Promise<{ decision: "allow" | "ask" }> {

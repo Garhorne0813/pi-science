@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { operatorFetch } from "../network/operator-fetch.js";
-import { authorizeMcpTool } from "./runtime-policy.js";
+import { authorizeMcpConnector, authorizeMcpTool } from "./runtime-policy.js";
 
 vi.mock("../network/operator-fetch.js", () => ({ operatorFetch: vi.fn() }));
 const expected = { connectorId: "connector", projectId: "project", toolName: "echo", connectorRevision: 2, settingsRevision: 1 };
@@ -42,4 +42,18 @@ it("fails closed on a network error or malformed authority response", async () =
 it("rejects invalid revision metadata before sending a request", async () => {
   await expect(authorizeMcpTool("/workspace", { ...expected, connectorRevision: 0 })).rejects.toThrow();
   expect(operatorFetch).not.toHaveBeenCalled();
+});
+
+
+it("requires connector admission before discovery and fails closed on rejection", async () => {
+  const { toolName: _tool, ...connector } = expected;
+  vi.mocked(operatorFetch).mockResolvedValueOnce(new Response(JSON.stringify({ decision: "allow" })));
+  await authorizeMcpConnector("/workspace", connector);
+  const [url, init] = vi.mocked(operatorFetch).mock.calls[0]!;
+  expect(url).toBe("http://127.0.0.1:8787/api/mcp/runtime/connect?cwd=%2Fworkspace");
+  expect(JSON.parse(String(init?.body))).toEqual(connector);
+  vi.mocked(operatorFetch).mockResolvedValueOnce(new Response("{}", { status: 409 }));
+  await expect(authorizeMcpConnector("/workspace", connector)).rejects.toThrow("HTTP 409");
+  vi.mocked(operatorFetch).mockResolvedValueOnce(new Response(JSON.stringify({ decision: "ask" })));
+  await expect(authorizeMcpConnector("/workspace", connector)).rejects.toThrow("discovery was not authorized");
 });

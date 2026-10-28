@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import Fastify from "fastify";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
@@ -351,10 +352,9 @@ it.each(["lost-acknowledgement", "projection-failure"])("retains a committed cre
   // snapshot before publication recovery, despite its old Allow and credential.
   const stale = await AgentMcpTools.open(f.cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "" });
   try {
-    for (const worker of [alreadyOpen, stale]) {
-      expect(worker.diagnostics).toEqual([]);
-      await expect(worker.tools[0]!.execute("stale-identity", {}, () => undefined, {} as never, {} as never, {} as never)).rejects.toThrow("MCP policy changed");
-    }
+    expect(stale.tools).toEqual([]);
+    expect(stale.diagnostics).toEqual([expect.stringContaining("MCP policy changed")]);
+    await expect(alreadyOpen.tools[0]!.execute("stale-identity", {}, () => undefined, {} as never, {} as never, {} as never)).rejects.toThrow("MCP policy changed");
   } finally { await stale.close(); }
   await f.mcp.materializeWorkspace(f.cwd);
   expect((loadProjectedServers(f.cwd)[f.connector.name]!.env as Record<string, string>).TOKEN).toBe("synthetic-new-secret");
@@ -416,10 +416,9 @@ it("blocks old and newly opened workers when a connector update commits but snap
     await expect(f.mcp.update(f.connector.connector_id, { revision: f.connector.revision, args: [...f.connector.args, "changed"] })).rejects.toThrow("publication failed");
     const after = await AgentMcpTools.open(f.cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "" });
     try {
-      for (const worker of [before, after]) {
-        expect(worker.diagnostics).toEqual([]);
-        await expect(worker.tools[0]!.execute("stale-server", {}, () => undefined, {} as never, {} as never, {} as never)).rejects.toThrow("MCP policy changed");
-      }
+      expect(after.tools).toEqual([]);
+      expect(after.diagnostics).toEqual([expect.stringContaining("MCP policy changed")]);
+      await expect(before.tools[0]!.execute("stale-server", {}, () => undefined, {} as never, {} as never, {} as never)).rejects.toThrow("MCP policy changed");
     } finally { await after.close(); }
   } finally { await before.close(); }
 }, 20_000);
@@ -496,5 +495,81 @@ it("retains runtime authorization when management routes are disabled", async ()
     const response = await app.inject({ method: "POST", url: `/api/mcp/runtime/authorize?${new URLSearchParams({ cwd: f.cwd })}`,
       payload: { ...f.pending.mcpGrant, projectId: snapshot.project_id } });
     expect(response.json()).toEqual({ decision: "ask" });
+  } finally { await app.close(); }
+});
+
+
+it.each(["disable", "remove", "command"])("never starts a stale stdio connector after %s commits and publication fails", async (change) => {
+  const f = await fixture(true);
+  const marker = join(f.cwd, "started");
+  await writeFile(f.connector.args[0]!, `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "started");\n` + await readFile(f.connector.args[0]!, "utf8"));
+  await f.mcp.setCredential(f.connector.connector_id, { revision: f.connector.revision, backend: "managed", delivery: "environment", target_name: "TOKEN", secret: "synthetic-secret" });
+  const current = (await f.repository.get(f.connector.connector_id))!;
+  vi.spyOn(f.projection, "materialize").mockRejectedValueOnce(new Error("publication failed"));
+  await expect(change === "remove" ? f.mcp.remove(current.connector_id)
+    : f.mcp.update(current.connector_id, { revision: current.revision, ...(change === "disable" ? { enabled: false } : { args: [...current.args, "changed"] }) })).rejects.toThrow("publication failed");
+  const credentials = vi.spyOn(CredentialStore.prototype, "readSync");
+  const worker = await AgentMcpTools.open(f.cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "" });
+  try {
+    expect(worker.tools).toEqual([]);
+    expect(worker.diagnostics).toEqual([expect.stringContaining("MCP policy changed")]);
+    expect(credentials).not.toHaveBeenCalled();
+    await expect(readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  } finally { await worker.close(); }
+});
+
+it.each(["streamable_http", "sse"])("never connects or sends old credentials to a stale %s endpoint", async (transport) => {
+  const f = await fixture();
+  const requests: unknown[] = [];
+  const endpoint = createServer((request, response) => { requests.push(request.headers); response.writeHead(500).end(); });
+  await new Promise<void>((resolve) => endpoint.listen(0, "127.0.0.1", resolve));
+  cleanups.push(() => new Promise<void>((resolve, reject) => endpoint.close((error) => error ? reject(error) : resolve())));
+  const address = endpoint.address() as { port: number };
+  const connector = await f.mcp.create({ name: "remote", display_name: "Remote", transport, endpoint_url: `http://127.0.0.1:${address.port}/mcp`, runtime_config: { allow_private: true }, enabled: true });
+  await f.mcp.setCredential(connector.connector_id, { revision: connector.revision, backend: "managed", delivery: "header", target_name: "Authorization", secret: "synthetic-old-secret" });
+  const current = (await f.repository.get(connector.connector_id))!;
+  vi.spyOn(f.projection, "materialize").mockRejectedValueOnce(new Error("publication failed"));
+  await expect(f.mcp.update(current.connector_id, { revision: current.revision, enabled: false })).rejects.toThrow("publication failed");
+  const credentials = vi.spyOn(CredentialStore.prototype, "readSync");
+  const worker = await AgentMcpTools.open(f.cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "" }, undefined, ["mcp__remote__echo"]);
+  try {
+    expect(worker.tools).toEqual([]);
+    expect(worker.diagnostics).toEqual([expect.stringContaining("MCP policy changed")]);
+    expect(credentials).not.toHaveBeenCalled();
+    expect(requests).toEqual([]);
+  } finally { await worker.close(); }
+});
+
+
+it("does not resolve credentials or start discovery when authority is unavailable", async () => {
+  const f = await fixture(true);
+  await f.mcp.setCredential(f.connector.connector_id, { revision: f.connector.revision, backend: "managed", delivery: "environment", target_name: "TOKEN", secret: "synthetic-secret" });
+  const credentials = vi.spyOn(CredentialStore.prototype, "readSync");
+  vi.spyOn(f.repository, "get").mockRejectedValueOnce(new Error("database unavailable"));
+  const worker = await AgentMcpTools.open(f.cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "" });
+  try {
+    expect(worker.tools).toEqual([]);
+    expect(worker.diagnostics).toEqual([expect.stringContaining("HTTP 500")]);
+    expect(credentials).not.toHaveBeenCalled();
+  } finally { await worker.close(); }
+});
+
+
+it("binds discovery authorization to the project, revisions, enabled state, and management-disabled route", async () => {
+  const f = await fixture();
+  const snapshot = JSON.parse(await readFile(join(metadataRoot(f.cwd), "mcp-runtime.json"), "utf8"));
+  const { toolName: _tool, ...metadata } = f.pending.mcpGrant;
+  const expected = { ...metadata, projectId: snapshot.project_id };
+  const app = Fastify();
+  registerMcpRoutes(app, f.mcp, false);
+  const check = (payload = expected) => app.inject({ method: "POST", url: `/api/mcp/runtime/connect?${new URLSearchParams({ cwd: f.cwd })}`, payload });
+  try {
+    expect((await check()).json()).toEqual({ decision: "allow" });
+    expect((await check({ ...expected, projectId: "different" })).statusCode).toBe(409);
+    expect((await check({ ...expected, settingsRevision: expected.settingsRevision + 1 })).statusCode).toBe(409);
+    expect((await check({ ...expected, connectorRevision: expected.connectorRevision + 1 })).statusCode).toBe(409);
+    const connector = (await f.repository.get(f.connector.connector_id))!;
+    vi.spyOn(f.repository, "get").mockResolvedValueOnce({ ...connector, enabled: false });
+    expect((await check()).statusCode).toBe(403);
   } finally { await app.close(); }
 });
