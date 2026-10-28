@@ -1,6 +1,8 @@
 import { isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { remarkCitations } from "@/lib/citations/remark-citations";
+import { CitationRef } from "./CitationRef";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
@@ -28,7 +30,7 @@ export type { MarkdownRenderMode } from "./streaming-markdown";
 
 type Variant = "chat" | "document" | "inspector";
 
-const REMARK_PLUGINS: NonNullable<Options["remarkPlugins"]> = [remarkGfm, remarkMath];
+const REMARK_PLUGINS: NonNullable<Options["remarkPlugins"]> = [remarkGfm, remarkMath, remarkCitations];
 const REHYPE_PLUGINS: NonNullable<Options["rehypePlugins"]> = [[rehypeKatex, { throwOnError: false }]];
 
 type MarkdownRendererProps = {
@@ -539,8 +541,12 @@ export function MarkdownViewer({
       }
       return <ResourceImage src={resolved.url} alt={alt} />;
     },
-    a: ({ children, href: rawHref }) => {
+    a: ({ children, href: rawHref, node }) => {
       const href = rawHref ?? "";
+      // Citation links (bare DOIs/arXiv ids lifted by remarkCitations) keep
+      // their text and gain a verified-evidence hover from cached snapshots.
+      const citationKey = (node?.properties as { dataCitation?: string } | undefined)?.dataCitation;
+      if (citationKey) return <CitationRef href={href} citationKey={citationKey}>{children}</CitationRef>;
       if (context && FILE_HREF.test(href)) {
         return (
           <span
