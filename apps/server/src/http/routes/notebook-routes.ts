@@ -2,7 +2,7 @@ import { constants } from "node:fs";
 import { authorizeKernelPolicy, SANDBOX_GRANT_HEADER } from "../../runtime/sandbox/kernel-authorization.js";
 import type { SandboxPolicy } from "../../runtime/sandbox/policy.js";
 import { randomUUID } from "node:crypto";
-import { chmod, readFile, rename, stat, unlink, writeFile, open } from "node:fs/promises";
+import { chmod, rename, unlink, writeFile, open } from "node:fs/promises";
 import { relative, sep, dirname } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";

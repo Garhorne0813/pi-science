@@ -418,7 +418,6 @@ describe("native control-plane business routes", () => {
     // levels only when the runtime verified the configured model identity.
     const stored = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"));
     expect(stored).toMatchObject({ model: "user-local-provider/local-model", model_context_window: 64000 });
-    const resources = new (await import("../../model-resources/model-resource-service.js")).ModelResourceService();
     expect(new ModelConfigService().readSync().config.providers["user-local-provider"]?.models?.[0]?.contextWindow).toBe(64000);
     const paths = [join(process.env.PI_SCIENCE_HOME, "config.json"), join(process.env.PI_SCIENCE_HOME, "models.json")];
     const fingerprints = () => Promise.all(paths.map(async (path) => ({ content: await readFile(path, "utf8"), mtime: (await stat(path, { bigint: true })).mtimeNs })));
@@ -1092,16 +1091,16 @@ describe("native control-plane business routes", () => {
     const path = workspaceFile(cwd, "research-records-v2.jsonl");
     await appendJsonLine(path, { record_type: "loop.created", loop_id: "legacy", payload: { title: "Historical study", status: "running" } });
     const original = await readFile(path, "utf8");
-    const response = await app.inject({ method: "GET", url: `/api/project-memory/archives?cwd=${encodeURIComponent(cwd)}` });
+    const response = await app.inject({ method: "GET", url: `/api/project/archives?cwd=${encodeURIComponent(cwd)}` });
     expect(response.statusCode).toBe(200); expect(response.json().archives[0]).toMatchObject({ id: "legacy", title: "Historical study", status: "running" });
     const exportedPath = response.json().archives[0].path;
     await expect(stat(join(cwd, exportedPath))).rejects.toMatchObject({ code: "ENOENT" });
-    expect((await app.inject({ method: "POST", url: `/api/project-memory/archives/legacy/export?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(200);
-    expect((await app.inject({ method: "POST", url: `/api/project-memory/archives/missing/export?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(404);
+    expect((await app.inject({ method: "POST", url: `/api/project/archives/legacy/export?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: `/api/project/archives/missing/export?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(404);
     const file = await app.inject({ method: "GET", url: `/api/files/serve/${exportedPath}?cwd=${encodeURIComponent(cwd)}` });
     expect(file.statusCode).toBe(200); expect(JSON.parse(file.body).records).toHaveLength(1);
     expect(await readFile(path, "utf8")).toBe(original);
-    expect((await app.inject({ method: "GET", url: "/api/project-memory/archives?cwd=/tmp" })).statusCode).toBe(403);
+    expect((await app.inject({ method: "GET", url: "/api/project/archives?cwd=/tmp" })).statusCode).toBe(403);
   });
 
   it("preserves exact multipart upload bytes and supports nested destination paths", async () => {

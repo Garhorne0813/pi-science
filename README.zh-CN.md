@@ -3,7 +3,7 @@
   <h1>Pi-Science</h1>
   <p><strong>面向科研、计算与可复现发现的开源科学 AI 工作台。</strong></p>
   <p>
-    在一个工作区中与 AI 智能体协作、运行科学代码、查看数据、管理项目知识，
+    在一个工作区中与 AI 智能体协作、运行科学代码、查看数据、管理统一记忆，
     并追踪每个产物的完整来源。
   </p>
   <p>
@@ -21,7 +21,7 @@
 
 ---
 
-Pi-Science 将 AI 对话、科学计算、数据预览和项目知识整合到一个本地工作台。
+Pi-Science 将 AI 对话、科学计算、数据预览和统一记忆整合到一个本地工作台。
 
 - **在上下文中运行分析。** 在会话内核执行 Python/R 代码，与对话一起查看表格、图像和生成文件。
 - **保留执行证据。** 运行记录保存代码、环境版本、产物哈希和谱系，便于检查与复现结果。
@@ -124,10 +124,20 @@ Windows 停止失败时保留身份记录以便重试，并返回退出码 1。W
 | 并行会话 | 活跃、恢复和分叉的对话使用独立的 Agent Core Worker 进程 |
 | 科学文件 | 原生预览分子结构、FITS、基因组、相图、3D 模型、表格、办公文档、媒体和代码 |
 | 可复现性 | 实时的会话级执行记录、产物哈希、生成代码与差异、环境快照、谱系历史和一键复现 |
-| 项目记忆 | Reviewer 提案、人工审核、证据链接、项目版本与只读历史研究归档 |
+| 记忆 | SQLite 统一记录、版本绑定人工审核、分作用域召回、可选 Extraction/Dream 与共享预算（默认关闭） |
 | 科学计算 | 可复用的 Micromamba 环境、隔离的 Python/R Session 内核、可执行 `.ipynb` 文件、与对话关联的运行记录和应用级 Jupyter Lab |
 | 扩展能力 | Pi skills、提示模板、MCP、subagents、自定义模型提供商和托管端点 |
 | 工作区安全 | 项目级元数据、路径校验、会话状态隔离和受控的模型端点发现 |
+
+## 记忆
+
+> **升级注意：** 新 Memory 初始为空，旧 Ledger / Project Knowledge 文件保留但不自动导入。停止应用后，可运行 `pnpm export:legacy-memory /absolute/workspace /absolute/new-export.json` 只读导出旧数据。迁移时核对原始来源，重新创建并审核记忆，不沿用旧审核标记。详见[升级步骤](docs/unified-memory.md#upgrade-from-ledger--project-knowledge)。
+
+在 **设置 → 记忆** 中启用 Memory，全局策略对当前本地用户的所有项目生效。Memory、自动提取 Extraction 和 Dream 默认关闭，分别启用。子选项随开关和触发模式展开，收起时保留已填写的值；模型、审核模式、运行计划和共享后台预算也在这里配置。项目与分类的召回开关保留在项目记忆页面。
+
+记忆页面分为 **记忆、待审核、运行历史** 三个页签。支持关键词搜索、状态/类型/作用域/分类筛选、排序和每页 20 条的分页，显示全部授权匹配记录的总数；手机端以底部抽屉选择条件，点击应用后生效，关闭会放弃本次修改；主页面优先展示记忆列表。条目默认显示紧凑预览和明确状态，展开后查看完整正文、来源、版本与历史；编辑、归档、删除位于“更多”菜单。新增候选展开后提供批准/拒绝操作，修改提案展示当前内容与建议内容对照。待审核内容不参与自动召回。智能审核只允许严格识别的低风险偏好等内容直接生效，科学内容始终需要批准指定版本；全部人工审核会将所有 Agent/后台变更送审。批准表示采用该版本，不表示科学结论已被证明。
+
+记忆保存在应用 SQLite 数据库中，不改写 `PROJECT.md`，也不自动导入旧 ledger / Project Knowledge 数据。作用域、召回、Extraction/Dream、预算、保留与备份详见[统一记忆](docs/unified-memory.md)。
 
 ## 会话审批模式
 
@@ -195,11 +205,13 @@ flowchart LR
     W --> H[AgentHarness / pi-ai]
     H --> S[(Core v4 会话)]
     CP --> K[Python / R 内核]
+    CP --> M[记忆服务与后台任务]
+    M --> DB[(SQLite state.sqlite)]
 ```
 
-AgentHarness 管理智能体执行和持久操作状态。Node 控制面监督独立 Worker，将 Core 事实投影为有版本的浏览器协议，并协调科学计算服务。对话、标题、研究、复查和子代理共用这套执行链路。
+AgentHarness 管理智能体执行和持久操作状态。Node 控制面监督独立 Worker，将 Core 事实投影为有版本的浏览器协议，并协调科学计算服务。对话、标题、研究和子代理共用这套执行链路。Memory 的 Extraction/Dream 由控制面管理，使用独立且不带工具的模型调用。
 
-Core 会话格式 **v4** 与产品 SSE 协议 **v3** 是独立版本。历史是 Core 会话的投影；旧格式只在数据读取/转换边界处理。SQLite 协调工作区、环境、任务和 MCP 策略，科研文件与产品元数据分别管理存储位置。
+Core 会话格式 **v4** 与产品 SSE 协议 **v3** 是独立版本。历史是 Core 会话的投影；旧格式只在数据读取/转换边界处理。SQLite 保存 Memory，并协调工作区、环境、任务和 MCP 策略，科研文件与产品元数据分别管理存储位置。
 
 进程边界、事件交付、状态目录、恢复机制与能力隔离详见[架构文档](docs/architecture.zh-CN.md)。
 
@@ -271,7 +283,7 @@ pnpm smoke:agent-core
 前端专项 UAT：
 
 ```bash
-pnpm --filter frontend test:uat:knowledge
+pnpm --filter frontend test:uat:memory
 pnpm --filter frontend test:uat:notebook
 pnpm --filter frontend test:uat:office
 ```
@@ -281,6 +293,7 @@ pnpm --filter frontend test:uat:office
 | 内容 | 参考 |
 | --- | --- |
 | 进程边界、状态归属、事件与恢复 | [架构文档](docs/architecture.zh-CN.md) |
+| 记忆设置、审核、召回、后台任务与数据保留 | [统一记忆](docs/unified-memory.md) |
 | 支持的工具与已知限制 | [Agent Core 能力清单](docs/agent-core-capability-inventory.md) |
 | 旧会话与离线转换 | [会话转换](docs/agent-core-session-conversion.md) |
 | 科学连接器、凭据与工具策略 | [MCP 管理](docs/mcp-management-implementation.md) |
@@ -298,3 +311,5 @@ pnpm --filter frontend test:uat:office
 MIT
 
 可选的 [Pi 原生模型配置后端](docs/model-config-native.md) 支持版本化配置、显式凭证来源和保守的旧资源迁移。发布门槛通过前，部署默认仍为 `legacy`。
+
+[Documentation index / 文档索引](docs/README.md) · [Development verification / 开发检查](docs/development-quality.md)

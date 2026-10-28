@@ -1,3 +1,4 @@
+import { registerMemoryRoutes } from "../http/routes/memory-routes.js";
 import { ModelConfigService } from "../model-config/model-config-service.js";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
@@ -31,7 +32,7 @@ import { importLegacyState } from "../storage/sqlite/legacy-state.js";
 import { internalAuthCookie, requestInternalToken, tokensMatch } from "../security/internal-auth.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, runtimeCatalog, settings, modelResources, mcp, jobs, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
+  const { sessions: nodeSessionService, events, sessionRepository, runtimeCatalog, settings, modelResources, mcp, jobs, memory, memoryBackground, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
   let stateReady = !sqliteEnabled;
   let stateError: unknown;
   const app = Fastify({
@@ -176,7 +177,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeExecutions !== false) registerKernelExecutionRoutes(app, config, environments, kernels);
   registerNotebookRoutes(app, notebooks, config.internalToken);
   if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, sqliteEnabled ? workspaces : undefined, sqliteEnabled ? mcp : undefined, nodeSessionService);
-  if (config.nodeProject !== false) registerProjectRoutes(app, projectReview);
+  if (config.nodeProject !== false) { registerProjectRoutes(app); registerMemoryRoutes(app, memory, memoryBackground, nodeSessionService, config.internalToken); };
   app.addHook("onReady", async () => {
     if (sqliteEnabled) {
       try {
@@ -191,12 +192,13 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     }
 
   });
+  app.addHook("onReady", async () => { await stateStore.start(); memoryBackground.start(); });
   app.addHook("onClose", async () => nodeSessionService.shutdownAll());
   app.addHook("onClose", async () => titleRuntimes.shutdownAll());
-  app.addHook("onClose", async () => projectReview.shutdown());
+  app.addHook("onClose", async () => memoryBackground.stop());
   app.addHook("onClose", async () => kernels.shutdownAll());
   app.addHook("onClose", async () => notebooks.shutdown());
-  app.addHook("onClose", async () => stateStore.close());
+  app.addHook("onClose", async () => { await memoryBackground.stop(); await stateStore.close(); });
   if (config.nodePiManager) {
     app.all("/api/sessions/*", async (request, reply) => reply.code(404).send({
       ok: false,

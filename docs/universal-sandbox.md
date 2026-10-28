@@ -59,6 +59,25 @@ PI_SCIENCE_SANDBOX_TEST=1 \
 
 The suite covers main/child Bash with no enabled Skill, credential/file/network isolation, subprocess inheritance, multi-cell Python/streams, changed-policy namespaces, real interrupt and resistant-cell timeout/rebuild, Candidate HTTP and `notebook_run` with persisted output, forged authorization/mode rejection, shared budgets, candidate repair, ordinary Parent evaluation and Reviewer stop advice. Compatibility tests cover worker death, cancellation and detached descendant cleanup. Parent-driven evaluation runs through the same ordinary Bash/Notebook sandbox and publishes existing Execution/Artifact/Provenance evidence. Candidate scope does not inherit Parent research access.
 
+### Linux CI host policy
+
+Ubuntu runner images can ship the AppArmor `bwrap-userns-restrict` profile.
+Its `unpriv_bwrap` child profile explicitly denies capabilities, preventing the
+pinned `apply-seccomp` helper from creating nested namespaces even after the
+generic user-namespace sysctl is relaxed. See the [upstream AppArmor policy](https://gitlab.com/apparmor/apparmor/-/blob/master/profiles/apparmor/profiles/extras/bwrap-userns-restrict)
+and [sandbox-runtime compatibility report](https://github.com/anthropics/sandbox-runtime/issues/429).
+
+The shared [CI-only host setup](../.github/scripts/configure-linux-sandbox.sh)
+unloads that named profile only on disposable GitHub-hosted Linux VMs. It is not
+called by installation, doctor or production startup, and refuses other hosts.
+It does not grant workload capabilities or turn off the runtime's sandbox.
+Acceptance first probes the packaged seccomp helper under real Bubblewrap, then
+tests filesystem/network/credential isolation, active seccomp and no-new-privs,
+and denial of workload CAP_SYS_ADMIN and read-write root remounts. Host policies
+that still prevent startup fail the suite; no trusted-host fallback or test skip
+is added. Production operators must explicitly resolve incompatible host policy;
+the application continues to fail closed.
+
 Native reads enforce workspace/protected-root boundaries and stable descriptors; macOS write/edit commits additionally use an OS-confined helper. Enabled skill resources are read-only. Local stdio MCP uses the same process layer and retains its separate tool authorization boundary. Hard CPU, memory, disk, GPU and cost quotas, hostile multi-tenant isolation, containers/VMs, providers and schedulers are outside this change. Long-lived Python kernels have a 24-hour watchdog ceiling. Operator-approved runtime dependencies and user-approved inputs must contain no secrets. Parent workspace policy permits authorized research scripts and data; Candidate policy remains input/work only. Truly confidential holdouts belong in external protected roots and are not a prerequisite for ordinary Skill evaluation. Missing sandbox/tools/dependencies are reported explicitly without host fallback.
 
 

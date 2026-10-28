@@ -33,6 +33,26 @@ async function execute(cwd: string, argv: string[], dependencies: string[] = [],
 }
 
 describe.skipIf(process.env.PI_SCIENCE_SANDBOX_TEST !== "1" || !["darwin", "linux"].includes(process.platform))("real platform sandbox acceptance", () => {
+  it.skipIf(process.platform !== "linux")("keeps seccomp active and denies namespace capabilities and remounts in the workload", async () => {
+    const cwd = await fixture();
+    vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "required");
+    const script = `set -eu
+      seccomp=0; no_new_privs=0; caps=0
+      while read -r key value rest; do
+        case "$key" in
+          Seccomp:) seccomp="$value" ;;
+          NoNewPrivs:) no_new_privs="$value" ;;
+          CapEff:) caps="$value" ;;
+        esac
+      done < /proc/self/status
+      test "$seccomp" = 2
+      test "$no_new_privs" = 1
+      test "$((16#$caps & 0x200000))" = 0
+      if mount -o remount,rw / 2>/dev/null; then exit 77; fi
+      echo seccomp-isolated`;
+    const result = await execute(cwd, ["/bin/bash", "-c", script]);
+    expect(result, result.stderr).toMatchObject({ code: 0, stdout: "seccomp-isolated\n" });
+  }, 30_000);
   it("runs real Bash, denies credentials/outside writes/network and captures ordinary output", async () => {
     const cwd = await fixture(); vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "required"); vi.stubEnv("OPENAI_API_KEY", "must-not-be-inherited");
     await writeFile(join(cwd, ".netrc"), "SECRET");

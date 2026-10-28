@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [
+    "typescript"
+  ],
+  "categories": {
+    "correctness": "off"
+  },
+  "rules": {
+    "typescript/no-floating-promises": "error"
+  },
+  "overrides": [
+    {
+      "files": [
+        "src/security/**/*.ts",
+        "src/model-resources/credential*.ts",
+        "src/model-config/**/*.ts"
+      ],
+      "rules": {
+        "typescript/no-misused-promises": "error"
+      }
+    },
+    {
+      "files": [
+        "**/*.test.ts"
+      ],
+      "rules": {
+        "typescript/no-misused-promises": "off"
+      }
+    }
+  ]
+}

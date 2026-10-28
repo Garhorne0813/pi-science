@@ -1,6 +1,5 @@
 import { AiTitleService } from "../title/ai-title-service.js";
 import { openHiddenTask, runHiddenPrompt } from "../agent/hidden-agent-task.js";
-import { ProjectReviewService } from "../../project-review/service.js";
 import { mkdir, mkdtemp, readdir, rename, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,11 +43,9 @@ it("releases failed admission without leaving the workspace locked", async () =>
 
 it("rejects hidden agent ownership writes and background review before they touch a mutating workspace", async () => {
   const cwd = await workspace(); const start = vi.fn(); const sendCommand = vi.fn();
-  const review = new ProjectReviewService({ review: vi.fn(), shutdown: vi.fn() } as never);
   await withWorkspaceMutation([cwd], async () => {
     await expect(openHiddenTask({ start } as never, "hidden", { cwd, sessionsRoot: join(cwd, "sessions"), model: { provider: "openai", modelId: "test" } }, "parent")).rejects.toBeInstanceOf(WorkspaceLifecycleBusyError);
     await expect(runHiddenPrompt({ cwd, sendCommand } as never, "new task", "id", Date.now() + 1000)).rejects.toBeInstanceOf(WorkspaceLifecycleBusyError);
-    await expect(review.run(cwd, { trigger: "auto", sessionId: "session" })).rejects.toBeInstanceOf(WorkspaceLifecycleBusyError);
     await expect(new AiTitleService({ start }).generateTitle(cwd, "session")).rejects.toBeInstanceOf(WorkspaceLifecycleBusyError);
     expect(start).not.toHaveBeenCalled(); expect(sendCommand).not.toHaveBeenCalled(); expect(await readdir(cwd)).toEqual([]);
   });

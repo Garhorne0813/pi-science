@@ -12,7 +12,6 @@ import { agentModelCatalog, agentModels } from "../agent/worker/agent-models.js"
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { loadDefaultPiConfig } from "../agent/runtime-config.js";
 import { canonicalRuntimeModelRef } from "../agent/model-ref.js";
-import type { ProjectReviewService } from "../../project-review/service.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { SessionRepository, sessionRepository } from "./session-repository.js";
 import { loadSessionStats, saveSessionStats } from "./session-stats-repository.js";
@@ -48,14 +47,15 @@ function effectiveConfig(requested?: Partial<PiConfig>): PiConfig {
 /** The product session facade uses Agent Core exclusively. Legacy JSONL is data, never a runtime fallback. */
 export class NodeSessionService {
   private readonly agentCore: AgentCoreSessionService;
-  private readonly autoReviews = new Set<string>();
+  private memoryHooks?: {settled:(cwd:string,sessionId:string)=>Promise<void>;deleted:(cwd:string,sessionId:string)=>Promise<void>};
+  configureMemory(hooks:NonNullable<NodeSessionService["memoryHooks"]>){this.memoryHooks=hooks;}
   private readonly statsProjector = new SessionStatsProjector();
   private log: (level: "info" | "warn" | "error", message: string) => void = () => {};
   constructor(
     private readonly eventHub: ConversationEventHub = conversationEventHub,
     private readonly repository: SessionRepository = sessionRepository,
     private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService(),
-    private readonly projectReview: Pick<ProjectReviewService, "run"> | null = null,
+    _retiredReview: unknown = null,
     private readonly statsEventStore: StatsEventStore = durableEventStore,
     private readonly modelResources: Pick<ModelResourceService, "ensureMigrated" | "isModelAvailable"> | null = null,
     agentCoreServer: { backendUrl?: string; internalToken?: string; onWorkerExit?: (cwd: string, sessionId: string) => Promise<void>; hasApprovalResources?: (cwd: string, sessionId: string) => boolean; revokeApprovalResources?: (cwd: string, sessionId: string) => Promise<{ kernelRestartCount: number }> } = {},
@@ -63,7 +63,7 @@ export class NodeSessionService {
     this.agentCore = new AgentCoreSessionService(eventHub, environments, agentCoreServer);
     this.agentCore.configureProductLifecycle({
       observe: (cwd, sessionId, event) => this.statsProjector.track(runtimeKey(cwd, sessionId), event, Date.now()),
-      settled: (cwd, sessionId, turnId) => this.scheduleAutoReview(cwd, sessionId, turnId),
+      settled: (cwd, sessionId) => { if(this.memoryHooks) void this.memoryHooks.settled(cwd,sessionId).catch(error=>this.log("warn",String(error))); },
       stats: async (cwd, sessionId, counters) => {
         const checkpoint = await loadSessionStats(cwd, sessionId).catch(() => null);
         const timing = this.statsProjector.timingWithCheckpoint(runtimeKey(cwd, sessionId), timingFromStats(checkpoint));
@@ -174,8 +174,13 @@ export class NodeSessionService {
   async delete(sessionId: string, cwdValue: string): Promise<RuntimeResult> { return this.admitted(cwdValue, () => this.deleteAdmitted(sessionId, cwdValue), (error) => ({ success: false, error: error.message, code: "busy" })); }
   private async deleteAdmitted(sessionId: string, cwdValue: string): Promise<RuntimeResult> {
     const prepared = await this.prepare(cwdValue, sessionId);
-    if ("success" in prepared) return prepared.code === "not_found" ? { success: true } : prepared;
-    return this.agentCore.delete(prepared.cwd, sessionId);
+    if ("success" in prepared) {
+      if(prepared.code==='not_found'){if(this.memoryHooks)await this.memoryHooks.deleted(await validateWorkspaceCwd(cwdValue),sessionId);return {success:true};}
+      return prepared;
+    }
+    const result=await this.agentCore.delete(prepared.cwd,sessionId);
+    if(result.success&&this.memoryHooks)await this.memoryHooks.deleted(prepared.cwd,sessionId);
+    return result;
   }
   closeIdleWorkspace(cwd: string): Promise<void> { return this.agentCore.closeIdleWorkspace(cwd); }
   hasActiveOperations(cwdValue: string): Promise<boolean> { return this.agentCore.hasActiveOperations(cwdValue); }
@@ -232,16 +237,7 @@ export class NodeSessionService {
     }
   }
 
-  private scheduleAutoReview(cwd: string, sessionId: string, turnId?: string): void {
-    const review = this.projectReview;
-    if (!review || !sessionId) return;
-    const key = runtimeKey(cwd, sessionId);
-    if (this.autoReviews.has(key)) return;
-    this.autoReviews.add(key);
-    void review.run(cwd, { sessionId, trigger: "auto", ...(turnId ? { turnId } : {}) })
-      .catch((error: unknown) => this.log("warn", `automatic project review failed for session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`))
-      .finally(() => this.autoReviews.delete(key));
-  }
+
 
 }
 

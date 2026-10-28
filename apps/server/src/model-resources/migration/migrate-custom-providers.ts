@@ -7,7 +7,6 @@ import {
   type Model,
   type ModelCapabilities,
   type Provider,
-  type ProviderEndpointBinding,
 } from "@pi-science/contracts";
 import { CredentialStore } from "../credential-store.js";
 import { ModelResourceRepository } from "../model-resource-repository.js";

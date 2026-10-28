@@ -10,7 +10,7 @@ import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
 import { cn } from "../../lib/ui";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace";
-import { projectKnowledgeApi, useReviewPolicy } from "../../lib/knowledge";
+import { memoryRequest, useMemorySettings } from "../../lib/memory";
 import { agentActionTextByBlock } from "../../lib/conversation";
 import { ConversationComposer } from "../../components/conversation/ConversationComposer";
 import { ConversationWelcome } from "../../components/conversation/ConversationWelcome";
@@ -193,15 +193,15 @@ export function LiveSessionPage() {
   // The reviewer already runs on every settled turn when the workspace opted in, so the manual
   // button would only duplicate it. Until the policy is known, show the manual button: it is the
   // shipped default and the only control that does something when auto review is off.
-  const autoReviewOn = useReviewPolicy(workspaceCwd).data?.auto_review === true;
+  const autoReviewOn = useMemorySettings().data?.extraction.enabled === true;
 
   const handleProjectReview = async () => {
     if (reviewingProject || working || interactionPending) return;
     setReviewingProject(true);
     setReviewNotice(null);
     try {
-      const result = await projectKnowledgeApi.review(workspaceCwd, activeSessionId);
-      setReviewNotice(result.created > 0 ? `${result.created} update proposal${result.created === 1 ? "" : "s"} added` : result.message);
+      const result = await memoryRequest<{status:string;reason?:string}>(workspaceCwd,"/extraction/run","POST",{sessionId:activeSessionId});
+      setReviewNotice(result.status + (result.reason ? ": " + result.reason : ""));
     } catch (cause) {
       setReviewNotice(cause instanceof Error ? cause.message : t("conversation.reviewError"));
     } finally {

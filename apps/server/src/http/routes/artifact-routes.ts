@@ -1,7 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash} from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
-import { basename, extname, join } from "node:path";
+import { extname, join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { provenanceRecordSchema, type ProvenanceRecord } from "@pi-science/contracts";
 import { appendJsonLine, appendJsonLineUnlocked, metadataRoot, readJsonLines, withFileWriteLock, workspaceFile } from "../../storage/persistence.js";

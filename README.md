@@ -3,7 +3,7 @@
   <h1>Pi-Science</h1>
   <p><strong>An open scientific AI workbench for research, computation, and reproducible discovery.</strong></p>
   <p>
-    Chat with AI agents, run scientific code, inspect data, manage project knowledge,
+    Chat with AI agents, run scientific code, inspect data, manage reviewed memory,
     and trace every generated artifact back to its source.
   </p>
   <p>
@@ -21,7 +21,7 @@
 
 ---
 
-Pi-Science brings AI conversations, scientific computation, data previews and project knowledge into one local workbench.
+Pi-Science brings AI conversations, scientific computation, data previews and reviewed memory into one local workbench.
 
 - **Run analyses in context.** Execute Python/R code on session kernels and inspect the resulting tables, plots and files alongside the conversation.
 - **Keep execution evidence.** Runs record code, environment revisions, artifact hashes and provenance so results can be inspected and reproduced.
@@ -124,10 +124,41 @@ Application state uses `PI_SCIENCE_HOME` or `~/.pi-science`, with a checkout-loc
 | Concurrent sessions | Independent Agent Core Worker processes for active, restored, and forked conversations |
 | Scientific files | Native previews for molecular structures, FITS, genomics, phase data, 3D models, tables, office documents, media, and code |
 | Reproducibility | Live session-scoped execution records, artifact hashes, generating code and diffs, environment snapshots, provenance history, and reproduce actions |
-| Project memory | Reviewer proposals, human approval, evidence links, project versions, and read-only historical research archives |
+| Memory | SQLite records, version-bound human review, scoped recall, optional Extraction/Dream, and shared budgets (disabled by default) |
 | Computation | Shared versioned Micromamba environments, isolated Python/R Session kernels, executable `.ipynb` files, agent notebook cell read/edit/run tools, conversation-linked runs, and an optional app-managed Jupyter Lab |
 | Extensibility | Pi skills, prompt templates, MCP servers, subagents, custom model providers, and managed endpoints |
 | Workspace safety | Project-scoped metadata, validated paths, isolated session state, and controlled outbound provider discovery |
+
+## Memory
+
+> **Upgrade note:** Memory starts empty; old Ledger / Project Knowledge data is
+> retained but not automatically imported. Stop the application and run
+> `pnpm export:legacy-memory /absolute/workspace /absolute/new-export.json` for a
+> read-only legacy export. Recreate useful entries with verified sources and new
+> approvals; legacy approval flags are not reused. See [upgrade steps](docs/unified-memory.md#upgrade-from-ledger--project-knowledge).
+
+Open **Settings → Memory** to enable Memory for the local user across all
+projects. Memory, automatic Extraction and Dream start disabled and have separate
+switches. Dependent controls expand when enabled; changing a switch or trigger
+mode preserves the stored values. Configure models, review policy, scheduling and
+shared background budgets here. Project/category recall switches stay on the
+project's Memory page.
+
+The Memory page has **Memories**, **Pending review** and **Run history** tabs.
+Keyword search, status/type/scope/category filters, sorting and 20-record pages
+operate on all authorized matches with a matching total. On mobile, filters
+open a bottom sheet with draft choices, Reset and Apply controls. Records show a compact preview with an explicit status; expand a record to inspect
+its full text, sources, version and history. Edit, archive and delete are in the
+more-actions menu. New candidates expose approval/rejection after expansion;
+change proposals show current/proposed content. Pending content is excluded from
+automatic recall. Smart review permits narrowly validated low-risk preferences;
+scientific claims always require approval of the exact version. All-manual queues
+all Agent/background changes. Approval means adoption, not scientific proof.
+
+Memory lives in the application SQLite database. It does not rewrite `PROJECT.md`
+or automatically import old ledger/Project Knowledge data. See
+[Unified Memory](docs/unified-memory.md) for scopes, recall, Extraction/Dream,
+budget limits, retention and backup.
 
 ## Scientific MCP Connectors
 
@@ -192,11 +223,13 @@ flowchart LR
     W --> H[AgentHarness / pi-ai]
     H --> S[(Core v4 sessions)]
     CP --> K[Python / R kernels]
+    CP --> M[Memory service and background tasks]
+    M --> DB[(SQLite state.sqlite)]
 ```
 
-AgentHarness owns agent execution and durable operation state. The Node control plane supervises isolated Workers, projects Core facts into the versioned browser protocol, and coordinates scientific services. Conversations, titles, research, reviews and subagents share this execution stack.
+AgentHarness owns agent execution and durable operation state. The Node control plane supervises isolated Workers, projects Core facts into the versioned browser protocol, and coordinates scientific services. Conversations, titles, research and subagents share this execution stack. Memory Extraction/Dream use separate tool-free model calls managed by the control plane.
 
-Core session format **v4** and product SSE protocol **v3** are independent versions. History is a projection of Core sessions; earlier formats are handled only at data-read/conversion boundaries. SQLite coordinates workspaces, environments, jobs and MCP policy. Research files and product metadata have separate storage ownership.
+Core session format **v4** and product SSE protocol **v3** are independent versions. History is a projection of Core sessions; earlier formats are handled only at data-read/conversion boundaries. SQLite owns Memory and coordinates workspaces, environments, jobs and MCP policy. Research files and product metadata have separate storage ownership.
 
 See the [architecture reference](docs/architecture.md) for process boundaries, event delivery, state locations, recovery and capability isolation.
 
@@ -277,7 +310,7 @@ pnpm smoke:agent-core
 Focused frontend UAT commands:
 
 ```bash
-pnpm --filter frontend test:uat:knowledge
+pnpm --filter frontend test:uat:memory
 pnpm --filter frontend test:uat:notebook
 pnpm --filter frontend test:uat:office
 ```
@@ -287,6 +320,7 @@ pnpm --filter frontend test:uat:office
 | Read about | Reference |
 | --- | --- |
 | Process boundaries, state ownership, events and recovery | [Architecture](docs/architecture.md) |
+| Memory setup, review, recall, background runs and retention | [Unified Memory](docs/unified-memory.md) |
 | Supported tools and known limits | [Agent Core capability inventory](docs/agent-core-capability-inventory.md) |
 | Existing sessions and offline conversion | [Session conversion](docs/agent-core-session-conversion.md) |
 | Scientific connectors, credentials and tool policy | [MCP management](docs/mcp-management-implementation.md) |
@@ -306,3 +340,5 @@ MIT
 The opt-in [Pi-native model configuration backend](docs/model-config-native.md)
 adds versioned configuration, explicit credential sources and conservative legacy
 migration. The deployment default remains `legacy` until rollout gates pass.
+
+[Documentation index / 文档索引](docs/README.md) · [Development verification / 开发检查](docs/development-quality.md)

@@ -2,7 +2,7 @@
  * Composer review control (B-DL-1).
  *
  * `policy.auto_review` now ships off, so the composer has two states: a manual
- * "Review" button when it is off (and while the policy is still unknown), and a
+ * "Extract memory" button when it is off (and while the policy is still unknown), and a
  * non-busy status badge that links to the knowledge inbox when it is on.
  */
 
@@ -38,7 +38,7 @@ let autoReview = false;
 
 const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
   const url = String(input);
-  if (url.startsWith("/api/project-knowledge/policy")) return jsonResponse({ auto_review: autoReview, reminder_threshold: 5 });
+  if (url.startsWith("/api/memory/settings")) return jsonResponse({ enabled: true, extraction: {enabled: autoReview} });
   if (url.startsWith("/api/model-selection/catalog")) return jsonResponse({ available_models: [] });
   if (url.includes("/model-selection?")) return jsonResponse({ scope: "session", session_id: SESSION_ID, selection: { model: null, thinking: "off" } });
   if (url.includes("/commands?")) return jsonResponse({ commands: [] });
@@ -52,7 +52,7 @@ function renderPage() {
         <MemoryRouter initialEntries={[`/workspace/${CWD}/session/${SESSION_ID}`]}>
           <Routes>
             <Route path="/workspace/:cwd/session/:sessionId" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
-            <Route path="/workspace/:cwd/knowledge" element={<div>knowledge inbox</div>} />
+            <Route path="/workspace/:cwd/memory" element={<div>knowledge inbox</div>} />
           </Routes>
         </MemoryRouter>
       </FeedbackContext.Provider>
@@ -112,19 +112,19 @@ describe("composer review control", () => {
   it("keeps the manual Review button when auto review is off", async () => {
     renderPage();
 
-    const button = await screen.findByRole("button", { name: "Review" });
-    expect(button).toHaveAttribute("aria-label", "Review");
-    expect(button).toHaveAttribute("title", "Review this conversation for durable project knowledge");
-    expect(button.querySelector(".composer-review-label")).toHaveTextContent("Review");
-    expect(screen.queryByRole("button", { name: "Auto review on" })).toBeNull();
+    const button = await screen.findByRole("button", { name: "Extract memory" });
+    expect(button).toHaveAttribute("aria-label", "Extract memory");
+    expect(button).toHaveAttribute("title", "Extract new memory from this conversation (Extraction must be enabled)");
+    expect(button.querySelector(".composer-review-label")).toHaveTextContent("Extract memory");
+    expect(screen.queryByRole("button", { name: "Memory extraction on" })).toBeNull();
   });
 
   it("replaces the manual button with a badge that opens the knowledge inbox when auto review is on", async () => {
     autoReview = true;
     renderPage();
 
-    const badge = await screen.findByRole("button", { name: "Auto review on" });
-    expect(screen.queryByRole("button", { name: "Review" })).toBeNull();
+    const badge = await screen.findByRole("button", { name: "Memory extraction on" });
+    expect(screen.queryByRole("button", { name: "Extract memory" })).toBeNull();
     expect(badge).not.toBeDisabled();
 
     fireEvent.click(badge);

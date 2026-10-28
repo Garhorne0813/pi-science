@@ -1,3 +1,4 @@
+import type { SettingsSection } from "../settings/settings-sections";
 /** UI Store — theme, locale, sidebar, inspector state.
  *  Ported from open-science's useUiStore. */
 
@@ -52,7 +53,8 @@ interface UiState {
   /** Snapshot of the workspace cwd taken when the dialog opened; the dialog
    *  must not follow route changes while it is open (e.g. browser back). */
   settingsScope: string | null;
-  openSettings: (scope: string | null) => void;
+  settingsSection: SettingsSection;
+  openSettings: (scope: string | null, section?: SettingsSection) => void;
   closeSettings: () => void;
   /** True while the preview divider is being dragged. Never persisted — it is
    *  transient interaction state used for drag feedback only. */
@@ -304,7 +306,8 @@ export const useUiStore = create<UiState>((set) => ({
 
   settingsOpen: false,
   settingsScope: null,
-  openSettings: (scope) => set({ settingsOpen: true, settingsScope: scope }),
+  settingsSection: "general",
+  openSettings: (scope, section = "general") => set({ settingsOpen: true, settingsScope: scope, settingsSection: section }),
   closeSettings: () => set({ settingsOpen: false }),
 
   inspectorResizing: false,

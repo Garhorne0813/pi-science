@@ -90,7 +90,8 @@ process_start_identity() {
 }
 
 process_tree_pids() {
-  local root="$1" previous="" current="$root"
+  local root="$1" previous="" current
+  current="$root"
   while [ "$current" != "$previous" ]; do
     previous="$current"
     while read -r pid ppid; do
@@ -177,7 +178,7 @@ fi
 export PI_SCIENCE_INTERNAL_TOKEN
 export PI_SCIENCE_REQUIRE_INTERNAL_TOKEN="${PI_SCIENCE_REQUIRE_INTERNAL_TOKEN:-1}"
 # Approval state is operator-owned even under a group-writable umask.
-(umask 077; mkdir -p -m 700 "$PI_SCIENCE_HOME")
+(umask 077; mkdir -p "$PI_SCIENCE_HOME")
 mkdir -p "$PI_SCIENCE_HOME/sessions" "$PI_SCIENCE_WORKSPACES"
 
 if ! port_is_available "$CONTROL_PLANE_PORT"; then

@@ -5,6 +5,11 @@ on:
     - cron: "17 2 * * *"
   workflow_dispatch:
 
+# Superseded runs for the same branch/PR do not consume another full matrix.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

@@ -127,7 +127,7 @@ export async function startSandboxNetwork(network: SandboxPolicy["network"], sou
       });
     };
     client.on("data", received);
-    if (initial.length) { buffered = Buffer.alloc(0); received(initial); }
+    if (initial.length) { buffered = Buffer.alloc(0); void received(initial).catch(() => client.destroy()); }
   };
   const http = httpServer(async (req, res) => {
     try {

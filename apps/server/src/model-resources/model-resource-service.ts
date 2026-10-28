@@ -1,412 +1,89 @@
-import { createHash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
-import {
-  type CreateBindingRequest,
-  type CreateCredentialRequest,
-  type CreateEndpointRequest,
-  type CreateProviderRequest,
-  type CredentialMetadata,
-  type Endpoint,
-  type Model,
-  type ModelCapabilities,
-  type ModelRead,
-  type Provider,
-  type ProviderView,
-  type ProviderEndpointBinding,
-  type UpdateBindingRequest,
-  type UpdateEndpointRequest,
-  type UpdateProviderRequest,
-} from "@pi-science/contracts";
+import type { CreateBindingRequest, CreateEndpointRequest, CreateProviderRequest, CredentialMetadata, Endpoint, Model, ModelCapabilities, ModelRead, Provider, ProviderView, ProviderEndpointBinding, UpdateBindingRequest, UpdateEndpointRequest, UpdateProviderRequest } from "@pi-science/contracts";
 import type { RuntimeCatalog, RuntimeCatalogService } from "../runtime/agent/runtime-catalog.js";
-import { egressAuditEnabled, recordEgress } from "../security/egress-audit.js";
-import { safeConnectorFetch, validateOutboundHttpUrl } from "../security/outbound-security.js";
 import { SettingsStore } from "../storage/settings-store.js";
-import { CredentialStore, type CredentialReader } from "./credential-store.js";
-import { resolveCapabilities, normalizeContextWindow, normalizeThinkingLevels, type CapabilityPatch } from "./capability-resolver.js";
-import { type MigrationResult } from "./migration/migrate-custom-providers.js";
+import { CredentialStore } from "./credential-store.js";
+import type { CapabilityPatch } from "./capability-resolver.js";
+import type { MigrationResult } from "./migration/migrate-custom-providers.js";
 import { ModelResourceRepository } from "./model-resource-repository.js";
-import { canonicalModelRef, resolvedModelToRead, RuntimeModelResolver } from "./runtime-model-resolver.js";
-import { discoverModelRows } from "./model-discovery.js";
-import { anthropicBaseUrl } from "../model-config/protocol-endpoints.js";
+import { RuntimeModelResolver } from "./runtime-model-resolver.js";
+import type { ModelResourceContext } from "./operations/context.js";
+import type { ProviderRead, DiscoveryResult, HealthResult } from "./operations/types.js";
+import { isModelAvailable, listProviders, providerViews, getProvider, listModels, getModel } from "./operations/reads.js";
+import { createProvider, upsertLegacyProvider, updateProvider, deleteProvider } from "./operations/providers.js";
+import { createCustomProvider, updateCustomProvider, deleteCustomProvider } from "./operations/custom-providers.js";
+import { listEndpoints, getEndpoint, createEndpoint, updateEndpoint, deleteEndpoint, setEndpointEnabled, probeEndpoint } from "./operations/endpoints.js";
+import { listBindings, createBinding, updateBinding, deleteBinding } from "./operations/bindings.js";
+import { updateModel, applyRuntimeCapabilities, deleteModel } from "./operations/models.js";
+import { testProviderConfiguration, discover } from "./operations/discovery.js";
 
-export type ProviderRead = Provider & {
-  models: string[];
-  has_key: boolean;
-  credential_status: "configured" | "connected" | "needs_key" | "needs_login" | "invalid";
-  routes: number;
-};
-
-export type DiscoveryResult = {
-  provider: ProviderRead;
-  binding_id: string;
-  endpoint_id: string;
-  models: ModelRead[];
-  warnings: string[];
-};
-
-export type HealthResult = Endpoint & { error?: string | null };
-
-function resourceError(code: string, message: string): Error & { code: string } {
-  return Object.assign(new Error(message), { code });
-}
-
-function defaultDataEgress(baseUrl: string): Endpoint["data_egress"] {
-  const hostname = new URL(normalizeBaseUrl(baseUrl)).hostname;
-  return hostname === "localhost" || /^127\./.test(hostname) || hostname === "[::1]" ? "local" : "remote";
-}
-
-function slug(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "provider";
-}
-
-function now(): string {
-  return new Date().toISOString();
-}
-
-function normalizeProtocol(value: unknown): Endpoint["protocol"] {
-  const raw = String(value ?? "openai").toLowerCase();
-  if (raw === "anthropic" || raw === "anthropic-messages" || raw === "anthropic-compatible") return "anthropic";
-  if (raw === "ollama") return "ollama";
-  if (raw === "native") return "native";
-  return "openai";
-}
-
-function adapterForEndpoint(protocol: Endpoint["protocol"]): Provider["adapter"] {
-  if (protocol === "anthropic") return "anthropic-compatible";
-  if (protocol === "ollama") return "ollama";
-  if (protocol === "native") return "native";
-  return "openai-compatible";
-}
-
-function normalizeBaseUrl(value: unknown): string {
-  const raw = String(value ?? "").trim();
-  if (!raw) throw resourceError("invalid_resource", "base_url is required");
-  let url: URL;
-  try { url = new URL(raw); } catch { throw resourceError("invalid_resource", "base_url must be a valid absolute URL"); }
-  if (!(["http:", "https:"] as string[]).includes(url.protocol)) throw resourceError("invalid_resource", "only http(s) endpoint URLs are allowed");
-  if (url.username || url.password) throw resourceError("invalid_resource", "URL credentials are not allowed");
-  let normalized = url.toString();
-  while (normalized.endsWith("/")) normalized = normalized.slice(0, -1);
-  return normalized;
-}
-
-function secureHeaderPolicy(value: unknown): Record<string, string> | undefined {
-  if (value === undefined) return undefined;
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw resourceError("invalid_resource", "headers_policy must be an object");
-  const forbidden = new Set(["authorization", "cookie", "proxy-authorization", "x-api-key", "set-cookie"]);
-  const result: Record<string, string> = {};
-  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
-    if (forbidden.has(key.toLowerCase())) throw resourceError("invalid_resource", `sensitive header is not allowed: ${key}`);
-    result[key] = String(raw);
-  }
-  return result;
-}
-
-function modelRows(payload: Record<string, unknown>): Array<{ id: string; raw: unknown }> {
-  const rows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [];
-  const seen = new Set<string>();
-  const result: Array<{ id: string; raw: unknown }> = [];
-  for (const row of rows) {
-    const id = typeof row === "string" ? row.trim() : row && typeof row === "object" ? String((row as Record<string, unknown>).id ?? (row as Record<string, unknown>).name ?? "").trim() : "";
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    result.push({ id, raw: row });
-  }
-  return result;
-}
-
-const CONTEXT_KEYS = new Set(["context_window", "context_length", "max_model_len", "max_context_length", "max_position_embeddings", "contextwindow"]);
-const MAX_OUTPUT_KEYS = new Set(["max_output_tokens", "max_completion_tokens"]);
-const THINKING_LEVEL_SET = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-
-function capabilityPatchFromPayload(value: unknown, protocol?: string): CapabilityPatch {
-  const patch: CapabilityPatch = {};
-  const visit = (current: unknown, depth: number): void => {
-    if (depth > 5 || current === null || current === undefined) return;
-    if (Array.isArray(current)) { for (const item of current.slice(0, 100)) visit(item, depth + 1); return; }
-    if (typeof current !== "object") return;
-    for (const [rawKey, child] of Object.entries(current as Record<string, unknown>)) {
-      const key = rawKey.toLowerCase();
-      if (CONTEXT_KEYS.has(key) && patch.context_window === undefined) {
-        const context = normalizeContextWindow(child);
-        if (context) patch.context_window = context;
-      }
-      if (MAX_OUTPUT_KEYS.has(key) && patch.max_output_tokens === undefined) {
-        const maxOutput = Number(child);
-        if (Number.isInteger(maxOutput) && maxOutput > 0) patch.max_output_tokens = maxOutput;
-      }
-      if ((key === "reasoning" || key === "supports_reasoning") && typeof child === "boolean" && patch.reasoning === undefined) patch.reasoning = child;
-      if ((key === "thinking_levels" || key === "supported_thinking_levels") && Array.isArray(child) && patch.thinking_levels === undefined) {
-        const levels = normalizeThinkingLevels(child.filter((level) => THINKING_LEVEL_SET.has(String(level))));
-        if (levels) patch.thinking_levels = levels;
-      }
-      if (key === "thinkinglevelmap" && child && typeof child === "object" && patch.thinking_levels === undefined) {
-        const levels = normalizeThinkingLevels(Object.entries(child as Record<string, unknown>).filter(([, mapped]) => mapped !== null).map(([level]) => level));
-        if (levels) patch.thinking_levels = levels;
-      }
-      if ((key === "vision" || key === "supports_vision") && typeof child === "boolean" && patch.vision === undefined) patch.vision = child;
-      if ((key === "tools" || key === "supports_tools") && typeof child === "boolean" && patch.tools === undefined) patch.tools = child;
-      if ((key === "structured_output" || key === "supports_structured_output") && typeof child === "boolean" && patch.structured_output === undefined) patch.structured_output = child;
-      visit(child, depth + 1);
-    }
-  };
-  visit(value, 0);
-  if (protocol === "anthropic" && value && typeof value === "object") {
-    const raw = value as Record<string, unknown>;
-    const positive = (v: unknown) => typeof v === "number" && Number.isSafeInteger(v) && v > 0 ? v : undefined;
-    // max_input_tokens is an input budget, not input + output. Do not add limits.
-    patch.context_window = positive(raw.context_window) ?? positive(raw.max_input_tokens) ?? patch.context_window;
-    patch.max_output_tokens = positive(raw.max_tokens) ?? patch.max_output_tokens;
-    const capabilities = raw.capabilities as Record<string, { supported?: unknown }> | undefined;
-    if (typeof capabilities?.image_input?.supported === "boolean") patch.vision = capabilities.image_input.supported;
-    if (typeof capabilities?.thinking?.supported === "boolean") patch.reasoning = capabilities.thinking.supported;
-    for (const key of Object.keys(patch) as Array<keyof CapabilityPatch>) if (patch[key] === undefined) delete patch[key];
-  }
-  return patch;
-}
-
-function manualCapabilityPatch(body: Record<string, unknown>): CapabilityPatch {
-  const source = body.capabilities && typeof body.capabilities === "object" && !Array.isArray(body.capabilities)
-    ? body.capabilities as Record<string, unknown>
-    : body;
-  const patch: CapabilityPatch = { source: "manual" };
-  if (typeof source.reasoning === "boolean") patch.reasoning = source.reasoning;
-  const levels = normalizeThinkingLevels(source.thinking_levels);
-  if (levels) patch.thinking_levels = levels;
-  if (source.context_window !== undefined) patch.context_window = normalizeContextWindow(source.context_window);
-  const maxOutput = Number(source.max_output_tokens);
-  if (source.max_output_tokens !== undefined && Number.isInteger(maxOutput) && maxOutput > 0) patch.max_output_tokens = maxOutput;
-  for (const key of ["vision", "tools", "structured_output"] as const) if (typeof source[key] === "boolean") patch[key] = source[key] as boolean;
-  return patch;
-}
-
-function redactSecret(message: string, secret: string | null | undefined): string {
-  return secret ? message.replaceAll(secret, "[redacted]") : message;
-}
-
-function authHeaders(protocol: Endpoint["protocol"], secret: string | null): Record<string, string> {
-  const headers: Record<string, string> = { accept: "application/json" };
-  if (protocol === "anthropic") headers["anthropic-version"] = "2023-06-01";
-  if (!secret) return headers;
-  if (protocol === "anthropic") {
-    headers["x-api-key"] = secret;
-    headers["anthropic-version"] = "2023-06-01";
-  } else headers.authorization = `Bearer ${secret}`;
-  return headers;
-}
-
-const MAX_MODEL_DISCOVERY_BYTES = 8 * 1024 * 1024;
-
-async function readBoundedJson(response: Response, maxBytes = MAX_MODEL_DISCOVERY_BYTES): Promise<Record<string, unknown>> {
-  const length = Number(response.headers.get("content-length") ?? 0);
-  if (length > maxBytes) throw resourceError("endpoint_probe_failed", "endpoint response is too large");
-  const text = await response.text();
-  if (Buffer.byteLength(text, "utf8") > maxBytes) throw resourceError("endpoint_probe_failed", "endpoint response is too large");
-  try { return JSON.parse(text) as Record<string, unknown>; } catch { return text ? { message: text } : {}; }
-}
-
-function discoveryPath(endpoint: Pick<Endpoint, "protocol" | "base_url">): string {
-  if (endpoint.protocol === "ollama") return `${endpoint.base_url}/api/tags`;
-  if (endpoint.protocol === "anthropic") return `${anthropicBaseUrl(endpoint.base_url)}/v1/models`;
-  return `${endpoint.base_url}/models`;
-}
-
+/** Public model-resource API; operations share one repository/credential context. */
 export class ModelResourceService {
   readonly repository: ModelResourceRepository;
   readonly credentials: CredentialStore;
   private readonly settings: SettingsStore;
   private readonly runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">;
-
+  private readonly context: ModelResourceContext;
   constructor(options: { repository?: ModelResourceRepository; credentials?: CredentialStore; settings?: SettingsStore; runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog"> } = {}) {
     this.repository = options.repository ?? new ModelResourceRepository();
     this.credentials = options.credentials ?? new CredentialStore();
     this.settings = options.settings ?? new SettingsStore();
     this.runtimeCatalog = options.runtimeCatalog;
+      this.context = {
+      repository: this.repository, credentials: this.credentials, settings: this.settings, runtimeCatalog: this.runtimeCatalog,
+      ensureMigrated: (...args) => this.ensureMigrated(...args),
+      resolveAvailableModels: (...args) => this.resolveAvailableModels(...args),
+      resolveModelRoute: (...args) => this.resolveModelRoute(...args),
+      isModelAvailable: (...args) => this.isModelAvailable(...args),
+      listProviders: (...args) => this.listProviders(...args),
+      providerViews: (...args) => this.providerViews(...args),
+      getProvider: (...args) => this.getProvider(...args),
+      createProvider: (...args) => this.createProvider(...args),
+      upsertLegacyProvider: (...args) => this.upsertLegacyProvider(...args),
+      updateProvider: (...args) => this.updateProvider(...args),
+      deleteProvider: (...args) => this.deleteProvider(...args),
+      createCustomProvider: (...args) => this.createCustomProvider(...args),
+      updateCustomProvider: (...args) => this.updateCustomProvider(...args),
+      deleteCustomProvider: (...args) => this.deleteCustomProvider(...args),
+      testProviderConfiguration: (...args) => this.testProviderConfiguration(...args),
+      listEndpoints: (...args) => this.listEndpoints(...args),
+      getEndpoint: (...args) => this.getEndpoint(...args),
+      createEndpoint: (...args) => this.createEndpoint(...args),
+      updateEndpoint: (...args) => this.updateEndpoint(...args),
+      deleteEndpoint: (...args) => this.deleteEndpoint(...args),
+      setEndpointEnabled: (...args) => this.setEndpointEnabled(...args),
+      probeEndpoint: (...args) => this.probeEndpoint(...args),
+      listBindings: (...args) => this.listBindings(...args),
+      createBinding: (...args) => this.createBinding(...args),
+      updateBinding: (...args) => this.updateBinding(...args),
+      deleteBinding: (...args) => this.deleteBinding(...args),
+      listModels: (...args) => this.listModels(...args),
+      getModel: (...args) => this.getModel(...args),
+      updateModel: (...args) => this.updateModel(...args),
+      applyRuntimeCapabilities: (...args) => this.applyRuntimeCapabilities(...args),
+      deleteModel: (...args) => this.deleteModel(...args),
+      discover: (...args) => this.discover(...args),
+      migrationStatus: (...args) => this.migrationStatus(...args),
+      modelPreferences: (...args) => this.modelPreferences(...args),
+    };
   }
-
   async ensureMigrated(): Promise<MigrationResult> {
     // Archived resource tooling must never activate old settings during normal use.
     return { migrated: false, provider_count: 0, model_count: 0, endpoint_count: 0, binding_count: 0, warnings: [] };
   }
-
   async resolveAvailableModels() {
     await this.ensureMigrated();
     return new RuntimeModelResolver(this.repository, this.credentials).resolveAvailableModels();
   }
-
   async resolveModelRoute(ref: string) {
     await this.ensureMigrated();
     return new RuntimeModelResolver(this.repository, this.credentials).resolveModelRoute(ref);
   }
-
-  async isModelAvailable(ref: string): Promise<boolean> {
-    await this.ensureMigrated();
-    const state = await this.repository.read();
-    const canonical = state.aliases[ref] ?? ref;
-    if (canonical.startsWith("user-")) return (await this.listModels({ available: true })).some((model) => model.id === canonical);
-    return true;
-  }
-
-  async listProviders(catalog?: RuntimeCatalog): Promise<ProviderRead[]> {
-    await this.ensureMigrated();
-    const state = await this.repository.read();
-    const result: ProviderRead[] = [];
-    catalog ??= await this.readRuntimeCatalog();
-    for (const entry of catalog.providers) {
-      const ref = state.credential_refs[entry.id];
-      const credential = ref ? await this.credentials.getForRuntime(ref) : null;
-      const configured = Boolean(credential?.secret) || entry.auth.configured;
-      const status = configured ? credential?.secret ? "configured" : "connected" : !entry.auth.apiKey && entry.auth.oauth ? "needs_login" : entry.auth.apiKey ? "needs_key" : "connected";
-      result.push({
-        id: entry.id,
-        name: entry.name,
-        kind: "system",
-        adapter: "pi-ai",
-        enabled: configured,
-        catalog_mode: "runtime",
-        auth_kind: entry.auth.apiKey && entry.auth.oauth ? "api_key_or_oauth" : entry.auth.oauth ? "oauth" : entry.auth.apiKey ? "api_key" : "none",
-        source: "pi-ai",
-        models: entry.models.map((model) => model.id),
-        has_key: Boolean(credential?.secret),
-        credential_status: status,
-        routes: 0,
-      });
-    }
-    const resolver = new RuntimeModelResolver(this.repository, this.credentials);
-    const resolved = await resolver.resolveState(state);
-    const modelsByProvider = new Map<string, string[]>();
-    for (const model of state.models) {
-      const models = modelsByProvider.get(model.provider_id) ?? [];
-      models.push(model.model_id);
-      modelsByProvider.set(model.provider_id, models);
-    }
-    const routeCounts = new Map<string, number>();
-    for (const model of resolved) routeCounts.set(model.provider_id, (routeCounts.get(model.provider_id) ?? 0) + model.routes.length);
-    const endpointsById = new Map(state.endpoints.map((endpoint) => [endpoint.id, endpoint]));
-    const endpointsByProvider = new Map<string, Set<Endpoint>>();
-    for (const binding of state.bindings) {
-      const endpoint = endpointsById.get(binding.endpoint_id);
-      if (!endpoint) continue;
-      const endpoints = endpointsByProvider.get(binding.provider_id) ?? new Set<Endpoint>();
-      endpoints.add(endpoint);
-      endpointsByProvider.set(binding.provider_id, endpoints);
-    }
-    const credentialConfigured = new Map<string, boolean>();
-    const hasCredential = (ref: string) => {
-      if (!credentialConfigured.has(ref)) credentialConfigured.set(ref, Boolean(state.credential_refs[ref]) || Boolean(this.credentials.readSync(ref)?.secret));
-      return credentialConfigured.get(ref)!;
-    };
-    for (const provider of state.providers) {
-      const models = modelsByProvider.get(provider.id) ?? [];
-      const hasConfiguredCredential = provider.auth_kind === "none" || [...(endpointsByProvider.get(provider.id) ?? [])]
-        .some((endpoint) => Boolean(endpoint.credential_ref && hasCredential(endpoint.credential_ref)));
-      const needsLogin = provider.auth_kind === "oauth" && !hasConfiguredCredential;
-      result.push({
-        ...provider,
-        models,
-        has_key: provider.auth_kind !== "none" && hasConfiguredCredential,
-        credential_status: provider.auth_kind === "none" ? "connected" : hasConfiguredCredential ? "configured" : needsLogin ? "needs_login" : "needs_key",
-        routes: routeCounts.get(provider.id) ?? 0,
-      });
-    }
-    return result.sort((a, b) => a.name.localeCompare(b.name));
-  }
-
-  /** One management snapshot; selection comes from Core, never credential heuristics. */
-  async providerViews(selectable: Set<string>, inputFormats: Map<string, string[]> = new Map(), catalogAvailable = true): Promise<ProviderView[]> {
-    await this.ensureMigrated();
-    const [state, catalog] = await Promise.all([this.repository.read(), this.readRuntimeCatalog()]);
-    const providers = new Map<string, Provider>();
-    const builtinConfigured = new Set(catalog.providers.filter((provider) => provider.auth.configured).map((provider) => provider.id));
-    for (const entry of catalog.providers) providers.set(entry.id, { id: entry.id, name: entry.name, kind: "system", source: "pi-ai", adapter: "pi-ai", enabled: true, catalog_mode: "runtime", auth_kind: entry.auth.apiKey && entry.auth.oauth ? "api_key_or_oauth" : entry.auth.oauth ? "oauth" : entry.auth.apiKey ? "api_key" : "none" });
-    for (const provider of state.providers) providers.set(provider.id, provider);
-    const credentialRead = await this.credentials.readSnapshot();
-    const declaredFormats = new Map(catalog.providers.flatMap((provider) => provider.models.map((model) => [canonicalModelRef(provider.id, model.id), model.input] as const)));
-    const modelsByProvider = new Map<string, Map<string, ModelRead>>();
-    const add = (model: ModelRead) => {
-      const rows = modelsByProvider.get(model.provider_id) ?? new Map<string, ModelRead>();
-      rows.set(model.id, model); modelsByProvider.set(model.provider_id, rows);
-    };
-    for (const model of await this.systemModelReads(state, catalog, credentialRead)) add(model);
-    const sourceModels = new Map(state.models.map((model) => [canonicalModelRef(model.provider_id, model.model_id), model]));
-    for (const model of await new RuntimeModelResolver(this.repository, credentialRead).resolveState(state)) add(resolvedModelToRead(model, sourceModels.get(model.id)));
-    const refs = new Map<string, Set<string>>();
-    const endpoints = new Map(state.endpoints.map((endpoint) => [endpoint.id, endpoint]));
-    for (const [id, ref] of Object.entries(state.credential_refs)) refs.set(id, new Set([ref]));
-    for (const binding of state.bindings) {
-      const ref = endpoints.get(binding.endpoint_id)?.credential_ref;
-      if (ref) { const ids = refs.get(binding.provider_id) ?? new Set<string>(); ids.add(ref); refs.set(binding.provider_id, ids); }
-    }
-    // Owned credentials remain configured when their binding/endpoint needs
-    // repair. Ownership is canonical metadata, not a guessed route association.
-    for (const endpoint of state.endpoints) if (endpoint.owner_provider_id && endpoint.credential_ref) {
-      const ids = refs.get(endpoint.owner_provider_id) ?? new Set<string>(); ids.add(endpoint.credential_ref); refs.set(endpoint.owner_provider_id, ids);
-    }
-    for (const credential of await credentialRead.listMetadata()) if (credential.owner_provider_id && credential.owner_kind !== "mcp") {
-      const ids = refs.get(credential.owner_provider_id) ?? new Set<string>(); ids.add(credential.id); refs.set(credential.owner_provider_id, ids);
-    }
-    const endpointCredentialRefs = new Set(state.endpoints.map((endpoint) => endpoint.credential_ref).filter(Boolean));
-    const credentials = new Map(await Promise.all([...new Set([...refs.values()].flatMap((ids) => [...ids]))].map(async (ref) => [ref, await credentialRead.getForRuntime(ref)] as const)));
-    return [...providers.values()].map((provider): ProviderView => {
-      const values = [...(refs.get(provider.id) ?? [])].map((ref) => credentials.get(ref));
-      const configured = provider.auth_kind === "none" || provider.kind === "system" && builtinConfigured.has(provider.id) || values.some((value) => Boolean(value?.secret) && ["configured", "connected"].includes(value!.metadata.status));
-      const credentialState = configured ? "ready" : values.some((value) => value?.metadata.status === "invalid") ? "invalid" : provider.auth_kind === "oauth" ? "needs_login" : "needs_key";
-      const models = [...(modelsByProvider.get(provider.id)?.values() ?? [])].map((model) => {
-        const available = provider.enabled && catalogAvailable && selectable.has(model.id);
-        const formats = inputFormats.get(model.id) ?? declaredFormats.get(model.id);
-        return { ...model, available, ...(formats ? { input_formats: formats } : {}), ...(available ? { availability_reason: undefined } : { availability_reason: !provider.enabled ? "provider_disabled" : model.availability_reason ?? (catalogAvailable ? "core_unavailable" : "catalog_unavailable") }) };
-      });
-      const count = models.filter((model) => model.available).length;
-      const issues = [...new Set(models.filter((model) => !model.available).map((model) => model.availability_reason!))].map((code) => ({ code }));
-      if (!models.length) issues.push({ code: "no_models" });
-      if (!catalogAvailable && !issues.some((issue) => issue.code === "catalog_unavailable")) issues.push({ code: "catalog_unavailable" });
-      if (provider.auth_kind === "oauth" && !count) issues.push({ code: "unsupported_login" });
-      const status = !provider.enabled ? "disabled" : count ? "ready" : provider.auth_kind === "oauth" ? "needs_login" : credentialState !== "ready" ? credentialState : "unavailable";
-      const custom = provider.kind === "user";
-      const credentialRef = state.credential_refs[provider.id] ?? "";
-      const removable = credentials.get(credentialRef)?.metadata.backend === "managed" && !endpointCredentialRefs.has(credentialRef);
-      const apiKey = provider.auth_kind === "api_key" || provider.auth_kind === "api_key_or_oauth";
-      return { id: provider.id, name: provider.name, source: custom ? "user" : "builtin", enabled: provider.enabled, status,
-        auth: { kind: provider.auth_kind, api_key_supported: apiKey, login_supported: false },
-        credential: { state: credentialState, configured },
-        routing: { selectable_model_count: count, configured_model_count: models.length, issues }, models,
-        // Endpoint probes and discovered capabilities are not inference verification.
-        last_verification: { state: "never", checked_at: null },
-        allowed_actions: [...(custom ? ["edit", provider.enabled ? "disable" : "enable", "delete", "discover"] as const : []), ...(apiKey ? ["replace_credential"] as const : []), ...(!custom && apiKey && removable ? ["remove_credential"] as const : [])] };
-    }).sort((a, b) => a.name.localeCompare(b.name));
-  }
-
-  async getProvider(id: string): Promise<ProviderRead> {
-    const provider = (await this.listProviders()).find((item) => item.id === id);
-    if (!provider) throw resourceError("resource_not_found", `Provider '${id}' was not found`);
-    return provider;
-  }
-
-  async createProvider(input: CreateProviderRequest): Promise<Provider> {
-    await this.ensureMigrated();
-    const requested = input.id?.trim();
-    const id = requested ? (requested.startsWith("user-") ? requested : `user-${slug(requested)}`) : ModelResourceRepository.providerId(input.name);
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) throw resourceError("invalid_resource", "Provider ID must be URL-safe");
-    const item: Provider = {
-      id,
-      name: input.name.trim(),
-      kind: "user",
-      adapter: input.adapter,
-      enabled: input.enabled,
-      catalog_mode: input.catalog_mode,
-      auth_kind: input.auth_kind,
-      source: "user",
-      created_at: now(),
-      updated_at: now(),
-    };
-    return this.repository.update((state) => {
-      if (state.providers.some((provider) => provider.id === id)) throw resourceError("provider_id_conflict", `Provider ID '${id}' already exists`);
-      state.providers.push(item);
-      return structuredClone(item);
-    });
-  }
-
-  async upsertLegacyProvider(input: {
+  isModelAvailable(ref: string): Promise<boolean> { return isModelAvailable(this.context, ref); }
+  listProviders(catalog?: RuntimeCatalog): Promise<ProviderRead[]> { return listProviders(this.context, catalog); }
+  providerViews(selectable: Set<string>, inputFormats: Map<string, string[]> = new Map(), catalogAvailable = true): Promise<ProviderView[]> { return providerViews(this.context, selectable, inputFormats, catalogAvailable); }
+  getProvider(id: string): Promise<ProviderRead> { return getProvider(this.context, id); }
+  createProvider(input: CreateProviderRequest): Promise<Provider> { return createProvider(this.context, input); }
+  upsertLegacyProvider(input: {
     id: string;
     name: string;
     base_url: string;
@@ -416,679 +93,33 @@ export class ModelResourceService {
     reasoning?: boolean;
     context_window?: number;
     model_hints?: Record<string, { context_window?: number; reasoning?: boolean; thinking_levels?: string[]; source?: string }>;
-  }): Promise<{ provider: Provider; endpoint: Endpoint; binding: ProviderEndpointBinding; models: Model[] }> {
-    await this.ensureMigrated();
-    const id = input.id.startsWith("user-") ? input.id : `user-${slug(input.id)}`;
-    const protocol = normalizeProtocol(input.api);
-    const baseUrl = normalizeBaseUrl(input.base_url);
-    const result = await this.repository.update(async (state) => {
-      let provider = state.providers.find((item) => item.id === id);
-      if (provider && provider.kind === "system") throw resourceError("provider_id_conflict", `Provider ID '${id}' conflicts with a system provider`);
-      if (!provider) {
-        provider = {
-          id,
-          name: input.name.trim() || "Provider",
-          kind: "user",
-          adapter: adapterForEndpoint(protocol),
-          enabled: true,
-          catalog_mode: "hybrid",
-          auth_kind: input.api_key ? "api_key" : "none",
-          source: "user",
-          created_at: now(),
-          updated_at: now(),
-        };
-        state.providers.push(provider);
-      } else {
-        provider.name = input.name.trim() || provider.name;
-        provider.adapter = adapterForEndpoint(protocol);
-        provider.auth_kind = input.api_key ? "api_key" : provider.auth_kind;
-        provider.updated_at = now();
-      }
-      let endpoint = state.endpoints.find((item) => item.base_url === baseUrl && item.protocol === protocol);
-      if (!endpoint) {
-        endpoint = {
-          id: `ep_legacy_${modelResourceHash(`${baseUrl}:${protocol}`)}`,
-          name: `${provider.name} connection`,
-          base_url: baseUrl,
-          protocol,
-          api: ["openai-responses", "anthropic-messages", "ollama", "native"].includes(input.api) ? input.api as Endpoint["api"] : "openai-completions",
-          credential_ref: null,
-          enabled: true,
-          health: "unknown",
-          data_egress: baseUrl.includes("127.0.0.1") || baseUrl.includes("localhost") ? "local" : "remote",
-          last_checked_at: null,
-          last_error: null,
-        };
-        state.endpoints.push(endpoint);
-      } else if (input.api) endpoint.api = input.api as Endpoint["api"];
-      if (input.api_key) {
-        const credentialId = `cred_${modelResourceHash(`legacy-api:${id}:${baseUrl}`)}`;
-        await this.credentials.putRaw(credentialId, { kind: "api_key", backend: "managed", label: `${provider.name} key` }, input.api_key);
-        endpoint.credential_ref = credentialId;
-        provider.auth_kind = "api_key";
-      }
-      let binding = state.bindings.find((item) => item.provider_id === provider.id && item.endpoint_id === endpoint.id);
-      if (!binding) {
-        binding = { id: `bind_legacy_${modelResourceHash(`${provider.id}:${endpoint.id}`)}`, provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 100, metadata: { api: input.api || "openai-completions" }, created_at: now(), updated_at: now() };
-        state.bindings.push(binding);
-      } else {
-        binding.enabled = true;
-        binding.metadata = { ...(binding.metadata ?? {}), api: input.api || binding.metadata?.api || "openai-completions" };
-        binding.updated_at = now();
-      }
-      const requestedModels = [...new Set(input.models.map((model) => model.trim()).filter(Boolean))];
-      state.models = state.models.filter((model) => model.provider_id !== provider.id || requestedModels.includes(model.model_id));
-      const models: Model[] = [];
-      for (const modelId of requestedModels) {
-        const existing = state.models.find((model) => model.provider_id === provider.id && model.model_id === modelId);
-        const hint = input.model_hints?.[modelId];
-        const patches: CapabilityPatch[] = [
-          ...(input.reasoning !== undefined || input.context_window !== undefined ? [{ reasoning: input.reasoning, context_window: input.context_window, source: "manual" as const }] : []),
-          ...(hint ? [{ ...hint, source: hint.source === "runtime" ? "runtime" as const : hint.source === "discovery" ? "discovery" as const : "manual" as const }] : []),
-          ...(existing ? [{ ...existing.capabilities, source: existing.capability_source, verified_at: existing.verified_at }] : []),
-        ];
-        const capabilities = resolveCapabilities(modelId, patches);
-        const next: Model = { provider_id: provider.id, model_id: modelId, display_name: `${provider.name} · ${modelId}`, enabled: existing?.enabled ?? true, capabilities: capabilities.capabilities, capability_source: capabilities.capability_source, verified_at: capabilities.verified_at, discovered_at: existing?.discovered_at ?? null };
-        if (existing) Object.assign(existing, next);
-        else state.models.push(next);
-        models.push(next);
-      }
-      return { provider: structuredClone(provider), endpoint: structuredClone(endpoint), binding: structuredClone(binding), models: structuredClone(models) };
-    });
-    return result;
-  }
-
-  async updateProvider(id: string, input: UpdateProviderRequest): Promise<Provider> {
-    await this.ensureMigrated();
-    return this.repository.update((state) => {
-      const item = state.providers.find((provider) => provider.id === id);
-      if (!item) throw resourceError("resource_not_found", `Provider '${id}' was not found`);
-      if (item.kind === "system") throw resourceError("invalid_resource", "System providers are read-only");
-      if (input.name !== undefined) item.name = input.name.trim();
-      if (input.adapter !== undefined) item.adapter = input.adapter;
-      if (input.enabled !== undefined) item.enabled = input.enabled;
-      if (input.catalog_mode !== undefined) item.catalog_mode = input.catalog_mode;
-      if (input.auth_kind !== undefined) item.auth_kind = input.auth_kind;
-      item.updated_at = now();
-      return structuredClone(item);
-    });
-  }
-
-  async deleteProvider(id: string, cascade = false): Promise<{ id: string; removed_models: number; removed_bindings: number }> {
-    await this.ensureMigrated();
-    const settings = await this.settings.read();
-    const state = await this.repository.read();
-    const item = state.providers.find((provider) => provider.id === id);
-    if (!item) throw resourceError("resource_not_found", `Provider '${id}' was not found`);
-    if (item.kind === "system") throw resourceError("invalid_resource", "System providers cannot be deleted");
-    const modelIds = state.models.filter((model) => model.provider_id === id).map((model) => canonicalModelRef(id, model.model_id));
-    const aliases = Object.entries(state.aliases).filter(([, target]) => modelIds.includes(target)).map(([alias]) => alias);
-    const defaultModel = String(settings.model ?? "");
-    const bindings = state.bindings.filter((binding) => binding.provider_id === id);
-    if (!cascade && (bindings.length > 0 || modelIds.some((model) => model === defaultModel || aliases.includes(defaultModel)))) throw resourceError("resource_in_use", `Provider '${id}' is still referenced`);
-    await this.repository.update((current) => {
-      current.providers = current.providers.filter((provider) => provider.id !== id);
-      current.models = current.models.filter((model) => model.provider_id !== id);
-      current.bindings = current.bindings.filter((binding) => binding.provider_id !== id);
-      for (const alias of aliases) delete current.aliases[alias];
-    });
-    if (cascade && (modelIds.includes(defaultModel) || aliases.includes(defaultModel))) await this.settings.update((current) => { current.model = ""; });
-    return { id, removed_models: modelIds.length, removed_bindings: bindings.length };
-  }
-
-  /** Custom-provider aggregate: create credential/endpoint/provider/binding as
-   *  one use case. On failure every resource created here is compensated so
-   *  the UI's single "Add provider" action cannot leave orphan data behind. */
-  async createCustomProvider(input: { name: string; base_url: string; protocol?: Endpoint["protocol"]; api?: Endpoint["api"]; data_egress?: Endpoint["data_egress"]; auth?: { kind: "api_key" | "none"; secret?: string } | null; models?: string[] }): Promise<{ provider: Provider; endpoint: Endpoint; credential: CredentialMetadata | null; binding: ProviderEndpointBinding; discovery?: { model_count: number }; discovery_error?: string }> {
-    await this.ensureMigrated();
-    const providerId = ModelResourceRepository.providerId(input.name);
-    if ((await this.repository.read()).providers.some((item) => item.id === providerId)) throw resourceError("provider_id_conflict", `Provider ID '${providerId}' already exists`);
-    const protocol = normalizeProtocol(input.protocol ?? "openai");
-    let credential: CredentialMetadata | null = null;
-    let endpoint!: Endpoint;
-    let provider!: Provider;
-    let binding!: ProviderEndpointBinding;
-    const compensation = async (): Promise<void> => {
-      if (binding) { await this.repository.update((state) => { state.bindings = state.bindings.filter((item) => item.id !== binding.id); }); }
-      if (provider) { await this.repository.update((state) => { state.providers = state.providers.filter((item) => item.id !== provider.id); state.models = state.models.filter((item) => item.provider_id !== provider.id); }); }
-      if (endpoint) { await this.deleteEndpoint(endpoint.id, true); }
-      if (credential) { await this.credentials.remove(credential.id); }
-    };
-    try {
-      if (input.auth?.kind === "api_key" && input.auth.secret) {
-        credential = await this.credentials.put({ kind: "api_key", backend: "managed", secret: input.auth.secret, label: `${input.name} key`, owner_provider_id: providerId });
-      }
-      endpoint = await this.createEndpoint({
-        name: `${input.name} connection`,
-        base_url: input.base_url,
-        protocol,
-        api: input.api,
-        credential_ref: credential?.id ?? null,
-        enabled: true,
-        data_egress: input.data_egress ?? defaultDataEgress(input.base_url),
-        owner_provider_id: providerId,
-      });
-      provider = await this.createProvider({ name: input.name, adapter: adapterForEndpoint(protocol), catalog_mode: "hybrid", auth_kind: input.auth?.kind ?? "none", enabled: true });
-      binding = await this.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, priority: 100, enabled: true });
-    } catch (error) {
-      await compensation();
-      throw error;
-    }
-    try {
-      const discovered = await this.discover(provider.id, binding.id);
-      // The UI confirms a model selection after testing; persist that choice
-      // instead of leaving every discovered model enabled.
-      if (input.models) {
-        const selected = new Set(input.models);
-        await this.repository.update((current) => {
-          for (const model of current.models) {
-            if (model.provider_id === provider.id) model.enabled = selected.has(model.model_id);
-          }
-        });
-      }
-      return { provider, endpoint, credential, binding, discovery: { model_count: discovered.models.length } };
-    } catch (error) {
-      return { provider, endpoint, credential, binding, discovery_error: error instanceof Error ? error.message : String(error) };
-    }
-  }
-
-  /** Edit a custom provider's connection: name, base URL, API format, or key.
-   *  The canonical split stays hidden from the caller. */
-  async updateCustomProvider(id: string, input: { name?: string; base_url?: string; api?: Endpoint["api"]; auth?: { kind?: "api_key" | "none"; secret?: string } | null }): Promise<{ provider: Provider; endpoint: Endpoint; binding: ProviderEndpointBinding }> {
-    await this.ensureMigrated();
-    const state = await this.repository.read();
-    const provider = state.providers.find((item) => item.id === id);
-    if (!provider || provider.kind !== "user") throw resourceError("resource_not_found", `Custom provider '${id}' was not found`);
-    const baseUrl = input.base_url ? normalizeBaseUrl(input.base_url) : undefined;
-    let binding = state.bindings.find((item) => item.provider_id === id);
-    let endpoint = state.endpoints.find((item) => item.id === binding?.endpoint_id);
-    let repairCredential: CredentialMetadata | undefined;
-    if (!binding) {
-      const owned = state.endpoints.filter((item) => item.owner_provider_id === id);
-      if (owned.length > 1) throw resourceError("invalid_resource", "Multiple owned endpoints exist; repair the binding explicitly");
-      endpoint = owned[0];
-      if (!endpoint) {
-        if (!baseUrl) throw resourceError("invalid_resource", "A base URL is required to rebuild this connection");
-        if (!["openai-compatible", "anthropic-compatible", "ollama"].includes(provider.adapter)) throw resourceError("invalid_resource", "This adapter requires an explicit endpoint repair");
-        const credentials = (await this.credentials.listMetadata()).filter((item) => item.owner_provider_id === id && item.owner_kind !== "mcp");
-        if (provider.auth_kind !== "none" && credentials.length > 1) throw resourceError("invalid_resource", "Multiple owned credentials exist; repair the connection explicitly");
-        repairCredential = provider.auth_kind === "none" ? undefined : credentials[0];
-      }
-    } else if (!endpoint) throw resourceError("resource_not_found", `Provider '${id}' connection endpoint was not found`);
-
-    const replacingKey = input.auth?.kind === "api_key" && Boolean(input.auth.secret);
-    const changesConnection = endpoint && (
-      baseUrl !== undefined && baseUrl !== endpoint.base_url ||
-      input.api !== undefined && input.api !== endpoint.api ||
-      replacingKey || input.auth?.kind === "none" && Boolean(endpoint.credential_ref)
-    );
-    // Preflight the entire aggregate before changing provider metadata, endpoint
-    // configuration, or secrets (including a missing-binding repair).
-    const endpointId = endpoint?.id;
-    if (endpoint && changesConnection && state.bindings.some((item) => item.endpoint_id === endpointId && item.provider_id !== id)) {
-      throw resourceError("resource_in_use", `Endpoint '${endpoint.id}' is shared with another provider`);
-    }
-    const credentialRef = endpoint?.credential_ref ?? repairCredential?.id;
-    if (replacingKey && credentialRef && (
-      state.endpoints.some((item) => item.id !== endpoint?.id && item.credential_ref === credentialRef) ||
-      Object.values(state.credential_refs).includes(credentialRef)
-    )) throw resourceError("resource_in_use", `Credential '${credentialRef}' is shared with another connection or builtin provider`);
-
-    if (!endpoint) {
-      endpoint = await this.createEndpoint({ name: `${provider.name} endpoint`, base_url: baseUrl!, protocol: provider.adapter === "anthropic-compatible" ? "anthropic" : provider.adapter === "ollama" ? "ollama" : "openai", ...(input.api ? { api: input.api } : {}), credential_ref: repairCredential?.id ?? null, enabled: true, data_egress: defaultDataEgress(baseUrl!), owner_provider_id: id });
-    }
-    if (input.name) await this.updateProvider(id, { name: input.name });
-    if (baseUrl !== undefined && baseUrl !== endpoint.base_url || input.api !== undefined && input.api !== endpoint.api) {
-      await this.updateEndpoint(endpoint.id, { ...(baseUrl ? { base_url: baseUrl } : {}), ...(input.api ? { api: input.api } : {}) });
-    }
-    if (input.auth?.kind === "api_key" && input.auth.secret) {
-      if (endpoint.credential_ref) {
-        await this.credentials.put({ id: endpoint.credential_ref, kind: "api_key", backend: "managed", secret: input.auth.secret, owner_provider_id: provider.id });
-      } else {
-        const created = await this.credentials.put({ kind: "api_key", backend: "managed", secret: input.auth.secret, label: `${provider.name} key`, owner_provider_id: provider.id });
-        await this.updateEndpoint(endpoint.id, { credential_ref: created.id });
-      }
-    } else if (input.auth?.kind === "none") {
-      const endpointRef = endpoint.credential_ref;
-      const refs = new Set((await this.credentials.listMetadata()).filter((item) => item.owner_provider_id === provider.id).map((item) => item.id));
-      if (endpointRef) refs.add(endpointRef);
-      if (endpointRef) await this.updateEndpoint(endpoint.id, { credential_ref: null });
-      for (const ref of refs) {
-        const current = await this.repository.read();
-        const metadata = await this.credentials.metadata(ref);
-        const shared = Object.values(current.credential_refs).includes(ref) || current.endpoints.some((item) => item.credential_ref === ref);
-        const owned = metadata?.owner_provider_id === provider.id || ref === endpointRef && metadata?.owner_provider_id === undefined;
-        if (!shared && owned) await this.credentials.remove(ref);
-      }
-    }
-    if (input.auth?.kind) await this.updateProvider(id, { auth_kind: input.auth.kind });
-    if (!binding) {
-      try { binding = await this.createBinding({ provider_id: id, endpoint_id: endpoint.id, enabled: true, priority: 100 }); }
-      catch { throw resourceError("connection_repair_incomplete", "Connection changes were saved, but the endpoint binding could not be created. Review the saved connection and retry to complete the repair."); }
-    }
-    const updated = await this.repository.read();
-    return { provider: structuredClone(updated.providers.find((item) => item.id === id)!), endpoint: structuredClone(updated.endpoints.find((item) => item.id === endpoint.id)!), binding: structuredClone(updated.bindings.find((item) => item.id === binding.id)!) };
-  }
-
-  /** Delete owned secrets and endpoints before the provider. Keeping the
-   *  provider until the last step makes a failed cleanup safe to retry. */
-  async deleteCustomProvider(id: string): Promise<{ id: string; removed_endpoints: number; removed_credentials: number }> {
-    await this.ensureMigrated();
-    const state = await this.repository.read();
-    const providerExists = state.providers.some((item) => item.id === id);
-    const bindingEndpointIds = new Set(state.bindings.filter((binding) => binding.provider_id === id).map((binding) => binding.endpoint_id));
-    const otherBindings = state.bindings.filter((binding) => binding.provider_id !== id);
-    const removableEndpoints = state.endpoints.filter((endpoint) => {
-      const owned = endpoint.owner_provider_id === id || (endpoint.owner_provider_id === undefined && bindingEndpointIds.has(endpoint.id));
-      return owned && !otherBindings.some((binding) => binding.endpoint_id === endpoint.id);
-    });
-    const removableEndpointIds = new Set(removableEndpoints.map((endpoint) => endpoint.id));
-    const systemCredentialRefs = new Set(Object.values(state.credential_refs));
-    const credentialMetadata = await this.credentials.listMetadata();
-    const removableCredentialRefs = new Set<string>();
-    for (const endpoint of removableEndpoints) {
-      const ref = endpoint.credential_ref;
-      if (!ref || systemCredentialRefs.has(ref)) continue;
-      const metadata = credentialMetadata.find((item) => item.id === ref);
-      if (!metadata || (metadata.owner_provider_id !== id && metadata.owner_provider_id !== undefined)) continue;
-      if (state.endpoints.some((item) => !removableEndpointIds.has(item.id) && item.credential_ref === ref)) continue;
-      removableCredentialRefs.add(ref);
-    }
-    for (const metadata of credentialMetadata) {
-      if (metadata.owner_provider_id !== id || systemCredentialRefs.has(metadata.id)) continue;
-      if (state.endpoints.some((endpoint) => !removableEndpointIds.has(endpoint.id) && endpoint.credential_ref === metadata.id)) continue;
-      removableCredentialRefs.add(metadata.id);
-    }
-
-    let removedCredentials = 0;
-    for (const ref of removableCredentialRefs) if (await this.credentials.remove(ref)) removedCredentials += 1;
-    let removedEndpoints = 0;
-    for (const endpoint of removableEndpoints) {
-      try { await this.deleteEndpoint(endpoint.id, true); removedEndpoints += 1; }
-      catch (error) { if (!(error instanceof Error) || !String(error.message).includes("was not found")) throw error; }
-    }
-
-    if (providerExists) await this.deleteProvider(id, true);
-    else {
-      const legacyId = id.startsWith("user-") ? id.slice("user-".length) : id;
-      await this.repository.update((current) => {
-        const modelRefs = current.models.filter((model) => model.provider_id === id).map((model) => canonicalModelRef(id, model.model_id));
-        current.providers = current.providers.filter((provider) => provider.id !== id);
-        current.models = current.models.filter((model) => model.provider_id !== id);
-        current.bindings = current.bindings.filter((binding) => binding.provider_id !== id);
-        for (const [alias, target] of Object.entries(current.aliases)) if (modelRefs.includes(target) || target.startsWith(`${id}/`)) delete current.aliases[alias];
-      });
-      await this.settings.update((current) => {
-        const model = String(current.model ?? "");
-        if (model.startsWith(`${id}/`) || model.startsWith(`custom-${legacyId}/`) || model.startsWith(`${legacyId}/`)) current.model = "";
-      });
-    }
-    return { id, removed_endpoints: removedEndpoints, removed_credentials: removedCredentials };
-  }
-
-  /** Probe a prospective provider configuration without persisting anything:
-   *  fetch its model list and report the rows. Used by the UI's
-   *  "Test & Discover" step before the aggregate create. */
-  async testProviderConfiguration(input: { protocol: Endpoint["protocol"]; base_url: string; api?: Endpoint["api"]; auth?: { kind: "api_key" | "none"; secret?: string } | null }): Promise<{ ok: true; health: "ready"; models: Array<{ id: string; display_name: string; kind?: "chat" | "embedding" | "rerank" | "unknown"; capabilities: CapabilityPatch }> }> {
-    const protocol = normalizeProtocol(input.protocol);
-    const baseUrl = normalizeBaseUrl(input.base_url);
-    const endpoint = { protocol, base_url: baseUrl };
-    const secret = input.auth?.kind === "api_key" ? input.auth.secret : undefined;
-    const settings = await this.settings.read();
-    const allowPrivate = settings.allow_private_providers !== false && process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0";
-    const rows = await discoverModelRows(discoveryPath(endpoint), protocol, authHeaders(protocol, secret ?? null), allowPrivate);
-    return { ok: true, health: "ready", models: rows.map((row) => {
-      const raw = row.raw && typeof row.raw === "object" ? row.raw as Record<string, unknown> : {};
-      const name = raw.display_name ?? raw.name;
-      const kind = String(raw.model_type ?? raw.task ?? raw.type ?? "").toLowerCase();
-      const modelKind = ["embedding", "embeddings", "text-embedding"].includes(kind) ? "embedding" : ["rerank", "reranker", "text-reranking"].includes(kind) ? "rerank" : ["chat", "chat-completion", "text-generation"].includes(kind) || protocol === "anthropic" ? "chat" : undefined;
-      return { id: row.id, display_name: typeof name === "string" && name.trim() ? name.trim() : row.id, ...(modelKind ? { kind: modelKind as "chat" | "embedding" | "rerank" } : {}), capabilities: capabilityPatchFromPayload(row.raw, protocol) };
-    }) };
-  }
-
-  async listEndpoints(): Promise<Endpoint[]> {
-    await this.ensureMigrated();
-    return (await this.repository.read()).endpoints;
-  }
-
-  async getEndpoint(id: string): Promise<Endpoint> {
-    const endpoint = (await this.listEndpoints()).find((item) => item.id === id);
-    if (!endpoint) throw resourceError("resource_not_found", `Endpoint '${id}' was not found`);
-    return endpoint;
-  }
-
-  async createEndpoint(input: CreateEndpointRequest): Promise<Endpoint> {
-    await this.ensureMigrated();
-    const baseUrl = normalizeBaseUrl(input.base_url);
-    const protocol = normalizeProtocol(input.protocol);
-    if (input.credential_ref !== undefined && input.credential_ref !== null && !(await this.credentials.metadata(input.credential_ref))) throw resourceError("resource_not_found", `Credential '${input.credential_ref}' was not found`);
-    const endpointId = input.id || ModelResourceRepository.endpointId();
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(endpointId)) throw resourceError("invalid_resource", "Endpoint ID must be URL-safe");
-    const endpoint: Endpoint = {
-      id: endpointId,
-      name: input.name.trim(),
-      base_url: baseUrl,
-      protocol,
-      ...(input.api ? { api: input.api } : {}),
-      credential_ref: input.credential_ref ?? null,
-      enabled: input.enabled,
-      health: "unknown",
-      data_egress: input.data_egress,
-      ...(input.owner_provider_id ? { owner_provider_id: input.owner_provider_id } : {}),
-      ...(input.rate_limit ? { rate_limit: input.rate_limit } : {}),
-      ...(input.network_policy ? { network_policy: input.network_policy } : {}),
-      last_checked_at: null,
-      last_error: null,
-      created_at: now(),
-      updated_at: now(),
-    };
-    return this.repository.update((state) => {
-      if (state.endpoints.some((item) => item.id === endpoint.id)) throw resourceError("provider_id_conflict", `Endpoint ID '${endpoint.id}' already exists`);
-      state.endpoints.push(endpoint);
-      return structuredClone(endpoint);
-    });
-  }
-
-  async updateEndpoint(id: string, input: UpdateEndpointRequest): Promise<Endpoint> {
-    await this.ensureMigrated();
-    if (input.credential_ref !== undefined && input.credential_ref !== null && !(await this.credentials.metadata(input.credential_ref))) throw resourceError("resource_not_found", `Credential '${input.credential_ref}' was not found`);
-    return this.repository.update((state) => {
-      const endpoint = state.endpoints.find((item) => item.id === id);
-      if (!endpoint) throw resourceError("resource_not_found", `Endpoint '${id}' was not found`);
-      if (input.name !== undefined) endpoint.name = input.name.trim();
-      if (input.base_url !== undefined) {
-        const baseUrl = normalizeBaseUrl(input.base_url);
-        // Preserve an explicit classification, but never carry an inferred
-        // local/remote label across an address change.
-        if (baseUrl !== endpoint.base_url && input.data_egress === undefined) endpoint.data_egress = defaultDataEgress(baseUrl);
-        endpoint.base_url = baseUrl;
-      }
-      if (input.protocol !== undefined) endpoint.protocol = normalizeProtocol(input.protocol);
-      if (input.api !== undefined) endpoint.api = input.api;
-      if (input.credential_ref !== undefined) endpoint.credential_ref = input.credential_ref;
-      if (input.enabled !== undefined) {
-        endpoint.enabled = input.enabled;
-        if (input.enabled) {
-          endpoint.health = "unknown";
-          endpoint.last_error = null;
-        } else {
-          endpoint.health = "blocked";
-        }
-      }
-      if (input.data_egress !== undefined) endpoint.data_egress = input.data_egress;
-      if (input.rate_limit !== undefined) endpoint.rate_limit = input.rate_limit;
-      if (input.network_policy !== undefined) endpoint.network_policy = input.network_policy;
-      endpoint.updated_at = now();
-      return structuredClone(endpoint);
-    });
-  }
-
-  async deleteEndpoint(id: string, cascade = false): Promise<{ id: string; removed_bindings: number }> {
-    await this.ensureMigrated();
-    const state = await this.repository.read();
-    if (!state.endpoints.some((endpoint) => endpoint.id === id)) throw resourceError("resource_not_found", `Endpoint '${id}' was not found`);
-    const bindings = state.bindings.filter((binding) => binding.endpoint_id === id);
-    if (bindings.length > 0 && !cascade) throw resourceError("resource_in_use", `Endpoint '${id}' is still referenced by bindings`);
-    await this.repository.update((current) => {
-      current.endpoints = current.endpoints.filter((endpoint) => endpoint.id !== id);
-      current.bindings = current.bindings.filter((binding) => binding.endpoint_id !== id);
-    });
-    return { id, removed_bindings: bindings.length };
-  }
-
-  async setEndpointEnabled(id: string, enabled: boolean): Promise<Endpoint> {
-    return this.updateEndpoint(id, { enabled });
-  }
-
-  async probeEndpoint(id: string): Promise<HealthResult> {
-    await this.ensureMigrated();
-    const endpoint = await this.getEndpoint(id);
-    if (!endpoint.enabled) {
-      return this.updateHealth(id, "blocked", "endpoint disabled");
-    }
-    try {
-      const settings = await this.settings.read();
-      const allowPrivate = endpoint.network_policy?.allow_private ?? (settings.allow_private_providers !== false && process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0");
-      await validateOutboundHttpUrl(endpoint.base_url, { allowPrivate });
-      if (await egressAuditEnabled()) await recordEgress({ connector_type: "connector", connector_id: `endpoint-health:${endpoint.id}`, target_domain: endpoint.base_url, approved: true, note: `endpoint_id=${endpoint.id}` });
-      const credential = endpoint.credential_ref ? await this.credentials.getForRuntime(endpoint.credential_ref) : null;
-      const response = await safeConnectorFetch(discoveryPath(endpoint), {
-        allowPrivate,
-        maxRedirects: 3,
-        maxResponseBytes: MAX_MODEL_DISCOVERY_BYTES,
-        timeoutMs: 8_000,
-        headers: { ...authHeaders(endpoint.protocol, credential?.secret ?? null) },
-      });
-      await response.body?.cancel();
-      return this.updateHealth(id, response.ok ? "ready" : "degraded", response.ok ? null : `endpoint returned ${response.status}`);
-    } catch (error) {
-      return this.updateHealth(id, "error", error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300));
-    }
-  }
-
-  async listBindings(filters: { provider_id?: string; endpoint_id?: string } = {}): Promise<ProviderEndpointBinding[]> {
-    await this.ensureMigrated();
-    const state = await this.repository.read();
-    return state.bindings.filter((binding) => (!filters.provider_id || binding.provider_id === filters.provider_id) && (!filters.endpoint_id || binding.endpoint_id === filters.endpoint_id)).sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
-  }
-
-  async createBinding(input: CreateBindingRequest): Promise<ProviderEndpointBinding> {
-    await this.ensureMigrated();
-    const headersPolicy = secureHeaderPolicy(input.headers_policy);
-    const bindingId = input.id || ModelResourceRepository.bindingId();
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(bindingId)) throw resourceError("invalid_resource", "Binding ID must be URL-safe");
-    const binding: ProviderEndpointBinding = {
-      id: bindingId,
-      provider_id: input.provider_id,
-      endpoint_id: input.endpoint_id,
-      enabled: input.enabled,
-      priority: input.priority,
-      ...(input.model_allowlist ? { model_allowlist: input.model_allowlist } : {}),
-      ...(input.model_aliases ? { model_aliases: input.model_aliases } : {}),
-      ...(headersPolicy ? { headers_policy: headersPolicy } : {}),
-      ...(input.metadata ? { metadata: input.metadata } : {}),
-      created_at: now(),
-      updated_at: now(),
-    };
-    return this.repository.update((state) => {
-      if (!state.providers.some((provider) => provider.id === binding.provider_id)) throw resourceError("resource_not_found", `Provider '${binding.provider_id}' was not found`);
-      if (!state.endpoints.some((endpoint) => endpoint.id === binding.endpoint_id)) throw resourceError("resource_not_found", `Endpoint '${binding.endpoint_id}' was not found`);
-      if (state.bindings.some((item) => item.provider_id === binding.provider_id && item.endpoint_id === binding.endpoint_id)) throw resourceError("provider_id_conflict", "A provider-endpoint binding already exists");
-      state.bindings.push(binding);
-      return structuredClone(binding);
-    });
-  }
-
-  async updateBinding(id: string, input: UpdateBindingRequest): Promise<ProviderEndpointBinding> {
-    await this.ensureMigrated();
-    const headersPolicy = secureHeaderPolicy(input.headers_policy);
-    return this.repository.update((state) => {
-      const binding = state.bindings.find((item) => item.id === id);
-      if (!binding) throw resourceError("resource_not_found", `Binding '${id}' was not found`);
-      if (input.enabled !== undefined) binding.enabled = input.enabled;
-      if (input.priority !== undefined) binding.priority = input.priority;
-      if (input.model_allowlist !== undefined) binding.model_allowlist = input.model_allowlist;
-      if (input.model_aliases !== undefined) binding.model_aliases = input.model_aliases;
-      if (input.headers_policy !== undefined) binding.headers_policy = headersPolicy;
-      if (input.metadata !== undefined) binding.metadata = input.metadata;
-      binding.updated_at = now();
-      return structuredClone(binding);
-    });
-  }
-
-  async deleteBinding(id: string): Promise<{ id: string }> {
-    await this.ensureMigrated();
-    return this.repository.update((state) => {
-      if (!state.bindings.some((binding) => binding.id === id)) throw resourceError("resource_not_found", `Binding '${id}' was not found`);
-      state.bindings = state.bindings.filter((binding) => binding.id !== id);
-      return { id };
-    });
-  }
-
-  async listModels(filters: { provider_id?: string; available?: boolean } = {}, catalog?: RuntimeCatalog): Promise<ModelRead[]> {
-    await this.ensureMigrated();
-    const state = await this.repository.read();
-    const resolver = new RuntimeModelResolver(this.repository, this.credentials);
-    const resolved = await resolver.resolveState(state);
-    const resolvedById = new Map(resolved.map((model) => [model.id, model]));
-    const userModels = state.models
-      .filter((model) => !filters.provider_id || model.provider_id === filters.provider_id)
-      .map((model) => resolvedModelToRead(resolvedById.get(canonicalModelRef(model.provider_id, model.model_id)) ?? {
-        id: canonicalModelRef(model.provider_id, model.model_id), provider_id: model.provider_id, model_id: model.model_id, display_name: model.display_name, available: false, capabilities: model.capabilities, capability_source: model.capability_source, routes: [], availability_reason: "no_routable_endpoint",
-      }, model));
-    catalog ??= await this.readRuntimeCatalog();
-    const systemProviderIds = new Set(catalog.providers.map((provider) => provider.id));
-    const systemModels = filters.provider_id && !systemProviderIds.has(filters.provider_id)
-      ? []
-      : await this.systemModelReads(state, catalog);
-    const all = [...userModels, ...systemModels].filter((model) => filters.available === undefined || model.available === filters.available);
-    return all.sort((a, b) => a.id.localeCompare(b.id));
-  }
-
-  async getModel(providerId: string, modelId: string): Promise<ModelRead> {
-    const model = (await this.listModels({ provider_id: providerId })).find((item) => item.model_id === modelId);
-    if (!model) throw resourceError("resource_not_found", `Model '${providerId}/${modelId}' was not found`);
-    return model;
-  }
-
-  async updateModel(providerId: string, modelId: string, body: Record<string, unknown>): Promise<ModelRead> {
-    await this.ensureMigrated();
-    await this.repository.update((state) => {
-      const provider = state.providers.find((item) => item.id === providerId);
-      if (!provider) throw resourceError("resource_not_found", `Provider '${providerId}' was not found`);
-      if (provider.kind === "system") throw resourceError("invalid_resource", "System provider models are read-only");
-      let current = state.models.find((item) => item.provider_id === providerId && item.model_id === modelId);
-      const manual = manualCapabilityPatch(body);
-      if (!current) {
-        const merged = resolveCapabilities(modelId, [manual]);
-        current = {
-          provider_id: providerId,
-          model_id: modelId,
-          display_name: typeof body.display_name === "string" && body.display_name.trim() ? body.display_name.trim() : `${provider.name} · ${modelId}`,
-          enabled: body.enabled !== false,
-          capabilities: merged.capabilities,
-          capability_source: merged.capability_source,
-          verified_at: merged.verified_at,
-          discovered_at: null,
-        };
-        state.models.push(current);
-      } else {
-        const merged = resolveCapabilities(modelId, [
-          { ...current.capabilities, source: current.capability_source, verified_at: current.verified_at },
-          manual,
-        ]);
-        current.display_name = typeof body.display_name === "string" && body.display_name.trim() ? body.display_name.trim() : current.display_name;
-        current.enabled = typeof body.enabled === "boolean" ? body.enabled : current.enabled;
-        current.capabilities = merged.capabilities;
-        current.capability_source = merged.capability_source;
-        current.verified_at = merged.verified_at;
-        current.discovered_at = current.discovered_at ?? null;
-      }
-    });
-    const result = await this.listModels({ provider_id: providerId });
-    const model = result.find((item) => item.model_id === modelId);
-    if (!model) throw resourceError("resource_not_found", `Model '${providerId}/${modelId}' was not found`);
-    return model;
-  }
-
-  async applyRuntimeCapabilities(providerId: string, modelId: string, patch: Partial<ModelCapabilities>): Promise<Model | null> {
-    await this.ensureMigrated();
-    const resolve = (model: Model, verifiedAt = model.verified_at) => resolveCapabilities(modelId, [
-      { ...model.capabilities, source: model.capability_source, verified_at: model.verified_at },
-      { ...patch, source: "runtime", verified_at: verifiedAt },
-    ]);
-    const unchanged = (model: Model) => model.capability_source === "runtime" && isDeepStrictEqual(model.capabilities, resolve(model).capabilities);
-    const snapshot = await this.repository.read();
-    const existing = snapshot.models.find((item) => item.provider_id === providerId && item.model_id === modelId);
-    // Repeated observations of identical facts do not refresh timestamps or
-    // acquire the write lock. The locked path rechecks for concurrent repairs.
-    if (!existing) return null;
-    if (unchanged(existing)) return structuredClone(existing);
-    return this.repository.update((state) => {
-      const model = state.models.find((item) => item.provider_id === providerId && item.model_id === modelId);
-      if (!model) return null;
-      if (unchanged(model)) return structuredClone(model);
-      const resolved = resolve(model, now());
-      model.capabilities = resolved.capabilities;
-      model.capability_source = "runtime";
-      model.verified_at = resolved.verified_at;
-      return structuredClone(model);
-    }, { skipUnchanged: true });
-  }
-
-  async deleteModel(providerId: string, modelId: string): Promise<{ provider_id: string; model_id: string; default_cleared: boolean }> {
-    await this.ensureMigrated();
-    const ref = canonicalModelRef(providerId, modelId);
-    const state = await this.repository.read();
-    if (!state.models.some((model) => model.provider_id === providerId && model.model_id === modelId)) throw resourceError("resource_not_found", `Model '${ref}' was not found`);
-    const settings = await this.settings.read();
-    const defaultCleared = settings.model === ref || state.aliases[settings.model ?? ""] === ref;
-    await this.repository.update((current) => {
-      current.models = current.models.filter((model) => model.provider_id !== providerId || model.model_id !== modelId);
-      for (const [alias, target] of Object.entries(current.aliases)) if (target === ref) delete current.aliases[alias];
-    });
-    if (defaultCleared) await this.settings.update((current) => { current.model = ""; });
-    return { provider_id: providerId, model_id: modelId, default_cleared: defaultCleared };
-  }
-
-  async discover(providerId: string, bindingId?: string): Promise<DiscoveryResult> {
-    await this.ensureMigrated();
-    const state = await this.repository.read();
-    const provider = state.providers.find((item) => item.id === providerId);
-    if (!provider) throw resourceError("resource_not_found", `Provider '${providerId}' was not found`);
-    const bindings = state.bindings.filter((binding) => binding.provider_id === providerId && binding.enabled).sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
-    const binding = bindingId ? bindings.find((item) => item.id === bindingId) : bindings[0];
-    if (!binding) throw resourceError("no_routable_endpoint", `Provider '${providerId}' has no enabled binding`);
-    const endpoint = state.endpoints.find((item) => item.id === binding.endpoint_id);
-    if (!endpoint) throw resourceError("resource_not_found", `Endpoint '${binding.endpoint_id}' was not found`);
-    const credential = endpoint.credential_ref ? await this.credentials.getForRuntime(endpoint.credential_ref) : null;
-    if (provider.auth_kind !== "none" && (!credential || !credential.secret)) throw resourceError("no_routable_endpoint", "Provider endpoint credential is not configured");
-    const settings = await this.settings.read();
-    const allowPrivate = endpoint.network_policy?.allow_private ?? (settings.allow_private_providers !== false && process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0");
-    const response = await safeConnectorFetch(discoveryPath(endpoint), {
-      allowPrivate,
-      maxRedirects: 3,
-      maxResponseBytes: MAX_MODEL_DISCOVERY_BYTES,
-      timeoutMs: 10_000,
-      headers: { ...authHeaders(endpoint.protocol, credential?.secret ?? null), ...(binding.headers_policy ?? {}) },
-    }).catch((error) => { throw resourceError("endpoint_probe_failed", error instanceof Error ? error.message : String(error)); });
-    const payload = await readBoundedJson(response).catch((error) => { throw resourceError("endpoint_probe_failed", error instanceof Error ? error.message : String(error)); });
-    if (!response.ok) throw resourceError("endpoint_probe_failed", redactSecret(String(payload.error ?? payload.message ?? `endpoint returned ${response.status}`), credential?.secret));
-    await this.updateHealth(endpoint.id, "ready", null);
-    const rows = modelRows(payload);
-    if (rows.length === 0) throw resourceError("discovery_empty", "No models were returned by this endpoint");
-    const discoveredAt = now();
-    await this.repository.update((current) => {
-      for (const row of rows) {
-        const existing = current.models.find((model) => model.provider_id === providerId && model.model_id === row.id);
-        const patch = capabilityPatchFromPayload(row.raw);
-        const resolved = resolveCapabilities(row.id, [
-          ...(existing ? [{ ...existing.capabilities, source: existing.capability_source, verified_at: existing.verified_at }] : []),
-          { ...patch, source: "discovery" },
-        ]);
-        const next: Model = {
-          provider_id: providerId,
-          model_id: row.id,
-          display_name: `${provider.name} · ${row.id}`,
-          enabled: existing?.enabled ?? true,
-          capabilities: resolved.capabilities,
-          capability_source: resolved.capability_source,
-          verified_at: existing?.verified_at ?? null,
-          discovered_at: discoveredAt,
-        };
-        if (existing) Object.assign(existing, next);
-        else current.models.push(next);
-      }
-    });
-    if (await egressAuditEnabled()) await recordEgress({ connector_type: "connector", connector_id: binding.id, target_domain: endpoint.base_url, approved: true, note: `Provider model discovery provider_id=${providerId} binding_id=${binding.id} endpoint_id=${endpoint.id}` });
-    const models = await this.listModels({ provider_id: providerId });
-    return { provider: await this.getProvider(providerId), binding_id: binding.id, endpoint_id: endpoint.id, models, warnings: [] };
-  }
-
+  }): Promise<{ provider: Provider; endpoint: Endpoint; binding: ProviderEndpointBinding; models: Model[] }> { return upsertLegacyProvider(this.context, input); }
+  updateProvider(id: string, input: UpdateProviderRequest): Promise<Provider> { return updateProvider(this.context, id, input); }
+  deleteProvider(id: string, cascade = false): Promise<{ id: string; removed_models: number; removed_bindings: number }> { return deleteProvider(this.context, id, cascade); }
+  createCustomProvider(input: { name: string; base_url: string; protocol?: Endpoint["protocol"]; api?: Endpoint["api"]; data_egress?: Endpoint["data_egress"]; auth?: { kind: "api_key" | "none"; secret?: string } | null; models?: string[] }): Promise<{ provider: Provider; endpoint: Endpoint; credential: CredentialMetadata | null; binding: ProviderEndpointBinding; discovery?: { model_count: number }; discovery_error?: string }> { return createCustomProvider(this.context, input); }
+  updateCustomProvider(id: string, input: { name?: string; base_url?: string; api?: Endpoint["api"]; auth?: { kind?: "api_key" | "none"; secret?: string } | null }): Promise<{ provider: Provider; endpoint: Endpoint; binding: ProviderEndpointBinding }> { return updateCustomProvider(this.context, id, input); }
+  deleteCustomProvider(id: string): Promise<{ id: string; removed_endpoints: number; removed_credentials: number }> { return deleteCustomProvider(this.context, id); }
+  testProviderConfiguration(input: { protocol: Endpoint["protocol"]; base_url: string; api?: Endpoint["api"]; auth?: { kind: "api_key" | "none"; secret?: string } | null }): Promise<{ ok: true; health: "ready"; models: Array<{ id: string; display_name: string; kind?: "chat" | "embedding" | "rerank" | "unknown"; capabilities: CapabilityPatch }> }> { return testProviderConfiguration(this.context, input); }
+  listEndpoints(): Promise<Endpoint[]> { return listEndpoints(this.context); }
+  getEndpoint(id: string): Promise<Endpoint> { return getEndpoint(this.context, id); }
+  createEndpoint(input: CreateEndpointRequest): Promise<Endpoint> { return createEndpoint(this.context, input); }
+  updateEndpoint(id: string, input: UpdateEndpointRequest): Promise<Endpoint> { return updateEndpoint(this.context, id, input); }
+  deleteEndpoint(id: string, cascade = false): Promise<{ id: string; removed_bindings: number }> { return deleteEndpoint(this.context, id, cascade); }
+  setEndpointEnabled(id: string, enabled: boolean): Promise<Endpoint> { return setEndpointEnabled(this.context, id, enabled); }
+  probeEndpoint(id: string): Promise<HealthResult> { return probeEndpoint(this.context, id); }
+  listBindings(filters: { provider_id?: string; endpoint_id?: string } = {}): Promise<ProviderEndpointBinding[]> { return listBindings(this.context, filters); }
+  createBinding(input: CreateBindingRequest): Promise<ProviderEndpointBinding> { return createBinding(this.context, input); }
+  updateBinding(id: string, input: UpdateBindingRequest): Promise<ProviderEndpointBinding> { return updateBinding(this.context, id, input); }
+  deleteBinding(id: string): Promise<{ id: string }> { return deleteBinding(this.context, id); }
+  listModels(filters: { provider_id?: string; available?: boolean } = {}, catalog?: RuntimeCatalog): Promise<ModelRead[]> { return listModels(this.context, filters, catalog); }
+  getModel(providerId: string, modelId: string): Promise<ModelRead> { return getModel(this.context, providerId, modelId); }
+  updateModel(providerId: string, modelId: string, body: Record<string, unknown>): Promise<ModelRead> { return updateModel(this.context, providerId, modelId, body); }
+  applyRuntimeCapabilities(providerId: string, modelId: string, patch: Partial<ModelCapabilities>): Promise<Model | null> { return applyRuntimeCapabilities(this.context, providerId, modelId, patch); }
+  deleteModel(providerId: string, modelId: string): Promise<{ provider_id: string; model_id: string; default_cleared: boolean }> { return deleteModel(this.context, providerId, modelId); }
+  discover(providerId: string, bindingId?: string): Promise<DiscoveryResult> { return discover(this.context, providerId, bindingId); }
   async migrationStatus(): Promise<MigrationResult> {
     return this.ensureMigrated();
   }
-
   async modelPreferences(): Promise<{ default_model: string | null; thinking: string; compaction_enabled: boolean; compaction_threshold_percent: number }> {
     await this.ensureMigrated();
     const settings = await this.settings.read();
@@ -1099,74 +130,6 @@ export class ModelResourceService {
       compaction_threshold_percent: typeof settings.compaction_threshold_percent === "number" ? settings.compaction_threshold_percent : 85,
     };
   }
-
-  private async readRuntimeCatalog() {
-    if (!this.runtimeCatalog) return { schemaVersion: 1 as const, providers: [] };
-    try { return await this.runtimeCatalog.getCatalog(); }
-    catch (error) {
-      if (process.env.NODE_ENV !== "test") throw error;
-      return { schemaVersion: 1 as const, providers: [] };
-    }
-  }
-
-  private async systemModelReads(state: Awaited<ReturnType<ModelResourceRepository["read"]>>, catalog: RuntimeCatalog, credentials: CredentialReader = this.credentials): Promise<ModelRead[]> {
-    const result: ModelRead[] = [];
-    for (const provider of catalog.providers) {
-      const ref = state.credential_refs[provider.id];
-      const hasCredential = Boolean(ref && await credentials.getForRuntime(ref)?.then((value) => value?.secret)) || provider.auth.configured;
-      const available = hasCredential || (!provider.auth.apiKey && !provider.auth.oauth);
-      for (const entry of provider.models) {
-        const modelId = entry.id;
-        const capabilities = resolveCapabilities(modelId, [{ reasoning: entry.reasoning, thinking_levels: entry.reasoning ? entry.thinkingLevels ?? ["off", "minimal", "low", "medium", "high"] : ["off"], context_window: entry.contextWindow || null, max_output_tokens: entry.maxTokens || null, vision: entry.input.includes("image"), source: "provider" }]);
-        result.push({
-          provider_id: provider.id,
-          model_id: modelId,
-          display_name: `${provider.name} · ${entry.name}`,
-          enabled: available,
-          capabilities: capabilities.capabilities,
-          capability_source: capabilities.capability_source,
-          verified_at: null,
-          discovered_at: null,
-          id: canonicalModelRef(provider.id, modelId),
-          available,
-          ...(available ? {} : { availability_reason: provider.auth.oauth && !provider.auth.apiKey ? "needs_login" : "missing_credential" }),
-          routes: [],
-        });
-      }
-    }
-    return result;
-  }
-
-  private async updateHealth(id: string, health: Endpoint["health"], error: string | null): Promise<HealthResult> {
-    return this.repository.update((state) => {
-      const endpoint = state.endpoints.find((item) => item.id === id);
-      if (!endpoint) throw resourceError("resource_not_found", `Endpoint '${id}' was not found`);
-      endpoint.health = health;
-      endpoint.last_checked_at = now();
-      endpoint.last_error = error;
-      endpoint.updated_at = now();
-      return structuredClone(endpoint);
-    });
-  }
 }
-
-export function providerReadToLegacy(provider: ProviderRead): Record<string, unknown> {
-  return {
-    id: provider.id,
-    name: provider.name,
-    models: provider.models,
-    has_key: provider.has_key,
-    auth: {
-      kind: provider.auth_kind,
-      api_key_supported: provider.auth_kind === "api_key" || provider.auth_kind === "api_key_or_oauth",
-      oauth_supported: provider.auth_kind === "oauth" || provider.auth_kind === "api_key_or_oauth",
-      login_supported: false,
-    },
-    credential_status: provider.credential_status,
-    enabled: provider.enabled,
-  };
-}
-
-export function modelResourceHash(value: string): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, 16);
-}
+export type { ProviderRead, DiscoveryResult, HealthResult } from "./operations/types.js";
+export { providerReadToLegacy, modelResourceHash } from "./operations/compatibility.js";

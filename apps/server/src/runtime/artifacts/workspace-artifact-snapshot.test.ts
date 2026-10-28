@@ -2,7 +2,7 @@ import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { diffWorkspaceSnapshots, previewKind, previewMime, snapshotWorkspace, type WorkspaceSnapshotEntry } from "./workspace-artifact-snapshot.js";
+import { diffWorkspaceSnapshots, previewKind, previewMime, snapshotWorkspace} from "./workspace-artifact-snapshot.js";
 
 const cleanup: string[] = [];
 

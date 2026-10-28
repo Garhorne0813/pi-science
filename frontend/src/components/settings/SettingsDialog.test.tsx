@@ -1,3 +1,4 @@
+import { settingsSchema } from "@pi-science/contracts";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -14,6 +15,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   const method = (init.method || "GET").toUpperCase();
+  if (url === "/api/memory/settings") return Promise.resolve(jsonResponse({...settingsSchema.parse({}),revision:0}));
   if (url.startsWith("/api/provider-views")) return Promise.resolve(jsonResponse({ providers: [] }));
   if (url.startsWith("/api/settings/config")) {
     return Promise.resolve(jsonResponse({ ok: true, providers: [], available_models: [], model: "", thinking: "high" }));
@@ -221,4 +223,13 @@ describe("SettingsDialog", () => {
     expect(closeIndex).toBeGreaterThan(generalIndex);
     expect(panelOrderIndex).toBeGreaterThan(closeIndex);
   });
+});
+
+it('opens the requested Memory section directly and resets ordinary Settings entry to General',async()=>{
+  renderDialog();act(()=>useUiStore.getState().openSettings('project','memory'));
+  expect(await screen.findByRole('tab',{name:'Memory'})).toHaveAttribute('aria-selected','true');
+  expect(await screen.findByRole('checkbox',{name:'Enable Memory'})).toBeInTheDocument();
+  expect(fetchMock.mock.calls.some(([url])=>url==='/api/memory/settings')).toBe(true);
+  act(()=>useUiStore.getState().closeSettings());act(()=>useUiStore.getState().openSettings('project'));
+  expect(await screen.findByRole('tab',{name:'General'})).toHaveAttribute('aria-selected','true');
 });

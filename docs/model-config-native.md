@@ -1,6 +1,6 @@
 # Native model configuration
 
-The governing requirements are [PRD v2: 完全替换](prd-model-config-v2-replacement.md).
+The governing requirements are [PRD v2: 完全替换](archive/prd-model-config-v2-replacement.md).
 This replaces the v1.1 staged legacy/shadow rollout. The sole backend is
 `pi_ai_v1`, enabled by default. Setting `PI_SCIENCE_MODEL_CONFIG_BACKEND` to
 `legacy`, `shadow`, or an unknown value fails validation. There is no runtime

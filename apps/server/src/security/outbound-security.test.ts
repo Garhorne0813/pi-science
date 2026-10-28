@@ -36,6 +36,16 @@ describe("validateConnectorOutboundUrl", () => {
     await expect(validateConnectorOutboundUrl("http://127.0.0.1:9000", { allowPrivate: true })).resolves.toBeInstanceOf(URL);
   });
 
+  it("leaves proxy-side DNS to the transport only when private destinations are permitted", async () => {
+    vi.stubEnv("NODE_USE_ENV_PROXY", "1"); vi.stubEnv("HTTPS_PROXY", "http://proxy:8080"); vi.stubEnv("NO_PROXY", "localhost");
+    try {
+      await expect(validateConnectorOutboundUrl("https://proxy-resolved.example/", { allowPrivate: true })).resolves.toBeInstanceOf(URL);
+      await expect(validateConnectorOutboundUrl("https://proxy-resolved.example/", { allowPrivate: false })).rejects.toThrow("ENOTFOUND");
+      vi.stubEnv("NO_PROXY", "proxy-resolved.example");
+      await expect(validateConnectorOutboundUrl("https://proxy-resolved.example/", { allowPrivate: true })).rejects.toThrow("ENOTFOUND");
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it("rejects hostnames resolving into private ranges (DNS rebinding baseline)", async () => {
     await expect(validateConnectorOutboundUrl("https://private.example.com/", { allowPrivate: false })).rejects.toThrow("private or reserved address");
     await expect(validateConnectorOutboundUrl("https://metadata.example.com/", { allowPrivate: false })).rejects.toThrow("private or reserved address");
@@ -159,7 +169,7 @@ describe("safeConnectorFetch", () => {
   });
 
   it("strips sensitive headers on cross-origin redirect hops but keeps same-origin headers", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = input instanceof URL ? input : new URL(String(input));
       if (url.hostname === "public.example.com") {
         return new Response(null, { status: 302, headers: { location: "http://other-public.example.com/echo" } });
@@ -187,6 +197,18 @@ describe("safeConnectorFetch", () => {
   it("keeps the total timeout alive while the response body is streaming", async () => {
     const response = await safeConnectorFetch(`${baseUrl}/slow-body`, { allowPrivate: true, timeoutMs: 150 });
     await expect(response.text()).rejects.toThrow("timed out");
+  });
+
+  it("preserves policy rejection when cancelling a discarded body also rejects", async () => {
+    const cancel = vi.fn(() => Promise.reject(new Error("transport cancellation failed")));
+    const body = new ReadableStream({ cancel });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { headers: { "content-length": "8192" } })));
+    try {
+      await expect(safeConnectorFetch("https://public.example.com/data", { maxResponseBytes: 256 })).rejects.toThrow("exceeds size limit");
+      expect(cancel).toHaveBeenCalledOnce();
+      // Give an unhandled rejection a turn to surface to the test runner.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it("enforces content-length size caps before reading the body", async () => {

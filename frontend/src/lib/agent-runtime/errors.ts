@@ -1,7 +1,7 @@
 /** Inline error rendering and missing-session detection for the runtime store. */
 
 import type { ThreadBlock } from "../../types/thread";
-import { useRuntimeStore } from "./store";
+import { runtimeStore } from "./store-access";
 
 /** Disambiguates errors rendered within the same millisecond. */
 let _errorSequence = 0;
@@ -11,7 +11,7 @@ export function appendRuntimeError(
   sessionId?: string | null,
   cwd?: string,
 ): void {
-  const current = useRuntimeStore.getState();
+  const current = runtimeStore.getState();
   if (sessionId && current.activeSessionId !== sessionId) return;
   if (cwd && current.cwd !== cwd) return;
   const errorBlock: ThreadBlock = {
@@ -21,7 +21,7 @@ export function appendRuntimeError(
     level: "error",
   };
   const nextBlocks = [...current.thread.blocks, errorBlock];
-  useRuntimeStore.setState({
+  runtimeStore.setState({
     thread: {
       blocks: nextBlocks,
       index: { ...current.thread.index, [errorBlock.id]: nextBlocks.length - 1 },

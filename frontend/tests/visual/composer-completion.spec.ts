@@ -1,5 +1,5 @@
 /** Browser acceptance for the unified composer completion (PRD
- *  docs/prd-pr114-main-adaptation.md §7 AC-01, AC-05, AC-07, AC-10, AC-22,
+ *  docs/archive/prd-pr114-main-adaptation.md §7 AC-01, AC-05, AC-07, AC-10, AC-22,
  *  AC-23, AC-24 and §8.5).
  *
  *  The fixture server answers the endpoints the other visual specs need, so
@@ -9,7 +9,7 @@
  *  stay at zero for the whole file, the accessibility test included.
  *
  *  This file also carries the browser acceptance for the inline structured
- *  references (PRD docs/prd-composer-inline-structured-references.md §7.1 and
+ *  references (PRD docs/archive/prd-composer-inline-structured-references.md §7.1 and
  *  §8C): a real keyboard undo/redo, and edits that reach the composer without
  *  an input transaction.
  *

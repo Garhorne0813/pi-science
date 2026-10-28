@@ -11,7 +11,7 @@ const LiveSessionPage = lazy(() => import("./routes/LiveSessionPage").then((m) =
 const SettingsPage = lazy(() => import("./routes/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const FilesPage = lazy(() => import("./routes/FilesPage").then((m) => ({ default: m.FilesPage })));
 const RunsPage = lazy(() => import("./routes/RunsPage").then((m) => ({ default: m.RunsPage })));
-const KnowledgePage = lazy(() => import("./routes/KnowledgePage").then((m) => ({ default: m.KnowledgePage })));
+const MemoryPage = lazy(() => import("./routes/MemoryPage").then((m) => ({ default: m.MemoryPage })));
 
 function LoadingFallback() {
   const { t } = useTranslation();
@@ -36,7 +36,7 @@ export const router = createBrowserRouter([
       { path: "workspace/:cwd/files", element: wrap(<FilesPage />) },
       { path: "workspace/:cwd/notebooks", element: <LegacyNotebooksRedirect /> },
       { path: "workspace/:cwd/runs", element: wrap(<RunsPage />) },
-      { path: "workspace/:cwd/knowledge", element: wrap(<KnowledgePage />) },
+      { path: "workspace/:cwd/memory", element: wrap(<MemoryPage />) },
       { path: "workspace/:cwd/*", element: <LegacyWorkspaceRedirect /> },
       { path: "workspace/:cwd/settings", element: wrap(<SettingsPage />) },
     ],
