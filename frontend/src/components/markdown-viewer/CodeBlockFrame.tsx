@@ -40,7 +40,10 @@ export function CodeBlockFrame({
 
   return (
     <div className="my-3 rounded-card bg-surface-2 text-[13px] leading-5">
-      <div className="sticky top-0 z-[6] flex items-center gap-2 rounded-t-card border-b border-faint bg-surface-2 px-3 py-1.5">
+      {/* The banner is chrome, not message prose: its language label and action
+          labels must not land in a text selection, or a quote would report words
+          the message never contained. */}
+      <div className="sticky top-0 z-[6] flex select-none items-center gap-2 rounded-t-card border-b border-faint bg-surface-2 px-3 py-1.5">
         {language && (
           <span className="min-w-0 truncate font-mono text-[11px] text-muted">{language}</span>
         )}

@@ -10,6 +10,7 @@ import {
   moveSessionName,
   type SessionInfo,
 } from "../client/pi-science-client";
+import { useMessageQuoteStore } from "../conversation/message-quote";
 import { replaceBrowserSessionRoute } from "./session-navigation";
 import { emptyThread, resetTurnBuffer } from "./folding/state";
 import { generations, turnState } from "./generations";
@@ -41,6 +42,9 @@ export function applySessionReplacements(replacements: SessionReplacement[]): st
 
   for (const replacement of relevant) {
     moveSessionName(state.cwd, replacement.oldId, resolveId(replacement.oldId));
+    // A pending quote is filed by session id. Re-issuing an id for the same
+    // conversation must carry the quote along, or it disappears mid-conversation.
+    useMessageQuoteStore.getState().migrateSession({ workspaceCwd: state.cwd, sessionId: replacement.oldId }, resolveId(replacement.oldId));
     // The old session id is gone — drop its message cache and SSE cursor so
     // they can't resurface or cause a stale resume on a reused id.
     clearCachedMessages(state.cwd, replacement.oldId);
