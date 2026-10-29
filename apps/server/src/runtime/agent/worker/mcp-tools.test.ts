@@ -15,9 +15,10 @@ import { CredentialStore } from "../../../model-resources/credential-store.js";
 
 // These SDK fixtures model policy in their synthetic snapshot. Database-backed
 // authority and publication failures are exercised by mcp-approval.test.ts.
-vi.mock("../../../mcp/runtime-policy.js", async () => {
+vi.mock("../../../mcp/runtime-policy.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../mcp/runtime-policy.js")>();
   const { loadProjectedSnapshot } = await import("../../shared/extensions/pi-science-mcp.js");
-  return { authorizeMcpConnector: vi.fn(async () => undefined), authorizeMcpTool: vi.fn(async (cwd: string, expected: { connectorId: string; toolName: string }) => {
+  return { ...actual, authorizeMcpConnector: vi.fn(async () => undefined), authorizeMcpTool: vi.fn(async (cwd: string, expected: { connectorId: string; toolName: string }) => {
     const server = Object.values(loadProjectedSnapshot(cwd).mcpServers).find((value) => value.__piScienceConnectorId === expected.connectorId)!;
     return (server.__piScienceAllowedTools as string[] | undefined)?.includes(expected.toolName) || server.approveTools === false
       || Array.isArray(server.approveTools) && !server.approveTools.includes(expected.toolName) ? "allow" : "ask";

@@ -1,5 +1,5 @@
 import { fingerprintMcpConnection } from "../../../mcp/connection-identity.js";
-import { authorizeMcpConnector, authorizeMcpTool } from "../../../mcp/runtime-policy.js";
+import { authorizeMcpConnector, authorizeMcpTool, mcpApprovalKey } from "../../../mcp/runtime-policy.js";
 import { redactMcpError } from "../../../mcp/diagnostics.js";
 import { readSessionApproval, sessionMode } from "../../sandbox/session-approval.js";
 import { acquireMcpCall } from "../../../mcp/call-scheduler.js";
@@ -166,14 +166,25 @@ export class AgentMcpTools {
               if (preauthorizedOnly) throw new Error(`Delegated MCP tool requires explicit preauthorization in MCP settings: ${name}: ${tool.name}`);
               const approvalStarted = Date.now();
               _onUpdate({ content: [], details: { approval: "waiting" } });
-              const approved = await bridge.confirmPermission(`Allow ${name}: ${tool.name}?`,
-                `Arguments: ${JSON.stringify(params).slice(0, 4_000)}`, context.abortSignal, _toolCallId,
-                { connectorId: server.__piScienceConnectorId!, toolName: tool.name,
-                  connectorRevision: server.__piScienceConnectorRevision, settingsRevision: server.__piScienceSettingsRevision });
-              approvalMs = Date.now() - approvalStarted;
-              _onUpdate({ content: [], details: { approval: "resolved" } });
-              approvedByUser = approved;
-              if (!approved) return { content: [{ type: "text", text: "MCP tool call was declined by the user" }], details: { declined: true, scheduling: { approval_ms: approvalMs } }, isError: true };
+              let outcome: "allowed" | "approved" | "declined";
+              try {
+                outcome = await bridge.withPermission(mcpApprovalKey({ projectId: server.__piScienceProjectId!, connectorId: server.__piScienceConnectorId!,
+                  toolName: tool.name, connectorRevision: server.__piScienceConnectorRevision!, settingsRevision: server.__piScienceSettingsRevision! }), async () => {
+                  currentPolicy(tool.name);
+                  if (approvalRevision !== undefined && sessionId && (await readSessionApproval(cwd, sessionId)).revision !== approvalRevision) throw new Error("MCP approval revision changed while queued; request fresh authorization");
+                  // Another worker may have saved Always allow while this call waited.
+                  if (await checkAuthority() === "allow") return "allowed";
+                  return await bridge.confirmPermission(`Allow ${name}: ${tool.name}?`,
+                    `Arguments: ${JSON.stringify(params).slice(0, 4_000)}`, context.abortSignal, _toolCallId,
+                    { connectorId: server.__piScienceConnectorId!, toolName: tool.name,
+                      connectorRevision: server.__piScienceConnectorRevision, settingsRevision: server.__piScienceSettingsRevision }) ? "approved" : "declined";
+                }, context.abortSignal);
+              } finally {
+                approvalMs = Date.now() - approvalStarted;
+                _onUpdate({ content: [], details: { approval: "resolved" } });
+              }
+              approvedByUser = outcome === "approved";
+              if (outcome === "declined") return { content: [{ type: "text", text: "MCP tool call was declined by the user" }], details: { declined: true, scheduling: { approval_ms: approvalMs } }, isError: true };
             }
             // Approval may race with connector disable/revocation. Recheck before dispatch.
             currentPolicy(tool.name);

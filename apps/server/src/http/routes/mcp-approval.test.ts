@@ -1,5 +1,7 @@
 import { saveSessionApproval } from "../../runtime/sandbox/session-approval.js";
 import { fingerprintMcpConnection } from "../../mcp/connection-identity.js";
+import { mcpApprovalKey } from "../../mcp/runtime-policy.js";
+import { runtimeApprovalQueue } from "../../runtime/agent/approval-queue.js";
 import { projectedConnectionFingerprint } from "../../mcp/runtime-projection.js";
 import { createServer } from "node:http";
 import { registerMcpRoutes } from "./mcp-routes.js";
@@ -67,7 +69,7 @@ async function fixture(withServer = false) {
   const pending = { type: "interaction.requested", sessionId: "session", requestId: "request", kind: "permission", method: "confirm",
     mcpGrant: { connectorId: connector.connector_id, toolName: "echo", connectorRevision: server.__piScienceConnectorRevision, settingsRevision: server.__piScienceSettingsRevision } };
   await events.publish(cwd, "session", pending);
-  const notify = vi.fn(async () => {
+  const notify = vi.fn(async (_sessionId: string, _cwd: string, _type: string, _params: Record<string, unknown>) => {
     events.resolvePendingInteraction(cwd, "session", "request");
     return { success: true };
   });
@@ -85,6 +87,118 @@ async function fixture(withServer = false) {
   };
   return { cwd, repository, workspaces, projection, credentials, origin, app, mcp, connector, events, pending, notify, approve, grants, authorize };
 }
+
+it.each(["always", "once", "save-failed"])("coordinates two live MCP workers through the approval route: %s", async (choice) => {
+  const f = await fixture(true);
+  const requested: Array<Array<Record<string, unknown>>> = [[], []];
+  const bridges = requested.map(events => new InteractionBridge(event => {
+    events.push(event);
+    void f.events.publish(f.cwd, "session", { ...event, requestId: event.id, sessionId: "session" });
+  }));
+  f.notify.mockImplementation(async (_session, _cwd, type, params) => {
+    const owner = requested.findIndex(events => events.some(event => event.id === params.id));
+    const result = owner < 0 ? { success: false } : bridges[owner]!.notify(type, params);
+    if (result.success) f.events.resolvePendingInteraction(f.cwd, "session", String(params.id));
+    return result;
+  });
+  const workers = await Promise.all(bridges.map(bridge => AgentMcpTools.open(f.cwd, bridge, { PATH: process.env.PATH ?? "" })));
+  const calls: Array<Promise<unknown>> = [];
+  const finishCommit = deferred();
+  try {
+    for (const worker of workers) expect(worker.diagnostics).toEqual([]);
+    calls.push(workers[0]!.tools[0]!.execute("first", {}, () => undefined, {} as never, {} as never, {} as never));
+    await vi.waitFor(() => expect(requested[0]).toHaveLength(1));
+    calls.push(workers[1]!.tools[0]!.execute("second", {}, () => undefined, {} as never, {} as never, {} as never));
+    await vi.waitFor(() => expect(bridges[1]!.hasPending).toBe(true));
+    expect(requested[1]).toHaveLength(0);
+    const commitEntered = deferred();
+    const save = f.repository.allowPendingTool.bind(f.repository);
+    const commit = vi.spyOn(f.repository, "allowPendingTool").mockImplementationOnce(async (...args) => {
+      commitEntered.resolve(); await finishCommit.promise;
+      if (choice === "save-failed") throw new Error("simulated save failure");
+      return save(...args);
+    });
+    const approve = f.approve(String(requested[0]![0]!.id), { confirmed: true, alwaysAllow: choice !== "once" });
+    if (choice !== "once") {
+      await commitEntered.promise;
+      expect(requested[1]).toHaveLength(0);
+      finishCommit.resolve();
+    }
+    expect((await approve).json()).toMatchObject({ ok: true, ...(choice === "always" ? { persistentGrant: true } : choice === "save-failed" ? { persistentGrant: null } : {}) });
+    expect(await calls[0]).toMatchObject({ content: [{ type: "text", text: "echo executed" }] });
+    if (choice !== "always") {
+      await vi.waitFor(() => expect(requested[1]).toHaveLength(1));
+      bridges[1]!.notify("extension_ui_response", { id: requested[1]![0]!.id, confirmed: false });
+      expect(await calls[1]).toMatchObject({ details: { declined: true } });
+    } else {
+      expect(await calls[1]).toMatchObject({ content: [{ type: "text", text: "echo executed" }] });
+      expect(requested[1]).toHaveLength(0);
+    }
+    expect(commit).toHaveBeenCalledTimes(choice === "once" ? 0 : 1);
+  } finally {
+    finishCommit.resolve();
+    bridges.forEach(bridge => bridge.close());
+    await Promise.allSettled(calls);
+    await Promise.all(workers.map(worker => worker.close()));
+  }
+}, 20_000);
+
+it.each(["deny", "connector", "session"])("rechecks %s changes before showing a queued MCP approval", async (change) => {
+  const f = await fixture(true);
+  const events: Array<Record<string, unknown>> = [];
+  const first = new InteractionBridge(event => events.push(event));
+  const secondEvents: Array<Record<string, unknown>> = [];
+  const second = new InteractionBridge(event => secondEvents.push(event));
+  const workers = await Promise.all([first, second].map((bridge, index) => AgentMcpTools.open(f.cwd, bridge, { PATH: process.env.PATH ?? "" }, undefined, undefined, false, undefined, `queued-${index}`)));
+  const calls: Array<Promise<unknown>> = [];
+  try {
+    calls.push(workers[0]!.tools[0]!.execute("first", {}, () => undefined, {} as never, {} as never, {} as never));
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    calls.push(workers[1]!.tools[0]!.execute("second", {}, () => undefined, {} as never, {} as never, {} as never));
+    const failure = expect(calls[1]).rejects.toThrow(/changed|disabled/);
+    await vi.waitFor(() => expect(second.hasPending).toBe(true));
+    if (change === "deny") await f.mcp.setToolGrant(f.connector.connector_id, "echo", "deny", f.cwd);
+    if (change === "connector") await f.mcp.update(f.connector.connector_id, { revision: f.connector.revision, args: [...f.connector.args, "changed"] });
+    if (change === "session") await saveSessionApproval(f.cwd, "queued-1", "auto", 0);
+    first.notify("extension_ui_response", { id: events[0]!.id, confirmed: false });
+    expect(await calls[0]).toMatchObject({ details: { declined: true } });
+    await failure;
+    expect(secondEvents).toEqual([]);
+  } finally {
+    first.close(); second.close();
+    await Promise.allSettled(calls);
+    await Promise.all(workers.map(worker => worker.close()));
+  }
+}, 20_000);
+
+it("keeps later approvals waiting if a worker exits during the service-side grant commit", async () => {
+  const f = await fixture();
+  const snapshot = JSON.parse(await readFile(join(f.cwd, ".pi-science", "mcp-runtime.json"), "utf8"));
+  const key = mcpApprovalKey({ ...f.pending.mcpGrant, projectId: snapshot.project_id });
+  const exitWorker = await runtimeApprovalQueue.acquire(key);
+  const enteredCommit = deferred(), finishCommit = deferred();
+  const save = f.repository.allowPendingTool.bind(f.repository);
+  vi.spyOn(f.repository, "allowPendingTool").mockImplementationOnce(async (...args) => {
+    enteredCommit.resolve(); await finishCommit.promise; return save(...args);
+  });
+  const approval = f.approve();
+  let next: Promise<() => void> | undefined;
+  const enteredNext = vi.fn();
+  try {
+    await enteredCommit.promise;
+    next = runtimeApprovalQueue.acquire(key).then(release => { enteredNext(); return release; });
+    exitWorker(); await Promise.resolve();
+    expect(enteredNext).not.toHaveBeenCalled();
+    finishCommit.resolve();
+    expect((await approval).json()).toMatchObject({ persistentGrant: true });
+    (await next)();
+    expect((await f.authorize()).json()).toEqual({ decision: "allow" });
+  } finally {
+    finishCommit.resolve(); exitWorker();
+    await approval;
+    (await next)?.();
+  }
+});
 
 it("binds Always allow to a live request and persists only in its project after confirmation", async () => {
   const f = await fixture();

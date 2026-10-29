@@ -15,8 +15,10 @@ export class ConversationDelivery {
     return (this.subscribers.get(streamKey(cwd, sessionId))?.size ?? 0) > 0;
   }
   resolvePendingInteraction(cwd: string, sessionId: string, requestId: string): void {
+    this.resolveInteraction(streamKey(cwd, sessionId), requestId);
+  }
+  private resolveInteraction(key: string, requestId: string): void {
     if (!requestId) return;
-    const key = streamKey(cwd, sessionId);
     const pending = this.pendingInteractions.get(key);
     if (!pending) return;
 
@@ -107,6 +109,8 @@ export class ConversationDelivery {
           : previous.requestId !== payload.requestId;
       });
       this.pendingInteractions.set(key, [...remaining, record]);
+    } else if (type === "interaction.resolved") {
+      this.resolveInteraction(key, String(payload.requestId ?? ""));
     } else if (type === "questionnaire.finished") {
       const remaining = (this.pendingInteractions.get(key) ?? []).filter((candidate) => {
         const previous = recordPayload(candidate);
