@@ -4,6 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDiscovery } from '../dist/runtime/agent/worker/workspace-discovery-runner.js';
 const root = await mkdtemp(join(await realpath(tmpdir()), 'discovery-acceptance-'));
+// A clean runner has no initialized application state. Keep grant-directory
+// initialization inside the sandbox's writable fixture, never in the real home.
+const previousHome = process.env.PI_SCIENCE_HOME;
+process.env.PI_SCIENCE_HOME = join(root, 'service-state');
 try {
 const cwd = root + '/workspace'; const outside = root + '/private';
 await mkdir(cwd); await mkdir(outside); await mkdir(cwd + '/data'); await mkdir(cwd + '/holdout');
@@ -31,4 +35,8 @@ assert.equal((await runDiscovery('grep',cwd,{path:'.pi/skills',pattern:'guidance
 await assert.rejects(runDiscovery('ls',cwd,{path:'.pi/skills',limit:100}),/access_denied/);
 await assert.rejects(runDiscovery('grep',cwd,{path:'.pi/settings.json',pattern:'.',limit:100},undefined,skillFiles),/access_denied/);
 console.log('PASS: compiled ls/glob/grep + ignore, links, secrets, long Unicode match windows, and cancellation');
-} finally { await rm(root, { recursive: true, force: true }); }
+} finally {
+  if (previousHome === undefined) delete process.env.PI_SCIENCE_HOME;
+  else process.env.PI_SCIENCE_HOME = previousHome;
+  await rm(root, { recursive: true, force: true });
+}
