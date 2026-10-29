@@ -88,12 +88,16 @@ export async function doctor(args = [], env = process.env) {
     });
   }
   await check("Workspace discovery (ls/glob/grep)", async () => {
-    if (process.platform !== "linux") throw new Error("unavailable: native descriptor traversal has not been verified on this platform");
+    if (!["linux", "darwin"].includes(process.platform)) throw new Error("unavailable: native descriptor traversal has not been verified on this platform");
     const require = createRequire(join(root, "apps/server/package.json"));
     const { RE2 } = require("re2-wasm");
     if (!new RE2("probe", "u").test("probe")) throw new Error("RE2 backend failed");
-    const handle = await open("/", constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-    try { const directory = await opendir(`/proc/self/fd/${handle.fd}`); await directory.close(); }
+    const native = process.platform === "darwin" ? require(join(root, "apps/server/dist/native/workspace-discovery-darwin.node")) : undefined;
+    const handle = await open("/", constants.O_RDONLY | constants.O_DIRECTORY | (process.platform === "darwin" ? 0x20000000 : constants.O_NOFOLLOW));
+    try {
+      if (native) { if (!Array.isArray(native.names(handle.fd, 1))) throw new Error("native directory probe failed"); }
+      else { const directory = await opendir(`/proc/self/fd/${handle.fd}`); await directory.close(); }
+    }
     finally { await handle.close(); }
     return "Node descriptor traversal + RE2/WASM; no search subprocess or additional rg dependency";
   }, false);

@@ -97,3 +97,7 @@ Future work: versioned releases and independent install packages, a transactiona
 updater with stopped-state data backup and recovery, and uninstall that preserves
 user data by default. These commands are not implemented by this change. Backups
 must include application state and workspace-owned metadata; see [data ownership](architecture.md#persistence-and-data-ownership).
+
+### macOS discovery build prerequisites
+
+The `ls`/`glob`/`grep` backend builds a small Node-API module during server build. Enabling this optional macOS backend needs Xcode Command Line Tools (`xcode-select --install`) and local Node headers (`include/node/node_api.h`); `PI_SCIENCE_NODE_HEADERS` can select an existing headers directory. Automatic build/test/dev compilation warns and continues without discovery if these prerequisites are missing or compilation fails. The explicit `build:native` command requires success on macOS for CI and verification. No headers or compiler are needed at application startup once the module has been built. See [workspace discovery](workspace-discovery-tools.md#macos-build-and-verification) for direct-test and source-mode commands.

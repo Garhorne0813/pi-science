@@ -5,7 +5,7 @@ import type { discover } from "./workspace-discovery.js";
 /** Isolate matching/ignore parsing so even pathological glob metadata cannot
  * block Agent control, cancellation or the hard wall-clock deadline. No child
  * process, shell, environment-selected executable or host fallback is involved. */
-export async function runDiscovery(operation: Operation, cwd: string, input: DiscoveryInput, signal?: AbortSignal): Promise<Awaited<ReturnType<typeof discover>>> {
+export async function runDiscovery(operation: Operation, cwd: string, input: DiscoveryInput, signal?: AbortSignal, skillFiles: string[] = []): Promise<Awaited<ReturnType<typeof discover>>> {
   if (signal?.aborted) throw new DiscoveryError("cancelled");
   if (!discoveryBackendAvailable()) throw new DiscoveryError("tool_unavailable");
   const source = import.meta.url.endsWith(".ts");
@@ -14,11 +14,11 @@ export async function runDiscovery(operation: Operation, cwd: string, input: Dis
     (async () => {
       if (workerData.loader) { const { register } = await import(workerData.loader); register(); }
       const { discover, DiscoveryError } = await import(workerData.module);
-      try { parentPort.postMessage({ result: await discover(workerData.operation, workerData.cwd, workerData.input) }); }
+      try { parentPort.postMessage({ result: await discover(workerData.operation, workerData.cwd, workerData.input, undefined, workerData.skillFiles) }); }
       catch (error) { parentPort.postMessage({ code: error instanceof DiscoveryError ? error.code : 'tool_unavailable' }); }
     })().catch(() => parentPort.postMessage({ code: 'tool_unavailable' }));
   `, { eval: true, workerData: { module: new URL(`./workspace-discovery.${source ? "ts" : "js"}`, import.meta.url).href,
-    loader: source ? import.meta.resolve("tsx/esm/api") : undefined, operation, cwd, input },
+    loader: source ? import.meta.resolve("tsx/esm/api") : undefined, operation, cwd, input, skillFiles },
     resourceLimits: { maxOldGenerationSizeMb: 128 }, stdout: true, stderr: true });
   worker.stdout.resume(); worker.stderr.resume();
   let timer: ReturnType<typeof setTimeout> | undefined;

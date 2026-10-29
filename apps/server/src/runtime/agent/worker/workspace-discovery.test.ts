@@ -14,7 +14,73 @@ async function workspace() { const root = await mkdtemp(join(await import("node:
 async function put(root: string, path: string, text: string | Buffer) { await mkdir(join(root, path, ".."), { recursive: true }); await writeFile(join(root, path), text); }
 const run = (root: string, operation: "ls" | "glob" | "grep", input = {}) => discover(operation, root, { limit: 100, ...input });
 
-describe.skipIf(!discoveryBackendAvailable())("workspace discovery on real Linux descriptors", () => {
+describe.skipIf(!discoveryBackendAvailable())("workspace discovery on real native descriptors", () => {
+  it("explores only explicitly requested granted skills and retains the workspace default and .pi denials", async () => {
+    const root = await workspace();
+    const skill = join(root, ".pi/skills/review");
+    const files = [join(skill, "SKILL.md"), join(root, ".pi/skills/loose.md")];
+    await put(root, ".gitignore", ".pi/\n");
+    await put(root, "public.txt", "public");
+    await put(root, ".pi/skills/review/SKILL.md", "review guidance");
+    await put(root, ".pi/skills/review/helper.py", "print('review guidance')");
+    await put(root, ".pi/skills/review/.gitignore", "skip.py\n");
+    await put(root, ".pi/skills/review/skip.py", "PRIVATE");
+    await put(root, ".pi/skills/review/credentials.json", "PRIVATE");
+    await put(root, ".pi/skills/loose.md", "standalone guidance");
+    await put(root, ".pi/skills/sibling.txt", "PRIVATE");
+    await put(root, ".pi/skills/disabled/SKILL.md", "PRIVATE");
+    await put(root, ".pi/settings.json", "PRIVATE");
+    const call = (operation: "ls" | "glob" | "grep", input = {}) => discover(operation, root, { limit: 100, ...input }, undefined, files);
+    expect((await call("ls", { path: ".pi" })).details.result.entries).toEqual([{ path: ".pi/skills/", type: "directory" }]);
+    expect((await call("ls", { path: ".pi/skills" })).details.result.entries).toEqual([
+      { path: ".pi/skills/loose.md", type: "file" }, { path: ".pi/skills/review/", type: "directory" },
+    ]);
+    expect((await call("glob", { path: ".pi/skills", pattern: "**/*" })).details.result.files).toEqual([
+      ".pi/skills/loose.md", ".pi/skills/review/SKILL.md", ".pi/skills/review/helper.py",
+    ]);
+    expect((await call("grep", { path: ".pi/skills", pattern: "guidance" })).details.result.matches).toHaveLength(3);
+    expect((await call("glob", { pattern: "**/*" })).details.result.files).toEqual(["public.txt"]);
+    expect((await call("grep", { pattern: "guidance" })).details.result.matches).toEqual([]);
+    for (const path of [".pi", ".pi/settings.json", ".pi/skills/disabled", ".pi/skills/sibling.txt", ".pi/skills/review/credentials.json"]) {
+      await expect(call("grep", { path, pattern: "PRIVATE" })).rejects.toThrow("access_denied");
+    }
+    await expect(run(root, "ls", { path: ".pi/skills" })).rejects.toThrow("access_denied");
+  });
+
+  it("passes trusted skill files to the discovery worker and rechecks them on each invocation", async () => {
+    const root = await workspace(); await put(root, ".pi/skills/review/SKILL.md", "review guidance");
+    let enabled = [join(root, ".pi/skills/review/SKILL.md")];
+    const tools = workspaceDiscoveryTools({ cwd: root, skillFiles: async () => enabled });
+    const env = new NodeExecutionEnv({ cwd: root });
+    const invocation = { operationId: "op", invocationId: "call", turnId: "turn", getMemo: async () => undefined, setMemo: async () => {} };
+    const ls = tools.find(tool => tool.name === "ls")!;
+    try {
+      const call = (args: unknown) => ls.execute("call", args, () => {}, { env }, invocation, BACKGROUND_CONTEXT);
+      expect(JSON.stringify(await call({ path: ".pi/skills" }))).toContain("review/");
+      await expect(call({ path: ".pi/skills", skillFiles: enabled })).rejects.toThrow("invalid_input");
+      enabled = [];
+      await expect(call({ path: ".pi/skills" })).rejects.toThrow("access_denied");
+    } finally { await env.cleanup(BACKGROUND_CONTEXT); }
+  });
+
+  it("does not follow aliases or hardlinks inside an explicitly granted skill directory", async () => {
+    const root = await workspace(); const outside = await workspace();
+    await put(root, ".pi/skills/review/SKILL.md", "guidance");
+    await put(outside, "secret.txt", "PRIVATE");
+    const skill = join(root, ".pi/skills/review");
+    const files = [join(skill, "SKILL.md")];
+    await symlink(outside, join(skill, "alias"));
+    await symlink(join(outside, "secret.txt"), join(skill, "alias.txt"));
+    await link(join(outside, "secret.txt"), join(skill, "hard.txt"));
+    for (const operation of ["ls", "glob", "grep"] as const) {
+      const result = await discover(operation, root, { path: ".pi/skills/review", pattern: operation === "glob" ? "**/*" : "PRIVATE", limit: 100 }, undefined, files);
+      expect(JSON.stringify(result)).not.toMatch(/PRIVATE|alias|hard.txt/);
+    }
+    for (const path of ["alias", "alias.txt", "hard.txt"]) {
+      await expect(discover("grep", root, { path: `.pi/skills/review/${path}`, pattern: "PRIVATE", limit: 100 }, undefined, files)).rejects.toThrow("access_denied");
+    }
+  });
+
   it("lists one level, sorts paths, preserves Unicode, and bounds results", async () => {
     const root = await workspace();
     await put(root, "z.csv", "x"); await put(root, "a/data.csv", "x"); await put(root, "中文 空格.csv", "x");

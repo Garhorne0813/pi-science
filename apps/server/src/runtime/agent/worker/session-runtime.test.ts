@@ -440,6 +440,45 @@ describe("agent-core worker mutations", () => {
     expect(refreshed.readPaths).not.toContain(review);
   }, 20_000);
 
+  it.skipIf(!discoveryBackend.discoveryBackendAvailable())("shares current skill boundaries across exploration and read while keeping all .pi resources read-only", async () => {
+    const { instance, parts } = await runtime(async cwd => {
+      for (const name of ["review", "disabled", "secrets"]) {
+        await mkdir(join(cwd, ".pi/skills", name), { recursive: true });
+        await writeFile(join(cwd, ".pi/skills", name, "SKILL.md"), `---\nname: ${name}\ndescription: A test skill\n---\nGuidance.`);
+      }
+      await writeFile(join(cwd, ".pi/skills/review/helper.py"), "print('approved guidance')");
+      await writeFile(join(cwd, ".pi/skills/loose.md"), "---\nname: loose\ndescription: Standalone guidance\n---\nStandalone instructions.");
+      await writeFile(join(cwd, ".pi/skills/sibling.txt"), "PRIVATE");
+      await writeFile(join(cwd, ".pi/settings.json"), "PRIVATE");
+    }, { skillPolicy: { mode: "allowlist", skills: ["review", "loose"] } });
+    const tools = await parts.harness.getTools(context);
+    const invoke = (name: string, args: unknown) => tools.find(tool => tool.name === name)!.execute("skill-boundary", args, () => {}, { env: parts.executionEnv },
+      { operationId: "skill-boundary", invocationId: "call", turnId: "turn", getMemo: async () => undefined, setMemo: async () => {} }, context);
+    const result = await invoke("ls", { path: ".pi/skills" });
+    expect(JSON.stringify(result)).toContain("review/");
+    expect(JSON.stringify(result)).toContain("loose.md");
+    expect(JSON.stringify(result)).not.toMatch(/disabled|sibling/);
+    expect(JSON.stringify(await invoke("read", { path: ".pi/skills/review/helper.py" }))).toContain("approved guidance");
+    expect(JSON.stringify(await invoke("read", { path: ".pi/skills/loose.md" }))).toContain("Standalone instructions");
+    for (const path of [".pi/settings.json", ".pi/skills/sibling.txt", ".pi/skills/disabled/SKILL.md"]) {
+      await expect(invoke("read", { path })).rejects.toThrow();
+      await expect(invoke("grep", { path, pattern: "." })).rejects.toThrow("access_denied");
+    }
+    for (const name of ["write", "edit"]) await expect(invoke(name, { path: ".pi/skills/review/helper.py", content: "changed", edits: [{ oldText: "approved", newText: "changed" }] })).rejects.toThrow("read-only");
+    expect(await instance.command("set_skill_policy", { policy: { mode: "none" } })).toMatchObject({ success: true });
+    await expect(invoke("read", { path: ".pi/skills/loose.md" })).rejects.toThrow();
+    await expect(invoke("read", { path: ".pi/skills/review/helper.py" })).rejects.toThrow();
+    await expect(invoke("ls", { path: ".pi/skills" })).rejects.toThrow("access_denied");
+    expect(await instance.command("set_skill_policy", { policy: { mode: "inherit" } })).toMatchObject({ success: true });
+    await rm(join(parts.executionEnv.cwd, ".pi/skills/review/SKILL.md"));
+    expect(await instance.command("refresh_skills", {})).toMatchObject({ success: true });
+    await expect(invoke("read", { path: ".pi/skills/review/helper.py" })).rejects.toThrow();
+    await expect(invoke("ls", { path: ".pi/skills/review" })).rejects.toThrow("access_denied");
+    await expect(invoke("read", { path: ".pi/skills/secrets/SKILL.md" })).rejects.toThrow();
+    await expect(invoke("ls", { path: ".pi/skills/secrets" })).rejects.toThrow("access_denied");
+    expect(JSON.stringify(await invoke("read", { path: ".pi/skills/loose.md" }))).toContain("Standalone instructions");
+  }, 20_000);
+
   it("does not give ordinary bash processes model, server, or inherited credentials", async () => {
     vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "trusted-host");
     vi.stubEnv("PR115_PARENT_SECRET", "parent-test-secret");
@@ -631,7 +670,55 @@ it("removes saved discovery selections on an unsupported backend without marking
   expect(await session.getValue(discoveryToolsVersion, context)).toBeUndefined();
 });
 
-it.skipIf(process.platform === "linux")("keeps discovery inactive on the native unsupported platform", async () => {
+it.skipIf(!discoveryBackend.discoveryBackendAvailable())("registers and activates all three discovery tools on the native supported platform", async () => {
+  const { instance, parts } = await runtime();
+  expect((await parts.harness.getTools(context)).map(tool => tool.name)).toEqual(expect.arrayContaining(["ls", "glob", "grep"]));
+  expect(await instance.command("get_state", {})).toMatchObject({ data: { activeTools: expect.arrayContaining(["ls", "glob", "grep"]) } });
+});
+
+it.skipIf(!discoveryBackend.discoveryBackendAvailable())("executes model-requested ls, glob and grep through the native session harness", async () => {
+  const { instance, parts } = await runtime(async cwd => {
+    await mkdir(join(cwd, "data"));
+    await writeFile(join(cwd, "data/sample.csv"), "temperature,humidity\n10,20\n");
+    await writeFile(join(cwd, "data/skip.csv"), "PRIVATE\n");
+    await writeFile(join(cwd, ".gitignore"), "data/skip.csv\n");
+  }, { skillPolicy: { mode: "none" } });
+  const plan: Array<{ name: string; arguments: Record<string, string> }> = [
+    { name: "ls", arguments: { path: "." } },
+    { name: "glob", arguments: { pattern: "**/*.csv" } },
+    { name: "grep", arguments: { pattern: "temperature" } },
+  ];
+  let latest: ReturnType<typeof normalizeContext> | undefined;
+  let turns = 0;
+  vi.spyOn(parts.models, "streamSimple").mockImplementation((model, request) => {
+    latest = normalizeContext(request);
+    const step = plan[turns++];
+    const message: AssistantMessage = {
+      role: "assistant", content: step ? [{ type: "toolCall", id: `discovery-${turns}`, ...step }] : [{ type: "text", text: "Discovery complete" }],
+      api: model.api, provider: model.provider, model: model.id,
+      stopReason: step ? "toolUse" : "stop", timestamp: Date.now(),
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    };
+    const stream = createAssistantMessageEventStream();
+    stream.push({ type: "start", partial: { ...message, content: [] } });
+    stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
+    return stream;
+  });
+  expect(await instance.command("prompt", { message: "Discover the CSV and its temperature column." })).toMatchObject({ success: true });
+  await vi.waitFor(async () => {
+    expect(turns).toBe(4);
+    expect(await instance.command("get_state", {})).toMatchObject({ data: { busy: false } });
+  }, { timeout: 15000 });
+  const results = latest!.messages.filter(message => message.role === "toolResult");
+  expect(results.map(result => result.toolName)).toEqual(["ls", "glob", "grep"]);
+  expect(results.every(result => !result.isError)).toBe(true);
+  const data = results.map(result => JSON.parse(result.content.filter(block => block.type === "text").map(block => block.text).join("")));
+  expect(data[0].entries).toEqual([{ path: "data/", type: "directory" }]);
+  expect(data[1].files).toEqual(["data/sample.csv"]);
+  expect(data[2].matches).toEqual([{ path: "data/sample.csv", line: 1, column: 1, text: "temperature,humidity" }]);
+}, 20000);
+
+it.skipIf(discoveryBackend.discoveryBackendAvailable())("keeps discovery inactive on the native unsupported platform", async () => {
   const { instance } = await runtime();
   const state = await instance.command("get_state", {});
   for (const name of ["ls", "glob", "grep"]) expect((state as { data: { activeTools: string[] } }).data.activeTools).not.toContain(name);

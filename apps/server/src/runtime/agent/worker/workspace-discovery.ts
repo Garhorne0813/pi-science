@@ -1,12 +1,13 @@
-import { constants } from "node:fs";
-import { lstat, open, opendir, type FileHandle } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, win32 } from "node:path";
+import { lstat } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import ignore, { type Ignore } from "ignore";
 import picomatch from "picomatch";
 import type { RE2 } from "re2-wasm";
-import { workspaceReadBoundary } from "../../sandbox/workspace-read-authorization.js";
+import { workspaceReadBoundary, workspaceSkillResources } from "../../sandbox/workspace-read-authorization.js";
+import { isWithin } from "../../sandbox/policy.js";
 import { readRegularFile } from "../../sandbox/file-read.js";
+import { directory } from "./workspace-discovery-directory.js";
 import { operatorExecutionMode } from "../../sandbox/policy.js";
 
 import { DiscoveryError, discoveryBackendAvailable, type Operation, type DiscoveryInput, type DiscoveryResult } from "./workspace-discovery-contract.js";
@@ -23,22 +24,6 @@ function matcher(pattern: string) {
   if (pattern.startsWith("!") || /[()]/.test(pattern)) throw new DiscoveryError("unsupported_pattern");
   try { return picomatch(pattern, { strictBrackets: true, dot: false, noext: true, nonegate: true }); }
   catch { throw new DiscoveryError("unsupported_pattern"); }
-}
-/** Pin every ancestor, including the workspace root. No lookup follows a link.
- * All directory names are read through these descriptors, never readdir(path).
- * Other platforms fail closed until equivalent native guarantees are verified. */
-async function directory<T>(path: string, consume: (pinned: string) => Promise<T>): Promise<T> {
-  const handles: FileHandle[] = [];
-  try {
-    let handle = await open("/", constants.O_RDONLY | constants.O_DIRECTORY); handles.push(handle);
-    for (const part of path.split("/").filter(Boolean)) {
-      handle = await open(`/proc/self/fd/${handle.fd}/${part}`, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW); handles.push(handle);
-    }
-    const result = await consume(`/proc/self/fd/${handle.fd}`);
-    const entry = await lstat(path); const pinned = await handle.stat();
-    if (entry.dev !== pinned.dev || entry.ino !== pinned.ino) throw new DiscoveryError("access_denied");
-    return result;
-  } finally { for (const handle of handles.reverse()) await handle.close(); }
 }
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 // eslint-disable-next-line no-control-regex -- Explicitly strip terminal control bytes from untrusted text.
@@ -62,7 +47,7 @@ const preview = (value: string, matchIndex: number) => {
 };
 const MAX_FILE = 8 * 1024 * 1024;
 
-export async function discover(operation: Operation, cwd: string, input: DiscoveryInput, signal?: AbortSignal) {
+export async function discover(operation: Operation, cwd: string, input: DiscoveryInput, signal?: AbortSignal, skillFiles: string[] = []) {
   if (!discoveryBackendAvailable()) throw new DiscoveryError("tool_unavailable");
   try { operatorExecutionMode(); } catch { throw new DiscoveryError("tool_unavailable"); }
   const start = performance.now();
@@ -72,7 +57,15 @@ export async function discover(operation: Operation, cwd: string, input: Discove
   };
   checkpoint();
   const requested = discoveryPath(cwd, input.path ?? ".");
-  const boundary = await workspaceReadBoundary("discovery").catch(() => { throw new DiscoveryError("tool_unavailable"); });
+  const pi = join(cwd, ".pi"); const skills = join(pi, "skills");
+  // Explicit navigation is required: ordinary workspace searches never descend
+  // into .pi. Recursive searches of .pi itself would include unrelated config.
+  const resourceRequest = input.path !== undefined && isWithin(pi, requested);
+  if (resourceRequest && requested === pi && operation !== "ls") throw new DiscoveryError("access_denied");
+  const resources = resourceRequest ? workspaceSkillResources(cwd, skillFiles) : { files: [], directories: [] };
+  const skillRoots = resources.files;
+  const ignoreRoot = resourceRequest ? resources.directories.find(root => isWithin(root, requested)) ?? skills : cwd;
+  const boundary = await workspaceReadBoundary("discovery", skillRoots).catch(() => { throw new DiscoveryError("tool_unavailable"); });
   const authorize = (path: string) => { try { return boundary(path, cwd); } catch { throw new DiscoveryError("access_denied"); } };
   const target = authorize(requested);
   const pathOf = (path: string) => relative(cwd, path).replaceAll("\\", "/");
@@ -169,16 +162,15 @@ export async function discover(operation: Operation, cwd: string, input: Discove
         }
       }
       const children: Array<{ name: string; dir: boolean }> = [];
-      const stream = await opendir(pinned);
-      for await (const entry of stream) {
+      for await (const name of pinned.names(20_001 - visited)) {
         checkpoint(); if (++visited > 20_000) throw new DiscoveryError("resource_limit");
-        const child = resolve(path, entry.name);
-        if (!allowed(child) || entry.name.startsWith(".")) continue;
-        const info = await lstat(`${pinned}/${entry.name}`);
-        if (!(info.isDirectory() || info.isFile() && info.nlink === 1)) continue;
-        const dir = info.isDirectory();
+        const child = resolve(path, name);
+        if (!allowed(child) || name.startsWith(".")) continue;
+        const info = await pinned.stat(name);
+        if (!(info.directory || info.file && info.nlink === 1)) continue;
+        const dir = info.directory;
         if (operation !== "ls" && ignored(rules, child, dir)) continue;
-        children.push({ name: entry.name, dir });
+        children.push({ name, dir });
       }
       children.sort((a, b) => compare(a.name + (a.dir ? "/" : ""), b.name + (b.dir ? "/" : "")));
       for (const child of children) {
@@ -186,8 +178,8 @@ export async function discover(operation: Operation, cwd: string, input: Discove
         const absolute = resolve(path, child.name);
         if (!allowed(absolute)) continue;
         // Reopen via the pinned parent before publishing names.
-        const info = await lstat(`${pinned}/${child.name}`);
-        if (child.dir ? !info.isDirectory() : !info.isFile() || info.nlink !== 1) throw new DiscoveryError("access_denied");
+        const info = await pinned.stat(child.name);
+        if (child.dir ? !info.directory : !info.file || info.nlink !== 1) throw new DiscoveryError("access_denied");
         if (operation === "ls") { if (!push({ path: pathOf(absolute) + (child.dir ? "/" : ""), type: child.dir ? "directory" : "file" })) return; }
         else if (child.dir) await walk(absolute, depth + 1, rules);
         else await search(absolute);
@@ -199,8 +191,8 @@ export async function discover(operation: Operation, cwd: string, input: Discove
     // Ancestor ignore rules also apply when a narrower path is requested.
     const inherited: Rule[] = [];
     const parents: string[] = [];
-    for (let parent = dirname(target); parent !== dirname(cwd) && parent.startsWith(cwd); parent = dirname(parent)) parents.unshift(parent);
-    if (target !== cwd && operation !== "ls") for (const parent of parents) {
+    for (let parent = dirname(target); parent !== dirname(ignoreRoot) && isWithin(ignoreRoot, parent); parent = dirname(parent)) parents.unshift(parent);
+    if (target !== ignoreRoot && operation !== "ls") for (const parent of parents) {
       try { inherited.push({ base: parent, rules: ignore().add(await readIgnore(parent)) }); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error instanceof DiscoveryError ? error : new DiscoveryError("access_denied");
@@ -216,7 +208,7 @@ export async function discover(operation: Operation, cwd: string, input: Discove
     if (error instanceof DiscoveryError) throw error;
     throw new DiscoveryError((error as NodeJS.ErrnoException).code === "ENOENT" ? "not_found" : "access_denied");
   }
-  const finalBoundary = await workspaceReadBoundary("discovery").catch(() => { throw new DiscoveryError("tool_unavailable"); });
+  const finalBoundary = await workspaceReadBoundary("discovery", skillRoots).catch(() => { throw new DiscoveryError("tool_unavailable"); });
   const finalPaths = new Map<string, Array<{ path: string; directory: boolean }>>();
   for (const item of resultItems) {
     const name = typeof item === "string" ? item : item.path;
@@ -230,8 +222,8 @@ export async function discover(operation: Operation, cwd: string, input: Discove
     for (const [parent, group] of finalPaths) await directory(parent, async (pinned) => {
       for (const item of group) {
         checkpoint(); finalBoundary(item.path, cwd);
-        const info = await lstat(`${pinned}/${relative(parent, item.path)}`);
-        if (item.directory ? !info.isDirectory() : !info.isFile() || info.nlink !== 1) throw new DiscoveryError("access_denied");
+        const info = await pinned.stat(relative(parent, item.path));
+        if (item.directory ? !info.directory : !info.file || info.nlink !== 1) throw new DiscoveryError("access_denied");
       }
     });
   } catch (error) { throw error instanceof DiscoveryError ? error : new DiscoveryError("access_denied"); }
