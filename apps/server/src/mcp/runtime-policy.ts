@@ -9,6 +9,9 @@ export const mcpRuntimeConnectorSchema = z.object({
 export const mcpRuntimePolicySchema = mcpRuntimeConnectorSchema.extend({ toolName: z.string().min(1) });
 export type McpRuntimeConnectorRequest = z.infer<typeof mcpRuntimeConnectorSchema>;
 export type McpRuntimePolicyRequest = z.infer<typeof mcpRuntimePolicySchema>;
+export const mcpApprovalKey = (request: Omit<McpRuntimePolicyRequest, "connectionFingerprint">): string => JSON.stringify([
+  "mcp", request.projectId, request.connectorId, request.toolName, request.connectorRevision, request.settingsRevision,
+]);
 
 /** Snapshots discover tools; the control plane's database admits each call.
  * Missing/unreachable authority and stale revisions must never fall back to disk. */

@@ -29,6 +29,7 @@ import { remoteComputeTools } from "./remote-compute-tools.js";
 import { todoHarnessTool } from "./todo-tool.js";
 import { SubagentBridge, subagentHarnessTool, subagentControlTool } from "./subagent-tool.js";
 import { InteractionBridge } from "./interaction-bridge.js";
+import type { AcquireApproval } from "../approval-queue.js";
 import { questionnaireHarnessTool } from "./questionnaire-tool.js";
 import { webTools } from "../../../web/tools.js";
 import { AgentMcpTools } from "./mcp-tools.js";
@@ -124,7 +125,7 @@ export class SessionRuntime {
     this.fatal = fatal;
   }
 
-  static async open(options: AgentRuntimeStartOptions, publish: (event: RuntimeEvent) => void, fatal: (error: unknown) => void): Promise<SessionRuntime> {
+  static async open(options: AgentRuntimeStartOptions, publish: (event: RuntimeEvent) => void, fatal: (error: unknown) => void, acquireApproval?: AcquireApproval): Promise<SessionRuntime> {
     if (options.initialApproval) initialSessionApprovalSchema.parse(options.initialApproval);
     const runtimeEpoch = randomUUID();
     let eventSequence = 0;
@@ -136,7 +137,7 @@ export class SessionRuntime {
     const environment = toolEnvironment(options.env ?? {});
     const executionEnv = new NodeExecutionEnv({ cwd: options.cwd, shellEnv: environment });
     const repo = new JsonlSessionRepo({ fileSystem: executionEnv, sessionsRoot: requiredRoot });
-    const interactions = new InteractionBridge(emit);
+    const interactions = new InteractionBridge(emit, acquireApproval);
     let mcp: AgentMcpTools | undefined;
     let openedLane: AgentLane | undefined;
     let created: Session<JsonlSessionMetadata> | undefined;

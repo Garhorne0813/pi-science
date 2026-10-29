@@ -293,8 +293,15 @@ export function registerNodeSessionRoutes(
     else if (typeof body.confirmed === "boolean") payload.confirmed = body.confirmed;
     else if (body.value !== undefined) payload.value = body.value;
     else payload.cancelled = true;
+    if (saveGrant) payload.deferResolution = true;
     const result = await nodeSessionService.notify(request.params.session_id, cwd(request), "extension_ui_response", payload);
-    return result.success ? { ok: true, ...(saveGrant ? await saveGrant() : {}) } : sendFailure(reply, result);
+    if (!result.success) return sendFailure(reply, result);
+    if (!saveGrant) return { ok: true };
+    try { return { ok: true, ...await saveGrant() }; }
+    finally {
+      const completed = await nodeSessionService.notify(request.params.session_id, cwd(request), "extension_ui_response", { id: request.params.request_id, complete: true });
+      if (!completed.success) request.log.warn({ code: completed.code }, "MCP approval completion failed");
+    }
     });
   });
 

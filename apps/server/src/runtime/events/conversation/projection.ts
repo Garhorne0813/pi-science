@@ -199,6 +199,8 @@ export class ConversationProjection {
         });
         return records;
       }
+      case "interaction.resolved":
+        return [{ type: "interaction.resolved", sessionId, ...turnFields(turn), requestId: event.id }];
       case "interaction.requested": {
         turn.hadActivity = true;
         const method = String(eventField(event, "method") ?? "");

@@ -18,14 +18,23 @@ export function networkAccessTool(bridge: InteractionBridge, cwd?: string, sessi
         ? `HTTP and a TCP tunnel on port ${target.port} after TLS ClientHello inspection (the TLS handshake is not verified)`
         : "a TCP tunnel on port 443 after TLS ClientHello inspection (the TLS handshake is not verified)";
       const result = (status: string, message: string) => ({ content: [{ type: "text" as const, text: JSON.stringify({ status, message }) }], details: { status, domain, profile } });
+      const check = async () => {
       await assertGrantable(profile, domain);
       const before = await readNetworkGrants();
       const decision = before.rules.some((rule) => rule.profile === profile && rule.decision === "deny" && domainMatches(domain, rule.domain))
         ? "deny" : before.rules.find((rule) => rule.profile === profile && rule.domain === domain)?.decision;
-      if (decision === "deny") return result("denied", "A standing denial blocks this domain. The user can change it in Network settings.");
-      if (!target && cwd && await sessionMode(cwd, sessionId) !== "ask") return result("session_allowed", "Public port-443 tunnels after TLS ClientHello inspection are permitted by this session mode; the TLS handshake is not verified and existing denials still apply.");
+      if (decision === "deny") return { before, settled: result("denied", "A standing denial blocks this domain. The user can change it in Network settings.") };
+      if (!target && cwd && await sessionMode(cwd, sessionId) !== "ask") return { before, settled: result("session_allowed", "Public port-443 tunnels after TLS ClientHello inspection are permitted by this session mode; the TLS handshake is not verified and existing denials still apply.") };
       const config = await profileConfiguration();
-      if (decision === "allow" || config.profiles[profile]?.allowedDomains.some((pattern) => (!target || pattern.includes(":") || target.port === 443) && domainMatches(domain, pattern))) return result("already_allowed", `This destination is already allowed over ${access}.`);
+      if (decision === "allow" || config.profiles[profile]?.allowedDomains.some((pattern) => (!target || pattern.includes(":") || target.port === 443) && domainMatches(domain, pattern))) return { before, settled: result("already_allowed", `This destination is already allowed over ${access}.`) };
+      return { before, settled: undefined };
+      };
+      const initial = await check();
+      if (initial.settled) return initial.settled;
+      // Keep the grant commit inside admission; waiting workers read fresh state.
+      return bridge.withPermission(JSON.stringify(["network", profile, domain]), async () => {
+      const { before, settled } = await check();
+      if (settled) return settled;
       _update({ content: [], details: { approval: "waiting" } });
       const answer = await bridge.request(`Network access: ${domain}`, "", context.abortSignal, {
         toolCallId: _id, method: "select", kind: "permission", message: `${reason ? `${reason}\n\n` : ""}Allow ${domain} over ${access} for ${profile} across all projects? This persists until revoked in Settings → Network.`,
@@ -36,6 +45,7 @@ export function networkAccessTool(bridge: InteractionBridge, cwd?: string, sessi
       if (answer !== "allow" && answer !== "deny") return result("denied", "Network access was not granted.");
       await changeNetworkGrant({ domain, profile, decision: answer }, "approval", { targetRevision: before.targetRevisions[networkGrantTargetKey(profile, domain)] ?? 0 }, reason);
       return result(answer === "allow" ? "granted" : "denied", answer === "allow" ? "Access granted. Retry the blocked request; kernel state is preserved." : "A standing denial was saved.");
+      }, context.abortSignal);
     },
   };
 }

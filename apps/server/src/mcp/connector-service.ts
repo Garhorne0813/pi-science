@@ -1,7 +1,8 @@
 import { mcpConnectorFingerprint } from "./tool-cache-identity.js";
 export { mcpConnectorFingerprint } from "./tool-cache-identity.js";
 import { projectedConnectionFingerprint } from "./runtime-projection.js";
-import type { McpRuntimeConnectorRequest, McpRuntimePolicyRequest } from "./runtime-policy.js";
+import { mcpApprovalKey, type McpRuntimeConnectorRequest, type McpRuntimePolicyRequest } from "./runtime-policy.js";
+import { runtimeApprovalQueue } from "../runtime/agent/approval-queue.js";
 import { updateWebSettings, webSettingsSchema } from "../web/settings.js";
 import { redactMcpError } from "./diagnostics.js";
 export { redactMcpError } from "./diagnostics.js";
@@ -323,6 +324,8 @@ export class McpConnectorService {
       throw new McpServiceError("stale_approval", "MCP connector or policy changed; request fresh authorization", 409);
     }
     return async () => {
+      const release = runtimeApprovalQueue.hold(mcpApprovalKey({ projectId: project.project_id, connectorId, toolName,
+        connectorRevision: connector.revision, settingsRevision: connector.settings_revision }));
       let persisted = false;
       try {
         persisted = await this.repository.allowPendingTool(project.project_id, connectorId, toolName, connector.revision, connector.settings_revision, previous);
@@ -335,7 +338,7 @@ export class McpConnectorService {
         return { persistentGrant: persisted ? true : null, warning: persisted
           ? "Always allow was saved, but runtime policy refresh failed. Refresh the session before the next call; revoke access in MCP settings if needed."
           : "This call was allowed once. The Always allow save could not be verified; check MCP settings before retrying or assuming access was not saved." };
-      }
+      } finally { release(); }
     };
   }
 

@@ -391,6 +391,24 @@ describe("central conversation event hub", () => {
     expect(restored).toEqual([expect.objectContaining({ requestId: "request-2" })]);
   });
 
+  it("withdraws cancelled worker interactions from subscribers and refresh replay", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
+    const received: Record<string, unknown>[] = [];
+    await hub.subscribe(cwd, "cancelled-approval", undefined, record => { received.push(JSON.parse(record.data)); }, false);
+    const runtime = new EventEmitter();
+    hub.bind(cwd, runtime, { activeSessionId: () => "cancelled-approval", onBusy: () => undefined, onExit: () => undefined });
+    runtime.emit("event", { type: "interaction.requested", id: "cancelled", method: "confirm", title: "Approve?" });
+    runtime.emit("event", { type: "interaction.resolved", id: "cancelled" });
+    await hub.flush();
+    expect(received.map(event => event.type)).toEqual(["interaction.requested", "interaction.resolved"]);
+    expect(received[1]).toMatchObject({ requestId: "cancelled" });
+    expect(hub.pendingInteraction(cwd, "cancelled-approval", "cancelled")).toBeUndefined();
+    const restored: unknown[] = [];
+    await hub.subscribe(cwd, "cancelled-approval", undefined, record => { restored.push(JSON.parse(record.data)); }, false);
+    expect(restored).toEqual([]);
+  });
+
   it("keeps parallel permissions when a questionnaire finishes", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
