@@ -12,7 +12,8 @@ import { notebookRuntime, type CellResult } from "@/lib/notebook";
 import { RunnableCodeBlock } from "../conversation/RunnableCodeBlock";
 import { CodeViewer } from "../code-viewer/CodeViewer";
 import { CodeBlockFrame } from "./CodeBlockFrame";
-import { fileInspectorForPath } from "@/lib/artifacts";
+import { normalizeArtifactPath, pinnedFileInspector } from "@/lib/artifacts";
+import type { PublishedReference } from "@/lib/artifacts/artifact-versions";
 import { resolveMarkdownResource, type MarkdownResourceContext } from "@/lib/files/markdown-resources";
 import { useUiStore } from "@/lib/ui";
 import {
@@ -419,6 +420,7 @@ export function MarkdownViewer({
   codeChrome,
   mode = "final",
   textScale = 1,
+  pinnedReferences,
 }: {
   children: string;
   className?: string;
@@ -428,6 +430,9 @@ export function MarkdownViewer({
   codeChrome?: boolean;
   mode?: MarkdownRenderMode;
   textScale?: number;
+  /** Published versions the surrounding message owns, keyed by workspace path.
+   *  A file link resolves to its own message's version, not the newest one. */
+  pinnedReferences?: ReadonlyMap<string, PublishedReference>;
 }) {
   const s = STYLES[variant];
   const cwd = codeRunner?.cwd;
@@ -513,8 +518,11 @@ export function MarkdownViewer({
     const resolved = resolveMarkdownResource(href, context);
     if (resolved.kind !== "workspace") return;
     const filename = resolved.path.split(/[\\/]/).at(-1) || resolved.path;
-    openInspector(fileInspectorForPath(resolved.path, filename, context.root, cwd));
-  }, [context, cwd, openInspector]);
+    // Chat file links pin to the version this message referenced so later edits
+    // cannot silently change what the sentence pointed at.
+    const reference = pinnedReferences?.get(normalizeArtifactPath(resolved.path));
+    void pinnedFileInspector(resolved.path, filename, context.root, cwd, reference).then((inspector) => openInspector(inspector));
+  }, [context, cwd, openInspector, pinnedReferences]);
   const components = useMemo<Components>(() => ({
     p: ({ children }) => <p className={s.p}>{children}</p>,
     img: ({ src, alt }) => {

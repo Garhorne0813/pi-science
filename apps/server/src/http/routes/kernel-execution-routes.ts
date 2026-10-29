@@ -343,6 +343,12 @@ async function publishKernelOutputs(
     source: body.source,
     notebookPath: body.notebook_path,
     cellId: body.cell_id,
+    environment: {
+      language: body.language,
+      ...(body.environment_revision_id ? { environment_revision_id: body.environment_revision_id } : {}),
+      ...(body.notebook_path ? { notebook_path: body.notebook_path } : {}),
+      ...(body.cell_id ? { cell_id: body.cell_id } : {}),
+    },
     onFailure: (failure) => logger?.warn({
       execution_id: executionId,
       artifact_path: failure.path,

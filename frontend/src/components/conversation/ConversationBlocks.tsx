@@ -5,7 +5,8 @@ import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import type { AgentMessageBlock, StatusLineBlock, ThreadBlock, UserMessageBlock } from "../../types/thread";
 import { MarkdownViewer, type CodeRunner } from "../markdown-viewer/MarkdownViewer";
-import { fileInspectorFromBlock, refToArtifactBlock } from "../../lib/artifacts";
+import { normalizeArtifactPath, pinnedFileInspector, pinnedReferenceMap } from "../../lib/artifacts";
+import type { PublishedReference } from "../../lib/artifacts/artifact-versions";
 import { ReferencedArtifactStrip, TurnArtifactStrip } from "./TurnArtifactStrip";
 import { referencesFromMessage, visibleUserMessage } from "../../lib/files";
 import { agentActionTextByBlock } from "../../lib/conversation";
@@ -30,6 +31,9 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
   const visibleAgent = turn.finalAgent ?? turn.provisionalAgent;
   const finalText = turn.finalAgent?.parts.map((part) => part.text).join("") ?? "";
   const publishedPaths = turn.artifacts.flatMap((block) => block.artifacts.map((item) => item.path));
+  // References formed in this turn keep this turn's published versions, so a
+  // reloaded history message reopens what it referenced, not what is newest now.
+  const pinnedReferences = pinnedReferenceMap(turn.artifacts.flatMap((block) => block.artifacts));
   // A settled turn with both boundaries can report its own duration even when
   // nothing folded into the process trace.
   const showActivity = turn.active
@@ -40,9 +44,9 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
     <div data-thread-block-ids={turnBlockIds(turn).join(" ")} className="flex flex-col gap-0 scroll-mt-4">
       {turn.user && <UserMessage block={turn.user} />}
       {showActivity && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} turnStartedAt={turn.startedAt ?? turn.user?.timestamp} turnEndedAt={turn.endedAt ?? turn.finalAgent?.timestamp} part={isLiveLifecycle(turn.lifecycle) ? "content" : "both"} />}
-      {visibleAgent && <AgentMessage key={visibleAgent.id} block={visibleAgent} actionText={turn.finalAgent ? actionTextByBlock?.get(turn.finalAgent.id) : undefined} codeRunner={codeRunner} />}
+      {visibleAgent && <AgentMessage key={visibleAgent.id} block={visibleAgent} actionText={turn.finalAgent ? actionTextByBlock?.get(turn.finalAgent.id) : undefined} codeRunner={codeRunner} pinnedReferences={pinnedReferences} />}
       {(turn.active || turn.activityBlocks.length > 0) && isLiveLifecycle(turn.lifecycle) && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} turnStartedAt={turn.startedAt ?? turn.user?.timestamp} part="status" />}
-      {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} />)}
+      {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} pinnedReferences={pinnedReferences} />)}
       {turn.artifacts.map((block) => <TurnArtifactStrip key={block.id} artifacts={block.artifacts} cwd={codeRunner?.cwd} />)}
       {finalText && <ReferencedArtifactStrip text={finalText} cwd={codeRunner?.cwd} exclude={publishedPaths} />}
     </div>
@@ -74,14 +78,14 @@ function UserMessage({ block }: { block: UserMessageBlock }) {
   );
 }
 
-function AgentMessage({ block, actionText, codeRunner }: { block: AgentMessageBlock; actionText?: string; codeRunner?: CodeRunner }) {
+function AgentMessage({ block, actionText, codeRunner, pinnedReferences }: { block: AgentMessageBlock; actionText?: string; codeRunner?: CodeRunner; pinnedReferences?: ReadonlyMap<string, PublishedReference> }) {
   const { t } = useTranslation();
   const rawText = block.parts.map((part) => part.text).join("");
   if (!rawText) return null;
   const text = parseSuggestions(rawText).clean;
   const citations = extractCitations(text);
   return <div className="group/message">
-    <MarkdownViewer variant="chat" codeRunner={codeRunner} mode={block.partial ? "streaming" : "final"}>{text}</MarkdownViewer>
+    <MarkdownViewer variant="chat" codeRunner={codeRunner} mode={block.partial ? "streaming" : "final"} pinnedReferences={pinnedReferences}>{text}</MarkdownViewer>
     {citations.length > 0 && <div className="mt-2 flex flex-wrap items-center gap-1.5">
       <span className="text-[10px] text-muted">{t("conversation.sources")} ({citations.length})</span>
       {citations.map((citation, index) => <a key={`${citation.kind}:${citation.id}`} href={citation.url} target="_blank" rel="noreferrer" title={citation.id} className="rounded-full border border-border bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted hover:text-text">{index + 1} · {shortCitationId(citation.id)}</a>)}
@@ -90,20 +94,22 @@ function AgentMessage({ block, actionText, codeRunner }: { block: AgentMessageBl
   </div>;
 }
 
-function SystemBlock({ block }: { block: ThreadBlock }) {
-  if (block.kind === "status-line") return block.level === "error" || block.path ? <StatusLine block={block} /> : null;
+function SystemBlock({ block, pinnedReferences }: { block: ThreadBlock; pinnedReferences?: ReadonlyMap<string, PublishedReference> }) {
+  if (block.kind === "status-line") return block.level === "error" || block.path ? <StatusLine block={block} pinnedReferences={pinnedReferences} /> : null;
   return null;
 }
 
 function shortCitationId(id: string): string { return id.length <= 24 ? id : `${id.slice(0, 14)}…${id.slice(-8)}`; }
 
-function StatusLine({ block }: { block: StatusLineBlock }) {
+function StatusLine({ block, pinnedReferences }: { block: StatusLineBlock; pinnedReferences?: ReadonlyMap<string, PublishedReference> }) {
   const openInspector = useUiStore((state) => state.openInspector);
   const cwd = useRuntimeStore((state) => state.cwd);
   const tone = block.level === "error" ? "text-error-text" : block.level === "done" ? "text-ok-text" : "text-muted";
   if (block.path) {
-    const artifact = refToArtifactBlock(block.path);
-    return <button type="button" onClick={() => openInspector({ ...fileInspectorFromBlock(artifact as any), cwd } as any)} className={cn("flex items-center gap-2 text-xs hover:underline", tone)}>{block.text}</button>;
+    // A published reference opens the version its own turn reported; the live
+    // file only shows for paths that were never published.
+    const open = () => { void pinnedFileInspector(block.path!, undefined, "workspace", cwd, pinnedReferences?.get(normalizeArtifactPath(block.path!))).then((inspector) => openInspector(inspector)); };
+    return <button type="button" onClick={open} className={cn("flex items-center gap-2 text-xs hover:underline", tone)}>{block.text}</button>;
   }
   return <div className={cn("flex items-center gap-2 text-xs", tone)}>{block.level === "info" && <Loader2 size={14} className="animate-spin text-accent" />}{block.text}</div>;
 }

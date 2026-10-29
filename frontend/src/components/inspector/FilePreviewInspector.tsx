@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { Check, Code2, Eye, ExternalLink, FileSearch, History, Loader2, Pencil, X } from "lucide-react";
+import { Check, Code2, Eye, ExternalLink, FileSearch, GitCompare, History, Loader2, Pencil, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { FilePreviewInspector as FilePreviewInspectorT, FileRoot } from "../../types/thread";
 import { previewKindForName, type PreviewKind } from "@/lib/artifacts";
@@ -20,6 +20,7 @@ import { IconButton } from "@/components/ui/Icon";
 import { ImagePreview } from "./ImagePreview";
 import { PreviewZoomControls, clampPreviewScale } from "./PreviewZoomControls";
 import { ProvenancePanel } from "./ProvenancePanel";
+import { ArtifactDiffPanel } from "./ArtifactDiffPanel";
 import { TablePreview } from "./TablePreview";
 import { TableChart } from "./TableChart";
 import { canChart } from "@/lib/shared";
@@ -96,6 +97,7 @@ export function FilePreviewInspector({
   const [textScale, setTextScale] = useState(1);
   const supportsTextScale = kind === "text" || kind === "markdown" || (policy.supportsCode && tab === "code");
   const [showHistory, setShowHistory] = useState(false);
+  const [showDiff, setShowDiff] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -292,7 +294,7 @@ export function FilePreviewInspector({
     <div className="flex h-full flex-col">
       <header className={cn("preview-toolbar", compactHeader ? "min-h-9" : "min-h-12")}>
         {showTitle && <span className="truncate text-sm font-medium text-text">{data.filename}</span>}
-        {data.sha256 && <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">{t("filePreview.publishedVersion", { version: data.version ? `v${data.version}` : data.sha256.slice(0, 8) })}</span>}
+        {data.sha256 && <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">{t(data.versionSource === "latest" ? "filePreview.latestPublishedVersion" : "filePreview.publishedVersion", { version: data.version ? `v${data.version}` : data.sha256.slice(0, 8) })}</span>}
         <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">
           {data.artifact || t("filePreview.file")}
         </span>
@@ -309,7 +311,7 @@ export function FilePreviewInspector({
           </div>
         )}
         <div className="flex-1" />
-        {supportsTextScale && !showHistory && !editing && <PreviewZoomControls scale={textScale} onChange={setTextScale} />}
+        {supportsTextScale && !showHistory && !showDiff && !editing && <PreviewZoomControls scale={textScale} onChange={setTextScale} />}
         {leadingControls}
         {saveNotice && <span className="mr-1 text-xs text-ok-text">{saveNotice}</span>}
         {editing ? (
@@ -333,7 +335,7 @@ export function FilePreviewInspector({
             </button>
           </>
         ) : (
-          editable && !showHistory && (
+          editable && !showHistory && !showDiff && (
             <IconButton
               icon={Pencil}
               label={t("filePreview.edit")}
@@ -349,8 +351,18 @@ export function FilePreviewInspector({
           size="compact"
           className={showHistory ? "bg-surface-2 text-accent" : "text-text"}
           aria-pressed={showHistory}
-          onClick={() => setShowHistory((v) => !v)}
+          onClick={() => { setShowDiff(false); setShowHistory((v) => !v); }}
         />
+        {data.artifactId && (data.version ?? 0) > 1 && !showHistory && !editing && (
+          <IconButton
+            icon={GitCompare}
+            label={t("diff.comparePrevious")}
+            size="compact"
+            className={showDiff ? "bg-surface-2 text-accent" : "text-text"}
+            aria-pressed={showDiff}
+            onClick={() => setShowDiff((v) => !v)}
+          />
+        )}
         {showOpenExternally && kind !== "html" && !data.sha256 && (
           <IconButton
             icon={ExternalLink}
@@ -377,7 +389,10 @@ export function FilePreviewInspector({
       <div data-preview-viewport ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto bg-surface">
         <div className="h-full min-h-full">
         {showHistory && <ProvenancePanel path={data.path} language={data.language} cwd={cwd} />}
-        {!showHistory && editing && draft !== null && (
+        {showDiff && data.artifactId && (
+          <ArtifactDiffPanel cwd={cwd} artifactId={data.artifactId} toVersion={data.version ?? 0} root={data.root} path={data.path} />
+        )}
+        {!showHistory && !showDiff && editing && draft !== null && (
           <div className="flex h-full flex-col">
             <textarea
               value={draft}
@@ -389,12 +404,12 @@ export function FilePreviewInspector({
             {saveError && <div className="border-t border-border px-4 py-2 text-xs text-error-text">{saveError}</div>}
           </div>
         )}
-        {!showHistory && !editing && loading && (
+        {!showHistory && !showDiff && !editing && loading && (
           <div className="flex items-center gap-2 p-4 text-sm text-muted">
             <Loader2 size={15} className="animate-spin" /> {t("filePreview.loadingFile", { filename: data.filename })}
           </div>
         )}
-        {!showHistory && !editing && !loading && error && (
+        {!showHistory && !showDiff && !editing && !loading && error && (
           <PreviewError
             error={error}
             filename={data.filename}
@@ -404,7 +419,7 @@ export function FilePreviewInspector({
             onOpenExternally={kind === "html" || data.sha256 ? undefined : () => void openArtifactExternally(data.path, data.root, cwd)}
           />
         )}
-        {!showHistory && !editing && !loading && !error && (
+        {!showHistory && !showDiff && !editing && !loading && !error && (
           <Suspense fallback={<Note text={t("filePreview.loadingScientificViewer")} />}>
             <Body
               textScale={textScale}

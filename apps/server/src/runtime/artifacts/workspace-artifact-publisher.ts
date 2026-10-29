@@ -42,6 +42,12 @@ export interface PublishWorkspaceArtifactOptions {
   onFailure?: (failure: WorkspaceArtifactPublishFailure) => void;
   /** Trusted execution adapters may capture an already-authorized, stable file handle. */
   captureFile?: (target: string) => Promise<{ sha256: string; size: number }>;
+  /** Input files the produced version was derived from, frozen into the manifest
+   *  as minimal evidence. Hashes are optional; a path alone still records lineage. */
+  inputs?: Array<{ path: string; sha256?: string }>;
+  /** Environment summary (language, environment revision, kernel identity) frozen
+   *  into the manifest so the version stays interpretable after the run is gone. */
+  environment?: Record<string, unknown>;
 }
 
 export interface WorkspaceArtifactPublishFailure {
@@ -191,8 +197,11 @@ async function publishWorkspaceArtifact(
       sha256: digest.sha256,
       published_at: publishedAt,
       producer,
-      inputs: [],
-      environment: {},
+      inputs: (options.inputs ?? []).slice(0, 50).map((input) => ({
+        path: String(input.path ?? ""),
+        ...(input.sha256 ? { sha256: String(input.sha256) } : {}),
+      })).filter((input) => input.path),
+      environment: options.environment ?? {},
       verification: {
         status: "passed",
         checks: { exists: true, readable: true, size: digest.size, sha256: digest.sha256 },
