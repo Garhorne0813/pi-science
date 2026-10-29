@@ -139,3 +139,13 @@ describe("FilesPage", () => {
     expect(screen.queryByText("a.txt")).toBeNull();
   });
 });
+
+it("distinguishes initial failure from an empty directory and supports retry", async () => {
+  files.directory.mockResolvedValue({ entries: entries(["inner.txt"]), breadcrumbs: [] }).mockRejectedValueOnce(new Error("offline"));
+  render(<FilesPage />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("offline");
+  expect(screen.queryByText(i18n.t("files.empty"))).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await screen.findByText("inner.txt");
+  expect(screen.queryByRole("alert")).toBeNull();
+});

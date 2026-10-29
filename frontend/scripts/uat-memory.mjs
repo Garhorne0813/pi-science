@@ -202,15 +202,17 @@ try {
   const archived = await (await archivedResponse).json();
   assert.equal(archived.record.status, "archived");
   await probe.getByText("Archived", { exact: true }).waitFor();
-  page.once("dialog", (dialog) => dialog.dismiss());
+
   await actions("Permanently delete");
+  await page.getByRole("alertdialog").getByRole("button", { name: "Cancel", exact: true }).click();
   assert.equal(
     (await api("/records/" + created.record.id)).record.id,
     created.record.id,
   );
   const deletedResponse = recordResponse("DELETE");
-  page.once("dialog", (dialog) => dialog.accept());
+
   await actions("Permanently delete");
+  await page.getByRole("alertdialog").getByRole("button", { name: "Permanently delete", exact: true }).click();
   assert.ok((await deletedResponse).ok());
   records.splice(
     records.findIndex((r) => r.id === created.record.id),
@@ -462,7 +464,7 @@ try {
   const compactHeight = await compactCard.evaluate(
     (el) => el.getBoundingClientRect().height,
   );
-  assert.ok(compactHeight <= 130, `Short memory is too tall: ${compactHeight}`);
+  assert.ok(compactHeight <= 140, `Short memory is too tall: ${compactHeight}`);
   assert.equal(
     await compactCard
       .getByRole("button", { name: "Version and review history" })

@@ -39,12 +39,14 @@ test("workbench rename and delete remain usable", async ({ page }, testInfo) => 
   await expect(card).toBeVisible();
   expect(await page.locator("main").evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("workbench.png"), fullPage: true });
-  await card.getByRole("button", { name: "Rename", exact: true }).click();
+  await card.getByRole("button", { name: /^More actions:/ }).click();
+  await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
   await card.getByRole("textbox", { name: "Rename", exact: true }).fill("Renamed Study");
   await card.getByRole("textbox", { name: "Rename", exact: true }).press("Enter");
   const renamed = page.locator("article").filter({ has: page.getByRole("link", { name: "Open Renamed Study", exact: true }) });
   await expect(renamed).toBeVisible();
-  await renamed.getByRole("button", { name: "Delete project?", exact: true }).click();
+  await renamed.getByRole("button", { name: /^More actions:/ }).click();
+  await page.getByRole("menuitem", { name: "Delete project?", exact: true }).click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();

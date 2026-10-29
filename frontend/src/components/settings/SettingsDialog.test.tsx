@@ -62,19 +62,19 @@ describe("SettingsDialog", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("opens with the global scope label", async () => {
+  it("opens General settings with the device scope label", async () => {
     renderDialog();
     openSettings(null);
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveAttribute("aria-modal", "true");
-    expect(await screen.findByText("Global settings")).toBeInTheDocument();
+    expect(await screen.findByText("This device")).toBeInTheDocument();
   });
 
-  it("shows the workspace scope label when opened from a workspace", async () => {
+  it("keeps the device scope for General settings opened from a workspace", async () => {
     renderDialog();
     openSettings("proj");
     await screen.findByRole("dialog");
-    expect(await screen.findByText("Workspace settings")).toBeInTheDocument();
+    expect(await screen.findByText("This device")).toBeInTheDocument();
   });
 
   it("opens with the DeepSeek-sized desktop panel above a lighter overlay", async () => {

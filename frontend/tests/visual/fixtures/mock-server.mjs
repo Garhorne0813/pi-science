@@ -98,6 +98,9 @@ async function handleApi(req, res, url) {
     return json(res, 200, { paths: [] });
   }
 
+  // Native model configuration; keep this in sync with the live settings contract.
+  if (method === "GET" && pathname === "/api/model-config") return json(res, 200, { schema_version: 1, backend: "pi_ai_v1", revision: 1, config: { providers: {} }, credential_refs: {}, keyless_providers: [], legacy_providers: [], aliases: {}, providers: [] });
+  if (method === "GET" && pathname === "/api/model-config/catalog") return json(res, 200, { revision: 1, providers: [{ id: "deepseek", name: "DeepSeek", configured: true, source: "builtin", editable: true, legacy: false, revision: 1, config: null, authentication: { source: "managed", resolved: true }, auth_capabilities: { api_key: true, environment: true, keyless: false, subscription: false }, allowed_actions: ["details", "credential"], models: FIXTURES.config.available_models.map(m => ({ id: m.model, name: m.label, available: true, contextWindow: m.context_window, maxTokens: 8192, thinking_levels: m.thinking_levels, input: ["text"], source: "configured" })) }] });
   // Settings / model config.
   if (method === "GET" && pathname === "/api/provider-views") return json(res, 200, providerViewsFixture(FIXTURES.config));
   if (method === "GET" && pathname === "/api/settings/config") {
@@ -229,6 +232,8 @@ async function handleApi(req, res, url) {
 
 
   // Unified Memory and independently retained research archives.
+  if(method==='GET'&&pathname==='/api/memory/categories')return json(res,200,{categories:[]});
+  if(method==='GET'&&pathname==='/api/memory/project-settings')return json(res,200,{autoRecall:true});
   if(method==='GET'&&pathname==='/api/memory/summary')return json(res,200,{pendingCount:0,enabled:false});
   if(method==='GET'&&pathname==='/api/memory/records')return json(res,200,{records:[]});
   if(method==='GET'&&pathname==='/api/memory/reviews')return json(res,200,{records:[],proposals:[]});

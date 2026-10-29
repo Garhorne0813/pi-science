@@ -1,6 +1,8 @@
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { MoreHorizontal } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, Pin, PinOff, Pencil, Trash2, Activity, Search, Grid2X2, LayoutList, ArrowRight, Clock3, Sparkles, X, Settings } from "lucide-react";
+import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, Pin, PinOff, Activity, Search, Grid2X2, LayoutList, ArrowRight, Clock3, X, Settings } from "lucide-react";
 import { cn, useUiStore } from "../../lib/ui";
 import { preloadSettingsContent } from "../../components/settings/settings-loading";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
@@ -253,7 +255,7 @@ export function ProjectsPage() {
   return (
     <ErrorBoundary>
       <div className="h-full overflow-y-auto bg-bg">
-        <div className="mx-auto w-full max-w-[1360px] px-card pb-16 pt-8 sm:px-page lg:px-10 lg:pt-12">
+        <div className="mx-auto w-full max-w-[1360px] px-card pb-16 pt-page sm:px-page lg:px-8">
           <input
             ref={dirInputRef}
             type="file"
@@ -263,13 +265,13 @@ export function ProjectsPage() {
             aria-label={t("projects.openFolder")}
           />
 
-          <header className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
+          <header className="mb-card flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
             <div>
               <div className="mb-2 flex items-center gap-2 text-ui-caption font-semibold uppercase tracking-[0.16em] text-accent">
                 <span className="h-1.5 w-1.5 rounded-full bg-accent" />
                 {t("projects.workbench")}
               </div>
-              <h1 className="text-3xl font-semibold tracking-[-0.035em] text-text sm:text-4xl">{t("nav.projects")}</h1>
+              <h1 className="text-2xl font-medium tracking-tight text-text sm:text-[28px]">{t("nav.projects")}</h1>
               <p className="mt-2 max-w-xl text-sm leading-6 text-muted">{t("projects.description")}</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -301,40 +303,12 @@ export function ProjectsPage() {
             </div>
           ) : (
           <>
-          <div className="mb-9 grid gap-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
-            <section className="relative flex min-h-[215px] flex-col justify-between overflow-hidden rounded-2xl border border-border bg-surface-2 p-6 sm:p-7">
-              <div className="pointer-events-none absolute -right-14 -top-24 h-64 w-64 rounded-full border-[35px] border-accent/5" />
-              <div className="pointer-events-none absolute -bottom-28 right-20 h-52 w-52 rounded-full border-[26px] border-accent/5" />
-              <div className="relative">
-                <span className="mb-3 inline-flex items-center gap-2 rounded-full border border-accent/15 bg-accent/5 px-3 py-1 text-ui-caption font-medium text-text">
-                  <Sparkles size={13} /> {t("projects.overview")}
-                </span>
-                <h2 className="max-w-lg text-xl font-semibold leading-snug tracking-tight text-text sm:text-2xl">{t("projects.overviewTitle")}</h2>
-                <p className="mt-2 max-w-lg text-ui-body leading-6 text-muted">{t("projects.overviewDescription")}</p>
-              </div>
-              <div className="relative mt-6 flex flex-wrap items-end gap-x-9 gap-y-4">
-                <div><p className="text-2xl font-semibold tracking-tight tabular-nums text-text">{workspaces.length}</p><p className="mt-1 text-ui-caption text-muted">{t("projects.totalProjects")}</p></div>
-                <div><p className="text-2xl font-semibold tracking-tight tabular-nums text-text">{sessionsTotal}</p><p className="mt-1 text-ui-caption text-muted">{t("projects.totalSessions")}</p></div>
-                <div><p className="text-2xl font-semibold tracking-tight tabular-nums text-text">{pinnedTotal}</p><p className="mt-1 text-ui-caption text-muted">{t("projects.pinnedProjects")}</p></div>
-              </div>
-            </section>
-            <section className="flex min-h-[215px] flex-col justify-between rounded-2xl border border-border bg-surface-raised p-6 sm:p-7">
-              <div className="flex items-center gap-2 text-ui-caption font-medium text-muted"><Clock3 size={15} />{t("projects.lastEdited")}</div>
-              {lastWorkspace ? (
-                <div className="mt-5 min-w-0">
-                  <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-accent-soft text-accent"><FolderOpen size={20} /></div>
-                  <h3 className="truncate text-lg font-semibold tracking-tight text-text" title={lastWorkspace.name}>{lastWorkspace.name}</h3>
-                  <p className="mt-1 text-ui-caption text-muted">{t("projects.editedAgo", { time: timeAgo(lastWorkspace.last_activity_at ?? lastWorkspace.last_modified) })}</p>
-                  <Link to={"/workspace/" + encodeURIComponent(lastWorkspace.path)}
-                    className="mt-4 inline-flex items-center gap-1.5 text-ui-body font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
-                    {t("projects.continueProject")} <ArrowRight size={15} />
-                  </Link>
-                </div>
-              ) : (
-                <div className="mt-5"><h3 className="text-lg font-semibold text-text">{t("projects.startHere")}</h3><p className="mt-2 text-ui-body leading-6 text-muted">{t("projects.startHereDescription")}</p></div>
-              )}
-            </section>
-          </div>
+          <section className="mb-card flex flex-wrap items-center justify-between gap-card rounded-card border border-border bg-surface p-card">
+            <div className="min-w-0">
+              {lastWorkspace ? <><p className="text-ui-caption text-muted">{t("projects.lastEdited")}</p><Link className="mt-1 inline-flex max-w-full items-center gap-2 text-ui-body font-medium text-link" to={"/workspace/" + encodeURIComponent(lastWorkspace.path)}><span className="truncate">{lastWorkspace.name}</span><span className="shrink-0">{t("projects.continueProject")}</span><ArrowRight size={15} /></Link></> : <p className="text-ui-body text-muted">{t("projects.startHereDescription")}</p>}
+            </div>
+            <div className="flex flex-wrap gap-4 text-ui-caption text-muted"><span>{t("projects.totalProjects")}: {workspaces.length}</span><span>{t("projects.totalSessions")}: {sessionsTotal}</span><span>{t("projects.pinnedProjects")}: {pinnedTotal}</span></div>
+          </section>
 
           <section aria-labelledby="projects-library-title">
             <div className="mb-4 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
@@ -427,7 +401,7 @@ export function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingNam
   const isPinned = pinned.has(w.path);
   const isList = viewMode === "list";
 
-  const startEdit = (e: React.MouseEvent) => {
+  const startEdit = (e: { stopPropagation: () => void }) => {
     e.stopPropagation();
     setEditingName(w.path);
     setEditValue(w.name);
@@ -482,10 +456,7 @@ export function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingNam
           className={cn("flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-surface-2", isPinned ? "text-accent" : "text-muted hover:text-text")}>
           {isPinned ? <Pin size={15} fill="currentColor" /> : <PinOff size={15} />}
         </button>
-        <button type="button" onClick={startEdit} title={t("projects.rename")} aria-label={t("projects.rename")}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-text"><Pencil size={15} /></button>
-        <button type="button" onClick={() => handleDelete(w.path)} title={t("projects.deleteTitle")} aria-label={t("projects.deleteTitle")}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-error/10 hover:text-error-text"><Trash2 size={15} /></button>
+        <DropdownMenu.Root modal={false}><DropdownMenu.Trigger asChild><button type="button" aria-label={t("common.moreActions") + ": " + w.name} className="flex h-control w-control items-center justify-center rounded-input text-muted hover:bg-surface-hover"><MoreHorizontal size={16} /></button></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content align="end" sideOffset={4} collisionPadding={8} className="ui-popover z-[110] min-w-40 rounded-card p-1 text-ui-label text-text"><DropdownMenu.Item onSelect={startEdit} className="flex min-h-control items-center rounded-input px-3 outline-none data-[highlighted]:bg-surface-hover">{t("projects.rename")}</DropdownMenu.Item><DropdownMenu.Item onSelect={() => handleDelete(w.path)} className="flex min-h-control items-center rounded-input px-3 text-error-text outline-none data-[highlighted]:bg-surface-hover">{t("projects.deleteTitle")}</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>
         <button type="button" onClick={() => navigate("/workspace/" + encodeURIComponent(w.path) + "/runs")} title={t("runs.viewAll")} aria-label={t("runs.viewAll")}
           className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-accent"><Activity size={15} /></button>
       </div>

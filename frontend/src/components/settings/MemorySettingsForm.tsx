@@ -1,10 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { MemorySettings } from "@pi-science/contracts";
 import { Section } from "./Section";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSelectMenu } from "./SettingsSelectMenu";
+
+const draftKey = "pi-science.memory-settings-draft";
+export function clearMemorySettingsDraft() { try { sessionStorage.removeItem(draftKey); } catch { /* storage unavailable */ } }
 
 const inputClass =
   "h-9 w-full min-w-0 max-w-full rounded-input border border-border bg-bg px-3 text-ui-caption text-text outline-none transition-colors focus:border-accent focus:ring-1 focus:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-50";
@@ -14,14 +17,20 @@ export function MemorySettingsForm({
   busy,
   save,
   models = [],
+  onDirtyChange,
 }: {
   models?: Array<{ value: string; label: string }>;
+  onDirtyChange?: (dirty: boolean) => void;
   value: MemorySettings;
   busy: boolean;
   save: (value: Omit<MemorySettings, "revision">) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
-  const [s, set] = useState(value);
+  const [s, set] = useState(() => { try { const draft = JSON.parse(sessionStorage.getItem(draftKey) || "null"); if (draft?.recall && draft?.extraction && draft?.dream && draft?.budget && draft?.review) return draft as MemorySettings; } catch { /* invalid draft */ } return value; });
+  const dirty = JSON.stringify(s) !== JSON.stringify(value);
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
+  useEffect(() => { try { if (dirty) sessionStorage.setItem(draftKey, JSON.stringify(s)); else clearMemorySettingsDraft(); } catch { /* storage unavailable */ } }, [s, dirty]);
+  useEffect(() => { const guard = (event: BeforeUnloadEvent) => { if (dirty) { event.preventDefault(); event.returnValue = ""; } }; window.addEventListener("beforeunload", guard); return () => window.removeEventListener("beforeunload", guard); }, [dirty]);
   const toggle = (
     label: string,
     checked: boolean,
@@ -121,6 +130,7 @@ export function MemorySettingsForm({
         void save(rest);
       }}
     >
+      {s.revision !== value.revision && <p role="alert" className="text-ui-body text-warn-text">{t("memory.draftConflict")}</p>}
       <Section title={t("memory.title")}>
         <div className="divide-y divide-faint">
           {toggle("enable", s.enabled, (v) => set({ ...s, enabled: v }))}
@@ -175,7 +185,7 @@ export function MemorySettingsForm({
               )}
             </div>
           </Section>
-          <Section title="Dream">
+          <Section title={t("memory.dream")}>
             <div className="divide-y divide-faint">
               {toggle("enableDream", s.dream.enabled, (v) =>
                 set({ ...s, dream: { ...s.dream, enabled: v } }),
@@ -329,10 +339,12 @@ export function MemorySettingsForm({
           </Section>
         </>
       )}
-      <div className="flex items-center justify-end border-t border-faint pt-4">
+      <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-end gap-3 border-t border-border bg-surface-raised py-card">
+        <p aria-live="polite" className="mr-auto text-ui-caption text-muted">{dirty ? t("memory.draftKept") : t("memory.noChanges")}</p>
+        {dirty && <button type="button" disabled={busy} className="text-ui-label text-muted" onClick={() => { clearMemorySettingsDraft(); set(value); }}>{t("common.discard")}</button>}
         <button
           type="submit"
-          disabled={busy}
+          disabled={busy || !dirty}
           className="flex min-h-9 items-center gap-2 rounded-input bg-accent-fill px-3 text-ui-label font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-40"
         >
           {busy && <Loader2 size={14} className="animate-spin" />}

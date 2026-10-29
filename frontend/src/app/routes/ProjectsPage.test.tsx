@@ -149,7 +149,7 @@ describe("ProjectsPage loading", () => {
     fireEvent.click(screen.getByRole("button", { name: i18n.t("common.refresh") }));
     expect(await screen.findByRole("link", { name: "Open Recovered" })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.getAllByText(i18n.t("projects.totalProjects")).some(element => element.tagName === "P")).toBe(true);
+    expect(screen.getByText(i18n.t("projects.totalProjects") + ": 1")).toBeInTheDocument();
     client.clear();
   });
 

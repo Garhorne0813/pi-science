@@ -46,6 +46,7 @@ const TABS: { id: Tab; labelKey: string; titleKey: string; icon: LucideIcon }[] 
 export function SettingsContent({ scope, onClose, initialTab="general" }: { scope: string | null; onClose?: () => void; initialTab?: SettingsSection }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>(initialTab);
+  const deviceTab = tab === "general";
   const globalTab=tab==="network"||tab==="web-search"||tab==="memory";
   const [config, setConfig] = useState<SettingsConfig | null>(null);
   const [loading, setLoading] = useState(false);
@@ -169,14 +170,14 @@ export function SettingsContent({ scope, onClose, initialTab="general" }: { scop
               )}
             >
               <Icon icon={item.icon} size={18} className="h-[18px] w-[18px] shrink-0 md:h-4 md:w-4" />
-              <span className="hidden min-w-0 truncate md:inline">{t(item.labelKey)}</span>
+              <span className="hidden min-w-0 whitespace-normal text-left leading-4 md:inline">{t(item.labelKey)}</span>
             </button>
             </div>
           ))}
         </nav>
         <div className="mt-4 hidden border-t border-border px-3 py-4 md:block">
-          <p className="flex items-center gap-2 text-ui-caption font-medium text-text"><Icon icon={scope && !globalTab ? FolderOpen : Globe2} size={14} />{scope && !globalTab ? t("settings.scope.workspace") : t("settings.scope.global")}</p>
-          <p title={globalTab ? undefined : scope ?? undefined} className="mt-2 break-words text-ui-meta leading-relaxed text-muted">{(globalTab ? null : scope) || t(tab === "memory" ? "memory.globalScope" : tab === "web-search" ? "settings.webSearch.scopeHelp" : "settings.redesign.globalScopeHelp")}</p>
+          <p className="flex items-center gap-2 text-ui-caption font-medium text-text"><Icon icon={scope && !globalTab && !deviceTab ? FolderOpen : Globe2} size={14} />{scope && !globalTab && !deviceTab ? t("settings.scope.workspace") : t(deviceTab ? "settings.scope.device" : "settings.scope.global")}</p>
+          <p title={globalTab || deviceTab ? undefined : scope ?? undefined} className="mt-2 break-words text-ui-meta leading-relaxed text-muted">{(globalTab || deviceTab ? null : scope) || t(deviceTab ? "settings.scope.deviceHelp" : tab === "memory" ? "memory.globalScope" : tab === "web-search" ? "settings.webSearch.scopeHelp" : "settings.redesign.globalScopeHelp")}</p>
         </div>
       </aside>
 
@@ -199,7 +200,7 @@ export function SettingsContent({ scope, onClose, initialTab="general" }: { scop
             />
           </header>
           <div className="min-h-0 flex-1 px-card py-card md:px-0 md:py-6">
-            <p className="mb-4 flex items-start gap-2 rounded-input bg-sidebar px-3 py-2 text-ui-caption leading-relaxed text-muted"><Icon icon={scope && !globalTab ? FolderOpen : Globe2} size={14} className="mt-0.5 shrink-0" /><span>{t(tab === "memory" ? "memory.globalScope" : tab === "web-search" ? "settings.webSearch.scopeHelp" : scope && !globalTab ? "settings.redesign.workspaceScopeHelp" : "settings.redesign.globalScopeHelp")}</span></p>
+            <p className="mb-4 flex items-start gap-2 rounded-input bg-sidebar px-3 py-2 text-ui-caption leading-relaxed text-muted"><Icon icon={scope && !globalTab && !deviceTab ? FolderOpen : Globe2} size={14} className="mt-0.5 shrink-0" /><span>{t(deviceTab ? "settings.scope.deviceHelp" : tab === "memory" ? "memory.globalScope" : tab === "web-search" ? "settings.webSearch.scopeHelp" : scope && !globalTab && !deviceTab ? "settings.redesign.workspaceScopeHelp" : "settings.redesign.globalScopeHelp")}</span></p>
             <Suspense fallback={<div role="status" className="py-4 text-sm text-muted">{t("common.loading")}</div>}>
                 {tab === "web-search" && <WebSearchTab />}
                 {tab === "network" && <NetworkTab />}
