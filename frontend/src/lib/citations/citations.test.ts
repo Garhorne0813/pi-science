@@ -4,34 +4,47 @@ import { extractCitations } from "./citations";
 describe("extractCitations", () => {
   it("extracts a DOI with a doi.org url", () => {
     expect(extractCitations("See doi:10.1038/s41586-025-1234-5 for details."))
-      .toEqual([{ kind: "doi", id: "10.1038/s41586-025-1234-5", url: "https://doi.org/10.1038/s41586-025-1234-5" }]);
+      .toEqual([{ kind: "doi", id: "10.1038/s41586-025-1234-5", requested_id: "10.1038/s41586-025-1234-5", url: "https://doi.org/10.1038/s41586-025-1234-5" }]);
   });
 
   it("normalizes DOIs by stripping trailing punctuation and lowercasing", () => {
     expect(extractCitations("Published as 10.1000/XYZ123."))
-      .toEqual([{ kind: "doi", id: "10.1000/xyz123", url: "https://doi.org/10.1000/xyz123" }]);
+      .toEqual([{ kind: "doi", id: "10.1000/xyz123", requested_id: "10.1000/xyz123", url: "https://doi.org/10.1000/xyz123" }]);
     expect(extractCitations("(10.1234/abc),; end"))
-      .toEqual([{ kind: "doi", id: "10.1234/abc", url: "https://doi.org/10.1234/abc" }]);
+      .toEqual([{ kind: "doi", id: "10.1234/abc", requested_id: "10.1234/abc", url: "https://doi.org/10.1234/abc" }]);
   });
 
-  it("extracts arXiv identifiers, case-insensitively and with optional space", () => {
+  it("keeps the cited arXiv version in the url and the version-less id as the source key", () => {
     expect(extractCitations("Compare arXiv:2401.12345v2 with arxiv: 1706.03762."))
       .toEqual([
-        { kind: "arxiv", id: "2401.12345v2", url: "https://arxiv.org/abs/2401.12345v2" },
-        { kind: "arxiv", id: "1706.03762", url: "https://arxiv.org/abs/1706.03762" },
+        { kind: "arxiv", id: "2401.12345", requested_id: "2401.12345v2", url: "https://arxiv.org/abs/2401.12345v2" },
+        { kind: "arxiv", id: "1706.03762", requested_id: "1706.03762", url: "https://arxiv.org/abs/1706.03762" },
       ]);
+  });
+
+  it("collapses two cited versions of one paper to a single source", () => {
+    const citations = extractCitations("First arXiv:2401.12345v1, later arXiv:2401.12345v2.");
+    expect(citations).toEqual([{ kind: "arxiv", id: "2401.12345", requested_id: "2401.12345v1", url: "https://arxiv.org/abs/2401.12345v1" }]);
   });
 
   it("dedupes repeats and preserves first-seen order across kinds", () => {
     const text = "arXiv:2107.03374 then 10.1000/first then doi:10.1000/FIRST and arXiv:2107.03374 again.\n\n## References\n1. doi:10.1000/first\n2. arXiv:2107.03374";
     expect(extractCitations(text)).toEqual([
-      { kind: "arxiv", id: "2107.03374", url: "https://arxiv.org/abs/2107.03374" },
-      { kind: "doi", id: "10.1000/first", url: "https://doi.org/10.1000/first" },
+      { kind: "arxiv", id: "2107.03374", requested_id: "2107.03374", url: "https://arxiv.org/abs/2107.03374" },
+      { kind: "doi", id: "10.1000/first", requested_id: "10.1000/first", url: "https://doi.org/10.1000/first" },
     ]);
   });
 
   it("ignores plain text and DOIs whose suffix is only punctuation", () => {
     expect(extractCitations("No identifiers here, just 10 items and pi.")).toEqual([]);
     expect(extractCitations("Broken ref 10.1234/. end")).toEqual([]);
+  });
+
+  it("terminates DOI matches at CJK text and fullwidth punctuation", () => {
+    const text = "AlphaFold 蛋白结构预测方法见 10.1038/s41586-020-2649-2，另见 arXiv:1706.03762。";
+    expect(extractCitations(text)).toEqual([
+      { kind: "doi", id: "10.1038/s41586-020-2649-2", requested_id: "10.1038/s41586-020-2649-2", url: "https://doi.org/10.1038/s41586-020-2649-2" },
+      { kind: "arxiv", id: "1706.03762", requested_id: "1706.03762", url: "https://arxiv.org/abs/1706.03762" },
+    ]);
   });
 });

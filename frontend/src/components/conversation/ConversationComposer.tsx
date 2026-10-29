@@ -11,8 +11,11 @@ import type { useAutoResearch } from "../../hooks/useAutoResearch";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { findLocalPromptRequest, promptContentDigest } from "../../lib/client/prompt-request-cache";
 import { ConversationStatsLine } from "./ConversationStatsLine";
+import { MessageQuoteCard } from "./MessageQuoteCard";
 import { MentionComposer } from "./MentionComposer";
 import { ModelControlMenu } from "./ModelControlMenu";
+import { useMessageQuoteStore } from "../../lib/conversation/message-quote";
+import { composeQuotedPrompt } from "../../lib/conversation/quoted-message";
 import { cn } from "../../lib/ui";
 
 const ComposerTodo = lazy(() => import("../todo/ComposerTodo").then((module) => ({ default: module.ComposerTodo })));
@@ -59,9 +62,15 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
   const mcpDiagnostics = useRuntimeStore((state) => state.cwd === workspaceCwd && state.activeSessionId === activeSessionId ? state.mcpDiagnostics : undefined);
   const sendPrompt = useRuntimeStore((state) => state.sendPrompt);
   const [composing, setComposing] = useState(false);
-  const retryRequest = activeSessionId && input.trim()
-    ? findLocalPromptRequest(workspaceCwd, activeSessionId, promptContentDigest(input.trim()))
+  const quote = composer.quote;
+  const clearQuote = useMessageQuoteStore((state) => state.clearQuote);
+  // The retry lookup matches the request the server recorded, which carried the
+  // quote too. A draft-only digest would miss it after a failed send.
+  const composedDraft = quote ? composeQuotedPrompt(quote, input.trim()) : input.trim();
+  const retryRequest = activeSessionId && composedDraft
+    ? findLocalPromptRequest(workspaceCwd, activeSessionId, promptContentDigest(composedDraft))
     : null;
+  const canSend = Boolean(input.trim() || files.length > 0 || workspaceReferences.length > 0 || quote);
   return (
     <div className={cn("px-4 sm:px-8 shrink-0", showWelcome ? "py-0" : "pb-1 pt-1")}>
       {!showWelcome && (
@@ -85,7 +94,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
       <div className="relative mx-auto max-w-[var(--conversation-composer-width)]">
         <McpDiagnosticsNotice diagnostics={mcpDiagnostics} />
         {promptDeliveryNotice === "indeterminate" && <div role="status" className="mb-2 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-muted">{t("conversation.promptDelivery.indeterminate")}</div>}
-        {retryRequest && <button type="button" onClick={() => { void sendPrompt(input.trim(), retryRequest.clientMessageId).catch(() => undefined); }} className="mb-2 text-xs text-accent hover:underline">{t("conversation.promptDelivery.retrySameRequest")}</button>}
+        {retryRequest && <button type="button" onClick={() => { void sendPrompt(composedDraft, retryRequest.clientMessageId).catch(() => undefined); }} className="mb-2 text-xs text-accent hover:underline">{t("conversation.promptDelivery.retrySameRequest")}</button>}
         {/* Fixed 36px fade band above the composer card (reference:
             ConversationRoot composer seat gradient). The card sits at the
             bottom of the column, so the band softens the transcript edge
@@ -132,6 +141,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
               ))}
             </div>
           )}
+          {quote && <MessageQuoteCard quote={quote} onRemove={() => clearQuote(quote.source)} />}
           <MentionComposer
             cwd={workspaceCwd}
             value={input}
@@ -211,10 +221,10 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
                   type="button"
                   aria-label={t("conversation.sendMessage")}
                   onClick={composer.handleSend}
-                  disabled={working || model.configuringModel || interactionPending || !model.selectedModel || reviewingProject || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
+                  disabled={working || model.configuringModel || interactionPending || !model.selectedModel || reviewingProject || (!activeSessionId && status === "connecting") || !canSend}
                   className={cn(
                     "flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full",
-                    (model.selectedModel && !model.configuringModel && !interactionPending && !reviewingProject && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent-fill text-accent-fg" : "bg-surface-2 text-muted cursor-default",
+                    (model.selectedModel && !model.configuringModel && !interactionPending && !reviewingProject && (activeSessionId || status !== "connecting") && canSend) ? "bg-accent-fill text-accent-fg" : "bg-surface-2 text-muted cursor-default",
                   )}
                 >
                   <ArrowUp size={16} />

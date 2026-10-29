@@ -8,6 +8,7 @@ import { loadSessionsInternal } from "../sessions";
 import { runtimeStore } from "../store-access";
 import type { RuntimeState } from "../types";
 import { disarmTurnWatchdog, ensureTurnWatchdog } from "./watchdog";
+import { maybeRequestScienceReview } from "./science-review";
 import { maybeGenerateAiTitle } from "./titles";
 
 function blocksLateEvents(lifecycle: string): boolean { return lifecycle === "aborted" || lifecycle === "failed"; }
@@ -71,6 +72,7 @@ export function applyLifecycleEvent(event: PiScienceEvent, state: RuntimeState):
       if (successful && state.activeSessionId && event.handledWithoutTurn !== true) {
         void resyncCompletedHistory(state.activeSessionId, state.cwd);
         if (event.status === "completed") maybeGenerateAiTitle(state.activeSessionId, state.cwd);
+        if (event.status === "completed") maybeRequestScienceReview(state.activeSessionId, state.cwd);
       }
     }
     void loadSessionsInternal();

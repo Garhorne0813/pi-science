@@ -27,6 +27,14 @@ it("normalizes native trusted-host paths without weakening required alias reject
   await expect(workspacePolicy(alias)).rejects.toThrow(/aliases|real directories/);
   await expect(canonicalDirectory(target + sep + "..")).rejects.toThrow("aliases");
 });
+it.skipIf(process.platform !== "darwin")("accepts the macOS /var system alias while still rejecting workspace symlinks", async () => {
+  const root = await fixture();
+  const alias = root.replace("/private/var/", "/var/");
+  expect(alias).not.toBe(root);
+  await expect(canonicalDirectory(alias)).resolves.toBe(root);
+  await mkdir(join(root, "real")); await symlink(join(root, "real"), join(root, "link"), "dir");
+  await expect(canonicalDirectory(join(root, "link"))).rejects.toThrow("aliases");
+});
 it.skipIf(process.platform !== "win32")("accepts Windows drive-case and separator normalization without admitting junctions", async () => {
   const root = await fixture();
   const spelling = root[0]!.toLowerCase() + root.slice(1).replaceAll("\\", "/");

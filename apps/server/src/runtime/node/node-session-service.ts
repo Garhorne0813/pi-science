@@ -5,6 +5,7 @@ import { ModelConfigService } from "../../model-config/model-config-service.js";
 import type { CreateSessionRequest, PiConfig, SessionState, SessionStats } from "@pi-science/contracts";
 import { resolve } from "node:path";
 import { ConversationEventHub, conversationEventHub } from "../events/conversation-event-hub.js";
+import { CitationAutoVerifyService } from "../citations/citation-auto-verify.js";
 import { durableEventStore } from "../events/event-store.js";
 import type { RuntimeResult, RuntimeSkillPolicy } from "../agent/agent-runtime-types.js";
 import { AgentCoreSessionService } from "../agent/agent-core-session-service.js";
@@ -49,6 +50,7 @@ function effectiveConfig(requested?: Partial<PiConfig>): PiConfig {
 export class NodeSessionService {
   private readonly agentCore: AgentCoreSessionService;
   private readonly autoReviews = new Set<string>();
+  private readonly citationsAutoVerify = new CitationAutoVerifyService();
   private readonly statsProjector = new SessionStatsProjector();
   private log: (level: "info" | "warn" | "error", message: string) => void = () => {};
   constructor(
@@ -63,7 +65,7 @@ export class NodeSessionService {
     this.agentCore = new AgentCoreSessionService(eventHub, environments, agentCoreServer);
     this.agentCore.configureProductLifecycle({
       observe: (cwd, sessionId, event) => this.statsProjector.track(runtimeKey(cwd, sessionId), event, Date.now()),
-      settled: (cwd, sessionId, turnId) => this.scheduleAutoReview(cwd, sessionId, turnId),
+      settled: (cwd, sessionId, turnId) => { this.scheduleAutoReview(cwd, sessionId, turnId); this.citationsAutoVerify.schedule(cwd, sessionId, turnId, this.log); },
       stats: async (cwd, sessionId, counters) => {
         const checkpoint = await loadSessionStats(cwd, sessionId).catch(() => null);
         const timing = this.statsProjector.timingWithCheckpoint(runtimeKey(cwd, sessionId), timingFromStats(checkpoint));

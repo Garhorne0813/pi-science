@@ -48,11 +48,12 @@ export function workspaceFileTool(original: Tool, cwd: string, skillRoots: strin
       if (property === "writeFile") return async (requested: string, bytes: string | Uint8Array) => {
         const path = check(requested, true);
         const writeRoot = full && isWithin(home, path) ? home : cwd;
-        await canonicalDirectory(writeRoot);
+        const canonicalRoot = await canonicalDirectory(writeRoot);
+        const destination = resolve(canonicalRoot, relative(writeRoot, path));
         if (process.platform === "darwin") {
-          try { const info = await lstat(path); if (!info.isFile() || info.nlink !== 1) throw new Error("Writes require a single-link regular workspace file"); }
+          try { const info = await lstat(destination); if (!info.isFile() || info.nlink !== 1) throw new Error("Writes require a single-link regular workspace file"); }
           catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-          await writeSandboxFile(writeRoot, path, bytes, context.abortSignal, full ? await workspacePolicy(cwd, undefined, "analysis", sessionId) : undefined); return ok(undefined);
+          await writeSandboxFile(canonicalRoot, destination, bytes, context.abortSignal, full ? await workspacePolicy(cwd, undefined, "analysis", sessionId) : undefined); return ok(undefined);
         }
         const parts = relative(writeRoot, path).split(/[\\/]/); const handles: FileHandle[] = [];
         let temporary: string | undefined;

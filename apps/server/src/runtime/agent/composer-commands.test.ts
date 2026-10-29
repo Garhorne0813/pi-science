@@ -13,8 +13,8 @@ import { seedWorkspaceAssets } from "./runtime-config.js";
 /** Literal packaged catalogue. A new builtin skill updates this list on purpose. */
 const BUILTIN_SKILLS = [
   "auto-research",
-  "band-structure-analysis", "figure-composer", "figure-style", "latex-pdf", "literature-review", "materials-phase-analysis",
-  "molecule-qc", "pdf-explore", "publication-figures", "scientific-problem-selection", "single-cell-rna-qc", "stats-integrity", "traceability-review",
+  "band-structure-analysis", "bionemo-skills", "figure-composer", "figure-style", "latex-pdf", "literature-review", "materials-phase-analysis",
+  "molecule-qc", "pdf-explore", "protein-structure", "publication-figures", "scientific-problem-selection", "sequence-analysis", "single-cell-rna-qc", "stats-integrity", "traceability-review",
 ];
 
 const roots: string[] = [];

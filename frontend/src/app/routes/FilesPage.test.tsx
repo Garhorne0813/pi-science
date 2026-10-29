@@ -26,6 +26,10 @@ vi.mock("../../lib/workspace", async (importOriginal) => {
       })),
       refreshDirectory: vi.fn(async () => ({ entries: entries(["a.txt", "b.txt", "new.txt"]), breadcrumbs: [] })),
       remove: vi.fn(async () => undefined),
+      mkdir: vi.fn(async () => undefined),
+      createFile: vi.fn(async () => undefined),
+      rename: vi.fn(async () => undefined),
+      reveal: vi.fn(async () => undefined),
       formatSize: actual.workspaceFiles.formatSize,
     },
   };
@@ -54,6 +58,10 @@ const files = (await import("../../lib/workspace")).workspaceFiles as unknown as
   refreshDirectory: ReturnType<typeof vi.fn>;
   invalidate: ReturnType<typeof vi.fn>;
   remove: ReturnType<typeof vi.fn>;
+  mkdir: ReturnType<typeof vi.fn>;
+  createFile: ReturnType<typeof vi.fn>;
+  rename: ReturnType<typeof vi.fn>;
+  reveal: ReturnType<typeof vi.fn>;
   formatSize: (bytes: number) => string;
 };
 
@@ -137,5 +145,81 @@ describe("FilesPage", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(screen.getByText("inner.txt")).toBeInTheDocument();
     expect(screen.queryByText("a.txt")).toBeNull();
+  });
+});
+
+describe("FilesPage inline file edits", () => {
+  it("offers New file and New folder as the first two items on a file row", async () => {
+    render(<FilesPage />);
+    await screen.findByText("a.txt");
+    fireEvent.contextMenu(screen.getByText("a.txt"));
+    const items = await screen.findAllByRole("menuitem");
+    expect(items.slice(0, 2).map((item) => item.textContent)).toEqual(["New file", "New folder"]);
+  });
+
+  it("creates a file in the current directory from a file row", async () => {
+    render(<FilesPage />);
+    await screen.findByText("a.txt");
+    fireEvent.contextMenu(screen.getByText("a.txt"));
+    fireEvent.click(screen.getByText("New file"));
+    const input = await screen.findByRole("textbox", { name: "File name" });
+    fireEvent.change(input, { target: { value: "notes.txt" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await vi.waitFor(() => expect(files.createFile).toHaveBeenCalledWith("proj", "notes.txt"));
+  });
+
+  it("creates a folder inside the folder row it was opened from", async () => {
+    const dirEntry: FileListEntry = { name: "work", path: "work", isDir: true, size: 0, modified: 1 };
+    files.directory.mockImplementation(async (_cwd: string, subdir: string) => ({
+      entries: subdir ? [] : [dirEntry],
+      breadcrumbs: subdir ? [{ name: "work", path: "work" }] : [],
+    }));
+    render(<FilesPage />);
+    await screen.findByText("work");
+    fireEvent.contextMenu(screen.getByText("work"));
+    fireEvent.click(screen.getByText("New folder"));
+    // The listing navigates into work/ and is empty, yet the input still renders.
+    const input = await screen.findByRole("textbox", { name: "Folder name" });
+    expect(screen.queryByText("No files")).toBeNull();
+    fireEvent.change(input, { target: { value: "sub" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await vi.waitFor(() => expect(files.mkdir).toHaveBeenCalledWith("proj", "work/sub", { exclusive: true }));
+    expect(files.directory).toHaveBeenCalledWith("proj", "work", expect.anything());
+  });
+
+  it("creates in the current directory from the header button while the listing is empty", async () => {
+    files.directory.mockImplementation(async () => ({ entries: [], breadcrumbs: [] }));
+    render(<FilesPage />);
+    await screen.findByText("No files");
+    fireEvent.click(screen.getByRole("button", { name: "New file" }));
+    const input = await screen.findByRole("textbox", { name: "File name" });
+    fireEvent.change(input, { target: { value: "blank.md" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await vi.waitFor(() => expect(files.createFile).toHaveBeenCalledWith("proj", "blank.md"));
+  });
+
+  it("replaces the renamed row and renames to a sibling path", async () => {
+    render(<FilesPage />);
+    await screen.findByText("a.txt");
+    fireEvent.contextMenu(screen.getByText("a.txt"));
+    fireEvent.click(screen.getByText("Rename"));
+    const input = await screen.findByRole("textbox", { name: "Rename" });
+    expect(input).toHaveValue("a.txt");
+    expect(screen.queryByText("a.txt")).toBeNull();
+    fireEvent.change(input, { target: { value: "c.txt" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await vi.waitFor(() => expect(files.rename).toHaveBeenCalledWith("proj", "a.txt", "c.txt"));
+  });
+
+  it("keeps the draft open with the inline conflict message on a 409", async () => {
+    files.createFile.mockRejectedValueOnce(Object.assign(new Error("exists"), { status: 409 }));
+    render(<FilesPage />);
+    await screen.findByText("a.txt");
+    fireEvent.click(screen.getByRole("button", { name: "New file" }));
+    const input = await screen.findByRole("textbox", { name: "File name" });
+    fireEvent.change(input, { target: { value: "dup.txt" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("A file or folder with that name already exists");
+    expect(screen.getByRole("textbox", { name: "File name" })).toHaveValue("dup.txt");
   });
 });

@@ -1,6 +1,8 @@
 import { isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { remarkCitations } from "@/lib/citations/remark-citations";
+import { CitationRef } from "./CitationRef";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
@@ -12,7 +14,8 @@ import { notebookRuntime, type CellResult } from "@/lib/notebook";
 import { RunnableCodeBlock } from "../conversation/RunnableCodeBlock";
 import { CodeViewer } from "../code-viewer/CodeViewer";
 import { CodeBlockFrame } from "./CodeBlockFrame";
-import { fileInspectorForPath } from "@/lib/artifacts";
+import { normalizeArtifactPath, pinnedFileInspector } from "@/lib/artifacts";
+import type { PublishedReference } from "@/lib/artifacts/artifact-versions";
 import { resolveMarkdownResource, type MarkdownResourceContext } from "@/lib/files/markdown-resources";
 import { useUiStore } from "@/lib/ui";
 import {
@@ -28,7 +31,7 @@ export type { MarkdownRenderMode } from "./streaming-markdown";
 
 type Variant = "chat" | "document" | "inspector";
 
-const REMARK_PLUGINS: NonNullable<Options["remarkPlugins"]> = [remarkGfm, remarkMath];
+const REMARK_PLUGINS: NonNullable<Options["remarkPlugins"]> = [remarkGfm, remarkMath, remarkCitations];
 const REHYPE_PLUGINS: NonNullable<Options["rehypePlugins"]> = [[rehypeKatex, { throwOnError: false }]];
 
 type MarkdownRendererProps = {
@@ -419,6 +422,7 @@ export function MarkdownViewer({
   codeChrome,
   mode = "final",
   textScale = 1,
+  pinnedReferences,
 }: {
   children: string;
   className?: string;
@@ -428,6 +432,9 @@ export function MarkdownViewer({
   codeChrome?: boolean;
   mode?: MarkdownRenderMode;
   textScale?: number;
+  /** Published versions the surrounding message owns, keyed by workspace path.
+   *  A file link resolves to its own message's version, not the newest one. */
+  pinnedReferences?: ReadonlyMap<string, PublishedReference>;
 }) {
   const s = STYLES[variant];
   const cwd = codeRunner?.cwd;
@@ -513,8 +520,11 @@ export function MarkdownViewer({
     const resolved = resolveMarkdownResource(href, context);
     if (resolved.kind !== "workspace") return;
     const filename = resolved.path.split(/[\\/]/).at(-1) || resolved.path;
-    openInspector(fileInspectorForPath(resolved.path, filename, context.root, cwd));
-  }, [context, cwd, openInspector]);
+    // Chat file links pin to the version this message referenced so later edits
+    // cannot silently change what the sentence pointed at.
+    const reference = pinnedReferences?.get(normalizeArtifactPath(resolved.path));
+    void pinnedFileInspector(resolved.path, filename, context.root, cwd, reference).then((inspector) => openInspector(inspector));
+  }, [context, cwd, openInspector, pinnedReferences]);
   const components = useMemo<Components>(() => ({
     p: ({ children }) => <p className={s.p}>{children}</p>,
     img: ({ src, alt }) => {
@@ -537,8 +547,12 @@ export function MarkdownViewer({
       }
       return <ResourceImage src={resolved.url} alt={alt} />;
     },
-    a: ({ children, href: rawHref }) => {
+    a: ({ children, href: rawHref, node }) => {
       const href = rawHref ?? "";
+      // Citation links (bare DOIs/arXiv ids lifted by remarkCitations) keep
+      // their text and gain a verified-evidence hover from cached snapshots.
+      const citationKey = (node?.properties as { dataCitation?: string } | undefined)?.dataCitation;
+      if (citationKey) return <CitationRef href={href} citationKey={citationKey}>{children}</CitationRef>;
       if (context && FILE_HREF.test(href)) {
         return (
           <span

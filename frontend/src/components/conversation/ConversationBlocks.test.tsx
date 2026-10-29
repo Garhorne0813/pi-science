@@ -5,7 +5,9 @@ import i18n from "../../i18n";
 import type { CodeRunner } from "../markdown-viewer/MarkdownViewer";
 import type { AgentMessageBlock, ThreadBlock, ToolCallBlock } from "../../types/thread";
 import { buildTurnPresentations } from "../../lib/conversation/turn-presentation";
+import { selectedTextWithin, useMessageQuoteStore } from "../../lib/conversation/message-quote";
 import { useRuntimeStore } from "../../lib/agent-runtime";
+import { RunnableCodeBlock } from "./RunnableCodeBlock";
 
 const codeRunner: CodeRunner = { cwd: "proj", sessionId: "s1" };
 const user = (id: string, text = id): ThreadBlock => ({ kind: "user", id, text, timestamp: new Date().toISOString() });
@@ -14,7 +16,18 @@ const tool = (id: string, name: string, status: ToolCallBlock["status"] = "done"
 
 beforeAll(async () => { await i18n.changeLanguage("en"); });
 beforeEach(() => { Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: vi.fn(async () => undefined) } }); });
-afterEach(() => { cleanup(); useRuntimeStore.setState({ thread: { blocks: [], index: {}, loaded: true } }); Reflect.deleteProperty(navigator, "clipboard"); });
+afterEach(() => { cleanup(); useRuntimeStore.setState({ thread: { blocks: [], index: {}, loaded: true } }); useMessageQuoteStore.setState({ quotes: {} }); window.getSelection()?.removeAllRanges(); Reflect.deleteProperty(navigator, "clipboard"); });
+
+const selectRange = (start: Node, startOffset: number, end: Node, endOffset: number) => {
+  const range = document.createRange();
+  range.setStart(start, startOffset);
+  range.setEnd(end, endOffset);
+  const selection = window.getSelection()!;
+  selection.removeAllRanges();
+  selection.addRange(range);
+  fireEvent(document, new Event("selectionchange"));
+};
+const quoteMenu = () => screen.queryByRole("button", { name: "Quote selection" });
 
 describe("turn-level conversation rendering", () => {
   it("keeps an optimistic prompt visible without a send-confirmation banner", () => {
@@ -132,5 +145,60 @@ describe("turn-level conversation rendering", () => {
     render(<>{renderBlocks([user("u1"), agent("a1", "final answer"), { kind: "artifact-summary", id: "turn-artifacts-t1", turnId: "t1", assistantMessageId: "a1", artifacts: [{ path: "work/plot.png", kind: "image", mime: "image/png", size: 10 }] }], codeRunner)}</>);
     expect(screen.getByText("final answer")).toBeInTheDocument();
     expect(screen.getByLabelText("Generated files")).toBeInTheDocument();
+  });
+});
+
+describe("message quoting", () => {
+  it("quotes the selected fragment of one message and keeps it through the menu click", () => {
+    render(<>{renderBlocks([user("u1", "question"), agent("a1", "Read the log twice")], codeRunner)}</>);
+    const prose = screen.getByText("Read the log twice").firstChild!;
+    selectRange(prose, 5, prose, 12);
+
+    fireEvent.click(quoteMenu()!);
+
+    expect(quoteMenu()).not.toBeInTheDocument();
+    expect(Object.values(useMessageQuoteStore.getState().quotes)).toEqual([
+      expect.objectContaining({ kind: "selection", text: "the log", messageText: "Read the log twice" }),
+    ]);
+  });
+
+  it("offers no quote for a selection that spans two messages", () => {
+    render(<>{renderBlocks([user("u1", "alpha first"), agent("a1", "beta second")], codeRunner)}</>);
+    selectRange(screen.getByText("alpha first").firstChild!, 0, screen.getByText("beta second").firstChild!, 4);
+    expect(quoteMenu()).not.toBeInTheDocument();
+  });
+
+  it("re-anchors the menu when the conversation scrolls under it", () => {
+    let top = 100;
+    Object.defineProperty(Range.prototype, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ top, left: 200, width: 10, height: 10, bottom: top + 10, right: 210, x: 200, y: top, toJSON: () => ({}) }),
+    });
+    try {
+      render(<>{renderBlocks([user("u1", "question"), agent("a1", "Read the log twice")], codeRunner)}</>);
+      const prose = screen.getByText("Read the log twice").firstChild!;
+      selectRange(prose, 5, prose, 12);
+      expect(quoteMenu()!.style.top).toBe("94px");
+
+      top = 40;
+      fireEvent.scroll(document);
+
+      expect(quoteMenu()!.style.top).toBe("34px");
+      expect(quoteMenu()!.style.left).toBe("205px");
+    } finally {
+      Reflect.deleteProperty(Range.prototype, "getBoundingClientRect");
+    }
+  });
+
+  it("refuses code run output, which exists only in the runner panel", () => {
+    const { container } = render(<RunnableCodeBlock code="print(42)" language="python" running={false} result={{ ok: true, stdout: "42", result: null, error: null }} onRun={() => {}} onCloseResult={() => {}}><code>print(42)</code></RunnableCodeBlock>);
+    const frame = container.firstElementChild as HTMLElement;
+    const output = container.querySelector("[data-quote-exclude] pre")!.firstChild!;
+    selectRange(output, 0, output, 2);
+    expect(selectedTextWithin(frame)).toBeNull();
+
+    const code = container.querySelector("code")!.firstChild!;
+    selectRange(code, 0, code, 9);
+    expect(selectedTextWithin(frame)).toBe("print(42)");
   });
 });

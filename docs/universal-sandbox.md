@@ -130,3 +130,63 @@ Skills policy changes and refreshes affect subsequent invocations without a Work
 restart. An already admitted invocation retains its original sandbox policy.
 
 The pinned SRT 0.0.79 dependency carries a pnpm patch for macOS Seatbelt read-rule generation. When a literal parent denial is restored after the workspace allow, it excludes explicitly allowed literal child directories. This preserves enabled Skill helper reads under `.pi` while leaving sibling directories and independently denied sensitive descendants inaccessible. Literal path semantics also apply to project names containing glob characters. The platform acceptance suite runs real helper execution on both Linux and macOS; the [Skill policy benchmark](performance/skill-resources-benchmark.md) records the cost of scanning enabled resource trees on every Bash invocation.
+
+## macOS runtime dependency reads
+
+A dynamically linked runtime needs the shared libraries it loads at launch, not
+only its entry binary, and one `otool -L` level is not the load closure: a
+Homebrew formula links further formulae, and dyld aborts on the first library no
+grant covers. The server walks the closure once per binary identity and grants,
+for each non-system library, the file the loader writes, the file its symlinks
+resolve to, and the `lib` directory of that library's own keg
+(`<prefix>/Cellar/<formula>/<version>/lib`).
+
+The keg `lib` directory is the one deliberate directory grant. A Homebrew dylib
+is usually a symlink to a versioned file (`libllhttp.9.4.dylib ->
+libllhttp.9.4.1.dylib`), and Seatbelt matches a symlinked leaf at the path its
+parent resolves to, which no filter written in the loader's spelling can name.
+The alternative is granting the shared prefix; one keg's `lib` directory holds
+that one installation and nothing else.
+
+The keg's startup configuration is granted the same way: the top-level files of
+`<prefix>/etc/<formula>`, never the directory and never the prefix `etc` tree.
+OpenSSL refuses to start a Homebrew node without the `openssl.cnf` that the keg
+itself does not ship.
+
+The shared prefix is never granted. `/opt`, `/opt/homebrew`, `/opt/homebrew/opt`,
+`/opt/homebrew/bin` and `/opt/homebrew/etc` stay out of the read set, so
+neighbouring packages, package state and unrelated configuration stay
+unreadable. When `otool` cannot list a binary's libraries, the installation's own
+`lib` prefix is granted instead, which is still one installation rather than a
+shared parent.
+
+Traversal is separate from content. Seatbelt checks `file-read-metadata` on
+every vnode a loader walks, and a symlinked component such as
+`opt/<formula>` is neither a file nor a directory. The pinned SRT patch emits
+that metadata allow for the link components of an allowed path, as literal
+filters, so a link is traversable while the target's contents stay behind the
+read denies.
+
+Residual risk, measured on macOS 15.6 with the real Seatbelt backend:
+
+- Link components of a granted library become observable. `lstat`, `readlink`
+  and `existsSync` report that the link and its target path exist, and where the
+  link points. Directory entry names beneath the target stay unlistable and
+  file contents stay unreadable.
+- SRT emits `(allow file-read-metadata (vnode-type DIRECTORY))` whenever any read
+  deny exists, and later rules win, so directory entry names are readable
+  system-wide, including `/opt/homebrew`, `/Users` and `/etc`, even with no
+  dependency grant at all. File contents in those directories stay denied. This
+  is upstream 0.0.79 behavior, not a grant this repository adds, and removing it
+  breaks `realpath()` through denied regions.
+- The grant is computed from the binary when a sandbox is prepared and cached on
+  its modification time and size. Replacing a library after preparation is
+  outside this model.
+
+`apps/server/src/runtime/sandbox/platform-acceptance.test.ts` holds the real
+macOS regression. A fixture Homebrew-shaped prefix whose `opt` entry is a symlink
+must load its library while a file beside that library, a file reached through
+the link, and `/etc/passwd` all stay unreadable. A second case runs the server's
+own node when it came from a keg, which covers what a compiled fixture cannot:
+`libnode` behind `@rpath`, a formula linking another formula, a dylib named
+through a symlink to a differently named file, and the keg's `openssl.cnf`.

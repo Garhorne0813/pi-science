@@ -144,6 +144,31 @@ describe("Node control plane", () => {
     }
   });
 
+  it("gates project knowledge on nodeProject and the catalog on nodeCatalog", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-science-feature-gates-"));
+    vi.stubEnv("PI_SCIENCE_HOME", join(root, "state"));
+    const cwd = join(root, "workspace");
+    await mkdir(join(cwd, ".pi-science"), { recursive: true });
+    // Each flag owns its own routes: a disabled catalog must not remove the
+    // project knowledge surface, and a disabled project surface must not keep
+    // it open just because the catalog is on.
+    const gates = async (overrides: Partial<ServerConfig>) => {
+      const app = buildApp(config("http://127.0.0.1:1", overrides));
+      openApps.push(app);
+      try {
+        const project = await app.inject({ method: "GET", url: `/api/project-knowledge/summary?${new URLSearchParams({ cwd })}` });
+        const catalog = await app.inject({ method: "GET", url: `/api/skills?${new URLSearchParams({ cwd })}` });
+        return { project: project.statusCode, catalog: catalog.statusCode };
+      } finally { await app.close(); }
+    };
+    try {
+      expect(await gates({ nodeProject: true, nodeCatalog: true })).toEqual({ project: 200, catalog: 200 });
+      expect(await gates({ nodeProject: true, nodeCatalog: false })).toEqual({ project: 200, catalog: 404 });
+      expect(await gates({ nodeProject: false, nodeCatalog: true })).toEqual({ project: 404, catalog: 200 });
+      expect(await gates({ nodeProject: false, nodeCatalog: false })).toEqual({ project: 404, catalog: 404 });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it("protects the control-plane API when a per-launch token is configured", async () => {
     const app = buildApp(config("http://127.0.0.1:1", { internalToken: "test-control-token", requireInternalToken: true }));
     openApps.push(app);

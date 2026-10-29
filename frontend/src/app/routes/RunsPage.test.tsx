@@ -6,6 +6,7 @@ import i18n from "../../i18n";
 import { queryClient } from "../../lib/client/query-client";
 import type { ExecutionRecord } from "@pi-science/contracts";
 import { RunsPage } from "./RunsPage";
+import { localDatetime } from "../../components/runs/RunsToolbar";
 
 const { toastMock, openInspectorMock, setDraftMock } = vi.hoisted(() => ({
   toastMock: vi.fn(),
@@ -520,7 +521,7 @@ describe("review regressions", () => {
     renderPage("/workspace/project/runs?session_id=session-1&scope=workspace&view=timeline&execution=exec_job&from=2026-08-15T00%3A00%3A00Z&to=2026-08-16T00%3A00%3A00Z&offset=100");
     await screen.findByText("node-job-coordinator");
     expect(screen.getByRole("button", { name: "Execution timeline" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByLabelText("Window start")).toHaveValue("2026-08-15T00:00");
+    expect(screen.getByLabelText("Window start")).toHaveValue(localDatetime("2026-08-15T00:00:00Z"));
     fireEvent.click(screen.getByRole("button", { name: "List" }));
     expect(screen.getByLabelText("location")).toHaveTextContent("view=list");
     fireEvent.click(screen.getByRole("button", { name: "Browser back" }));

@@ -20,6 +20,8 @@ import { InteractionBridge } from "../agent/worker/interaction-bridge.js";
 import { builtinMcpConnectors } from "../../mcp/builtin-connectors.js";
 
 const roots: string[] = [];
+/** The Homebrew prefix this server runs from, when node came from a keg. */
+const homebrewPrefix = /^(.*)\/Cellar\//.exec(process.execPath)?.[1];
 const managers: NodeKernelManager[] = [];
 afterEach(async () => { await Promise.all(managers.splice(0).map((manager) => manager.shutdownAll())); vi.unstubAllEnvs(); await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 async function fixture() { const root = await mkdtemp(join(await realpath("/tmp"), "ps-accept-")); roots.push(root); return root; }
@@ -189,16 +191,52 @@ describe.skipIf(process.env.PI_SCIENCE_SANDBOX_TEST !== "1" || !["darwin", "linu
     await runEnvironmentProcess("/bin/bash", ["-c", `set -e; test -s "$CONDA_SSL_VERIFY"; test "$CONDA_SSL_VERIFY" = "$MAMBA_SSL_VERIFY"; test -z "$(ls -A '${prefix}')"; touch '${prefix}/installed'; touch '${cache}/cached'; if touch '${workspace}/escaped' 2>/dev/null; then exit 77; fi`], prefix, cache, 10_000);
     expect(await readFile(join(prefix, "installed"), "utf8")).toBe(""); await expect(readFile(join(workspace, "escaped"))).rejects.toThrow();
   }, 30_000);
+  it.skipIf(process.platform !== "darwin")("loads a symlinked Homebrew dylib without granting the directories above it", async () => {
+    const root = await fixture(), cwd = await fixture();
+    const prefix = join(root, "prefix"), lib = join(prefix, "Cellar/libdemo/1.0/lib");
+    await mkdir(lib, { recursive: true }); await mkdir(join(prefix, "opt")); await mkdir(join(prefix, "bin"));
+    await writeFile(join(root, "demo.c"), "int demo_value(void){return 42;}\n");
+    await writeFile(join(root, "app.c"), "#include <stdio.h>\nint demo_value(void);\nint main(void){printf(\"dylib-value=%d\\n\", demo_value());return 0;}\n");
+    const clang = (args: string[]) => new Promise<void>((compile, fail) => spawn("/usr/bin/clang", args, { stdio: "pipe" }).once("exit", (code) => code === 0 ? compile() : fail(new Error(`clang exited ${code}: ${args.join(" ")}`))));
+    await clang(["-dynamiclib", "-install_name", join(prefix, "opt/libdemo/lib/libdemo.dylib"), "-o", join(lib, "libdemo.dylib"), join(root, "demo.c")]);
+    await symlink("../Cellar/libdemo/1.0", join(prefix, "opt/libdemo"));
+    await clang(["-o", join(prefix, "bin/app"), join(root, "app.c"), "-L", join(prefix, "opt/libdemo/lib"), "-ldemo", `-Wl,-rpath,${join(prefix, "opt/libdemo/lib")}`]);
+    await writeFile(join(lib, "secret.txt"), "SECRET");
+    vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "required");
+    const app = join(prefix, "bin/app");
+    const loaded = await execute(cwd, [app], [app]);
+    expect(loaded, loaded.stderr).toMatchObject({ code: 0, stdout: "dylib-value=42\n" });
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    // The loader reaches the dylib through opt/libdemo, so that link and its
+    // parents must stay traversable. Everything beside the dylib stays closed.
+    const probes = await execute(cwd, ["/bin/bash", "-c", [
+      `test ! -s ${quote(join(lib, "secret.txt"))}`,
+      `test ! -s ${quote(join(prefix, "opt/libdemo/lib/secret.txt"))}`,
+      `if /bin/cat /etc/passwd >/dev/null 2>&1; then exit 78; fi`,
+      "printf probes-done",
+    ].join(" && ")], [app]);
+    expect(probes, probes.stderr).toMatchObject({ code: 0, stdout: "probes-done" });
+  }, 60_000);
+  it.skipIf(process.platform !== "darwin" || !homebrewPrefix)("runs a Homebrew runtime whose libraries sit behind Cellar links", async () => {
+    const cwd = await fixture(); vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "required");
+    // A real keg run adds what a compiled fixture cannot: libnode behind
+    // @rpath, a formula linking another formula, a dylib named through a
+    // symlink whose target names a different file, and the keg's openssl.cnf.
+    const probe = `const fs=require('node:fs');const read=(path)=>{try{fs.readFileSync(path);return true}catch{return false}};const list=(path)=>{try{fs.readdirSync(path);return true}catch{return false}};process.stdout.write(JSON.stringify({runtime:process.versions.node,prefixRead:read(${JSON.stringify(join(homebrewPrefix!, "bin/brew"))}),prefixListing:list(${JSON.stringify(homebrewPrefix)}),passwdRead:read('/etc/passwd')}))`;
+    const result = await execute(cwd, [process.execPath, "-e", probe], [process.execPath]);
+    expect(result, result.stderr).toMatchObject({ code: 0 });
+    expect(JSON.parse(result.stdout)).toEqual({ runtime: process.versions.node, prefixRead: false, prefixListing: false, passwdRead: false });
+  }, 60_000);
   it("confines a real MCP server while passing only its own explicitly bound credential", async () => {
     const cwd = await fixture(); vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "required"); vi.stubEnv("OPENAI_API_KEY", "host-model-key");
     const script = join(cwd, "server.mjs");
-    await writeFile(script, `import {McpServer} from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};\nimport {StdioServerTransport} from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};\nimport fs from 'node:fs';\nconst server=new McpServer({name:'isolated',version:'1'});server.registerTool('inspect',{},async()=>({content:[{type:'text',text:JSON.stringify({token:process.env.TOKEN,hostKey:!!process.env.OPENAI_API_KEY,passwd:fs.existsSync('/etc/passwd')})}]}));await server.connect(new StdioServerTransport());`);
+    await writeFile(script, `import {McpServer} from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};\nimport {StdioServerTransport} from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};\nimport fs from 'node:fs';\nconst readOrDenied = (path) => { try { return fs.readFileSync(path, 'utf8'); } catch { return ''; } };\nconst server=new McpServer({name:'isolated',version:'1'});server.registerTool('inspect',{},async()=>({content:[{type:'text',text:JSON.stringify({token:process.env.TOKEN,hostKey:!!process.env.OPENAI_API_KEY,passwd:readOrDenied('/etc/passwd')})}]}));await server.connect(new StdioServerTransport());`);
     const transport = await localMcpTransport(cwd, process.execPath, [script], cwd, { TOKEN: "connector-only" });
     const client = new Client({ name: "acceptance", version: "1" });
     try {
       await client.connect(transport);
       const result = await client.callTool({ name: "inspect", arguments: {} });
-      expect(result.content).toEqual([{ type: "text", text: JSON.stringify({ token: "connector-only", hostKey: false, passwd: false }) }]);
+      expect(result.content).toEqual([{ type: "text", text: JSON.stringify({ token: "connector-only", hostKey: false, passwd: "" }) }]);
     } finally { await client.close(); }
   }, 30_000);
   it.each(["paper-search", "literature-graph"])("starts builtin %s inside the narrow MCP sandbox within discovery budget", async (name) => {

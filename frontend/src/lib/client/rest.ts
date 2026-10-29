@@ -339,3 +339,16 @@ export async function generateSessionTitle(baseUrl: string, sessionId: string, c
   }
   return typeof data.title === "string" && data.title ? data.title : null;
 }
+
+/** Best-effort science review of the latest report-shaped turn. Never throws. */
+export async function requestScienceReview(baseUrl: string, sessionId: string, cwd: string, trigger: "manual" | "auto"): Promise<void> {
+  try {
+    await request(`${baseUrl}/api/project-knowledge/science-review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd, session_id: sessionId, trigger }),
+    });
+  } catch {
+    // A failed review must never disturb the conversation.
+  }
+}

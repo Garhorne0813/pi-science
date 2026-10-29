@@ -1,5 +1,6 @@
 import { pathLeaf } from "../workspace";
 import { stripSubagentMentionBlock } from "../conversation/subagent-mentions";
+import { stripQuotedMessageBlocks } from "../conversation/quoted-message";
 
 export interface WorkspaceReference {
   cwd: string;
@@ -25,7 +26,7 @@ export function visibleUserMessage(message: string): string {
   const skill = message.match(SKILL_BLOCK);
   let visible = skill ? message.slice(skill[0].length) || `/skill:${skill[1]}` : message;
   if (skill?.[1] === "auto-research" || message.startsWith("/skill:auto-research [Workflow:")) visible = visible.replace(RESEARCH_STARTER, "");
-  return stripSubagentMentionBlock(visible.replace(REFERENCE_BLOCK, ""));
+  return stripSubagentMentionBlock(stripQuotedMessageBlocks(visible.replace(REFERENCE_BLOCK, "")));
 }
 
 export function referencesFromMessage(message: string): Array<Pick<WorkspaceReference, "path" | "name" | "isDir">> {

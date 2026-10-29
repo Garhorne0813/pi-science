@@ -38,6 +38,19 @@ export function registerProjectRoutes(app: FastifyInstance, review: ProjectRevie
     try { return await review.run(cwd, { sessionId: typeof body.session_id === "string" ? body.session_id : null, forceFullSession: body.force_full_session === true, trigger: "manual" }); }
     catch (error) { return reply.code(error instanceof ProjectReviewBusyError || error instanceof WorkspaceLifecycleBusyError ? 409 : 500).send({ error: error instanceof Error ? error.message : String(error) }); }
   });
+
+  // Science review: integrity check of the latest report-shaped turn using
+  // verified citation evidence and execution records. Findings join the same
+  // pending-proposal queue with human approval.
+  app.post("/api/project-knowledge/science-review", async (request, reply) => {
+    const body = (request.body ?? {}) as { cwd?: unknown; session_id?: unknown; trigger?: unknown };
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(typeof body.cwd === "string" && body.cwd ? body.cwd : q(request, "cwd")); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+    if (review.isRunning(cwd)) return reply.code(409).send({ error: "A project review is already running for this workspace" });
+    try { return await review.run(cwd, { sessionId: typeof body.session_id === "string" ? body.session_id : null, trigger: body.trigger === "auto" ? "auto" : "manual", mode: "science" }); }
+    catch (error) { return reply.code(error instanceof ProjectReviewBusyError || error instanceof WorkspaceLifecycleBusyError ? 409 : 500).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
   app.get("/api/project-knowledge/summary", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); return { workspace: cwd, project_file: "PROJECT.md", pending_count: current.proposals.filter((item) => item.status === "pending").length, knowledge_count: current.items.filter((item) => item.status === "active").length, auto_review: current.policy.auto_review }; });
   app.post("/api/project-knowledge/initialize", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await mutateProjectState(cwd, (value) => value); return { workspace: cwd, project_file: "PROJECT.md", pending_count: 0, knowledge_count: current.items.length, auto_review: current.policy.auto_review }; });
   app.get("/api/project-knowledge/project", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); return { workspace: cwd, project_file: "PROJECT.md", pending_count: current.proposals.filter((item) => item.status === "pending").length, knowledge_count: current.items.length, auto_review: current.policy.auto_review, content: await projectContent(cwd) }; });

@@ -1,6 +1,7 @@
 import { createReadTool, createWriteTool, createEditTool, BACKGROUND_CONTEXT, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { chmod, stat, link, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import { workspaceFileTool } from "./workspace-file-tool.js";
@@ -118,3 +119,13 @@ it("denies native hardlink aliases to sensitive files through read/write/edit", 
     expect(await readFile(join(cwd, "innocent.txt"), "utf8")).toBe("SECRET");
   } finally { await env.cleanup(BACKGROUND_CONTEXT); }
 });
+
+it.skipIf(process.platform !== "darwin")("writes through the macOS sandbox into a temporary workspace", async () => {
+  root = await mkdtemp(join(tmpdir(), "pi-file-tool-"));
+  const cwd = join(root, "workspace"); await mkdir(cwd);
+  const env = new NodeExecutionEnv({ cwd }); const write = workspaceFileTool(createWriteTool(), cwd, []);
+  const invocation = { operationId: "op", invocationId: "call", turnId: "turn", getMemo: async () => undefined, setMemo: async () => {} };
+  await write.execute("call", { path: "research/report.md", content: "sandboxed write" }, () => {}, { env }, invocation, BACKGROUND_CONTEXT);
+  expect(await readFile(join(cwd, "research/report.md"), "utf8")).toBe("sandboxed write");
+  await env.cleanup(BACKGROUND_CONTEXT);
+}, 120_000);
