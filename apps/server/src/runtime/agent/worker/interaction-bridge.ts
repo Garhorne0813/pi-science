@@ -98,6 +98,7 @@ export class InteractionBridge {
       this.pending.delete(id);
       item.cleanup();
       item.reject(new Error("agent worker closed while waiting for browser interaction"));
+      this.publish({ type: "interaction.resolved", id });
     }
     this.lifetime.abort(new Error("agent worker closed while waiting for browser interaction"));
   }

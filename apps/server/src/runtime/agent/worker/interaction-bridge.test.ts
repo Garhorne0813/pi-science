@@ -72,7 +72,10 @@ describe("agent-core questionnaire bridge", () => {
     await vi.waitFor(() => expect(events).toHaveLength(1));
     bridge.close();
     expect((await outcomes).map(outcome => outcome.status)).toEqual(["rejected", "rejected"]);
-    expect(events).toHaveLength(1); expect(bridge.hasPending).toBe(false);
+    expect(events).toHaveLength(2);
+    expect(events[1]).toEqual({ type: "interaction.resolved", id: events[0]!.id });
+    expect(bridge.hasPending).toBe(false);
+    bridge.close(); expect(events).toHaveLength(2);
   });
 
   it("withdraws a cancelled visible card before presenting its successor", async () => {

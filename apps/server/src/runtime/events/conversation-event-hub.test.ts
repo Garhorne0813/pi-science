@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConversationEventHub } from "./conversation-event-hub.js";
 import { DurableEventStore, type SseEventRecord } from "./event-store.js";
+import { InteractionBridge } from "../agent/worker/interaction-bridge.js";
 type RuntimeEventSource = EventEmitter;
 
 const workspaces: string[] = [];
@@ -407,6 +408,51 @@ describe("central conversation event hub", () => {
     const restored: unknown[] = [];
     await hub.subscribe(cwd, "cancelled-approval", undefined, record => { restored.push(JSON.parse(record.data)); }, false);
     expect(restored).toEqual([]);
+  });
+
+  it.each(["close", "expected-exit", "unexpected-exit"])("does not replay interrupted approvals after %s without operation.settled", async (mode) => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
+    const runtime = new EventEmitter();
+    let connected = true;
+    const bridge = new InteractionBridge(event => { if (connected) runtime.emit("event", event); });
+    hub.bind(cwd, runtime, { activeSessionId: () => "interrupted", onBusy: () => undefined, onExit: () => undefined });
+    const received: Record<string, unknown>[] = [];
+    await hub.subscribe(cwd, "interrupted", undefined, record => { received.push(JSON.parse(record.data)); }, false);
+    const pending = Promise.allSettled([bridge.confirmPermission("Approve command", "args")]);
+    try {
+      await hub.flush();
+      expect(received).toHaveLength(1);
+      const requestId = String(received[0]!.requestId);
+      expect(hub.pendingInteraction(cwd, "interrupted", requestId)).toBeDefined();
+      if (mode === "close") bridge.close();
+      else {
+        if (mode === "expected-exit") hub.expectExit(runtime);
+        connected = false;
+        runtime.emit("exit", { code: mode === "expected-exit" ? 0 : 1, signal: null });
+      }
+      await hub.flush();
+      expect(received.filter(event => event.type === "interaction.resolved")).toEqual([expect.objectContaining({ requestId })]);
+      expect(hub.pendingInteraction(cwd, "interrupted", requestId)).toBeUndefined();
+      const restored: unknown[] = [];
+      await hub.subscribe(cwd, "interrupted", undefined, record => { restored.push(JSON.parse(record.data)); }, false);
+      expect(restored).toEqual([]);
+    } finally { connected = false; bridge.close(); await pending; }
+  });
+
+  it("preserves replacement workers' approvals when an old worker exits", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
+    const old = new EventEmitter(), replacement = new EventEmitter();
+    for (const runtime of [old, replacement]) hub.bind(cwd, runtime, { activeSessionId: () => "replaced", onBusy: () => undefined, onExit: () => undefined });
+    old.emit("event", { type: "interaction.requested", id: "old", method: "confirm", title: "Old approval" });
+    replacement.emit("event", { type: "interaction.requested", id: "new", method: "confirm", title: "New approval" });
+    hub.expectExit(old);
+    old.emit("exit", { code: 0, signal: null });
+    await hub.flush();
+    const restored: Record<string, unknown>[] = [];
+    await hub.subscribe(cwd, "replaced", undefined, record => { restored.push(JSON.parse(record.data)); }, false);
+    expect(restored).toEqual([expect.objectContaining({ type: "interaction.requested", requestId: "new" })]);
   });
 
   it("keeps parallel permissions when a questionnaire finishes", async () => {

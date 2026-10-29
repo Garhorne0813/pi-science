@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AgentCoreRuntimeClient } from "./agent-runtime-client.js";
 import { ApprovalBridge } from "./worker/approval-bridge.js";
 import { workerRequestSchema } from "./worker/protocol.js";
+import { mcpApprovalKey } from "../../mcp/runtime-policy.js";
 
 function worker() {
   const child = new EventEmitter();
@@ -20,6 +21,23 @@ function worker() {
 }
 
 describe("control-plane approval IPC", () => {
+  it("admits oversized MCP tool names with bounded keys and keeps distinct tools isolated", async () => {
+    const first = worker(), second = worker();
+    const toolName = "external-tool-" + "x".repeat(8192);
+    const target = { projectId: "project", connectorId: "connector", toolName, connectorRevision: 1, settingsRevision: 1 };
+    const key = mcpApprovalKey(target);
+    const otherKey = mcpApprovalKey({ ...target, toolName: toolName + "other" });
+    expect(key.length).toBeLessThanOrEqual(4096);
+    try {
+      const release = await first.bridge.acquire(key);
+      const entered = vi.fn();
+      const pending = second.bridge.acquire(mcpApprovalKey({ ...target })).then(leave => { entered(); return leave; });
+      (await second.bridge.acquire(otherKey))();
+      expect(entered).not.toHaveBeenCalled();
+      release(); (await pending)();
+      expect(entered).toHaveBeenCalledOnce();
+    } finally { first.exit(); second.exit(); }
+  });
   it("coordinates separate workers and reclaims an exited owner's lease", async () => {
     const first = worker(), second = worker();
     try {

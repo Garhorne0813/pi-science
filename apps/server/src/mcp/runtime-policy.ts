@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { operatorFetch } from "../network/operator-fetch.js";
 
 export const mcpRuntimeConnectorSchema = z.object({
@@ -9,9 +10,10 @@ export const mcpRuntimeConnectorSchema = z.object({
 export const mcpRuntimePolicySchema = mcpRuntimeConnectorSchema.extend({ toolName: z.string().min(1) });
 export type McpRuntimeConnectorRequest = z.infer<typeof mcpRuntimeConnectorSchema>;
 export type McpRuntimePolicyRequest = z.infer<typeof mcpRuntimePolicySchema>;
-export const mcpApprovalKey = (request: Omit<McpRuntimePolicyRequest, "connectionFingerprint">): string => JSON.stringify([
+// Tool names are server-controlled; bound the IPC key without truncating identity.
+export const mcpApprovalKey = (request: Omit<McpRuntimePolicyRequest, "connectionFingerprint">): string => "mcp:" + createHash("sha256").update(JSON.stringify([
   "mcp", request.projectId, request.connectorId, request.toolName, request.connectorRevision, request.settingsRevision,
-]);
+])).digest("hex");
 
 /** Snapshots discover tools; the control plane's database admits each call.
  * Missing/unreachable authority and stale revisions must never fall back to disk. */
