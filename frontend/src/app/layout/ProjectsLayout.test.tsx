@@ -578,13 +578,16 @@ describe("WorkspaceSessionList", () => {
     const trigger = screen.getByRole("button", { name: "Manage conversation: Session A" });
     trigger.focus();
     await userEvent.keyboard("{Enter}");
-    expect(await screen.findByRole("menuitem", { name: "Fork conversation" })).toHaveFocus();
+    expect(await screen.findByRole("menuitem", { name: "Rename conversation" })).toHaveFocus();
     await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "Regenerate title with AI" })).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
     expect(screen.getByRole("menuitem", { name: "Delete conversation" })).toHaveFocus();
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(trigger).toHaveFocus());
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-    await userEvent.keyboard("{Enter}{Enter}");
+    // Fork sits third, after rename and regenerate: reopen, move twice, activate.
+    await userEvent.keyboard("{Enter}{ArrowDown}{ArrowDown}{Enter}");
     await waitFor(() => expect(useRuntimeStore.getState().forkSession).toHaveBeenCalledWith("s1"));
     // Calling the async fork action precedes its resolved result and navigation.
     await waitFor(() => expect(screen.getByTestId("path")).toHaveTextContent("/workspace/proj/session/forked"));

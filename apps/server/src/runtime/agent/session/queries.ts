@@ -20,6 +20,11 @@ export function liveSessions(context: Context, cwd: string): Array<{ id: string;
     .map((item) => ({ id: item.runtime.sessionId, cwd }));
 }
 
+export function sessionBusy(context: Context, cwd: string, sessionId: string): boolean {
+  const item = context.live.get(identity(cwd, sessionId));
+  return Boolean(item && !item.runtime.isClosed && (item.busy || item.expectedOperationId));
+}
+
 export async function hasActiveOperations(context: Context, cwd: string): Promise<boolean> {
   const workspace = workspaceIdentity(cwd);
   const pending = () => [context.opening, context.mutations, context.recovering, context.recoveryTimers, context.approvalRetirements].some((entries) => [...entries.keys()].some((key) => pathIsInside(workspace, key.split("\0")[0]!, true)));

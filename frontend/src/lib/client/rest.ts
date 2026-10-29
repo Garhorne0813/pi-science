@@ -290,17 +290,39 @@ export async function deleteSession(baseUrl: string, sessionId: string, cwd?: st
   }
 }
 
-export async function setSessionTitle(baseUrl: string, sessionId: string, title: string, cwd?: string): Promise<void> {
+/** How a title write treats a title that is already stored. `initialize` is the
+ *  client's first name for a session, derived from its first message, and fills
+ *  an empty slot only. `override` is the user typing a name and always wins. */
+export type SessionTitleWriteMode = "initialize" | "override";
+
+/** The title stored after the write, which is the caller's own unless
+ *  `initialize` found the session already named. */
+export interface SessionTitleWrite {
+  applied: boolean;
+  title: string;
+}
+
+export async function setSessionTitle(
+  baseUrl: string,
+  sessionId: string,
+  title: string,
+  cwd?: string,
+  mode: SessionTitleWriteMode = "override",
+): Promise<SessionTitleWrite> {
   const params = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
   const res = await request(`${baseUrl}/api/sessions/${sessionId}/title${params}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title }),
+    body: JSON.stringify({ title, mode }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.ok === false) {
     throw new Error(responseError(data, `Set session title failed: ${res.statusText}`));
   }
+  return {
+    applied: data.applied !== false,
+    title: typeof data.title === "string" && data.title ? data.title : title,
+  };
 }
 
 export async function respondToInteraction(
@@ -326,16 +348,29 @@ export async function respondToInteraction(
   }
 }
 
-/** Ask the control plane to generate an AI title for a session (Pi runtime). */
-export async function generateSessionTitle(baseUrl: string, sessionId: string, cwd: string): Promise<string | null> {
+/** What the control plane did with a title request. A request the server
+ *  cancelled (`superseded` by a newer request, `deleted` with its session) is
+ *  not a model failure and must not surface as one. */
+export type TitleGenerationResult =
+  | { status: "applied"; title: string }
+  | { status: "superseded" }
+  | { status: "deleted" }
+  | { status: "failed" };
+
+/** Ask the control plane to generate an AI title for a session (Pi runtime).
+ *  `manual` records who asked: the server only guards a running session for a
+ *  user-requested regenerate, because the settled-turn trigger fires while the
+ *  live table may still report busy. */
+export async function generateSessionTitle(baseUrl: string, sessionId: string, cwd: string, manual: boolean): Promise<TitleGenerationResult> {
   const res = await request(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/title?cwd=${encodeURIComponent(cwd)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: "{}",
+    body: JSON.stringify({ manual }),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.ok === false) {
-    return null;
-  }
-  return typeof data.title === "string" && data.title ? data.title : null;
+  if (!res.ok || data.ok === false) return { status: "failed" };
+  if (typeof data.title === "string" && data.title) return { status: "applied", title: data.title };
+  if (data.deleted === true) return { status: "deleted" };
+  if (data.superseded === true) return { status: "superseded" };
+  return { status: "failed" };
 }

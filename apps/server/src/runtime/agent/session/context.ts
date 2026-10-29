@@ -38,6 +38,7 @@ export interface SessionContext {
   importLegacy(cwd: string, sessionId: string, source: string, config: PiConfig, options?: { activate?: boolean }): Promise<RuntimeResult>;
   importLegacyOnce(cwd: string, sessionId: string, source: string, config: PiConfig, options: { activate?: boolean }): Promise<RuntimeResult>;
   liveSessions(cwd: string): Array<{ id: string; cwd: string }>;
+  sessionBusy(cwd: string, sessionId: string): boolean;
   hasActiveOperations(cwd: string): Promise<boolean>;
   closeIdleWorkspace(cwd: string): Promise<void>;
   liveRuntime(cwd: string, expectedModel?: string): AgentCoreRuntimeClient | null;

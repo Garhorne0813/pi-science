@@ -90,6 +90,35 @@ Do not duplicate a protocol's maps or timers when extracting helpers. Keep
 components on the public entrypoint, keep folding pure, and import internal
 operations from their owning leaf module.
 
+### Title writes: who may replace what
+
+Every title write says what it is. `initialize` is the first name derived from
+the conversation, and it fills an empty slot only, so a browser with empty
+localStorage that opens another browser's history cannot replace the title the
+user typed there (`backfillSessionName`, `applyPromptSessionName`). `override`
+is the user typing a name, and it always wins (`renameSession`).
+
+Order between two AI generations comes from when they started, not when they
+finished. `SessionTitleRepository.beginGeneration` takes a claim before the
+model runs, and a claim commits only while nothing that started later outranks
+it (manual beats automatic, later beats earlier) and nobody wrote since it
+started. So a user-requested regenerate wins over an automatic one that finished
+first, and a title written by hand during the generation stands. A refused
+generation answers `superseded` (or `deleted` when its session went away), which
+the client reports as a cancellation instead of an error.
+
+### Manual title precedence, known boundary
+
+A hand-written title stops the next settled turn from regenerating it only in
+the browser that wrote it. The mark that stops the regeneration (`hasAiTitle`,
+written by `markAiTitle`) lives in localStorage. The title itself is
+server-persisted in `.pi-science/session-titles.jsonl`, so a second browser, or
+the same browser after clearing site data, shows the manual title and still lets
+the next settled turn replace it. Making the precedence survive a browser
+change means recording the title's source in that same record and having the
+automatic request refuse to overwrite a manual one. Until that decision is
+taken, this is the boundary.
+
 ## Validation
 
 Run `pnpm --filter frontend exec vitest run src/lib/agent-runtime --maxWorkers=2`

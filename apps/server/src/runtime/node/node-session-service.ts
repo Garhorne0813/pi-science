@@ -182,6 +182,9 @@ export class NodeSessionService {
   liveSessions(cwdValue: string): Array<{ id: string; cwd: string }> {
     try { return this.agentCore.liveSessions(resolve(cwdValue)); } catch { return []; }
   }
+  sessionBusy(cwdValue: string, sessionId: string): boolean {
+    try { return this.agentCore.sessionBusy(resolve(cwdValue), sessionId); } catch { return false; }
+  }
   liveSession(cwdValue: string): { id: string; cwd: string } | null { return this.liveSessions(cwdValue)[0] ?? null; }
   activeSessionId(cwdValue: string): string | null { return this.liveSession(cwdValue)?.id ?? null; }
   async availableModels(cwdValue: string): Promise<RuntimeResult> {

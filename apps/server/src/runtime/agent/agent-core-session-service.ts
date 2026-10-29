@@ -14,7 +14,7 @@ import type { Live, ProductHooks } from "./session/types.js";
 import { identity } from "./session/identity.js";
 import { workerEnvironment, composerCommands, credentialEnvNames, setGlobalSkillPolicy, refreshAllSkills } from "./session/resources.js";
 import { importLegacy, importLegacyOnce } from "./session/legacy-import.js";
-import { waitForMutation, owns, liveSessions, hasActiveOperations, closeIdleWorkspace, liveRuntime } from "./session/queries.js";
+import { waitForMutation, owns, liveSessions, sessionBusy, hasActiveOperations, closeIdleWorkspace, liveRuntime } from "./session/queries.js";
 import { create, createAdmitted, attach, open, openOnce } from "./session/startup.js";
 import { command, commandOnce, notify, notifyAdmitted, configure, configureOnce } from "./session/commands.js";
 import { approvalTransitionPending, setApprovalMode } from "./session/approval.js";
@@ -71,6 +71,7 @@ export class AgentCoreSessionService {
       importLegacy: (...args) => this.importLegacy(...args),
       importLegacyOnce: (...args) => this.importLegacyOnce(...args),
       liveSessions: (...args) => this.liveSessions(...args),
+      sessionBusy: (...args) => this.sessionBusy(...args),
       hasActiveOperations: (...args) => this.hasActiveOperations(...args),
       closeIdleWorkspace: (...args) => this.closeIdleWorkspace(...args),
       liveRuntime: (...args) => this.liveRuntime(...args),
@@ -120,6 +121,8 @@ export class AgentCoreSessionService {
   importLegacy(cwd: string, sessionId: string, source: string, config: PiConfig, options: { activate?: boolean } = {}): Promise<RuntimeResult> { return importLegacy(this.context, cwd, sessionId, source, config, options); }
   private importLegacyOnce(cwd: string, sessionId: string, source: string, config: PiConfig, options: { activate?: boolean }): Promise<RuntimeResult> { return importLegacyOnce(this.context, cwd, sessionId, source, config, options); }
   liveSessions(cwd: string): Array<{ id: string; cwd: string }> { return liveSessions(this.context, cwd); }
+  /** True when a live runtime for this session is mid-turn. Reads only the in-memory live table. */
+  sessionBusy(cwd: string, sessionId: string): boolean { return sessionBusy(this.context, cwd, sessionId); }
   hasActiveOperations(cwd: string): Promise<boolean> { return hasActiveOperations(this.context, cwd); }
   closeIdleWorkspace(cwd: string): Promise<void> { return closeIdleWorkspace(this.context, cwd); }
   liveRuntime(cwd: string, expectedModel?: string): AgentCoreRuntimeClient | null { return liveRuntime(this.context, cwd, expectedModel); }
