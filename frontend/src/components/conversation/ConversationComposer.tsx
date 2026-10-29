@@ -13,7 +13,7 @@ import { findLocalPromptRequest, promptContentDigest } from "../../lib/client/pr
 import { ConversationStatsLine } from "./ConversationStatsLine";
 import { MentionComposer } from "./MentionComposer";
 import { ModelControlMenu } from "./ModelControlMenu";
-import { cn } from "../../lib/ui";
+import { cn, useUiStore } from "../../lib/ui";
 
 const ComposerTodo = lazy(() => import("../todo/ComposerTodo").then((module) => ({ default: module.ComposerTodo })));
 
@@ -54,6 +54,7 @@ export interface ConversationComposerProps {
 export function ConversationComposer({ workspaceCwd, status, activeSessionId, sessionStats, contextTokens, contextWindow, contextPercent, compactionEnabled, compactionThresholdPercent, working, promptDeliveryNotice, interactionPending, reviewingProject, reviewNotice, autoReviewOn, modelControlsDisabled, showWelcome, showScrollDown, composer, model, research, onScrollToBottom, onReview, onAbort, onRemoveWorkspaceReference }: ConversationComposerProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const openSettings = useUiStore((s) => s.openSettings);
   const { input, setInput, files, setFiles, workspaceReferences } = composer;
   const mcpDiagnostics = useRuntimeStore((state) => state.cwd === workspaceCwd && state.activeSessionId === activeSessionId ? state.mcpDiagnostics : undefined);
   const sendPrompt = useRuntimeStore((state) => state.sendPrompt);
@@ -107,10 +108,11 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
             <div className="border-b border-faint px-3 py-2">
               <div className="flex flex-wrap gap-1.5">
                 {workspaceReferences.map((reference) => (
-                  <span key={reference.path} className="flex max-w-full items-center gap-1 rounded-input bg-accent/5 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-accent/20 cursor-pointer hover:bg-accent/10" title={`${t("conversation.clickToInsert")} ${reference.path}`} onClick={() => { const current = input; setInput(current ? `${current} ${reference.path}` : reference.path); }}>
+                  <span key={reference.path} className="flex max-w-full items-center gap-1 rounded-input bg-accent/5 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-accent/20">
+                    <button type="button" className="flex min-w-0 items-center gap-1 text-left" title={`${t("conversation.clickToInsert")} ${reference.path}`} aria-label={`${t("conversation.clickToInsert")} ${reference.path}`} onClick={() => { setInput(input ? `${input} ${reference.path}` : reference.path); composer.inputRef.current?.focus(); }}>
                     {reference.isDir ? <FolderOpen size={11} className="shrink-0 text-accent" /> : <File size={11} className="shrink-0 text-accent" />}
-                    <span className="truncate">{reference.path}</span>
-                    <button type="button" aria-label={`Remove reference ${reference.name}`} onClick={(event) => { event.stopPropagation(); onRemoveWorkspaceReference(workspaceCwd, reference.path); }} className="shrink-0 text-muted hover:text-error-text">
+                    <span className="truncate">{reference.path}</span></button>
+                    <button type="button" aria-label={t("conversation.removeReference", { name: reference.name })} onClick={(event) => { event.stopPropagation(); onRemoveWorkspaceReference(workspaceCwd, reference.path); }} className="shrink-0 text-muted hover:text-error-text">
                       <X size={11} />
                     </button>
                   </span>
@@ -123,13 +125,15 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
               {files.map((file, index) => (
                 <span key={index} className="flex items-center gap-1 rounded-input bg-surface-2 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-border">
                   {file.name}
-                  <button type="button" onClick={() => setFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))} className="text-muted hover:text-error-text">
+                  <button type="button" aria-label={t("conversation.removeAttachment", { name: file.name })} onClick={() => setFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))} className="text-muted hover:text-error-text">
                     <X size={11} />
                   </button>
                 </span>
               ))}
             </div>
           )}
+          {model.modelError && <p role="alert" className="mx-3 my-2 break-words rounded-input border border-error/30 bg-error/5 px-3 py-2 text-ui-body text-error-text">{model.modelError}<button type="button" className="ml-3 underline" onClick={() => openSettings(workspaceCwd, "models")}>{t("settings.models.title")}</button></p>}
+          {reviewNotice && <p role="status" className="mx-3 my-2 break-words text-ui-label text-muted">{reviewNotice}</p>}
           <MentionComposer
             cwd={workspaceCwd}
             value={input}
@@ -141,7 +145,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
             inputRef={composer.inputRef}
             composing={composing}
             composingRef={composer.composingRef}
-            placeholder={composer.dragOver ? "Drop files here…" : research.prompt}
+            placeholder={composer.dragOver ? t("conversation.dropFiles") : research.prompt}
           />
           <div className="flex items-center justify-between gap-2 px-3 pb-1">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -178,8 +182,6 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
                   <span className="composer-review-label">{t("conversation.review")}</span>
                 </button>
               )}
-              {model.modelError && <span className="max-w-[180px] truncate text-[10px] text-error-text" title={model.modelError}>{model.modelError}</span>}
-              {reviewNotice && <span className="max-w-[220px] truncate text-[10px] text-muted" title={reviewNotice}>{reviewNotice}</span>}
             </div>
             <input ref={composer.fileInputRef} type="file" multiple className="hidden" onChange={composer.handleFilePick} />
             <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">

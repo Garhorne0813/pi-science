@@ -1,3 +1,4 @@
+import { useFeedback } from "../feedback/feedback-context";
 import { useRef, useState, useLayoutEffect } from "react";
 import { useTranslation } from "react-i18next";
 import type { MemoryContent, MemoryRecord } from "@pi-science/contracts";
@@ -25,6 +26,7 @@ export function MemoryEditor({
   close: () => void;
 }) {
   const { t } = useTranslation();
+  const { confirm } = useFeedback();
   const [initial] = useState<MemoryContent>(() =>
     record
       ? {
@@ -58,8 +60,8 @@ export function MemoryEditor({
         Math.min(400, Math.max(160, body.current.scrollHeight)) + "px";
     }
   }, [value.body]);
-  const dismiss = () => {
-    if (!busy && (!dirty || window.confirm(t("memory.discardDraft")))) close();
+  const dismiss = async () => {
+    if (!busy && (!dirty || await confirm({ title: t("memory.unsavedChanges"), message: t("memory.discardDraft"), confirmLabel: t("common.discard"), destructive: true }))) close();
   };
   const select = (
     field: "scope" | "kind" | "evidenceLevel" | "categoryId",

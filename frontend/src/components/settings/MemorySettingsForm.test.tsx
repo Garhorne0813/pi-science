@@ -7,7 +7,7 @@ import i18n from "../../i18n";
 beforeAll(async () => {
   await i18n.changeLanguage("en");
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); sessionStorage.clear(); });
 function mount(enabled = true) {
   const save = vi.fn(async () => true);
   render(
@@ -81,7 +81,7 @@ it("shows Dream scheduling controls according to trigger mode and idle requireme
   expect(
     screen.queryByRole("spinbutton", { name: "Maximum runtime (minutes)" }),
   ).not.toBeInTheDocument();
-  toggle("Enable Dream");
+  toggle("Automatically organize memories");
   expect(
     screen.getByRole("spinbutton", { name: "Cooldown (hours)" }),
   ).toBeInTheDocument();
@@ -121,16 +121,16 @@ it("shows Dream scheduling controls according to trigger mode and idle requireme
   expect(
     screen.getByRole("spinbutton", { name: "Trigger interval (hours)" }),
   ).toHaveValue(48);
-  toggle("Enable Dream");
+  toggle("Automatically organize memories");
   expect(screen.queryByLabelText("Start")).not.toBeInTheDocument();
-  toggle("Enable Dream");
+  toggle("Automatically organize memories");
   expect(
     screen.getByRole("spinbutton", { name: "Trigger interval (hours)" }),
   ).toHaveValue(48);
 });
 it("preserves time-window values while its restriction is collapsed", () => {
   const save = mount();
-  toggle("Enable Dream");
+  toggle("Automatically organize memories");
   fireEvent.change(screen.getByLabelText("Start"), {
     target: { value: "02:30" },
   });
@@ -151,4 +151,18 @@ it("preserves time-window values while its restriction is collapsed", () => {
       }),
     }),
   );
+});
+
+it("retains a draft across tab unmounts and allows explicit discard", () => {
+  const value = { ...settingsSchema.parse({ enabled: true }), revision: 1 };
+  const save = vi.fn(async () => true);
+  const first = render(<MemorySettingsForm value={value} busy={false} save={save} />);
+  expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Daily token limit" }), { target: { value: "12345" } });
+  first.unmount();
+  render(<MemorySettingsForm value={value} busy={false} save={save} />);
+  expect(screen.getByRole("spinbutton", { name: "Daily token limit" })).toHaveValue(12345);
+  fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+  expect(screen.getByRole("spinbutton", { name: "Daily token limit" })).toHaveValue(value.budget.dailyTokens);
+  expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
 });

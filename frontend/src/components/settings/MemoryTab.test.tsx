@@ -50,7 +50,7 @@ beforeEach(() => {
     }),
   );
 });
-afterEach(() => {
+afterEach(() => { sessionStorage.clear();
   cleanup();
   vi.unstubAllGlobals();
 });
@@ -99,6 +99,7 @@ it("shows settings conflicts instead of a saved notice", async () => {
     name: "Review mode: Smart review (recommended)",
   });
   conflict = true;
+  fireEvent.click(screen.getByRole("checkbox", { name: "Allow automatic recall" }));
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await screen.findByRole("alert");
   expect(screen.getByRole("alert")).toHaveTextContent(

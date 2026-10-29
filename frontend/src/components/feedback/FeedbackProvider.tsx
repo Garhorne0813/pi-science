@@ -1,3 +1,4 @@
+import * as Dialog from "@radix-ui/react-dialog";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -42,19 +43,11 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
     }
   }, [confirmation]);
 
-  // Escape cancels the confirm dialog (replacing window.confirm behaviour that
-  // the SubagentSettings flow used to rely on).
   useEffect(() => {
-    if (!confirmation) return undefined;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        confirmation.resolve(false);
-        setConfirmation(null);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    if (!confirmation) return;
+    const cancel = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); confirmation.resolve(false); setConfirmation(null); } };
+    window.addEventListener("keydown", cancel, true);
+    return () => window.removeEventListener("keydown", cancel, true);
   }, [confirmation]);
 
   return (
@@ -73,21 +66,22 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
         })}
       </div>
       {confirmation && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/45 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) finishConfirmation(false); }}>
-          <div role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-description" className="ui-dialog w-full max-w-sm rounded-card p-5">
+        <Dialog.Root open onOpenChange={(open) => { if (!open) finishConfirmation(false); }}><Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-[140] bg-black/45" />
+          <Dialog.Content role="alertdialog" aria-labelledby="confirm-title" aria-describedby="confirm-description" onEscapeKeyDown={(event) => event.stopPropagation()} className="ui-dialog fixed left-1/2 top-1/2 z-[141] w-[calc(100%_-_32px)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-card p-5">
             <div className="flex items-start gap-3">
               <AlertTriangle size={20} className={cn("mt-0.5 shrink-0", confirmation.destructive ? "text-error-text" : "text-warn-text")} />
               <div>
-                <h2 id="confirm-title" className="font-medium text-text">{confirmation.title}</h2>
-                <p id="confirm-description" className="mt-1.5 text-sm leading-6 text-muted">{confirmation.message}</p>
+                <Dialog.Title id="confirm-title" className="font-medium text-text">{confirmation.title}</Dialog.Title>
+                <Dialog.Description id="confirm-description" className="mt-1.5 text-sm leading-6 text-muted">{confirmation.message}</Dialog.Description>
               </div>
             </div>
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" autoFocus onClick={() => finishConfirmation(false)} className="h-9 rounded-input border border-border px-3 text-sm text-muted hover:text-text">{t("common.cancel")}</button>
               <button type="button" onClick={() => finishConfirmation(true)} className={cn("h-9 rounded-input px-3 text-sm font-medium", confirmation.destructive ? "bg-error-fill text-accent-fg" : "bg-accent-fill text-accent-fg")}>{confirmation.confirmLabel || t("common.ok")}</button>
             </div>
-          </div>
-        </div>
+          </Dialog.Content>
+        </Dialog.Portal></Dialog.Root>
       )}
     </FeedbackContext.Provider>
   );

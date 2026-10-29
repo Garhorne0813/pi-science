@@ -497,3 +497,15 @@ enters the checked radio (or first), then visits each available detail button in
 option order, then the custom entry; Shift+Tab reverses that order. Details stay
 visually beside their options and retain Enter/Space activation and Escape focus
 return. Checkbox rows keep their existing interleaved checkbox/detail DOM order.
+
+## Desktop usability consolidation (Pi-Science proposal)
+
+Reuse WorkspacePage geometry (1120px, 24/28px title), 12/16px spacing,
+36/40px semantic controls, 13px labels and 14px readable content. Memory
+uses underline navigation and a primary create action; organization is a
+separate dialog. Settings keep the existing rail width with wrapping labels.
+Long forms use a sticky surface-colored save row with visible draft state.
+Projects prioritize recent work and a compact inline summary over decoration.
+Files use full-height row buttons, persistent actions, and explicit error states.
+Confirmation dialogs share the application modal, above other dialogs (z 140/141),
+with keyboard focus containment. No new palette or motion is introduced.

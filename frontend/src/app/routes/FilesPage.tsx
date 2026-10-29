@@ -1,3 +1,4 @@
+import { ErrorState, inputClass } from "../../components/ui/controls";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FolderOpen, File, ChevronRight, Trash2, ArrowUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -19,6 +20,10 @@ export function FilesPage() {
   const [entries, setEntries] = useState<FileListEntry[]>([]);
   const [breadcrumbs, setBreadcrumbs] = useState<Breadcrumb[]>([]);
   const [subdir, setSubdir] = useState("");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const loadedDir = useRef<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState("name");
   const [loading, setLoading] = useState(true);
   const [contextMenu, setContextMenu] = useState<{ entry: FileListEntry; point: ContextPoint } | null>(null);
   // Guards the polling fallback: a refresh for a previous subdir must never
@@ -27,18 +32,21 @@ export function FilesPage() {
   const openInspector = useUiStore((s) => s.openInspector);
   const addWorkspaceReference = useUiStore((s) => s.addWorkspaceReference);
   const fileRevision = useRuntimeStore((s) => s.fileRevision);
-  const visibleEntries = notebookOnly ? entries.filter((entry) => entry.isDir || entry.name.toLowerCase().endsWith(".ipynb")) : entries;
+  const visibleEntries = entries.filter((entry) => (!notebookOnly || entry.isDir || entry.name.toLowerCase().endsWith(".ipynb")) && entry.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())).sort((a, b) => Number(b.isDir) - Number(a.isDir) || (sort === "modified" ? b.modified - a.modified : sort === "type" ? a.name.split(".").pop()!.localeCompare(b.name.split(".").pop()!) : 0) || a.name.localeCompare(b.name, undefined, { numeric: true }));
 
   const loadFiles = useCallback(async (dir: string, signal?: AbortSignal) => {
     setLoading(true);
+    if (dir !== loadedDir.current) setEntries([]);
     try {
       const result = await workspaceFiles.directory(workspaceCwd, dir, signal);
       setEntries(result.entries);
+      loadedDir.current = dir;
+      setLoadError(null);
       setBreadcrumbs(result.breadcrumbs);
     } catch (error) {
-      if (!signal?.aborted) toast(error instanceof Error ? error.message : t("files.loadError"), "error");
+      if (!signal?.aborted) setLoadError(error instanceof Error ? error.message : t("files.loadError"));
     } finally { if (!signal?.aborted) setLoading(false); }
-  }, [workspaceCwd, t, toast]);
+  }, [workspaceCwd, t]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -58,13 +66,15 @@ export function FilesPage() {
           // Drop results that raced a directory switch (or unmount): the
           // current token only matches the newest poll cycle.
           if (token !== pollTokenRef.current) return;
+          setLoadError(null);
+          loadedDir.current = subdir;
           setEntries(result.entries);
           setBreadcrumbs(result.breadcrumbs);
         })
-        .catch(() => undefined);
+        .catch((error) => { if (token === pollTokenRef.current) setLoadError(error instanceof Error ? error.message : t("files.loadError")); });
     }, 2_000);
     return () => { pollTokenRef.current += 1; window.clearInterval(id); };
-  }, [workspaceCwd, subdir]);
+  }, [workspaceCwd, subdir, t]);
 
   const refreshFiles = () => {
     workspaceFiles.invalidate();
@@ -136,6 +146,8 @@ export function FilesPage() {
       />
 
       <div className="mt-6">
+        {loadError && <ErrorState retry={refreshFiles} retryLabel={t("common.retry")} busy={loading}>{t("files.loadError")}{entries.length > 0 && <p>{t("common.refreshFailed")}</p>}<details className="mt-2 text-ui-caption"><summary>{t("runs.details")}</summary>{loadError}</details></ErrorState>}
+        <div className="my-panel flex flex-wrap gap-2"><input aria-label={t("files.search")} placeholder={t("files.search")} value={search} onChange={(e) => setSearch(e.target.value)} className={inputClass + " flex-1"} /><select aria-label={t("files.sort")} value={sort} onChange={(e) => setSort(e.target.value)} className={inputClass}><option value="name">{t("files.sortName")}</option><option value="type">{t("files.sortType")}</option><option value="modified">{t("files.sortModified")}</option></select></div>
         {/* Subdirectory navigation */}
         {subdir && (
           <button onClick={() => { const parts = subdir.split("/"); parts.pop(); setSubdir(parts.join("/")); }}
@@ -144,25 +156,26 @@ export function FilesPage() {
           </button>
         )}
 
-        {loading ? (
+        {loading && entries.length === 0 ? (
           <div className="text-sm text-muted py-8 text-center">{t("common.loading")}</div>
-        ) : visibleEntries.length === 0 ? (
+        ) : loadError && entries.length === 0 ? null : visibleEntries.length === 0 ? (
           <div className="text-center py-16">
             <FolderOpen size={40} className="mx-auto text-muted/30 mb-3" />
-            <p className="text-sm text-muted">{t("files.empty")}</p>
+            <p className="text-sm text-muted">{t(search ? "files.noMatches" : "files.empty")}</p>
           </div>
         ) : (
           <div className="ui-card-flat overflow-hidden rounded-card">
             {visibleEntries.map((e) => (
               <div key={e.path} onContextMenu={(ev) => handleContextMenu(ev, e)}
-                className="group flex items-center gap-3 px-4 py-2.5 border-b border-faint last:border-b-0 hover:bg-surface-2 cursor-pointer text-sm">
-                <button onClick={() => handleClick(e)} className="flex items-center gap-3 flex-1 min-w-0 text-left">
+                className="group flex items-center gap-3 pr-4 border-b border-faint last:border-b-0 hover:bg-surface-2 text-sm">
+                <button onClick={() => handleClick(e)} className="flex self-stretch items-center gap-3 flex-1 min-w-0 py-3 pl-4 text-left" title={e.name} aria-label={e.name}>
                   {e.isDir ? <FolderOpen size={16} className="text-accent/60 shrink-0" /> : <File size={16} className="text-muted shrink-0" />}
-                  <span className="truncate text-text">{e.name}</span>
+                  <span className="min-w-0 flex-1 break-all text-text">{e.name}</span>
+                  <time className="hidden shrink-0 text-ui-caption text-muted lg:block" title={t("files.modified")}>{new Date(e.modified * 1000).toLocaleDateString()}</time>
                   <span className="text-xs text-muted shrink-0 ml-auto">{e.isDir ? "—" : workspaceFiles.formatSize(e.size)}</span>
                 </button>
                 <button onClick={(ev) => { ev.stopPropagation(); handleDelete(e); }}
-                  className="shrink-0 rounded p-1 text-muted hover:text-error-text hover:bg-error/10 opacity-0 group-hover:opacity-100 transition-opacity">
+                  title={t("common.delete") + ": " + e.name} className="flex h-control w-control shrink-0 items-center justify-center rounded-input text-muted hover:text-error-text hover:bg-error/10">
                   <Trash2 size={14} /><span className="sr-only">{t("common.delete")}</span>
                 </button>
               </div>

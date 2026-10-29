@@ -1,3 +1,6 @@
+import { useFeedback } from "../../components/feedback/feedback-context";
+import { WorkspacePage, WorkspacePageHeader } from "../../components/layout/WorkspacePage";
+import { ErrorState, EmptyState } from "../../components/ui/controls";
 import { MemoryDialog } from "../../components/memory/MemoryDialog";
 import { MemoryReviewRecord } from "../../components/memory/MemoryReviewRecord";
 import { MemoryEditor } from "../../components/memory/MemoryEditor";
@@ -9,12 +12,12 @@ import {
   MemoryRunCard,
   type MemoryRun as Run,
 } from "../../components/memory/MemoryRunCard";
-import { memoryButton, memoryPrimary } from "../../components/memory/memory-ui";
+import { memoryButton, memoryPrimary, memoryInput } from "../../components/memory/memory-ui";
 import {
   changedMemoryFields,
   MemoryProposalDiff,
 } from "../../components/memory/MemoryProposalDiff";
-import { Settings2, Plus, Download } from "lucide-react";
+import { Plus, Download, Settings2 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -26,7 +29,7 @@ import {
   type MemoryFilters,
 } from "../../components/memory/MemoryBrowseControls";
 import { MemoryRecordCard } from "../../components/memory/MemoryRecordCard";
-import { useUiStore } from "../../lib/ui";
+import { cn, useUiStore } from "../../lib/ui";
 type Proposal = {
   status?: string;
   id: string;
@@ -50,7 +53,9 @@ const control = memoryButton;
 export function MemoryPage() {
   const { cwd = "" } = useParams();
   const { t } = useTranslation();
+  const { confirm } = useFeedback();
   const client = useQueryClient();
+  const [organizationOpen, setOrganizationOpen] = useState(false);
   const [tab, setTab] = useState("records");
   const [params, setParams] = useSearchParams();
   const q = params.get("q") ?? "";
@@ -127,6 +132,7 @@ export function MemoryPage() {
   useEffect(() => {
     projectGeneration.current++;
     setBusy(false);
+    setOrganizationOpen(false);
     setError("");
     setNotice("");
     setNoticeReview(false);
@@ -229,8 +235,8 @@ export function MemoryPage() {
           contentHash: r.contentHash,
         })
       }
-      onDelete={() => {
-        if (window.confirm(t("memory.deleteConfirm")))
+      onDelete={async () => {
+        if (await confirm({ title: t("memory.delete"), message: `${r.title} — ${t("memory.deleteConfirm")}`, confirmLabel: t("memory.delete"), destructive: true }))
           void mutate(`/records/${r.id}`, "DELETE", {
             expectedRevision: r.revision,
             contentHash: r.contentHash,
@@ -258,31 +264,11 @@ export function MemoryPage() {
   const reviewRecord = reviews.data?.records.find(
     (r) => r.id === reviewRecordId,
   );
-  const loadError =
-    records.error ?? reviews.error ?? settings.error ?? runs.error;
+  const sectionQuery = tab === "reviews" ? reviews : tab === "runs" ? runs : records;
   return (
-    <main className="h-full overflow-y-auto p-4 sm:p-6">
-      <div className="mx-auto max-w-5xl space-y-3 sm:space-y-5">
-        <header className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-semibold sm:text-2xl">
-              {t("memory.title")}
-            </h1>
-            <p className="hidden text-sm text-muted sm:block">
-              {t("memory.description")}
-            </p>
-          </div>
-          <button
-            className={
-              control + " flex min-h-11 items-center justify-center gap-2"
-            }
-            aria-label={t("memory.openSettings")}
-            onClick={() => openSettings(cwd, "memory")}
-          >
-            <Settings2 size={16} className="sm:hidden" />
-            <span className="hidden sm:inline">{t("memory.openSettings")}</span>
-          </button>
-        </header>
+    <WorkspacePage>
+      <div className="space-y-3">
+        <WorkspacePageHeader className="max-sm:flex-row max-sm:justify-between max-sm:gap-3 max-sm:pb-3" title={t("memory.title")} description={<span className="hidden sm:inline">{t("memory.description")}</span>} actions={<button className={control} aria-label={t("memory.openSettings")} onClick={() => openSettings(cwd, "memory")}><Settings2 size={16} className="sm:hidden" /><span className="hidden sm:inline">{t("memory.openSettings")}</span></button>} />
         <nav
           className="grid grid-cols-3 gap-1 sm:flex sm:flex-wrap sm:gap-2"
           aria-label={t("memory.title")}
@@ -292,24 +278,21 @@ export function MemoryPage() {
               key={v}
               ref={v === "reviews" ? reviewTabRef : undefined}
               aria-pressed={tab === v}
-              className={
-                control +
-                " min-h-11 px-1.5 text-ui-caption sm:px-3 sm:text-sm" +
-                (tab === v ? " bg-surface-selected text-accent" : "")
-              }
+              className={cn(control, "min-h-11 rounded-none border-0 border-b-2 bg-transparent px-3 text-sm", tab === v ? "border-accent text-accent" : "border-transparent")}
               onClick={() => setTab(v)}
             >
               {t(`memory.${v}`)}
               {v === "reviews" &&
-                ` (${(reviews.data?.records.length ?? 0) + (reviews.data?.proposals.length ?? 0)})`}
+                ` (${reviews.isError ? t("common.unknownCount") : reviews.data ? reviews.data.records.length + reviews.data.proposals.length : "…"})`}
             </button>
           ))}
         </nav>
-        {(error || loadError) && (
-          <p role="alert" className="text-error-text">
-            {error || String(loadError)}
-          </p>
-        )}
+        {error && <p role="alert" className="text-error-text">{error}</p>}
+        {sectionQuery.isError && <ErrorState retry={() => void sectionQuery.refetch()} retryLabel={t("common.retry")} busy={sectionQuery.isFetching}>{t("common.loadFailed", { section: t(`memory.${tab}`) })}{sectionQuery.data && <p>{t("common.refreshFailed")}</p>}</ErrorState>}
+        {settings.isError && <ErrorState retry={() => void settings.refetch()} retryLabel={t("common.retry")}>{t("common.loadFailed", { section: t("memory.settings") })}</ErrorState>}
+        {sectionQuery.isPending && <p role="status" className="text-ui-body text-muted">{t("common.loading")}</p>}
+        {tab === "reviews" && reviews.isSuccess && !reviews.data.records.length && !reviews.data.proposals.length && <EmptyState>{t("memory.noReviews")}</EmptyState>}
+        {tab === "runs" && runs.isSuccess && !runs.data.runs.length && <EmptyState>{t("memory.noRuns")}</EmptyState>}
         {notice && (
           <div role="status" className="flex items-center gap-3">
             <p>{notice}</p>
@@ -327,7 +310,7 @@ export function MemoryPage() {
           <>
             <div className="flex min-w-0 gap-2">
               <input
-                className={control + " min-w-0 flex-1"}
+                className={memoryInput + " flex-1"}
                 aria-label={t("memory.search")}
                 maxLength={500}
                 placeholder={t("memory.search")}
@@ -336,7 +319,7 @@ export function MemoryPage() {
               />
               <button
                 className={
-                  control +
+                  memoryPrimary +
                   " flex min-h-11 shrink-0 items-center justify-center"
                 }
                 aria-label={t("memory.create")}
@@ -394,18 +377,13 @@ export function MemoryPage() {
             >
               {records.isFetching
                 ? t("common.loading")
-                : t("memory.matchCount", { count: total })}
+                : records.data ? t("memory.matchCount", { count: total }) : t("common.unknownCount")}
             </div>
-            <details className="space-y-3">
-              <summary className="cursor-pointer text-sm text-muted">
-                {t("memory.organization")}
-              </summary>
-              <MemoryOrganization cwd={cwd} busy={busy} mutate={mutate} />
-            </details>
+            <button type="button" className="text-ui-caption text-link" onClick={() => setOrganizationOpen(true)}>{t("memory.organization")}</button>
             <div className="space-y-2">
               {records.data?.records.map((r) => card(r))}
             </div>
-            {records.data?.records.length === 0 && (
+            {!records.isError && records.data?.records.length === 0 && (
               <p className="text-ui-caption text-muted">
                 {t(activeFilters ? "memory.noMatches" : "memory.empty")}
               </p>
@@ -548,8 +526,8 @@ export function MemoryPage() {
             <button
               className={control + " ml-2"}
               disabled={busy}
-              onClick={() => {
-                if (window.confirm(t("memory.forceConfirm")))
+              onClick={async () => {
+                if (await confirm({ title: t("memory.forceScan"), message: t("memory.forceConfirm"), confirmLabel: t("common.ok") }))
                   void mutate("/dream/run", "POST", {
                     forceScan: true,
                     confirmedForceScan: true,
@@ -571,6 +549,7 @@ export function MemoryPage() {
             </div>
           </>
         )}
+        {organizationOpen && <MemoryDialog title={t("memory.organization")} close={() => setOrganizationOpen(false)}><MemoryOrganization cwd={cwd} busy={busy} mutate={mutate} /></MemoryDialog>}
         {(creating || editing) && (
           <MemoryEditor
             key={editing ? `${editing.id}:${editing.revision}` : "create"}
@@ -781,7 +760,7 @@ export function MemoryPage() {
           </MemoryDialog>
         )}
       </div>
-    </main>
+    </WorkspacePage>
   );
 }
 function MemoryOrganization({
@@ -809,11 +788,13 @@ function MemoryOrganization({
   });
   return (
     <section className="space-y-3 border border-border p-4 rounded-card">
+      {categories.isError && <ErrorState retry={() => void categories.refetch()} retryLabel={t("common.retry")}>{t("common.loadFailed", { section: t("memory.filter.categoryId") })}</ErrorState>}
+      {project.isError && <ErrorState retry={() => void project.refetch()} retryLabel={t("common.retry")}>{t("common.loadFailed", { section: t("memory.projectRecall") })}</ErrorState>}
       <h2>{t("memory.organization")}</h2>
       <label className="flex gap-2">
         <input
           type="checkbox"
-          checked={project.data?.autoRecall ?? true}
+          checked={project.data?.autoRecall ?? false}
           disabled={busy || !project.data}
           onChange={(e) =>
             void mutate("/project-settings", "PATCH", {

@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { MemorySettings } from "@pi-science/contracts";
 import { memoryRequest, useMemorySettings } from "../../lib/memory";
 import { modelSelectionApi } from "../../lib/model-selection";
-import { MemorySettingsForm } from "./MemorySettingsForm";
+import { clearMemorySettingsDraft, MemorySettingsForm } from "./MemorySettingsForm";
 
 /** Memory policy is owner-wide, including when Settings opened inside a project. */
 export function MemoryTab() {
@@ -19,6 +19,7 @@ export function MemoryTab() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const onDirtyChange = useCallback((dirty: boolean) => { if (dirty) setSaved(false); }, []);
   async function save(value: Omit<MemorySettings, "revision">) {
     if (!settings.data) return false;
     setSaving(true);
@@ -29,6 +30,7 @@ export function MemoryTab() {
         expectedRevision: settings.data.revision,
         settings: value,
       });
+      clearMemorySettingsDraft();
       await client.invalidateQueries({ queryKey: ["memory"] });
       setSaved(true);
       return true;
@@ -81,6 +83,7 @@ export function MemoryTab() {
             value: m.id,
             label: m.label || m.id,
           }))}
+          onDirtyChange={onDirtyChange}
           busy={saving}
           save={save}
         />

@@ -598,8 +598,8 @@ button {
   transition-timing-function: ease;
 }
 
-button:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 38%, transparent);
+:is(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
