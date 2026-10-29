@@ -62,7 +62,7 @@ jobs:
           python -m pip install numpy==2.3.5
           pnpm install --frozen-lockfile
       - name: Test optional native build fallback
-        run: node --test apps/server/scripts/build-workspace-discovery-native.test.mjs
+        run: node --test apps/server/scripts/build-workspace-discovery-native.node-test.mjs
       - name: Build native directory backend
         run: pnpm --filter @pi-science/server build:native
       - name: Probe complete Linux sandbox startup

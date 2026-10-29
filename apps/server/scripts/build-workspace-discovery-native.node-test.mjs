@@ -1,3 +1,4 @@
+// Run with node --test. The .node-test.mjs suffix keeps this suite out of Vitest discovery.
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
