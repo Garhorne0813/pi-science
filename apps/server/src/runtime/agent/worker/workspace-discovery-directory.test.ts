@@ -55,3 +55,20 @@ it.skipIf(!darwinDirectory)("bounds native enumeration and rejects nonlocal entr
   } finally { await handle.close(); }
   expect(() => darwinDirectory!.stat(handle.fd, "public.txt")).toThrow("EINVAL");
 });
+
+it.skipIf(!darwinDirectory)("consumes the native directory offset and requires a fresh open to enumerate again", async () => {
+  const root = await fixture();
+  const path = join(root, "workspace");
+  await writeFile(join(path, "second.txt"), "second");
+  const flags = constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000;
+  const handle = await open(path, flags);
+  try {
+    expect(darwinDirectory!.names(handle.fd, 100).sort()).toEqual(["public.txt", "second.txt"]);
+    expect(darwinDirectory!.names(handle.fd, 100)).toEqual([]);
+    expect(darwinDirectory!.stat(handle.fd, "public.txt")).toMatchObject({ file: true, nlink: 1 });
+    const reopened = await open(path, flags);
+    try {
+      expect(darwinDirectory!.names(reopened.fd, 100).sort()).toEqual(["public.txt", "second.txt"]);
+    } finally { await reopened.close(); }
+  } finally { await handle.close(); }
+});

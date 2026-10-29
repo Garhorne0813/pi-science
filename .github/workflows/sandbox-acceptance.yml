@@ -12,7 +12,7 @@ on:
       - 'apps/server/src/mcp/**'
       - 'apps/server/package.json'
       - 'apps/server/native/**'
-      - 'apps/server/scripts/build-workspace-discovery-native.mjs'
+      - 'apps/server/scripts/build-workspace-discovery-native*.mjs'
       - 'apps/server/scripts/verify-workspace-discovery.mjs'
       - 'apps/server/scripts/benchmark-skill-resources.ts'
       - 'patches/**'
@@ -61,6 +61,8 @@ jobs:
           fi
           python -m pip install numpy==2.3.5
           pnpm install --frozen-lockfile
+      - name: Test optional native build fallback
+        run: node --test apps/server/scripts/build-workspace-discovery-native.test.mjs
       - name: Build native directory backend
         run: pnpm --filter @pi-science/server build:native
       - name: Probe complete Linux sandbox startup
@@ -97,7 +99,7 @@ jobs:
           PI_SCIENCE_SANDBOX_SOCAT="$(command -v socat)"
           PI_SCIENCE_SANDBOX_RIPGREP="$(command -v rg)"
           export PI_SCIENCE_SANDBOX_PYTHON PI_SCIENCE_SANDBOX_PYTHON_ROOT PI_SCIENCE_SANDBOX_SOCAT PI_SCIENCE_SANDBOX_RIPGREP
-          pnpm --filter @pi-science/server exec vitest run src/runtime/agent/worker/workspace-discovery-directory.test.ts src/runtime/agent/worker/workspace-discovery.test.ts src/runtime/sandbox/workspace-read-authorization.test.ts src/runtime/agent/worker/session-runtime.test.ts src/runtime/agent/agent-definitions.test.ts src/runtime/agent/worker/confined-read-tool.test.ts src/runtime/agent/agent-core-tools.test.ts src/runtime/sandbox/universal-sandbox.test.ts src/runtime/sandbox/execution-scope.test.ts src/runtime/sandbox/execution-grants.test.ts src/runtime/agent/subagent-dispatch.test.ts src/runtime/sandbox/platform-acceptance.test.ts src/runtime/sandbox/skill-resources.test.ts src/runtime/sandbox/session-approval.test.ts src/runtime/sandbox/profiles.test.ts src/runtime/sandbox/network.test.ts src/runtime/sandbox/network-grants.test.ts src/runtime/agent/worker/network-access-tool.test.ts src/runtime/executions/execution-budget.test.ts src/runtime/agent/worker/execution-budget.test.ts src/mcp/call-scheduler.test.ts --reporter=default --reporter=junit --outputFile.junit=sandbox-acceptance.xml
+          pnpm --filter @pi-science/server exec vitest run src/runtime/agent/worker/workspace-discovery-unavailable.test.ts src/runtime/agent/worker/workspace-discovery-directory.test.ts src/runtime/agent/worker/workspace-discovery.test.ts src/runtime/sandbox/workspace-read-authorization.test.ts src/runtime/agent/worker/session-runtime.test.ts src/runtime/agent/agent-definitions.test.ts src/runtime/agent/worker/confined-read-tool.test.ts src/runtime/agent/agent-core-tools.test.ts src/runtime/sandbox/universal-sandbox.test.ts src/runtime/sandbox/execution-scope.test.ts src/runtime/sandbox/execution-grants.test.ts src/runtime/agent/subagent-dispatch.test.ts src/runtime/sandbox/platform-acceptance.test.ts src/runtime/sandbox/skill-resources.test.ts src/runtime/sandbox/session-approval.test.ts src/runtime/sandbox/profiles.test.ts src/runtime/sandbox/network.test.ts src/runtime/sandbox/network-grants.test.ts src/runtime/agent/worker/network-access-tool.test.ts src/runtime/executions/execution-budget.test.ts src/runtime/agent/worker/execution-budget.test.ts src/mcp/call-scheduler.test.ts --reporter=default --reporter=junit --outputFile.junit=sandbox-acceptance.xml
       - name: Measure per-Bash Skill policy scans
         shell: bash
         run: pnpm --filter @pi-science/server exec tsx scripts/benchmark-skill-resources.ts > skill-resource-performance.json

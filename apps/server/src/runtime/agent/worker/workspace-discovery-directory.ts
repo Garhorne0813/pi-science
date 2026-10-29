@@ -4,6 +4,7 @@ import { DiscoveryError } from "./workspace-discovery-contract.js";
 import { darwinDirectory } from "./workspace-discovery-native.js";
 
 interface PinnedDirectory {
+  /** Call once per pinned directory; bounded enumeration is not pagination. */
   names(maximum: number): AsyncIterable<string>;
   stat(name: string): Promise<{ directory: boolean; file: boolean; nlink: number }>;
 }

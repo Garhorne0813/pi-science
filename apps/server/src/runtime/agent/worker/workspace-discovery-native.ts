@@ -2,6 +2,8 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 interface NativeDirectory {
+  /** Single pass per opened fd: shares its offset and may discard buffered entries.
+   * Reopen the directory for another scan; repeated calls are not pagination. */
   names(fd: number, maximum: number): string[];
   stat(fd: number, name: string): { directory: boolean; file: boolean; nlink: number };
 }

@@ -26,6 +26,8 @@ static int directory_fd(napi_env env, napi_value value, int *fd) {
   return 1;
 }
 
+// Single-pass enumeration: the duplicate shares the caller's directory offset.
+// A bounded call may discard buffered entries; reopen the directory for a new scan.
 static napi_value names(napi_env env, napi_callback_info info) {
   size_t argc = 2;
   napi_value args[2], result, name;
