@@ -130,7 +130,7 @@ describe("SettingsDialog", () => {
     fireEvent.click(modelsTab);
     expect(await screen.findByText("My model services")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "General & appearance" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "false");
   });
 
   it("auto-closes when an extension interaction arrives", async () => {
@@ -189,7 +189,7 @@ describe("SettingsDialog", () => {
     const panelOrder = screen.getByRole("button", { name: /^Waiting for input:/ });
     panelOrder.focus();
     fireEvent.keyDown(panelOrder, { key: "Tab" });
-    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "General & appearance" }));
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "General" }));
   });
 
   it("wraps Shift+Tab from the first control (or the panel) to the last", async () => {
@@ -197,7 +197,7 @@ describe("SettingsDialog", () => {
     openSettings(null);
     const dialog = await screen.findByRole("dialog");
     // The sidebar's General tab is the first focusable control now.
-    const general = screen.getByRole("tab", { name: "General & appearance" });
+    const general = screen.getByRole("tab", { name: "General" });
     general.focus();
     fireEvent.keyDown(general, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(screen.getByRole("button", { name: /^Waiting for input:/ }));
@@ -217,7 +217,7 @@ describe("SettingsDialog", () => {
       'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
     ));
     const labels = focusables.map((el) => el.getAttribute("aria-label") ?? el.textContent ?? "");
-    const generalIndex = labels.indexOf("General & appearance");
+    const generalIndex = labels.indexOf("General");
     const closeIndex = labels.indexOf("Close");
     const panelOrderIndex = labels.findIndex((label) => label.includes("Conversation and preview layout"));
     expect(generalIndex).toBeGreaterThanOrEqual(0);
@@ -232,5 +232,5 @@ it('opens the requested Memory section directly and resets ordinary Settings ent
   expect(await screen.findByRole('checkbox',{name:'Enable Memory'})).toBeInTheDocument();
   expect(fetchMock.mock.calls.some(([url])=>url==='/api/memory/settings')).toBe(true);
   act(()=>useUiStore.getState().closeSettings());act(()=>useUiStore.getState().openSettings('project'));
-  expect(await screen.findByRole('tab',{name:'General & appearance'})).toHaveAttribute('aria-selected','true');
+  expect(await screen.findByRole('tab',{name:'General'})).toHaveAttribute('aria-selected','true');
 });

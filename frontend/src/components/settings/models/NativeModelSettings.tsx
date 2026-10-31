@@ -125,7 +125,6 @@ export function NativeModelSettings({ onConfigReload }: { onConfigReload?: () =>
       {providers.slice(currentPage * 20, (currentPage + 1) * 20).map((provider) => <ServiceCard key={provider.id} provider={provider} search={search} open={Boolean(expanded[provider.id])} onToggle={() => setExpanded((v) => ({ ...v, [provider.id]: !v[provider.id] }))} onDialog={(kind) => { document.getElementById(`provider-actions-${provider.id}`)?.focus(); setDialog({ kind, provider }); }} dialogOpen={dialog !== null} />)}
       {providers.length > 20 && <div className="flex gap-2"><button className={button} disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>{t("settings.redesign.previousPage")}</button><button className={button} disabled={(currentPage + 1) * 20 >= providers.length} onClick={() => setPage(currentPage + 1)}>{t("settings.redesign.nextPage")}</button></div>}
     </section>
-    <p className="border-t border-faint pt-3 text-ui-meta text-muted">{t("settings.native.capabilitySource")}</p>
     {dialog?.kind === "connect" && <ConnectModelService providers={catalog.data?.providers ?? []} revision={dialog.revision} onClose={() => setDialog(null)} onSaved={committed} onFailure={failed} />}
     {dialog?.kind === "subscription" && <Modal title={`${dialog.provider.name} · ${t("settings.oauth.manage")}`} restoreFocusTo={document.getElementById(`provider-actions-${dialog.provider.id}`)} onClose={() => setDialog(null)} contentClassName="h-[min(620px,calc(100dvh-32px))] w-[min(600px,calc(100vw-32px))] max-h-none"><SubscriptionAuthorization provider={dialog.provider} revision={dialog.provider.revision} onSaved={committed} onFailure={failed} /></Modal>}
     {dialog && dialog.kind !== "connect" && dialog.kind !== "subscription" && <ManageDialog key={`${dialog.kind}-${dialog.provider.id}`} dialog={dialog} config={configuration.data?.config ?? { providers: {} }} onClose={() => setDialog(null)} onSaved={committed} onFailure={failed} />}
@@ -162,7 +161,7 @@ function ServiceCard({ provider, search, open, onToggle, onDialog, dialogOpen }:
     </div>
     {provider.config?.baseUrl && <div className="flex min-w-0 items-center gap-2 pb-2 pl-12 pr-3"><code className="min-w-0 truncate font-mono text-ui-meta text-muted">{provider.config.baseUrl}</code><CopyEndpoint url={provider.config.baseUrl} /></div>}
     {provider.authentication.restart_required && <p className="pb-2 pl-12 pr-3 text-ui-caption text-muted">{t("settings.native.restart")}</p>}
-    {open && <div id={regionId} role="region" aria-label={`${provider.name} ${t("settings.models.models")}`} className="border-t border-faint"><ModelTable key={search} models={models} /></div>}
+    {open && <div id={regionId} role="region" aria-label={`${provider.name} ${t("settings.models.models")}`} className="border-t border-faint"><ModelTable key={search} models={models} /><p className="border-t border-faint px-3 py-3 text-ui-caption text-muted">{t("settings.native.capabilitySource")}</p></div>}
   </section>;
 }
 

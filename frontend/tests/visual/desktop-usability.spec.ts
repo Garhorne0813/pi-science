@@ -39,7 +39,7 @@ test("memory settings draft survives navigation and save stays in the desktop vi
   await page.getByRole("button", { name: "Memory settings", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Settings", exact: true });
   await dialog.getByRole("spinbutton", { name: "Daily token limit", exact: true }).fill("12345");
-  await dialog.getByRole("tab", { name: "General & appearance", exact: true }).click();
+  await dialog.getByRole("tab", { name: "General", exact: true }).click();
   await dialog.getByRole("tab", { name: "Memory", exact: true }).click();
   await expect(dialog.getByRole("spinbutton", { name: "Daily token limit", exact: true })).toHaveValue("12345");
   const save = dialog.getByRole("button", { name: "Save", exact: true });

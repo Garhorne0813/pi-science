@@ -20,7 +20,7 @@ test("Settings isolates delayed model loading and bounds a 10,000-model catalog"
   expect(requests).toBe(0);
   await dialog.getByRole("tab", { name: "AI Models", exact: true }).click();
   await expect.poll(() => requests).toBe(1);
-  await dialog.getByRole("tab", { name: "General & appearance", exact: true }).click();
+  await dialog.getByRole("tab", { name: "General", exact: true }).click();
   await dialog.getByRole("button", { name: "Dark", exact: true }).click();
   await expect(dialog.getByRole("button", { name: "Dark", exact: true })).toHaveAttribute("aria-pressed", "true");
   await dialog.getByRole("tab", { name: "Progress", exact: true }).click();

@@ -1,3 +1,5 @@
+import { SettingsSaveMode } from "../SettingsSaveMode";
+import { useSettingsDraftStatus } from "../SettingsDraftStatus";
 import { SettingsSaveBar } from "../SettingsSaveBar";
 import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -29,6 +31,7 @@ export function DefaultModelSelection({ scope = null, onCommitted, onOpenModels 
   const configured = base?.model ? index.byId.get(base.model) : undefined;
   const levels = model?.thinking_levels?.length ? model.thinking_levels : ["off"];
   const dirty = Boolean(draft && (draft.model !== base?.model || draft.thinking !== base?.thinking));
+  useSettingsDraftStatus("agent:model", dirty);
   const edit = (selection: ModelSelection) => { setDraft(selection); setSaved(false); };
   const refresh = async () => {
     const version = ++refreshVersion.current;
@@ -51,7 +54,8 @@ export function DefaultModelSelection({ scope = null, onCommitted, onOpenModels 
   const loadError = defaults.error ?? catalog.error;
   const contextWindow = configured?.context_window;
   return <section aria-labelledby="agent-model-title" className="rounded-card border border-faint bg-surface-2/40 p-4">
-    <div className="flex flex-wrap items-center justify-between gap-3">
+    <SettingsSaveMode />
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
       <h3 id="agent-model-title" className="text-ui-body font-medium text-text">{t("settings.agent.activeModelTitle")}</h3>
       {onOpenModels && <button type="button" onClick={onOpenModels} className="flex min-h-9 items-center gap-2 rounded-input px-2 text-ui-caption text-link hover:bg-surface-hover">{t("settings.redesign.manageModels")}<ArrowRight size={14} /></button>}
     </div>

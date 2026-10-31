@@ -23,9 +23,9 @@ test("settings navigation, model facts and saved compaction across viewports", a
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog.getByRole("button", { name: "Light", exact: true })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
-  for (const tab of ["General & appearance", "AI Models", "Agent"]) {
+  for (const tab of ["General", "AI Models", "Agent"]) {
     await dialog.getByRole("tab", { name: tab, exact: true }).click();
-    await expect(dialog.getByRole("heading", { name: tab, exact: true })).toBeVisible();
+    await expect(dialog.getByRole("heading", { name: tab === "General" ? "General & appearance" : tab, exact: true })).toBeVisible();
     // Default selection is fetched independently from the Settings shell.
     // Audit the ready control, rather than racing its disabled loading state.
     if (tab === "Agent") {
@@ -132,6 +132,7 @@ test("settings switches preserve drafts across tabs and expose only applicable c
   await expect(dialog.getByLabel("API key", { exact: true })).toBeVisible();
   await dialog.getByRole("checkbox", { name: "Enable webpage and PDF reading", exact: true }).uncheck();
   await expect(dialog.getByLabel("API key", { exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole("tab", { name: "Web access", exact: true }).locator('[title="Unsaved changes"]')).toBeVisible();
   await dialog.getByRole("tab", { name: "Agent", exact: true }).click();
   const compact = dialog.getByRole("checkbox", { name: "Automatic compaction", exact: true });
   await compact.uncheck();
@@ -143,4 +144,6 @@ test("settings switches preserve drafts across tabs and expose only applicable c
   await expect(dialog.getByRole("checkbox", { name: "Enable web search", exact: true })).toBeChecked();
   await dialog.getByRole("tab", { name: "Agent", exact: true }).click();
   await expect(compact).not.toBeChecked();
+  await expect(dialog.getByRole("tab", { name: "Web access", exact: true }).locator('[title="Unsaved changes"]')).toHaveCount(0);
+  await expect(dialog.getByRole("tab", { name: "Agent", exact: true }).locator('[title="Unsaved changes"]')).toBeVisible();
 });

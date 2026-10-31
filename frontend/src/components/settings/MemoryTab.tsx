@@ -44,9 +44,6 @@ export function MemoryTab() {
   const failure = error || (settings.error ? String(settings.error) : "");
   return (
     <div className="space-y-4">
-      <p className="text-ui-caption leading-relaxed text-muted">
-        {t("memory.settingsDescription")}
-      </p>
       {settings.isPending && <p role="status">{t("common.loading")}</p>}
       {failure && (
         <p role="alert" className="text-error-text">

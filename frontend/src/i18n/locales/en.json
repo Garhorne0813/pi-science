@@ -1,6 +1,6 @@
 {
   "settings.network.title": "Network permissions",
-  "settings.network.description": "Manage persistent network permissions for analysis and local MCP. Changes apply across all projects. Running kernels keep their variables; revoked connections are closed.",
+  "settings.network.description": "Manage network permissions for analysis and local MCP. Revoking access closes connections; running kernels keep their variables.",
   "settings.network.rules": "Destination permissions",
   "settings.network.profile": "Applies to",
   "settings.network.analysis": "Analysis (Bash, Notebook, Jobs)",
@@ -1639,7 +1639,7 @@
   "filePreview.pdfFocusHint": "The browser PDF viewer may handle Esc itself. Use Exit focus in the toolbar to return.",
   "filePreview.frameFocusHint": "Esc exits accessible HTML previews. If the embedded page handles Esc, use Exit focus in the toolbar.",
   "settings.webSearch.title": "Web access",
-  "settings.webSearch.description": "Configure public web search and webpage/PDF reading for all projects. Changes also apply to existing conversations.",
+  "settings.webSearch.description": "Configure web search and webpage/PDF reading. Changes also apply to existing conversations.",
   "settings.webSearch.tools": "Web access",
   "settings.webSearch.searchEnabled": "Enable web search",
   "settings.webSearch.fetchEnabled": "Enable webpage and PDF reading",
@@ -2063,12 +2063,16 @@
   "settings.scope.device": "This device",
   "settings.scope.deviceHelp": "Appearance, language and layout are saved on this device.",
   "memory.noChanges": "No unsaved changes",
-  "settings.consistency.progressScope": "Progress appearance · Global · Saved automatically. General preferences above apply to this device.",
+  "settings.consistency.progressScope": "Progress appearance · Global · Auto-save",
   "settings.consistency.agentScope": "Default model, approval and context policy are global. Subagents belong to the current project. Save each configuration separately; switching tabs keeps your edits.",
   "settings.consistency.configurationGuide": "Configuration guide",
   "settings.consistency.runConditions": "Advanced: consolidation conditions",
   "settings.consistency.runConditionsHelp": "Time windows, idle requirements and run limits also apply to manual consolidation. Turning an option off keeps its values.",
   "settings.consistency.saveModel": "Save default model",
   "settings.consistency.autoSave": "Changes are saved automatically",
-  "settings.consistency.webDependency": "Web tools follow network permissions. Turning tools off keeps provider settings."
+  "settings.consistency.webDependency": "Web tools follow network permissions. Turning tools off keeps provider settings.",
+  "settings.consistency.manualSave": "Save required · Apply changes with Save",
+  "settings.consistency.memoryDisabled": "Enable Memory to configure recall, extraction, consolidation, review and budgets.",
+  "settings.consistency.generalNav": "General",
+  "settings.consistency.scrollMore": "Scroll for more settings"
 }

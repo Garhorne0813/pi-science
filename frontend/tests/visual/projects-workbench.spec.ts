@@ -12,7 +12,7 @@ test("empty workbench opens global settings from its header", async ({ page }, t
   await page.screenshot({ path: testInfo.outputPath("empty-workbench.png"), fullPage: true });
   await settings.click();
   const dialog = page.getByRole("dialog", { name: "Settings", exact: true });
-  await expect(dialog.getByRole("tab", { name: "General & appearance", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("tab", { name: "General", exact: true })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Light", exact: true })).toBeVisible();
   await dialog.getByRole("button", { name: "Close", exact: true }).click();
   await expect(dialog).not.toBeVisible();

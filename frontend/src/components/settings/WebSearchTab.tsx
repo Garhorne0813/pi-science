@@ -1,3 +1,5 @@
+import { SettingsSaveMode } from "./SettingsSaveMode";
+import { useSettingsDraftStatus } from "./SettingsDraftStatus";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { apiRequest } from "../../lib/client/api";
@@ -27,6 +29,7 @@ export function WebSearchTab() {
     return () => { active = false; };
   }, []);
   const dirty = JSON.stringify(data) !== JSON.stringify(base) || Boolean(key.trim());
+  useSettingsDraftStatus("web-search", dirty);
   async function save(removeKey = false) {
     if (!data) return;
     setBusy(true); setError(null); setSaved(false);
@@ -44,6 +47,7 @@ export function WebSearchTab() {
   }
   function change(patch: Partial<WebSettings>) { setData((previous) => previous ? { ...previous, ...patch } : previous); setSaved(false); }
   return <div className="space-y-5">
+    <SettingsSaveMode />
     <p className="text-ui-label leading-relaxed text-muted">{t("settings.webSearch.description")}</p>
     <p className="text-ui-caption text-muted">{t("settings.consistency.webDependency")}</p>
     {error && <p role="alert" className="text-ui-label text-error-text">{error}</p>}

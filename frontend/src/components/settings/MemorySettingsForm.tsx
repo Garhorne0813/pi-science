@@ -1,3 +1,5 @@
+import { SettingsSaveMode } from "./SettingsSaveMode";
+import { useSettingsDraftStatus } from "./SettingsDraftStatus";
 import { SettingsToggle } from "./SettingsToggle";
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
@@ -29,6 +31,7 @@ export function MemorySettingsForm({
   const { t } = useTranslation();
   const [s, set] = useState(() => { try { const draft = JSON.parse(sessionStorage.getItem(draftKey) || "null"); if (draft?.recall && draft?.extraction && draft?.dream && draft?.budget && draft?.review) return draft as MemorySettings; } catch { /* invalid draft */ } return value; });
   const dirty = JSON.stringify(s) !== JSON.stringify(value);
+  useSettingsDraftStatus("memory", dirty);
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => { try { if (dirty) sessionStorage.setItem(draftKey, JSON.stringify(s)); else clearMemorySettingsDraft(); } catch { /* storage unavailable */ } }, [s, dirty]);
   useEffect(() => { const guard = (event: BeforeUnloadEvent) => { if (dirty) { event.preventDefault(); event.returnValue = ""; } }; window.addEventListener("beforeunload", guard); return () => window.removeEventListener("beforeunload", guard); }, [dirty]);
@@ -119,6 +122,8 @@ export function MemorySettingsForm({
         void save(rest);
       }}
     >
+      <SettingsSaveMode />
+      {!s.enabled && <p className="text-ui-caption text-muted">{t("settings.consistency.memoryDisabled")}</p>}
       {s.revision !== value.revision && <p role="alert" className="text-ui-body text-warn-text">{t("memory.draftConflict")}</p>}
       <Section title={t("memory.title")}>
         <div className="divide-y divide-faint">

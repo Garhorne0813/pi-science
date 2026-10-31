@@ -88,8 +88,8 @@ describe("SettingsContent", () => {
     renderContent(null);
     const nav = await screen.findByRole("tablist", { name: "Settings" });
     expect(nav).toHaveAttribute("aria-orientation", "vertical");
-    expect(screen.getByRole("tab", { name: "General & appearance" })).toHaveAttribute("aria-selected", "true");
-    const panel = screen.getByRole("tabpanel", { name: "General & appearance" });
+    expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true");
+    const panel = screen.getByRole("tabpanel", { name: "General" });
     expect(panel).toHaveAttribute("aria-labelledby", "settings-tab-general");
     expect(panel.querySelector(":scope > div > div")).toHaveClass("md:px-0");
     expect(panel.querySelector(":scope > div > div")).not.toHaveClass("md:px-6");
@@ -99,7 +99,7 @@ describe("SettingsContent", () => {
     renderContent(null);
     const nav = await screen.findByRole("tablist", { name: "Settings" });
     expect(nav).toHaveClass("gap-1");
-    const general = screen.getByRole("tab", { name: "General & appearance" });
+    const general = screen.getByRole("tab", { name: "General" });
     const models = screen.getByRole("tab", { name: "AI Models" });
     expect(general).toHaveClass("bg-surface-selected");
     expect(models).not.toHaveClass("bg-surface-selected");
@@ -111,14 +111,14 @@ describe("SettingsContent", () => {
     const nav = await screen.findByRole("tablist", { name: "Settings" });
     const aside = nav.closest("aside");
     if (!aside) throw new Error("settings aside not found");
-    // Desktop column is exactly 188px with 12px side padding and 22px top
+    // Desktop column is exactly 220px with 12px side padding and 22px top
     // padding; mobile stays a 56px icon rail with 10px side padding.
-    expect(aside).toHaveClass("w-14", "px-2.5", "md:w-[188px]", "md:px-3", "md:pt-[22px]", "md:pb-0");
+    expect(aside).toHaveClass("w-14", "px-2.5", "md:w-[220px]", "md:px-3", "md:pt-[22px]", "md:pb-0");
     // A settings heading sits above the list on desktop (hidden on mobile).
     expect(screen.getByRole("heading", { name: "Settings" })).toHaveClass("hidden", "md:block", "text-base", "font-medium");
     // Tabs: 36px circle centered on mobile; 40px full-width rounded row with
     // an 8px icon gap on desktop; no separate icon tile background.
-    const general = screen.getByRole("tab", { name: "General & appearance" });
+    const general = screen.getByRole("tab", { name: "General" });
     expect(general).toHaveClass("h-9", "w-9", "rounded-full", "md:h-10", "md:w-full", "md:rounded-card", "md:px-3", "md:gap-2");
     expect(general).toHaveClass("bg-surface-selected", "text-text");
     expect(screen.getByRole("tab", { name: "Agent" })).toHaveClass("hover:bg-surface-hover");
@@ -159,7 +159,7 @@ describe("SettingsContent", () => {
     await screen.findByRole("tablist", { name: "Settings" });
     fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
     expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "General & appearance" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("tabpanel", { name: "AI Models" })).toHaveAttribute("aria-labelledby", "settings-tab-models");
     expect(await screen.findByText("My model services")).toBeInTheDocument();
   });
@@ -167,13 +167,13 @@ describe("SettingsContent", () => {
   it("shows device scope for General and global scope for Network", async () => {
     renderContent("/lab/project");
     const aside = (await screen.findByRole("tablist", { name: "Settings" })).closest("aside")!;
-    expect(within(aside).getByText("This device")).toBeInTheDocument();
+    expect(screen.getByText("This device")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Network permissions" }));
-    expect(within(aside).getByText("Global settings")).toBeInTheDocument();
+    expect(screen.getByText("Global settings")).toBeInTheDocument();
     expect(within(aside).queryByText("Workspace settings")).not.toBeInTheDocument();
     expect(within(aside).queryByText("/lab/project")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "General & appearance" }));
-    expect(within(aside).getByText("This device")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "General" }));
+    expect(screen.getByText("This device")).toBeInTheDocument();
     expect(within(aside).queryByText("/lab/project")).not.toBeInTheDocument();
   });
 
@@ -182,7 +182,7 @@ describe("SettingsContent", () => {
     const aside = (await screen.findByRole("tablist", { name: "Settings" })).closest("aside")!;
     fireEvent.click(screen.getByRole("tab", { name: "Web access" }));
     expect(await screen.findByRole("checkbox", { name: "Enable web search" })).toBeChecked();
-    expect(within(aside).getByText("Global settings")).toBeInTheDocument();
+    expect(screen.getByText("Global settings")).toBeInTheDocument();
     expect(within(aside).queryByText("/lab/project")).not.toBeInTheDocument();
   });
 
@@ -220,7 +220,7 @@ describe("SettingsContent", () => {
   it("supports arrow-key navigation between tabs", async () => {
     renderContent(null);
     const nav = await screen.findByRole("tablist", { name: "Settings" });
-    const general = screen.getByRole("tab", { name: "General & appearance" });
+    const general = screen.getByRole("tab", { name: "General" });
     general.focus();
     fireEvent.keyDown(nav, { key: "ArrowDown" });
     await waitFor(() => expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true"));
@@ -231,7 +231,7 @@ describe("SettingsContent", () => {
     fireEvent.keyDown(nav, { key: "ArrowUp" });
     await waitFor(() => expect(screen.getByRole("tab", { name: "Environments" })).toHaveAttribute("aria-selected", "true"));
     fireEvent.keyDown(nav, { key: "Home" });
-    await waitFor(() => expect(screen.getByRole("tab", { name: "General & appearance" })).toHaveAttribute("aria-selected", "true"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true"));
   });
 
   it("keeps runtime model controls out of Settings", async () => {
@@ -257,7 +257,7 @@ describe("SettingsContent", () => {
     const nav = await screen.findByRole("tablist", { name: "Settings" });
     expect(nav.querySelectorAll('button[tabindex="0"]')).toHaveLength(1);
     fireEvent.click(screen.getByRole("tab", { name: "Agent" }));
-    expect(screen.getByRole("tab", { name: "General & appearance" })).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("tabindex", "-1");
     expect(screen.getByRole("tab", { name: "Agent" })).toHaveAttribute("tabindex", "0");
     fireEvent.click(await screen.findByRole("button", { name: "Manage models" }));
     expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true");
@@ -292,7 +292,7 @@ describe("SettingsContent", () => {
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("model-config"))).toBe(false);
     fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
     await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/model-config")).toHaveLength(1));
-    fireEvent.click(screen.getByRole("tab", { name: "General & appearance" }));
+    fireEvent.click(screen.getByRole("tab", { name: "General" }));
     fireEvent.click(screen.getByRole("button", { name: "Dark" }));
     expect(useUiStore.getState().theme).toBe("dark");
     expect(screen.queryByRole("status", { name: "Loading…" })).not.toBeInTheDocument();
@@ -310,7 +310,7 @@ describe("SettingsContent", () => {
     renderContent(null);
     fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Catalog unavailable");
-    fireEvent.click(screen.getByRole("tab", { name: "General & appearance" }));
+    fireEvent.click(screen.getByRole("tab", { name: "General" }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Light" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));

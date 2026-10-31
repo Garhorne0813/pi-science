@@ -9,7 +9,6 @@ export function AgentTab({ config, loading, error, scope, saving, onSave, onRefr
   const { t } = useTranslation();
   return <div className="space-y-6">
     <p className="text-ui-caption leading-relaxed text-muted">{t("settings.agent.description")}</p>
-    <p className="text-ui-caption text-muted">{t("settings.consistency.agentScope")}</p>
     <ApprovalPreferences />
     <DefaultModelSelection scope={scope} onCommitted={onRefreshContext} onOpenModels={onOpenModels} />
     <section aria-label={t("settings.context.title")} className="space-y-3">

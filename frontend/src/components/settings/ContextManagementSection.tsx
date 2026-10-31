@@ -1,3 +1,5 @@
+import { SettingsSaveMode } from "./SettingsSaveMode";
+import { useSettingsDraftStatus } from "./SettingsDraftStatus";
 import { useEffect, useState } from "react";
 import { SettingsToggle } from "./SettingsToggle";
 import { SettingsSaveBar } from "./SettingsSaveBar";
@@ -15,6 +17,7 @@ export function ContextManagementSection({ config, saving, onSave }: { config: S
     setThreshold(config.compaction_threshold_percent ?? 85);
   }, [config.compaction_enabled, config.compaction_threshold_percent]);
   const dirty = enabled !== (config.compaction_enabled !== false) || threshold !== (config.compaction_threshold_percent ?? 85);
+  useSettingsDraftStatus("agent:context", dirty);
   const policy = contextPolicy(config, threshold);
   const submit = async () => {
     setSaved(false);
@@ -23,7 +26,8 @@ export function ContextManagementSection({ config, saving, onSave }: { config: S
   };
   return (
     <section aria-labelledby="context-management-title" className="rounded-card border border-faint bg-surface-2/40 p-4">
-      <div className="flex flex-wrap items-start justify-between gap-4">
+      <SettingsSaveMode />
+      <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <h2 id="context-management-title" className="text-ui-body font-medium text-text">{t("settings.context.title")}</h2>
           <p className="mt-1 text-ui-caption leading-relaxed text-muted">{t("settings.context.description")}</p>

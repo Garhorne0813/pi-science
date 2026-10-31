@@ -1,6 +1,6 @@
 {
   "settings.network.title": "网络权限",
-  "settings.network.description": "管理分析执行和本地 MCP 的持久网络权限，对所有项目生效。修改后运行中的内核保留变量，被撤销的网络连接会关闭。",
+  "settings.network.description": "管理分析工具与本地 MCP 的网络权限。撤销权限会关闭相应连接，运行中的内核保留变量。",
   "settings.network.rules": "目标地址权限",
   "settings.network.profile": "适用范围",
   "settings.network.analysis": "分析执行（Bash、Notebook、Jobs）",
@@ -1639,7 +1639,7 @@
   "filePreview.pdfFocusHint": "浏览器 PDF 阅读器可能自行处理 Esc，请使用工具栏的“退出专注”返回。",
   "filePreview.frameFocusHint": "可访问的 HTML 预览支持 Esc 退出；若嵌入页面自行处理 Esc，请使用工具栏的“退出专注”。",
   "settings.webSearch.title": "网页访问",
-  "settings.webSearch.description": "配置所有项目的网页搜索及网页/PDF 阅读能力。修改也会应用于已有对话。",
+  "settings.webSearch.description": "配置网页搜索和网页/PDF 读取，更改也适用于已有对话。",
   "settings.webSearch.tools": "联网工具",
   "settings.webSearch.searchEnabled": "启用联网搜索",
   "settings.webSearch.fetchEnabled": "启用网页及 PDF 阅读",
@@ -2063,12 +2063,16 @@
   "settings.scope.device": "当前设备",
   "settings.scope.deviceHelp": "外观、语言和布局保存在当前设备。",
   "memory.noChanges": "没有未保存的修改",
-  "settings.consistency.progressScope": "进度外观 · 全局 · 自动保存。上方通用偏好仅作用于当前设备。",
+  "settings.consistency.progressScope": "进度外观 · 全局 · 自动保存",
   "settings.consistency.agentScope": "默认模型、审批和上下文策略为全局设置；子代理来自当前项目。各配置单独保存，切换标签保留未保存的修改。",
   "settings.consistency.configurationGuide": "配置指南",
   "settings.consistency.runConditions": "高级：整理运行条件",
   "settings.consistency.runConditionsHelp": "时间窗口、空闲要求和运行限制也适用于手动整理。关闭选项会保留已有参数。",
   "settings.consistency.saveModel": "保存默认模型",
   "settings.consistency.autoSave": "更改自动保存",
-  "settings.consistency.webDependency": "网页工具受网络权限规则约束。关闭工具会保留供应商配置。"
+  "settings.consistency.webDependency": "网页工具受网络权限规则约束。关闭工具会保留供应商配置。",
+  "settings.consistency.manualSave": "需要保存 · 修改后点击保存",
+  "settings.consistency.memoryDisabled": "启用后可设置记忆召回、自动提取、整理、审核和预算。",
+  "settings.consistency.generalNav": "通用外观",
+  "settings.consistency.scrollMore": "向下滚动查看更多设置"
 }
