@@ -6,7 +6,7 @@ import { SettingsSelectMenu } from "../SettingsSelectMenu";
 
 type Metrics = { samples: number; transitions: Array<{ transition: string; count: number; failures: number; p95_ms: number | null; worker_restarts: number; kernel_restarts: number }> };
 export function ApprovalPreferences() {
-  const { i18n } = useTranslation(); const zh = i18n.language.startsWith("zh");
+  const { i18n, t } = useTranslation(); const zh = i18n.language.startsWith("zh");
   const [mode, setMode] = useState<"ask" | "auto">("ask");
   const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false);
   const [error, setError] = useState(""); const [metrics, setMetrics] = useState<Metrics | null>(null);
@@ -44,6 +44,7 @@ export function ApprovalPreferences() {
     {loading ? <p role="status">{zh ? "加载中…" : "Loading…"}</p> : <SettingsSelectMenu ariaLabel={title} value={mode} disabled={saving} options={[
       { value: "ask", label: zh ? "请求批准" : "Ask for approval" }, { value: "auto", label: zh ? "帮我批准" : "Approve safe actions" },
     ]} onSelect={(next) => void save(next)} />}
+    <p role="status" className="text-ui-caption text-muted">{t(saving ? "common.saving" : "settings.consistency.autoSave")}</p>
     {error && <p role="alert" className="text-ui-caption text-error-text">{error}</p>}
     <details className="text-ui-caption text-muted"><summary>{zh ? "审批切换性能" : "Approval switch performance"}</summary>
       <p className="my-2">{zh ? "当前服务进程最近 1000 次切换，按方向统计；P95 只计算成功请求。" : "Last 1,000 changes in this server process, grouped by direction. P95 includes successful requests."}</p>

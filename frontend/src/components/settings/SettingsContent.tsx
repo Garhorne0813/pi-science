@@ -1,6 +1,7 @@
+import { SettingsDraftContext } from "./SettingsDraftStatus";
 import type { SettingsSection } from "../../lib/settings/settings-sections";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { Activity, Blocks, BookOpen, Boxes, BrainCircuit, ServerCog, Settings2, ShieldCheck, FolderOpen, Globe2, Unplug, UserRound, WandSparkles, X, type LucideIcon } from "lucide-react";
+import { BookOpen, Boxes, BrainCircuit, ServerCog, Settings2, ShieldCheck, FolderOpen, Globe2, Unplug, UserRound, WandSparkles, X, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/ui";
 import { settingsApi } from "../../lib/settings";
@@ -9,7 +10,6 @@ import { GeneralTab } from "./GeneralTab";
 import { Icon, IconButton } from "../ui/Icon";
 
 const ComputeSettings = lazy(() => import("./ComputeSettings").then((module) => ({ default: module.ComputeSettings })));
-const CapabilitiesTab = lazy(() => import("./CapabilitiesTab").then((module) => ({ default: module.CapabilitiesTab })));
 const AIModelsTab = lazy(() => import("./models/AIModelsTab").then((module) => ({ default: module.AIModelsTab })));
 const AgentTab = lazy(() => import("./agent/AgentTab").then((module) => ({ default: module.AgentTab })));
 const MCPTab = lazy(() => import("./MCPTab").then((module) => ({ default: module.MCPTab })));
@@ -26,13 +26,11 @@ type Tab = SettingsSection;
 const GROUP_STARTS: Partial<Record<Tab, string>> = { general: "settings.redesign.workbench", skills: "settings.redesign.capabilities", environments: "settings.redesign.computeGroup" };
 
 const TABS: { id: Tab; labelKey: string; titleKey: string; icon: LucideIcon }[] = [
-  { id: "general", labelKey: "settings.general", titleKey: "settings.general", icon: Settings2 },
+  { id: "general", labelKey: "settings.consistency.generalNav", titleKey: "settings.general", icon: Settings2 },
   { id: "models", labelKey: "settings.models.title", titleKey: "settings.models.title", icon: BrainCircuit },
   { id: "agent", labelKey: "settings.agent.title", titleKey: "settings.agent.title", icon: UserRound },
   { id: "memory", labelKey: "memory.title", titleKey: "memory.title", icon: BookOpen },
-  { id: "progress", labelKey: "settings.progress.nav", titleKey: "settings.progress.nav", icon: Activity },
   { id: "skills", labelKey: "skills.title", titleKey: "skills.title", icon: WandSparkles },
-  { id: "capabilities", labelKey: "settings.capabilities.title", titleKey: "settings.capabilities.title", icon: Blocks },
   { id: "web-search", labelKey: "settings.webSearch.title", titleKey: "settings.webSearch.title", icon: Globe2 },
   { id: "network", labelKey: "settings.network.title", titleKey: "settings.network.title", icon: ShieldCheck },
   { id: "mcp", labelKey: "settings.mcp", titleKey: "settings.mcpPage.title", icon: Unplug },
@@ -45,9 +43,13 @@ const TABS: { id: Tab; labelKey: string; titleKey: string; icon: LucideIcon }[] 
  *  (`null` = global settings); it must never read the live route context. */
 export function SettingsContent({ scope, onClose, initialTab="general" }: { scope: string | null; onClose?: () => void; initialTab?: SettingsSection }) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<Tab>(initialTab);
+  const [tab, setTab] = useState<Tab>(initialTab === "progress" ? "general" : initialTab === "capabilities" ? "agent" : initialTab);
   const deviceTab = tab === "general";
-  const globalTab=tab==="network"||tab==="web-search"||tab==="memory";
+  const [visited, setVisited] = useState<Tab[]>([tab]);
+  const globalTab=tab==="network"||tab==="web-search"||tab==="memory"||tab==="models"||tab==="agent";
+  const [drafts, setDrafts] = useState<Record<string, boolean>>({});
+  const reportDraft = useCallback((section: string, dirty: boolean) => setDrafts((current) => current[section] === dirty ? current : { ...current, [section]: dirty }), []);
+  const hasDraft = (section: string) => Object.entries(drafts).some(([key, dirty]) => dirty && key.split(":")[0] === section);
   const [config, setConfig] = useState<SettingsConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
@@ -55,6 +57,18 @@ export function SettingsContent({ scope, onClose, initialTab="general" }: { scop
   const [showKey, setShowKey] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollMore, setCanScrollMore] = useState(false);
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const update = () => setCanScrollMore(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop > 8);
+    update();
+    scroller.addEventListener("scroll", update, { passive: true });
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    observer?.observe(scroller);
+    if (scroller.firstElementChild) observer?.observe(scroller.firstElementChild);
+    return () => { scroller.removeEventListener("scroll", update); observer?.disconnect(); };
+  }, [tab]);
   const needsModelConfig = tab === "agent";
   const requestId = useRef(0);
   useEffect(() => () => { requestId.current++; }, [scope]);
@@ -62,6 +76,7 @@ export function SettingsContent({ scope, onClose, initialTab="general" }: { scop
 
   const changeTab = (next: Tab) => {
     setTab(next);
+    setVisited((current) => current.includes(next) ? current : [...current, next]);
     // jsdom does not implement scrollTo; guard for tests and old browsers.
     scrollRef.current?.scrollTo?.({ top: 0 });
   };
@@ -144,11 +159,11 @@ export function SettingsContent({ scope, onClose, initialTab="general" }: { scop
 
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1">
+    <SettingsDraftContext.Provider value={reportDraft}><div className="relative flex min-h-0 min-w-0 flex-1">
       {/* Settings navigation: a light rail on mobile (56px icon column) and a
-          quiet 188px column with a title on desktop, mirroring the DeepSeek
+          quiet 220px column with a title on desktop, mirroring the DeepSeek
           harness SettingsRoot geometry (22px/12px padding, 4px list gap). */}
-      <aside className="flex w-14 shrink-0 flex-col border-r border-faint bg-sidebar px-2.5 pt-panel pb-panel md:w-[188px] md:px-3 md:pt-[22px] md:pb-0">
+      <aside className="flex w-14 shrink-0 flex-col border-r border-faint bg-sidebar px-2.5 pt-panel pb-panel md:w-[220px] md:px-3 md:pt-[22px] md:pb-0">
         <h2 className="hidden px-3 pb-2 text-base font-medium text-text md:block">{t("nav.settings")}</h2>
         <nav role="tablist" aria-orientation="vertical" aria-label={t("nav.settings")} onKeyDown={handleNavKeyDown} className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
           {TABS.map((item) => (
@@ -162,6 +177,7 @@ export function SettingsContent({ scope, onClose, initialTab="general" }: { scop
               aria-selected={tab === item.id}
               aria-controls="settings-tabpanel"
               aria-label={t(item.labelKey)}
+              aria-describedby={hasDraft(item.id) ? `settings-draft-${item.id}` : undefined}
               onClick={() => changeTab(item.id)}
               title={t(item.labelKey)}
               className={cn(
@@ -171,20 +187,18 @@ export function SettingsContent({ scope, onClose, initialTab="general" }: { scop
             >
               <Icon icon={item.icon} size={18} className="h-[18px] w-[18px] shrink-0 md:h-4 md:w-4" />
               <span className="hidden min-w-0 whitespace-normal text-left leading-4 md:inline">{t(item.labelKey)}</span>
+              {hasDraft(item.id) && <><span title={t("settings.redesign.unsaved")} aria-hidden="true" className="ml-auto h-2 w-2 shrink-0 rounded-full bg-accent" /><span id={`settings-draft-${item.id}`} className="sr-only">{t("settings.redesign.unsaved")}</span></>}
             </button>
             </div>
           ))}
         </nav>
-        <div className="mt-4 hidden border-t border-border px-3 py-4 md:block">
-          <p className="flex items-center gap-2 text-ui-caption font-medium text-text"><Icon icon={scope && !globalTab && !deviceTab ? FolderOpen : Globe2} size={14} />{scope && !globalTab && !deviceTab ? t("settings.scope.workspace") : t(deviceTab ? "settings.scope.device" : "settings.scope.global")}</p>
-          <p title={globalTab || deviceTab ? undefined : scope ?? undefined} className="mt-2 break-words text-ui-meta leading-relaxed text-muted">{(globalTab || deviceTab ? null : scope) || t(deviceTab ? "settings.scope.deviceHelp" : tab === "memory" ? "memory.globalScope" : tab === "web-search" ? "settings.webSearch.scopeHelp" : "settings.redesign.globalScopeHelp")}</p>
-        </div>
+
       </aside>
 
       {/* Active tab. The header stays pinned at the top of the scroll area so
           the close control is always reachable on mobile; it lives in the
           content header (not the sidebar) like the DeepSeek settings panel. */}
-      <div ref={scrollRef} id="settings-tabpanel" role="tabpanel" aria-labelledby={`settings-tab-${tab}`} className="settings-page min-w-0 flex-1 overflow-y-auto">
+      <div ref={scrollRef} id="settings-tabpanel" role="tabpanel" aria-labelledby={`settings-tab-${tab}`} className="settings-page settings-scroll min-w-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex min-h-full w-full max-w-[820px] flex-col md:px-6">
           <header className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-card border-b border-faint bg-surface-raised px-card py-panel md:px-0 md:py-4">
             <div className="min-w-0">
@@ -200,24 +214,23 @@ export function SettingsContent({ scope, onClose, initialTab="general" }: { scop
             />
           </header>
           <div className="min-h-0 flex-1 px-card py-card md:px-0 md:py-6">
-            <p className="mb-4 flex items-start gap-2 rounded-input bg-sidebar px-3 py-2 text-ui-caption leading-relaxed text-muted"><Icon icon={scope && !globalTab && !deviceTab ? FolderOpen : Globe2} size={14} className="mt-0.5 shrink-0" /><span>{t(deviceTab ? "settings.scope.deviceHelp" : tab === "memory" ? "memory.globalScope" : tab === "web-search" ? "settings.webSearch.scopeHelp" : scope && !globalTab && !deviceTab ? "settings.redesign.workspaceScopeHelp" : "settings.redesign.globalScopeHelp")}</span></p>
+            <p className="mb-4 flex items-start gap-2 rounded-input bg-sidebar px-3 py-2 text-ui-caption leading-relaxed text-muted"><Icon icon={scope && !globalTab && !deviceTab ? FolderOpen : Globe2} size={14} className="mt-0.5 shrink-0" /><span>{t(deviceTab ? "settings.scope.device" : scope && !globalTab ? "settings.scope.workspace" : "settings.scope.global")}</span><span role="status" className="ml-auto">{hasDraft(tab) ? t("settings.redesign.unsaved") : ""}</span></p>
             <Suspense fallback={<div role="status" className="py-4 text-sm text-muted">{t("common.loading")}</div>}>
-                {tab === "web-search" && <WebSearchTab />}
-                {tab === "network" && <NetworkTab />}
-                {tab === "general" && <GeneralTab />}
-                {tab === "models" && <AIModelsTab scope={scope} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} />}
-                {tab === "agent" && <AgentTab config={config} saving={saving === "compaction"} onSave={saveCompaction} scope={scope} loading={loading} error={error} onRefreshContext={loadConfig} onOpenModels={() => { changeTab("models"); focusTab("models"); }} />}
-                {tab === "memory" && <MemoryTab />}
-                {tab === "progress" && <ProgressTab />}
-                {tab === "skills" && <SkillsTab workspaceCwd={scope} />}
-                {tab === "capabilities" && <CapabilitiesTab workspaceCwd={scope} onOpenWeb={() => { changeTab("web-search"); focusTab("web-search"); }} onOpenMcp={() => { changeTab("mcp"); focusTab("mcp"); }} />}
-                {tab === "mcp" && <MCPTab workspaceCwd={scope} />}
-                {tab === "compute" && <ComputeSettings workspaceCwd={scope} />}
-                {tab === "environments" && <EnvironmentSettings workspaceCwd={scope} />}
+                {visited.includes("web-search") && <div key={`web-search:${scope ?? "global"}`} hidden={tab !== "web-search"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><WebSearchTab /></Suspense></div>}
+                {visited.includes("network") && <div key={`network:${scope ?? "global"}`} hidden={tab !== "network"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><NetworkTab /></Suspense></div>}
+                {visited.includes("general") && <div key={`general:${scope ?? "global"}`} hidden={tab !== "general"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><div className="space-y-6"><GeneralTab /><div><p className="mb-3 text-ui-caption text-muted">{t("settings.consistency.progressScope")}</p><ProgressTab /></div></div></Suspense></div>}
+                {visited.includes("models") && <div key={`models:${scope ?? "global"}`} hidden={tab !== "models"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><AIModelsTab scope={scope} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} /></Suspense></div>}
+                {visited.includes("agent") && <div key={`agent:${scope ?? "global"}`} hidden={tab !== "agent"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><AgentTab config={config} saving={saving === "compaction"} onSave={saveCompaction} scope={scope} loading={loading} error={error} onRefreshContext={loadConfig} onOpenModels={() => { changeTab("models"); focusTab("models"); }} /></Suspense></div>}
+                {visited.includes("memory") && <div key={`memory:${scope ?? "global"}`} hidden={tab !== "memory"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><MemoryTab /></Suspense></div>}
+                {visited.includes("skills") && <div key={`skills:${scope ?? "global"}`} hidden={tab !== "skills"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><SkillsTab workspaceCwd={scope} /></Suspense></div>}
+                {visited.includes("mcp") && <div key={`mcp:${scope ?? "global"}`} hidden={tab !== "mcp"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><MCPTab workspaceCwd={scope} /></Suspense></div>}
+                {visited.includes("compute") && <div key={`compute:${scope ?? "global"}`} hidden={tab !== "compute"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><ComputeSettings workspaceCwd={scope} /></Suspense></div>}
+                {visited.includes("environments") && <div key={`environments:${scope ?? "global"}`} hidden={tab !== "environments"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><EnvironmentSettings workspaceCwd={scope} /></Suspense></div>}
             </Suspense>
           </div>
         </div>
       </div>
-    </div>
+      {canScrollMore && tab === "general" && <div aria-hidden="true" className="pointer-events-none absolute bottom-0 left-14 right-3 flex h-9 items-end justify-center bg-gradient-to-t from-surface-raised to-transparent pb-1 md:left-[220px]"><span className="rounded-full bg-surface-raised px-3 py-1 text-ui-meta text-muted">↓ {t("settings.consistency.scrollMore")}</span></div>}
+    </div></SettingsDraftContext.Provider>
   );
 }

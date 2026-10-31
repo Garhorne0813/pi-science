@@ -126,10 +126,10 @@ describe("SettingsDialog", () => {
     renderDialog();
     openSettings(null);
     await screen.findByRole("dialog");
-    const modelsTab = await screen.findByRole("tab", { name: "AI Models" });
+    const modelsTab = await screen.findByRole("tab", { name: "Models" });
     fireEvent.click(modelsTab);
     expect(await screen.findByText("My model services")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Models" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "false");
   });
 
@@ -185,7 +185,8 @@ describe("SettingsDialog", () => {
     await screen.findByRole("dialog");
     // The close button now lives in the content header, so the first focusable
     // is the sidebar's General tab and the panel-order select stays last.
-    const panelOrder = await screen.findByLabelText(/Conversation and preview layout/);
+    await screen.findByRole("button", { name: /^Waiting for input:/ });
+    const panelOrder = screen.getByRole("button", { name: /^Waiting for input:/ });
     panelOrder.focus();
     fireEvent.keyDown(panelOrder, { key: "Tab" });
     expect(document.activeElement).toBe(screen.getByRole("tab", { name: "General" }));
@@ -199,11 +200,11 @@ describe("SettingsDialog", () => {
     const general = screen.getByRole("tab", { name: "General" });
     general.focus();
     fireEvent.keyDown(general, { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(screen.getByLabelText(/Conversation and preview layout/));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /^Waiting for input:/ }));
     // Right after opening, focus sits on the panel itself: Shift+Tab wraps too.
     dialog.focus();
     fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(screen.getByLabelText(/Conversation and preview layout/));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /^Waiting for input:/ }));
   });
 
   it("keeps the close button in the panel's normal tab order", async () => {

@@ -15,7 +15,7 @@ function ErrorNote({ message }: { message: string | null }) {
   return <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-ui-caption text-error-text">{message}</p>;
 }
 
-const inputClass = "h-9 w-full rounded-input border border-border bg-surface-2 px-3 text-ui-label text-text outline-none focus:border-accent focus:ring-1 focus:ring-accent/25";
+const inputClass = "h-10 w-full rounded-input border border-border bg-surface-2 px-3 text-ui-label text-text outline-none focus:border-accent focus:ring-1 focus:ring-accent/25";
 const textareaClass = "w-full rounded-input border border-border bg-surface-2 px-3 py-2 text-ui-label text-text outline-none focus:border-accent focus:ring-1 focus:ring-accent/25";
 
 export function SkillEditorDialog({
@@ -80,8 +80,8 @@ export function SkillEditorDialog({
         </label>
         <ErrorNote message={error} />
         <div className="flex justify-end gap-2">
-          <button type="button" className="rounded-input border border-border px-3 py-1.5 text-ui-caption text-muted hover:bg-surface-2" onClick={onClose}>{t("common.cancel")}</button>
-          <button type="button" disabled={saving || !name || !description} onClick={() => void submit()} className="flex min-h-9 items-center gap-1.5 rounded-input bg-accent px-3 text-ui-caption text-white disabled:opacity-50">
+          <button type="button" className="min-h-10 rounded-input border border-border px-3 text-ui-caption text-muted hover:bg-surface-2" onClick={onClose}>{t("common.cancel")}</button>
+          <button type="button" disabled={saving || !name || !description} onClick={() => void submit()} className="flex min-h-10 items-center gap-1.5 rounded-input bg-accent px-3 text-ui-caption text-white disabled:opacity-50">
             {saving && <Loader2 size={12} className="animate-spin" />}
             {t("common.save")}
           </button>
@@ -182,8 +182,8 @@ export function SkillUploadDialog({ open, cwd, onClose }: { open: boolean; cwd: 
         )}
         <ErrorNote message={error} />
         <div className="flex justify-end gap-2">
-          <button type="button" className="rounded-input border border-border px-3 py-1.5 text-ui-caption text-muted hover:bg-surface-2" onClick={onClose}>{t("common.cancel")}</button>
-          <button type="button" disabled={busy || !selected} onClick={() => void confirmImport()} className="flex min-h-9 items-center gap-1.5 rounded-input bg-accent px-3 text-ui-caption text-white disabled:opacity-50">
+          <button type="button" className="min-h-10 rounded-input border border-border px-3 text-ui-caption text-muted hover:bg-surface-2" onClick={onClose}>{t("common.cancel")}</button>
+          <button type="button" disabled={busy || !selected} onClick={() => void confirmImport()} className="flex min-h-10 items-center gap-1.5 rounded-input bg-accent px-3 text-ui-caption text-white disabled:opacity-50">
             {busy && <Loader2 size={12} className="animate-spin" />}
             {t("skills.uploadImport")}
           </button>
@@ -252,7 +252,7 @@ export function SkillGithubDialog({ open, cwd, onClose }: { open: boolean; cwd: 
           {t("skills.githubRepo")}
           <input className={`${inputClass} mt-1 font-mono`} value={repo} onChange={(event) => setRepo(event.target.value)} placeholder="owner/repo, owner/repo@ref, or https://github.com/..." />
         </label>
-        <button type="button" disabled={busy || !repo.trim()} onClick={() => void preview()} className="flex min-h-9 items-center gap-1.5 rounded-input bg-accent px-3 text-ui-caption text-white disabled:opacity-50">
+        <button type="button" disabled={busy || !repo.trim()} onClick={() => void preview()} className="flex min-h-10 items-center gap-1.5 rounded-input bg-accent px-3 text-ui-caption text-white disabled:opacity-50">
           {busy && <Loader2 size={12} className="animate-spin" />}
           {t("skills.githubPreview")}
         </button>
@@ -274,8 +274,8 @@ export function SkillGithubDialog({ open, cwd, onClose }: { open: boolean; cwd: 
         )}
         <ErrorNote message={error} />
         <div className="flex justify-end gap-2">
-          <button type="button" className="rounded-input border border-border px-3 py-1.5 text-ui-caption text-muted hover:bg-surface-2" onClick={onClose}>{t("common.cancel")}</button>
-          <button type="button" disabled={busy || selected.length === 0} onClick={() => void confirmImport()} className="flex min-h-9 items-center gap-1.5 rounded-input bg-accent px-3 text-ui-caption text-white disabled:opacity-50">
+          <button type="button" className="min-h-10 rounded-input border border-border px-3 text-ui-caption text-muted hover:bg-surface-2" onClick={onClose}>{t("common.cancel")}</button>
+          <button type="button" disabled={busy || selected.length === 0} onClick={() => void confirmImport()} className="flex min-h-10 items-center gap-1.5 rounded-input bg-accent px-3 text-ui-caption text-white disabled:opacity-50">
             {busy && <Loader2 size={12} className="animate-spin" />}
             {t("skills.githubImport")}
           </button>

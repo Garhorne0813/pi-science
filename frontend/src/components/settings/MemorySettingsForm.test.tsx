@@ -82,6 +82,7 @@ it("shows Dream scheduling controls according to trigger mode and idle requireme
     screen.queryByRole("spinbutton", { name: "Maximum runtime (minutes)" }),
   ).not.toBeInTheDocument();
   toggle("Automatically organize memories");
+  if (screen.queryByText("Advanced: consolidation conditions")) fireEvent.click(screen.getByText("Advanced: consolidation conditions"));
   expect(
     screen.getByRole("spinbutton", { name: "Cooldown (hours)" }),
   ).toBeInTheDocument();
@@ -122,8 +123,10 @@ it("shows Dream scheduling controls according to trigger mode and idle requireme
     screen.getByRole("spinbutton", { name: "Trigger interval (hours)" }),
   ).toHaveValue(48);
   toggle("Automatically organize memories");
+  if (screen.queryByText("Advanced: consolidation conditions")) fireEvent.click(screen.getByText("Advanced: consolidation conditions"));
   expect(screen.queryByLabelText("Start")).not.toBeInTheDocument();
   toggle("Automatically organize memories");
+  if (screen.queryByText("Advanced: consolidation conditions")) fireEvent.click(screen.getByText("Advanced: consolidation conditions"));
   expect(
     screen.getByRole("spinbutton", { name: "Trigger interval (hours)" }),
   ).toHaveValue(48);
@@ -131,6 +134,7 @@ it("shows Dream scheduling controls according to trigger mode and idle requireme
 it("preserves time-window values while its restriction is collapsed", () => {
   const save = mount();
   toggle("Automatically organize memories");
+  if (screen.queryByText("Advanced: consolidation conditions")) fireEvent.click(screen.getByText("Advanced: consolidation conditions"));
   fireEvent.change(screen.getByLabelText("Start"), {
     target: { value: "02:30" },
   });
