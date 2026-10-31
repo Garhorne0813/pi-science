@@ -1,6 +1,6 @@
 import type { SettingsSection } from "../../lib/settings/settings-sections";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { Activity, Blocks, BookOpen, Boxes, BrainCircuit, ServerCog, Settings2, ShieldCheck, FolderOpen, Globe2, Unplug, UserRound, WandSparkles, X, type LucideIcon } from "lucide-react";
+import { BookOpen, Boxes, BrainCircuit, ServerCog, Settings2, ShieldCheck, FolderOpen, Globe2, Unplug, UserRound, WandSparkles, X, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/ui";
 import { settingsApi } from "../../lib/settings";
@@ -9,7 +9,6 @@ import { GeneralTab } from "./GeneralTab";
 import { Icon, IconButton } from "../ui/Icon";
 
 const ComputeSettings = lazy(() => import("./ComputeSettings").then((module) => ({ default: module.ComputeSettings })));
-const CapabilitiesTab = lazy(() => import("./CapabilitiesTab").then((module) => ({ default: module.CapabilitiesTab })));
 const AIModelsTab = lazy(() => import("./models/AIModelsTab").then((module) => ({ default: module.AIModelsTab })));
 const AgentTab = lazy(() => import("./agent/AgentTab").then((module) => ({ default: module.AgentTab })));
 const MCPTab = lazy(() => import("./MCPTab").then((module) => ({ default: module.MCPTab })));
@@ -30,9 +29,7 @@ const TABS: { id: Tab; labelKey: string; titleKey: string; icon: LucideIcon }[] 
   { id: "models", labelKey: "settings.models.title", titleKey: "settings.models.title", icon: BrainCircuit },
   { id: "agent", labelKey: "settings.agent.title", titleKey: "settings.agent.title", icon: UserRound },
   { id: "memory", labelKey: "memory.title", titleKey: "memory.title", icon: BookOpen },
-  { id: "progress", labelKey: "settings.progress.nav", titleKey: "settings.progress.nav", icon: Activity },
   { id: "skills", labelKey: "skills.title", titleKey: "skills.title", icon: WandSparkles },
-  { id: "capabilities", labelKey: "settings.capabilities.title", titleKey: "settings.capabilities.title", icon: Blocks },
   { id: "web-search", labelKey: "settings.webSearch.title", titleKey: "settings.webSearch.title", icon: Globe2 },
   { id: "network", labelKey: "settings.network.title", titleKey: "settings.network.title", icon: ShieldCheck },
   { id: "mcp", labelKey: "settings.mcp", titleKey: "settings.mcpPage.title", icon: Unplug },
@@ -45,9 +42,10 @@ const TABS: { id: Tab; labelKey: string; titleKey: string; icon: LucideIcon }[] 
  *  (`null` = global settings); it must never read the live route context. */
 export function SettingsContent({ scope, onClose, initialTab="general" }: { scope: string | null; onClose?: () => void; initialTab?: SettingsSection }) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<Tab>(initialTab);
+  const [tab, setTab] = useState<Tab>(initialTab === "progress" ? "general" : initialTab === "capabilities" ? "agent" : initialTab);
   const deviceTab = tab === "general";
-  const globalTab=tab==="network"||tab==="web-search"||tab==="memory";
+  const [visited, setVisited] = useState<Tab[]>([tab]);
+  const globalTab=tab==="network"||tab==="web-search"||tab==="memory"||tab==="models"||tab==="agent";
   const [config, setConfig] = useState<SettingsConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
@@ -62,6 +60,7 @@ export function SettingsContent({ scope, onClose, initialTab="general" }: { scop
 
   const changeTab = (next: Tab) => {
     setTab(next);
+    setVisited((current) => current.includes(next) ? current : [...current, next]);
     // jsdom does not implement scrollTo; guard for tests and old browsers.
     scrollRef.current?.scrollTo?.({ top: 0 });
   };
@@ -202,18 +201,16 @@ export function SettingsContent({ scope, onClose, initialTab="general" }: { scop
           <div className="min-h-0 flex-1 px-card py-card md:px-0 md:py-6">
             <p className="mb-4 flex items-start gap-2 rounded-input bg-sidebar px-3 py-2 text-ui-caption leading-relaxed text-muted"><Icon icon={scope && !globalTab && !deviceTab ? FolderOpen : Globe2} size={14} className="mt-0.5 shrink-0" /><span>{t(deviceTab ? "settings.scope.deviceHelp" : tab === "memory" ? "memory.globalScope" : tab === "web-search" ? "settings.webSearch.scopeHelp" : scope && !globalTab && !deviceTab ? "settings.redesign.workspaceScopeHelp" : "settings.redesign.globalScopeHelp")}</span></p>
             <Suspense fallback={<div role="status" className="py-4 text-sm text-muted">{t("common.loading")}</div>}>
-                {tab === "web-search" && <WebSearchTab />}
-                {tab === "network" && <NetworkTab />}
-                {tab === "general" && <GeneralTab />}
-                {tab === "models" && <AIModelsTab scope={scope} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} />}
-                {tab === "agent" && <AgentTab config={config} saving={saving === "compaction"} onSave={saveCompaction} scope={scope} loading={loading} error={error} onRefreshContext={loadConfig} onOpenModels={() => { changeTab("models"); focusTab("models"); }} />}
-                {tab === "memory" && <MemoryTab />}
-                {tab === "progress" && <ProgressTab />}
-                {tab === "skills" && <SkillsTab workspaceCwd={scope} />}
-                {tab === "capabilities" && <CapabilitiesTab workspaceCwd={scope} onOpenWeb={() => { changeTab("web-search"); focusTab("web-search"); }} onOpenMcp={() => { changeTab("mcp"); focusTab("mcp"); }} />}
-                {tab === "mcp" && <MCPTab workspaceCwd={scope} />}
-                {tab === "compute" && <ComputeSettings workspaceCwd={scope} />}
-                {tab === "environments" && <EnvironmentSettings workspaceCwd={scope} />}
+                {visited.includes("web-search") && <div key={`web-search:${scope ?? "global"}`} hidden={tab !== "web-search"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><WebSearchTab /></Suspense></div>}
+                {visited.includes("network") && <div key={`network:${scope ?? "global"}`} hidden={tab !== "network"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><NetworkTab /></Suspense></div>}
+                {visited.includes("general") && <div key={`general:${scope ?? "global"}`} hidden={tab !== "general"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><div className="space-y-6"><GeneralTab /><div><p className="mb-3 text-ui-caption text-muted">{t("settings.consistency.progressScope")}</p><ProgressTab /></div></div></Suspense></div>}
+                {visited.includes("models") && <div key={`models:${scope ?? "global"}`} hidden={tab !== "models"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><AIModelsTab scope={scope} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} /></Suspense></div>}
+                {visited.includes("agent") && <div key={`agent:${scope ?? "global"}`} hidden={tab !== "agent"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><AgentTab config={config} saving={saving === "compaction"} onSave={saveCompaction} scope={scope} loading={loading} error={error} onRefreshContext={loadConfig} onOpenModels={() => { changeTab("models"); focusTab("models"); }} /></Suspense></div>}
+                {visited.includes("memory") && <div key={`memory:${scope ?? "global"}`} hidden={tab !== "memory"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><MemoryTab /></Suspense></div>}
+                {visited.includes("skills") && <div key={`skills:${scope ?? "global"}`} hidden={tab !== "skills"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><SkillsTab workspaceCwd={scope} /></Suspense></div>}
+                {visited.includes("mcp") && <div key={`mcp:${scope ?? "global"}`} hidden={tab !== "mcp"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><MCPTab workspaceCwd={scope} /></Suspense></div>}
+                {visited.includes("compute") && <div key={`compute:${scope ?? "global"}`} hidden={tab !== "compute"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><ComputeSettings workspaceCwd={scope} /></Suspense></div>}
+                {visited.includes("environments") && <div key={`environments:${scope ?? "global"}`} hidden={tab !== "environments"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><EnvironmentSettings workspaceCwd={scope} /></Suspense></div>}
             </Suspense>
           </div>
         </div>

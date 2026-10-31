@@ -1,5 +1,5 @@
 {
-  "settings.network.title": "网络",
+  "settings.network.title": "网络权限",
   "settings.network.description": "管理分析执行和本地 MCP 的持久网络权限，对所有项目生效。修改后运行中的内核保留变量，被撤销的网络连接会关闭。",
   "settings.network.rules": "目标地址权限",
   "settings.network.profile": "适用范围",
@@ -315,7 +315,7 @@
   "research.status.reserved": "已预留",
   "research.status.started": "已开始",
   "nav.settings": "设置",
-  "settings.general": "常规",
+  "settings.general": "通用与外观",
   "settings.llm": "模型",
   "settings.models.title": "AI 模型",
   "settings.models.description": "管理模型服务及其可用状态。",
@@ -1451,7 +1451,7 @@
   "settings.redesign.workbench": "工作台",
   "settings.redesign.capabilities": "智能体能力",
   "settings.redesign.computeGroup": "科学计算",
-  "settings.redesign.globalScopeHelp": "模型连接和新会话默认值在工作区之间共享。",
+  "settings.redesign.globalScopeHelp": "全局设置在所有项目之间共享；作用域不同的分组会单独标明。",
   "settings.redesign.workspaceScopeHelp": "技能、MCP 工具策略与计算资源使用当前工作区；模型连接和已配置的模型设置全局共享。",
   "settings.redesign.generalDescription": "调整研究工作台的外观与布局。这些偏好保存在当前设备上。",
   "settings.redesign.appearanceHelp": "选择主题，或跟随设备的外观设置。",
@@ -1638,7 +1638,7 @@
   "filePreview.fontSize": "文字大小",
   "filePreview.pdfFocusHint": "浏览器 PDF 阅读器可能自行处理 Esc，请使用工具栏的“退出专注”返回。",
   "filePreview.frameFocusHint": "可访问的 HTML 预览支持 Esc 退出；若嵌入页面自行处理 Esc，请使用工具栏的“退出专注”。",
-  "settings.webSearch.title": "联网搜索",
+  "settings.webSearch.title": "网页访问",
   "settings.webSearch.description": "配置所有项目的网页搜索及网页/PDF 阅读能力。修改也会应用于已有对话。",
   "settings.webSearch.tools": "联网工具",
   "settings.webSearch.searchEnabled": "启用联网搜索",
@@ -2062,5 +2062,13 @@
   "memory.noRuns": "暂无记忆任务。",
   "settings.scope.device": "当前设备",
   "settings.scope.deviceHelp": "外观、语言和布局保存在当前设备。",
-  "memory.noChanges": "没有未保存的修改"
+  "memory.noChanges": "没有未保存的修改",
+  "settings.consistency.progressScope": "进度外观 · 全局 · 自动保存。上方通用偏好仅作用于当前设备。",
+  "settings.consistency.agentScope": "默认模型、审批和上下文策略为全局设置；子代理来自当前项目。各配置单独保存，切换标签保留未保存的修改。",
+  "settings.consistency.configurationGuide": "配置指南",
+  "settings.consistency.runConditions": "高级：整理运行条件",
+  "settings.consistency.runConditionsHelp": "时间窗口、空闲要求和运行限制也适用于手动整理。关闭选项会保留已有参数。",
+  "settings.consistency.saveModel": "保存默认模型",
+  "settings.consistency.autoSave": "更改自动保存",
+  "settings.consistency.webDependency": "网页工具受网络权限规则约束。关闭工具会保留供应商配置。"
 }

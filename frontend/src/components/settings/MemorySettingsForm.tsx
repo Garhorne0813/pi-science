@@ -1,3 +1,4 @@
+import { SettingsToggle } from "./SettingsToggle";
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -37,19 +38,7 @@ export function MemorySettingsForm({
     change: (next: boolean) => void,
   ) => (
     <SettingsRow label={t(`memory.${label}`)} inline>
-      <label className="inline-flex min-h-9 min-w-11 cursor-pointer items-center justify-end has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50">
-        <span className="relative inline-flex h-5 w-9 shrink-0 rounded-full border border-border bg-surface-2 transition-colors has-[:checked]:border-transparent has-[:checked]:bg-accent-fill">
-          <input
-            type="checkbox"
-            aria-label={t(`memory.${label}`)}
-            checked={checked}
-            disabled={busy}
-            onChange={(e) => change(e.target.checked)}
-            className="peer sr-only"
-          />
-          <span className="pointer-events-none absolute left-0.5 top-0.5 h-3.5 w-3.5 rounded-full bg-accent-fg shadow-sm transition-transform peer-checked:translate-x-4 peer-focus-visible:ring-2 peer-focus-visible:ring-accent" />
-        </span>
-      </label>
+      <SettingsToggle label={t(`memory.${label}`)} checked={checked} disabled={busy} onChange={change} />
     </SettingsRow>
   );
   const number = (
@@ -251,7 +240,7 @@ export function MemorySettingsForm({
             </div>
           </Section>
           {s.dream.enabled && (
-            <Section title={t("memory.schedule")}>
+            <details className="rounded-card border border-faint p-4"><summary className="cursor-pointer text-ui-label font-medium">{t("settings.consistency.runConditions")}</summary><p className="my-3 text-ui-caption text-muted">{t("settings.consistency.runConditionsHelp")}</p><Section title={t("memory.schedule")}>
               <div className="divide-y divide-faint">
                 {toggle("windowEnabled", s.dream.allowedWindow.enabled, (v) =>
                   set({
@@ -319,7 +308,7 @@ export function MemorySettingsForm({
                     </div>
                   ))}
               </div>
-            </Section>
+            </Section></details>
           )}
           <Section title={t("memory.budget")}>
             <p className="pb-2 text-ui-caption leading-relaxed text-muted">

@@ -1,3 +1,4 @@
+import { SubagentSettings } from "../SubagentSettings";
 import { ApprovalPreferences } from "./ApprovalPreferences";
 import { useTranslation } from "react-i18next";
 import { ContextManagementSection } from "../ContextManagementSection";
@@ -8,6 +9,7 @@ export function AgentTab({ config, loading, error, scope, saving, onSave, onRefr
   const { t } = useTranslation();
   return <div className="space-y-6">
     <p className="text-ui-caption leading-relaxed text-muted">{t("settings.agent.description")}</p>
+    <p className="text-ui-caption text-muted">{t("settings.consistency.agentScope")}</p>
     <ApprovalPreferences />
     <DefaultModelSelection scope={scope} onCommitted={onRefreshContext} onOpenModels={onOpenModels} />
     <section aria-label={t("settings.context.title")} className="space-y-3">
@@ -15,5 +17,7 @@ export function AgentTab({ config, loading, error, scope, saving, onSave, onRefr
       {error && <p role="alert" className="text-ui-caption text-error-text">{t("settings.selection.contextError", { error })}<button type="button" onClick={() => void onRefreshContext().catch(() => undefined)} className="ml-2 min-h-9 px-2 text-link">{t("settings.redesign.retryLoad")}</button></p>}
       {config && <ContextManagementSection config={config} saving={saving} onSave={onSave} />}
     </section>
+    <details className="rounded-card border border-faint p-4"><summary className="cursor-pointer text-ui-label font-medium">{t("settings.capabilities.builtinTitle")}</summary><p className="mt-3 text-ui-caption text-muted">{t("settings.capabilities.builtinDescription")}</p></details>
+    <SubagentSettings workspaceCwd={scope} />
   </div>;
 }

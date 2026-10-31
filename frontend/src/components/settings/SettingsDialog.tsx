@@ -43,10 +43,15 @@ export function SettingsDialog() {
   // Escape lives on the overlay so it still closes when focus escaped once.
   const handlePanelKeyDown = (event: React.KeyboardEvent) => {
     if (event.key !== "Tab") return;
-    const focusables = panelRef.current?.querySelectorAll<HTMLElement>(
-      'button:not([disabled]):not([tabindex="-1"]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])',
+    const candidates = panelRef.current?.querySelectorAll<HTMLElement>(
+      'summary, button:not([disabled]):not([tabindex="-1"]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])',
     );
-    if (!focusables || focusables.length === 0) return;
+    const focusables = Array.from(candidates ?? []).filter((element) => {
+      if (element.closest("[hidden], [inert]")) return false;
+      const collapsed = element.closest("details:not([open])");
+      return !collapsed || element === collapsed.querySelector("summary");
+    });
+    if (focusables.length === 0) return;
     const first = focusables[0];
     const last = focusables[focusables.length - 1];
     // The panel itself is the initial focus target, so Shift+Tab right after

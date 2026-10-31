@@ -1,3 +1,4 @@
+import { SettingsSaveBar } from "../SettingsSaveBar";
 import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -49,7 +50,7 @@ export function DefaultModelSelection({ scope = null, onCommitted, onOpenModels 
   };
   const loadError = defaults.error ?? catalog.error;
   const contextWindow = configured?.context_window;
-  return <section aria-labelledby="agent-model-title" className="rounded-card border border-border bg-sidebar p-4">
+  return <section aria-labelledby="agent-model-title" className="rounded-card border border-faint bg-surface-2/40 p-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <h3 id="agent-model-title" className="text-ui-body font-medium text-text">{t("settings.agent.activeModelTitle")}</h3>
       {onOpenModels && <button type="button" onClick={onOpenModels} className="flex min-h-9 items-center gap-2 rounded-input px-2 text-ui-caption text-link hover:bg-surface-hover">{t("settings.redesign.manageModels")}<ArrowRight size={14} /></button>}
@@ -71,8 +72,9 @@ export function DefaultModelSelection({ scope = null, onCommitted, onOpenModels 
       {syncWarning && <p role="status" className="text-ui-caption text-muted">{t("settings.selection.syncWarning", { error: syncWarning })}<button type="button" onClick={() => void refresh()} className="ml-2 min-h-9 px-2 text-link">{t("settings.redesign.retryLoad")}</button></p>}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <button type="button" disabled={!base || saving || !selected?.model} onClick={() => edit({ model: null, thinking: "off" })} className="min-h-9 rounded-input px-3 text-ui-caption text-muted hover:bg-surface-hover disabled:opacity-40">{t("settings.selection.clearDefault")}</button>
-        <button type="button" disabled={!dirty || saving || !base} onClick={() => void save()} className="min-h-9 rounded-input bg-accent px-4 text-ui-caption text-white disabled:opacity-40">{saving ? t("common.saving") : t("common.save")}</button>
+
       </div>
+      <SettingsSaveBar dirty={dirty} busy={saving || !base} saved={saved} label={t("settings.consistency.saveModel")} onDiscard={() => setDraft(null)} onSave={() => void save()} />
     </div>
     <dl className="mt-4 grid gap-4 border-t border-border pt-4 sm:grid-cols-2">
       <div><dt className="text-ui-caption text-muted">{t("settings.redesign.contextWindow")}</dt><dd className="mt-1 font-mono text-ui-body text-text">{contextWindow && Number.isSafeInteger(contextWindow) && contextWindow > 0 ? t("settings.redesign.tokens", { count: contextWindow }) : t("settings.redesign.unknown")}</dd></div>
