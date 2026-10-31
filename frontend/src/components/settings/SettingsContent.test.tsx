@@ -100,7 +100,7 @@ describe("SettingsContent", () => {
     const nav = await screen.findByRole("tablist", { name: "Settings" });
     expect(nav).toHaveClass("gap-1");
     const general = screen.getByRole("tab", { name: "General" });
-    const models = screen.getByRole("tab", { name: "AI Models" });
+    const models = screen.getByRole("tab", { name: "Models" });
     expect(general).toHaveClass("bg-surface-selected");
     expect(models).not.toHaveClass("bg-surface-selected");
     expect(models).toHaveClass("hover:bg-surface-hover");
@@ -157,10 +157,10 @@ describe("SettingsContent", () => {
   it("switches tabs and resets aria-selected", async () => {
     renderContent(null);
     await screen.findByRole("tablist", { name: "Settings" });
-    fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
-    expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByRole("tab", { name: "Models" }));
+    expect(screen.getByRole("tab", { name: "Models" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "false");
-    expect(screen.getByRole("tabpanel", { name: "AI Models" })).toHaveAttribute("aria-labelledby", "settings-tab-models");
+    expect(screen.getByRole("tabpanel", { name: "Models" })).toHaveAttribute("aria-labelledby", "settings-tab-models");
     expect(await screen.findByText("My model services")).toBeInTheDocument();
   });
 
@@ -223,9 +223,9 @@ describe("SettingsContent", () => {
     const general = screen.getByRole("tab", { name: "General" });
     general.focus();
     fireEvent.keyDown(nav, { key: "ArrowDown" });
-    await waitFor(() => expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Models" })).toHaveAttribute("aria-selected", "true"));
     // Keyboard navigation moves focus into the newly activated tab.
-    await waitFor(() => expect(screen.getByRole("tab", { name: "AI Models" })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Models" })).toHaveFocus());
     fireEvent.keyDown(nav, { key: "End" });
     await waitFor(() => expect(screen.getByRole("tab", { name: "Compute" })).toHaveAttribute("aria-selected", "true"));
     fireEvent.keyDown(nav, { key: "ArrowUp" });
@@ -236,7 +236,7 @@ describe("SettingsContent", () => {
 
   it("keeps runtime model controls out of Settings", async () => {
     renderContent(null);
-    fireEvent.click(await screen.findByRole("tab", { name: "AI Models" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Models" }));
     expect(await screen.findByText("My model services")).toBeInTheDocument();
     expect(screen.queryByText("Default model")).not.toBeInTheDocument();
     expect(screen.queryByText("Thinking Level")).not.toBeInTheDocument();
@@ -260,8 +260,8 @@ describe("SettingsContent", () => {
     expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("tabindex", "-1");
     expect(screen.getByRole("tab", { name: "Agent" })).toHaveAttribute("tabindex", "0");
     fireEvent.click(await screen.findByRole("button", { name: "Manage models" }));
-    expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true");
-    await waitFor(() => expect(screen.getByRole("tab", { name: "AI Models" })).toHaveFocus());
+    expect(screen.getByRole("tab", { name: "Models" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Models" })).toHaveFocus());
     expect(screen.getByText("Global settings")).toBeInTheDocument();
   });
 
@@ -273,7 +273,7 @@ describe("SettingsContent", () => {
       if (url === "/api/model-config/providers/user-lab/credential" && init.method === "PUT") { repaired = true; return jsonResponse({ ok: true, revision: 1, runtime: "published" }); }
       return defaultFetch(url, init);
     });
-    renderContent(null); fireEvent.click(await screen.findByRole("tab", { name: "AI Models" }));
+    renderContent(null); fireEvent.click(await screen.findByRole("tab", { name: "Models" }));
     fireEvent.pointerDown(await screen.findByRole("button", { name: "Lab actions" }), { button: 0, ctrlKey: false, pointerType: "mouse" });
     fireEvent.click(await screen.findByRole("menuitem", { name: "Manage credentials" }));
     const dialog = screen.getByRole("dialog", { name: "Lab · Manage credentials" });
@@ -290,7 +290,7 @@ describe("SettingsContent", () => {
     renderContent(null);
     expect(screen.getByRole("button", { name: "Light" })).toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("model-config"))).toBe(false);
-    fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Models" }));
     await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/model-config")).toHaveLength(1));
     fireEvent.click(screen.getByRole("tab", { name: "General" }));
     fireEvent.click(screen.getByRole("button", { name: "Dark" }));
@@ -308,12 +308,12 @@ describe("SettingsContent", () => {
       return defaultFetch(String(input), init);
     });
     renderContent(null);
-    fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Models" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Catalog unavailable");
     fireEvent.click(screen.getByRole("tab", { name: "General" }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Light" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Models" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Catalog unavailable");
     fireEvent.click(screen.getByRole("button", { name: "Retry loading" }));
     expect(await screen.findByText("My model services")).toBeInTheDocument();
@@ -346,7 +346,7 @@ describe("SettingsContent", () => {
       if (String(input) === "/api/model-config/providers/user-lab/credential") return jsonResponse({ error: "Credential write failed" }, 500);
       return defaultFetch(String(input), init);
     });
-    renderContent(null); fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
+    renderContent(null); fireEvent.click(screen.getByRole("tab", { name: "Models" }));
     fireEvent.pointerDown(await screen.findByRole("button", { name: "Lab actions" }), { button: 0, ctrlKey: false, pointerType: "mouse" });
     fireEvent.click(await screen.findByRole("menuitem", { name: "Manage credentials" }));
     const dialog = screen.getByRole("dialog", { name: "Lab · Manage credentials" });

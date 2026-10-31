@@ -23,7 +23,7 @@ test("settings navigation, model facts and saved compaction across viewports", a
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog.getByRole("button", { name: "Light", exact: true })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
-  for (const tab of ["General", "AI Models", "Agent"]) {
+  for (const tab of ["General", "Models", "Agent"]) {
     await dialog.getByRole("tab", { name: tab, exact: true }).click();
     await expect(dialog.getByRole("heading", { name: tab === "General" ? "General & appearance" : tab, exact: true })).toBeVisible();
     // Default selection is fetched independently from the Settings shell.
@@ -37,7 +37,7 @@ test("settings navigation, model facts and saved compaction across viewports", a
     expect(violations, `${tab} accessibility`).toEqual([]);
     expect(await dialog.getByRole("tabpanel").evaluate((element) => element.scrollWidth <= element.clientWidth + 1), `${tab} must fit the viewport`).toBe(true);
     await dialog.screenshot({ path: testInfo.outputPath(`${tab.replaceAll(" ", "-").toLowerCase()}.png`), animations: "disabled" });
-    if (tab === "AI Models") {
+    if (tab === "Models") {
       await expect(dialog.getByRole("button", { name: "DeepSeek", exact: true })).toBeVisible();
       const search = dialog.getByRole("textbox", { name: /Search/ });
       await search.fill("nonexistent-model");
@@ -53,7 +53,7 @@ test("settings navigation, model facts and saved compaction across viewports", a
   await expect(dialog.getByText("Settings saved", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Save context settings", exact: true })).toBeDisabled();
   await dialog.getByRole("button", { name: "Manage models", exact: true }).click();
-  await expect(dialog.getByRole("tab", { name: "AI Models", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(dialog.getByRole("tab", { name: "Models", exact: true })).toHaveAttribute("aria-selected", "true");
 });
 
 test("native model catalog failures recover without showing an empty inventory", async ({ page }) => {
@@ -64,7 +64,7 @@ test("native model catalog failures recover without showing an empty inventory",
   });
   await page.goto("/settings");
   const dialog = page.getByRole("dialog", { name: "Settings" });
-  await dialog.getByRole("tab", { name: "AI Models", exact: true }).click();
+  await dialog.getByRole("tab", { name: "Models", exact: true }).click();
   await expect(dialog.getByRole("alert")).toContainText("Catalog unavailable");
   failed = false;
   await dialog.getByRole("button", { name: "Retry loading", exact: true }).click();

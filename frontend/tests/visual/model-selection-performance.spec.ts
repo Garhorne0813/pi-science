@@ -38,7 +38,7 @@ test("10,000-model default picker stays responsive while context settings stall 
   await expect(page.getByRole("menuitemradio")).toHaveCount(1);
   const searchReadyMs = Date.now() - searchStart;
   await page.getByRole("menuitemradio", { name: "Model 09999", exact: true }).click();
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await dialog.getByRole("button", { name: "Save default model", exact: true }).click();
   await expect(dialog.getByText("Default model saved", { exact: true })).toBeVisible();
   expect(defaults.model).toBe(models[9999].id);
   expect(writes).toBe(1);
@@ -47,7 +47,7 @@ test("10,000-model default picker stays responsive while context settings stall 
   release();
   await expect(dialog.getByText(/Default model saved. Context settings could not refresh/)).toBeVisible();
   await expect(trigger).toBeEnabled();
-  await expect(dialog.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "Save default model", exact: true })).toBeDisabled();
   await trigger.click();
   await expect(page.getByRole("menuitemradio")).toHaveCount(50);
   await page.keyboard.press("Escape");
