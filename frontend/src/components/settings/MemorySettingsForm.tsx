@@ -13,7 +13,7 @@ const draftKey = "pi-science.memory-settings-draft";
 export function clearMemorySettingsDraft() { try { sessionStorage.removeItem(draftKey); } catch { /* storage unavailable */ } }
 
 const inputClass =
-  "h-9 w-full min-w-0 max-w-full rounded-input border border-border bg-bg px-3 text-ui-caption text-text outline-none transition-colors focus:border-accent focus:ring-1 focus:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-50";
+  "h-10 w-full min-w-0 max-w-full rounded-input border border-border bg-bg px-3 text-ui-label text-text outline-none transition-colors focus:border-accent focus:ring-1 focus:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-50";
 
 export function MemorySettingsForm({
   value,
@@ -339,7 +339,7 @@ export function MemorySettingsForm({
         <button
           type="submit"
           disabled={busy || !dirty}
-          className="flex min-h-9 items-center gap-2 rounded-input bg-accent-fill px-3 text-ui-label font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex min-h-10 items-center gap-2 rounded-input bg-accent-fill px-3 text-ui-caption font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-40"
         >
           {busy && <Loader2 size={14} className="animate-spin" />}
           {t(busy ? "common.saving" : "memory.save")}

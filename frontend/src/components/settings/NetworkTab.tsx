@@ -38,9 +38,9 @@ export function NetworkTab() {
       <Section title={t("settings.network.rules")}>
         <form className="flex flex-wrap items-end gap-2" onSubmit={(event) => { event.preventDefault(); void mutate("POST", { profile, domain, decision }); }}>
           <label className="text-ui-caption text-muted">{t("settings.network.profile")}<SettingsSelectMenu variant="field" ariaLabel={t("settings.network.profile")} value={profile} disabled={busy} onSelect={(next) => setProfile(next as Profile)} options={["analysis","mcp"].map((value) => ({ value, label: t(`settings.network.${value}`) }))} /></label>
-          <label className="min-w-48 flex-1 text-ui-caption text-muted">{t("settings.network.domain")}<input value={domain} onChange={(event) => setDomain(event.target.value)} disabled={busy} maxLength={253} required placeholder="api.example.org / 192.168.1.10:8080" className="mt-1 block w-full rounded-input border border-border bg-surface p-2 text-ui-label text-text" /></label>
+          <label className="min-w-48 flex-1 text-ui-caption text-muted">{t("settings.network.domain")}<input value={domain} onChange={(event) => setDomain(event.target.value)} disabled={busy} maxLength={253} required placeholder="api.example.org / 192.168.1.10:8080" className="mt-1 block w-full h-10 rounded-input border border-border bg-surface px-3 text-ui-label text-text" /></label>
           <label className="text-ui-caption text-muted">{t("settings.network.decision")}<SettingsSelectMenu variant="field" ariaLabel={t("settings.network.decision")} value={decision} disabled={busy} onSelect={(next) => setDecision(next as "allow" | "deny")} options={["allow","deny"].map((value) => ({ value, label: t(`settings.network.${value}`) }))} /></label>
-          <button type="submit" disabled={busy || !domain.trim()} className="rounded-input bg-accent-fill px-3 py-2 text-ui-label text-accent-fg disabled:opacity-50">{t("settings.network.save")}</button>
+          <button type="submit" disabled={busy || !domain.trim()} className="min-h-10 rounded-input bg-accent-fill px-3 text-ui-caption text-accent-fg disabled:opacity-50">{t("settings.network.save")}</button>
         </form>
         <p className="mt-2 text-ui-caption text-muted">{t("settings.network.scope")}</p>
         <ul className="mt-4 divide-y divide-border">

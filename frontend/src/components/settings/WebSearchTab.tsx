@@ -65,7 +65,7 @@ export function WebSearchTab() {
         </SettingsRow>
         <p className="mt-2 text-ui-caption leading-relaxed text-muted">{t(data.provider === "deepseek" ? "settings.webSearch.deepseekHelp" : "settings.webSearch.providerHelp")}</p>
         {data.provider !== "auto" && <div className="mt-4 space-y-2">
-          <label className="block text-ui-label">{t("settings.webSearch.apiKey")}<input type="password" autoComplete="new-password" value={key} disabled={busy} onChange={(event) => { setKey(event.target.value); setSaved(false); }} placeholder={t(data.api_keys[data.provider] ? "settings.webSearch.keyConfigured" : "settings.webSearch.keyEmpty")} className="mt-2 block w-full rounded-input border border-border bg-surface p-2 text-text" /></label>
+          <label className="block text-ui-label">{t("settings.webSearch.apiKey")}<input type="password" autoComplete="new-password" value={key} disabled={busy} onChange={(event) => { setKey(event.target.value); setSaved(false); }} placeholder={t(data.api_keys[data.provider] ? "settings.webSearch.keyConfigured" : "settings.webSearch.keyEmpty")} className="mt-2 block w-full h-10 rounded-input border border-border bg-surface px-3 text-ui-label text-text" /></label>
           {data.api_keys[data.provider] && <button type="button" disabled={busy} onClick={() => void save(true)} className="text-ui-label text-error-text disabled:opacity-50">{t("settings.webSearch.removeKey")}</button>}
         </div>}
       </Section>}
