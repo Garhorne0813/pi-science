@@ -31,6 +31,56 @@ describe("scanIdentifiers", () => {
   });
 });
 
+describe("scanIdentifiers label_start", () => {
+  const labelOf = (text: string) => scanIdentifiers(text).map((match) => text.slice(match.label_start, match.end));
+
+  it("absorbs a doi: scheme written straight before the identifier", () => {
+    expect(labelOf("Our method follows doi:10.1038/s41586-021-03819-2 closely.")).toEqual(["doi:10.1038/s41586-021-03819-2"]);
+  });
+
+  it("absorbs the scheme in any case and with spaces around the colon", () => {
+    expect(labelOf("See DOI:10.1000/a and DoI : 10.1000/b.")).toEqual(["DOI:10.1000/a", "DoI : 10.1000/b"]);
+  });
+
+  it("absorbs the scheme when Chinese prose is glued to it", () => {
+    const text = "该结论见doi:10.1000/a，另见（doi:10.1000/b）。";
+    expect(labelOf(text)).toEqual(["doi:10.1000/a", "doi:10.1000/b"]);
+    expect(text.slice(0, scanIdentifiers(text)[0]!.label_start)).toBe("该结论见");
+  });
+
+  it("absorbs the scheme inside brackets and before a numbered marker", () => {
+    expect(labelOf("(doi:10.1000/a)[2] and doi:10.1000/b[3]")).toEqual(["doi:10.1000/a", "doi:10.1000/b"]);
+  });
+
+  it("leaves a word that only ends in doi alone", () => {
+    const text = "xdoi:10.1000/a";
+    expect(labelOf(text)).toEqual(["10.1000/a"]);
+    expect(scanIdentifiers(text)[0]!.label_start).toBe(5);
+  });
+
+  it("keeps a bare identifier's label on the identifier", () => {
+    expect(labelOf("See 10.1000/a.")).toEqual(["10.1000/a"]);
+  });
+
+  it("leaves the arXiv scheme inside the match it already wrote", () => {
+    const text = "See arXiv:2401.12345v2.";
+    expect(labelOf(text)).toEqual(["arXiv:2401.12345v2"]);
+    expect(scanIdentifiers(text)[0]!.label_start).toBe(scanIdentifiers(text)[0]!.start);
+  });
+
+  it("does not reach across prose to a scheme written somewhere else", () => {
+    const text = "Prose `doi:` is not a scheme, 10.1000/a stands alone.";
+    expect(labelOf(text)).toEqual(["10.1000/a"]);
+  });
+
+  it("keeps start on the identifier itself so a marker still lands after it", () => {
+    const text = "see doi:10.1000/a now";
+    const match = scanIdentifiers(text)[0]!;
+    expect([match.start, match.end]).toEqual([8, 17]);
+    expect(text.slice(match.start, match.end)).toBe("10.1000/a");
+  });
+});
+
 describe("maskNonProse", () => {
   it("blanks fenced code, inline code and math without moving any offset", () => {
     const text = "Prose 10.1000/real.\n\n```\n10.1000/fenced\n```\n\nInline `10.1000/inline`.\n\nMath $10.1000/math$.";

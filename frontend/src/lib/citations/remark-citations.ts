@@ -32,8 +32,11 @@ export function remarkCitations() {
         let cursor = 0;
         for (const match of matches) {
           if (match.start < cursor) continue;
-          if (match.start > cursor) replacement.push({ type: "text", value: value.slice(cursor, match.start) });
-          const label = value.slice(match.start, match.end);
+          // The label starts at the scheme, not at the identifier, so `doi:`
+          // travels with the citation instead of being stranded in the prose.
+          const labelStart = Math.max(match.label_start, cursor);
+          if (labelStart > cursor) replacement.push({ type: "text", value: value.slice(cursor, labelStart) });
+          const label = value.slice(labelStart, match.end);
           const link: MdNode = { type: "link", url: identifierUrl(match.kind, match.requested_id), children: [{ type: "text", value: label }] };
           tag(link, `${match.kind}:${match.requested_id}`);
           replacement.push(link);

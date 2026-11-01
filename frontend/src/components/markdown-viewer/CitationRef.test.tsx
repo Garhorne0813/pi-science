@@ -243,6 +243,33 @@ it("keeps the identifier and the number under the identifier style", () => {
   expect(trigger()).toBeInTheDocument();
 });
 
+it("reads as the number alone when the label carries a doi: scheme", () => {
+  stubFetch("number");
+  renderRef({ style: "number", children: "doi:10.1000/alpha" });
+  expect(screen.getByRole("link", { name: "References [1]" })).toBeInTheDocument();
+  expect(screen.queryByText(/doi:/i)).not.toBeInTheDocument();
+});
+
+it("keeps the whole identifier, scheme included, under the identifier style", () => {
+  stubFetch("identifier");
+  renderRef({ style: "identifier", children: "doi:10.1000/alpha" });
+  expect(screen.getByRole("link", { name: "doi:10.1000/alpha" })).toBeInTheDocument();
+  expect(trigger()).toBeInTheDocument();
+});
+
+it("treats a scheme with spaces as the identifier too", () => {
+  stubFetch("number");
+  renderRef({ style: "number", children: "DOI : 10.1000/alpha" });
+  expect(screen.getByRole("link", { name: "References [1]" })).toBeInTheDocument();
+});
+
+it("keeps a label that mentions the scheme but says something else", () => {
+  stubFetch("number");
+  renderRef({ style: "number", children: "the DOI paper" });
+  expect(screen.getByRole("link", { name: "the DOI paper" })).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "References [1]" })).not.toBeInTheDocument();
+});
+
 it("keeps the identifier when the document gives the source no number", () => {
   stubFetch("number");
   renderRef({ style: "number", document: "Nothing is cited here." });

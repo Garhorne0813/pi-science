@@ -25,6 +25,13 @@ export interface CitationIdentifierMatch {
   start: number;
   /** Offset one past the last character. */
   end: number;
+  /** Where the identifier's own label begins, counting a `doi:`/`DOI :` scheme
+   *  written immediately before it. `start` is where the identifier itself
+   *  begins and is what a marker insertion wants; this is what a renderer
+   *  wants, because the scheme belongs to the citation and leaving it in the
+   *  prose printed `doi:` in front of the body number. Equal to `start`
+   *  whenever the document wrote no scheme. */
+  label_start: number;
 }
 
 // DOI suffixes are ASCII per the DOI spec, but the prose around them is not.
@@ -56,6 +63,23 @@ const FENCE_LINE = /^[ \t]{0,3}(`{3,}|~{3,})/;
 const INLINE_CODE = /`+[^`\n]*`+/g;
 const MATH_BLOCK = /\$\$[\s\S]*?\$\$/g;
 const MATH_INLINE = /\$[^$\n]+\$/g;
+
+/** `doi:`, `DOI :` or `doi: ` written straight before an identifier. arXiv's
+ *  already sits inside its own match, so only the DOI form needs reading back.
+ *  A preceding ASCII letter or digit disqualifies it: `xdoi:` is a word, not a
+ *  scheme. Anything else may precede it, because Chinese prose glues the
+ *  scheme onto the word before it (`见doi:10.…`), and requiring a space there
+ *  left `doi:` in half the real answers. */
+const SCHEME_TAIL = /doi[ \t]*:[ \t]*$/i;
+const SCHEME_LOOKBACK = 24;
+
+function schemeStart(text: string, start: number): number {
+  const from = Math.max(0, start - SCHEME_LOOKBACK);
+  const match = SCHEME_TAIL.exec(text.slice(from, start));
+  if (!match) return start;
+  const at = from + match.index;
+  return at > 0 && /[A-Za-z0-9]/.test(text[at - 1]!) ? start : at;
+}
 
 export function arxivVersionOf(requestedId: string): string | null {
   return ARXIV_VERSION.exec(requestedId)?.[1] ?? null;
@@ -100,12 +124,12 @@ export function scanIdentifiers(text: string): CitationIdentifierMatch[] {
     const cleaned = trimTrailingPunctuation(text.slice(start, start + match[0].length));
     if (cleaned.endsWith("/")) continue;
     const id = cleaned.toLowerCase();
-    found.push({ kind: "doi", id, requested_id: id, requested_version: null, start, end: start + cleaned.length });
+    found.push({ kind: "doi", id, requested_id: id, requested_version: null, start, end: start + cleaned.length, label_start: schemeStart(text, start) });
   }
   for (const match of prose.matchAll(ARXIV_PATTERN)) {
     const requestedId = match[1]!;
     const start = match.index ?? 0;
-    found.push({ kind: "arxiv", id: arxivIdOf(requestedId), requested_id: requestedId, requested_version: arxivVersionOf(requestedId), start, end: start + match[0].length });
+    found.push({ kind: "arxiv", id: arxivIdOf(requestedId), requested_id: requestedId, requested_version: arxivVersionOf(requestedId), start, end: start + match[0].length, label_start: start });
   }
   return found.sort((left, right) => left.start - right.start);
 }
