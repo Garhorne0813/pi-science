@@ -10,6 +10,7 @@ import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { citationVerifyService, type VerifyCitationsResult } from "../../runtime/citations/citation-verify-service.js";
 import { citationAutoVerifyEnabled } from "../../runtime/citations/citation-auto-verify.js";
 import { citationPassagesService, type PassageRequest, type PositionResult } from "../../runtime/citations/citation-passages.js";
+import { citationEvidenceService, type SelectionRequest, type SourceReadResult } from "../../runtime/citations/citation-evidence.js";
 
 /** A reader opens one citation at a time; a batch is the source panel prefetching
  *  for the citations on screen, so it stays a handful of provider reads. */
@@ -17,6 +18,32 @@ const MAX_POSITIONS_PER_CALL = 8;
 /** Long enough for any sentence an answer cites, short enough that a pasted
  *  document cannot become a retrieval query. */
 const MAX_CLAIM_CHARS = 4_000;
+/** The agent session a citation position belongs to. Evidence is recorded per
+ *  session, so one answer's passages never answer for another's. */
+const MAX_SESSION_ID_CHARS = 200;
+
+function bodySessionId(body: Record<string, unknown>): string | null {
+  const value = body.session_id;
+  return typeof value === "string" && value.trim() && value.length <= MAX_SESSION_ID_CHARS ? value.trim() : null;
+}
+
+/** The selections one `cite_evidence` call names, or null after answering 400. */
+function bodySelections(body: Record<string, unknown>, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): SelectionRequest[] | null {
+  const selections = body.selections;
+  if (!Array.isArray(selections) || !selections.length) { reply.code(400).send({ error: "selections must be a non-empty array" }); return null; }
+  const cleaned: SelectionRequest[] = [];
+  for (const entry of selections) {
+    const record = (entry ?? {}) as Record<string, unknown>;
+    const source = typeof record.source === "string" ? record.source.trim() : "";
+    const claim = typeof record.claim === "string" ? record.claim.trim() : "";
+    const snapshotId = typeof record.snapshot_id === "string" ? record.snapshot_id.trim() : "";
+    const passageIds = Array.isArray(record.passage_ids) ? record.passage_ids.filter((id): id is string => typeof id === "string" && id.trim() !== "") : [];
+    if (!source || !claim || !snapshotId || !passageIds.length) { reply.code(400).send({ error: "each selection needs source, claim, snapshot_id and passage_ids" }); return null; }
+    if (claim.length > MAX_CLAIM_CHARS) { reply.code(400).send({ error: `claim must be at most ${MAX_CLAIM_CHARS} characters` }); return null; }
+    cleaned.push({ source, claim, snapshot_id: snapshotId, passage_ids: passageIds });
+  }
+  return cleaned;
+}
 
 function q(request: { query: unknown }, key: string, fallback = "."): string {
   const value = (request.query as Record<string, unknown>)[key];
@@ -108,7 +135,34 @@ export function registerCitationRoutes(app: FastifyInstance, service = citationV
     const cwd = await ws(request, reply); if (!cwd) return;
     const body = (request.body ?? {}) as Record<string, unknown>;
     const positions = bodyPositions(body, reply); if (positions === null) return;
-    const result: PositionResult[] = await passages.positions(cwd, { positions, fetch: body.fetch !== false });
+    // The session is what makes a recorded selection findable. Without one the
+    // answer falls back to searching, which is labelled as such.
+    const result: PositionResult[] = await passages.positions(cwd, { positions, fetch: body.fetch !== false, session_id: bodySessionId(body) ?? undefined });
     return { positions: result };
+  });
+
+  // The agent reads a source through this route. It answers numbered passages
+  // with the snapshot they came from, and the read itself is what later makes a
+  // selection checkable.
+  app.post("/api/citations/evidence/read", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request, reply) => {
+    const cwd = await ws(request, reply); if (!cwd) return;
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const sessionId = bodySessionId(body);
+    if (!sessionId) { reply.code(400).send({ error: "session_id is required" }); return; }
+    const source = typeof body.source === "string" ? body.source.trim() : "";
+    if (!/^(?:doi|arxiv):\S+$/.test(source)) { reply.code(400).send({ error: "source must be doi:<id> or arxiv:<id>" }); return; }
+    const result: SourceReadResult = await citationEvidenceService.readSource(cwd, { session_id: sessionId, source, section: typeof body.section === "string" ? body.section : undefined, skip: typeof body.skip === "number" ? body.skip : undefined, limit: typeof body.limit === "number" ? body.limit : undefined });
+    return result;
+  });
+
+  // The model names the passages it used. Nothing is stored that the session
+  // was not shown, and a rejected entry comes back with its reason.
+  app.post("/api/citations/evidence", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (request, reply) => {
+    const cwd = await ws(request, reply); if (!cwd) return;
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const sessionId = bodySessionId(body);
+    if (!sessionId) { reply.code(400).send({ error: "session_id is required" }); return; }
+    const selections = bodySelections(body, reply); if (selections === null) return;
+    return await citationEvidenceService.record(cwd, { session_id: sessionId, selections });
   });
 }

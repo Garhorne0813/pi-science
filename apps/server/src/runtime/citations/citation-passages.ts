@@ -15,33 +15,12 @@
  */
 import { createHash } from "node:crypto";
 import { appendJsonLine, readJsonLines, workspaceFile } from "../../storage/persistence.js";
-import { arxivIdOf, arxivVersionOf } from "@pi-science/contracts";
-import { fullTextSnapshot, type FullTextDeps, type FullTextPassage, type FullTextRef, type FullTextSnapshot, type FullTextState } from "./citation-fulltext.js";
+import { fullTextSnapshot, passageIdOf, refFromKey, snapshotIdOf, type FullTextDeps, type FullTextPassage, type FullTextSnapshot } from "./citation-fulltext.js";
+import { citationEvidenceService, generationExcerpts, type CitationExcerpt, type PositionResult } from "./citation-evidence.js";
+
+export type { CitationExcerpt, PositionResult } from "./citation-evidence.js";
 
 export interface PassageRequest { key: string; claim: string }
-
-export interface CitationExcerpt {
-  /** Verbatim, copied out of the snapshot passage. */
-  text: string;
-  /** Up to ~200 chars of the preceding passage, verbatim. */
-  before: string;
-  /** Up to ~200 chars of the following passage, verbatim. */
-  after: string;
-  section_title: string | null;
-  section_id: string | null;
-  page: number | null;
-  /** Retrieval score, NOT a support probability. */
-  score: number;
-}
-
-export interface PositionResult {
-  key: string;
-  claim_sha256: string;
-  state: FullTextState | "matched" | "no_match" | "unfetched";
-  note: string | null;
-  snapshot_sha256: string | null;
-  excerpts: CitationExcerpt[];
-}
 
 const MAX_EXCERPTS = 3;
 const NEIGHBOR_CHARS = 200;
@@ -128,6 +107,7 @@ function locate(passages: FullTextPassage[], claim: string): CitationExcerpt[] {
       section_id: passage.section_id,
       page: passage.page,
       score: entry.score,
+      passage_id: passageIdOf(passage.index),
     });
   }
   // Verbatim or nothing: every quote has to be literal text of this snapshot.
@@ -147,30 +127,22 @@ function passagesCacheFile(cwd: string): string {
   return workspaceFile(cwd, "citations-passages.jsonl");
 }
 
-function refFromKey(key: string): FullTextRef | null {
-  const at = key.indexOf(":");
-  if (at < 0) return null;
-  const kind = key.slice(0, at);
-  const requestedId = key.slice(at + 1);
-  if ((kind !== "doi" && kind !== "arxiv") || !requestedId) return null;
-  // The verify snapshot stores a DOI in its canonical lowercase form, and this
-  // lookup has to reach the same file the source card reads.
-  return kind === "doi"
-    ? { kind, id: requestedId.toLowerCase(), requested_id: requestedId, requested_version: null }
-    : { kind, id: arxivIdOf(requestedId), requested_id: requestedId, requested_version: arxivVersionOf(requestedId) };
-}
-
 async function readPositionCache(cwd: string): Promise<PositionResult[]> {
   const rows = await readJsonLines<Record<string, unknown>>(passagesCacheFile(cwd));
   const results: PositionResult[] = [];
   for (const row of rows) {
     if (typeof row.key !== "string" || typeof row.claim_sha256 !== "string" || typeof row.state !== "string" || !Array.isArray(row.excerpts)) continue;
+    // A row written before passages had ids cannot name the paragraph it
+    // quoted, so it is dropped and the position is located again.
+    if (!(row.excerpts as CitationExcerpt[]).every((excerpt) => typeof excerpt?.passage_id === "string")) continue;
     results.push({
       key: row.key,
       claim_sha256: row.claim_sha256,
       state: row.state as PositionResult["state"],
       note: typeof row.note === "string" ? row.note : null,
       snapshot_sha256: typeof row.snapshot_sha256 === "string" ? row.snapshot_sha256 : null,
+      snapshot_id: typeof row.snapshot_id === "string" ? row.snapshot_id : null,
+      origin: "located",
       excerpts: row.excerpts as CitationExcerpt[],
     });
   }
@@ -178,10 +150,13 @@ async function readPositionCache(cwd: string): Promise<PositionResult[]> {
 }
 
 export const citationPassagesService = {
-  /** One result per citation position. A position whose full text is not on
-   *  disk and may not be fetched reports `unfetched`: the answer is unknown,
-   *  which is not the same as "this paper has no open text". */
-  async positions(cwd: string, input: { positions: PassageRequest[]; fetch?: boolean }, deps: FullTextDeps = {}): Promise<PositionResult[]> {
+  /** One result per citation position. A position this session recorded while
+   *  it wrote answers from that record; only a position with no record falls
+   *  back to searching the paper afterwards, and the result says which it is.
+   *  A position whose full text is not on disk and may not be fetched reports
+   *  `unfetched`: the answer is unknown, which is not the same as "this paper
+   *  has no open text". */
+  async positions(cwd: string, input: { positions: PassageRequest[]; fetch?: boolean; session_id?: string }, deps: FullTextDeps = {}): Promise<PositionResult[]> {
     const allowFetch = input.fetch !== false;
     const cache = await readPositionCache(cwd);
     // Two claims in one answer can cite the same paper; reading it twice would
@@ -190,25 +165,41 @@ export const citationPassagesService = {
     const results: PositionResult[] = [];
     for (const request of input.positions) {
       const claim_sha256 = createHash("sha256").update(request.claim).digest("hex");
+      // The model's own choice, recorded while it wrote, always wins over a
+      // search: it is the paragraph the writer actually used, and re-deriving
+      // it from the finished sentence can only guess.
+      const recorded = input.session_id && request.claim.trim() ? await citationEvidenceService.lookup(cwd, { session_id: input.session_id, key: request.key, claim: request.claim }) : { state: "absent" as const };
+      if (recorded.state === "recorded") {
+        const excerpts = generationExcerpts(recorded.snapshot, recorded.record.passage_ids);
+        // A record whose passages no longer resolve is not a match: saying so is
+        // better than showing an empty card as if the source said nothing.
+        results.push({ key: request.key, claim_sha256, state: excerpts.length ? "matched" : "stale", note: excerpts.length ? null : "the recorded passages are no longer in this snapshot", snapshot_sha256: recorded.snapshot.content_sha256, snapshot_id: snapshotIdOf(recorded.snapshot), origin: "generation", excerpts });
+        continue;
+      }
+      if (recorded.state === "stale") {
+        results.push({ key: request.key, claim_sha256, state: "stale", note: "the source was read again since this answer recorded its evidence, so the recorded passages no longer resolve", snapshot_sha256: null, snapshot_id: recorded.record.snapshot_id, origin: "generation", excerpts: [] });
+        continue;
+      }
       const ref = refFromKey(request.key);
       if (!ref) {
-        results.push({ key: request.key, claim_sha256, state: "no_match", note: "the citation key is not a DOI or arXiv id", snapshot_sha256: null, excerpts: [] });
+        results.push({ key: request.key, claim_sha256, state: "no_match", note: "the citation key is not a DOI or arXiv id", snapshot_sha256: null, snapshot_id: null, origin: "located", excerpts: [] });
         continue;
       }
       const sourceKey = `${ref.kind}:${ref.id}`;
       if (!snapshots.has(sourceKey)) snapshots.set(sourceKey, await fullTextSnapshot(cwd, ref, { fetch: allowFetch }, deps));
       const snapshot = snapshots.get(sourceKey) ?? null;
       if (!snapshot) {
-        results.push({ key: request.key, claim_sha256, state: "unfetched", note: "full text not fetched yet", snapshot_sha256: null, excerpts: [] });
+        results.push({ key: request.key, claim_sha256, state: "unfetched", note: "full text not fetched yet", snapshot_sha256: null, snapshot_id: null, origin: "located", excerpts: [] });
         continue;
       }
       const snapshot_sha256 = snapshot.content_sha256;
+      const snapshot_id = snapshotIdOf(snapshot);
       if (snapshot.state !== "available") {
-        results.push({ key: request.key, claim_sha256, state: snapshot.state, note: snapshot.note, snapshot_sha256, excerpts: [] });
+        results.push({ key: request.key, claim_sha256, state: snapshot.state, note: snapshot.note, snapshot_sha256, snapshot_id, origin: "located", excerpts: [] });
         continue;
       }
       if (!snapshot.passages.length) {
-        results.push({ key: request.key, claim_sha256, state: "no_match", note: "the full text holds no passages", snapshot_sha256, excerpts: [] });
+        results.push({ key: request.key, claim_sha256, state: "no_match", note: "the full text holds no passages", snapshot_sha256, snapshot_id, origin: "located", excerpts: [] });
         continue;
       }
       // A cache row only answers for the exact text it was computed against. A
@@ -216,11 +207,11 @@ export const citationPassagesService = {
       // stops matching and the position is found again instead of quoted stale.
       const cached = cache.findLast((row) => row.key === request.key && row.claim_sha256 === claim_sha256 && row.snapshot_sha256 === snapshot_sha256);
       if (cached) {
-        results.push(cached);
+        results.push({ ...cached, snapshot_id, origin: "located" });
         continue;
       }
       const excerpts = locate(snapshot.passages, request.claim);
-      const result: PositionResult = { key: request.key, claim_sha256, state: excerpts.length ? "matched" : "no_match", note: null, snapshot_sha256, excerpts };
+      const result: PositionResult = { key: request.key, claim_sha256, state: excerpts.length ? "matched" : "no_match", note: null, snapshot_sha256, snapshot_id, origin: "located", excerpts };
       if (snapshot_sha256) {
         await appendJsonLine(passagesCacheFile(cwd), result);
         cache.push(result);

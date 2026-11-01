@@ -1,7 +1,7 @@
 ---
 name: literature-review
 description: Find, verify, and synthesize scientific literature with traceable citations. Use configured MCP tools for literature and scientific data retrieval, including Crossref, PubMed, arXiv, GenBank, PubChem, and UniProt. Use for literature searches, evidence tables, paper comparisons, and review-ready summaries.
-version: 0.4.0
+version: 0.5.0
 license: Apache-2.0
 category: research
 requirements:
@@ -88,6 +88,21 @@ Crossref retrieval uses `search_crossref`, including DOI-oriented searches. For 
 - Normalize identifiers before comparing: lowercase DOIs and strip any `https://doi.org/` or `doi:` prefix; reduce arXiv ids to the canonical `NNNN.NNNNN` form (strip the `arXiv:` prefix, the `http://arxiv.org/abs/` prefix, and any `vN` version suffix, e.g. `http://arxiv.org/abs/2301.01234v2` becomes `2301.01234`).
 - Deduplicate across providers: match by normalized DOI first, then by normalized title plus year.
 - For every kept record, preserve: identifier(s), title, authors, year, venue, provider name, and retrieval timestamp (ISO 8601 UTC).
+
+## Citing from source text
+
+Two tools in this session read a cited source's open full text and record what you used.
+
+- `read_source_evidence` returns one source as numbered passages, with a `snapshot_id` for the read and a `passage_id` for each paragraph, plus its section and, when the PDF states one, its file page. Page a long paper with `skip`. A state other than `available` says why there is no text: no open full text, access refused, download failed, unreadable body, a PDF with no text layer, or only another version.
+- `cite_evidence` records which passages of which snapshot you used for one sentence.
+
+Rules:
+
+1. Read before you cite. Quote only a paragraph `read_source_evidence` returned, and only from the snapshot it named.
+2. After you put a citation into your answer, call `cite_evidence` with the source, the sentence exactly as you wrote it, the `snapshot_id` and the passage ids you used. A reader then opens the paragraph you chose, not one a search guessed afterwards.
+3. A rejected selection is not recorded. Read the source again and select a passage that was returned, or state only what the metadata supports.
+4. If you never read the source, do not call `cite_evidence`. The source then shows that no generation-time text was recorded, which is accurate.
+5. A recorded passage is text from the paper. It is not a finding that the paper supports the sentence, and saying it does is your reading, not the record's.
 
 ## Output format (mandatory)
 

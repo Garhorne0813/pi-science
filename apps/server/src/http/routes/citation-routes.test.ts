@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerCitationRoutes } from "./citation-routes.js";
+import { fullTextSnapshotPath, snapshotIdOf, type FullTextSnapshot } from "../../runtime/citations/citation-fulltext.js";
+import { writeJsonAtomic } from "../../storage/persistence.js";
 import type { CitationEvidence, VerifyCitationsResult } from "../../runtime/citations/citation-verify-service.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 
@@ -306,5 +308,75 @@ describe("citation passage routes", () => {
       expect(response.statusCode).toBe(400);
     }
     expect(passages.positions).not.toHaveBeenCalled();
+  });
+});
+
+/** A source already on disk, so the evidence routes below read a fixture and
+ *  never contact a provider. */
+async function seedSource(cwd: string, home: string): Promise<{ snapshotId: string; passageIds: string[] }> {
+  vi.stubEnv("PI_SCIENCE_HOME", home);
+  const passages = [
+    { index: 0, section_title: "Results", section_id: "S2", page: null, text: "Attention layers alone reach a better BLEU score than the recurrent baseline on every pair we tested." },
+    { index: 1, section_title: "Methods", section_id: "S3", page: null, text: "We trained each model on eight GPUs for three and a half days with one shared vocabulary." },
+  ];
+  const snapshot: FullTextSnapshot = { kind: "doi", id: "10.1/x", requested_id: "10.1/x", requested_version: null, state: "available", note: null, provider: "europepmc", url: "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC1/fullTextXML", retrieved_at: new Date().toISOString(), content_sha256: "sha-fixture", license: null, sections: [{ id: "S2", title: "Results" }, { id: "S3", title: "Methods" }], passages };
+  await writeJsonAtomic(fullTextSnapshotPath(cwd, "doi", "10.1/x"), snapshot);
+  return { snapshotId: String(snapshotIdOf(snapshot)), passageIds: passages.map((passage) => `p${passage.index}`) };
+}
+
+describe("citation evidence routes", () => {
+  it("requires a session before it hands a source to the model", async () => {
+    const cwd = await makeWorkspace();
+    const app = Fastify({ logger: false });
+    registerCitationRoutes(app, fakeService() as never);
+    apps.push(app);
+
+    const response = await app.inject({ method: "POST", url: `/api/citations/evidence/read?cwd=${encodeURIComponent(cwd)}`, payload: { source: "doi:10.1/x" } });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("returns numbered passages of a source that is already on disk", async () => {
+    const cwd = await makeWorkspace();
+    const home = await mkdtemp(join(tmpdir(), "pi-citation-evidence-home-")); workspaces.push(home);
+    const { snapshotId, passageIds } = await seedSource(cwd, home);
+    const app = Fastify({ logger: false });
+    registerCitationRoutes(app, fakeService() as never);
+    apps.push(app);
+
+    const response = await app.inject({ method: "POST", url: `/api/citations/evidence/read?cwd=${encodeURIComponent(cwd)}`, payload: { session_id: "session-a", source: "doi:10.1/x" } });
+    const body = response.json() as { snapshot_id: string; passages: Array<{ passage_id: string; text: string }> };
+
+    expect(response.statusCode).toBe(200);
+    expect(body.snapshot_id).toBe(snapshotId);
+    expect(body.passages.map((passage) => passage.passage_id)).toEqual(passageIds);
+    expect(body.passages[0]?.text).toContain("Attention layers alone");
+  });
+
+  it("records the passages the model selected and rejects one it never saw", async () => {
+    const cwd = await makeWorkspace();
+    const home = await mkdtemp(join(tmpdir(), "pi-citation-evidence-home-")); workspaces.push(home);
+    const { snapshotId } = await seedSource(cwd, home);
+    const app = Fastify({ logger: false });
+    registerCitationRoutes(app, fakeService() as never);
+    apps.push(app);
+    await app.inject({ method: "POST", url: `/api/citations/evidence/read?cwd=${encodeURIComponent(cwd)}`, payload: { session_id: "session-a", source: "doi:10.1/x", limit: 1 } });
+
+    const recorded = await app.inject({ method: "POST", url: `/api/citations/evidence?cwd=${encodeURIComponent(cwd)}`, payload: { session_id: "session-a", selections: [{ source: "doi:10.1/x", claim: "Attention layers alone beat the recurrent baseline.", snapshot_id: snapshotId, passage_ids: ["p0"] }] } });
+    expect(recorded.json()).toMatchObject({ accepted: 1, rejected: 0 });
+
+    const rejected = await app.inject({ method: "POST", url: `/api/citations/evidence?cwd=${encodeURIComponent(cwd)}`, payload: { session_id: "session-a", selections: [{ source: "doi:10.1/x", claim: "Attention layers alone beat the recurrent baseline.", snapshot_id: snapshotId, passage_ids: ["p1"] }] } });
+    expect(rejected.json()).toMatchObject({ accepted: 0, rejected: 1, results: [{ reason: "not_delivered" }] });
+  });
+
+  it("rejects a selection payload that names no passage", async () => {
+    const cwd = await makeWorkspace();
+    const app = Fastify({ logger: false });
+    registerCitationRoutes(app, fakeService() as never);
+    apps.push(app);
+
+    const response = await app.inject({ method: "POST", url: `/api/citations/evidence?cwd=${encodeURIComponent(cwd)}`, payload: { session_id: "session-a", selections: [{ source: "doi:10.1/x", claim: "A sentence.", snapshot_id: "", passage_ids: [] }] } });
+
+    expect(response.statusCode).toBe(400);
   });
 });

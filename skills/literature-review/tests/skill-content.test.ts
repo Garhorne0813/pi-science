@@ -75,6 +75,16 @@ describe("literature-review skill content", () => {
     expect(body).toContain("ISO 8601");
   });
 
+  it("makes the model record the passage it cited while it writes", async () => {
+    const body = await readFile(SKILL_MD, "utf8");
+    expect(body).toContain("`read_source_evidence`");
+    expect(body).toContain("`cite_evidence`");
+    expect(body).toContain("snapshot_id");
+    expect(body).toContain("passage_id");
+    // The record is text from the paper, not a support verdict.
+    expect(body).toContain("not a finding that the paper supports the sentence");
+  });
+
   it("states the mandatory citation output convention the frontend renders", async () => {
     const body = await readFile(SKILL_MD, "utf8");
 
