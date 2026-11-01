@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../../app/app.js";
@@ -13,12 +13,15 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   vi.restoreAllMocks(); vi.unstubAllEnvs();
 });
-async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "pi-citation-settings-")); roots.push(root); vi.stubEnv("PI_SCIENCE_HOME", root);
+async function boot() {
   const config: ServerConfig = { host: "127.0.0.1", port: 0, corsOrigins: [], maxBodyBytes: 10_000_000, upstreamTimeoutMs: 100, nodeSessions: false, nodeSse: false, nodeFiles: true, nodePiManager: false, logLevel: "silent" };
   const modules = createServerModules(config);
   const app = buildApp(config, modules); apps.push(app);
   return { app, modules };
+}
+async function fixture() {
+  const root = await mkdtemp(join(tmpdir(), "pi-citation-settings-")); roots.push(root); vi.stubEnv("PI_SCIENCE_HOME", root);
+  return { root, ...(await boot()) };
 }
 
 it("persists the automatic citation verification switch and reads it back", async () => {
@@ -41,4 +44,31 @@ it("rejects a non-boolean value without saving it", async () => {
     expect((await app.inject({ method: "PUT", url: "/api/settings/citation-auto-verify", payload })).statusCode).toBe(400);
   }
   expect(await modules.settings.read()).not.toHaveProperty("citation_auto_verify");
+});
+
+const config = async (app: { inject: (options: { method: "GET"; url: string }) => Promise<{ json: () => { citation_auto_verify?: boolean } }> }) =>
+  (await app.inject({ method: "GET", url: "/api/settings/config" })).json().citation_auto_verify;
+
+it("reports automatic verification as on before the user chose anything", async () => {
+  const { app } = await fixture();
+  expect(await config(app)).toBe(true);
+});
+
+it("reports a stored on and a stored off as stored", async () => {
+  const { app } = await fixture();
+  await app.inject({ method: "PUT", url: "/api/settings/citation-auto-verify", payload: { enabled: true } });
+  expect(await config(app)).toBe(true);
+  await app.inject({ method: "PUT", url: "/api/settings/citation-auto-verify", payload: { enabled: false } });
+  expect(await config(app)).toBe(false);
+});
+
+it("keeps an explicit off on disk so a toggle on then off survives a restart", async () => {
+  const { app, root } = await fixture();
+  await app.inject({ method: "PUT", url: "/api/settings/citation-auto-verify", payload: { enabled: true } });
+  await app.inject({ method: "PUT", url: "/api/settings/citation-auto-verify", payload: { enabled: false } });
+  expect(JSON.parse(await readFile(join(root, "config.json"), "utf8"))).toMatchObject({ citation_auto_verify: false });
+
+  // A restarted server re-reads the file with a cold settings store.
+  const restarted = await boot();
+  expect(await config(restarted.app)).toBe(false);
 });

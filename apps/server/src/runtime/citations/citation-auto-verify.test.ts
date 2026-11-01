@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CitationAutoVerifyService, finalAnswerForTurn } from "./citation-auto-verify.js";
+import { CitationAutoVerifyService, citationAutoVerifyEnabled, finalAnswerForTurn } from "./citation-auto-verify.js";
 import type { SessionMessageRecord } from "../node/session-repository.js";
 import type { CitationView, VerifyCitationsResult } from "./citation-verify-service.js";
 
@@ -76,7 +76,33 @@ describe("finalAnswerForTurn", () => {
   });
 });
 
+describe("citationAutoVerifyEnabled", () => {
+  it("is on when the user never stored a choice", async () => {
+    await fixture({});
+    expect(await citationAutoVerifyEnabled()).toBe(true);
+  });
+
+  it("honours a stored false forever", async () => {
+    await fixture(OFF);
+    expect(await citationAutoVerifyEnabled()).toBe(false);
+  });
+
+  it("reads a stored true as on", async () => {
+    await fixture(ON);
+    expect(await citationAutoVerifyEnabled()).toBe(true);
+  });
+});
+
 describe("CitationAutoVerifyService", () => {
+  it("verifies a settled turn by default, before the user chose anything", async () => {
+    const cwd = await fixture({});
+    const { svc, verify } = service([message("Cites 10.1038/one here.")]);
+    expect(await svc.run(cwd, "session-1", "turn-1")).toMatchObject({ ran: true, citations: 1 });
+    expect(verify).toHaveBeenCalledOnce();
+    expect((await svc.run(cwd, "session-1", "turn-1")).reason).toContain("already checked");
+    expect(verify).toHaveBeenCalledOnce();
+  });
+
   it("contacts no provider while the switch is off", async () => {
     const cwd = await fixture(OFF);
     const { svc, verify } = service([message("Cites 10.1038/one here.")]);

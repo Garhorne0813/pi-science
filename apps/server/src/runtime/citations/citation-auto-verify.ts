@@ -18,11 +18,13 @@ export const CITATION_AUTO_VERIFY_KEY = "citation_auto_verify";
 const CLAIMS_FILE = "citation-auto-verify.json";
 const MAX_CLAIMS = 500;
 
-/** Off unless the user turns it on. Automatic verification contacts public
- *  scholarly APIs on every completed turn, so it must be opted into. */
+/** On unless the user turned it off. A missing key means no choice was stored
+ *  yet, which reads as on; a stored boolean is the user's own answer and is
+ *  honoured as stored, so an explicit false stays off. */
 export async function citationAutoVerifyEnabled(): Promise<boolean> {
   const config = await readJson<Record<string, unknown>>(configPath("config.json"), {});
-  return config[CITATION_AUTO_VERIFY_KEY] === true;
+  const stored = config[CITATION_AUTO_VERIFY_KEY];
+  return typeof stored === "boolean" ? stored : true;
 }
 
 /** The answer a settled turn produced, or null when the turn did not end as a
