@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Code2, Eye, ExternalLink, FileSearch, GitCompare, History, Loader2, Pencil, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { FilePreviewInspector as FilePreviewInspectorT, FileRoot } from "../../types/thread";
@@ -16,6 +16,8 @@ import { parseTableFile } from "@/lib/shared";
 import { formatNumber } from "@/i18n/format";
 import { CodeViewer } from "@/components/code-viewer/CodeViewer";
 import { MarkdownViewer } from "@/components/markdown-viewer/MarkdownViewer";
+import { CitationNumberingProvider } from "@/components/markdown-viewer/CitationNumbering";
+import { numberCitations } from "@/lib/citations/numbering";
 import { IconButton } from "@/components/ui/Icon";
 import { ImagePreview } from "./ImagePreview";
 import { PreviewZoomControls, clampPreviewScale } from "./PreviewZoomControls";
@@ -446,6 +448,14 @@ export function FilePreviewInspector({
   );
 }
 
+/** A Markdown document reads with the same numbering as the answer it was
+ *  produced from: a body marker resolves through the document's own sources, so
+ *  a reader can open the source card from a written report, not only from chat. */
+function MarkdownDocument({ text, textScale, cwd, root, path }: { text: string; textScale: number; cwd: string | null | undefined; root: FileRoot | undefined; path: string }) {
+  const numbering = useMemo(() => numberCitations(text), [text]);
+  return <CitationNumberingProvider numbering={numbering}><MarkdownViewer textScale={textScale} variant="inspector" resourceContext={{ cwd: cwd ?? "", root, documentPath: path }}>{text}</MarkdownViewer></CitationNumberingProvider>;
+}
+
 function Body({
   textScale,
   kind,
@@ -612,7 +622,7 @@ function Body({
             paddingBlock: "1.25rem",
           }}
         >
-          <MarkdownViewer textScale={textScale} variant="inspector" resourceContext={{ cwd: cwd ?? "", root, documentPath: path }}>{text}</MarkdownViewer>
+          <MarkdownDocument text={text} textScale={textScale} cwd={cwd} root={root} path={path} />
         </div>
       </div>
     ) : (
