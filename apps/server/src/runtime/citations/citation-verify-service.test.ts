@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -50,10 +50,11 @@ async function cacheRows(cwd: string): Promise<string> {
 }
 
 describe("extractCitations", () => {
-  it("keeps one reference per source and remembers the cited arXiv version", () => {
+  it("keeps one reference per source and keeps two cited arXiv versions apart", () => {
     const text = "See arXiv:2401.12345v1, then arXiv:2401.12345v2, and arXiv:1706.03762.";
     expect(extractCitations(text)).toEqual([
       { kind: "arxiv", id: "2401.12345", requested_id: "2401.12345v1", requested_version: "1" },
+      { kind: "arxiv", id: "2401.12345", requested_id: "2401.12345v2", requested_version: "2" },
       { kind: "arxiv", id: "1706.03762", requested_id: "1706.03762", requested_version: null },
     ]);
   });
@@ -85,6 +86,11 @@ describe("extractCitations", () => {
       { kind: "doi", id: "10.1000/beta", requested_id: "10.1000/beta", requested_version: null },
     ]);
   });
+
+  it("skips an identifier the body only shows inside code or math", () => {
+    const text = ["Prose cites 10.1000/real.", "", "```", "10.1000/fenced", "```", "", "Inline `10.1000/inline` and math $10.1000/math$."].join("\n");
+    expect(extractCitations(text)).toEqual([{ kind: "doi", id: "10.1000/real", requested_id: "10.1000/real", requested_version: null }]);
+  });
 });
 
 describe("citationVerifyService.verify", () => {
@@ -96,6 +102,9 @@ describe("citationVerifyService.verify", () => {
         title: ["Attention Is All You Need"],
         author: [{ given: "Ashish", family: "Vaswani" }],
         "container-title": ["Nature"],
+        volume: "30",
+        issue: "3",
+        page: "1125-1136",
         issued: { "date-parts": [[2017]] },
         abstract: "<p>The Transformer architecture.</p>",
       }) as unknown as typeof fetch,
@@ -103,9 +112,42 @@ describe("citationVerifyService.verify", () => {
     const result = await citationVerifyService.verify(cwd, { text: "The Transformer (10.1038/x) changed everything." }, deps);
     expect(result.citations[0]).toMatchObject({
       kind: "doi", id: "10.1038/x", status: "found", title: "Attention Is All You Need", journal: "Nature", year: "2017",
+      volume: "30", issue: "3", pages: "1125-1136",
       retraction: "clear", checked_providers: ["crossref"], error: null, version: "not_applicable", cached: false,
     });
     expect(await cacheRows(cwd)).toContain("10.1038/x");
+  });
+
+  it("reads a snapshot row written before the numbering fields as nulls and fills them on refresh", async () => {
+    const cwd = await makeWorkspace();
+    // A row from before volume/issue/pages existed: it carries none of them.
+    const row = {
+      schema: 2, kind: "doi", id: "10.1038/old-row", status: "found", title: "Old Row Paper", authors: [], journal: "Nature", year: "2019",
+      abstract: null, oa_url: null, retraction: "clear", retraction_note: null, retraction_url: null,
+      checked_providers: ["crossref"], record_version: null, status_note: null, verified_at: new Date().toISOString(),
+    };
+    await writeFile(join(cwd, ".pi-science", "citations.jsonl"), `${JSON.stringify(row)}\n`);
+    const [hit] = await citationVerifyService.lookup(cwd, ["doi:10.1038/old-row"]);
+    expect(hit).toMatchObject({ title: "Old Row Paper", volume: null, issue: null, pages: null, cached: true });
+
+    const fetchMock = crossrefFetch({ title: ["Old Row Paper"], author: [], issued: { "date-parts": [[2019]] }, volume: "12", issue: "4", page: "77-88" }) as unknown as typeof fetch;
+    const refreshed = await citationVerifyService.verify(cwd, { text: "10.1038/old-row", refresh: true }, { fetch: fetchMock, minimumInterval: FAST });
+    expect(refreshed.citations[0]).toMatchObject({ volume: "12", issue: "4", pages: "77-88", cached: false });
+  });
+
+  it("verifies only the sources a follow-up round names and replays a snapshot instead of asking again", async () => {
+    const cwd = await makeWorkspace();
+    const fetchMock = crossrefFetch({ title: ["Named Paper"], author: [], issued: { "date-parts": [[2020]] } }) as unknown as typeof fetch;
+    const text = "10.1038/first and 10.1038/second";
+    const refs = extractCitations(text);
+    const first = await citationVerifyService.verify(cwd, { text }, { fetch: fetchMock, minimumInterval: FAST });
+    expect(first.citations.map((citation) => citation.id)).toEqual(["10.1038/first", "10.1038/second"]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const followUp = await citationVerifyService.verify(cwd, { text, ids: [refs[1]!] }, { fetch: fetchMock, minimumInterval: FAST });
+    expect(followUp).toMatchObject({ total: 1, processed: 1, unprocessed: [] });
+    expect(followUp.citations[0]).toMatchObject({ id: "10.1038/second", cached: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("reuses a fresh snapshot without contacting providers again", async () => {
@@ -241,6 +283,7 @@ describe("citationVerifyService.verify", () => {
     expect(result.citations[0]).toMatchObject({
       kind: "arxiv", id: "2401.12345", requested_id: "2401.12345v1", requested_version: "1", status: "found",
       title: "Paper Title", abstract: "A summary.", oa_url: "https://arxiv.org/abs/2401.12345",
+      volume: null, issue: null, pages: null,
       version: "confirmed", record_version: "1",
     });
     const requested = String(new URL(String((fetchMock as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]![0])).searchParams.get("id_list"));
@@ -253,6 +296,18 @@ describe("citationVerifyService.verify", () => {
     const fetchMock = vi.fn(async () => xmlResponse(xml)) as unknown as typeof fetch;
     const result = await citationVerifyService.verify(cwd, { text: "As shown in arXiv:2401.12345v2." }, { fetch: fetchMock, minimumInterval: FAST });
     expect(result.citations[0]).toMatchObject({ status: "found", version: "unconfirmed", record_version: "1", abstract: null });
+  });
+
+  it("reports both cited versions of one paper from a single query", async () => {
+    const cwd = await makeWorkspace();
+    const xml = arxivFeed({ id: "2401.12345v2", title: "Paper Title", summary: "Summary of version two.", published: "2024-01-22" });
+    const fetchMock = vi.fn(async () => xmlResponse(xml)) as unknown as typeof fetch;
+    const result = await citationVerifyService.verify(cwd, { text: "Earlier arXiv:2401.12345v1, later arXiv:2401.12345v2." }, { fetch: fetchMock, minimumInterval: FAST });
+    expect(result.citations.map((citation) => [citation.requested_version, citation.version, citation.abstract])).toEqual([
+      ["1", "unconfirmed", null],
+      ["2", "confirmed", "Summary of version two."],
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the record abstract on the snapshot when the older version is cited first", async () => {

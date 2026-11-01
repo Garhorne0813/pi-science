@@ -18,6 +18,7 @@
 import { createHash } from "node:crypto";
 import { appendJsonLine, configPath, readJson, readJsonLines, workspaceFile } from "../../storage/persistence.js";
 import { recordEgress } from "../../security/egress-audit.js";
+import { arxivIdOf, arxivVersionOf, scanIdentifiers } from "@pi-science/contracts";
 
 export type CitationKind = "doi" | "arxiv";
 /** `found` and `not_found` are provider answers. `error` is a failed request:
@@ -54,6 +55,11 @@ export interface CitationEvidence {
   authors: string[];
   journal: string | null;
   year: string | null;
+  /** Crossref's own numbering of the issue the record appeared in. arXiv has
+   *  no such fields, so it leaves all three null. */
+  volume: string | null;
+  issue: string | null;
+  pages: string | null;
   abstract: string | null;
   oa_url: string | null;
   retraction: RetractionState;
@@ -98,16 +104,9 @@ export interface CitationDeps {
   minimumInterval?: Record<string, number>;
 }
 
-// DOI suffixes are ASCII per the DOI spec, but the prose around them is not.
-// The match must terminate at CJK ideographs/kana/hangul and CJK, fullwidth or
-// general punctuation, or a Chinese sentence glues its words onto the id ("10.1038/xyz，另见" would otherwise be queried verbatim and fail as
-// not_found). It must also stop at `[`, or a numbered marker written straight
-// after an identifier (`10.1000/alpha[1]`) would be read back as part of the
-// id. Keep in sync with frontend/src/lib/citations/citations.ts.
-const DOI_PATTERN = /10\.\d{4,9}\/[^\s)\][}>\u2010-\u2027\u2030-\u205e\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef\uac00-\ud7af]+/gi;
-const ARXIV_PATTERN = /arXiv:\s?(\d{4}\.\d{4,5}(?:v\d+)?)/gi;
-const TRAILING_PUNCTUATION = /[.,;:!?*"'\u2010-\u2027\u2030-\u205e\u3000-\u303f\uff00-\uffef]+$/;
-const ARXIV_VERSION = /v(\d+)$/i;
+// The identifier rule itself is shared with the renderer and the copy path, so
+// the link a reader clicks, the number the body shows and the id this service
+// queries cannot disagree about which source a citation means.
 export const MAX_CITATIONS_PER_CALL = 30;
 const MAX_ABSTRACT_CHARS = 2_000;
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -118,30 +117,15 @@ const UNPAYWALL_EMAIL_CONFIG = "citation_verify_email";
 
 const lastRequestAt = new Map<string, number>();
 
-function arxivVersion(id: string): string | null {
-  return ARXIV_VERSION.exec(id)?.[1] ?? null;
-}
-
-/** Extract DOI and arXiv identifiers from text, deduped by source identity in
- *  first-seen order. One logical query per source, even when the same paper is
- *  cited twice, possibly with different arXiv versions.
- *  Rule-compatible with the frontend citations module. */
+/** Extract DOI and arXiv identifiers from text, in first-seen order. Two arXiv
+ *  versions of one paper stay two entries: a reader tracing a claim made about
+ *  v2 must not be handed the v1 text, and the snapshot reports the version a
+ *  citation names separately from the version the record now carries. */
 export function extractCitations(text: string): CitationRef[] {
-  const found: Array<CitationRef & { index: number }> = [];
-  for (const match of text.matchAll(DOI_PATTERN)) {
-    const id = match[0].replace(TRAILING_PUNCTUATION, "").toLowerCase();
-    if (id.endsWith("/")) continue;
-    found.push({ kind: "doi", id, requested_id: id, requested_version: null, index: match.index ?? 0 });
-  }
-  for (const match of text.matchAll(ARXIV_PATTERN)) {
-    const requestedId = match[1]!;
-    found.push({ kind: "arxiv", id: requestedId.replace(ARXIV_VERSION, ""), requested_id: requestedId, requested_version: arxivVersion(requestedId), index: match.index ?? 0 });
-  }
-  found.sort((left, right) => left.index - right.index);
   const seen = new Set<string>();
   const citations: CitationRef[] = [];
-  for (const { kind, id, requested_id, requested_version } of found) {
-    const key = `${kind}:${id}`;
+  for (const { kind, id, requested_id, requested_version } of scanIdentifiers(text)) {
+    const key = `${kind}:${requested_id}`;
     if (seen.has(key)) continue;
     seen.add(key);
     citations.push({ kind, id, requested_id, requested_version });
@@ -182,6 +166,9 @@ async function readCache(cwd: string): Promise<Map<string, CitationEvidence>> {
       authors: Array.isArray(row.authors) ? (row.authors as string[]) : [],
       journal: typeof row.journal === "string" ? row.journal : null,
       year: typeof row.year === "string" ? row.year : null,
+      volume: typeof row.volume === "string" ? row.volume : null,
+      issue: typeof row.issue === "string" ? row.issue : null,
+      pages: typeof row.pages === "string" ? row.pages : null,
       abstract: typeof row.abstract === "string" ? row.abstract : null,
       oa_url: typeof row.oa_url === "string" ? row.oa_url : null,
       retraction: retractionState(row.retraction),
@@ -220,7 +207,7 @@ async function fetchJson(url: URL, deps: CitationDeps, domain: string): Promise<
 }
 
 function emptyEvidence(kind: CitationKind, id: string, status: CitationStatus, providers: string[]): CitationEvidence {
-  return { schema: 2, kind, id, status, title: null, authors: [], journal: null, year: null, abstract: null, oa_url: null, retraction: "unknown", retraction_note: null, retraction_url: null, checked_providers: providers, error: null, record_version: null, status_note: null, verified_at: new Date().toISOString() };
+  return { schema: 2, kind, id, status, title: null, authors: [], journal: null, year: null, volume: null, issue: null, pages: null, abstract: null, oa_url: null, retraction: "unknown", retraction_note: null, retraction_url: null, checked_providers: providers, error: null, record_version: null, status_note: null, verified_at: new Date().toISOString() };
 }
 
 /** Crossref registers an update relation on both records: the notice carries
@@ -260,6 +247,9 @@ function crossrefEvidence(doi: string, works: Record<string, unknown>): Citation
     authors,
     journal: Array.isArray(message["container-title"]) ? String(message["container-title"][0] ?? "") || null : null,
     year: dateParts[0]?.[0] ? String(dateParts[0][0]) : null,
+    volume: typeof message.volume === "string" ? message.volume : null,
+    issue: typeof message.issue === "string" ? message.issue : null,
+    pages: typeof message.page === "string" ? message.page : null,
     abstract: abstract ? abstract.slice(0, MAX_ABSTRACT_CHARS) : null,
     retraction: retraction.retraction,
     retraction_note: retraction.note,
@@ -340,7 +330,7 @@ async function verifyArxiv(id: string, deps: CitationDeps): Promise<CitationEvid
     throw new Error(`export.arxiv.org answered with an API error feed (${feedTitle || "no title"})`);
   }
   if (!entry) return emptyEvidence("arxiv", id, "not_found", ["arxiv"]);
-  const recordVersion = arxivVersion(arxivXmlTag(entry, "id").replace(/^.*\/abs\//, ""));
+  const recordVersion = arxivVersionOf(arxivXmlTag(entry, "id").replace(/^.*\/abs\//, ""));
   return {
     ...emptyEvidence("arxiv", id, "found", ["arxiv"]),
     title: arxivXmlTag(entry, "title") || null,
@@ -437,8 +427,20 @@ function refFromCompositeId(raw: string): CitationRef | null {
   const [kind, ...rest] = raw.split(":");
   const requestedId = rest.join(":");
   if ((kind !== "doi" && kind !== "arxiv") || !requestedId) return null;
-  const id = kind === "arxiv" ? requestedId.replace(ARXIV_VERSION, "") : requestedId;
-  return { kind, id, requested_id: requestedId, requested_version: kind === "arxiv" ? arxivVersion(requestedId) : null };
+  const id = kind === "arxiv" ? arxivIdOf(requestedId) : requestedId;
+  return { kind, id, requested_id: requestedId, requested_version: kind === "arxiv" ? arxivVersionOf(requestedId) : null };
+}
+
+/** One logical query per source, so a caller that names the same source twice
+ *  does not make the batch ask a provider twice. */
+function uniqueRefs(refs: CitationRef[]): CitationRef[] {
+  const seen = new Set<string>();
+  return refs.filter((ref) => {
+    const key = `${ref.kind}:${ref.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** One source snapshot per citation: replay a fresh one, otherwise query and
@@ -455,18 +457,25 @@ async function resolveRef(cwd: string, ref: CitationRef, cache: Map<string, Cita
     // cached as "this paper does not exist".
     evidence = failedEvidence(ref, error);
   }
-  if (evidence.status !== "error") await appendJsonLine(citationCacheFile(cwd), evidence);
+  if (evidence.status !== "error") {
+    await appendJsonLine(citationCacheFile(cwd), evidence);
+    // Two arXiv versions of one paper resolve to the same record, so the second
+    // version in the same batch replays this answer instead of querying again.
+    cache.set(`${ref.kind}:${ref.id}`, evidence);
+  }
   return citationView(evidence, ref, false, bibliographic(evidence));
 }
 
 export const citationVerifyService = {
   /** Verify the citations in a text; fresh snapshots are reused until stale.
    *  `refresh` re-queries the providers, which is what a manual retry wants
-   *  after a rate limit or a provider outage. */
-  async verify(cwd: string, input: { text: string; refresh?: boolean }, deps: CitationDeps = {}): Promise<VerifyCitationsResult> {
+   *  after a rate limit or a provider outage. `ids` verifies exactly those
+   *  sources instead of scanning the text again: that is how the automatic pass
+   *  continues past the per-call cap without re-reading the answer. */
+  async verify(cwd: string, input: { text: string; refresh?: boolean; ids?: CitationRef[] }, deps: CitationDeps = {}): Promise<VerifyCitationsResult> {
     const now = deps.now ?? Date.now;
     const text = String(input.text ?? "");
-    const refs = extractCitations(text);
+    const refs = input.ids ? uniqueRefs(input.ids) : extractCitations(text);
     const batch = refs.slice(0, MAX_CITATIONS_PER_CALL);
     const cache = refreshRequested(input.refresh) ? new Map<string, CitationEvidence>() : await readCache(cwd);
     const results: CitationView[] = [];

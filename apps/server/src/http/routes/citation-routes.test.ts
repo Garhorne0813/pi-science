@@ -25,7 +25,7 @@ async function makeWorkspace(): Promise<string> {
 
 const evidence = (id: string): CitationEvidence => ({
   schema: 2, kind: "doi", id, status: "found", title: `Paper ${id}`, authors: ["A. Author"], journal: "Nature", year: "2024",
-  abstract: "An abstract.", oa_url: null, retraction: "clear", retraction_note: null, retraction_url: null,
+  abstract: "An abstract.", oa_url: null, volume: null, issue: null, pages: null, retraction: "clear", retraction_note: null, retraction_url: null,
   checked_providers: ["crossref"], error: null, record_version: null, status_note: null, verified_at: new Date().toISOString(),
 });
 
