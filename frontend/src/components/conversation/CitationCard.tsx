@@ -3,8 +3,10 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { citationCardState, citationResolver, useCitationCwd, useVerifyCitation, type CitationCardState, type CitationEvidence } from "../../lib/citations/citation-evidence";
+import { useCitationPosition, type CitationPosition } from "../../lib/citations/citation-passages";
 import { formattedReference } from "../../lib/citations/citation-reference-format";
 import { cn } from "../../lib/ui";
+import { CitationSourceViewer, PassageBody } from "./CitationSourceViewer";
 import { CitationVerifyButton } from "./CitationVerifyButton";
 
 const STATE_KEY: Record<CitationCardState, string> = { unchecked: "unverified", checking: "checking", found: "found", not_found: "not_found", error: "error" };
@@ -60,16 +62,42 @@ function FormattedReference({ label, text }: { label: string; text: string }) {
   </div>;
 }
 
-/** The source card. A dialog, not a tooltip: it holds buttons, so it has to be
- *  focusable, reachable by keyboard and Escape-dismissable, and it has to work
- *  on touch where there is no hover. Opening it reads the workspace snapshot
- *  only; every provider request starts from the check button inside. */
-export function CitationCard({ id, citationKey, evidence, focusOnOpen, trigger, onPointerEnter, onPointerLeave, onClose }: {
+/** Why there is no passage to show. Each state names what actually happened:
+ *  a paper with no open full text, one we were not allowed to read, one that
+ *  failed to download, one whose bytes held no readable text, and a citation
+ *  pinned to a version whose text we do not hold. None of them is "the paper
+ *  does not say this". */
+function passageNotice(t: (key: string, options?: Record<string, unknown>) => string, position: CitationPosition | undefined, hasOpenFullText: boolean): { message: string; retryable: boolean } | null {
+  if (position?.state === "matched" && position.excerpts.length) return null;
+  switch (position?.state) {
+    case "unfetched": return { message: t("citation.passage.unfetched"), retryable: true };
+    case "no_match": return { message: t("citation.passage.noMatch"), retryable: true };
+    case "access_denied": return { message: t("citation.passage.accessDenied"), retryable: false };
+    case "download_failed": return { message: t("citation.passage.downloadFailed", { reason: position.note ?? "" }), retryable: true };
+    case "parse_failed": return { message: t("citation.passage.parseFailed"), retryable: false };
+    case "no_text_layer": return { message: t("citation.passage.noTextLayer"), retryable: false };
+    case "version_mismatch": return { message: t("citation.passage.versionMismatch"), retryable: false };
+    case "available": return { message: t("citation.passage.noMatch"), retryable: true };
+    case "no_open_fulltext": return { message: t("citation.passage.noOpenFullText"), retryable: false };
+    default: return hasOpenFullText ? { message: t("citation.passage.unfetched"), retryable: true } : { message: t("citation.card.noFullText"), retryable: false };
+  }
+}
+
+/** The source card. A hover previews the located passage; a click pins it and
+ *  only then is the paper's full text fetched, so moving the pointer over an
+ *  answer never spends a provider request. Opening and previewing read the
+ *  workspace snapshot only; every provider request starts from the check button
+ *  or from an explicit "show the source" action. */
+export function CitationCard({ id, citationKey, claim = "", evidence, focusOnOpen, trigger, onPointerEnter, onPointerLeave, onClose }: {
   id: string;
   citationKey: string;
+  /** The sentence the marker sits in. The same paper is cited by different
+   *  sentences, and each sentence points at different text. Absent when the
+   *  card is opened without a rendered sentence, which reads as no claim. */
+  claim?: string;
   evidence: CitationEvidence | undefined;
   /** True when a click or the keyboard opened the card. A hover preview must
-   *  never take focus away from the answer. */
+   *  never take focus away from the answer and must never fetch. */
   focusOnOpen: boolean;
   trigger: React.RefObject<HTMLElement | null>;
   onPointerEnter: () => void;
@@ -82,8 +110,17 @@ export function CitationCard({ id, citationKey, evidence, focusOnOpen, trigger, 
   const card = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   const [placement, setPlacement] = useState<Placement>(() => placementFor(trigger.current?.getBoundingClientRect() ?? new DOMRect()));
+  const [wantFullText, setWantFullText] = useState(false);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [excerptIndex, setExcerptIndex] = useState(0);
   const close = useRef(onClose);
   close.current = onClose;
+
+  // A pinned card may fetch; a hover preview may not. Clicking "show the
+  // source" from a preview upgrades this card to a fetching one.
+  const allowFetch = focusOnOpen || wantFullText;
+  const { position, isLoading } = useCitationPosition(cwd, claim.trim() ? { key: citationKey, claim } : null, allowFetch);
+  const excerpts = position?.excerpts ?? [];
 
   const measure = useCallback(() => { const rect = trigger.current?.getBoundingClientRect(); if (rect) setPlacement(placementFor(rect)); }, [trigger]);
   // Focus goes back to the number only when the card had it: a hover preview
@@ -99,14 +136,20 @@ export function CitationCard({ id, citationKey, evidence, focusOnOpen, trigger, 
   }, [measure]);
   useEffect(() => { if (focusOnOpen) closeButton.current?.focus(); }, [focusOnOpen]);
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") { event.stopPropagation(); dismiss(); } };
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !viewerOpen) { event.stopPropagation(); dismiss(); } };
     // The card is a portal, so the number that opened it is outside it and has
     // to be named as inside here: clicking it pins the card, never closes it.
-    const onClick = (event: MouseEvent) => { const target = event.target as Node; if (card.current?.contains(target) || trigger.current?.contains(target)) return; close.current(); };
+    // The source viewer is a second portal and belongs to this card too.
+    const onClick = (event: MouseEvent) => {
+      if (viewerOpen) return;
+      const target = event.target as Node;
+      if (card.current?.contains(target) || trigger.current?.contains(target)) return;
+      close.current();
+    };
     document.addEventListener("keydown", onKey, true);
     document.addEventListener("click", onClick);
     return () => { document.removeEventListener("keydown", onKey, true); document.removeEventListener("click", onClick); };
-  }, [dismiss, trigger]);
+  }, [dismiss, trigger, viewerOpen]);
 
   const resolver = citationResolver(citationKey);
   const state = citationCardState(evidence, verify.isPending);
@@ -118,6 +161,8 @@ export function CitationCard({ id, citationKey, evidence, focusOnOpen, trigger, 
   const queried = evidence?.checked_providers?.length ? t("citation.card.queriedFrom", { providers: evidence.checked_providers.join(", "), at: evidence.verified_at }) : t("citation.card.neverQueried");
   const gbt = evidence ? formattedReference(evidence, "gbt7714") : null;
   const apa = evidence ? formattedReference(evidence, "apa") : null;
+  const notice = passageNotice(t, position, Boolean(evidence?.oa_url));
+  const excerpt = excerpts[Math.min(excerptIndex, excerpts.length - 1)];
 
   return createPortal(<div
     ref={card}
@@ -125,7 +170,7 @@ export function CitationCard({ id, citationKey, evidence, focusOnOpen, trigger, 
     role="dialog"
     aria-label={`${sourceType} ${identifier}`}
     onPointerEnter={onPointerEnter}
-    onPointerLeave={onPointerLeave}
+    onPointerLeave={() => { if (!viewerOpen) onPointerLeave(); }}
     style={{ position: "fixed", left: placement.left, width: placement.width, maxHeight: placement.maxHeight, ...(placement.below ? { top: placement.top } : { bottom: placement.bottom }) }}
     className={cn("ui-popover z-[70] flex flex-col rounded-card text-left", placement.below ? "before:-top-2" : "before:-bottom-2", "before:absolute before:inset-x-0 before:h-2 before:content-['']")}
   >
@@ -139,50 +184,81 @@ export function CitationCard({ id, citationKey, evidence, focusOnOpen, trigger, 
         </button>
       </div>
 
-      <div className="mt-1.5 space-y-1 text-[11px] leading-4">
-        <p className="font-mono text-[10px] text-muted"><span className="text-muted/70">{t("citation.card.identifier")} </span>{sourceType} · {identifier}</p>
-        {evidence?.title && <p className="font-medium text-text">{evidence.title}</p>}
-        {bibliographic && <p className="text-muted">{bibliographic}</p>}
-        {serial && <p className="font-mono text-[10px] text-muted">{serial}</p>}
-        {evidence?.status === "error" && <p className="text-warn-text">{t("conversation.citationLookupFailed", { reason: evidence.error ?? "" })}</p>}
-        {evidence?.status === "not_found" && <p className="text-warn-text">{t("conversation.citationNotInSource", { providers: evidence.checked_providers.join(", ") || t("citation.card.noProviders") })}</p>}
-        {evidence?.status_note && <p className="text-muted">{evidence.status_note}</p>}
-        <p className="text-muted">{queried}</p>
-      </div>
+      {/* The located passage is the card's main content: it is what the reader
+          opened the card to check. Metadata sits below it. */}
+      {excerpt
+        ? <>
+            <div className="mt-1.5 flex items-baseline justify-between gap-2">
+              <span className="text-[10px] font-medium text-muted">{t("citation.passage.located")}</span>
+              {[excerpt.section_title, excerpt.page === null ? null : t("citation.passage.filePage", { page: excerpt.page })].filter(Boolean).length > 0 && <span className="truncate font-mono text-[10px] text-muted">{[excerpt.section_title, excerpt.page === null ? null : `#page=${excerpt.page}`].filter(Boolean).join(" · ")}</span>}
+            </div>
+            <div className="ui-card-inset mt-1 rounded-card p-2"><PassageBody excerpt={excerpt} className="line-clamp-6" /></div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <button type="button" onClick={() => { setExcerptIndex(0); setViewerOpen(true); }} className="rounded border border-border px-1.5 py-0.5 text-[10px] text-accent hover:border-accent hover:underline">{t("citation.passage.viewSource")}</button>
+              {excerpts.length > 1 && <span className="text-[10px] text-muted">{t("citation.passage.moreCandidates", { count: excerpts.length - 1 })}</span>}
+            </div>
+            <p className="mt-1 text-[10px] text-warn-text">{t("citation.passage.caveat")}</p>
+          </>
+        : <div className="mt-1.5">
+            <p className="text-[10px] text-muted">{isLoading ? t("citation.passage.loading") : notice?.message}</p>
+            {notice?.retryable && !isLoading && <button type="button" onClick={() => setWantFullText(true)} className="mt-1 rounded border border-border px-1.5 py-0.5 text-[10px] text-accent hover:border-accent hover:underline">{t("citation.passage.fetchFullText")}</button>}
+          </div>}
 
-      {evidence?.retraction === "retracted" && <p className="mt-1.5 rounded border border-error-text/40 px-1.5 py-1 text-[10px] text-error-text">
-        {t("citation.card.retractionNotice", { note: evidence.retraction_note ?? "" })}
-        {evidence.retraction_url && <a href={evidence.retraction_url} target="_blank" rel="noreferrer" className="ml-1 underline">{t("citation.card.openDoi")}</a>}
-      </p>}
-      {evidence?.retraction === "unknown" && state !== "unchecked" && <p className="mt-1.5 text-[10px] text-muted">{t("citation.card.retractionUnknown")}</p>}
-      {evidence?.bibliographic === "mismatch" && <p className="mt-1.5 text-[10px] text-warn-text">{t("conversation.citationBibliographicMismatch", { cited: evidence.bibliographic_note ?? "" })}</p>}
-      {evidence?.version === "unconfirmed" && <p className="mt-1.5 text-[10px] text-warn-text">{t("citation.card.version", { requested: evidence.requested_version ?? "—", current: evidence.record_version ?? "—" })}</p>}
+      <details className="mt-2 border-t border-border/60 pt-1.5">
+        <summary className="cursor-pointer text-[10px] text-muted hover:text-text">{t("citation.passage.details")}</summary>
+        <div className="mt-1 space-y-1 text-[11px] leading-4">
+          <p className="font-mono text-[10px] text-muted"><span className="text-muted/70">{t("citation.card.identifier")} </span>{sourceType} · {identifier}</p>
+          {evidence?.title && <p className="font-medium text-text">{evidence.title}</p>}
+          {bibliographic && <p className="text-muted">{bibliographic}</p>}
+          {serial && <p className="font-mono text-[10px] text-muted">{serial}</p>}
+          {evidence?.status === "error" && <p className="text-warn-text">{t("conversation.citationLookupFailed", { reason: evidence.error ?? "" })}</p>}
+          {evidence?.status === "not_found" && <p className="text-warn-text">{t("conversation.citationNotInSource", { providers: evidence.checked_providers.join(", ") || t("citation.card.noProviders") })}</p>}
+          {evidence?.status_note && <p className="text-muted">{evidence.status_note}</p>}
+          <p className="text-muted">{queried}</p>
+        </div>
 
-      {evidence?.abstract && <>
-        <details className="mt-1.5 text-[10px] text-muted">
-          <summary className="cursor-pointer text-muted hover:text-text">{t("citation.card.abstract")}</summary>
-          <p className="mt-1 leading-4">{evidence.abstract}</p>
-        </details>
-        {/* Outside the disclosure: the caveat has to be readable whether or not
-            the preview is expanded. */}
-        <p className="mt-1 text-[10px] text-warn-text">{t("citation.card.abstractNote")}</p>
-      </>}
+        {evidence?.retraction === "retracted" && <p className="mt-1.5 rounded border border-error-text/40 px-1.5 py-1 text-[10px] text-error-text">
+          {t("citation.card.retractionNotice", { note: evidence.retraction_note ?? "" })}
+          {evidence.retraction_url && <a href={evidence.retraction_url} target="_blank" rel="noreferrer" className="ml-1 underline">{t("citation.card.openDoi")}</a>}
+        </p>}
+        {evidence?.retraction === "unknown" && state !== "unchecked" && <p className="mt-1.5 text-[10px] text-muted">{t("citation.card.retractionUnknown")}</p>}
+        {evidence?.bibliographic === "mismatch" && <p className="mt-1.5 text-[10px] text-warn-text">{t("conversation.citationBibliographicMismatch", { cited: evidence.bibliographic_note ?? "" })}</p>}
+        {evidence?.version === "unconfirmed" && <p className="mt-1.5 text-[10px] text-warn-text">{t("citation.card.version", { requested: evidence.requested_version ?? "—", current: evidence.record_version ?? "—" })}</p>}
 
-      {gbt && <FormattedReference label={t("citation.card.gbt7714")} text={gbt} />}
-      {apa && <FormattedReference label={t("citation.card.apa")} text={apa} />}
+        {/* Named as an abstract everywhere it appears: an abstract is not the
+            passage, and reading it as the passage would let a paper appear to
+            say something its text does not. */}
+        {evidence?.abstract && <>
+          <details className="mt-1.5 text-[10px] text-muted">
+            <summary className="cursor-pointer text-muted hover:text-text">{t("citation.card.abstract")}</summary>
+            <p className="mt-1 leading-4">{evidence.abstract}</p>
+          </details>
+          <p className="mt-1 text-[10px] text-warn-text">{t("citation.card.abstractNote")}</p>
+        </>}
 
-      <p className="mt-1.5 text-[10px] text-muted">{t("citation.card.bibliographicOnly")}</p>
+        {gbt && <FormattedReference label={t("citation.card.gbt7714")} text={gbt} />}
+        {apa && <FormattedReference label={t("citation.card.apa")} text={apa} />}
+
+        <p className="mt-1.5 text-[10px] text-muted">{t("citation.card.bibliographicOnly")}</p>
+      </details>
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         {resolver && <a href={resolver.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 rounded border border-border px-1.5 py-0.5 text-[10px] text-accent hover:underline">
           {resolver.kind === "doi" ? t("citation.card.openDoi") : t("citation.card.openArxiv")}<ExternalLink size={9} />
         </a>}
-        {evidence?.oa_url
-          ? <a href={evidence.oa_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 rounded border border-border px-1.5 py-0.5 text-[10px] text-accent hover:underline">{t("citation.card.openFullText")}<ExternalLink size={9} /></a>
-          : <span className="text-[10px] text-muted">{t("citation.card.noFullText")}</span>}
+        {evidence?.oa_url && <a href={evidence.oa_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 rounded border border-border px-1.5 py-0.5 text-[10px] text-accent hover:underline">{t("citation.card.openFullText")}<ExternalLink size={9} /></a>}
         <CitationVerifyButton citationKey={citationKey} hasEvidence={Boolean(evidence) && evidence?.status !== "unchecked"} verify={verify} />
       </div>
       <p className="mt-1.5 text-[10px] text-muted/80">{t("conversation.citationCardNote")}</p>
     </div>
+    {viewerOpen && excerpt && <CitationSourceViewer
+      title={evidence?.title ?? identifier}
+      excerpts={excerpts}
+      excerptIndex={excerptIndex}
+      onIndex={setExcerptIndex}
+      resolverUrl={resolver?.url ?? null}
+      onClose={() => setViewerOpen(false)}
+      returnFocusTo={trigger.current}
+    />}
   </div>, document.body);
 }

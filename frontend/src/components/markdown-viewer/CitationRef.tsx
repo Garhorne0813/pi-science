@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { citationResolver, useCitationCwd, useCitationInlineStyle, useCitationSource } from "@/lib/citations/citation-evidence";
+import { claimForTrigger } from "@/lib/citations/citation-claim";
 import { citationNumberForKey } from "@/lib/citations/numbering";
 import { cn } from "@/lib/ui";
 import { CitationCard } from "@/components/conversation/CitationCard";
@@ -38,10 +39,15 @@ export function CitationRef({ href, citationKey, children }: { href: string; cit
   const style = useCitationInlineStyle(cwd);
   const number = numbering && citationKey ? citationNumberForKey(numbering, citationKey) : null;
   const [open, setOpen] = useState<"none" | "preview" | "pinned">("none");
+  // The sentence is measured from the rendered answer when the card opens, not
+  // on every render: reading the DOM on each pointer move would be wasted work
+  // and would follow the answer if it re-renders mid-hover.
+  const [claim, setClaim] = useState("");
   const trigger = useRef<HTMLElement | null>(null);
   const closeTimer = useRef<number | undefined>(undefined);
   const cardId = `citation-card-${useId().replace(/:/g, "")}`;
   const evidence = useCitationSource(cwd, citationKey, open !== "none");
+  const reveal = (next: "preview" | "pinned") => { setClaim(claimForTrigger(trigger.current)); setOpen(next); };
 
   const cancelClose = () => { if (closeTimer.current !== undefined) { window.clearTimeout(closeTimer.current); closeTimer.current = undefined; } };
   const scheduleClose = () => {
@@ -56,7 +62,7 @@ export function CitationRef({ href, citationKey, children }: { href: string; cit
   const pin = () => {
     cancelClose();
     if (open === "pinned") { trigger.current?.focus(); setOpen("none"); return; }
-    setOpen("pinned");
+    reveal("pinned");
   };
   const resolver = citationKey ? citationResolver(citationKey) : null;
   const text = textOf(children).trim();
@@ -69,7 +75,7 @@ export function CitationRef({ href, citationKey, children }: { href: string; cit
       onPointerEnter={(event) => {
         if (event.pointerType === "touch" || !number || !citationKey) return;
         cancelClose();
-        setOpen((current) => current === "none" ? "preview" : current);
+        if (open === "none") reveal("preview");
       }}
       onPointerLeave={(event) => {
         if (event.pointerType === "touch") return;
@@ -111,6 +117,7 @@ export function CitationRef({ href, citationKey, children }: { href: string; cit
       {open !== "none" && number !== null && citationKey && <CitationCard
         id={cardId}
         citationKey={citationKey}
+        claim={claim}
         evidence={evidence}
         focusOnOpen={open === "pinned"}
         trigger={trigger}
