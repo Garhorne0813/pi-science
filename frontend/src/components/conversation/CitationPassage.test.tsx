@@ -110,7 +110,7 @@ it("shows the located passage as the card's main content, with its context", asy
   expect(mark.tagName).toBe("MARK");
   expect(screen.getByText(/We trained a neural network/)).toBeInTheDocument();
   expect(screen.getByText(/The remaining gap is in loop regions/)).toBeInTheDocument();
-  expect(screen.getByText(/Results · #page=7/)).toBeInTheDocument();
+  expect(screen.getByText(/Results · file page 7/)).toBeInTheDocument();
   // The caveat sits beside the excerpt, not in the detail block: a located
   // passage is not a judgement that it supports the sentence.
   expect(screen.getByText(/not a judgement that it supports this sentence/)).toBeInTheDocument();

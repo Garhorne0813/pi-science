@@ -78,7 +78,8 @@ export function offsetOfNode(container: HTMLElement, node: Node): number | null 
 
 /** The claim for a body marker, measured from the element that holds it. */
 export function claimForTrigger(trigger: HTMLElement | null): string {
-  const container = trigger?.closest?.(CLAIM_CONTAINER) as HTMLElement | null;
+  if (!trigger) return "";
+  const container = trigger.closest(CLAIM_CONTAINER) as HTMLElement | null;
   if (!container) return "";
   const text = container.textContent ?? "";
   const offset = offsetOfNode(container, trigger);

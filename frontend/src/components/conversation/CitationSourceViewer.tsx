@@ -18,8 +18,8 @@ export function PassageBody({ excerpt, className }: { excerpt: CitationExcerpt; 
 
 /** Where the passage lives, in words a reader can act on. A page number is the
  *  PDF file's own sequence, so it is labelled as a file page rather than as the
- *  journal's printed page. */
-function locatorLine(t: (key: string, options?: Record<string, unknown>) => string, excerpt: CitationExcerpt): string | null {
+ *  journal's printed page, which the two do not have to agree on. */
+export function locatorLine(t: (key: string, options?: Record<string, unknown>) => string, excerpt: CitationExcerpt): string | null {
   const parts = [excerpt.section_title, excerpt.page === null ? null : t("citation.passage.filePage", { page: excerpt.page })].filter(Boolean);
   return parts.length ? parts.join(" · ") : null;
 }

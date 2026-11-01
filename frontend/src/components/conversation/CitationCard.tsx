@@ -6,7 +6,7 @@ import { citationCardState, citationResolver, useCitationCwd, useVerifyCitation,
 import { useCitationPosition, type CitationPosition } from "../../lib/citations/citation-passages";
 import { formattedReference } from "../../lib/citations/citation-reference-format";
 import { cn } from "../../lib/ui";
-import { CitationSourceViewer, PassageBody } from "./CitationSourceViewer";
+import { CitationSourceViewer, PassageBody, locatorLine } from "./CitationSourceViewer";
 import { CitationVerifyButton } from "./CitationVerifyButton";
 
 const STATE_KEY: Record<CitationCardState, string> = { unchecked: "unverified", checking: "checking", found: "found", not_found: "not_found", error: "error" };
@@ -190,7 +190,7 @@ export function CitationCard({ id, citationKey, claim = "", evidence, focusOnOpe
         ? <>
             <div className="mt-1.5 flex items-baseline justify-between gap-2">
               <span className="text-[10px] font-medium text-muted">{t("citation.passage.located")}</span>
-              {[excerpt.section_title, excerpt.page === null ? null : t("citation.passage.filePage", { page: excerpt.page })].filter(Boolean).length > 0 && <span className="truncate font-mono text-[10px] text-muted">{[excerpt.section_title, excerpt.page === null ? null : `#page=${excerpt.page}`].filter(Boolean).join(" · ")}</span>}
+              {locatorLine(t, excerpt) && <span className="truncate font-mono text-[10px] text-muted">{locatorLine(t, excerpt)}</span>}
             </div>
             <div className="ui-card-inset mt-1 rounded-card p-2"><PassageBody excerpt={excerpt} className="line-clamp-6" /></div>
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
