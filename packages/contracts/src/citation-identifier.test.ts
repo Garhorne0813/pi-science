@@ -23,6 +23,12 @@ describe("scanIdentifiers", () => {
   it("drops a DOI suffix made only of punctuation", () => {
     expect(scanIdentifiers("broken 10.1234/. end")).toEqual([]);
   });
+
+  it("trims a long run of trailing punctuation from a scanned identifier and a resolver link", () => {
+    const punctuated = `10.1000/alpha${"!".repeat(20_000)}`;
+    expect(scanIdentifiers(`See ${punctuated}.`).map((match) => match.id)).toEqual(["10.1000/alpha"]);
+    expect(identifierFromUrl(`https://doi.org/${punctuated}`)).toMatchObject({ id: "10.1000/alpha" });
+  });
 });
 
 describe("maskNonProse", () => {

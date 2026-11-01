@@ -35,7 +35,23 @@ export interface CitationIdentifierMatch {
 const DOI_PATTERN = /10\.\d{4,9}\/[^\s[\])\}>\u2010-\u2027\u2030-\u205e\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef\uac00-\ud7af]+/gi;
 const ARXIV_PATTERN = /arXiv:\s?(\d{4}\.\d{4,5}(?:v\d+)?)/gi;
 const ARXIV_VERSION = /v(\d+)$/i;
-const TRAILING_PUNCTUATION = /[.,;:!?*"'\u2010-\u2027\u2030-\u205e\u3000-\u303f\uff00-\uffef]+$/;
+// Trimming the trailing run with one regex (`/[.,;:!?*"'\u2010-\u2027...]+$/`)
+// makes the engine walk back over the run at every start offset it rejects, so a
+// long run of `!` inside a document or a URL costs quadratic time. CodeQL grades
+// that `js/polynomial-redos`. Reading the string backwards touches each
+// character once and trims exactly the same set.
+const TRAILING_ASCII_PUNCTUATION = ".,;:!?*\"'";
+const TRAILING_PUNCTUATION_RANGES: ReadonlyArray<readonly [number, number]> = [[0x2010, 0x2027], [0x2030, 0x205e], [0x3000, 0x303f], [0xff00, 0xffef]];
+function isTrailingPunctuation(char: string): boolean {
+  if (TRAILING_ASCII_PUNCTUATION.includes(char)) return true;
+  const code = char.codePointAt(0) ?? 0;
+  return TRAILING_PUNCTUATION_RANGES.some(([from, to]) => code >= from && code <= to);
+}
+function trimTrailingPunctuation(value: string): string {
+  let end = value.length;
+  while (end > 0 && isTrailingPunctuation(value[end - 1]!)) end -= 1;
+  return value.slice(0, end);
+}
 const FENCE_LINE = /^[ \t]{0,3}(`{3,}|~{3,})/;
 const INLINE_CODE = /`+[^`\n]*`+/g;
 const MATH_BLOCK = /\$\$[\s\S]*?\$\$/g;
@@ -81,7 +97,7 @@ export function scanIdentifiers(text: string): CitationIdentifierMatch[] {
   const found: CitationIdentifierMatch[] = [];
   for (const match of prose.matchAll(DOI_PATTERN)) {
     const start = match.index ?? 0;
-    const cleaned = text.slice(start, start + match[0].length).replace(TRAILING_PUNCTUATION, "");
+    const cleaned = trimTrailingPunctuation(text.slice(start, start + match[0].length));
     if (cleaned.endsWith("/")) continue;
     const id = cleaned.toLowerCase();
     found.push({ kind: "doi", id, requested_id: id, requested_version: null, start, end: start + cleaned.length });
@@ -103,7 +119,7 @@ const ARXIV_URL = /^https?:\/\/(?:www\.|export\.)?arxiv\.org\/(?:abs|pdf)\/(\d{4
 export function identifierFromUrl(url: string): { kind: CitationIdentifierKind; id: string; requested_id: string; requested_version: string | null } | null {
   const doi = RESOLVER_URL.exec(url.trim());
   if (doi?.[1]) {
-    const id = decodeURIComponent(doi[1]).replace(TRAILING_PUNCTUATION, "").toLowerCase();
+    const id = trimTrailingPunctuation(decodeURIComponent(doi[1])).toLowerCase();
     if (id.endsWith("/")) return null;
     return { kind: "doi", id, requested_id: id, requested_version: null };
   }
