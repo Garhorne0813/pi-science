@@ -44,6 +44,10 @@ export interface CitationPosition {
   snapshot_id: string | null;
   origin: EvidenceOrigin;
   excerpts: CitationExcerpt[];
+  /** What a search of the same snapshot offered beside a generation-time
+   *  record. Absent when there is no record, because then the search result is
+   *  the answer and not a supplement to it. */
+  supplementary?: CitationExcerpt[];
 }
 
 export interface CitationPositionRequest { key: string; claim: string }

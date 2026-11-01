@@ -106,6 +106,21 @@ it("names a missing source without claiming the lookup failed", () => {
   expect(screen.queryByText(/Lookup failed/)).not.toBeInTheDocument();
 });
 
+/** The status chip carries its text on a solid fill. `*-fill` and `*-text` are
+ *  two different roles and the light theme gives them the same value, so using
+ *  one as the other's ink renders the word the same colour as the fill it sits
+ *  on. jsdom has no cascade, so the class list is the closest observable. */
+it("gives the status badge ink that can be read on its own fill", () => {
+  renderCard();
+  const badge = screen.getByText("Source metadata found");
+  const classes = badge.className.split(/\s+/);
+  for (const role of ["ok", "warn", "error"]) {
+    if (!classes.includes(`bg-${role}-fill`)) continue;
+    expect(classes).not.toContain(`text-${role}-text`);
+    expect(classes).toContain("text-white");
+  }
+});
+
 it("does not take focus away from the answer when a hover preview opens", () => {
   renderCard(evidence, false);
   expect(screen.getByRole("dialog")).toBeInTheDocument();

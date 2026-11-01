@@ -1889,6 +1889,8 @@
   "citation.passage.versionMismatch": "The full text available is a different version from the one cited",
   "citation.passage.stale": "The source has been read again since this answer recorded its evidence, so the recorded passage no longer resolves. The source link below still works.",
   "citation.passage.generation": "Passage the answer selected when it was written",
+  "citation.passage.supplementary": "{{count}} related passage found by searching afterwards",
+  "citation.passage.supplementaryNote": "Found by searching the finished sentence, not the text the answer chose. Weaker than the passage above.",
   "citation.passage.located": "Relevant passage found after the fact",
   "citation.passage.caveat": "Located text, not a judgement that it supports this sentence. Read the context to decide.",
   "citation.passage.viewSource": "Show the source",

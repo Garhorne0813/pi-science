@@ -123,6 +123,7 @@ export function CitationCard({ id, citationKey, claim = "", evidence, focusOnOpe
   const allowFetch = focusOnOpen || wantFullText;
   const { position, isLoading } = useCitationPosition(cwd, session, claim.trim() ? { key: citationKey, claim } : null, allowFetch);
   const excerpts = position?.excerpts ?? [];
+  const supplementary = position?.supplementary ?? [];
   // The heading names where the passage came from. A passage the model chose
   // while writing is a different fact from one found by reading the finished
   // sentence, and the card must not present the second as the first.
@@ -182,7 +183,7 @@ export function CitationCard({ id, citationKey, claim = "", evidence, focusOnOpe
   >
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
       <div className="flex items-start justify-between gap-2">
-        <span className={cn("inline-block rounded px-1.5 py-0.5 text-[10px] font-medium", state === "found" ? "bg-ok-fill text-ok-text" : state === "error" || state === "not_found" ? "bg-warn-fill text-warn-text" : "bg-surface-2 text-muted")}>
+        <span className={cn("inline-block rounded px-1.5 py-0.5 text-[10px] font-medium", state === "found" ? "bg-ok-fill text-white" : state === "error" || state === "not_found" ? "bg-warn-fill text-white" : "bg-surface-2 text-muted")}>
           {t(`conversation.citationState.${STATE_KEY[state]}`)}
         </span>
         <button ref={closeButton} data-card-close type="button" onClick={dismiss} aria-label={t("citation.card.close")} className="rounded p-0.5 text-muted hover:bg-surface-2 hover:text-text">
@@ -209,6 +210,19 @@ export function CitationCard({ id, citationKey, claim = "", evidence, focusOnOpe
             <p className="text-[10px] text-muted">{isLoading ? t("citation.passage.loading") : notice?.message}</p>
             {notice?.retryable && !isLoading && <button type="button" onClick={() => setWantFullText(true)} className="mt-1 rounded border border-border px-1.5 py-0.5 text-[10px] text-accent hover:border-accent hover:underline">{t("citation.passage.fetchFullText")}</button>}
           </div>}
+
+      {/* A search of the same snapshot is a second opinion, not the evidence
+          the answer used, so it stays folded and named as what it is. */}
+      {supplementary.length > 0 && <details className="mt-2 rounded border border-border/60 px-1.5 py-1">
+        <summary className="cursor-pointer text-[10px] text-muted hover:text-text">{t("citation.passage.supplementary", { count: supplementary.length })}</summary>
+        <ul className="mt-1 space-y-1.5">
+          {supplementary.map((candidate) => <li key={candidate.passage_id}>
+            {locatorLine(t, candidate) && <p className="font-mono text-[10px] text-muted">{locatorLine(t, candidate)}</p>}
+            <p className="line-clamp-3 select-text text-[10px] leading-4 text-text">{candidate.text}</p>
+          </li>)}
+        </ul>
+        <p className="mt-1 text-[10px] text-muted">{t("citation.passage.supplementaryNote")}</p>
+      </details>}
 
       <details className="mt-2 border-t border-border/60 pt-1.5">
         <summary className="cursor-pointer text-[10px] text-muted hover:text-text">{t("citation.passage.details")}</summary>

@@ -1889,6 +1889,8 @@
   "citation.passage.versionMismatch": "可获取的全文与所引版本不同",
   "citation.passage.stale": "此回答记录证据后，该来源已被重新读取，记录的原文位置已无法还原。下方来源链接仍可使用。",
   "citation.passage.generation": "回答生成时选用的原文",
+  "citation.passage.supplementary": "事后检索到 {{count}} 个相关段落",
+  "citation.passage.supplementaryNote": "这是用成品句子检索得到的，不是回答生成时选用的原文，可信度低于上方段落。",
   "citation.passage.located": "事后查找的相关段落",
   "citation.passage.caveat": "这是定位到的原文，不代表它支持这句话。请阅读上下文自行判断。",
   "citation.passage.viewSource": "查看原文",
