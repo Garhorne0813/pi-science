@@ -26,6 +26,9 @@ export interface CitationReferenceDetail {
   authors?: readonly string[] | null;
   year?: string | null;
   venue?: string | null;
+  volume?: string | null;
+  issue?: string | null;
+  pages?: string | null;
   url?: string | null;
 }
 
@@ -35,7 +38,68 @@ export interface ReferenceOptions {
   details?: ReadonlyMap<number, CitationReferenceDetail>;
 }
 
-const REFERENCES_HEADING = /(?:^|\n)#{1,6}[ \t]*references[ \t]*\n/i;
+/** A heading that starts a reference list. Both the English and the Chinese
+ *  headings are recognised, because an answer written in Chinese uses the
+ *  second and a rule that only knew the first appended a duplicate list. */
+const REFERENCE_HEADING = /^(#{1,6})[ \t]+(?:references|bibliography|works cited|参考文献|引用文献|参考书目)[ \t]*:?[ \t]*$/i;
+const HEADING_LINE = /^(#{1,6})[ \t]+\S/;
+const ENTRY_LINE = /^([ \t]*)(?:\[(\d{1,3})\]|\d{1,3}[.)、]|[-*•])[ \t]+(.*)$/;
+
+export interface ReferenceSection {
+  /** Offset of the heading line. */
+  start: number;
+  /** Offset where the section stops: the next heading of the same or a higher
+   *  level, or the end of the document. */
+  end: number;
+  level: number;
+}
+
+function lineSpans(markdown: string): Array<{ text: string; start: number; end: number }> {
+  const spans: Array<{ text: string; start: number; end: number }> = [];
+  let start = 0;
+  for (;;) {
+    const newline = markdown.indexOf("\n", start);
+    const end = newline === -1 ? markdown.length : newline;
+    spans.push({ text: markdown.slice(start, end), start, end });
+    if (newline === -1) return spans;
+    start = newline + 1;
+  }
+}
+
+/** Every reference list in the document. A source that appears only in one of
+ *  these is a bibliography entry the answer printed, not a place the answer
+ *  cited it, so it must not take a body number: guessing which sentence it
+ *  belongs to would invent a link the document never made. */
+export function referenceSections(markdown: string): ReferenceSection[] {
+  const spans = lineSpans(markdown);
+  const sections: ReferenceSection[] = [];
+  for (let index = 0; index < spans.length; index += 1) {
+    const heading = REFERENCE_HEADING.exec(spans[index]!.text);
+    if (!heading) continue;
+    const level = heading[1]!.length;
+    let end = markdown.length;
+    let resume = spans.length;
+    for (let next = index + 1; next < spans.length; next += 1) {
+      const other = HEADING_LINE.exec(spans[next]!.text);
+      if (other && other[1]!.length <= level) { end = spans[next]!.start; resume = next; break; }
+    }
+    sections.push({ start: spans[index]!.start, end, level });
+    index = resume - 1;
+  }
+  return sections;
+}
+
+function blankReferenceSection(markdown: string): string {
+  const chars = markdown.split("");
+  for (const section of referenceSections(markdown)) {
+    for (let index = section.start; index < section.end; index += 1) if (chars[index] !== "\n") chars[index] = " ";
+  }
+  return chars.join("");
+}
+
+function numberFor(numbering: CitationNumbering, kind: Citation["kind"], requestedId: string): number | null {
+  return numbering.sources.find((source) => source.kind === kind && source.requested_ids.includes(requestedId))?.number ?? null;
+}
 
 /** Number the citations of one document version. The same source cited twice
  *  keeps one number, because the order is decided by where a source first
@@ -43,9 +107,10 @@ const REFERENCES_HEADING = /(?:^|\n)#{1,6}[ \t]*references[ \t]*\n/i;
  *  numbering from their own text, so a regenerated answer can never inherit
  *  the previous answer's numbers. */
 export function numberCitations(markdown: string): CitationNumbering {
+  const body = blankReferenceSection(markdown);
   const bySource = new Map<string, CitationSource>();
-  for (const occurrence of scanCitations(markdown)) {
-    const key = `${occurrence.kind}:${occurrence.id}`;
+  for (const occurrence of scanCitations(body)) {
+    const key = `${occurrence.kind}:${occurrence.requested_id}`;
     const existing = bySource.get(key);
     if (!existing) {
       bySource.set(key, { number: bySource.size + 1, kind: occurrence.kind, id: occurrence.id, requested_ids: [occurrence.requested_id], requested_version: occurrence.requested_version, url: occurrence.url });
@@ -58,18 +123,19 @@ export function numberCitations(markdown: string): CitationNumbering {
 }
 
 export function citationNumberOf(numbering: CitationNumbering, kind: Citation["kind"], id: string): number | null {
-  return numbering.sources.find((source) => source.kind === kind && source.id === id)?.number ?? null;
+  return numbering.sources.find((source) => source.kind === kind && (source.id === id || source.requested_ids.includes(id)))?.number ?? null;
 }
 
 /** Resolve the number for a `kind:requestedId` key, the form the renderer and
  *  the evidence lookup carry, so a body marker and the reference list can never
- *  disagree about which source they mean. */
+ *  disagree about which source they mean. An arXiv key carries the version the
+ *  answer cited, so v1 and v2 resolve to their own numbers. */
 export function citationNumberForKey(numbering: CitationNumbering, key: string): number | null {
   const separator = key.indexOf(":");
   if (separator === -1) return null;
   const kind = key.slice(0, separator);
   const requestedId = key.slice(separator + 1);
-  return numbering.sources.find((source) => source.kind === kind && source.requested_ids.includes(requestedId))?.number ?? null;
+  return numbering.sources.find((source) => source.kind === kind && (source.requested_ids.includes(requestedId) || source.id === requestedId))?.number ?? null;
 }
 
 function authorLine(authors: readonly string[] | null | undefined): string | null {
@@ -81,7 +147,8 @@ function referenceLine(source: CitationSource, detail: CitationReferenceDetail |
   const author = authorLine(detail?.authors);
   const year = detail?.year ? `(${detail.year})` : null;
   const head = [author, year].filter(Boolean).join(" ");
-  const body = [head || null, detail?.title ?? null, detail?.venue ?? null].filter(Boolean).join(". ");
+  const volume = detail?.volume ? [`${detail.volume}${detail.issue ? `(${detail.issue})` : ""}`, detail.pages].filter(Boolean).join(": ") : detail?.pages ?? null;
+  const body = [head || null, detail?.title ?? null, detail?.venue ?? null, volume].filter(Boolean).join(". ");
   const link = detail?.url ?? source.url;
   return `[${source.number}] ${body ? `${body}. ` : ""}${source.requested_ids.join(", ")} — ${link}`;
 }
@@ -105,23 +172,58 @@ function markerOffset(body: string, end: number): number {
   return at;
 }
 
-/** Body markers plus the reference list, so what a reader copies or opens from
- *  disk carries the same numbering as the screen. A marker is inserted only
- *  where it is missing, which keeps a document that already carries one from
- *  growing a second, and a document that already ends in a reference list from
- *  stacking another. */
+function withinReferenceList(at: number, sections: ReferenceSection[]): boolean {
+  return sections.some((section) => at >= section.start && at < section.end);
+}
+
+/** Body markers plus the reference list, so what a reader copies or opens
+ *  from disk carries the same numbering as the screen. A marker is inserted
+ *  only where it is missing, so a document that already carries one does not
+ *  grow a second. Every existing character stays where it was: an entry the
+ *  answer wrote keeps its authors, title and year, and a section printed after
+ *  the list survives. */
 export function withReferences(markdown: string, options: ReferenceOptions = {}): string {
   const numbering = numberCitations(markdown);
   if (!numbering.sources.length) return markdown;
-  const headingAt = markdown.search(REFERENCES_HEADING);
-  const body = headingAt === -1 ? markdown : markdown.slice(0, headingAt);
-  let out = body;
-  const insertions = scanCitations(body).flatMap((occurrence) => {
-    const number = citationNumberOf(numbering, occurrence.kind, occurrence.id);
+  const sections = referenceSections(markdown);
+  const insertions = scanCitations(markdown).flatMap((occurrence) => {
+    if (withinReferenceList(occurrence.start, sections)) return [];
+    const number = numberFor(numbering, occurrence.kind, occurrence.requested_id);
     if (number === null) return [];
-    const at = markerOffset(body, occurrence.end);
-    return body.startsWith(`[${number}]`, at) ? [] : [{ at, marker: `[${number}]` }];
+    const at = markerOffset(markdown, occurrence.end);
+    return markdown.startsWith(`[${number}]`, at) ? [] : [{ at, marker: `[${number}]` }];
   });
+  let out = markdown;
   for (const { at, marker } of insertions.sort((left, right) => right.at - left.at)) out = `${out.slice(0, at)}${marker}${out.slice(at)}`;
-  return `${out.trimEnd()}\n\n${referencesText(numbering, options)}\n`;
+  const shifted = referenceSections(out);
+  return shifted.length ? rewriteReferenceLists(out, shifted, numbering, options) : `${out.trimEnd()}\n\n${referencesText(numbering, options)}\n`;
+}
+
+/** Give every entry in an existing list the number the body gave its source,
+ *  and append an entry for a source the list forgot. An entry that names no
+ *  source the body cites is left exactly as written: it may be a note rather
+ *  than a bibliography line, and dropping it would lose the answer's own text. */
+function rewriteReferenceLists(markdown: string, sections: ReferenceSection[], numbering: CitationNumbering, options: ReferenceOptions): string {
+  let out = markdown;
+  for (const section of [...sections].reverse()) out = rewriteReferenceList(out, section, numbering, options);
+  return out;
+}
+
+function rewriteReferenceList(markdown: string, section: ReferenceSection, numbering: CitationNumbering, options: ReferenceOptions): string {
+  const covered = new Set<number>();
+  const rewritten = markdown.slice(section.start, section.end).split("\n").map((line) => {
+    const entry = ENTRY_LINE.exec(line);
+    if (!entry) return line;
+    const [, indent = "", , rest = ""] = entry;
+    const source = scanCitations(rest)[0];
+    if (!source) return line;
+    const number = numberFor(numbering, source.kind, source.requested_id);
+    if (number === null) return line;
+    covered.add(number);
+    return `${indent}[${number}] ${rest}`;
+  }).join("\n");
+  const missing = numbering.sources.filter((source) => !covered.has(source.number));
+  const atDocumentEnd = section.end >= markdown.length;
+  const tail = missing.length ? `${rewritten.replace(/\s*$/, "")}\n${missing.map((source) => referenceLine(source, options.details?.get(source.number))).join("\n")}${atDocumentEnd ? "" : "\n\n"}` : rewritten;
+  return `${markdown.slice(0, section.start)}${tail}${markdown.slice(section.end)}`;
 }

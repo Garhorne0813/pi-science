@@ -74,11 +74,19 @@ describe("remarkCitations", () => {
     expect(tree.children).toEqual([{ type: "link", url: "https://example.org", children: [{ type: "text", value: "the 10.1000/linked paper" }] }]);
   });
 
-  it("leaves a link whose href holds a DOI alone", () => {
+  it("tags a link that points at a DOI resolver without rewriting its text", () => {
     const tree: Node = { type: "paragraph", children: [{ type: "link", url: "https://doi.org/10.1000/linked", children: [{ type: "text", value: "doi:10.1000/linked" }] }] };
     (remarkCitations() as (tree: Node) => void)(tree);
     expect(tree.children).toHaveLength(1);
     expect(tree.children![0]!.children).toEqual([{ type: "text", value: "doi:10.1000/linked" }]);
+    expect((tree.children![0]!.data!.hProperties as { dataCitation: string }).dataCitation).toBe("doi:10.1000/linked");
+  });
+
+  it("keeps the words of an ordinary link that points at a paper", () => {
+    const tree: Node = { type: "paragraph", children: [{ type: "link", url: "https://arxiv.org/abs/2401.12345v2", children: [{ type: "text", value: "the 论文 we discussed" }] }] };
+    (remarkCitations() as (tree: Node) => void)(tree);
+    expect(tree.children![0]!.children).toEqual([{ type: "text", value: "the 论文 we discussed" }]);
+    expect((tree.children![0]!.data!.hProperties as { dataCitation: string }).dataCitation).toBe("arxiv:2401.12345v2");
   });
 
   it("leaves fenced code, inline code and math alone", () => {
@@ -98,10 +106,12 @@ describe("remarkCitations", () => {
     expect(tree.children![3]!.children!.some((node) => node.type === "link")).toBe(true);
   });
 
-  it("still converts an identifier that a numbered marker follows", () => {
+  it("does not swallow a numbered marker that follows the identifier", () => {
     const nodes = run("Gain on QA (10.1000/alpha)[1].");
     const link = nodes.find((node) => node.type === "link");
     expect(link).toMatchObject({ url: "https://doi.org/10.1000/alpha" });
-    expect(nodes.map((node) => node.value ?? "").join("")).toContain(")");
+    expect((link!.data!.hProperties as { dataCitation: string }).dataCitation).toBe("doi:10.1000/alpha");
+    expect(link!.children![0]!.value).toBe("10.1000/alpha");
+    expect(nodes.map((node) => node.value ?? "").join("")).toContain("[1]");
   });
 });

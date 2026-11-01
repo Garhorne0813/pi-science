@@ -22,9 +22,12 @@ describe("extractCitations", () => {
       ]);
   });
 
-  it("collapses two cited versions of one paper to a single source", () => {
+  it("keeps two cited versions of one paper as two sources", () => {
     const citations = extractCitations("First arXiv:2401.12345v1, later arXiv:2401.12345v2.");
-    expect(citations).toEqual([{ kind: "arxiv", id: "2401.12345", requested_id: "2401.12345v1", url: "https://arxiv.org/abs/2401.12345v1" }]);
+    expect(citations).toEqual([
+      { kind: "arxiv", id: "2401.12345", requested_id: "2401.12345v1", url: "https://arxiv.org/abs/2401.12345v1" },
+      { kind: "arxiv", id: "2401.12345", requested_id: "2401.12345v2", url: "https://arxiv.org/abs/2401.12345v2" },
+    ]);
   });
 
   it("dedupes repeats and preserves first-seen order across kinds", () => {

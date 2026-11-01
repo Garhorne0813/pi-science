@@ -5,61 +5,38 @@
 // is left alone, because rewriting it would put a second link inside a link or
 // turn an example into a citation. Code and math nodes carry `value`, not
 // `text`, so only the link guard is needed here.
-// DOI suffixes are ASCII, but prose is not: stop the match at CJK
-// ideographs/kana/hangul and CJK/fullwidth/general punctuation, or Chinese
-// sentences glue their words onto the id and the doi.org link breaks. Keep in
-// sync with lib/citations/citations.ts.
-const DOI_PATTERN = /10\.\d{4,9}\/[^\s)\]}>\u2010-\u2027\u2030-\u205e\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef\uac00-\ud7af]+/gi;
-const ARXIV_PATTERN = /arXiv:\s?(\d{4}\.\d{4,5}(?:v\d+)?)/gi;
-const TRAILING = /[.,;:!?*"'\u2010-\u2027\u2030-\u205e\u3000-\u303f\uff00-\uffef]+$/;
-const ARXIV_VERSION = /v\d+$/i;
+//
+// An ordinary Markdown link that points at a DOI or arXiv resolver asserts the
+// same source as a bare identifier, so it is tagged for a body number while its
+// own text stays written. Without the tag the source list numbered a source the
+// body gave no way to reach.
+import { identifierFromUrl, identifierUrl, scanIdentifiers } from "@pi-science/contracts";
 
 type MdNode = { type?: string; value?: string; url?: string; children?: MdNode[]; data?: { hProperties?: Record<string, unknown> } };
 
-/** Match rule-compatible extraction with lib/citations (frontend). */
+const LINK_TYPES = new Set(["link", "linkReference"]);
+
+function tag(node: MdNode, citationKey: string): void {
+  node.data = { ...node.data, hProperties: { ...node.data?.hProperties, dataCitation: citationKey } };
+}
+
 export function remarkCitations() {
-  const walk = (nodes: MdNode[], parent?: MdNode) => {
+  const walk = (nodes: MdNode[]) => {
     for (let index = 0; index < nodes.length; index += 1) {
       const node = nodes[index]!;
-      const quoted = parent?.type === "link" || parent?.type === "linkReference";
-      if (node.type === "text" && parent && !quoted && typeof node.value === "string") {
+      if (node.type === "text" && typeof node.value === "string") {
         const value = node.value;
-        const matches: Array<{ start: number; end: number; id: string; requestedId: string; kind: "doi" | "arxiv"; url: string; label: string }> = [];
-        for (const pattern of [DOI_PATTERN, ARXIV_PATTERN]) {
-          for (const match of value.matchAll(pattern)) {
-            const raw = match[0];
-            const cleaned = raw.replace(TRAILING, "");
-            if (pattern === DOI_PATTERN && cleaned.endsWith("/")) continue;
-            // `id` stays the version-less source identity the cache and dedupe
-            // keys use; `requestedId` is the identifier as cited, so the hover
-            // lookup can report whether its snapshot describes that version.
-            const id = pattern === DOI_PATTERN ? cleaned.toLowerCase() : (match[1] ?? "").replace(ARXIV_VERSION, "");
-            const requestedId = pattern === DOI_PATTERN ? id : (match[1] ?? "");
-            if (!id) continue;
-            matches.push({
-              start: match.index ?? 0,
-              end: (match.index ?? 0) + cleaned.length,
-              id,
-              requestedId,
-              kind: pattern === DOI_PATTERN ? "doi" : "arxiv",
-              url: pattern === DOI_PATTERN ? `https://doi.org/${cleaned}` : `https://arxiv.org/abs/${requestedId}`,
-              label: cleaned,
-            });
-          }
-        }
+        const matches = scanIdentifiers(value);
         if (!matches.length) continue;
-        matches.sort((left, right) => left.start - right.start);
         const replacement: MdNode[] = [];
         let cursor = 0;
         for (const match of matches) {
-          if (match.start < cursor) continue; // overlapping arXiv/DOI hits
+          if (match.start < cursor) continue;
           if (match.start > cursor) replacement.push({ type: "text", value: value.slice(cursor, match.start) });
-          replacement.push({
-            type: "link",
-            url: match.url,
-            children: [{ type: "text", value: match.label }],
-            data: { hProperties: { className: ["citation-ref"], dataCitation: `${match.kind}:${match.requestedId}` } },
-          });
+          const label = value.slice(match.start, match.end);
+          const link: MdNode = { type: "link", url: identifierUrl(match.kind, match.requested_id), children: [{ type: "text", value: label }] };
+          tag(link, `${match.kind}:${match.requested_id}`);
+          replacement.push(link);
           cursor = match.end;
         }
         if (cursor < value.length) replacement.push({ type: "text", value: value.slice(cursor) });
@@ -67,7 +44,12 @@ export function remarkCitations() {
         index += replacement.length - 1;
         continue;
       }
-      if (Array.isArray(node.children)) walk(node.children, node);
+      if (node.type && LINK_TYPES.has(node.type)) {
+        const target = typeof node.url === "string" ? identifierFromUrl(node.url) : null;
+        if (target) tag(node, `${target.kind}:${target.requested_id}`);
+        continue;
+      }
+      if (Array.isArray(node.children)) walk(node.children);
     }
   };
   return (tree: MdNode) => { walk([tree]); };
