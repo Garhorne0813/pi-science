@@ -153,4 +153,16 @@ describe("literature-review skill content", () => {
     expect(allRequired.has("inline_identifier_citations")).toBe(true);
     expect(allRequired.has("missing_connector_guidance")).toBe(true);
   });
+
+  it("makes a written report file carry the numbering it renders", async () => {
+    const body = await readFile(SKILL_MD, "utf8");
+    expect(body).toContain("3. Report files:");
+    expect(body).toContain("[1] Kojima et al. (2009)");
+    // The rule a report must obey, stated as the two things a reader checks.
+    expect(body).toContain("Number in first-citation order");
+    expect(body).toContain("reuses its number");
+    expect(body).toContain("Two versions of one arXiv paper are two entries");
+    // A chat reply must not hand-write numbers: the app numbers the rendered version.
+    expect(body).toContain("do not write numbers into a chat reply");
+  });
 });
