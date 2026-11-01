@@ -2,7 +2,7 @@ import { ExternalLink, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { citationCardState, citationResolver, useCitationCwd, useVerifyCitation, type CitationCardState, type CitationEvidence } from "../../lib/citations/citation-evidence";
+import { citationCardState, citationResolver, useCitationCwd, useCitationSession, useVerifyCitation, type CitationCardState, type CitationEvidence } from "../../lib/citations/citation-evidence";
 import { useCitationPosition, type CitationPosition } from "../../lib/citations/citation-passages";
 import { formattedReference } from "../../lib/citations/citation-reference-format";
 import { cn } from "../../lib/ui";
@@ -77,6 +77,7 @@ function passageNotice(t: (key: string, options?: Record<string, unknown>) => st
     case "parse_failed": return { message: t("citation.passage.parseFailed"), retryable: false };
     case "no_text_layer": return { message: t("citation.passage.noTextLayer"), retryable: false };
     case "version_mismatch": return { message: t("citation.passage.versionMismatch"), retryable: false };
+    case "stale": return { message: t("citation.passage.stale"), retryable: false };
     case "available": return { message: t("citation.passage.noMatch"), retryable: true };
     case "no_open_fulltext": return { message: t("citation.passage.noOpenFullText"), retryable: false };
     default: return hasOpenFullText ? { message: t("citation.passage.unfetched"), retryable: true } : { message: t("citation.card.noFullText"), retryable: false };
@@ -106,6 +107,7 @@ export function CitationCard({ id, citationKey, claim = "", evidence, focusOnOpe
 }) {
   const { t } = useTranslation();
   const cwd = useCitationCwd();
+  const session = useCitationSession();
   const verify = useVerifyCitation(cwd);
   const card = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
@@ -119,8 +121,12 @@ export function CitationCard({ id, citationKey, claim = "", evidence, focusOnOpe
   // A pinned card may fetch; a hover preview may not. Clicking "show the
   // source" from a preview upgrades this card to a fetching one.
   const allowFetch = focusOnOpen || wantFullText;
-  const { position, isLoading } = useCitationPosition(cwd, claim.trim() ? { key: citationKey, claim } : null, allowFetch);
+  const { position, isLoading } = useCitationPosition(cwd, session, claim.trim() ? { key: citationKey, claim } : null, allowFetch);
   const excerpts = position?.excerpts ?? [];
+  // The heading names where the passage came from. A passage the model chose
+  // while writing is a different fact from one found by reading the finished
+  // sentence, and the card must not present the second as the first.
+  const passageLabel = position?.origin === "generation" ? t("citation.passage.generation") : t("citation.passage.located");
 
   const measure = useCallback(() => { const rect = trigger.current?.getBoundingClientRect(); if (rect) setPlacement(placementFor(rect)); }, [trigger]);
   // Focus goes back to the number only when the card had it: a hover preview
@@ -189,7 +195,7 @@ export function CitationCard({ id, citationKey, claim = "", evidence, focusOnOpe
       {excerpt
         ? <>
             <div className="mt-1.5 flex items-baseline justify-between gap-2">
-              <span className="text-[10px] font-medium text-muted">{t("citation.passage.located")}</span>
+              <span className="text-[10px] font-medium text-muted">{passageLabel}</span>
               {locatorLine(t, excerpt) && <span className="truncate font-mono text-[10px] text-muted">{locatorLine(t, excerpt)}</span>}
             </div>
             <div className="ui-card-inset mt-1 rounded-card p-2"><PassageBody excerpt={excerpt} className="line-clamp-6" /></div>
@@ -253,6 +259,7 @@ export function CitationCard({ id, citationKey, claim = "", evidence, focusOnOpe
     </div>
     {viewerOpen && excerpt && <CitationSourceViewer
       title={evidence?.title ?? identifier}
+      label={passageLabel}
       excerpts={excerpts}
       excerptIndex={excerptIndex}
       onIndex={setExcerptIndex}

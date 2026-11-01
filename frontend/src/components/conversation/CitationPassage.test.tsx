@@ -26,10 +26,11 @@ const excerpt: CitationExcerpt = {
   section_id: "sec-results",
   page: 7,
   score: 12.5,
+  passage_id: "p3",
 };
 
 function position(state: CitationPosition["state"], excerpts: CitationExcerpt[] = [], note: string | null = null): CitationPosition {
-  return { key: "doi:10.1000/alpha", claim_sha256: "abc", state, note, snapshot_sha256: "sha", excerpts };
+  return { key: "doi:10.1000/alpha", claim_sha256: "abc", state, note, snapshot_sha256: "sha", snapshot_id: "snap-1", origin: "generation", excerpts };
 }
 
 /** Answers the settings read, the source read, the snapshot read and the
@@ -86,6 +87,28 @@ it("sends the sentence the marker sits in, never the whole answer", async () => 
   expect(passages[0]!.body.positions).toEqual([{ key: "doi:10.1000/alpha", claim }]);
 });
 
+it("names the session so a recorded passage can be found", async () => {
+  const passages = stubFetch();
+  useRuntimeStore.setState({ cwd, activeSessionId: "session-a" });
+  renderCard();
+  await waitFor(() => expect(passages).toHaveLength(1));
+  expect((passages[0]!.body as { session_id?: string }).session_id).toBe("session-a");
+});
+
+it("says when the passage was found after the fact instead of chosen", async () => {
+  stubFetch({ ...position("matched", [excerpt]), origin: "located" });
+  renderCard();
+  await waitFor(() => expect(screen.getByText("Relevant passage found after the fact")).toBeInTheDocument());
+  expect(screen.queryByText("Passage the answer selected when it was written")).not.toBeInTheDocument();
+});
+
+it("reports a recorded passage that no longer resolves instead of quoting new text", async () => {
+  stubFetch(position("stale"));
+  renderCard();
+  await waitFor(() => expect(screen.getByText(/recorded passage no longer resolves/)).toBeInTheDocument());
+  expect(screen.queryByText(excerpt.text)).not.toBeInTheDocument();
+});
+
 it("does not fetch a provider when a hover preview opened the card", async () => {
   const passages = stubFetch();
   renderCard(false);
@@ -105,7 +128,7 @@ it("fetches once the reader clicks the number", async () => {
 it("shows the located passage as the card's main content, with its context", async () => {
   stubFetch();
   renderCard();
-  await waitFor(() => expect(screen.getByText("Located in the source")).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByText("Passage the answer selected when it was written")).toBeInTheDocument());
   const mark = screen.getByText(excerpt.text);
   expect(mark.tagName).toBe("MARK");
   expect(screen.getByText(/We trained a neural network/)).toBeInTheDocument();
@@ -130,7 +153,8 @@ it("opens the source viewer on the passage, highlights it, and goes back", async
   await waitFor(() => expect(screen.queryByRole("button", { name: "Back to the citation" })).not.toBeInTheDocument());
   // The card is still open behind the viewer it belonged to.
   expect(screen.getByRole("dialog")).toBeInTheDocument();
-  expect(screen.getByText("Located in the source")).toBeInTheDocument();
+  // The viewer names the passage's origin the same way the card did.
+  expect(screen.getByText("Passage the answer selected when it was written")).toBeInTheDocument();
 });
 
 it("offers every candidate passage in the viewer", async () => {

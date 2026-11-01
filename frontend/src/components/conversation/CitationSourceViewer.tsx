@@ -28,8 +28,12 @@ export function locatorLine(t: (key: string, options?: Record<string, unknown>) 
  *  context and, when the source can be opened directly, a way there. It never
  *  claims the passage supports the claim: locating text and judging support are
  *  different jobs and the caveat says so. */
-export function CitationSourceViewer({ title, excerpts, excerptIndex, onIndex, resolverUrl, onClose, returnFocusTo }: {
+export function CitationSourceViewer({ title, label, excerpts, excerptIndex, onIndex, resolverUrl, onClose, returnFocusTo }: {
   title: string;
+  /** Where these passages came from. The viewer says it the same way the card
+   *  does, so opening the source does not relabel a chosen passage as a found
+   *  one or the reverse. */
+  label?: string;
   excerpts: CitationExcerpt[];
   excerptIndex: number;
   onIndex: (index: number) => void;
@@ -55,7 +59,7 @@ export function CitationSourceViewer({ title, excerpts, excerptIndex, onIndex, r
           className={cn("rounded border px-1.5 py-0.5 text-[10px]", position === index ? "border-accent text-accent" : "border-border text-muted hover:border-accent hover:text-accent")}
         >{t("citation.passage.candidate", { index: position + 1 })}</button>)}
       </div>}
-      <p className="text-[10px] font-medium text-muted">{t("citation.passage.located")}</p>
+      <p className="text-[10px] font-medium text-muted">{label ?? t("citation.passage.located")}</p>
       {locatorLine(t, excerpt) && <p className="mt-0.5 font-mono text-[10px] text-muted">{locatorLine(t, excerpt)}</p>}
       <div className="ui-card-inset mt-1.5 rounded-card p-2.5"><PassageBody excerpt={excerpt} /></div>
       <p className="mt-1.5 text-[10px] text-warn-text">{t("citation.passage.caveat")}</p>

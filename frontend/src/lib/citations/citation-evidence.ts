@@ -173,3 +173,10 @@ export function citationResolver(key: string): { kind: "doi" | "arxiv"; id: stri
 export function useCitationCwd(): string {
   return useRuntimeStore((state) => state.cwd);
 }
+
+/** The session whose evidence a card may read. Generation-time evidence is
+ *  recorded per session, so an answer in another session can never open this
+ *  one's passages. */
+export function useCitationSession(): string | null {
+  return useRuntimeStore((state) => state.activeSessionId);
+}
