@@ -11,11 +11,12 @@ import type { PublishedReference } from "../../lib/artifacts/artifact-versions";
 import { ReferencedArtifactStrip, TurnArtifactStrip } from "./TurnArtifactStrip";
 import { referencesFromMessage, visibleUserMessage } from "../../lib/files";
 import { agentActionTextByBlock } from "../../lib/conversation";
-import { numberCitations, withReferences } from "../../lib/citations";
+import { numberCitations, withReferences, type CitationNumbering, type CitationReferenceDetail } from "../../lib/citations";
+import { useCitationCwd, useCitationEvidence, type CitationEvidence } from "../../lib/citations/citation-evidence";
 import { CitationNumberingProvider } from "../markdown-viewer/CitationNumbering";
 import { CitationReferences } from "./CitationReferences";
 import { parseSuggestions } from "../../lib/conversation";
-import { MessageActions, MessageSelectionQuoteMenu, type MessageSelectionAnchor } from "./MessageActions";
+import { MessageActions, MessageSelectionQuoteMenu, type MessageQuoteTarget, type MessageSelectionAnchor } from "./MessageActions";
 import { buildMessageQuote, selectedTextWithin, useMessageQuoteStore, type MessageQuoteScope, type MessageQuoteSource } from "../../lib/conversation/message-quote";
 import { messageAnchorId, quotedMessagesFromMessage } from "../../lib/conversation/quoted-message";
 import { buildTurnPresentations, turnBlockIds, type TurnPresentation } from "../../lib/conversation/turn-presentation";
@@ -97,6 +98,30 @@ function UserMessage({ block, scope }: { block: UserMessageBlock; scope: Message
   );
 }
 
+/** The bibliographic part of one source, taken from whatever the snapshot
+ *  returned. A field nobody looked up stays absent, so a reference list omits it
+ *  instead of printing a placeholder. */
+function referenceDetail(evidence: CitationEvidence | undefined): CitationReferenceDetail {
+  return { title: evidence?.title ?? null, authors: evidence?.authors ?? null, year: evidence?.year ?? null, venue: evidence?.journal ?? null, volume: evidence?.volume ?? null, issue: evidence?.issue ?? null, pages: evidence?.pages ?? null };
+}
+
+/** Copy text for an answer that cites sources. It is its own component because
+ *  it reads the evidence snapshot, and that read belongs only to a message that
+ *  has something to look up. */
+function CitedAnswerActions({ actionText, numbering, text, timestamp, quote }: { actionText: string; numbering: CitationNumbering; text: string; timestamp?: string; quote: MessageQuoteTarget | undefined }) {
+  const { t } = useTranslation();
+  const cwd = useCitationCwd();
+  const { bySource } = useCitationEvidence(cwd, text);
+  // The copy carries the same numbering and the same looked-up fields the
+  // reference list shows, so a pasted answer keeps its titles, authors, years
+  // and volume instead of falling back to a bare identifier.
+  const copyText = useMemo(() => {
+    const details = new Map<number, CitationReferenceDetail>(numbering.sources.map((source) => [source.number, referenceDetail(bySource.get(`${source.kind}:${source.requested_ids[0]}`))]));
+    return withReferences(parseSuggestions(actionText).clean, { heading: t("conversation.references"), details });
+  }, [actionText, t, numbering, bySource]);
+  return <MessageActions text={copyText} timestamp={timestamp} quote={quote} />;
+}
+
 function AgentMessage({ block, actionText, codeRunner, pinnedReferences, scope }: { block: AgentMessageBlock; actionText?: string; codeRunner?: CodeRunner; pinnedReferences?: ReadonlyMap<string, PublishedReference>; scope: MessageQuoteScope }) {
   const { t } = useTranslation();
   const rawText = block.parts.map((part) => part.text).join("");
@@ -105,17 +130,17 @@ function AgentMessage({ block, actionText, codeRunner, pinnedReferences, scope }
   // One numbering per rendered version of the answer, derived from this text
   // and nothing else, so a regenerated answer cannot reuse the old numbers.
   const numbering = useMemo(() => numberCitations(text), [text]);
-  // The copy action carries the same numbering and its reference list, so a
-  // pasted answer still says which source each `[n]` meant.
-  const copyText = useMemo(() => withReferences(parseSuggestions(actionText ?? "").clean, { heading: t("conversation.references") }), [actionText, t]);
   if (!rawText) return null;
+  const quote = text ? { blockId: block.id, role: "agent" as const, ...scope, messageText: text } : undefined;
   return <div className="group/message" id={messageAnchorId({ blockId: block.id, role: "agent" })}>
     <CitationNumberingProvider numbering={numbering}>
       <div ref={selection.ref}><MarkdownViewer variant="chat" codeRunner={codeRunner} mode={block.partial ? "streaming" : "final"} pinnedReferences={pinnedReferences}>{text}</MarkdownViewer></div>
     </CitationNumberingProvider>
     {selection.selection && <MessageSelectionQuoteMenu selection={selection.selection} onQuote={selection.quote} />}
     {numbering.sources.length > 0 && <CitationReferences numbering={numbering} text={text} streaming={block.partial} />}
-    {!block.partial && actionText && <MessageActions text={copyText} timestamp={block.timestamp} quote={text ? { blockId: block.id, role: "agent", ...scope, messageText: text } : undefined} />}
+    {!block.partial && actionText && (numbering.sources.length > 0
+      ? <CitedAnswerActions actionText={actionText} numbering={numbering} text={text} timestamp={block.timestamp} quote={quote} />
+      : <MessageActions text={withReferences(parseSuggestions(actionText).clean, { heading: t("conversation.references") })} timestamp={block.timestamp} quote={quote} />)}
   </div>;
 }
 
