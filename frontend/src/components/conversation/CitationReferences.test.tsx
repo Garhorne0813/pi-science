@@ -107,3 +107,25 @@ it("does not poll while the automatic verification switch is off", async () => {
   await act(async () => { await vi.advanceTimersByTimeAsync(600_000); });
   expect(snapshotCalls(calls)).toBe(1);
 });
+
+it("keeps two cited arXiv versions of one paper apart instead of letting one row win", async () => {
+  const arxivText = "Preprints in arXiv:2401.12345v1 and arXiv:2401.12345v2.";
+  const row = { kind: "arxiv", id: "2401.12345", authors: [], journal: null, year: null, volume: null, issue: null, pages: null, abstract: null, oa_url: null, retraction: "unknown", retraction_note: null, retraction_url: null, error: null, status_note: null, bibliographic: "not_compared", bibliographic_note: null, version: "confirmed", requested_version: null, record_version: null, verified_at: "2026-10-27T09:00:00.000Z" };
+  const rows = [
+    { ...row, requested_id: "2401.12345v1", status: "found", title: "The v1 record", checked_providers: ["arxiv"] },
+    { ...row, requested_id: "2401.12345v2", status: "not_found", title: null, checked_providers: ["arxiv"] },
+  ];
+  vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+    const url = String(input);
+    const body = url.startsWith("/api/settings/config") ? { ok: true } : { citations: rows, unprocessed: [] };
+    return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  }));
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <CitationReferences numbering={numberCitations(arxivText)} text={arxivText} />
+    </QueryClientProvider>,
+  );
+
+  expect(await screen.findByText("The v1 record")).toBeInTheDocument();
+  expect(screen.getByLabelText("Not in the queried source")).toBeInTheDocument();
+});
