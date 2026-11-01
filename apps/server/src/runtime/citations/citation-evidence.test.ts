@@ -258,3 +258,92 @@ describe("generation-time evidence", () => {
     expect(position?.snapshot_id).toBe(snapshotId);
   });
 });
+
+describe("recorded claim matching", () => {
+  /** The model writes the identifier inline and the reader's body shows a
+   *  number where it was, so the two spellings of one sentence have to reach the
+   *  same record. A recorded passage that no spelling can find is the defect
+   *  this guards: the card then falls back to a search of the finished
+   *  sentence and shows whatever that search ranked first. */
+  const CLAIM_WITH_DOI = `AlphaFold reached a median backbone RMSD of 0.96 Å in CASP14, doi:10.1038/s41586-020-2649-2`;
+
+  it("finds the record when the body shows a number where the identifier was", async () => {
+    const cwd = await makeWorkspace();
+    const snapshotId = await seed(cwd, snapshot(PASSAGES, "sha-a"));
+    await read(cwd);
+    await citationEvidenceService.record(cwd, { session_id: SESSION, selections: [{ source: KEY, claim: CLAIM_WITH_DOI, snapshot_id: snapshotId, passage_ids: ["p1"] }] });
+
+    const found = await citationEvidenceService.lookup(cwd, { session_id: SESSION, key: KEY, claim: "AlphaFold reached a median backbone RMSD of 0.96 Å in CASP14, [1]" });
+
+    expect(found.state).toBe("recorded");
+    if (found.state === "absent") return;
+    expect(found.record.match).toBe("normalized");
+    expect(found.record.passage_ids).toEqual(["p1"]);
+  });
+
+  it("finds the record when the finished sentence is worded a little differently", async () => {
+    const cwd = await makeWorkspace();
+    const snapshotId = await seed(cwd, snapshot(PASSAGES, "sha-a"));
+    await read(cwd);
+    await citationEvidenceService.record(cwd, { session_id: SESSION, selections: [{ source: KEY, claim: CLAIM_WITH_DOI, snapshot_id: snapshotId, passage_ids: ["p1"] }] });
+
+    const found = await citationEvidenceService.lookup(cwd, { session_id: SESSION, key: KEY, claim: "In CASP14, AlphaFold reached a median backbone RMSD of 0.96 Å." });
+
+    expect(found.state).toBe("recorded");
+    if (found.state === "absent") return;
+    expect(found.record.match).toBe("similar");
+    expect(found.record.passage_ids).toEqual(["p1"]);
+  });
+
+  it("answers absent for a sentence about something else", async () => {
+    const cwd = await makeWorkspace();
+    const snapshotId = await seed(cwd, snapshot(PASSAGES, "sha-a"));
+    await read(cwd);
+    await citationEvidenceService.record(cwd, { session_id: SESSION, selections: [{ source: KEY, claim: CLAIM_WITH_DOI, snapshot_id: snapshotId, passage_ids: ["p1"] }] });
+
+    const found = await citationEvidenceService.lookup(cwd, { session_id: SESSION, key: KEY, claim: "Photosynthesis in alpine lichens depends on the snow cover of the previous winter." });
+
+    expect(found.state).toBe("absent");
+  });
+
+  it("refuses to choose between two equally close recorded sentences", async () => {
+    const cwd = await makeWorkspace();
+    const snapshotId = await seed(cwd, snapshot(PASSAGES, "sha-a"));
+    await read(cwd);
+    await citationEvidenceService.record(cwd, {
+      session_id: SESSION,
+      selections: [
+        { source: KEY, claim: "The model reached its best CASP14 score under the standard protocol.", snapshot_id: snapshotId, passage_ids: ["p1"] },
+        { source: KEY, claim: "The model reached its best CASP14 score under the revised protocol.", snapshot_id: snapshotId, passage_ids: ["p2"] },
+      ],
+    });
+
+    const found = await citationEvidenceService.lookup(cwd, { session_id: SESSION, key: KEY, claim: "The model reached its best CASP14 score under the protocol." });
+
+    expect(found.state).toBe("absent");
+  });
+
+  it("matches a selection whose source is spelled with another case", async () => {
+    const cwd = await makeWorkspace();
+    const snapshotId = await seed(cwd, snapshot(PASSAGES, "sha-a"));
+    await read(cwd, SESSION, "doi:10.1038/S41586-020-2649-2");
+
+    const recorded = await citationEvidenceService.record(cwd, { session_id: SESSION, selections: [{ source: "doi:10.1038/s41586-020-2649-2", claim: RESULTS_TEXT, snapshot_id: snapshotId, passage_ids: ["p1"] }] });
+
+    expect(recorded.results[0]).toMatchObject({ accepted: true, reason: null });
+    expect((await citationEvidenceService.lookup(cwd, { session_id: SESSION, key: KEY, claim: RESULTS_TEXT })).state).toBe("recorded");
+  });
+
+  it("still answers for a claim the model recorded before a rewrite of the answer", async () => {
+    const cwd = await makeWorkspace();
+    const snapshotId = await seed(cwd, snapshot(PASSAGES, "sha-a"));
+    await read(cwd);
+    await citationEvidenceService.record(cwd, { session_id: SESSION, selections: [{ source: KEY, claim: "Attention layers alone reach a better BLEU score than the recurrent baseline on every translation pair we tested.", snapshot_id: snapshotId, passage_ids: ["p1"] }] });
+
+    const [position] = await citationPassagesService.positions(cwd, { session_id: SESSION, positions: [{ key: KEY, claim: "Attention layers alone reach a better BLEU score than the recurrent baseline, [1]" }] }, DEPS);
+
+    expect(position?.origin).toBe("generation");
+    expect(position?.excerpts[0]?.text).toBe(RESULTS_TEXT);
+    expect(position?.supplementary?.some((excerpt) => excerpt.passage_id === "p1")).toBe(false);
+  });
+});

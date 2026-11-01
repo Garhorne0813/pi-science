@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readJsonLines, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
+import { appendJsonLine, readJsonLines, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
 import { fullTextSnapshotPath, type FullTextDeps, type FullTextPassage, type FullTextSnapshot } from "./citation-fulltext.js";
 import { citationPassagesService } from "./citation-passages.js";
 
@@ -168,5 +169,94 @@ describe("citation passages", () => {
     expect(result?.state).toBe("no_open_fulltext");
     expect(result?.note).toContain("europepmc");
     expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("citation passage ranking", () => {
+  /** The reported case: one paper, one numbered claim, and a passage of a
+   *  section that cannot be the sentence's evidence sharing almost every word
+   *  with it. Lexical overlap alone puts the supplement in the card. */
+  const BOILERPLATE: FullTextPassage[] = [
+    paragraph("In CASP14 the AlphaFold structures reached a median backbone RMSD95 of 0.96 Å, the best result reported for that assessment.", "Main", "Sec1", 0),
+    paragraph("For the CASP14 assessment the AlphaFold structures were compared with the best result reported, and each structure median backbone RMSD95 of the assessment was reported in the assessment table of the AlphaFold structures.", "Supplementary information", "Sec2", 1),
+    paragraph("We thank the CASP14 assessors for the evaluation targets and the referees for their comments on the AlphaFold structures and on this work.", "Acknowledgements", "Sec3", 2),
+  ];
+  const BOILERPLATE_CLAIM = "The AlphaFold structures in the CASP14 assessment reached the best median backbone RMSD95 reported for a structure in that assessment.";
+
+  it("leaves supplementary material and acknowledgements out of the candidate pool", async () => {
+    const cwd = await makeWorkspace();
+    await seedSnapshot(cwd, snapshot(BOILERPLATE, "sha-a"));
+
+    const [result] = await citationPassagesService.positions(cwd, { positions: [{ key: KEY, claim: BOILERPLATE_CLAIM }] });
+
+    expect(result?.state).toBe("matched");
+    expect(result?.excerpts.map((excerpt) => excerpt.section_title)).toEqual(["Main"]);
+    expect(result?.excerpts[0]?.text).toBe(BOILERPLATE[0]?.text);
+  });
+
+  /** The reported case again: the passage that repeats the claim's words but
+   *  reports none of its numbers, against the passage that reports them in one
+   *  short sentence. */
+  const NUMERIC: FullTextPassage[] = [
+    paragraph("The CASP14 structures reached 0.96 Å and the next best method 2.8 Å.", "Discussion", "S2", 0),
+    paragraph("Across the CASP14 targets the median backbone RMSD of the structures and the next best method were compared for every target of the assessment.", "Results", "S1", 1),
+  ];
+  const NUMERIC_CLAIM = "Across the CASP14 targets, the structures reached a median backbone RMSD of 0.96 Å and the next best method reached 2.8 Å.";
+
+  it("does not offer a passage that reports none of the numbers the claim quotes", async () => {
+    const cwd = await makeWorkspace();
+    await seedSnapshot(cwd, snapshot(NUMERIC, "sha-b"));
+
+    const [result] = await citationPassagesService.positions(cwd, { positions: [{ key: KEY, claim: NUMERIC_CLAIM }] });
+
+    expect(result?.excerpts.map((excerpt) => excerpt.passage_id)).toEqual(["p0"]);
+    expect(result?.excerpts[0]?.text).toBe(NUMERIC[0]?.text);
+  });
+
+  it("shows at most one paragraph per section", async () => {
+    const cwd = await makeWorkspace();
+    const repeated: FullTextPassage[] = [
+      paragraph("Attention layers alone reach a better BLEU score on the translation benchmark than the recurrent baseline we compared against.", "Results", "S1", 0),
+      paragraph("The attention model reaches a better BLEU score on the translation benchmark than the recurrent baseline on every language pair.", "Results", "S1", 1),
+      paragraph("Our discussion returns to the better BLEU score on translation that the attention model reached against the recurrent baseline.", "Discussion", "S2", 2),
+    ];
+    await seedSnapshot(cwd, snapshot(repeated, "sha-c"));
+
+    const [result] = await citationPassagesService.positions(cwd, { positions: [{ key: KEY, claim: "Attention layers reach a better BLEU score than the recurrent baseline on the translation benchmark." }] });
+
+    // Two paragraphs of one section both match this claim; three candidates from
+    // one section would be the same argument quoted three times.
+    const ids = (result?.excerpts ?? []).map((excerpt) => excerpt.passage_id);
+    const sections = (result?.excerpts ?? []).map((excerpt) => excerpt.section_id);
+    expect(ids[0]).toBe("p0");
+    expect(ids).not.toContain("p1");
+    expect(new Set(sections).size).toBe(sections.length);
+  });
+
+  it("re-finds a position whose cached answer came from an older ranking", async () => {
+    const cwd = await makeWorkspace();
+    await seedSnapshot(cwd, snapshot(BOILERPLATE, "sha-a"));
+    const claim = BOILERPLATE_CLAIM;
+    // What the previous ranker stored for this exact claim and snapshot: the
+    // supplementary paragraph, replayed forever because the cache key has not
+    // changed.
+    await appendJsonLine(workspaceFile(cwd, "citations-passages.jsonl"), {
+      key: KEY,
+      claim_sha256: createHash("sha256").update(claim).digest("hex"),
+      state: "matched",
+      note: null,
+      snapshot_sha256: "sha-a",
+      snapshot_id: "sha-a-old",
+      origin: "located",
+      ranker: 1,
+      excerpts: [{ text: BOILERPLATE[1]?.text, before: "", after: "", section_title: "Supplementary information", section_id: "Sec2", page: null, score: 9, passage_id: "p1" }],
+    });
+
+    const [result] = await citationPassagesService.positions(cwd, { positions: [{ key: KEY, claim }] });
+
+    expect(result?.excerpts[0]?.text).toBe(BOILERPLATE[0]?.text);
+    expect(result?.excerpts[0]?.section_title).toBe("Main");
+    const rows = await cacheRows(cwd);
+    expect(rows.map((row) => row.ranker)).toContain(2);
   });
 });

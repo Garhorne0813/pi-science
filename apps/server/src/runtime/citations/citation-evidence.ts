@@ -52,6 +52,10 @@ export interface PositionResult {
   snapshot_id: string | null;
   origin: EvidenceOrigin;
   excerpts: CitationExcerpt[];
+  /** Passages a search of the same snapshot would have offered, beside a
+   *  generation-time record. Absent when there is no record, because then the
+   *  search result is the answer rather than a supplement to it. */
+  supplementary?: CitationExcerpt[];
 }
 
 export type SelectionRejectReason = "bad_source" | "empty_claim" | "unknown_snapshot" | "unknown_passage" | "not_delivered";
@@ -111,7 +115,14 @@ interface SelectionRow {
 
 type StoredRow = DeliveryRow | SelectionRow;
 
-export interface GenerationRecord { snapshot_id: string; passage_ids: string[]; claim: string; recorded_at: string }
+/** How the recorded claim was recognised as this citation position. Exact
+ *  wording is the sentence byte for byte; normalized ignores the spelling the
+ *  renderer changes (the identifier becomes a number, markdown emphasis goes);
+ *  similar is the same sentence written slightly differently, accepted only
+ *  when one record is clearly ahead of the others. */
+export type ClaimMatch = "exact" | "normalized" | "similar";
+
+export interface GenerationRecord { snapshot_id: string; passage_ids: string[]; claim: string; recorded_at: string; match: ClaimMatch }
 
 export type GenerationLookup = { state: "recorded"; record: GenerationRecord; snapshot: FullTextSnapshot } | { state: "stale"; record: GenerationRecord } | { state: "absent" };
 
@@ -134,6 +145,54 @@ function evidenceFile(cwd: string): string {
 function claimHash(claim: string): string {
   return createHash("sha256").update(claim).digest("hex");
 }
+/** The body shows a number where the model wrote the identifier, so one
+ *  citation position has two spellings. These four differences are the ones
+ *  the renderer introduces, and none of them changes which sentence it is. */
+const CITATION_MARKER = /\[\s*\d{1,4}\s*\]/g;
+const CITATION_IDENTIFIER = /(?:doi\s*:\s*)?10\.\d{4,9}\/[^\s,;.:)\]}>，。；：、）】"']*|arxiv\s*:\s*\d{4}\.\d{4,5}(?:v\d+)?/gi;
+const MARKDOWN_EMPHASIS = /[*_~`]+/g;
+const EDGE_PUNCTUATION = /^[\s\p{P}]+|[\s\p{P}]+$/gu;
+const WORD = /[\p{L}\p{N}]+/gu;
+const CJK_RUN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+/g;
+
+/** The sentence as a position rather than as a string: no identifier, no
+ *  marker, no emphasis, one kind of space, no edge punctuation. */
+export function normalizeClaim(claim: string): string {
+  return claim.replace(CITATION_MARKER, " ").replace(CITATION_IDENTIFIER, " ").replace(MARKDOWN_EMPHASIS, "").replace(/\s+/g, " ").replace(EDGE_PUNCTUATION, "").toLowerCase();
+}
+
+/** A DOI is case-insensitive, so two spellings of one DOI name one source; an
+ *  arXiv version suffix stays, because v1 and v2 are different texts. */
+export function canonicalSource(key: string): string {
+  const ref = refFromKey(key);
+  if (!ref) return key.trim();
+  return ref.kind === "doi" ? `doi:${ref.id}` : `arxiv:${ref.requested_id}`;
+}
+
+function claimTokens(text: string): Set<string> {
+  const result = new Set<string>();
+  for (const word of text.match(WORD) ?? []) {
+    result.add(word);
+    // Chinese runs are not space-separated, so bigrams are the unit that can
+    // overlap between two spellings of one sentence.
+    for (const run of word.match(CJK_RUN) ?? []) for (let at = 0; at + 1 < run.length; at += 1) result.add(run.slice(at, at + 2));
+  }
+  return result;
+}
+
+function overlap(left: Set<string>, right: Set<string>): number {
+  if (!left.size || !right.size) return 0;
+  let shared = 0;
+  for (const term of left) if (right.has(term)) shared += 1;
+  return (2 * shared) / (left.size + right.size);
+}
+
+/** How close two spellings of one sentence must be before a recorded passage
+ *  answers for the sentence in the finished answer, and how far ahead the best
+ *  candidate must be. Two sentences of one answer about one paper look alike,
+ *  and a near tie means the record cannot say which one was meant. */
+const SIMILAR_SCORE = 0.6;
+const SIMILAR_MARGIN = 0.15;
 
 async function readRows(cwd: string): Promise<StoredRow[]> {
   const rows = await readJsonLines<Record<string, unknown>>(evidenceFile(cwd));
@@ -142,11 +201,11 @@ async function readRows(cwd: string): Promise<StoredRow[]> {
     if (typeof row.session_id !== "string" || typeof row.source !== "string" || typeof row.snapshot_id !== "string" || !Array.isArray(row.passage_ids)) continue;
     const passage_ids = row.passage_ids.filter((id): id is string => typeof id === "string");
     if (row.row === "delivery") {
-      result.push({ row: "delivery", session_id: row.session_id, source: row.source, snapshot_id: row.snapshot_id, passage_ids, at: String(row.at ?? "") });
+      result.push({ row: "delivery", session_id: row.session_id, source: canonicalSource(row.source), snapshot_id: row.snapshot_id, passage_ids, at: String(row.at ?? "") });
       continue;
     }
     if (row.row === "selection" && typeof row.claim === "string" && typeof row.claim_sha256 === "string") {
-      result.push({ row: "selection", session_id: row.session_id, source: row.source, claim: row.claim, claim_sha256: row.claim_sha256, snapshot_id: row.snapshot_id, passage_ids, at: String(row.at ?? "") });
+      result.push({ row: "selection", session_id: row.session_id, source: canonicalSource(row.source), claim: row.claim, claim_sha256: row.claim_sha256, snapshot_id: row.snapshot_id, passage_ids, at: String(row.at ?? "") });
     }
   }
   return result.slice(-MAX_ROWS);
@@ -196,6 +255,27 @@ export function generationExcerpts(snapshot: FullTextSnapshot, passageIds: strin
   return excerpts;
 }
 
+/** Which recorded claim answers for this sentence, if one does. Exact wording
+ *  first, then the same sentence in the renderer's spelling, then a close
+ *  rewrite. The last has to be clearly ahead: two sentences of one answer
+ *  about one paper share most of their words, and choosing between them at a
+ *  near tie would open the wrong paragraph with confidence. */
+function matchClaim(rows: SelectionRow[], claim: string): { row: SelectionRow; match: ClaimMatch } | null {
+  const exact = rows.findLast((row) => row.claim_sha256 === claimHash(claim.trim()));
+  if (exact) return { row: exact, match: "exact" };
+  const wanted = normalizeClaim(claim);
+  if (!wanted) return null;
+  const normalized = rows.findLast((row) => normalizeClaim(row.claim) === wanted);
+  if (normalized) return { row: normalized, match: "normalized" };
+  const wantedTerms = claimTokens(wanted);
+  const scored = rows.map((row) => ({ row, score: overlap(wantedTerms, claimTokens(normalizeClaim(row.claim))) })).sort((left, right) => right.score - left.score);
+  const best = scored[0];
+  const second = scored[1];
+  if (!best || best.score < SIMILAR_SCORE) return null;
+  if (second && best.score - second.score < SIMILAR_MARGIN) return null;
+  return { row: best.row, match: "similar" };
+}
+
 function sectionMatches(passage: FullTextPassage, section: string): boolean {
   const wanted = section.trim().toLowerCase();
   if (!wanted) return true;
@@ -229,7 +309,7 @@ export const citationEvidenceService = {
       passages.push({ passage_id: passageIdOf(passage.index), section_title: passage.section_title, section_id: passage.section_id, page: passage.page, text: passage.text });
     }
     if (passages.length && snapshotId) {
-      await appendJsonLine(evidenceFile(cwd), { row: "delivery", session_id: input.session_id, source: input.source, snapshot_id: snapshotId, passage_ids: passages.map((passage) => passage.passage_id), at: new Date().toISOString() } satisfies DeliveryRow);
+      await appendJsonLine(evidenceFile(cwd), { row: "delivery", session_id: input.session_id, source: canonicalSource(input.source), snapshot_id: snapshotId, passage_ids: passages.map((passage) => passage.passage_id), at: new Date().toISOString() } satisfies DeliveryRow);
     }
     return { source: input.source, state: snapshot.state, note: passages.length ? null : "no passage in this slice of the source", ...read, total: matching.length, skip, passages };
   },
@@ -250,6 +330,9 @@ export const citationEvidenceService = {
       const passageIds = Array.isArray(selection.passage_ids) ? selection.passage_ids.filter((id): id is string => typeof id === "string" && id.trim() !== "") : [];
       const reject = (reason: SelectionRejectReason, note: string): void => { results.push({ source, accepted: false, reason, note }); };
       if (!refFromKey(source)) { reject("bad_source", "the source must be doi:<id> or arxiv:<id>"); continue; }
+      // The model may spell the same source key differently in the read and in
+      // the selection; the DOI it names is the same source either way.
+      const key = canonicalSource(source);
       if (!claim) { reject("empty_claim", "the claim must be the sentence this citation sits in"); continue; }
       if (claim.length > MAX_CLAIM_CHARS) { reject("empty_claim", `the claim must be at most ${MAX_CLAIM_CHARS} characters`); continue; }
       if (!snapshotId || !passageIds.length) { reject("unknown_snapshot", "a snapshot id and at least one passage id are required"); continue; }
@@ -257,9 +340,9 @@ export const citationEvidenceService = {
       if (!snapshot) { reject("unknown_snapshot", `no stored read of ${source} answers snapshot ${snapshotId}`); continue; }
       const missing = passageIds.filter((id) => !passageOf(snapshot, id));
       if (missing.length) { reject("unknown_passage", `the snapshot holds no passage ${missing.join(", ")}`); continue; }
-      const delivered = rows.some((row) => row.row === "delivery" && row.session_id === input.session_id && row.source === source && row.snapshot_id === snapshotId && passageIds.every((id) => row.passage_ids.includes(id)));
+      const delivered = rows.some((row) => row.row === "delivery" && row.session_id === input.session_id && row.source === key && row.snapshot_id === snapshotId && passageIds.every((id) => row.passage_ids.includes(id)));
       if (!delivered) { reject("not_delivered", "these passages were not handed to this session from this snapshot"); continue; }
-      const row: SelectionRow = { row: "selection", session_id: input.session_id, source, claim, claim_sha256: claimHash(claim), snapshot_id: snapshotId, passage_ids: passageIds, at: new Date().toISOString() };
+      const row: SelectionRow = { row: "selection", session_id: input.session_id, source: key, claim, claim_sha256: claimHash(claim), snapshot_id: snapshotId, passage_ids: passageIds, at: new Date().toISOString() };
       await appendJsonLine(evidenceFile(cwd), row);
       rows.push(row);
       results.push({ source, accepted: true, reason: null, note: null });
@@ -268,15 +351,17 @@ export const citationEvidenceService = {
   },
 
   /** The generation-time record for one citation position, if this session
-   *  recorded one. The claim is matched exactly, not by similarity: a near
-   *  sentence is a different citation position. */
+   *  recorded one. A near sentence is a different citation position, so the
+   *  tolerant match needs a clear winner, not merely a close contender. */
   async lookup(cwd: string, input: { session_id: string; key: string; claim: string }): Promise<GenerationLookup> {
     if (!input.session_id) return { state: "absent" };
+    const source = canonicalSource(input.key);
     const rows = await readRows(cwd);
-    const wanted = claimHash(input.claim.trim());
-    const row = rows.findLast((entry) => entry.row === "selection" && entry.session_id === input.session_id && entry.source === input.key && entry.claim_sha256 === wanted);
-    if (!row || row.row !== "selection") return { state: "absent" };
-    const record: GenerationRecord = { snapshot_id: row.snapshot_id, passage_ids: row.passage_ids, claim: row.claim, recorded_at: row.at };
+    const candidates = rows.filter((entry): entry is SelectionRow => entry.row === "selection" && entry.session_id === input.session_id && entry.source === source);
+    const match = matchClaim(candidates, input.claim);
+    if (!match) return { state: "absent" };
+    const row = match.row;
+    const record: GenerationRecord = { snapshot_id: row.snapshot_id, passage_ids: row.passage_ids, claim: row.claim, recorded_at: row.at, match: match.match };
     const snapshot = await recordedSnapshot(cwd, row.source, row.snapshot_id);
     return snapshot ? { state: "recorded", record, snapshot } : { state: "stale", record };
   },

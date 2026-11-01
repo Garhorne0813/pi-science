@@ -30,6 +30,38 @@ const NEIGHBOR_CHARS = 200;
 const MIN_SCORE = 1.5;
 const RELATIVE_CUTOFF = 0.35;
 const MAX_CACHE_ROWS = 500;
+/** Bumped whenever a rule below changes a ranking. A row scored by an older
+ *  ranker is dropped and the position is found again, so a fixed rule reaches
+ *  the answers that were already cached against the same snapshot. */
+const RANKER_VERSION = 2;
+
+/** Sections that cannot be the paragraph a sentence rests on. They list
+ *  software versions, funding, permissions or thanks. A software inventory
+ *  outranks a number the claim actually quotes because it repeats version
+ *  numbers on every line, so these leave the pool instead of scoring low: a
+ *  scored-down inventory paragraph would still crowd out a real one when the
+ *  paper is short. */
+const BOILERPLATE_SECTION = /^(?:supplementar|supporting\s+information|reporting\s+summary|author\s+contribution|competing\s+interest|conflict\s+of\s+interest|publisher|editorial|additional\s+information|source\s+data|data\s+availability|code\s+availability|acknowledg|peer\s+review|ethics\s+statement)/i;
+
+/** Where a claim's evidence usually lives, as a multiplier on the retrieval
+ *  score. A Methods paragraph repeats the words of a Results claim ("training",
+ *  "baseline", "model") and would otherwise win a tie it should lose. */
+const SECTION_WEIGHT: Array<[RegExp, number]> = [
+  [/abstract|\bmain\b|results?|discussion|conclusion|findings?/, 1.5],
+  [/introduction|background/, 1.2],
+  [/method|material|experimental|protocol|statistic/, 1],
+];
+const OTHER_SECTION_WEIGHT = 0.8;
+/** A claim that quotes a number is talking about that number, so a passage
+ *  reporting none of them is talking about something else. It is weighted down
+ *  rather than dropped: the paper may state the same value as "0.96 Å" in one
+ *  place and as "96%" in another, and a dropped passage cannot recover that. */
+const MISSING_NUMBER_WEIGHT = 0.5;
+/** Only a number standing on its own is a value the passage reports.
+ *  `CASP14`, `AlphaFold2` and `v.1.16.4` put digits inside a name or a version,
+ *  and a claim naming CASP14 would otherwise be anchored to every passage that
+ *  mentions the assessment. */
+const NUMBER = /(?<![\p{L}\p{N}._])\d+(?:\.\d+)*(?![\p{L}\p{N}])/gu;
 
 const WORD = /[\p{L}\p{N}]+/gu;
 const CJK_RUN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+/g;
@@ -85,24 +117,62 @@ function bm25(query: string[], passages: FullTextPassage[]): number[] {
 
 const verbatim = (needle: string, source: string): boolean => needle.length > 0 && source.includes(needle);
 
+/** "4.0" and "4" are the same reported value, so trailing zeros go before the
+ *  comparison; "1.16.4" stays one token and so never equals "1.16". */
+function numbersOf(text: string): string[] {
+  return (text.match(NUMBER) ?? []).map((value) => value.replace(/(?:\.0+)+$/, ""));
+}
+
+function sectionWeight(title: string | null): number {
+  const text = (title ?? "").toLowerCase();
+  if (!text) return 1;
+  for (const [pattern, weight] of SECTION_WEIGHT) if (pattern.test(text)) return weight;
+  return OTHER_SECTION_WEIGHT;
+}
+
+/** The passages worth ranking. When every passage of a paper sits in a
+ *  boilerplate section the filter is skipped, because a source whose only
+ *  readable text is a data statement still has text. */
+function candidatePool(passages: FullTextPassage[]): FullTextPassage[] {
+  const kept = passages.filter((passage) => !BOILERPLATE_SECTION.test(passage.section_title ?? ""));
+  return kept.length ? kept : passages;
+}
+
 function locate(passages: FullTextPassage[], claim: string): CitationExcerpt[] {
   const query = tokens(claim);
   if (!query.length) return [];
-  const ranked = bm25(query, passages)
-    .map((score, index) => ({ score, index }))
+  const pool = candidatePool(passages);
+  const wanted = numbersOf(claim);
+  const ranked = bm25(query, pool)
+    .map((score, index) => {
+      const passage = pool[index]!;
+      const present = new Set(numbersOf(passage.text));
+      const anchors = wanted.length && !wanted.some((number) => present.has(number)) ? MISSING_NUMBER_WEIGHT : 1;
+      return { score: score * sectionWeight(passage.section_title) * anchors, index };
+    })
     .filter((entry) => entry.score > 0)
     .sort((left, right) => right.score - left.score || left.index - right.index);
   const threshold = Math.max(MIN_SCORE, (ranked[0]?.score ?? 0) * RELATIVE_CUTOFF);
   const excerpts: CitationExcerpt[] = [];
+  // One paragraph per section keeps three candidates from being three
+  // paragraphs of one argument. Only a named section can be deduped: a PDF text
+  // layer has no section title, and there every paragraph is its own candidate.
+  const seen = new Set<string>();
   for (const entry of ranked) {
     if (excerpts.length >= MAX_EXCERPTS) break;
     if (entry.score < threshold) break;
-    const passage = passages[entry.index];
+    const passage = pool[entry.index];
     if (!passage) continue;
+    const section = passage.section_id ?? passage.section_title;
+    if (section !== null) {
+      if (seen.has(section)) continue;
+      seen.add(section);
+    }
+    const at = passages.indexOf(passage);
     excerpts.push({
       text: passage.text,
-      before: passages[entry.index - 1]?.text.slice(-NEIGHBOR_CHARS) ?? "",
-      after: passages[entry.index + 1]?.text.slice(0, NEIGHBOR_CHARS) ?? "",
+      before: at > 0 ? passages[at - 1]?.text.slice(-NEIGHBOR_CHARS) ?? "" : "",
+      after: at >= 0 ? passages[at + 1]?.text.slice(0, NEIGHBOR_CHARS) ?? "" : "",
       section_title: passage.section_title,
       section_id: passage.section_id,
       page: passage.page,
@@ -133,7 +203,10 @@ async function readPositionCache(cwd: string): Promise<PositionResult[]> {
   for (const row of rows) {
     if (typeof row.key !== "string" || typeof row.claim_sha256 !== "string" || typeof row.state !== "string" || !Array.isArray(row.excerpts)) continue;
     // A row written before passages had ids cannot name the paragraph it
-    // quoted, so it is dropped and the position is located again.
+    // quoted, so it is dropped and the position is located again. A row scored
+    // by an older ranker is dropped for the same reason: replaying it would keep
+    // showing the paragraph that rule picked.
+    if (row.ranker !== RANKER_VERSION) continue;
     if (!(row.excerpts as CitationExcerpt[]).every((excerpt) => typeof excerpt?.passage_id === "string")) continue;
     results.push({
       key: row.key,
@@ -173,7 +246,12 @@ export const citationPassagesService = {
         const excerpts = generationExcerpts(recorded.snapshot, recorded.record.passage_ids);
         // A record whose passages no longer resolve is not a match: saying so is
         // better than showing an empty card as if the source said nothing.
-        results.push({ key: request.key, claim_sha256, state: excerpts.length ? "matched" : "stale", note: excerpts.length ? null : "the recorded passages are no longer in this snapshot", snapshot_sha256: recorded.snapshot.content_sha256, snapshot_id: snapshotIdOf(recorded.snapshot), origin: "generation", excerpts });
+        const chosen = new Set(recorded.record.passage_ids);
+        // What a search of the same snapshot would have offered, kept apart from
+        // the model's own choice so the card can offer it as the supplement it
+        // is. It costs no request: the snapshot is the one already read.
+        const supplementary = excerpts.length ? locate(recorded.snapshot.passages, request.claim).filter((excerpt) => !chosen.has(excerpt.passage_id)) : [];
+        results.push({ key: request.key, claim_sha256, state: excerpts.length ? "matched" : "stale", note: excerpts.length ? null : "the recorded passages are no longer in this snapshot", snapshot_sha256: recorded.snapshot.content_sha256, snapshot_id: snapshotIdOf(recorded.snapshot), origin: "generation", excerpts, supplementary });
         continue;
       }
       if (recorded.state === "stale") {
@@ -213,7 +291,7 @@ export const citationPassagesService = {
       const excerpts = locate(snapshot.passages, request.claim);
       const result: PositionResult = { key: request.key, claim_sha256, state: excerpts.length ? "matched" : "no_match", note: null, snapshot_sha256, snapshot_id, origin: "located", excerpts };
       if (snapshot_sha256) {
-        await appendJsonLine(passagesCacheFile(cwd), result);
+        await appendJsonLine(passagesCacheFile(cwd), { ...result, ranker: RANKER_VERSION });
         cache.push(result);
       }
       results.push(result);
