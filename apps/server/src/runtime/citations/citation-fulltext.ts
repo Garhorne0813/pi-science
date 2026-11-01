@@ -16,6 +16,7 @@
  */
 import { createHash } from "node:crypto";
 import { constants as zlibConstants, inflateRawSync, inflateSync } from "node:zlib";
+import { arxivIdOf, arxivVersionOf } from "@pi-science/contracts";
 import { readJson, readJsonLines, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
 import { recordEgress } from "../../security/egress-audit.js";
 
@@ -77,14 +78,51 @@ export function fullTextSnapshotPath(cwd: string, kind: FullTextRef["kind"], id:
   return workspaceFile(cwd, `citations-fulltext/${kind}-${createHash("sha1").update(id).digest("hex")}.json`);
 }
 
+/** Identity of one stored read of a source: the source, the version asked for
+ *  and the bytes that came back. Re-reading the same bytes answers the same id,
+ *  so a citation recorded against it still resolves; a paper that changed
+ *  answers a new one, and an old record is then reported as stale instead of
+ *  being pointed at text it never saw. */
+export function snapshotIdOf(snapshot: Pick<FullTextSnapshot, "kind" | "id" | "requested_version" | "content_sha256">): string | null {
+  if (!snapshot.content_sha256) return null;
+  return sha256(`${snapshot.kind}\u0000${snapshot.id}\u0000${snapshot.requested_version ?? ""}\u0000${snapshot.content_sha256}`).slice(0, 24);
+}
+
+/** A passage's identity inside one snapshot. `index` is the position the
+ *  snapshot stored it at, so the pair names one verbatim paragraph and a
+ *  re-fetched paper cannot inherit it. */
+export function passageIdOf(index: number): string {
+  return `p${index}`;
+}
+
+/** Where one observed read of a source is kept, so evidence recorded against it
+ *  still resolves after the source is fetched again. */
+export function fullTextVersionPath(cwd: string, kind: FullTextRef["kind"], id: string, snapshotId: string): string {
+  return workspaceFile(cwd, `citations-fulltext-versions/${kind}-${createHash("sha1").update(id).digest("hex")}-${snapshotId}.json`);
+}
+
+/** The source key a citation carries, resolved to the reference a snapshot is
+ *  filed under. A DOI is stored in its canonical lowercase form, and an arXiv id
+ *  keeps the version the answer cited, so v1 and v2 never share a snapshot. */
+export function refFromKey(key: string): FullTextRef | null {
+  const at = key.indexOf(":");
+  if (at < 0) return null;
+  const kind = key.slice(0, at);
+  const requestedId = key.slice(at + 1);
+  if ((kind !== "doi" && kind !== "arxiv") || !requestedId) return null;
+  return kind === "doi"
+    ? { kind, id: requestedId.toLowerCase(), requested_id: requestedId, requested_version: null }
+    : { kind, id: arxivIdOf(requestedId), requested_id: requestedId, requested_version: arxivVersionOf(requestedId) };
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** A stored snapshot is only reused when it still describes the same source;
  *  a file written for another id would hand this citation someone else's text. */
-export async function readFullTextSnapshot(cwd: string, kind: FullTextRef["kind"], id: string): Promise<FullTextSnapshot | null> {
-  const raw = await readJson<Record<string, unknown> | null>(fullTextSnapshotPath(cwd, kind, id), null);
+export async function readFullTextSnapshot(cwd: string, kind: FullTextRef["kind"], id: string, path = fullTextSnapshotPath(cwd, kind, id)): Promise<FullTextSnapshot | null> {
+  const raw = await readJson<Record<string, unknown> | null>(path, null);
   if (!raw || raw.kind !== kind || raw.id !== id || !STATES.includes(raw.state as FullTextState)) return null;
   const sections = Array.isArray(raw.sections) ? raw.sections.filter((entry): entry is { id: string | null; title: string | null } => typeof entry === "object" && entry !== null) : [];
   const passages = Array.isArray(raw.passages) ? raw.passages.filter((entry): entry is FullTextPassage => typeof entry === "object" && entry !== null && typeof (entry as FullTextPassage).text === "string") : [];
@@ -472,7 +510,20 @@ export async function fetchFullTextSnapshot(cwd: string, ref: FullTextRef, deps:
     passages: answer.passages,
   };
   await writeJsonAtomic(fullTextSnapshotPath(cwd, ref.kind, ref.id), snapshot);
+  // The read that answered this fetch is kept beside the current snapshot. A
+  // citation recorded against it has to keep resolving after the paper is
+  // fetched again, and overwriting the one file would have erased its text.
+  const snapshotId = snapshotIdOf(snapshot);
+  if (snapshotId) await writeJsonAtomic(fullTextVersionPath(cwd, snapshot.kind, snapshot.id, snapshotId), snapshot);
   return snapshot;
+}
+
+/** One source read as an old citation recorded it, read back by the id that
+ *  citation carries. A version file that no longer describes the same source
+ *  answers null rather than someone else's text. */
+export async function readFullTextVersion(cwd: string, kind: FullTextRef["kind"], id: string, snapshotId: string): Promise<FullTextSnapshot | null> {
+  const snapshot = await readFullTextSnapshot(cwd, kind, id, fullTextVersionPath(cwd, kind, id, snapshotId));
+  return snapshot && snapshotIdOf(snapshot) === snapshotId ? snapshot : null;
 }
 
 /** Read the snapshot on disk, fetching only when it is missing or older than
