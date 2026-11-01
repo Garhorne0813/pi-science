@@ -26,10 +26,28 @@ function bodyText(body: Record<string, unknown>, reply: { code: (status: number)
   return text;
 }
 
+/** The composite ids a source card's own check action names, or null after
+ *  answering 400. */
+function bodyIds(body: Record<string, unknown>, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): string[] | null {
+  const ids = body.ids;
+  if (!Array.isArray(ids) || !ids.length || !ids.every((id) => typeof id === "string" && id.trim())) {
+    reply.code(400).send({ error: "ids must be a non-empty array of non-empty strings" });
+    return null;
+  }
+  return ids.map((id) => String(id).trim());
+}
+
 export function registerCitationRoutes(app: FastifyInstance, service = citationVerifyService): void {
   app.post("/api/citations/verify", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (request, reply) => {
     const cwd = await ws(request, reply); if (!cwd) return;
     const body = (request.body ?? {}) as Record<string, unknown>;
+    if (body.ids !== undefined) {
+      if (body.text !== undefined) { reply.code(400).send({ error: "Provide either text or ids, not both" }); return; }
+      // A named source is the user's own request, so it is never gated on the
+      // automatic switch; the text path below keeps that gate for agent calls.
+      const ids = bodyIds(body, reply); if (ids === null) return;
+      return await service.verifyIds(cwd, ids, { refresh: body.refresh === true });
+    }
     const text = bodyText(body, reply); if (text === null) return;
     // `refresh` is the manual retry path: it re-queries providers instead of
     // replaying a snapshot taken before a rate limit or an outage. The trigger

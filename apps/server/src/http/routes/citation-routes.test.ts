@@ -41,6 +41,13 @@ function fakeService() {
       citations: [view("10.1/x")],
     })),
     lookup: vi.fn(async () => [{ ...view("10.1/x"), cached: true }]),
+    verifyIds: vi.fn(async (_cwd: string, ids: string[]): Promise<VerifyCitationsResult> => ({
+      text_sha256: "abc",
+      total: ids.length,
+      processed: ids.length,
+      unprocessed: [],
+      citations: [view("10.1/x")],
+    })),
     lookupText: vi.fn(async (): Promise<VerifyCitationsResult> => ({
       text_sha256: "abc",
       total: 1,
@@ -117,6 +124,7 @@ describe("citation routes", () => {
       payload: { text: "Cites 10.1/x here.", trigger: "agent", refresh: true },
     });
     expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ citations: [{ status: "unchecked" }] });
     expect(service.lookupText).toHaveBeenCalledOnce();
     expect(service.verify).not.toHaveBeenCalled();
   });
@@ -138,6 +146,53 @@ describe("citation routes", () => {
     });
     expect(service.verify).toHaveBeenCalledOnce();
     expect(service.lookupText).not.toHaveBeenCalled();
+  });
+
+  it("queries the sources a card names even while automatic verification is off", async () => {
+    const cwd = await makeWorkspace();
+    const home = await mkdtemp(join(tmpdir(), "pi-citation-route-home-")); workspaces.push(home);
+    vi.stubEnv("PI_SCIENCE_HOME", home);
+    await writeFile(join(home, "config.json"), JSON.stringify({ citation_auto_verify: false }));
+    const service = fakeService();
+    const app = Fastify({ logger: false });
+    registerCitationRoutes(app, service as never);
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/citations/verify?cwd=${encodeURIComponent(cwd)}`,
+      payload: { ids: ["doi:10.1/x"], refresh: true },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ citations: [{ id: "10.1/x" }] });
+    const canonicalCwd = await validateWorkspaceCwd(cwd);
+    expect(service.verifyIds).toHaveBeenCalledOnce();
+    expect(service.verifyIds).toHaveBeenCalledWith(canonicalCwd, ["doi:10.1/x"], { refresh: true });
+    expect(service.verify).not.toHaveBeenCalled();
+    expect(service.lookupText).not.toHaveBeenCalled();
+  });
+
+  it("rejects a body with neither, both or malformed ids", async () => {
+    const cwd = await makeWorkspace();
+    const service = fakeService();
+    const app = Fastify({ logger: false });
+    registerCitationRoutes(app, service as never);
+    apps.push(app);
+
+    const posts = [
+      {},
+      { ids: ["doi:10.1/x"], text: "Cites 10.1/x here." },
+      { ids: [] },
+      { ids: [" "] },
+      { ids: [1] },
+      { ids: "doi:10.1/x" },
+    ];
+    for (const payload of posts) {
+      const response = await app.inject({ method: "POST", url: `/api/citations/verify?cwd=${encodeURIComponent(cwd)}`, payload });
+      expect(response.statusCode).toBe(400);
+    }
+    expect(service.verifyIds).not.toHaveBeenCalled();
+    expect(service.verify).not.toHaveBeenCalled();
   });
 
   it("looks up cached evidence by composite ids", async () => {

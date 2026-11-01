@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -74,6 +75,14 @@ describe("extractCitations", () => {
     expect(extractCitations(text)).toEqual([
       { kind: "doi", id: "10.1038/s41586-020-2649-2", requested_id: "10.1038/s41586-020-2649-2", requested_version: null },
       { kind: "arxiv", id: "1706.03762", requested_id: "1706.03762", requested_version: null },
+    ]);
+  });
+
+  it("reads its own numbered marker back as punctuation, not as part of the id", () => {
+    const text = "The gain holds on QA (10.1000/alpha)[1] and on retrieval (10.1000/beta)[2].";
+    expect(extractCitations(text)).toEqual([
+      { kind: "doi", id: "10.1000/alpha", requested_id: "10.1000/alpha", requested_version: null },
+      { kind: "doi", id: "10.1000/beta", requested_id: "10.1000/beta", requested_version: null },
     ]);
   });
 });
@@ -378,6 +387,77 @@ describe("bibliographic check", () => {
     const text = "1. 张三 (2021). 蛋白质结构预测. 生物学报. 10.1038/x";
     const result = await citationVerifyService.verify(cwd, { text }, deps);
     expect(result.citations[0]).toMatchObject({ kind: "doi", bibliographic: "not_compared" });
+  });
+});
+
+describe("citationVerifyService.verifyIds", () => {
+  it("queries the named source and replays its snapshot without asking again", async () => {
+    const cwd = await makeWorkspace();
+    const fetchMock = crossrefFetch({ title: ["Named Paper"], author: [], issued: { "date-parts": [[2020]] } }) as unknown as typeof fetch;
+    const first = await citationVerifyService.verifyIds(cwd, ["doi:10.1038/named"], {}, { fetch: fetchMock, minimumInterval: FAST });
+    expect(first).toMatchObject({ total: 1, processed: 1, unprocessed: [] });
+    expect(first.citations[0]).toMatchObject({ id: "10.1038/named", status: "found", title: "Named Paper", cached: false, bibliographic: "not_compared" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // The field stays meaningful without answer text: it names the id list.
+    expect(first.text_sha256).toBe(createHash("sha256").update("doi:10.1038/named").digest("hex"));
+
+    const replay = await citationVerifyService.verifyIds(cwd, ["doi:10.1038/named"], {}, { fetch: fetchMock, minimumInterval: FAST });
+    expect(replay.citations[0]).toMatchObject({ id: "10.1038/named", cached: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-queries a source that already has a fresh snapshot when the check asks for a refresh", async () => {
+    const cwd = await makeWorkspace();
+    const fetchMock = crossrefFetch({ title: ["Named Paper"], author: [], issued: { "date-parts": [[2020]] } }) as unknown as typeof fetch;
+    await citationVerifyService.verifyIds(cwd, ["doi:10.1038/named"], {}, { fetch: fetchMock, minimumInterval: FAST });
+    const refreshed = await citationVerifyService.verifyIds(cwd, ["doi:10.1038/named"], { refresh: true }, { fetch: fetchMock, minimumInterval: FAST });
+    expect(refreshed.citations[0]).toMatchObject({ cached: false });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a provider failure as an error, caches nothing and re-queries next time", async () => {
+    const cwd = await makeWorkspace();
+    const limited = vi.fn(async () => jsonResponse({}, 429)) as unknown as typeof fetch;
+    const failed = await citationVerifyService.verifyIds(cwd, ["doi:10.1038/limited"], {}, { fetch: limited, minimumInterval: FAST });
+    expect(failed.citations[0]).toMatchObject({ status: "error", title: null });
+    expect(failed.citations[0]!.error).toContain("HTTP 429");
+    expect(await cacheRows(cwd)).not.toContain("10.1038/limited");
+
+    const recovered = crossrefFetch({ title: ["Recovered Paper"], author: [], issued: { "date-parts": [[2021]] } }) as unknown as typeof fetch;
+    const retried = await citationVerifyService.verifyIds(cwd, ["doi:10.1038/limited"], {}, { fetch: recovered, minimumInterval: FAST });
+    expect(retried.citations[0]).toMatchObject({ status: "found", title: "Recovered Paper", cached: false });
+    expect(limited).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one query for two spellings of one arXiv id and keeps the version that was asked for", async () => {
+    const cwd = await makeWorkspace();
+    const xml = arxivFeed({ id: "2301.01234v2", title: "Named Paper", summary: "A summary.", published: "2023-01-03" });
+    const fetchMock = vi.fn(async () => xmlResponse(xml)) as unknown as typeof fetch;
+    const result = await citationVerifyService.verifyIds(cwd, ["arxiv:2301.01234v2", "arxiv:2301.01234"], {}, { fetch: fetchMock, minimumInterval: FAST });
+    expect(result.total).toBe(1);
+    expect(result.citations).toHaveLength(1);
+    expect(result.citations[0]).toMatchObject({ id: "2301.01234", requested_version: "2", record_version: "2", version: "confirmed", status: "found" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(new URL(String((fetchMock as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]![0])).searchParams.get("id_list"))).toBe("2301.01234");
+  });
+
+  it("drops an unsupported kind without contacting anything", async () => {
+    const cwd = await makeWorkspace();
+    const fetchMock = vi.fn(async () => jsonResponse({})) as unknown as typeof fetch;
+    const result = await citationVerifyService.verifyIds(cwd, ["pmid:12345678", "doi:", "bogus"], {}, { fetch: fetchMock, minimumInterval: FAST });
+    expect(result).toMatchObject({ total: 0, processed: 0, citations: [] });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports the ids past the batch cap instead of truncating silently", async () => {
+    const cwd = await makeWorkspace();
+    const ids = Array.from({ length: MAX_CITATIONS_PER_CALL + 2 }, (_, index) => `doi:10.1038/paper-${index}`);
+    const deps: CitationDeps = { minimumInterval: FAST, fetch: crossrefFetch({ title: ["Batch Paper"], author: [], issued: { "date-parts": [[2020]] } }) as unknown as typeof fetch };
+    const result = await citationVerifyService.verifyIds(cwd, ids, {}, deps);
+    expect(result.total).toBe(MAX_CITATIONS_PER_CALL + 2);
+    expect(result.processed).toBe(MAX_CITATIONS_PER_CALL);
+    expect(result.citations).toHaveLength(MAX_CITATIONS_PER_CALL);
+    expect(result.unprocessed.map((ref) => ref.id)).toEqual(["10.1038/paper-30", "10.1038/paper-31"]);
   });
 });
 

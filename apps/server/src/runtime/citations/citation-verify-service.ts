@@ -100,10 +100,11 @@ export interface CitationDeps {
 
 // DOI suffixes are ASCII per the DOI spec, but the prose around them is not.
 // The match must terminate at CJK ideographs/kana/hangul and CJK, fullwidth or
-// general punctuation, or a Chinese sentence glues its words onto the id
-// ("10.1038/xyz，另见" would otherwise be queried verbatim and fail as
-// not_found). Keep in sync with frontend/src/lib/citations/*.
-const DOI_PATTERN = /10\.\d{4,9}\/[^\s)\]}>\u2010-\u2027\u2030-\u205e\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef\uac00-\ud7af]+/gi;
+// general punctuation, or a Chinese sentence glues its words onto the id ("10.1038/xyz，另见" would otherwise be queried verbatim and fail as
+// not_found). It must also stop at `[`, or a numbered marker written straight
+// after an identifier (`10.1000/alpha[1]`) would be read back as part of the
+// id. Keep in sync with frontend/src/lib/citations/citations.ts.
+const DOI_PATTERN = /10\.\d{4,9}\/[^\s)\][}>\u2010-\u2027\u2030-\u205e\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef\uac00-\ud7af]+/gi;
 const ARXIV_PATTERN = /arXiv:\s?(\d{4}\.\d{4,5}(?:v\d+)?)/gi;
 const TRAILING_PUNCTUATION = /[.,;:!?*"'\u2010-\u2027\u2030-\u205e\u3000-\u303f\uff00-\uffef]+$/;
 const ARXIV_VERSION = /v(\d+)$/i;
@@ -430,6 +431,34 @@ function refreshRequested(value: unknown): boolean {
   return value === true;
 }
 
+/** Split a `kind:requested_id` composite id. Only doi and arxiv are verifiable
+ *  kinds, so any other prefix is dropped instead of queried. */
+function refFromCompositeId(raw: string): CitationRef | null {
+  const [kind, ...rest] = raw.split(":");
+  const requestedId = rest.join(":");
+  if ((kind !== "doi" && kind !== "arxiv") || !requestedId) return null;
+  const id = kind === "arxiv" ? requestedId.replace(ARXIV_VERSION, "") : requestedId;
+  return { kind, id, requested_id: requestedId, requested_version: kind === "arxiv" ? arxivVersion(requestedId) : null };
+}
+
+/** One source snapshot per citation: replay a fresh one, otherwise query and
+ *  cache the answer. A failed request is reported and never cached, so a retry
+ *  asks the provider again. */
+async function resolveRef(cwd: string, ref: CitationRef, cache: Map<string, CitationEvidence>, deps: CitationDeps, now: () => number, bibliographic: (evidence: CitationEvidence) => { state: BibliographicState; note: string | null }): Promise<CitationView> {
+  const cached = cache.get(`${ref.kind}:${ref.id}`);
+  if (cached && now() - Date.parse(cached.verified_at) < CACHE_TTL_MS) return citationView(cached, ref, true, bibliographic(cached));
+  let evidence: CitationEvidence;
+  try {
+    evidence = ref.kind === "doi" ? await verifyDoi(ref.id, deps) : await verifyArxiv(ref.id, deps);
+  } catch (error) {
+    // A provider hiccup must not fail the whole batch, and must not be
+    // cached as "this paper does not exist".
+    evidence = failedEvidence(ref, error);
+  }
+  if (evidence.status !== "error") await appendJsonLine(citationCacheFile(cwd), evidence);
+  return citationView(evidence, ref, false, bibliographic(evidence));
+}
+
 export const citationVerifyService = {
   /** Verify the citations in a text; fresh snapshots are reused until stale.
    *  `refresh` re-queries the providers, which is what a manual retry wants
@@ -441,29 +470,43 @@ export const citationVerifyService = {
     const batch = refs.slice(0, MAX_CITATIONS_PER_CALL);
     const cache = refreshRequested(input.refresh) ? new Map<string, CitationEvidence>() : await readCache(cwd);
     const results: CitationView[] = [];
-    for (const ref of batch) {
-      const cached = cache.get(`${ref.kind}:${ref.id}`);
-      if (cached && now() - Date.parse(cached.verified_at) < CACHE_TTL_MS) {
-        results.push(citationView(cached, ref, true, bibliographicCheck(text, ref, cached)));
-        continue;
-      }
-      let evidence: CitationEvidence;
-      try {
-        evidence = ref.kind === "doi" ? await verifyDoi(ref.id, deps) : await verifyArxiv(ref.id, deps);
-      } catch (error) {
-        // A provider hiccup must not fail the whole batch, and must not be
-        // cached as "this paper does not exist".
-        evidence = failedEvidence(ref, error);
-      }
-      if (evidence.status !== "error") await appendJsonLine(citationCacheFile(cwd), evidence);
-      results.push(citationView(evidence, ref, false, bibliographicCheck(text, ref, evidence)));
-    }
+    for (const ref of batch) results.push(await resolveRef(cwd, ref, cache, deps, now, (evidence) => bibliographicCheck(text, ref, evidence)));
     return {
       text_sha256: createHash("sha256").update(String(input.text ?? "")).digest("hex"),
       total: refs.length,
       processed: batch.length,
       unprocessed: refs.slice(MAX_CITATIONS_PER_CALL),
       citations: results,
+    };
+  },
+
+  /** Verify explicitly named sources: what a source card's own check action
+   *  asks for. Only these ids are contacted, never the text around them. Not
+   *  gated by the automatic switch, because a manual check is the user's own
+   *  request. `refresh` re-queries instead of replaying a snapshot taken before
+   *  a rate limit or an outage. */
+  async verifyIds(cwd: string, ids: string[], input: { refresh?: boolean } = {}, deps: CitationDeps = {}): Promise<VerifyCitationsResult> {
+    const now = deps.now ?? Date.now;
+    const refs: CitationRef[] = [];
+    const seen = new Set<string>();
+    for (const raw of ids) {
+      const ref = refFromCompositeId(String(raw));
+      if (!ref || seen.has(`${ref.kind}:${ref.id}`)) continue;
+      seen.add(`${ref.kind}:${ref.id}`);
+      refs.push(ref);
+    }
+    const batch = refs.slice(0, MAX_CITATIONS_PER_CALL);
+    const cache = refreshRequested(input.refresh) ? new Map<string, CitationEvidence>() : await readCache(cwd);
+    const citations: CitationView[] = [];
+    // There is no answer text here, so the reference-entry comparison has
+    // nothing to read and stays `not_compared` on every citation.
+    for (const ref of batch) citations.push(await resolveRef(cwd, ref, cache, deps, now, () => NOT_COMPARED));
+    return {
+      text_sha256: createHash("sha256").update(refs.map((ref) => `${ref.kind}:${ref.id}`).join(",")).digest("hex"),
+      total: refs.length,
+      processed: batch.length,
+      unprocessed: refs.slice(MAX_CITATIONS_PER_CALL),
+      citations,
     };
   },
 
@@ -496,13 +539,10 @@ export const citationVerifyService = {
   async lookup(cwd: string, ids: string[]): Promise<CitationView[]> {
     const cache = await readCache(cwd);
     return ids.flatMap((raw) => {
-      const [kind, ...rest] = raw.split(":");
-      const requestedId = rest.join(":");
-      if ((kind !== "doi" && kind !== "arxiv") || !requestedId) return [];
-      const id = kind === "arxiv" ? requestedId.replace(ARXIV_VERSION, "") : requestedId;
-      const hit = cache.get(`${kind}:${id}`);
-      if (!hit) return [];
-      return [citationView(hit, { kind, id, requested_id: requestedId, requested_version: kind === "arxiv" ? arxivVersion(requestedId) : null }, true)];
+      const ref = refFromCompositeId(raw);
+      if (!ref) return [];
+      const hit = cache.get(`${ref.kind}:${ref.id}`);
+      return hit ? [citationView(hit, ref, true)] : [];
     });
   },
 };
