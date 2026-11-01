@@ -8,6 +8,10 @@ import type { ProgressAppearance } from "@pi-science/contracts";
 export type ProviderAuthKind = "api_key" | "oauth" | "api_key_or_oauth" | "none";
 export type ProviderCredentialStatus = "configured" | "connected" | "needs_key" | "needs_login" | "invalid";
 
+/** How an inline citation reads in the answer body: the document's own number,
+ *  or the identifier the model wrote. `number` is the default. */
+export type CitationInlineStyle = "number" | "identifier";
+
 export interface ProviderAuthInfo {
   kind: ProviderAuthKind;
   api_key_supported: boolean;
@@ -72,6 +76,8 @@ export interface SettingsConfig {
   /** Effective automatic citation verification on every settled turn: on when
    *  the stored key is absent, otherwise the stored boolean. */
   citation_auto_verify?: boolean;
+  /** Effective inline citation style: `number` when the stored key is absent. */
+  citation_inline_style?: CitationInlineStyle;
   compaction_threshold_percent: number;
   model_context_window?: number | null;
   model_context_window_override?: { model: string; context_window: number } | null;

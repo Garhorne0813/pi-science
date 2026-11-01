@@ -1,63 +1,123 @@
-import { useId, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { apiRequest } from "@/lib/client/api";
-import { useCitationCwd, type CitationEvidence } from "@/lib/citations/citation-evidence";
+import { citationResolver, useCitationCwd, useCitationInlineStyle, useCitationSource } from "@/lib/citations/citation-evidence";
 import { citationNumberForKey } from "@/lib/citations/numbering";
 import { cn } from "@/lib/ui";
 import { CitationCard } from "@/components/conversation/CitationCard";
 import { useCitationNumbering } from "./CitationNumbering";
 
+/** A preview closes this long after the pointer leaves, which is long enough to
+ *  cross the gap onto the card; entering the card cancels it. */
+const PREVIEW_CLOSE_MS = 180;
+/** The identifier the model wrote, optionally written with its scheme. */
+const IDENTIFIER_PREFIX = /^(?:doi|arxiv)\s*:\s*/i;
+
+function textOf(children: React.ReactNode): string {
+  if (typeof children === "string" || typeof children === "number") return String(children);
+  if (Array.isArray(children)) return children.map(textOf).join("");
+  return "";
+}
+
+/** A link whose text is nothing but the identifier names no content of its own,
+ *  so the body can read as the number instead. A link with words in it keeps
+ *  its words: rewriting them would lose what the model meant. */
+function isIdentifierOnly(text: string, id: string): boolean {
+  return text.replace(IDENTIFIER_PREFIX, "").trim().toLowerCase() === id.toLowerCase();
+}
+
 /**
- * An inline citation. The identifier the model wrote stays written and stays a
- * link to the source; the number beside it comes from the document's own
- * numbering, and clicking the number opens the source card. Nothing here is
- * rewritten into a bare `[n]`, because the answer may be discussing the
- * identifier itself.
+ * An inline citation. Opening the card reads the workspace snapshot and nothing
+ * else; only the check button inside contacts a provider. Under the `number`
+ * style a link that is just the identifier reads as the document's own number,
+ * and a link with meaningful words keeps them and gains the number beside it.
  */
 export function CitationRef({ href, citationKey, children }: { href: string; citationKey?: string; children: React.ReactNode }) {
   const { t } = useTranslation();
   const cwd = useCitationCwd();
   const numbering = useCitationNumbering();
+  const style = useCitationInlineStyle(cwd);
   const number = numbering && citationKey ? citationNumberForKey(numbering, citationKey) : null;
   const [open, setOpen] = useState<"none" | "preview" | "pinned">("none");
+  const trigger = useRef<HTMLElement | null>(null);
+  const closeTimer = useRef<number | undefined>(undefined);
   const cardId = `citation-card-${useId().replace(/:/g, "")}`;
+  const evidence = useCitationSource(cwd, citationKey, open !== "none");
 
-  // The card answers "what is already known about this source". Reading the
-  // workspace snapshot contacts nobody; only the check button inside does.
-  const { data } = useQuery({
-    queryKey: ["citation", cwd, citationKey],
-    queryFn: () => apiRequest<{ citations: CitationEvidence[] }>(`/api/citations?${new URLSearchParams({ cwd, ids: citationKey ?? "" })}`),
-    enabled: open !== "none" && Boolean(cwd) && Boolean(citationKey),
-    staleTime: 5 * 60_000,
-    retry: false,
-  });
-  const close = () => { setOpen("none"); document.getElementById(`${cardId}-trigger`)?.focus(); };
+  const cancelClose = () => { if (closeTimer.current !== undefined) { window.clearTimeout(closeTimer.current); closeTimer.current = undefined; } };
+  const scheduleClose = () => {
+    cancelClose();
+    closeTimer.current = window.setTimeout(() => { closeTimer.current = undefined; setOpen("none"); }, PREVIEW_CLOSE_MS);
+  };
+  const close = () => { cancelClose(); setOpen("none"); };
+  useEffect(() => cancelClose, []);
+
+  // A click pins what a hover only previewed; a second click on the number
+  // closes it. Pointer movement never closes a pinned card.
+  const pin = () => {
+    cancelClose();
+    if (open === "pinned") { trigger.current?.focus(); setOpen("none"); return; }
+    setOpen("pinned");
+  };
+  const resolver = citationKey ? citationResolver(citationKey) : null;
+  const text = textOf(children).trim();
+  const numberAsText = style === "number" && number !== null && Boolean(resolver) && isIdentifierOnly(text, resolver?.id ?? "");
+  const markerClass = "rounded px-0.5 font-mono text-[10px] align-super text-accent hover:bg-accent/10";
 
   return (
     <span
-      className="group/citation relative inline-block"
-      onPointerEnter={(event) => { if (event.pointerType !== "touch") setOpen((current) => current === "none" ? "preview" : current); }}
-      onPointerLeave={() => setOpen((current) => current === "preview" ? "none" : current)}
+      className="inline-block"
+      onPointerEnter={(event) => {
+        if (event.pointerType === "touch" || !number || !citationKey) return;
+        cancelClose();
+        setOpen((current) => current === "none" ? "preview" : current);
+      }}
+      onPointerLeave={(event) => {
+        if (event.pointerType === "touch") return;
+        if (open === "preview") scheduleClose();
+      }}
     >
-      <a href={href} target="_blank" rel="noreferrer" className="underline decoration-dotted decoration-1 underline-offset-2 hover:text-accent">
-        {children}
-      </a>
-      {number !== null && citationKey && <>
-        <button
-          id={`${cardId}-trigger`}
-          type="button"
-          aria-expanded={open !== "none"}
-          aria-controls={cardId}
-          aria-haspopup="dialog"
-          aria-label={t("conversation.references") + ` [${number}]`}
-          onClick={() => setOpen((current) => current === "pinned" ? "none" : "pinned")}
-          className={cn("ml-1 rounded px-1 align-super font-mono text-[10px] text-accent hover:bg-accent/10", open !== "none" && "bg-accent/10")}
-        >
-          [{number}]
-        </button>
-        {open !== "none" && <CitationCard id={cardId} citationKey={citationKey} evidence={data?.citations?.[0]} onClose={close} />}
-      </>}
+      {numberAsText && citationKey
+        ? <a
+            ref={(element) => { trigger.current = element; }}
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            aria-haspopup="dialog"
+            aria-expanded={open !== "none"}
+            aria-controls={cardId}
+            aria-label={t("conversation.references") + ` [${number}]`}
+            onClick={(event) => {
+              // The resolver stays reachable through the card and through the
+              // browser's own link actions; a plain click opens the source.
+              if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+              event.preventDefault();
+              pin();
+            }}
+            className={cn(markerClass, open !== "none" && "bg-accent/10")}
+          >[{number}]</a>
+        : <>
+            <a href={href} target="_blank" rel="noreferrer" className="underline decoration-dotted decoration-1 underline-offset-2 hover:text-accent">{children}</a>
+            {number !== null && citationKey && <button
+              ref={(element) => { trigger.current = element; }}
+              type="button"
+              aria-expanded={open !== "none"}
+              aria-controls={cardId}
+              aria-haspopup="dialog"
+              aria-label={t("conversation.references") + ` [${number}]`}
+              onClick={pin}
+              className={cn("ml-1", markerClass, open !== "none" && "bg-accent/10")}
+            >[{number}]</button>}
+          </>}
+      {open !== "none" && number !== null && citationKey && <CitationCard
+        id={cardId}
+        citationKey={citationKey}
+        evidence={evidence}
+        focusOnOpen={open === "pinned"}
+        trigger={trigger}
+        onPointerEnter={cancelClose}
+        onPointerLeave={() => { if (open === "preview") scheduleClose(); }}
+        onClose={close}
+      />}
     </span>
   );
 }

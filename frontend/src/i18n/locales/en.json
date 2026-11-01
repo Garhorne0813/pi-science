@@ -1797,6 +1797,13 @@
   "settings.citationAutoVerify.on": "Verify citations automatically",
   "settings.citationAutoVerify.off": "Do not verify automatically",
   "settings.citationAutoVerify.saveError": "Unable to save the citation verification setting",
+  "settings.citationInlineStyle.title": "Inline citation style",
+  "settings.citationInlineStyle.description": "How a citation reads inside the answer. The number style shows the reference number and keeps the DOI or arXiv identifier out of the prose; the identifier style keeps the identifier the model wrote and puts the number beside it. A link that carries its own words always keeps them. The reference list and the source cards are the same in both styles.",
+  "settings.citationInlineStyle.number": "Reference number",
+  "settings.citationInlineStyle.numberHint": "[1]",
+  "settings.citationInlineStyle.identifier": "Identifier",
+  "settings.citationInlineStyle.identifierHint": "10.1000/xyz",
+  "settings.citationInlineStyle.saveError": "Unable to save the inline citation style",
   "files.newFolder": "New folder",
   "files.newFolderName": "Folder name",
   "files.folderCreated": "Folder \"{{name}}\" created",
@@ -1864,5 +1871,11 @@
   "citation.card.noProviders": "none answered",
   "citation.card.identifier": "Identifier",
   "citation.card.sourceType.doi": "DOI",
-  "citation.card.sourceType.arxiv": "arXiv"
+  "citation.card.sourceType.arxiv": "arXiv",
+  "citation.card.abstract": "Paper abstract (preview)",
+  "citation.card.abstractNote": "An abstract describes the paper itself. It does not show that the paper supports the sentence citing it.",
+  "citation.card.gbt7714": "GB/T 7714",
+  "citation.card.apa": "APA 7th edition",
+  "citation.card.copy": "Copy",
+  "citation.card.copied": "Copied"
 }

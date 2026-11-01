@@ -19,7 +19,9 @@ export function CitationReferences({ numbering, text, streaming = false }: { num
     <section className="mt-2 border-t border-border/70 pt-1.5" aria-label={t("conversation.references")}>
       <p className="text-[10px] text-muted">{t("conversation.references")} ({numbering.sources.length})</p>
       <ol className="mt-1 space-y-1">
-        {numbering.sources.map((source) => <CitationReferenceRow key={`${source.kind}:${source.id}`} source={source} evidence={bySource.get(`${source.kind}:${source.id}`)} />)}
+        {/* The snapshot files a source under the version it was cited at, so the
+            row reads it by that spelling rather than by the version-less id. */}
+        {numbering.sources.map((source) => <CitationReferenceRow key={`${source.kind}:${source.requested_ids[0]}`} source={source} evidence={bySource.get(`${source.kind}:${source.requested_ids[0]}`)} />)}
       </ol>
       {unprocessed.length > 0 && <p className="mt-1 text-[10px] text-warn-text">{t("conversation.citationTooMany", { count: unprocessed.length })}</p>}
     </section>

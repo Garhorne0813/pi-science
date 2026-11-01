@@ -1797,6 +1797,13 @@
   "settings.citationAutoVerify.on": "自动核验引用",
   "settings.citationAutoVerify.off": "不自动核验",
   "settings.citationAutoVerify.saveError": "无法保存引文核验设置",
+  "settings.citationInlineStyle.title": "行内引用样式",
+  "settings.citationInlineStyle.description": "回答正文里引用的呈现方式。序号样式只显示引用序号，不把 DOI 或 arXiv 标识符写进正文；标识符样式保留模型写下的标识符，并在旁边加上序号。链接自带文字时始终保留原来的文字。两种样式下的参考文献列表和来源卡片相同。",
+  "settings.citationInlineStyle.number": "引用序号",
+  "settings.citationInlineStyle.numberHint": "[1]",
+  "settings.citationInlineStyle.identifier": "标识符",
+  "settings.citationInlineStyle.identifierHint": "10.1000/xyz",
+  "settings.citationInlineStyle.saveError": "无法保存行内引用样式",
   "files.newFolder": "新建文件夹",
   "files.newFolderName": "文件夹名称",
   "files.folderCreated": "已创建文件夹「{{name}}」",
@@ -1864,5 +1871,11 @@
   "citation.card.noProviders": "无来源应答",
   "citation.card.identifier": "标识符",
   "citation.card.sourceType.doi": "DOI",
-  "citation.card.sourceType.arxiv": "arXiv"
+  "citation.card.sourceType.arxiv": "arXiv",
+  "citation.card.abstract": "论文摘要（预览）",
+  "citation.card.abstractNote": "摘要只描述论文本身，不能说明论文支持引用它的那句话。",
+  "citation.card.gbt7714": "GB/T 7714",
+  "citation.card.apa": "APA 第 7 版",
+  "citation.card.copy": "复制",
+  "citation.card.copied": "已复制"
 }

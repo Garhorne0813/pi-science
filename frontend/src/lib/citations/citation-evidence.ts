@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import { useRuntimeStore } from "../agent-runtime";
 import { apiRequest } from "../client/api";
 import { configQuery } from "../settings/settings-api";
+import type { CitationInlineStyle } from "../settings/settings-types";
 
 /** One source as the workspace snapshot holds it. `found` is a provider answer
  *  about the identifier, not a judgement that the paper supports the sentence
@@ -10,12 +11,22 @@ import { configQuery } from "../settings/settings-api";
  *  the status so a reader never has to read one as the other. */
 export interface CitationEvidence {
   kind: "doi" | "arxiv";
+  /** The identifier as cited, arXiv version suffix included. Snapshot rows
+   *  carry it; the card's own read keys by it so two cited versions of one
+   *  paper never share a row. */
+  requested_id?: string;
   id: string;
   status: "found" | "not_found" | "error" | "unchecked";
   title: string | null;
   authors: string[];
   journal: string | null;
   year: string | null;
+  /** Crossref's own numbering of the issue the record appeared in. arXiv has
+   *  no such fields, so it leaves all three null; a missing one is omitted,
+   *  never filled in. */
+  volume: string | null;
+  issue: string | null;
+  pages: string | null;
   abstract: string | null;
   oa_url: string | null;
   retraction: "retracted" | "clear" | "unknown";
@@ -54,6 +65,16 @@ const MAX_SNAPSHOT_POLLS = 60;
 
 export const citationSnapshotKey = (cwd: string, text: string) => ["citations", cwd, text] as const;
 
+/** One source's own read, under the same `["citations"]` root as the snapshot
+ *  it also writes to: a check invalidates that root and every view of the same
+ *  source — card and reference list — refetches together. */
+export const citationSourceKey = (cwd: string, citationKey: string) => ["citations", "source", cwd, citationKey] as const;
+
+/** The composite `kind:requestedId` key a snapshot row is filed under. The
+ *  version the answer cited is part of the key, so an arXiv paper cited at two
+ *  versions keeps two rows instead of one overwriting the other. */
+export const citationEvidenceKey = (row: Pick<CitationEvidence, "kind" | "id" | "requested_id">): string => `${row.kind}:${row.requested_id ?? row.id}`;
+
 export interface CitationEvidenceSet {
   bySource: Map<string, CitationEvidence>;
   unprocessed: Array<{ kind: string; requested_id: string }>;
@@ -85,10 +106,33 @@ export function useCitationEvidence(cwd: string, text: string, streaming = false
     retry: false,
   });
   return {
-    bySource: new Map((data?.citations ?? []).map((row) => [`${row.kind}:${row.id}`, row])),
+    bySource: new Map((data?.citations ?? []).map((row) => [citationEvidenceKey(row), row])),
     unprocessed: data?.unprocessed ?? [],
   };
 }
+
+/** The snapshot of one source, read without contacting a provider. Opening a
+ *  card is a read of what the workspace already holds. */
+export function useCitationSource(cwd: string, citationKey: string | undefined, enabled: boolean): CitationEvidence | undefined {
+  const { data } = useQuery({
+    queryKey: citationSourceKey(cwd, citationKey ?? ""),
+    queryFn: () => apiRequest<{ citations: CitationEvidence[] }>(`/api/citations?${new URLSearchParams({ cwd, ids: citationKey ?? "" })}`),
+    enabled: enabled && Boolean(cwd) && Boolean(citationKey),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  return data?.citations?.[0];
+}
+
+/** The body marker style the reader chose. An absent or unreadable value is the
+ *  default, `number`. */
+export function useCitationInlineStyle(cwd: string): CitationInlineStyle {
+  const { data } = useQuery(configQuery<{ citation_inline_style?: CitationInlineStyle }>(cwd));
+  return data?.citation_inline_style === "identifier" ? "identifier" : "number";
+}
+
+/** The check action's own state, so a card can show the check it started. */
+export type CitationCheck = ReturnType<typeof useVerifyCitation>;
 
 /** Check the sources named here, and only those. `refresh` re-queries instead
  *  of replaying a snapshot taken before a rate limit or an outage. This runs
@@ -99,7 +143,17 @@ export function useVerifyCitation(cwd: string) {
   return useMutation({
     mutationFn: ({ ids, refresh }: { ids: string[]; refresh?: boolean }) =>
       apiRequest<{ citations: CitationEvidence[] }>(`/api/citations/verify?cwd=${encodeURIComponent(cwd)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids, refresh }) }),
-    onSuccess: () => { void client.invalidateQueries({ queryKey: ["citations"] }); },
+    // The answer is what the card must show next, so it is written to the
+    // source read directly; invalidating the `citations` root then refreshes
+    // the snapshot the reference list reads. Without the write the card kept
+    // showing the state it had before the check.
+    onSuccess: (result, { ids }) => {
+      for (const row of result.citations ?? []) {
+        const key = citationEvidenceKey(row);
+        if (ids.includes(key)) client.setQueryData(citationSourceKey(cwd, key), { citations: [row] });
+      }
+      void client.invalidateQueries({ queryKey: ["citations"] });
+    },
   });
 }
 
