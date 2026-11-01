@@ -237,3 +237,74 @@ describe("citation routes", () => {
     expect(response.statusCode).toBe(403);
   });
 });
+
+/** The source card asks about the positions on screen, so the fake answers one
+ *  result per requested position and records how the route called it. */
+function fakePassages() {
+  return {
+    positions: vi.fn(async (_cwd: string, input: { positions: Array<{ key: string; claim: string }> }) =>
+      input.positions.map((position) => ({ key: position.key, claim_sha256: "claim-sha", state: "matched" as const, note: null, snapshot_sha256: "snap-sha", excerpts: [] }))),
+  };
+}
+
+describe("citation passage routes", () => {
+  it("answers one result per citation position", async () => {
+    const cwd = await makeWorkspace();
+    const passages = fakePassages();
+    const app = Fastify({ logger: false });
+    registerCitationRoutes(app, fakeService() as never, passages as never);
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/citations/passages?cwd=${encodeURIComponent(cwd)}`,
+      payload: { positions: [{ key: "doi:10.1/x", claim: "Cites 10.1/x here." }] },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ positions: [{ key: "doi:10.1/x", state: "matched", snapshot_sha256: "snap-sha" }] });
+    const canonicalCwd = await validateWorkspaceCwd(cwd);
+    expect(passages.positions).toHaveBeenCalledWith(canonicalCwd, { positions: [{ key: "doi:10.1/x", claim: "Cites 10.1/x here." }], fetch: true });
+  });
+
+  it("passes the read-only flag through", async () => {
+    const cwd = await makeWorkspace();
+    const passages = fakePassages();
+    const app = Fastify({ logger: false });
+    registerCitationRoutes(app, fakeService() as never, passages as never);
+    apps.push(app);
+
+    await app.inject({
+      method: "POST",
+      url: `/api/citations/passages?cwd=${encodeURIComponent(cwd)}`,
+      payload: { fetch: false, positions: [{ key: "arxiv:2401.12345v2", claim: "Cites the paper." }] },
+    });
+
+    const canonicalCwd = await validateWorkspaceCwd(cwd);
+    expect(passages.positions).toHaveBeenCalledWith(canonicalCwd, { positions: [{ key: "arxiv:2401.12345v2", claim: "Cites the paper." }], fetch: false });
+  });
+
+  it("rejects an empty, oversized or malformed position list", async () => {
+    const cwd = await makeWorkspace();
+    const passages = fakePassages();
+    const app = Fastify({ logger: false });
+    registerCitationRoutes(app, fakeService() as never, passages as never);
+    apps.push(app);
+
+    const payloads: unknown[] = [
+      {},
+      { positions: [] },
+      { positions: "doi:10.1/x" },
+      { positions: Array.from({ length: 9 }, (_, index) => ({ key: `doi:10.1/${index}`, claim: "c" })) },
+      { positions: [{ key: "pmid:123", claim: "c" }] },
+      { positions: [{ key: "doi:", claim: "c" }] },
+      { positions: [{ key: "doi:10.1/x" }] },
+      { positions: [{ key: "doi:10.1/x", claim: "x".repeat(4_001) }] },
+    ];
+    for (const payload of payloads) {
+      const response = await app.inject({ method: "POST", url: `/api/citations/passages?cwd=${encodeURIComponent(cwd)}`, payload: payload as never });
+      expect(response.statusCode).toBe(400);
+    }
+    expect(passages.positions).not.toHaveBeenCalled();
+  });
+});

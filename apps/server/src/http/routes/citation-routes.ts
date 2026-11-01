@@ -2,12 +2,21 @@
  * Citation verification endpoints. The global internal-token hook covers the
  * agent path; workspace membership is validated per request. Verification
  * contacts free public scholarly APIs (Crossref, Unpaywall, arXiv) with
- * per-domain throttling and egress audit records.
+ * per-domain throttling and egress audit records. The passages endpoint reads
+ * the open full text snapshot of one source and quotes it back.
  */
 import type { FastifyInstance } from "fastify";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { citationVerifyService, type VerifyCitationsResult } from "../../runtime/citations/citation-verify-service.js";
 import { citationAutoVerifyEnabled } from "../../runtime/citations/citation-auto-verify.js";
+import { citationPassagesService, type PassageRequest, type PositionResult } from "../../runtime/citations/citation-passages.js";
+
+/** A reader opens one citation at a time; a batch is the source panel prefetching
+ *  for the citations on screen, so it stays a handful of provider reads. */
+const MAX_POSITIONS_PER_CALL = 8;
+/** Long enough for any sentence an answer cites, short enough that a pasted
+ *  document cannot become a retrieval query. */
+const MAX_CLAIM_CHARS = 4_000;
 
 function q(request: { query: unknown }, key: string, fallback = "."): string {
   const value = (request.query as Record<string, unknown>)[key];
@@ -37,7 +46,25 @@ function bodyIds(body: Record<string, unknown>, reply: { code: (status: number) 
   return ids.map((id) => String(id).trim());
 }
 
-export function registerCitationRoutes(app: FastifyInstance, service = citationVerifyService): void {
+/** One citation position, or null after answering 400. A position is bounded
+ *  because a whole reference list of them is not one reader's click, and the
+ *  answer would cost one provider read per source with no one waiting for it. */
+function bodyPositions(body: Record<string, unknown>, reply: { code: (status: number) => { send: (body: unknown) => void } }): PassageRequest[] | null {
+  const positions = body.positions;
+  if (!Array.isArray(positions) || !positions.length) { reply.code(400).send({ error: "positions must be a non-empty array" }); return null; }
+  if (positions.length > MAX_POSITIONS_PER_CALL) { reply.code(400).send({ error: `positions may name at most ${MAX_POSITIONS_PER_CALL} citations` }); return null; }
+  const cleaned: PassageRequest[] = [];
+  for (const entry of positions) {
+    const record = (entry ?? {}) as Record<string, unknown>;
+    const key = typeof record.key === "string" ? record.key.trim() : "";
+    if (!/^(?:doi|arxiv):\S+$/.test(key)) { reply.code(400).send({ error: "key must be doi:<id> or arxiv:<id>" }); return null; }
+    if (typeof record.claim !== "string" || record.claim.length > MAX_CLAIM_CHARS) { reply.code(400).send({ error: `claim must be a string of at most ${MAX_CLAIM_CHARS} characters` }); return null; }
+    cleaned.push({ key, claim: record.claim });
+  }
+  return cleaned;
+}
+
+export function registerCitationRoutes(app: FastifyInstance, service = citationVerifyService, passages = citationPassagesService): void {
   app.post("/api/citations/verify", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (request, reply) => {
     const cwd = await ws(request, reply); if (!cwd) return;
     const body = (request.body ?? {}) as Record<string, unknown>;
@@ -73,5 +100,15 @@ export function registerCitationRoutes(app: FastifyInstance, service = citationV
     const ids = raw.split(",").map((id) => id.trim()).filter(Boolean);
     if (!ids.length) return { citations: [] };
     return { citations: await service.lookup(cwd, ids) };
+  });
+
+  // `fetch: false` is the read-only path a source card uses when the reader
+  // opens a citation: it quotes what is already on disk and contacts nobody.
+  app.post("/api/citations/passages", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (request, reply) => {
+    const cwd = await ws(request, reply); if (!cwd) return;
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const positions = bodyPositions(body, reply); if (positions === null) return;
+    const result: PositionResult[] = await passages.positions(cwd, { positions, fetch: body.fetch !== false });
+    return { positions: result };
   });
 }
