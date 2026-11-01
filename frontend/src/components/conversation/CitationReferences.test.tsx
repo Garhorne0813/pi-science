@@ -1,12 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import i18n from "../../i18n";
 import { useRuntimeStore } from "../../lib/agent-runtime";
-import { extractCitations } from "../../lib/citations";
-import { CitationChips } from "./CitationChips";
+import { numberCitations } from "../../lib/citations";
+import { CitationReferences } from "./CitationReferences";
 
-const text = "References\n\n1. He, K. (2016). Deep residual learning for image recognition. CVPR. 10.1038/x";
+const text = "The method is described in the reference entry.\n\nReferences\n\n1. He, K. (2016). Deep residual learning for image recognition. CVPR. 10.1038/x";
 /** A project that is not the directory the server runs in. */
 const cwd = "/Users/someone/other-project";
 const SNAPSHOT_URL = "/api/citations/snapshot?cwd=%2FUsers%2Fsomeone%2Fother-project";
@@ -17,11 +17,12 @@ function snapshot(status: "found" | "unchecked") {
   return {
     citations: [{
       kind: "doi", id: "10.1038/x", status, title: "Attention Is All You Need", authors: ["Ashish Vaswani"],
-      journal: null, year: "2017", retraction: "clear", retraction_note: null, retraction_url: null,
+      journal: null, year: "2017", abstract: null, oa_url: null, retraction: "clear", retraction_note: null, retraction_url: null,
       checked_providers: status === "found" ? ["crossref"] : [], error: null, status_note: null,
       bibliographic: status === "found" ? "mismatch" : "not_compared", bibliographic_note: status === "found" ? referenceEntry : null,
       version: "not_applicable", requested_version: null, record_version: null, verified_at: status === "found" ? "2026-10-27T09:00:00.000Z" : "",
     }],
+    unprocessed: [],
   };
 }
 
@@ -41,10 +42,10 @@ function stubFetch(snapshots: unknown[], autoVerify = false): string[] {
 
 const snapshotCalls = (calls: string[]) => calls.filter((url) => url.startsWith("/api/citations/snapshot")).length;
 
-function renderChips() {
+function renderReferences() {
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <CitationChips citations={extractCitations(text)} text={text} />
+      <CitationReferences numbering={numberCitations(text)} text={text} />
     </QueryClientProvider>,
   );
 }
@@ -55,17 +56,31 @@ afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 it("shows a reference entry that contradicts the record and reads it for this workspace", async () => {
   const calls = stubFetch([snapshot("found")]);
-  renderChips();
+  renderReferences();
 
   expect(await screen.findByLabelText("Bibliographic mismatch")).toBeInTheDocument();
   await waitFor(() => expect(screen.getByRole("link").getAttribute("title")).toContain("Deep residual learning"));
   expect(calls).toContain(SNAPSHOT_URL);
 });
 
+it("numbers the reference list with the same numbers the body shows", async () => {
+  stubFetch([snapshot("found")]);
+  renderReferences();
+  expect(await screen.findByText("[1]")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "10.1038/x" })).toBeInTheDocument();
+});
+
+it("checks one named source on its own, without touching the others", async () => {
+  const calls = stubFetch([snapshot("found")]);
+  renderReferences();
+  fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
+  await waitFor(() => expect(calls.some((url) => url.startsWith("/api/citations/verify"))).toBe(true));
+});
+
 it("polls while a source is unchecked and stops once the background verification lands", async () => {
   vi.useFakeTimers();
   const calls = stubFetch([snapshot("unchecked"), snapshot("found")], true);
-  renderChips();
+  renderReferences();
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
   expect(snapshotCalls(calls)).toBe(1);
 
@@ -73,7 +88,7 @@ it("polls while a source is unchecked and stops once the background verification
   await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
   expect(snapshotCalls(calls)).toBe(2);
   // React Query batches the completed fetch onto a timer of its own, so one
-  // more tick is needed before the chip reads the new evidence.
+  // more tick is needed before the row reads the new evidence.
   await act(async () => { await vi.advanceTimersByTimeAsync(1); });
   expect(screen.getByLabelText("Bibliographic mismatch")).toBeInTheDocument();
 
@@ -85,7 +100,7 @@ it("polls while a source is unchecked and stops once the background verification
 it("does not poll while the automatic verification switch is off", async () => {
   vi.useFakeTimers();
   const calls = stubFetch([snapshot("unchecked")]);
-  renderChips();
+  renderReferences();
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
   expect(snapshotCalls(calls)).toBe(1);
 

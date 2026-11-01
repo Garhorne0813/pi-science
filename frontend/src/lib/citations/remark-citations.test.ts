@@ -67,4 +67,41 @@ describe("remarkCitations", () => {
     expect(arxivLink).toMatchObject({ url: "https://arxiv.org/abs/2112.10752" });
     expect(nodes.map((node) => node.value ?? "").join("")).toContain("，另见");
   });
+
+  it("leaves an ordinary link's own text exactly as written", () => {
+    const tree: Node = { type: "paragraph", children: [{ type: "link", url: "https://example.org", children: [{ type: "text", value: "the 10.1000/linked paper" }] }] };
+    (remarkCitations() as (tree: Node) => void)(tree);
+    expect(tree.children).toEqual([{ type: "link", url: "https://example.org", children: [{ type: "text", value: "the 10.1000/linked paper" }] }]);
+  });
+
+  it("leaves a link whose href holds a DOI alone", () => {
+    const tree: Node = { type: "paragraph", children: [{ type: "link", url: "https://doi.org/10.1000/linked", children: [{ type: "text", value: "doi:10.1000/linked" }] }] };
+    (remarkCitations() as (tree: Node) => void)(tree);
+    expect(tree.children).toHaveLength(1);
+    expect(tree.children![0]!.children).toEqual([{ type: "text", value: "doi:10.1000/linked" }]);
+  });
+
+  it("leaves fenced code, inline code and math alone", () => {
+    const tree: Node = {
+      type: "root",
+      children: [
+        { type: "code", value: "curl https://doi.org/10.1000/fenced" },
+        { type: "paragraph", children: [{ type: "inlineCode", value: "10.1000/inline" }] },
+        { type: "math", value: "10.1000/math" },
+        { type: "paragraph", children: [{ type: "text", value: "but 10.1000/prose is a citation" }] },
+      ],
+    };
+    (remarkCitations() as (tree: Node) => void)(tree);
+    expect(tree.children![0]).toEqual({ type: "code", value: "curl https://doi.org/10.1000/fenced" });
+    expect(tree.children![1]!.children).toEqual([{ type: "inlineCode", value: "10.1000/inline" }]);
+    expect(tree.children![2]).toEqual({ type: "math", value: "10.1000/math" });
+    expect(tree.children![3]!.children!.some((node) => node.type === "link")).toBe(true);
+  });
+
+  it("still converts an identifier that a numbered marker follows", () => {
+    const nodes = run("Gain on QA (10.1000/alpha)[1].");
+    const link = nodes.find((node) => node.type === "link");
+    expect(link).toMatchObject({ url: "https://doi.org/10.1000/alpha" });
+    expect(nodes.map((node) => node.value ?? "").join("")).toContain(")");
+  });
 });

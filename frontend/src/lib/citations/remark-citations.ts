@@ -1,6 +1,10 @@
 // Remark plugin: turn bare DOI and arXiv identifiers in prose into citation
 // links so the renderer can attach verified-evidence hovers. The visible text
-// is preserved exactly; only the wrapping element changes.
+// is preserved exactly; only the wrapping element changes. Text that is
+// already something else keeps its meaning: a link's own text and code or math
+// is left alone, because rewriting it would put a second link inside a link or
+// turn an example into a citation. Code and math nodes carry `value`, not
+// `text`, so only the link guard is needed here.
 // DOI suffixes are ASCII, but prose is not: stop the match at CJK
 // ideographs/kana/hangul and CJK/fullwidth/general punctuation, or Chinese
 // sentences glue their words onto the id and the doi.org link breaks. Keep in
@@ -17,7 +21,8 @@ export function remarkCitations() {
   const walk = (nodes: MdNode[], parent?: MdNode) => {
     for (let index = 0; index < nodes.length; index += 1) {
       const node = nodes[index]!;
-      if (node.type === "text" && parent && typeof node.value === "string") {
+      const quoted = parent?.type === "link" || parent?.type === "linkReference";
+      if (node.type === "text" && parent && !quoted && typeof node.value === "string") {
         const value = node.value;
         const matches: Array<{ start: number; end: number; id: string; requestedId: string; kind: "doi" | "arxiv"; url: string; label: string }> = [];
         for (const pattern of [DOI_PATTERN, ARXIV_PATTERN]) {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2, File, FolderOpen } from "lucide-react";
 import { cn } from "../../lib/ui";
@@ -11,8 +11,9 @@ import type { PublishedReference } from "../../lib/artifacts/artifact-versions";
 import { ReferencedArtifactStrip, TurnArtifactStrip } from "./TurnArtifactStrip";
 import { referencesFromMessage, visibleUserMessage } from "../../lib/files";
 import { agentActionTextByBlock } from "../../lib/conversation";
-import { extractCitations } from "../../lib/citations";
-import { CitationChips } from "./CitationChips";
+import { numberCitations, withReferences } from "../../lib/citations";
+import { CitationNumberingProvider } from "../markdown-viewer/CitationNumbering";
+import { CitationReferences } from "./CitationReferences";
 import { parseSuggestions } from "../../lib/conversation";
 import { MessageActions, MessageSelectionQuoteMenu, type MessageSelectionAnchor } from "./MessageActions";
 import { buildMessageQuote, selectedTextWithin, useMessageQuoteStore, type MessageQuoteScope, type MessageQuoteSource } from "../../lib/conversation/message-quote";
@@ -97,16 +98,24 @@ function UserMessage({ block, scope }: { block: UserMessageBlock; scope: Message
 }
 
 function AgentMessage({ block, actionText, codeRunner, pinnedReferences, scope }: { block: AgentMessageBlock; actionText?: string; codeRunner?: CodeRunner; pinnedReferences?: ReadonlyMap<string, PublishedReference>; scope: MessageQuoteScope }) {
+  const { t } = useTranslation();
   const rawText = block.parts.map((part) => part.text).join("");
   const text = parseSuggestions(rawText).clean;
   const selection = useMessageSelection({ blockId: block.id, role: "agent", ...scope }, text);
+  // One numbering per rendered version of the answer, derived from this text
+  // and nothing else, so a regenerated answer cannot reuse the old numbers.
+  const numbering = useMemo(() => numberCitations(text), [text]);
+  // The copy action carries the same numbering and its reference list, so a
+  // pasted answer still says which source each `[n]` meant.
+  const copyText = useMemo(() => withReferences(parseSuggestions(actionText ?? "").clean, { heading: t("conversation.references") }), [actionText, t]);
   if (!rawText) return null;
-  const citations = extractCitations(text);
   return <div className="group/message" id={messageAnchorId({ blockId: block.id, role: "agent" })}>
-    <div ref={selection.ref}><MarkdownViewer variant="chat" codeRunner={codeRunner} mode={block.partial ? "streaming" : "final"} pinnedReferences={pinnedReferences}>{text}</MarkdownViewer></div>
+    <CitationNumberingProvider numbering={numbering}>
+      <div ref={selection.ref}><MarkdownViewer variant="chat" codeRunner={codeRunner} mode={block.partial ? "streaming" : "final"} pinnedReferences={pinnedReferences}>{text}</MarkdownViewer></div>
+    </CitationNumberingProvider>
     {selection.selection && <MessageSelectionQuoteMenu selection={selection.selection} onQuote={selection.quote} />}
-    {citations.length > 0 && <CitationChips citations={citations} text={text} streaming={block.partial} />}
-    {!block.partial && actionText && <MessageActions text={parseSuggestions(actionText).clean} timestamp={block.timestamp} quote={text ? { blockId: block.id, role: "agent", ...scope, messageText: text } : undefined} />}
+    {numbering.sources.length > 0 && <CitationReferences numbering={numbering} text={text} streaming={block.partial} />}
+    {!block.partial && actionText && <MessageActions text={copyText} timestamp={block.timestamp} quote={text ? { blockId: block.id, role: "agent", ...scope, messageText: text } : undefined} />}
   </div>;
 }
 
