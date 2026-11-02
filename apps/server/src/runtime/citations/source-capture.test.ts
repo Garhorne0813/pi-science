@@ -4,6 +4,7 @@ import type { SseEventRecord } from "../events/event-store.js";
 
 const STARTED_AT = "2026-11-02T02:00:00.000Z";
 const ENDED_AT = "2026-11-02T02:00:01.000Z";
+const SCOPE = { turnIds: ["turn-1"] };
 
 function record(data: unknown): SseEventRecord {
   return { event: null, id: null, data: JSON.stringify(data), created_at: STARTED_AT };
@@ -11,16 +12,24 @@ function record(data: unknown): SseEventRecord {
 
 /** The event projection stores a tool result as JSON, so that is what a test
  *  fixture has to look like. */
-function result(text: string): string {
-  return JSON.stringify({ content: [{ type: "text", text }] });
+function result(text: string, details?: Record<string, unknown>): string {
+  return JSON.stringify({ content: [{ type: "text", text }], ...(details ? { details } : {}) });
 }
 
-function started(callId: string, tool: string, input: Record<string, unknown>, turnId?: string): SseEventRecord {
-  return record({ type: "tool.started", sessionId: "s1", callId, itemId: callId, ...(turnId ? { turnId } : {}), tool, status: "running", input, startedAt: STARTED_AT });
+function started(callId: string, tool: string, input: Record<string, unknown>, turnId = "turn-1"): SseEventRecord {
+  return record({ type: "tool.started", sessionId: "s1", callId, itemId: callId, turnId, tool, status: "running", input, startedAt: STARTED_AT });
 }
 
 function completed(callId: string, tool: string, output: unknown, extra: Record<string, unknown> = {}): SseEventRecord {
-  return record({ type: "tool.completed", sessionId: "s1", callId, itemId: callId, tool, status: "done", output, endedAt: ENDED_AT, ...extra });
+  return record({ type: "tool.completed", sessionId: "s1", callId, itemId: callId, turnId: "turn-1", tool, status: "done", output, endedAt: ENDED_AT, ...extra });
+}
+
+const capture = (events: SseEventRecord[], scope: { turnIds: string[] } = SCOPE) => captureCitationSources(events, scope);
+
+/** The text `web_fetch` really returns: the slice, then its pagination
+ *  guidance, then the handle that addresses the cached page. */
+function pageText(slice: string, responseId: string, nextOffset: number | null): string {
+  return `${slice}${nextOffset === null ? "" : `\n\nUse web_fetch({ responseId: "${responseId}", offset: ${nextOffset}, limit: 20 }) for the next slice.`}\n\nResponse ID: ${responseId}`;
 }
 
 describe("captureCitationSources", () => {
@@ -33,7 +42,7 @@ describe("captureCitationSources", () => {
       started("c3", "grep", { pattern: "doi:10.1000/x" }),
       completed("c3", "grep", "10.1000/x"),
     ];
-    const sources = captureCitationSources(events);
+    const sources = capture(events);
     expect(sources).toHaveLength(2);
     expect(sources[0]).toMatchObject({
       id: "file:data/table.csv",
@@ -52,7 +61,7 @@ describe("captureCitationSources", () => {
       title: "example.org",
       locator: { kind: "chars", start: 0, end: 10 },
       excerpt: "Findings text",
-      evidence: { tool: "web_fetch", callId: "c2", turnId: null },
+      evidence: { tool: "web_fetch", callId: "c2", turnId: "turn-1" },
     });
   });
 
@@ -63,7 +72,7 @@ describe("captureCitationSources", () => {
       started("c2", "web_fetch", { url: "https://example.org/scan.pdf", offset: 0, limit: 100 }),
       completed("c2", "web_fetch", Buffer.from(Array.from({ length: 4096 }, (_value, index) => 128 + (index % 64))).toString("base64")),
     ];
-    const sources = captureCitationSources(events);
+    const sources = capture(events);
     expect(sources[0]).toMatchObject({ excerpt: null, binary: true, locator: { kind: "whole-source" } });
     expect(sources[1]).toMatchObject({ excerpt: null, binary: true, locator: { kind: "whole-source" } });
     expect(isReadableText("Results\n\nWe found a 12% gain, see figure 3.")).toBe(true);
@@ -78,7 +87,7 @@ describe("captureCitationSources", () => {
       started("c5", "web_fetch", { url: "javascript:alert(1)" }), completed("c5", "web_fetch", "alert"),
       started("c6", "web_fetch", { url: "ftp://example.org/x" }), completed("c6", "web_fetch", "x"),
     ];
-    expect(captureCitationSources(events)).toEqual([]);
+    expect(capture(events)).toEqual([]);
   });
 
   it("keeps the first capture of an identity and follows first-capture order", () => {
@@ -87,7 +96,7 @@ describe("captureCitationSources", () => {
       started("c2", "read", { path: "a.md" }), completed("c2", "read", "alpha"),
       started("c3", "read", { path: "./b.md" }), completed("c3", "read", "third version"),
     ];
-    const sources = captureCitationSources(events);
+    const sources = capture(events);
     expect(sources.map((source) => source.identity)).toEqual(["b.md", "a.md"]);
     expect(sources[0]?.excerpt).toBe("second version");
   });
@@ -99,7 +108,7 @@ describe("captureCitationSources", () => {
       completed("c3", "read", "orphan"),
     ];
     // A completion with no start carries no read input, so nothing is registered for it.
-    expect(captureCitationSources(events)).toMatchObject([
+    expect(capture(events)).toMatchObject([
       { id: "file:a.md", excerpt: null, attempt: true },
       { id: "file:b.md", excerpt: null, attempt: true },
     ]);
@@ -110,7 +119,7 @@ describe("captureCitationSources", () => {
       started("c1", "read", { path: "a.md" }),
       started("c2", "read", { path: "a.md" }), completed("c2", "read", "real content"),
     ];
-    const sources = captureCitationSources(events);
+    const sources = capture(events);
     expect(sources).toHaveLength(1);
     expect(sources[0]).toMatchObject({ excerpt: "real content" });
     expect(sources[0]?.attempt).toBeUndefined();
@@ -123,17 +132,17 @@ describe("captureCitationSources", () => {
       started("c2", "web_fetch", { url: "https://example.org/report" }),
       completed("c2", "web_fetch", result("Findings")),
     ];
-    expect(captureCitationSources(events).map((source) => source.excerpt)).toEqual(["a,b\n1,2", "Findings"]);
+    expect(capture(events).map((source) => source.excerpt)).toEqual(["a,b\n1,2", "Findings"]);
   });
 
   it("keeps the read tool's continuation note out of the excerpt and locator", () => {
     const text = "GATTACA\nGGGCCC\n\n[Showing lines 1-2 of 400. Use offset=3 to continue.]";
-    const sources = captureCitationSources([started("c1", "read", { path: "seq.fasta" }), completed("c1", "read", result(text))]);
+    const sources = capture([started("c1", "read", { path: "seq.fasta" }), completed("c1", "read", result(text))]);
     expect(sources[0]).toMatchObject({ excerpt: "GATTACA\nGGGCCC", locator: { kind: "lines", startLine: 1, endLine: 2 } });
   });
 
   it("treats a result that carried an image part as binary", () => {
-    const sources = captureCitationSources([
+    const sources = capture([
       started("c1", "read", { path: "figure.png" }),
       completed("c1", "read", JSON.stringify({ content: [{ type: "text", text: "Read image file [image/png]" }, { type: "image", data: "AAAA", mimeType: "image/png" }] })),
     ]);
@@ -145,13 +154,43 @@ describe("captureCitationSources", () => {
       started("c1", "read", { path: "results.csv" }, "turn-1"), completed("c1", "read", "version A", { turnId: "turn-1" }),
       started("c2", "read", { path: "results.csv" }, "turn-2"), completed("c2", "read", "version B", { turnId: "turn-2" }),
     ];
-    expect(captureCitationSources(events, { turnIds: ["turn-2"] }).map((source) => source.excerpt)).toEqual(["version B"]);
-    expect(captureCitationSources(events, { turnIds: ["turn-3"] })).toEqual([]);
-    expect(captureCitationSources(events)[0]?.excerpt).toBe("version A");
+    expect(capture(events, { turnIds: ["turn-2"] }).map((source) => source.excerpt)).toEqual(["version B"]);
+    expect(capture(events, { turnIds: ["turn-3"] })).toEqual([]);
+    expect(capture(events)[0]?.excerpt).toBe("version A");
+  });
+
+  it("resolves no source for an answer whose turn id is unknown", () => {
+    const events = [started("c1", "read", { path: "a.md" }), completed("c1", "read", "text")];
+    expect(capture(events, { turnIds: [] })).toEqual([]);
+  });
+
+  it("registers a page paged by response id under the url its fetch cached", () => {
+    const details = { provider: "deepseek", responseId: "deepseek_1", offset: 20, totalChars: 60 };
+    const events = [
+      started("c1", "web_fetch", { url: "https://example.org/paper" }),
+      completed("c1", "web_fetch", result(pageText("First slice", "deepseek_1", 20), { provider: "deepseek", responseId: "deepseek_1", offset: 0, totalChars: 60 }), { details: { provider: "deepseek", responseId: "deepseek_1", offset: 0, totalChars: 60 } }),
+      started("c2", "web_fetch", { responseId: "deepseek_1", offset: 20, limit: 20 }, "turn-2"),
+      completed("c2", "web_fetch", result(pageText("Second slice", "deepseek_1", 40), details), { turnId: "turn-2", details }),
+    ];
+    expect(capture(events, { turnIds: ["turn-2"] })).toMatchObject([
+      { id: "web:https://example.org/paper", identity: "https://example.org/paper", locator: { kind: "chars", start: 20, end: 40 }, excerpt: "Second slice", evidence: { tool: "web_fetch", callId: "c2", turnId: "turn-2" } },
+    ]);
+  });
+
+  it("leaves a response id that pages a search listing without a url", () => {
+    const listing = "1. A\nhttps://example.org/a\nsummary";
+    const search = { provider: "deepseek", responseId: "deepseek_2", searchId: "deepseek_2", offset: 0, totalChars: 80 };
+    const events = [
+      started("c1", "web_search", { query: "glioblastoma survival" }),
+      completed("c1", "web_search", result(pageText(listing, "deepseek_2", null), search), { details: search }),
+      started("c2", "web_fetch", { responseId: "deepseek_2", offset: 0, limit: 80 }),
+      completed("c2", "web_fetch", result(pageText(listing, "deepseek_2", null), search), { details: search }),
+    ];
+    expect(capture(events)).toEqual([]);
   });
 
   it("starts a line locator at the requested offset when no limit is given", () => {
-    const sources = captureCitationSources([started("c1", "read", { path: "a.md", offset: 5 }), completed("c1", "read", "l5\nl6")]);
+    const sources = capture([started("c1", "read", { path: "a.md", offset: 5 }), completed("c1", "read", "l5\nl6")]);
     expect(sources[0]?.locator).toEqual({ kind: "lines", startLine: 5, endLine: 6 });
   });
 
@@ -175,8 +214,8 @@ describe("captureCitationSources", () => {
       completed("c3", "web_fetch", "text"),
       record(["not", "an", "object"]),
     ];
-    expect(() => captureCitationSources(events)).not.toThrow();
-    expect(captureCitationSources(events)).toEqual([]);
+    expect(() => capture(events)).not.toThrow();
+    expect(capture(events)).toEqual([]);
   });
 
   it("normalizes windows separators and rejects non-identifier values", () => {

@@ -58,6 +58,33 @@ async function capturedRead(cwd: string, path: string, text: string) {
   return captureCitationSources(records, { turnIds: [publishedTurnId(records)] });
 }
 
+/** One fetch that caches a page and one that pages the same cache, each in its
+ *  own turn, both published through the real hub. */
+async function fetchThroughHub(cwd: string): Promise<SseEventRecord[]> {
+  const records: SseEventRecord[] = [];
+  const store = {
+    append: async (_cwd: string, _sessionId: string, event: SseEventRecord) => { records.push(event); },
+    readAfter: async () => records,
+  };
+  const hub = new ConversationEventHub(store);
+  const runtime = new EventEmitter();
+  hub.bind(cwd, runtime, { activeSessionId: () => "s1", onBusy: () => undefined, onExit: () => undefined });
+  const page = (slice: string, offset: number) => ({ content: [{ type: "text", text: `${slice}\n\nResponse ID: deepseek_1` }],
+    details: { provider: "deepseek", responseId: "deepseek_1", offset, totalChars: 80 } });
+  const call = (callId: string, args: Record<string, unknown>, slice: string, offset: number) => {
+    runtime.emit("event", { type: "tool.started", toolCallId: callId, toolName: "web_fetch", args });
+    const result = page(slice, offset);
+    runtime.emit("event", { type: "tool.completed", toolCallId: callId, toolName: "web_fetch", result, details: result.details, isError: false });
+  };
+  runtime.emit("event", { type: "operation.started", turnId: "turn-1", runId: "run-1" });
+  call("call-1", { url: "https://example.org/paper" }, "First slice", 0);
+  runtime.emit("event", { type: "operation.started", turnId: "turn-2", runId: "run-2" });
+  call("call-2", { responseId: "deepseek_1", offset: 20, limit: 20 }, "Second slice", 20);
+  await hub.flush();
+  await eventually(() => records.filter((record) => record.data.includes(`"type":"tool.completed"`)).length === 2);
+  return records;
+}
+
 describe("citation evidence from the published event stream", () => {
   it("verifies the file a read actually returned", async () => {
     const cwd = await workspace();
@@ -77,6 +104,13 @@ describe("citation evidence from the published event stream", () => {
     const [verified] = await verifyCitationSources(cwd, captured);
     expect(verified).toMatchObject({ status: "changed", excerpt: "Accuracy improved by 4%." });
     expect(verified?.statusDetail).toMatch(/read at answer time/);
+  });
+
+  it("registers a page a response id addresses under the url the first fetch used", async () => {
+    const cwd = await workspace();
+    const captured = captureCitationSources(await fetchThroughHub(cwd), { turnIds: ["turn-2"] });
+    expect(captured).toMatchObject([{ kind: "web", identity: "https://example.org/paper", excerpt: "Second slice", locator: { kind: "chars", start: 20, end: 40 }, evidence: { callId: "call-2", turnId: "turn-2" } }]);
+    expect(captureCitationSources(await fetchThroughHub(cwd), { turnIds: ["turn-9"] })).toEqual([]);
   });
 
   it("verifies a paginated read whose output carries the tool's continuation note", async () => {

@@ -49,9 +49,9 @@ function appFor(resolve: (cwd: string, sessionId: string) => Promise<string | nu
 describe("GET /api/citations/sources", () => {
   it("returns captured sources verified against the workspace file", async () => {
     const cwd = await workspace();
-    await recordRead(cwd, "s1", "call-1");
+    await recordRead(cwd, "s1", "call-1", "turn-1");
     const app = appFor(async (workspaceCwd, sessionId) => workspaceCwd === cwd && sessionId === "s1" ? join(cwd, "session.jsonl") : null);
-    const response = await app.inject({ method: "GET", url: `/api/citations/sources?cwd=${encodeURIComponent(cwd)}&sessionId=s1` });
+    const response = await app.inject({ method: "GET", url: sourcesUrl(cwd, "turn-1") });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       sessionId: "s1",
@@ -63,9 +63,18 @@ describe("GET /api/citations/sources", () => {
         locator: { kind: "lines", startLine: 1, endLine: 2 },
         excerpt: "Line one\nLine two",
         status: "verified",
-        evidence: { tool: "read", callId: "call-1", turnId: null },
+        evidence: { tool: "read", callId: "call-1", turnId: "turn-1" },
       }],
     });
+  });
+
+  it("returns nothing for a request that names no turn", async () => {
+    const cwd = await workspace();
+    await recordRead(cwd, "s1", "call-1", "turn-1");
+    const app = appFor(async (workspaceCwd, sessionId) => workspaceCwd === cwd && sessionId === "s1" ? join(cwd, "session.jsonl") : null);
+    const response = await app.inject({ method: "GET", url: `/api/citations/sources?cwd=${encodeURIComponent(cwd)}&sessionId=s1` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ sessionId: "s1", sources: [] });
   });
 
   it("binds a cited version to the turn that read it", async () => {

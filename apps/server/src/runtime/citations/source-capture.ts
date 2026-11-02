@@ -20,8 +20,9 @@ export interface CapturedSource {
 
 export interface CaptureScope {
   /** Turn ids the answer belongs to. A version only binds to an answer whose
-   *  turn actually read it; without a scope the registry spans the session. */
-  turnIds?: string[];
+   *  turn actually read it. An answer that lost its turn id resolves to no turn
+   *  at all, so it gets an empty registry instead of another turn's evidence. */
+  turnIds: string[];
 }
 
 const MAX_EXCERPT_CHARS = 2_000;
@@ -33,6 +34,10 @@ const BASE64_MARKER = /[+/=]/;
 /** The `read` tool appends its own continuation note to the text it returns.
  *  That note is not in the file, so it must never reach the excerpt or locator. */
 const READ_CONTINUATION_NOTE = /\n\n\[(?:Showing lines \d+-\d+ of \d+|Line \d+ is |\d+ more lines in file\.)[\s\S]*$/;
+
+/** `web_fetch` appends its pagination guidance and the response handle that
+ *  addresses the cached text. Neither is page content. */
+const WEB_FETCH_NOTE = /(?:\n\nUse web_fetch\(\{[^\n]*\}\) for the next slice\.)?\n\nResponse ID: \S+$/;
 
 function isBase64Char(code: number): boolean {
   return (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57) || code === 43 || code === 47 || code === 61;
@@ -150,6 +155,10 @@ function stripContinuationNote(text: string): string {
   return text.replace(READ_CONTINUATION_NOTE, "");
 }
 
+function stripWebFetchNote(text: string): string {
+  return text.replace(WEB_FETCH_NOTE, "");
+}
+
 function excerptOf(text: string, unreadable: boolean): { excerpt: string | null; binary: boolean; text: string } {
   const trimmed = text.trim();
   if (unreadable) return { excerpt: null, binary: true, text: "" };
@@ -190,16 +199,18 @@ function captureRead(started: Record<string, unknown>, completed: Record<string,
   };
 }
 
-function captureWebFetch(started: Record<string, unknown>, completed: Record<string, unknown> | null): CapturedSource | null {
+function captureWebFetch(started: Record<string, unknown>, completed: Record<string, unknown> | null, pages: Map<string, string>): CapturedSource | null {
   const input = objectValue(started.input);
-  const url = stringValue(input?.url);
-  if (!input || !url) return null;
-  const identity = normalizeWebUrl(url);
+  if (!input) return null;
+  // Paging by `responseId` reads the page an earlier fetch cached. Without that
+  // association there is no URL to register, and a guessed one is worse than none.
+  const url = stringValue(input.url) ?? pages.get(stringValue(input.responseId) ?? "") ?? null;
+  const identity = url ? normalizeWebUrl(url) : null;
   if (!identity) return null;
   const callId = stringValue(started.callId);
   if (!callId) return null;
   const raw = completed ? toolResultText(completed.output) : { text: "", binary: false };
-  const { excerpt, binary } = excerptOf(raw.text, raw.binary);
+  const { excerpt, binary } = excerptOf(stripWebFetchNote(raw.text), raw.binary);
   return {
     id: `web:${identity}`,
     kind: "web",
@@ -214,18 +225,44 @@ function captureWebFetch(started: Record<string, unknown>, completed: Record<str
   };
 }
 
-function captureOf(tool: string, started: Record<string, unknown>, completed: Record<string, unknown> | null): CapturedSource | null {
+function captureOf(tool: string, started: Record<string, unknown>, completed: Record<string, unknown> | null, pages: Map<string, string>): CapturedSource | null {
   if (tool === "read") return captureRead(started, completed);
-  return tool === "web_fetch" ? captureWebFetch(started, completed) : null;
+  return tool === "web_fetch" ? captureWebFetch(started, completed, pages) : null;
+}
+
+/** A `web_fetch` by `url` caches the page text and returns a `responseId` that
+ *  addresses it, so paging by that id reads the same page. A search response
+ *  returns a `responseId` too, but it pages the whole result list rather than
+ *  one page, so it proves no single URL. The table spans the whole session: the
+ *  handle names a page, while the turn still owns the evidence. */
+function pageUrls(events: SseEventRecord[]): Map<string, string> {
+  const urls = new Map<string, string>();
+  const inputs = new Map<string, Record<string, unknown>>();
+  for (const event of events) {
+    const data = parseEvent(event);
+    const callId = stringValue(data?.callId);
+    if (!data || !callId) continue;
+    if (data.type === "tool.started") { const input = objectValue(data.input); if (input) inputs.set(callId, input); continue; }
+    if (data.type !== "tool.completed") continue;
+    const input = inputs.get(callId);
+    const details = objectValue(data.details);
+    const responseId = stringValue(details?.responseId);
+    const identity = normalizeWebUrl(stringValue(input?.url) ?? "");
+    if (!identity || !responseId || details?.searchId !== undefined || urls.has(responseId)) continue;
+    urls.set(responseId, identity);
+  }
+  return urls;
 }
 
 /** Pair read and web_fetch calls into captured sources, keeping the first read
  *  of an identity inside the scope: that is the version the answer used.
  *  A failed, interrupted or output-less read is still registered as an attempt,
  *  but a real read of the same identity always wins over it. */
-export function captureCitationSources(events: SseEventRecord[], scope: CaptureScope = {}): CapturedSource[] {
-  const turnIds = scope.turnIds && scope.turnIds.length > 0 ? new Set(scope.turnIds) : null;
-  const inScope = (data: Record<string, unknown>): boolean => !turnIds || (typeof data.turnId === "string" && turnIds.has(data.turnId));
+export function captureCitationSources(events: SseEventRecord[], scope: CaptureScope): CapturedSource[] {
+  if (scope.turnIds.length === 0) return [];
+  const turnIds = new Set(scope.turnIds);
+  const pages = pageUrls(events);
+  const inScope = (data: Record<string, unknown>): boolean => typeof data.turnId === "string" && turnIds.has(data.turnId);
   const starts = new Map<string, { data: Record<string, unknown>; index: number }>();
   const reads: Array<{ source: CapturedSource; index: number }> = [];
   const attempts: Array<{ source: CapturedSource; index: number }> = [];
@@ -244,11 +281,11 @@ export function captureCitationSources(events: SseEventRecord[], scope: CaptureS
     starts.delete(callId);
     const tool = stringValue(start.data.tool) ?? "";
     const completed = data.status === "error" ? null : data;
-    const source = captureOf(tool, start.data, completed);
+    const source = captureOf(tool, start.data, completed, pages);
     if (source) reads.push({ source, index: start.index });
   });
   for (const { data, index } of starts.values()) {
-    const source = captureOf(stringValue(data.tool) ?? "", data, null);
+    const source = captureOf(stringValue(data.tool) ?? "", data, null, pages);
     if (source) attempts.push({ source, index });
   }
   const byStart = (left: { index: number }, right: { index: number }): number => left.index - right.index;
