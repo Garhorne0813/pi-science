@@ -16,6 +16,22 @@ export interface ResolvedCitation {
 
 const IDENTIFIER_KINDS: CitationSourceKind[] = ["doi", "arxiv"];
 
+/** A source may show its captured text and open the file only while the server
+ *  can still read it. A permission failure hides the content, not the card. */
+export function citationSourceContentVisible(source: CitationSource | null): boolean {
+  return Boolean(source && source.status !== "identifier-only" && source.status !== "forbidden");
+}
+
+/** The registry normalizes a page URL to the form `URL` prints, which adds a
+ *  trailing slash an answer may not have written. */
+function findIdentity(text: string, identity: string): { start: number; length: number } | null {
+  const start = text.indexOf(identity);
+  if (start >= 0) return { start, length: identity.length };
+  if (!identity.endsWith("/")) return null;
+  const trimmed = text.indexOf(identity.slice(0, -1));
+  return trimmed < 0 ? null : { start: trimmed, length: identity.length - 1 };
+}
+
 /** Resolve the identifiers and captured sources an answer text mentions.
  *  A path or URL only becomes a citation when the server captured it, so a
  *  fabricated path in the prose can never render as a source. */
@@ -32,10 +48,10 @@ export function resolveCitations(text: string, sources: CitationSource[]): Resol
   for (const source of sources) {
     byKey.set(`${source.kind}:${source.identity}`, source);
     if (IDENTIFIER_KINDS.includes(source.kind)) continue;
-    const start = text.indexOf(source.identity);
+    const at = findIdentity(text, source.identity);
     // An identifier already claimed this offset: `10.1234/x` is not a path.
-    if (start < 0 || identifierStarts.has(start)) continue;
-    tokens.push({ kind: source.kind, identity: source.identity, start, end: start + source.identity.length });
+    if (!at || identifierStarts.has(at.start)) continue;
+    tokens.push({ kind: source.kind, identity: source.identity, start: at.start, end: at.start + at.length });
   }
   const seen = new Set<string>();
   return tokens

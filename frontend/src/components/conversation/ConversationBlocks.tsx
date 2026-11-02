@@ -14,7 +14,7 @@ import { useCitationSources } from "../../lib/citations/sources";
 import { CitationSources } from "./CitationSources";
 import { parseSuggestions } from "../../lib/conversation";
 import { MessageActions } from "./MessageActions";
-import { buildTurnPresentations, turnBlockIds, type TurnPresentation } from "../../lib/conversation/turn-presentation";
+import { buildTurnPresentations, turnBlockIds, turnRuntimeIds, type TurnPresentation } from "../../lib/conversation/turn-presentation";
 import { AgentActivity } from "./AgentActivity";
 import { isLiveLifecycle } from "../../lib/conversation/turn-presentation";
 
@@ -32,6 +32,7 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
   const visibleAgent = turn.finalAgent ?? turn.provisionalAgent;
   const finalText = turn.finalAgent?.parts.map((part) => part.text).join("") ?? "";
   const publishedPaths = turn.artifacts.flatMap((block) => block.artifacts.map((item) => item.path));
+  const turnIds = turnRuntimeIds(turn);
   // A settled turn with both boundaries can report its own duration even when
   // nothing folded into the process trace.
   const showActivity = turn.active
@@ -42,7 +43,7 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
     <div data-thread-block-ids={turnBlockIds(turn).join(" ")} className="flex flex-col gap-0 scroll-mt-4">
       {turn.user && <UserMessage block={turn.user} />}
       {showActivity && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} turnStartedAt={turn.startedAt ?? turn.user?.timestamp} turnEndedAt={turn.endedAt ?? turn.finalAgent?.timestamp} part={isLiveLifecycle(turn.lifecycle) ? "content" : "both"} />}
-      {visibleAgent && <AgentMessage key={visibleAgent.id} block={visibleAgent} actionText={turn.finalAgent ? actionTextByBlock?.get(turn.finalAgent.id) : undefined} codeRunner={codeRunner} />}
+      {visibleAgent && <AgentMessage key={visibleAgent.id} block={visibleAgent} actionText={turn.finalAgent ? actionTextByBlock?.get(turn.finalAgent.id) : undefined} codeRunner={codeRunner} turnIds={turnIds} />}
       {(turn.active || turn.activityBlocks.length > 0) && isLiveLifecycle(turn.lifecycle) && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} turnStartedAt={turn.startedAt ?? turn.user?.timestamp} part="status" />}
       {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} />)}
       {turn.artifacts.map((block) => <TurnArtifactStrip key={block.id} artifacts={block.artifacts} cwd={codeRunner?.cwd} />)}
@@ -76,8 +77,8 @@ function UserMessage({ block }: { block: UserMessageBlock }) {
   );
 }
 
-function AgentMessage({ block, actionText, codeRunner }: { block: AgentMessageBlock; actionText?: string; codeRunner?: CodeRunner }) {
-  const sources = useCitationSources(codeRunner?.cwd, codeRunner?.sessionId);
+function AgentMessage({ block, actionText, codeRunner, turnIds }: { block: AgentMessageBlock; actionText?: string; codeRunner?: CodeRunner; turnIds?: string[] }) {
+  const sources = useCitationSources(codeRunner?.cwd, codeRunner?.sessionId, turnIds);
   const rawText = block.parts.map((part) => part.text).join("");
   if (!rawText) return null;
   const text = parseSuggestions(rawText).clean;

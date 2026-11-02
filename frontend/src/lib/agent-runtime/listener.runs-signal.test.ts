@@ -86,7 +86,10 @@ describe("execution invalidation on the conversation stream", () => {
       endedAt: "2026-09-25T00:00:01.000Z",
     });
     await flushSignal();
-    expect(invalidate).toHaveBeenCalledTimes(1);
+    // A finished tool call is also new read evidence and invalidates the
+    // captured citation sources, so this pins the runs key itself rather than
+    // the total number of invalidations.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: runsKey(CWD) });
   });
 
   it("invalidates on operation.settled, the SSE v3 turn boundary", async () => {

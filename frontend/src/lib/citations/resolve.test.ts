@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CitationSource } from "@pi-science/contracts";
-import { resolveCitations } from "./resolve";
+import { citationSourceContentVisible, resolveCitations } from "./resolve";
 
 function source(overrides: Partial<CitationSource> & Pick<CitationSource, "kind" | "identity">): CitationSource {
   return {
@@ -49,6 +49,20 @@ describe("resolveCitations", () => {
   it("prefers a DOI identifier when a captured path starts at the same offset", () => {
     const resolved = resolveCitations("10.1234/xyz", [source({ kind: "file", identity: "10.1234/xyz" })]);
     expect(resolved.map((citation) => citation.token.kind)).toEqual(["doi"]);
+  });
+
+  it("matches a page URL whose normalized form adds a trailing slash", () => {
+    const resolved = resolveCitations("See https://example.org for details.", [source({ kind: "web", identity: "https://example.org/", title: "example.org" })]);
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]).toMatchObject({ token: { identity: "https://example.org/", start: 4, end: 23 } });
+  });
+
+  it("only offers content for a source the server could still read", () => {
+    expect(citationSourceContentVisible(source({ kind: "file", identity: "a.csv" }))).toBe(true);
+    expect(citationSourceContentVisible(source({ kind: "file", identity: "a.csv", status: "missing" }))).toBe(true);
+    expect(citationSourceContentVisible(source({ kind: "file", identity: "a.csv", status: "forbidden" }))).toBe(false);
+    expect(citationSourceContentVisible(source({ kind: "doi", identity: "10.1000/x", status: "identifier-only" }))).toBe(false);
+    expect(citationSourceContentVisible(null)).toBe(false);
   });
 
   it("keeps arXiv identifiers and numbers them after the previous citation", () => {

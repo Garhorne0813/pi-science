@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useRuntimeStore } from "./index";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 import * as fileRevision from "./file-revision";
+import { citationSourcesKey } from "../citations/sources";
+import { queryClient } from "../client/query-client";
 
 
 installRuntimeTestEnvironment();
@@ -28,6 +30,34 @@ describe("runtime event subscription", () => {
     expect(useRuntimeStore.getState()).toMatchObject({ working: true, turnLifecycle: "active" });
     source.emit("operation.settled", { type: "operation.settled", status: "completed", sessionId: "session-compaction" });
     expect(useRuntimeStore.getState()).toMatchObject({ working: false, turnLifecycle: "settled" });
+  });
+
+  it("makes the captured sources stale when a read finishes and when the turn settles", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-citations"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-citations");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    const readTurn = citationSourcesKey("/workspace", "session-citations", ["turn-1"]);
+    const settledTurn = citationSourcesKey("/workspace", "session-citations", ["turn-2"]);
+    queryClient.setQueryData(readTurn, []);
+    queryClient.setQueryData(settledTurn, []);
+    expect(queryClient.getQueryState(readTurn)?.isInvalidated).toBe(false);
+
+    source.emit("tool.completed", { type: "tool.completed", sessionId: "session-citations", turnId: "turn-1", callId: "c1", tool: "read", status: "done", output: "text" });
+    expect(queryClient.getQueryState(readTurn)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(settledTurn)?.isInvalidated).toBe(true);
+
+    queryClient.setQueryData(readTurn, []);
+    expect(queryClient.getQueryState(readTurn)?.isInvalidated).toBe(false);
+    source.emit("operation.settled", { type: "operation.settled", status: "completed", sessionId: "session-citations" });
+    expect(queryClient.getQueryState(readTurn)?.isInvalidated).toBe(true);
   });
 
   it("renders named message.reasoning.delta events delivered through the SSE transport", async () => {

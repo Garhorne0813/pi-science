@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import type { CitationLocator, CitationSourceStatus } from "@pi-science/contracts";
 import { cn } from "../../lib/ui";
 import { useUiStore } from "../../lib/ui";
-import type { ResolvedCitation } from "../../lib/citations/resolve";
+import { citationSourceContentVisible, type ResolvedCitation } from "../../lib/citations/resolve";
 
 const STATUS_TONE: Partial<Record<CitationSourceStatus, string>> = {
   changed: "text-warn-text",
@@ -41,6 +41,7 @@ function CitationCard({ citation, cwd }: { citation: ResolvedCitation; cwd?: str
   const href = externalHref(citation);
   const tone = source ? STATUS_TONE[source.status] : undefined;
   const hasEvidence = Boolean(source && source.status !== "identifier-only");
+  const showContent = citationSourceContentVisible(source);
   const locator = hasEvidence && source ? locatorLabel(source.locator, t) : null;
   const openFile = () => {
     if (!source) return;
@@ -57,9 +58,9 @@ function CitationCard({ citation, cwd }: { citation: ResolvedCitation; cwd?: str
         ? <a href={href} target="_blank" rel="noreferrer" title={token.identity} className="min-w-0 truncate text-xs text-text hover:underline">{title}</a>
         : <span className="min-w-0 truncate text-xs text-text" title={token.identity}>{title}</span>}
       {tone && source && <span className={cn("text-[10px]", tone)}>{t(`conversation.citation.status.${source.status}`)}</span>}
-      {token.kind === "file" && source && <button type="button" onClick={openFile} className="text-[10px] text-accent hover:underline">{t("conversation.citation.openSource")}</button>}
+      {token.kind === "file" && showContent && <button type="button" onClick={openFile} className="text-[10px] text-accent hover:underline">{t("conversation.citation.openSource")}</button>}
     </div>
-    {hasEvidence && source?.excerpt && <p className="line-clamp-3 text-[11px] leading-5 text-muted">{source.excerpt}</p>}
+    {showContent && source?.excerpt && <p className="line-clamp-3 text-[11px] leading-5 text-muted">{source.excerpt}</p>}
     {hasEvidence && source?.statusDetail && <p className="text-[10px] text-muted">{source.statusDetail}</p>}
     <div className="flex flex-wrap gap-2 text-[10px] text-muted">
       {locator && <span>{locator}</span>}

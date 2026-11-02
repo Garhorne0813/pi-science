@@ -8,6 +8,7 @@ import { queryClient } from "../client/query-client";
 import { runsKey } from "../runs";
 import { appendRuntimeError, isMissingSessionError } from "./errors";
 import { markWorkspaceFilesChanged } from "./file-revision";
+import { invalidateCitationSources } from "../citations/sources";
 import { foldEvent, resetTurnBuffer } from "./event-fold";
 import { bumpConversationGeneration, bumpPresentationMetadataGeneration, generations, turnState } from "./generations";
 import { applyTransportEvent, RECONNECT_REASONS, type ReconnectReason } from "./transport-status";
@@ -541,6 +542,12 @@ export function registerEventListener(client: PiScienceClient) {
       || event.type === "tool.completed"
       || event.type === "tool.updated"
       || event.type === "plan.updated";
+    // A finished tool call is new read evidence, and a settled turn may have read
+    // more since the last fetch. Either one makes the captured sources stale.
+    if ((event.type === "tool.completed" || event.type === "operation.settled")
+      && (!event.sessionId || event.sessionId === state.activeSessionId)) {
+      invalidateCitationSources(state.cwd, state.activeSessionId ?? undefined);
+    }
     const knownTerminalRun = typeof event.runId === "string" && state.thread.foldState?.terminalRunIds.includes(event.runId);
     if (runStarted && !knownTerminalRun && state.turnLifecycle !== "stopping") {
       bumpConversationGeneration();

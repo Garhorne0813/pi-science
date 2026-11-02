@@ -68,6 +68,15 @@ describe("CitationSources", () => {
     expect(screen.getByText("changed detail")).toBeInTheDocument();
   });
 
+  it("never shows the excerpt or an open button for a forbidden source", () => {
+    const citations = resolveCitations("secret.csv", [source({ kind: "file", identity: "secret.csv", status: "forbidden", statusDetail: "Path is outside the workspace", excerpt: "top secret" })]);
+    render(<CitationSources citations={citations} cwd="proj" />);
+    expect(screen.getByText("Not allowed")).toBeInTheDocument();
+    expect(screen.getByText("Path is outside the workspace")).toBeInTheDocument();
+    expect(screen.queryByText("top secret")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open source" })).not.toBeInTheDocument();
+  });
+
   it("shows no evidence for an identifier-only source", () => {
     const citations = resolveCitations("doi:10.1000/abc", []);
     render(<CitationSources citations={citations} />);

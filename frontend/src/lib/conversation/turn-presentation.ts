@@ -33,6 +33,15 @@ export interface TurnPresentation {
   completed: boolean;
 }
 
+/** Every runtime turn id inside one conversation turn. A resumed run can change
+ *  the id mid-answer, and the reads that produced the answer carry either one. */
+export function turnRuntimeIds(turn: TurnPresentation): string[] {
+  const ids = new Set<string>();
+  if (turn.turnId) ids.add(turn.turnId);
+  for (const block of turn.blocks) if ("turnId" in block && typeof block.turnId === "string" && block.turnId) ids.add(block.turnId);
+  return [...ids];
+}
+
 export function buildTurnPresentations(blocks: ThreadBlock[], opts: { lastTurnLifecycle?: TurnLifecycle; lastTurnId?: string } = {}): TurnPresentation[] {
   if (!Array.isArray(blocks)) return [];
   const turns: Array<{ key: string; blocks: ThreadBlock[] }> = [];
