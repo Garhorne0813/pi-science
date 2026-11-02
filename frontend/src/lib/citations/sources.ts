@@ -12,9 +12,12 @@ export const citationSourcesKey = (cwd: string | undefined, sessionId: string | 
 
 /** Captured sources for one answer. A read only binds to the answer whose turn
  *  did it, so every turn keeps its own registry entry. A missing session has no
- *  registry to read, so the query stays disabled instead of asking for nothing. */
+ *  registry to read, so the query stays disabled instead of asking for nothing.
+ *  An answer without a turn id has nothing to bind either: borrowing every
+ *  source of the session would show evidence another answer produced, so that
+ *  answer reports no captured sources at all. */
 export function useCitationSources(cwd: string | undefined, sessionId: string | undefined, turnIds: string[] = []): CitationSource[] {
-  const enabled = Boolean(cwd && sessionId && sessionId !== "scratch");
+  const enabled = Boolean(cwd && sessionId && sessionId !== "scratch" && turnIds.length > 0);
   const { data } = useQuery({
     queryKey: citationSourcesKey(cwd, sessionId, turnIds),
     enabled,
