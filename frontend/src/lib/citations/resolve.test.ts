@@ -57,6 +57,35 @@ describe("resolveCitations", () => {
     expect(resolved[0]).toMatchObject({ token: { identity: "https://example.org/", start: 4, end: 23 } });
   });
 
+  it("never lets a shorter url claim a longer one the answer wrote", () => {
+    const home = source({ kind: "web", identity: "https://example.org/", title: "example.org" });
+    expect(resolveCitations("See https://example.org/another-paper for the data.", [home])).toEqual([]);
+    expect(resolveCitations("See https://example.org/ for the home page.", [home])).toHaveLength(1);
+  });
+
+  it("never lets a path claim a longer name that starts with it", () => {
+    const report = source({ kind: "file", identity: "report.md" });
+    expect(resolveCitations("The backup is report.md.bak.", [report])).toEqual([]);
+    expect(resolveCitations("The copy is data/report.md, not this one.", [report])).toEqual([]);
+    expect(resolveCitations("Read report.md for the numbers.", [report])).toHaveLength(1);
+  });
+
+  it("matches a path or url the answer wrapped in punctuation", () => {
+    const report = source({ kind: "file", identity: "report.md" });
+    const page = source({ kind: "web", identity: "https://example.org/page", title: "example.org" });
+    const text = "Read (`report.md`) and [the page](https://example.org/page), then report.md.";
+    const resolved = resolveCitations(text, [report, page]);
+    expect(resolved.map((citation) => [citation.token.kind, citation.token.identity, citation.token.start])).toEqual([
+      ["file", "report.md", 7],
+      ["web", "https://example.org/page", 34],
+    ]);
+  });
+
+  it("compares the url the registry stores with the raw one the answer wrote", () => {
+    expect(resolveCitations("See https://EXAMPLE.org/report#results.", [source({ kind: "web", identity: "https://example.org/report" })])).toHaveLength(1);
+    expect(resolveCitations("./report.md", [source({ kind: "file", identity: "report.md" })])).toHaveLength(1);
+  });
+
   it("only offers content for a source the server could still read", () => {
     expect(citationSourceContentVisible(source({ kind: "file", identity: "a.csv" }))).toBe(true);
     expect(citationSourceContentVisible(source({ kind: "file", identity: "a.csv", status: "missing" }))).toBe(true);
