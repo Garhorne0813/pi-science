@@ -7,6 +7,7 @@ import { gatewayHealthSchema } from "@pi-science/contracts";
 import type { ServerConfig } from "../config/config.js";
 import { routeBoundary, runtimeOwner } from "../http/runtime-boundaries.js";
 import { registerSessionReadRoutes } from "../http/routes/session-routes.js";
+import { registerCitationRoutes } from "../http/routes/citation-routes.js";
 import { registerSseRoutes } from "../http/routes/sse-routes.js";
 import { registerFileReadRoutes } from "../http/routes/file-routes.js";
 import { registerNodeSessionRoutes } from "../http/routes/node-session-routes.js";
@@ -150,6 +151,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   });
 
   if (config.nodeSessions || config.nodePiManager) registerSessionReadRoutes(app, sessionRepository, nodeSessionService);
+  if (config.nodeSessions || config.nodePiManager) registerCitationRoutes(app, sessionRepository);
   if (config.nodeSse || config.nodePiManager) registerSseRoutes(app, nodeSessionService, events);
   if (config.nodeFiles) registerFileReadRoutes(app);
   const titleRuntimes = new CoreTitleRuntimeFactory(undefined, environments);
