@@ -9,7 +9,7 @@ export type Live = { key: string; runtime: AgentCoreRuntimeClient; busy: boolean
 
 export type ProductHooks = {
   observe?: (cwd: string, sessionId: string, event: Record<string, unknown>) => void;
-  settled?: (cwd: string, sessionId: string, turnId: string) => void;
+  settled?: (cwd: string, sessionId: string, turnId: string, status: string) => void;
   stats?: (cwd: string, sessionId: string, stats: SessionStats) => Promise<SessionStats>;
 };
 

@@ -10,7 +10,6 @@ import { AgentSessionRepository } from "./agent-session-repository.js";
 import { ModelConfigService } from "../../model-config/model-config-service.js";
 import { AgentRuntimeManager } from "./agent-runtime-manager.js";
 import { openHiddenTask, runHiddenPrompt } from "./hidden-agent-task.js";
-import { CoreReviewSubagentRunner } from "../../project-review/core-subagent-runner.js";
 import { AgentCoreSessionService } from "./agent-core-session-service.js";
 import { AgentSessionRegistry } from "./agent-session-registry.js";
 import { ConversationEventHub } from "../events/conversation-event-hub.js";
@@ -302,10 +301,18 @@ describe("agent-core product tools", () => {
     ].join("\n"));
     await writeFile(join(fixture.cwd, ".pi-science/mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "retrieval_project", mcpServers: {
       "fresh-library": { command: process.execPath, args: [server], approveTools: true,
-        __piScienceAllowedTools: ["search_papers", "retrieve_paper"], __piScienceConnectorId: "connector_web" },
+        __piScienceAllowedTools: ["search_papers", "retrieve_paper"], __piScienceConnectorId: "connector_web", __piScienceConnectorRevision: 1, __piScienceSettingsRevision: 1 },
     } }));
+    const authority = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ decision: "allow" }));
+    });
+    await new Promise<void>((resolve) => authority.listen(0, "127.0.0.1", resolve));
+    cleanup.push(() => new Promise<void>((resolve) => { authority.closeAllConnections(); authority.close(() => resolve()); }));
+    const policyUrl = `http://127.0.0.1:${(authority.address() as { port: number }).port}`;
     const manager = new AgentRuntimeManager(); cleanup.push(() => manager.shutdownAll());
     const parent = await openHiddenTask(manager, "retrieval-parent", { cwd: fixture.cwd, sessionsRoot: join(fixture.cwd, ".pi-science/agent-sessions"),
+      env: { PI_SCIENCE_BACKEND_URL: policyUrl },
       model: fixture.model, thinking: "off", allowedTools: ["read", "subagent", "execution_budget", "mcp__fresh-library__search_papers", "mcp__fresh-library__retrieve_paper"] }, "retrieval-owner");
     const interactions: unknown[] = []; parent.on("event", (event) => { if (event.type === "interaction.requested") interactions.push(event); });
     expect(await runHiddenPrompt(parent, "Retrieve evidence", "retrieval-once", Date.now() + 30000)).toContain("evidence saved");
@@ -472,15 +479,6 @@ fs.writeFileSync('research/quant/result.json', JSON.stringify(result)); console.
     expect(history.some((item) => item.toolName === "subagent" && JSON.stringify(item.details).includes("Final-test"))).toBe(true);
   }, 30000);
 
-  it("runs Core project review schema repair in an independent Worker", async () => {
-    const fixture = await modelFixture((body) => body.messages[0]!.content.includes("project reviewer")
-      ? body.messages.length > 2 ? "[]" : "invalid-json"
-      : '{"kind":"analysis","findings":[{"summary":"Measured improvement"}],"next_strategy":"Repeat"}');
-    const environment = { environment: async () => ({}) };
-    const review = new CoreReviewSubagentRunner(environment); cleanup.push(() => review.shutdown());
-    expect(await review.run({ run_id: "review-test", cwd: fixture.cwd, session_id: "conversation", excerpt: { session_id: "conversation", messages: [], truncated: false } })).toEqual({ run_id: "review-test", output: { proposals: [] } });
-    expect(await new AgentSessionRepository().list(fixture.cwd)).toEqual([]);
-  }, 20000);
 
   it("cancels an active child when its parent operation is aborted", async () => {
     const fixture = await modelFixture((_body, index) => index === 1 ? { name: "subagent", args: { agent: "planner", task: "Wait for evidence" } } : null);

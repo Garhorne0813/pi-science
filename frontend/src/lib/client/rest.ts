@@ -309,7 +309,7 @@ export async function respondToInteraction(
   requestId: string,
   response: InteractionResponse,
   cwd?: string,
-): Promise<void> {
+): Promise<{ persistentGrant?: boolean | null; warning?: string }> {
   const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
   const res = await request(
     `${baseUrl}/api/sessions/${sessionId}/interactions/${encodeURIComponent(requestId)}${params}`,
@@ -324,6 +324,7 @@ export async function respondToInteraction(
   if (!res.ok || data.ok === false) {
     throw new Error(responseError(data, `Interaction response failed: ${res.statusText}`));
   }
+  return { persistentGrant: data.persistentGrant, warning: data.warning };
 }
 
 /** Ask the control plane to generate an AI title for a session (Pi runtime). */
@@ -340,15 +341,14 @@ export async function generateSessionTitle(baseUrl: string, sessionId: string, c
   return typeof data.title === "string" && data.title ? data.title : null;
 }
 
-/** Best-effort science review of the latest report-shaped turn. Never throws. */
-export async function requestScienceReview(baseUrl: string, sessionId: string, cwd: string, trigger: "manual" | "auto"): Promise<void> {
-  try {
-    await request(`${baseUrl}/api/project-knowledge/science-review`, {
+/** Request a review and return its queue status or skip reason. */
+export async function requestScienceReview(baseUrl: string, sessionId: string, cwd: string, trigger: "manual" | "auto", turnId?: string): Promise<{ id: string; status: string; reason?: string }> {
+    const response = await request(`${baseUrl}/api/project-knowledge/science-review`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cwd, session_id: sessionId, trigger }),
+      body: JSON.stringify({ cwd, session_id: sessionId, trigger, ...(turnId ? { turn_id: turnId } : {}) }),
     });
-  } catch {
-    // A failed review must never disturb the conversation.
-  }
+    const data = await response.json();
+    if (!response.ok) throw new Error(responseError(data, `Science review failed: ${response.statusText}`));
+    return data;
 }

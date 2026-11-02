@@ -39,6 +39,14 @@ nearest existing ancestor without creating them. Optional scientific environment
 and provider setup are reported separately. Run it before startup: occupied ports
 are reported as conflicts even if another Pi-Science instance owns them.
 
+On Linux in required mode, `doctor` checks both outer Bubblewrap namespaces and
+the installed runtime’s nested `apply-seccomp` helper, offline, with a 10-second
+limit for each probe. An outer namespace success alone does not establish that
+the nested helper can start. Failures report namespace/AppArmor restrictions,
+including restrictions on Bubblewrap child processes; diagnostics never change
+AppArmor or other system policy. Install server dependencies before running this
+check. An explicit `trusted-host` selection skips both sandbox probes.
+
 POSIX readiness and status probes use the required Node.js runtime, so starting the application does not require `curl`. Each HTTP request has a 2-second wall-clock limit covering connection, headers and body, capped by the remaining shared startup deadline. After the deadline, startup rolls back its owned services without another probe.
 
 ## Failure recovery
@@ -89,3 +97,7 @@ Future work: versioned releases and independent install packages, a transactiona
 updater with stopped-state data backup and recovery, and uninstall that preserves
 user data by default. These commands are not implemented by this change. Backups
 must include application state and workspace-owned metadata; see [data ownership](architecture.md#persistence-and-data-ownership).
+
+### macOS discovery build prerequisites
+
+The `ls`/`glob`/`grep` backend builds a small Node-API module during server build. Enabling this optional macOS backend needs Xcode Command Line Tools (`xcode-select --install`) and local Node headers (`include/node/node_api.h`); `PI_SCIENCE_NODE_HEADERS` can select an existing headers directory. Automatic build/test/dev compilation warns and continues without discovery if these prerequisites are missing or compilation fails. The explicit `build:native` command requires success on macOS for CI and verification. No headers or compiler are needed at application startup once the module has been built. See [workspace discovery](workspace-discovery-tools.md#macos-build-and-verification) for direct-test and source-mode commands.

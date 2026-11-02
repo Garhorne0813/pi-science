@@ -15,7 +15,6 @@
     "test:uat:model-discovery": "node scripts/uat-model-discovery.mjs",
     "test:uat:conversation": "node scripts/uat-conversation.mjs",
     "test:uat:slash": "node scripts/uat-slash-commands.mjs",
-    "test:uat:knowledge": "node scripts/uat-project-knowledge.mjs",
     "test:uat:notebook": "node scripts/uat-notebook.mjs",
     "test:uat:office": "node scripts/uat-office-preview.mjs",
     "test:visual": "pnpm build && playwright test --config playwright.visual.config.ts",
@@ -24,7 +23,8 @@
     "test:accessibility": "pnpm build && playwright test --config playwright.visual.config.ts --grep @accessibility",
     "lint": "oxlint --deny-warnings",
     "preview": "vite preview",
-    "test:uat:model-oauth": "node scripts/uat-model-oauth.mjs"
+    "test:uat:model-oauth": "node scripts/uat-model-oauth.mjs",
+    "test:uat:memory": "node scripts/uat-memory.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",

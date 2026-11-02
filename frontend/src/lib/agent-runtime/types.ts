@@ -20,6 +20,8 @@ export interface PendingInteraction {
   operation?: string;
   scope?: string;
   effect?: string;
+  /** Only managed MCP tool approvals may save a project-scoped grant. */
+  mcpGrant?: { connectorId: string; toolName: string };
 }
 
 export interface QuestionnaireOption {
@@ -122,7 +124,7 @@ export interface RuntimeState {
   sendPrompt: (message: string, clientMessageId?: string) => Promise<string | null>;
   abort: () => Promise<void>;
   setModel: (model: string, thinking?: string) => Promise<string | null>;
-  respondToInteraction: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => Promise<void>;
+  respondToInteraction: (response: { value?: string; confirmed?: boolean; cancelled?: boolean; alwaysAllow?: boolean }) => Promise<void>;
   loadSessions: (cwd?: string) => Promise<SessionInfo[]>;
   loadMoreSessions: () => Promise<number>;
   loadSession: (sessionId: string) => Promise<void>;

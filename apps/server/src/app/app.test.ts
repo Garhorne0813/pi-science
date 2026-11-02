@@ -144,19 +144,19 @@ describe("Node control plane", () => {
     }
   });
 
-  it("gates project knowledge on nodeProject and the catalog on nodeCatalog", async () => {
+  it("gates memory on nodeProject and the catalog on nodeCatalog", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-science-feature-gates-"));
     vi.stubEnv("PI_SCIENCE_HOME", join(root, "state"));
     const cwd = join(root, "workspace");
     await mkdir(join(cwd, ".pi-science"), { recursive: true });
     // Each flag owns its own routes: a disabled catalog must not remove the
-    // project knowledge surface, and a disabled project surface must not keep
+    // memory surface, and a disabled project surface must not keep
     // it open just because the catalog is on.
     const gates = async (overrides: Partial<ServerConfig>) => {
       const app = buildApp(config("http://127.0.0.1:1", overrides));
       openApps.push(app);
       try {
-        const project = await app.inject({ method: "GET", url: `/api/project-knowledge/summary?${new URLSearchParams({ cwd })}` });
+        const project = await app.inject({ method: "GET", url: `/api/memory/summary?${new URLSearchParams({ cwd })}` });
         const catalog = await app.inject({ method: "GET", url: `/api/skills?${new URLSearchParams({ cwd })}` });
         return { project: project.statusCode, catalog: catalog.statusCode };
       } finally { await app.close(); }
@@ -533,4 +533,15 @@ describe("Node control plane", () => {
     expect(escape.statusCode).toBe(403);
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
+});
+
+
+it("binds worker policy authority to the actual listening address with an ephemeral port", async () => {
+  const settings = config("", { nodeSettings: false });
+  const modules = createServerModules(settings, { sqliteEnabled: false });
+  const configureBackend = vi.spyOn(modules, "configureBackendUrl");
+  const app = buildApp(settings, modules);
+  openApps.push(app);
+  const address = await app.listen({ host: "127.0.0.1", port: 0 });
+  expect(configureBackend).toHaveBeenCalledWith(address);
 });

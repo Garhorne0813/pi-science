@@ -1,9 +1,10 @@
 # Agent-core 能力与验收范围
 
-Pi Science 使用 Agent Core SDK 和独立 Worker 执行对话、研究、复查与标题生成。旧会话可自动转换或离线批量转换，参见[转换说明](agent-core-session-conversion.md)。
+Pi Science 使用 Agent Core SDK 和独立 Worker 执行对话、研究与标题生成。旧会话可自动转换或离线批量转换，参见[转换说明](agent-core-session-conversion.md)。
 
 | 能力 | agent-core 实现 | 验证/范围 |
 | --- | --- | --- |
+| ls/glob/grep | 自建原生 Harness 工具，Node 描述符遍历 + RE2/WASM，无搜索子进程 | 仅 Linux 启用；工作区内只读、有界扫描、取消/超时、权限与换链回归、旧会话一次性迁移；candidate/confined 不开放。参见[实现与平台范围](workspace-discovery-tools.md) |
 | read/bash/edit/write | Harness 原生工具 | 快速写文件产物、崩溃恢复；bash 使用工具环境白名单 |
 | 模型、思考档、上下文、压缩 | canonical 路由与 Harness | 本地流式模型验证路由、别名、凭据隔离及 live/cold state |
 | todo | MIT 授权的 rpiv-todo 纯领域逻辑 + Harness 工具 | action/schema/状态机与原 2.4.0 一致；分支历史恢复、并发、重放、完整 details |
@@ -11,8 +12,8 @@ Pi Science 使用 Agent Core SDK 和独立 Worker 执行对话、研究、复查
 | 子代理定义 | `.pi/agents/<name>.md` + `.pi/skills/<skill>/agents/<name>.md` + 内置角色 | frontmatter 的 tools 可收窄父工具范围；继承父模型与资源策略；深度上限 2 |
 | Auto Research | 当前 Conversation Agent + auto-research Skill | 动态子问题委派、独立 Reviewer、任务专属评价与文件检查点；旧 Research 专属运行链路已移除 |
 | execution_budget | 通用 Harness 工具 + 持久化调用预留 | 操作级时间/执行次数硬上限；工具取消信号、并发计数与恢复；不持有研究状态机 |
-| review runner | `CoreReviewSubagentRunner` | 复用原 5 分钟期限、一次 JSON 修复与结果校验；工具禁用 |
-| 子 Worker 资源 | `AgentRuntimeManager` | 普通会话、子代理、研究、复查共享进程级容量；`PI_SCIENCE_AGENT_MAX_WORKERS` 默认 16；跨 manager 排他归属 |
+| Memory | 主 Agent 的 search/read/write 工具 + SQLite MemoryService | 会话绑定授权、版本审核与分范围召回；子代理无 Memory 能力；Extraction/Dream 是控制面的无工具模型任务，见[统一记忆](unified-memory.md) |
+| 子 Worker 资源 | `AgentRuntimeManager` | 普通会话、子代理、研究与标题任务共享进程级容量；`PI_SCIENCE_AGENT_MAX_WORKERS` 默认 16；跨 manager 排他归属 |
 | 技能/模板/命令 | 上游 loader 与 invocation formatter | `.pi/skills`、配置技能目录及 `.pi/prompts`；策略控制菜单与执行；refresh 更新资源；前端展示模板 |
 | Notebook | 现有 Notebook 扩展 API 的 Harness 适配 | 保留现有工具与内部服务鉴权 |
 | Questionnaire | 现有验证/格式化 + Worker InteractionBridge | 浏览器请求、响应、取消仍由会话 Worker 拥有 |

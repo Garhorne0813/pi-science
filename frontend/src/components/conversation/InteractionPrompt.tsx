@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import type { PendingInteraction } from "../../lib/agent-runtime";
 import { useTranslation } from "react-i18next";
@@ -9,11 +9,13 @@ export function InteractionPrompt({
   onRespond,
 }: {
   interaction: PendingInteraction;
-  onRespond: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => void | Promise<void>;
+  onRespond: (response: { value?: string; confirmed?: boolean; cancelled?: boolean; alwaysAllow?: boolean }) => void | Promise<void>;
 }) {
   const { t } = useTranslation();
   const [value, setValue] = useState(interaction.prefill || "");
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const [selectedAlwaysAllow, setSelectedAlwaysAllow] = useState(false);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const [selectedConfirmation, setSelectedConfirmation] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -21,14 +23,18 @@ export function InteractionPrompt({
   useEffect(() => {
     setValue(interaction.prefill || "");
     setSubmitting(false);
+    submittingRef.current = false;
+    setSelectedAlwaysAllow(false);
     setSelectedOption(null);
     setSelectedConfirmation(null);
     setError(null);
   }, [interaction.requestId, interaction.prefill]);
 
-  const respond = async (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => {
-    if (submitting) return;
+  const respond = async (response: { value?: string; confirmed?: boolean; cancelled?: boolean; alwaysAllow?: boolean }) => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
+    setSelectedAlwaysAllow(response.alwaysAllow === true);
     setSelectedOption(typeof response.value === "string" ? response.value : null);
     setSelectedConfirmation(typeof response.confirmed === "boolean" ? response.confirmed : null);
     setError(null);
@@ -37,6 +43,8 @@ export function InteractionPrompt({
     } catch (cause) {
       setError(cause instanceof Error && cause.message ? cause.message : t("interaction.responseFailed"));
       setSubmitting(false);
+      submittingRef.current = false;
+      setSelectedAlwaysAllow(false);
       setSelectedOption(null);
       setSelectedConfirmation(null);
     }
@@ -54,7 +62,7 @@ export function InteractionPrompt({
 
   if (permission) {
     return <>
-      <PermissionCard interaction={interaction} submitting={submitting} selectedOption={selectedOption} selectedConfirmation={selectedConfirmation} onRespond={(response) => { void respond(response); }} />
+      <PermissionCard interaction={interaction} submitting={submitting} selectedOption={selectedOption} selectedConfirmation={selectedConfirmation} selectedAlwaysAllow={selectedAlwaysAllow} onRespond={(response) => { void respond(response); }} />
       {error && <p role="alert" className="mt-3 rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{error}</p>}
     </>;
   }

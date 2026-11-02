@@ -16,6 +16,7 @@ const SettingsContent = lazy(() => loadSettingsContent().then((m) => ({ default:
 export function SettingsDialog() {
   const { t } = useTranslation();
   const settingsOpen = useUiStore((s) => s.settingsOpen);
+  const settingsSection=useUiStore(s=>s.settingsSection);
   const settingsScope = useUiStore((s) => s.settingsScope);
   const closeSettings = useUiStore((s) => s.closeSettings);
   const pendingInteraction = useRuntimeStore((s) => s.pendingInteraction);
@@ -103,7 +104,7 @@ export function SettingsDialog() {
             </div>
           </div>
         )}>
-          <SettingsContent key={settingsScope === null ? "global" : `workspace:${settingsScope}`} scope={settingsScope} onClose={closeSettings} />
+          <SettingsContent key={`${settingsScope === null ? "global" : `workspace:${settingsScope}`}:${settingsSection}`} initialTab={settingsSection} scope={settingsScope} onClose={closeSettings} />
         </Suspense>
       </div>
     </div>

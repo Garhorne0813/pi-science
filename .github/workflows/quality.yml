@@ -13,6 +13,9 @@ concurrency:
 permissions:
   contents: read
 
+# sandbox-runtime 0.0.79's nested user namespace helper fails on Ubuntu 26.04
+# (/proc/self/setgroups). Pin the validated runner; retain matrix labels so
+# required check names and artifact names stay stable.
 jobs:
   changes:
     # Linux legs pin Ubuntu 24.04: 26.04 denies the sandbox's nested user namespace (docs/sandbox-profiles.md)
@@ -36,7 +39,7 @@ jobs:
   static-checks:
     needs: changes
     if: needs.changes.outputs.run == 'true'
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -69,11 +72,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
-          shellcheck -S warning scripts/*.sh scripts/fixtures/*.sh
+          shellcheck -S warning scripts/*.sh scripts/fixtures/*.sh .github/scripts/*.sh
       - name: Check PowerShell scripts
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+            Register-PSRepository -Default
+          }
           Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force -Repository PSGallery
           $issues = @(Invoke-ScriptAnalyzer -Path scripts -Recurse -Settings .github/PSScriptAnalyzerSettings.psd1)
           $issues | Format-Table -AutoSize
@@ -82,7 +88,7 @@ jobs:
   tests:
     needs: changes
     if: needs.changes.outputs.run == 'true'
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -108,14 +114,14 @@ jobs:
 
       - name: Install required Linux sandbox dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap socat ripgrep
-          # Dedicated ephemeral runner: Bubblewrap requires user namespaces.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        run: bash .github/scripts/prepare-linux-sandbox.sh
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Probe complete Linux sandbox startup
+        if: runner.os == 'Linux'
+        run: node .github/scripts/probe-linux-seccomp.mjs
 
       - name: Test native Windows file read boundary
         if: runner.os == 'Windows'
@@ -163,12 +169,12 @@ jobs:
   build:
     needs: changes
     if: needs.changes.outputs.run == 'true'
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        # Same nested user namespace requirement as the tests job. The
-        # control-plane smoke test starts the sandbox, so it fails on 26.04.
+        # The Ubuntu 26.04 runner blocks the sandbox runtime's nested user
+        # namespace setup; keep the full sandbox smoke test on 24.04.
         os: [ubuntu-24.04, windows-latest]
     timeout-minutes: 20
     steps:
@@ -186,14 +192,14 @@ jobs:
 
       - name: Install required Linux sandbox dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap socat ripgrep
-          # Dedicated ephemeral runner: Bubblewrap requires user namespaces.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        run: bash .github/scripts/prepare-linux-sandbox.sh
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Probe complete Linux sandbox startup
+        if: runner.os == 'Linux'
+        run: node .github/scripts/probe-linux-seccomp.mjs
 
       - name: Build all JavaScript packages
         run: pnpm build
@@ -337,7 +343,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run == 'true'
     name: production install (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -355,11 +361,7 @@ jobs:
           node-version: 24.16.0
       - name: Install required Linux sandbox dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap socat ripgrep
-          # Dedicated ephemeral runner: Bubblewrap requires user namespaces.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        run: bash .github/scripts/prepare-linux-sandbox.sh
 
       # Intentionally omit pnpm setup: exercise the pinned bootstrap from npm.
       - name: Install and build (POSIX)
@@ -375,7 +377,7 @@ jobs:
     name: verify (${{ matrix.os }})
     needs: [changes, static-checks, tests, build, browser, macos-launcher, production-install]
     if: always()
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-24.04, windows-latest]

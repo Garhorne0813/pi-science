@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { probeLinuxSandbox, resolveSandboxTool } from "./check-linux-sandbox.mjs";
+import { checkLinuxSeccomp, probeLinuxSandbox, resolveSandboxTool } from "./check-linux-sandbox.mjs";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
 async function fixture(fn) {
@@ -33,7 +33,7 @@ test("probe creates user/PID/network namespaces with a read-only root and a boun
   let invocation;
   probeLinuxSandbox("/custom/bwrap", (...args) => { invocation = args; return { status: 0 }; });
   assert.equal(invocation[0], "/custom/bwrap");
-  assert.deepEqual(invocation[1], ["--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid", "--unshare-net", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--", "/bin/true"]);
+  assert.deepEqual(invocation[1], ["--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid", "--unshare-net", "--cap-drop", "ALL", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--", "/bin/true"]);
   assert.equal(invocation[2].timeout, 10_000);
   assert.equal(invocation[2].killSignal, "SIGKILL");
 });
@@ -75,3 +75,21 @@ test("explicit trusted-host selection skips the Linux probe without silently cha
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /operator explicitly selected trusted-host/);
 });
+
+test("nested probe reports helper denial even when the outer namespace starts", { skip: process.platform !== "linux" }, async () => fixture(async (root) => {
+  await executable(join(root, "bwrap"));
+  const environment = { PATH: root };
+  const calls = [];
+  const run = (...args) => { calls.push(args); return { status: 1, stderr: "apply-seccomp: write /proc/self/setgroups: Permission denied" }; };
+  probeLinuxSandbox(join(root, "bwrap"), () => ({ status: 0 }));
+  await assert.rejects(checkLinuxSeccomp(environment, run), /Linux nested seccomp startup check failed: apply-seccomp.*\nBubblewrap.*child processes/);
+  assert.equal(calls[0][0], await realpath(join(root, "bwrap")));
+  assert.match(calls[0][1].at(-2), /vendor[/\\]seccomp[/\\].*[/\\]apply-seccomp$/);
+  assert.equal(calls[0][1].at(-1), "/bin/true");
+  assert.equal(calls[0][2].timeout, 10_000);
+  assert.equal(calls[0][2].killSignal, "SIGKILL");
+  for (const result of [{ status: null, error: new Error("ETIMEDOUT") }, { status: null, error: new Error("ENOENT") }]) {
+    await assert.rejects(checkLinuxSeccomp(environment, () => result), /nested seccomp startup check failed/);
+  }
+  await checkLinuxSeccomp(environment, () => ({ status: 0 }));
+}));

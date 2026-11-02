@@ -38,12 +38,15 @@ export interface AgentRuntimeStartOptions {
 }
 
 export type WorkerCommand =
+  | { type: "approval_granted"; id: string }
   | { type: "initialize"; requestId: string; options: AgentRuntimeStartOptions }
   | ({ type: "command"; requestId: string } & RuntimeCommand)
   | ({ type: "notification"; requestId: string } & RuntimeNotification)
   | { type: "shutdown" };
 
 export type WorkerEvent =
+  | { type: "approval_acquire"; id: string; key: string }
+  | { type: "approval_release"; id: string }
   | { type: "ready"; sessionId: string }
   | { type: "result"; requestId: string; result: RuntimeResult }
   | { type: "runtime_event"; event: RuntimeEvent }
@@ -65,12 +68,15 @@ const startOptionsSchema = z.object({
   deferActivation: z.boolean().optional(), initialApproval: initialSessionApprovalSchema.optional(),
 }).strict();
 export const workerRequestSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("approval_granted"), id: z.string().uuid() }).strict(),
   z.object({ type: z.literal("initialize"), requestId: z.string().min(1), options: startOptionsSchema }).strict(),
   z.object({ type: z.literal("command"), requestId: z.string().min(1), command: z.string(), params: z.record(z.string(), z.unknown()) }).strict(),
   z.object({ type: z.literal("notification"), requestId: z.string().min(1), notification: z.string(), params: z.record(z.string(), z.unknown()) }).strict(),
   z.object({ type: z.literal("shutdown") }).strict(),
 ]);
 export const workerEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("approval_acquire"), id: z.string().uuid(), key: z.string().min(1).max(4096) }).strict(),
+  z.object({ type: z.literal("approval_release"), id: z.string().uuid() }).strict(),
   z.object({ type: z.literal("ready"), sessionId: z.string().min(1) }).strict(),
   z.object({ type: z.literal("result"), requestId: z.string().min(1), result: resultSchema }).strict(),
   z.object({ type: z.literal("runtime_event"), event: productInputSchema.and(z.object({ runtime_epoch: z.string().min(1), runtime_sequence: z.number().int().positive() })) }).strict(),

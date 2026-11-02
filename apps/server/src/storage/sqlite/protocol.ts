@@ -1,3 +1,4 @@
+import type { MemoryCommand } from "../../memory/repository.js";
 export type SqlValue = null | number | bigint | string | Uint8Array;
 
 export interface SqlStatement {
@@ -20,20 +21,24 @@ export interface Migration {
 }
 
 export type SqliteRequest =
+  | { id: number; type: "memory"; command: MemoryCommand }
   | { id: number; type: "get"; sql: string; params: SqlValue[] }
   | { id: number; type: "all"; sql: string; params: SqlValue[] }
   | { id: number; type: "run"; sql: string; params: SqlValue[] }
   | { id: number; type: "batch"; statements: SqlStatement[] }
   | { id: number; type: "migrate"; migrations: Migration[] }
+  | { id: number; type: "backup"; path: string }
   | { id: number; type: "checkpoint" }
   | { id: number; type: "close" };
 
 export type SqliteRequestInput =
+  | Omit<Extract<SqliteRequest, { type: "memory" }>, "id">
   | Omit<Extract<SqliteRequest, { type: "get" }>, "id">
   | Omit<Extract<SqliteRequest, { type: "all" }>, "id">
   | Omit<Extract<SqliteRequest, { type: "run" }>, "id">
   | Omit<Extract<SqliteRequest, { type: "batch" }>, "id">
   | Omit<Extract<SqliteRequest, { type: "migrate" }>, "id">
+  | Omit<Extract<SqliteRequest, { type: "backup" }>, "id">
   | Omit<Extract<SqliteRequest, { type: "checkpoint" }>, "id">
   | Omit<Extract<SqliteRequest, { type: "close" }>, "id">;
 
@@ -53,7 +58,7 @@ export interface SqliteErrorResponse {
   type: "response";
   id: number;
   ok: false;
-  error: { name: string; message: string; code?: string; stack?: string };
+  error: { name: string; message: string; code?: string; statusCode?: number; stack?: string };
 }
 
 export type SqliteWorkerMessage = SqliteReadyMessage | SqliteResponse | SqliteErrorResponse;

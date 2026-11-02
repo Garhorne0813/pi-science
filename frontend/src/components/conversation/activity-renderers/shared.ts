@@ -2,18 +2,20 @@ import type { ToolCallBlock } from "../../../types/thread";
 import type { ActivityDetailView, ActivityRendererProps } from "./types";
 
 export function genericDetails({ source, t }: ActivityRendererProps): ActivityDetailView[] {
+  const discovery = ["ls", "glob", "grep"].includes(source.tool);
   const details: ActivityDetailView[] = [{ label: t("conversation.activity.toolLabel"), value: source.tool, plain: true }];
   if (source.input) details.push({ label: t("conversation.activity.input"), value: stringify(source.input), pre: true });
   const output = source.output ?? source.partialOutput;
   if (output) details.push({
     label: t("conversation.activity.output"),
     value: output,
+    ...(discovery ? { pre: true } : {}),
     ...(source.output ? { fullValue: source.output } : {}),
     partial: Boolean(source.partialOutput && !source.output),
   });
   if (source.details !== undefined && source.details !== null) {
     const value = stringify(source.details);
-    details.push({ label: t("conversation.activity.details"), value, fullValue: value });
+    details.push({ label: t("conversation.activity.details"), value, fullValue: value, ...(discovery ? { pre: true } : {}) });
   }
   if (source.diff) details.push({ label: t("conversation.activity.diff"), value: source.diff, fullValue: source.diff });
   return details;

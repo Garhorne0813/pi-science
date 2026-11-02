@@ -91,7 +91,7 @@ export async function attach(context: Context, key: string, runtime: AgentCoreRu
       await observeAgentEvent(runtime.cwd, item.model, event, sessionId,
         (payload) => context.events.publish(runtime.cwd, sessionId, payload));
       if (await context.turns.observe(runtime.cwd, sessionId, event, turn)) {
-        context.hooks.settled?.(runtime.cwd, sessionId, String(event.runId));
+        context.hooks.settled?.(runtime.cwd, sessionId, String(event.runId), String(event.status));
       }
       if (["message.completed", "tool.completed", "operation.settled"].includes(event.type)) {
         const stats = await context.repository.stats(runtime.cwd, sessionId);

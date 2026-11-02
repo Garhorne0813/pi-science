@@ -3,7 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import i18n from "../../i18n";
 import { WorkspaceRail } from "./WorkspaceRail";
-vi.mock("../../lib/knowledge", () => ({ usePendingProposalCount: () => ({ data: { pending_count: 0 } }) }));
+vi.mock("../../lib/memory", () => ({ useMemorySummary: () => ({ data: { pendingCount: 0 } }) }));
 vi.mock("./workspace-navigation", () => ({ closeSidebarOnNarrow: vi.fn(), useNewWorkspaceConversation: () => vi.fn(), useWorkspaceSidebar: { getState: () => ({ showConversations: vi.fn() }) } }));
 beforeAll(async () => { await i18n.changeLanguage("en"); });
 afterEach(cleanup);

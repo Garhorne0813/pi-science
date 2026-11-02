@@ -1,5 +1,6 @@
+import type { SettingsSection } from "../../lib/settings/settings-sections";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { Activity, Blocks, Boxes, BrainCircuit, ServerCog, Settings2, ShieldCheck, FolderOpen, Globe2, Unplug, UserRound, WandSparkles, X, type LucideIcon } from "lucide-react";
+import { Activity, Blocks, BookOpen, Boxes, BrainCircuit, ServerCog, Settings2, ShieldCheck, FolderOpen, Globe2, Unplug, UserRound, WandSparkles, X, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/ui";
 import { settingsApi } from "../../lib/settings";
@@ -15,11 +16,12 @@ const MCPTab = lazy(() => import("./MCPTab").then((module) => ({ default: module
 const SkillsTab = lazy(() => import("./SkillsTab").then((module) => ({ default: module.SkillsTab })));
 const EnvironmentSettings = lazy(() => import("./EnvironmentSettings").then((module) => ({ default: module.EnvironmentSettings })));
 const NetworkTab = lazy(() => import("./NetworkTab").then((module) => ({ default: module.NetworkTab })));
+const MemoryTab = lazy(() => import("./MemoryTab").then(module=>({default:module.MemoryTab})));
 const ProgressTab = lazy(() => import("./ProgressTab").then((module) => ({ default: module.ProgressTab })));
 
 const WebSearchTab = lazy(() => import("./WebSearchTab").then((module) => ({ default: module.WebSearchTab })));
 
-type Tab = "web-search" | "network" | "general" | "models" | "agent" | "progress" | "skills" | "capabilities" | "mcp" | "compute" | "environments";
+type Tab = SettingsSection;
 
 const GROUP_STARTS: Partial<Record<Tab, string>> = { general: "settings.redesign.workbench", skills: "settings.redesign.capabilities", environments: "settings.redesign.computeGroup" };
 
@@ -27,6 +29,7 @@ const TABS: { id: Tab; labelKey: string; titleKey: string; icon: LucideIcon }[] 
   { id: "general", labelKey: "settings.general", titleKey: "settings.general", icon: Settings2 },
   { id: "models", labelKey: "settings.models.title", titleKey: "settings.models.title", icon: BrainCircuit },
   { id: "agent", labelKey: "settings.agent.title", titleKey: "settings.agent.title", icon: UserRound },
+  { id: "memory", labelKey: "memory.title", titleKey: "memory.title", icon: BookOpen },
   { id: "progress", labelKey: "settings.progress.nav", titleKey: "settings.progress.nav", icon: Activity },
   { id: "skills", labelKey: "skills.title", titleKey: "skills.title", icon: WandSparkles },
   { id: "capabilities", labelKey: "settings.capabilities.title", titleKey: "settings.capabilities.title", icon: Blocks },
@@ -40,9 +43,10 @@ const TABS: { id: Tab; labelKey: string; titleKey: string; icon: LucideIcon }[] 
 /** Settings page content: vertical navigation on the left, active tab on the
  *  right. `scope` is the workspace cwd snapshot taken when the dialog opened
  *  (`null` = global settings); it must never read the live route context. */
-export function SettingsContent({ scope, onClose }: { scope: string | null; onClose?: () => void }) {
+export function SettingsContent({ scope, onClose, initialTab="general" }: { scope: string | null; onClose?: () => void; initialTab?: SettingsSection }) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<Tab>("general");
+  const [tab, setTab] = useState<Tab>(initialTab);
+  const globalTab=tab==="network"||tab==="web-search"||tab==="memory";
   const [config, setConfig] = useState<SettingsConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
@@ -171,8 +175,8 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
           ))}
         </nav>
         <div className="mt-4 hidden border-t border-border px-3 py-4 md:block">
-          <p className="flex items-center gap-2 text-ui-caption font-medium text-text"><Icon icon={scope && tab !== "network" && tab !== "web-search" ? FolderOpen : Globe2} size={14} />{scope && tab !== "network" && tab !== "web-search" ? t("settings.scope.workspace") : t("settings.scope.global")}</p>
-          <p title={scope ?? undefined} className="mt-2 break-words text-ui-meta leading-relaxed text-muted">{(tab === "network" || tab === "web-search" ? null : scope) || t(tab === "web-search" ? "settings.webSearch.scopeHelp" : "settings.redesign.globalScopeHelp")}</p>
+          <p className="flex items-center gap-2 text-ui-caption font-medium text-text"><Icon icon={scope && !globalTab ? FolderOpen : Globe2} size={14} />{scope && !globalTab ? t("settings.scope.workspace") : t("settings.scope.global")}</p>
+          <p title={globalTab ? undefined : scope ?? undefined} className="mt-2 break-words text-ui-meta leading-relaxed text-muted">{(globalTab ? null : scope) || t(tab === "memory" ? "memory.globalScope" : tab === "web-search" ? "settings.webSearch.scopeHelp" : "settings.redesign.globalScopeHelp")}</p>
         </div>
       </aside>
 
@@ -195,13 +199,14 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
             />
           </header>
           <div className="min-h-0 flex-1 px-card py-card md:px-0 md:py-6">
-            <p className="mb-4 flex items-start gap-2 rounded-input bg-sidebar px-3 py-2 text-ui-caption leading-relaxed text-muted"><Icon icon={scope && tab !== "network" && tab !== "web-search" ? FolderOpen : Globe2} size={14} className="mt-0.5 shrink-0" /><span>{t(tab === "web-search" ? "settings.webSearch.scopeHelp" : scope && tab !== "network" ? "settings.redesign.workspaceScopeHelp" : "settings.redesign.globalScopeHelp")}</span></p>
+            <p className="mb-4 flex items-start gap-2 rounded-input bg-sidebar px-3 py-2 text-ui-caption leading-relaxed text-muted"><Icon icon={scope && !globalTab ? FolderOpen : Globe2} size={14} className="mt-0.5 shrink-0" /><span>{t(tab === "memory" ? "memory.globalScope" : tab === "web-search" ? "settings.webSearch.scopeHelp" : scope && !globalTab ? "settings.redesign.workspaceScopeHelp" : "settings.redesign.globalScopeHelp")}</span></p>
             <Suspense fallback={<div role="status" className="py-4 text-sm text-muted">{t("common.loading")}</div>}>
                 {tab === "web-search" && <WebSearchTab />}
                 {tab === "network" && <NetworkTab />}
                 {tab === "general" && <GeneralTab />}
                 {tab === "models" && <AIModelsTab scope={scope} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} />}
                 {tab === "agent" && <AgentTab config={config} saving={saving === "compaction"} onSave={saveCompaction} scope={scope} loading={loading} error={error} onRefreshContext={loadConfig} onOpenModels={() => { changeTab("models"); focusTab("models"); }} />}
+                {tab === "memory" && <MemoryTab />}
                 {tab === "progress" && <ProgressTab />}
                 {tab === "skills" && <SkillsTab workspaceCwd={scope} />}
                 {tab === "capabilities" && <CapabilitiesTab workspaceCwd={scope} onOpenWeb={() => { changeTab("web-search"); focusTab("web-search"); }} onOpenMcp={() => { changeTab("mcp"); focusTab("mcp"); }} />}

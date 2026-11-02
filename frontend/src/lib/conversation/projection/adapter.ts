@@ -210,7 +210,7 @@ export function activityKind(block: ToolCallBlock): ActivityKind {
   if (tool.includes("python") || tool.includes("kernel") || tool === "r" || tool === "notebook" || tool === "notebook_run" || tool === "run_cell" || tool === "execute_code") return "kernel";
   if (LITERATURE_TOOLS.has(tool)) return "literature";
   if (/dataset|csv|parquet|table/.test(tool)) return "dataset";
-  if (/read|write|file|grep|glob|find|list/.test(tool)) return "file";
+  if (tool === "ls" || /read|write|file|grep|glob|find|list/.test(tool)) return "file";
   if (/environment|package|install|dependency/.test(tool)) return "environment";
   if (/research|candidate|optimization/.test(tool)) return "research";
   return block.tool ? "tool" : "unknown";

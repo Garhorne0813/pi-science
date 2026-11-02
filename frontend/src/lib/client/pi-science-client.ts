@@ -179,7 +179,7 @@ export class PiScienceClient {
     requestId: string,
     response: InteractionResponse,
     cwd?: string,
-  ): Promise<void> {
+  ): Promise<{ persistentGrant?: boolean | null; warning?: string }> {
     return rest.respondToInteraction(this.baseUrl, sessionId, requestId, response, cwd);
   }
 
@@ -188,13 +188,9 @@ export class PiScienceClient {
     return rest.generateSessionTitle(this.baseUrl, sessionId, cwd);
   }
 
-  /** Best-effort science review of the latest report turn; findings join the pending proposal queue. */
-  async requestScienceReview(sessionId: string, cwd: string, trigger: "manual" | "auto" = "auto"): Promise<void> {
-    try {
-      await rest.requestScienceReview(this.baseUrl, sessionId, cwd, trigger);
-    } catch {
-      // Silent by design, like AI titles: a failed review must never disturb the conversation.
-    }
+  /** Request science review; skipped responses include a reason. */
+  async requestScienceReview(sessionId: string, cwd: string, trigger: "manual" | "auto" = "manual", turnId?: string): Promise<{ id: string; status: string; reason?: string }> {
+    return rest.requestScienceReview(this.baseUrl, sessionId, cwd, trigger, turnId);
   }
 
   // ── SSE ──

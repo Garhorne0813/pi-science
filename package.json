@@ -17,6 +17,7 @@
     "uat:conversation": "pnpm --filter frontend test:uat:conversation",
     "verify:ui": "node frontend/scripts/ui-verify.mjs",
     "migrate:sessions": "pnpm --filter @pi-science/server exec tsx src/cli/migrate-sessions.ts",
+    "export:legacy-memory": "pnpm --filter @pi-science/server exec tsx src/cli/export-legacy-memory.ts",
     "lint": "pnpm --parallel --filter @pi-science/server --filter frontend run lint"
   }
 }
