@@ -5,6 +5,8 @@ import type { CapturedSource } from "./source-capture.js";
 
 const MAX_VERIFY_BYTES = 8 * 1024 * 1024;
 const BINARY_DETAIL = "Binary source; no text excerpt was retained.";
+const INCOMPLETE_DETAIL = "The read did not complete, so this is not evidence that the file's content was read.";
+const NO_EXCERPT_DETAIL = "No text excerpt was retained for this source.";
 const WEB_VERIFIED_DETAIL = "Excerpt captured when the page was fetched; the live page may have changed and this does not confirm the page supports the answer.";
 const WEB_UNAVAILABLE_DETAIL = "No text excerpt was captured from this page.";
 
@@ -12,6 +14,8 @@ async function readWorkspaceFile(absolutePath: string): Promise<string> {
   return readFile(absolutePath, "utf8");
 }
 
+/** The excerpt is content. A path that now fails the workspace permission
+ *  check must not travel back to the client with the text it once read. */
 function resolve(captured: CapturedSource, status: CitationSourceStatus, statusDetail: string | null): CitationSource {
   return {
     id: captured.id,
@@ -19,7 +23,7 @@ function resolve(captured: CapturedSource, status: CitationSourceStatus, statusD
     identity: captured.identity,
     title: captured.title,
     locator: captured.locator,
-    excerpt: captured.excerpt,
+    excerpt: status === "forbidden" ? null : captured.excerpt,
     capturedAt: captured.capturedAt,
     evidence: captured.evidence,
     status,
@@ -27,7 +31,13 @@ function resolve(captured: CapturedSource, status: CitationSourceStatus, statusD
   };
 }
 
+function excerptDetail(captured: CapturedSource): string {
+  if (captured.attempt) return INCOMPLETE_DETAIL;
+  return captured.binary ? BINARY_DETAIL : NO_EXCERPT_DETAIL;
+}
+
 function verifyWeb(captured: CapturedSource): CitationSource {
+  if (captured.attempt) return resolve(captured, "unavailable", INCOMPLETE_DETAIL);
   if (captured.binary) return resolve(captured, "unavailable", BINARY_DETAIL);
   if (captured.excerpt && captured.capturedAt) return resolve(captured, "verified", WEB_VERIFIED_DETAIL);
   return resolve(captured, "unavailable", WEB_UNAVAILABLE_DETAIL);
@@ -52,7 +62,7 @@ async function verifyFile(cwd: string, captured: CapturedSource, read: (absolute
   } catch {
     return resolve(captured, "missing", "File is no longer present in the workspace.");
   }
-  if (!captured.excerpt) return resolve(captured, "unavailable", captured.binary ? BINARY_DETAIL : "No text excerpt was retained for this source.");
+  if (!captured.excerpt) return resolve(captured, "unavailable", excerptDetail(captured));
   if (content.includes(captured.excerpt)) return resolve(captured, "verified", null);
   return resolve(captured, "changed", "Excerpt came from the read at answer time; the file has changed since then.");
 }

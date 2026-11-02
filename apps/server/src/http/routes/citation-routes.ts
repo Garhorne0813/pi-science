@@ -13,10 +13,18 @@ function queryValue(request: { query: unknown }, key: string): string {
   return typeof query[key] === "string" ? query[key] as string : "";
 }
 
+/** A repeatable query parameter, so one answer can name every turn it spans. */
+function queryValues(request: { query: unknown }, key: string): string[] {
+  const value = (request.query as Record<string, unknown>)[key];
+  const items = Array.isArray(value) ? value : [value];
+  return items.filter((item): item is string => typeof item === "string" && item.length > 0);
+}
+
 export function registerCitationRoutes(app: FastifyInstance, sessionRepository: SessionLookup): void {
   app.get("/api/citations/sources", async (request, reply) => {
     const cwd = queryValue(request, "cwd");
     const sessionId = queryValue(request, "sessionId");
+    const turnIds = queryValues(request, "turnId");
     try {
       await validateWorkspaceCwd(cwd);
     } catch {
@@ -26,7 +34,7 @@ export function registerCitationRoutes(app: FastifyInstance, sessionRepository: 
       // A session must belong to this workspace; anything else is an empty
       // result so one workspace can never observe another's sources.
       if (!sessionId || !await sessionRepository.findPath(cwd, sessionId)) return reply.code(200).send({ sessionId, sources: [] });
-      const captured = captureCitationSources(await durableEventStore.readAfter(cwd, sessionId));
+      const captured = captureCitationSources(await durableEventStore.readAfter(cwd, sessionId), { turnIds });
       const sources = await verifyCitationSources(cwd, captured, (absolutePath) => readFile(absolutePath, "utf8"));
       return reply.code(200).send(citationSourcesResponseSchema.parse({ sessionId, sources }));
     } catch (error) {

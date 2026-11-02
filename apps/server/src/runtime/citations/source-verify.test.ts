@@ -51,6 +51,24 @@ describe("verifyCitationSources", () => {
     expect(sources[2]?.statusDetail).toBeTruthy();
   });
 
+  it("withholds the excerpt of a source the workspace no longer permits", async () => {
+    const cwd = await workspace();
+    const sources = await verifyCitationSources(cwd, [
+      source({ kind: "file", identity: ".pi-science/state.json", excerpt: "service state" }),
+      source({ kind: "file", identity: "../outside.md", excerpt: "escape" }),
+    ], (path) => readFile(path, "utf8"));
+    expect(sources.map((item) => [item.status, item.excerpt])).toEqual([["forbidden", null], ["forbidden", null]]);
+    expect(sources[0]?.statusDetail).toBeTruthy();
+  });
+
+  it("marks an interrupted read as an attempt, not as read content", async () => {
+    const cwd = await workspace();
+    await writeFile(join(cwd, "report.md"), "text", "utf8");
+    const [verified] = await verifyCitationSources(cwd, [source({ kind: "file", identity: "report.md", attempt: true })], (path) => readFile(path, "utf8"));
+    expect(verified).toMatchObject({ status: "unavailable", excerpt: null });
+    expect(verified?.statusDetail).toMatch(/did not complete/);
+  });
+
   it("marks sources without an excerpt as unavailable, including binary captures", async () => {
     const cwd = await workspace();
     await writeFile(join(cwd, "scan.pdf"), "%PDF-1.7", "utf8");

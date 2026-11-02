@@ -13,35 +13,55 @@ export interface CapturedSource {
   evidence: { tool: string; callId: string; turnId: string | null };
   /** The tool output was not readable text, so no excerpt may be rendered. */
   binary?: boolean;
+  /** The read never produced a usable result: failed, interrupted or missing
+   *  output. The source is registered but is not evidence that content was read. */
+  attempt?: boolean;
+}
+
+export interface CaptureScope {
+  /** Turn ids the answer belongs to. A version only binds to an answer whose
+   *  turn actually read it; without a scope the registry spans the session. */
+  turnIds?: string[];
 }
 
 const MAX_EXCERPT_CHARS = 2_000;
-// Prose is not base64. A minimum length and a whitespace check keep ordinary
-// short or punctuation-free text from being misread as an encoded payload.
+// Prose is not base64. A payload long enough to matter, unbroken by any
+// whitespace and containing a base64 marker character is an encoded blob.
 const BASE64_MIN_CHARS = 512;
-const BASE64_MIN_RATIO = 0.95;
-const BASE64_MAX_WHITESPACE_RATIO = 0.02;
-const BASE64_ALPHABET = "+/=";
+const BASE64_MARKER = /[+/=]/;
+
+/** The `read` tool appends its own continuation note to the text it returns.
+ *  That note is not in the file, so it must never reach the excerpt or locator. */
+const READ_CONTINUATION_NOTE = /\n\n\[(?:Showing lines \d+-\d+ of \d+|Line \d+ is |\d+ more lines in file\.)[\s\S]*$/;
 
 function isBase64Char(code: number): boolean {
-  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57) || BASE64_ALPHABET.includes(String.fromCharCode(code));
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57) || code === 43 || code === 47 || code === 61;
+}
+
+/** One unbroken run of base64 alphabet carrying a `+`, `/` or `=` marker is an
+ *  encoded payload. Wrapped text keeps its whitespace, so a column-folded DNA or
+ *  protein sequence stays readable. */
+function isBase64Payload(payload: string): boolean {
+  if (!BASE64_MARKER.test(payload)) return false;
+  for (let index = 0; index < payload.length; index += 1) if (!isBase64Char(payload.charCodeAt(index))) return false;
+  return true;
 }
 
 /** Binary tool output (PDF, image, archive) must never become a rendered excerpt. */
 export function isReadableText(text: string): boolean {
   if (text.includes("\u0000") || text.includes("\uFFFD")) return false;
-  const whitespace = (text.match(/\s/g) ?? []).length;
-  if (text.length > 0 && whitespace / text.length >= BASE64_MAX_WHITESPACE_RATIO) return true;
-  const stripped = text.replace(/\s+/g, "");
-  if (stripped.length < BASE64_MIN_CHARS) return true;
-  let alphabet = 0;
-  for (let index = 0; index < stripped.length; index += 1) if (isBase64Char(stripped.charCodeAt(index))) alphabet += 1;
-  return alphabet / stripped.length <= BASE64_MIN_RATIO;
+  const payload = text.trim();
+  if (payload.length < BASE64_MIN_CHARS || /\s/.test(payload)) return true;
+  return !isBase64Payload(payload);
 }
 
 function parseEvent(record: SseEventRecord): Record<string, unknown> | null {
+  return parseJsonObject(record.data);
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | null {
   try {
-    const value: unknown = JSON.parse(record.data);
+    const value: unknown = JSON.parse(text);
     return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
   } catch {
     return null;
@@ -99,32 +119,63 @@ function charLocator(input: Record<string, unknown>): CitationLocator {
 function lineLocator(input: Record<string, unknown>, output: string, binary: boolean): CitationLocator {
   const offset = nonNegativeInteger(input.offset);
   const limit = nonNegativeInteger(input.limit);
-  if (!binary && offset !== null && offset >= 1 && limit !== null && limit >= 1) return { kind: "lines", startLine: offset, endLine: offset + limit - 1 };
+  if (!binary && offset !== null && offset >= 1) {
+    const read = Math.max(1, countLines(output));
+    const endLine = limit !== null && limit >= 1 ? offset + limit - 1 : offset + read - 1;
+    return { kind: "lines", startLine: offset, endLine };
+  }
   const lines = binary ? 0 : countLines(output);
   return lines > 0 ? { kind: "lines", startLine: 1, endLine: lines } : { kind: "whole-source" };
 }
 
-function excerptOf(output: string): { excerpt: string | null; binary: boolean; text: string } {
-  const text = output.trim();
-  if (!text) return { excerpt: null, binary: false, text };
-  if (!isReadableText(text)) return { excerpt: null, binary: true, text };
-  return { excerpt: text.slice(0, MAX_EXCERPT_CHARS), binary: false, text };
+/** `read` and `web_fetch` return `{ content: [{ type: "text", text }] }` and the
+ *  event projection stores that whole result as JSON. The excerpt has to be the
+ *  text the tool returned, or verification compares JSON against the file. */
+function toolResultText(output: unknown): { text: string; binary: boolean } {
+  if (typeof output !== "string") return { text: "", binary: false };
+  const parsed = parseJsonObject(output);
+  const content = parsed && Array.isArray(parsed.content) ? parsed.content : null;
+  if (!content) return { text: output, binary: false };
+  const parts: string[] = [];
+  for (const part of content) {
+    const record = objectValue(part);
+    // An image or attachment part means the result carried no file text.
+    if (!record || record.type !== "text" || typeof record.text !== "string") return { text: "", binary: true };
+    parts.push(record.text);
+  }
+  return { text: parts.join(""), binary: false };
 }
 
-function timestamp(started: Record<string, unknown>, completed: Record<string, unknown>): string | null {
-  return stringValue(completed.endedAt) ?? stringValue(started.startedAt);
+function stripContinuationNote(text: string): string {
+  return text.replace(READ_CONTINUATION_NOTE, "");
 }
 
-function captureRead(started: Record<string, unknown>, completed: Record<string, unknown>): CapturedSource | null {
+function excerptOf(text: string, unreadable: boolean): { excerpt: string | null; binary: boolean; text: string } {
+  const trimmed = text.trim();
+  if (unreadable) return { excerpt: null, binary: true, text: "" };
+  if (!trimmed) return { excerpt: null, binary: false, text: "" };
+  if (!isReadableText(trimmed)) return { excerpt: null, binary: true, text: trimmed };
+  return { excerpt: trimmed.slice(0, MAX_EXCERPT_CHARS), binary: false, text: trimmed };
+}
+
+function timestamp(started: Record<string, unknown>, completed: Record<string, unknown> | null): string | null {
+  return stringValue(completed?.endedAt) ?? stringValue(started.startedAt);
+}
+
+function turnOf(started: Record<string, unknown>, completed: Record<string, unknown> | null): string | null {
+  return stringValue(completed?.turnId) ?? stringValue(started.turnId);
+}
+
+function captureRead(started: Record<string, unknown>, completed: Record<string, unknown> | null): CapturedSource | null {
   const input = objectValue(started.input);
   const path = stringValue(input?.path);
   if (!input || !path) return null;
   const identity = normalizeWorkspacePath(path);
   if (!identity) return null;
-  const { excerpt, binary, text } = excerptOf(typeof completed.output === "string" ? completed.output : "");
-  const tool = stringValue(started.tool) ?? "read";
-  const callId = stringValue(started.callId) ?? "";
+  const callId = stringValue(started.callId);
   if (!callId) return null;
+  const raw = completed ? toolResultText(completed.output) : { text: "", binary: false };
+  const { excerpt, binary, text } = excerptOf(stripContinuationNote(raw.text), raw.binary);
   return {
     id: `file:${identity}`,
     kind: "file",
@@ -133,21 +184,22 @@ function captureRead(started: Record<string, unknown>, completed: Record<string,
     locator: lineLocator(input, text, binary),
     excerpt,
     capturedAt: timestamp(started, completed),
-    evidence: { tool, callId, turnId: stringValue(completed.turnId) ?? stringValue(started.turnId) },
+    evidence: { tool: stringValue(started.tool) ?? "read", callId, turnId: turnOf(started, completed) },
+    ...(completed ? {} : { attempt: true }),
     ...(binary ? { binary } : {}),
   };
 }
 
-function captureWebFetch(started: Record<string, unknown>, completed: Record<string, unknown>): CapturedSource | null {
+function captureWebFetch(started: Record<string, unknown>, completed: Record<string, unknown> | null): CapturedSource | null {
   const input = objectValue(started.input);
   const url = stringValue(input?.url);
   if (!input || !url) return null;
   const identity = normalizeWebUrl(url);
   if (!identity) return null;
-  const { excerpt, binary } = excerptOf(typeof completed.output === "string" ? completed.output : "");
-  const tool = stringValue(started.tool) ?? "web_fetch";
-  const callId = stringValue(started.callId) ?? "";
+  const callId = stringValue(started.callId);
   if (!callId) return null;
+  const raw = completed ? toolResultText(completed.output) : { text: "", binary: false };
+  const { excerpt, binary } = excerptOf(raw.text, raw.binary);
   return {
     id: `web:${identity}`,
     kind: "web",
@@ -156,38 +208,56 @@ function captureWebFetch(started: Record<string, unknown>, completed: Record<str
     locator: binary ? { kind: "whole-source" } : charLocator(input),
     excerpt,
     capturedAt: timestamp(started, completed),
-    evidence: { tool, callId, turnId: stringValue(completed.turnId) ?? stringValue(started.turnId) },
+    evidence: { tool: stringValue(started.tool) ?? "web_fetch", callId, turnId: turnOf(started, completed) },
+    ...(completed ? {} : { attempt: true }),
     ...(binary ? { binary } : {}),
   };
 }
 
-/** Pair completed read/web_fetch tool calls into first-seen captured sources.
- *  A capture order follows the tool start, so the answer's original version wins. */
-export function captureCitationSources(events: SseEventRecord[]): CapturedSource[] {
+function captureOf(tool: string, started: Record<string, unknown>, completed: Record<string, unknown> | null): CapturedSource | null {
+  if (tool === "read") return captureRead(started, completed);
+  return tool === "web_fetch" ? captureWebFetch(started, completed) : null;
+}
+
+/** Pair read and web_fetch calls into captured sources, keeping the first read
+ *  of an identity inside the scope: that is the version the answer used.
+ *  A failed, interrupted or output-less read is still registered as an attempt,
+ *  but a real read of the same identity always wins over it. */
+export function captureCitationSources(events: SseEventRecord[], scope: CaptureScope = {}): CapturedSource[] {
+  const turnIds = scope.turnIds && scope.turnIds.length > 0 ? new Set(scope.turnIds) : null;
+  const inScope = (data: Record<string, unknown>): boolean => !turnIds || (typeof data.turnId === "string" && turnIds.has(data.turnId));
   const starts = new Map<string, { data: Record<string, unknown>; index: number }>();
-  const candidates: Array<{ source: CapturedSource; index: number }> = [];
+  const reads: Array<{ source: CapturedSource; index: number }> = [];
+  const attempts: Array<{ source: CapturedSource; index: number }> = [];
   events.forEach((event, index) => {
     const data = parseEvent(event);
-    if (!data) return;
+    if (!data || !inScope(data)) return;
     const callId = stringValue(data.callId);
     if (!callId) return;
     if (data.type === "tool.started") {
       if (!starts.has(callId)) starts.set(callId, { data, index });
       return;
     }
-    if (data.type !== "tool.completed" || data.status === "error") return;
+    if (data.type !== "tool.completed") return;
     const start = starts.get(callId);
     if (!start) return;
-    const tool = stringValue(start.data.tool);
-    const source = tool === "read" ? captureRead(start.data, data) : tool === "web_fetch" ? captureWebFetch(start.data, data) : null;
-    if (source) candidates.push({ source, index: start.index });
+    starts.delete(callId);
+    const tool = stringValue(start.data.tool) ?? "";
+    const completed = data.status === "error" ? null : data;
+    const source = captureOf(tool, start.data, completed);
+    if (source) reads.push({ source, index: start.index });
   });
+  for (const { data, index } of starts.values()) {
+    const source = captureOf(stringValue(data.tool) ?? "", data, null);
+    if (source) attempts.push({ source, index });
+  }
+  const byStart = (left: { index: number }, right: { index: number }): number => left.index - right.index;
   const seen = new Set<string>();
-  return candidates
-    .sort((left, right) => left.index - right.index)
-    .flatMap(({ source }) => {
-      if (seen.has(source.id)) return [];
-      seen.add(source.id);
-      return [source];
-    });
+  const kept: Array<{ source: CapturedSource; index: number }> = [];
+  for (const entry of [...reads.sort(byStart), ...attempts.sort(byStart)]) {
+    if (seen.has(entry.source.id)) continue;
+    seen.add(entry.source.id);
+    kept.push(entry);
+  }
+  return kept.sort(byStart).map((entry) => entry.source);
 }
