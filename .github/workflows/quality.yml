@@ -149,13 +149,13 @@ jobs:
       # Native process integration tests launch Node, bash and taskkill trees.
       # Serializing server files on the two-core Windows runner prevents unrelated
       # 500 ms/15 s characterization deadlines from competing for process slots.
-      - name: Test contracts and serialized control plane (shard 1 of 2)
+      - name: Test contracts and serialized control plane (shard 1 of 4)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           pnpm --filter @pi-science/contracts test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          pnpm --filter @pi-science/server exec vitest run --fileParallelism=false --shard=1/2
+          pnpm --filter @pi-science/server exec vitest run --fileParallelism=false --shard=1/4
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   linux-server-shard:
@@ -223,11 +223,15 @@ jobs:
           pnpm test:skills
 
   windows-server-shard:
-    name: Windows server tests (shard 2 of 2)
+    name: Windows server tests (shard ${{ matrix.shard }} of 4)
     needs: changes
     if: needs.changes.outputs.run == 'true'
     runs-on: windows-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [2, 3, 4]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -247,8 +251,8 @@ jobs:
       - name: Check Windows worker startup before the full IPC suite
         run: node scripts/check-worker-startup.mjs
 
-      - name: Test serialized control plane (shard 2 of 2)
-        run: pnpm --filter @pi-science/server exec vitest run --fileParallelism=false --shard=2/2
+      - name: Test serialized control plane (shard ${{ matrix.shard }} of 4)
+        run: pnpm --filter @pi-science/server exec vitest run --fileParallelism=false --shard=${{ matrix.shard }}/4
 
   windows-frontend-skills:
     name: Windows frontend and skills tests
@@ -386,10 +390,6 @@ jobs:
         if: runner.os == 'Linux'
         run: pnpm --filter frontend test:sse-budget
 
-      - name: Run frontend accessibility smoke
-        if: runner.os == 'Linux'
-        run: pnpm --filter frontend exec playwright test --config playwright.visual.config.ts --grep @accessibility
-
       - name: Run workspace sidebar interaction tests
         if: runner.os == 'Linux'
         run: |
@@ -414,6 +414,46 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: settings-browser-performance
+          path: frontend/tests/visual/.artifacts
+          if-no-files-found: ignore
+          include-hidden-files: true
+
+  browser-accessibility:
+    name: browser accessibility
+    needs: [changes, build]
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.16.0
+          cache: pnpm
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Restore the frontend build
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+      - name: Run frontend accessibility smoke
+        run: pnpm --filter frontend exec playwright test --config playwright.visual.config.ts --grep @accessibility
+
+      - name: Upload accessibility screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-accessibility
           path: frontend/tests/visual/.artifacts
           if-no-files-found: ignore
           include-hidden-files: true
@@ -489,7 +529,7 @@ jobs:
 
   verify:
     name: verify (${{ matrix.os }})
-    needs: [changes, static-checks, tests, linux-server-shard, linux-frontend-skills, windows-server-shard, windows-frontend-skills, build, browser, macos-launcher, production-install]
+    needs: [changes, static-checks, tests, linux-server-shard, linux-frontend-skills, windows-server-shard, windows-frontend-skills, build, browser, browser-accessibility, macos-launcher, production-install]
     if: always()
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
