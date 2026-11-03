@@ -110,3 +110,45 @@ jobs:
           path: |
             apps/server/sandbox-acceptance.xml
             skill-resource-performance.json
+
+  windows-diagnostic:
+    name: Windows model configuration diagnostic
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.16.0
+          cache: pnpm
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run one diagnostic test
+        shell: pwsh
+        env:
+          PI_SCIENCE_CI_DIAGNOSTIC: '1'
+        run: |
+          $sampler = Start-Job -ScriptBlock {
+            while ($true) {
+              $processes = @(Get-Process -Name node -ErrorAction SilentlyContinue)
+              $cpu = ($processes | Measure-Object -Property CPU -Sum).Sum
+              $memory = ($processes | Measure-Object -Property WorkingSet64 -Sum).Sum
+              $sample = @{ timestamp = [DateTime]::UtcNow.ToString('o'); nodeCount = $processes.Count; nodeCpuSeconds = $cpu; nodeWorkingSetBytes = $memory }
+              Write-Output ("[ci-resource] " + ($sample | ConvertTo-Json -Compress))
+              Start-Sleep -Seconds 3
+            }
+          }
+          try {
+            pnpm --filter @pi-science/server exec vitest run src/model-config/model-config-review-v2.test.ts --fileParallelism=false --retry=0 --testNamePattern '^uses imported native aliases for Settings, ordinary sessions and real research/review Workers without rewriting the saved default$'
+            $testExitCode = $LASTEXITCODE
+          } finally {
+            Stop-Job $sampler
+            Receive-Job $sampler
+            Remove-Job $sampler
+          }
+          exit $testExitCode
