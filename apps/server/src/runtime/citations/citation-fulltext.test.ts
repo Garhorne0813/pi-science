@@ -4,12 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appendJsonLine, workspaceFile } from "../../storage/persistence.js";
-import { fullTextSnapshot, fullTextSnapshotPath, fetchFullTextSnapshot, type FullTextDeps, type FullTextRef } from "./citation-fulltext.js";
+import { appendJsonLine, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
+import { fullTextSnapshot, fullTextSnapshotPath, fetchFullTextSnapshot, snapshotIdOf, type FullTextDeps, type FullTextRef, type FullTextSnapshot } from "./citation-fulltext.js";
 
 const workspaces: string[] = [];
 /** Every fixture request is local, so no domain needs a real throttle wait. */
 const FAST: FullTextDeps["minimumInterval"] = { "www.ebi.ac.uk": 0, "arxiv.org": 0, "example.org": 0 };
+/** The outbound policy resolves a hostname before any request leaves, so the
+ *  fixtures answer with a public address instead of asking a DNS server. */
+const PUBLIC_DNS: FullTextDeps["lookup"] = async () => [{ address: "93.184.216.34", family: 4 }];
 
 beforeEach(async () => {
   const home = await mkdtemp(join(tmpdir(), "pi-science-fulltext-home-"));
@@ -123,7 +126,7 @@ describe("citation full text", () => {
       return undefined;
     });
 
-    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, minimumInterval: FAST });
+    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, minimumInterval: FAST, lookup: PUBLIC_DNS });
 
     expect(snapshot.state).toBe("available");
     expect(snapshot.provider).toBe("europepmc");
@@ -151,7 +154,7 @@ describe("citation full text", () => {
       return undefined;
     });
 
-    const snapshot = await fetchFullTextSnapshot(cwd, arxivRef(null), { fetch: fetchFn, minimumInterval: FAST });
+    const snapshot = await fetchFullTextSnapshot(cwd, arxivRef(null), { fetch: fetchFn, minimumInterval: FAST, lookup: PUBLIC_DNS });
 
     expect(snapshot.state).toBe("available");
     expect(snapshot.provider).toBe("arxiv_html");
@@ -172,7 +175,7 @@ describe("citation full text", () => {
       return undefined;
     });
 
-    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, minimumInterval: FAST });
+    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, minimumInterval: FAST, lookup: PUBLIC_DNS });
 
     expect(snapshot.state).toBe("available");
     expect(snapshot.provider).toBe("open_pdf");
@@ -191,7 +194,7 @@ describe("citation full text", () => {
       return undefined;
     });
 
-    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, minimumInterval: FAST });
+    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, minimumInterval: FAST, lookup: PUBLIC_DNS });
 
     expect(snapshot.state).toBe("available");
     expect(snapshot.provider).toBe("open_pdf");
@@ -202,7 +205,7 @@ describe("citation full text", () => {
     const cwd = await makeWorkspace();
     const fetchFn = fakeFetch((url) => (url.host === "www.ebi.ac.uk" && url.pathname.endsWith("/search") ? response(epmcMiss) : undefined));
 
-    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, minimumInterval: FAST });
+    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, minimumInterval: FAST, lookup: PUBLIC_DNS });
 
     expect(snapshot.state).toBe("no_open_fulltext");
     expect(snapshot.provider).toBeNull();
@@ -214,7 +217,7 @@ describe("citation full text", () => {
     const cwd = await makeWorkspace();
     const fetchFn = fakeFetch((url) => (url.host === "www.ebi.ac.uk" && url.pathname.endsWith("/search") ? response("forbidden", 403) : undefined));
 
-    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, minimumInterval: FAST });
+    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, minimumInterval: FAST, lookup: PUBLIC_DNS });
 
     expect(snapshot.state).toBe("access_denied");
     expect(snapshot.note).toContain("HTTP 403");
@@ -226,7 +229,7 @@ describe("citation full text", () => {
       throw new TypeError("fetch failed");
     });
 
-    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn as unknown as typeof fetch, minimumInterval: FAST });
+    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn as unknown as typeof fetch, minimumInterval: FAST, lookup: PUBLIC_DNS });
 
     expect(snapshot.state).toBe("download_failed");
     expect(snapshot.note).toContain("fetch failed");
@@ -240,7 +243,7 @@ describe("citation full text", () => {
       return undefined;
     });
 
-    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, minimumInterval: FAST });
+    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, minimumInterval: FAST, lookup: PUBLIC_DNS });
 
     expect(snapshot.state).toBe("parse_failed");
     expect(snapshot.note).toContain("no paragraphs");
@@ -255,7 +258,7 @@ describe("citation full text", () => {
       return undefined;
     });
 
-    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, minimumInterval: FAST });
+    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, minimumInterval: FAST, lookup: PUBLIC_DNS });
 
     expect(snapshot.state).toBe("no_text_layer");
     expect(snapshot.passages).toEqual([]);
@@ -270,7 +273,7 @@ describe("citation full text", () => {
       return undefined;
     });
 
-    const snapshot = await fetchFullTextSnapshot(cwd, arxivRef("2"), { fetch: fetchFn, minimumInterval: FAST });
+    const snapshot = await fetchFullTextSnapshot(cwd, arxivRef("2"), { fetch: fetchFn, minimumInterval: FAST, lookup: PUBLIC_DNS });
 
     expect(snapshot.state).toBe("version_mismatch");
     expect(snapshot.passages).toEqual([]);
@@ -287,16 +290,16 @@ describe("citation full text", () => {
     // Ahead of any clock an earlier test recorded, so the throttle never waits.
     const now = Date.now() + 60_000;
     const first = fakeFetch(handler);
-    await fetchFullTextSnapshot(cwd, doiRef, { fetch: first, now: () => now, minimumInterval: FAST });
+    await fetchFullTextSnapshot(cwd, doiRef, { fetch: first, now: () => now, minimumInterval: FAST, lookup: PUBLIC_DNS });
     expect(first).toHaveBeenCalledTimes(2);
 
     const second = fakeFetch(handler);
-    const fresh = await fullTextSnapshot(cwd, doiRef, {}, { fetch: second, now: () => now + 1_000, minimumInterval: FAST });
+    const fresh = await fullTextSnapshot(cwd, doiRef, {}, { fetch: second, now: () => now + 1_000, minimumInterval: FAST, lookup: PUBLIC_DNS });
     expect(second).not.toHaveBeenCalled();
     expect(fresh?.provider).toBe("europepmc");
 
     const third = fakeFetch(handler);
-    const stale = await fullTextSnapshot(cwd, doiRef, {}, { fetch: third, now: () => now + 31 * 24 * 60 * 60 * 1_000, minimumInterval: FAST });
+    const stale = await fullTextSnapshot(cwd, doiRef, {}, { fetch: third, now: () => now + 31 * 24 * 60 * 60 * 1_000, minimumInterval: FAST, lookup: PUBLIC_DNS });
     expect(third).toHaveBeenCalledTimes(2);
     expect(stale?.state).toBe("available");
   });
@@ -305,9 +308,188 @@ describe("citation full text", () => {
     const cwd = await makeWorkspace();
     const fetchFn = vi.fn(async () => response("unused"));
 
-    const missing = await fullTextSnapshot(cwd, doiRef, { fetch: false }, { fetch: fetchFn as unknown as typeof fetch, minimumInterval: FAST });
+    const missing = await fullTextSnapshot(cwd, doiRef, { fetch: false }, { fetch: fetchFn as unknown as typeof fetch, minimumInterval: FAST, lookup: PUBLIC_DNS });
 
     expect(missing).toBeNull();
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+});
+
+/** A page that states its own version, so a read of it can be checked against
+ *  the version the citation asked for. */
+function arxivVersionPage(version: string, sentence: string): string {
+  return `<!DOCTYPE html><html><body>
+<article class="ltx_document"><img src="2401.12345v${version}/Figures/model.png">
+<section id="S1" class="ltx_section"><h2>Results</h2>
+<p class="ltx_p">${sentence}</p>
+</section></article></body></html>`;
+}
+
+const V1_SENTENCE = "The first version reports that the encoder adds no recurrent state of its own to the model.";
+const V2_SENTENCE = "The second version reports that the encoder was replaced by a convolutional stem in every experiment.";
+
+function arxivVersionFetch() {
+  const pages: Record<string, string> = { "1": arxivVersionPage("1", V1_SENTENCE), "2": arxivVersionPage("2", V2_SENTENCE) };
+  return fakeFetch((url) => {
+    if (url.host === "www.ebi.ac.uk" && url.pathname.endsWith("/search")) return response(epmcMiss);
+    if (url.host !== "arxiv.org") return undefined;
+    const version = /^\/html\/2401\.12345v(\d+)$/.exec(url.pathname)?.[1];
+    return version ? response(pages[version] ?? "") : undefined;
+  });
+}
+
+function storedArxivSnapshot(version: string, sentence: string): FullTextSnapshot {
+  return {
+    kind: "arxiv",
+    id: "2401.12345",
+    requested_id: `2401.12345v${version}`,
+    requested_version: version,
+    state: "available",
+    note: null,
+    provider: "arxiv_html",
+    url: `https://arxiv.org/html/2401.12345v${version}`,
+    retrieved_at: new Date().toISOString(),
+    content_sha256: createHash("sha256").update(sentence).digest("hex"),
+    license: null,
+    sections: [{ id: "S1", title: "Results" }],
+    passages: [{ index: 0, section_title: "Results", section_id: "S1", page: null, text: sentence }],
+  };
+}
+
+describe("citation full text version isolation", () => {
+  it("keeps each arXiv version in its own cache and answers the version that was asked for", async () => {
+    const cwd = await makeWorkspace();
+    const fetchFn = arxivVersionFetch();
+    // Both reads land well inside one freshness window, which is exactly when a
+    // version-blind cache would have answered the second read with the first text.
+    const now = Date.now() + 60_000;
+
+    const v1 = await fullTextSnapshot(cwd, arxivRef("1"), {}, { fetch: fetchFn, lookup: PUBLIC_DNS, now: () => now, minimumInterval: FAST });
+    expect(v1?.requested_version).toBe("1");
+    expect(v1?.passages[0]?.text).toBe(V1_SENTENCE);
+
+    const v2 = await fullTextSnapshot(cwd, arxivRef("2"), {}, { fetch: fetchFn, lookup: PUBLIC_DNS, now: () => now + 1_000, minimumInterval: FAST });
+    expect(v2?.requested_version).toBe("2");
+    expect(v2?.passages[0]?.text).toBe(V2_SENTENCE);
+    expect(v2?.url).toBe("https://arxiv.org/html/2401.12345v2");
+    expect(snapshotIdOf(v2!)).not.toBe(snapshotIdOf(v1!));
+
+    const reread = await fullTextSnapshot(cwd, arxivRef("1"), {}, { fetch: fetchFn, lookup: PUBLIC_DNS, now: () => now + 2_000, minimumInterval: FAST });
+    expect(reread?.requested_version).toBe("1");
+    expect(reread?.passages[0]?.text).toBe(V1_SENTENCE);
+    expect(reread?.url).toBe("https://arxiv.org/html/2401.12345v1");
+  });
+
+  it("does not answer a version from a versionless snapshot another version wrote", async () => {
+    const cwd = await makeWorkspace();
+    await writeJsonAtomic(fullTextSnapshotPath(cwd, "arxiv", "2401.12345"), storedArxivSnapshot("1", V1_SENTENCE));
+
+    const v2 = await fullTextSnapshot(cwd, arxivRef("2"), { fetch: false }, { lookup: PUBLIC_DNS, minimumInterval: FAST });
+
+    expect(v2).toBeNull();
+  });
+
+  it("reads back the stored text of the exact version the citation asked for", async () => {
+    const cwd = await makeWorkspace();
+    const v1 = storedArxivSnapshot("1", V1_SENTENCE);
+    await writeJsonAtomic(fullTextSnapshotPath(cwd, "arxiv", "2401.12345", "1"), v1);
+    await writeJsonAtomic(fullTextSnapshotPath(cwd, "arxiv", "2401.12345", "2"), storedArxivSnapshot("2", V2_SENTENCE));
+
+    const one = await fullTextSnapshot(cwd, arxivRef("1"), { fetch: false }, { lookup: PUBLIC_DNS, minimumInterval: FAST });
+    const two = await fullTextSnapshot(cwd, arxivRef("2"), { fetch: false }, { lookup: PUBLIC_DNS, minimumInterval: FAST });
+
+    expect(one?.passages[0]?.text).toBe(V1_SENTENCE);
+    expect(two?.passages[0]?.text).toBe(V2_SENTENCE);
+  });
+});
+
+/** Enough bytes to pass any real paper, with no Content-Length to pre-check. */
+function oversizedStream(): Response {
+  const chunk = new Uint8Array(1024 * 1024);
+  let sent = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(stream) {
+      if (sent >= 40) { stream.close(); return; }
+      sent += 1;
+      stream.enqueue(chunk);
+    },
+  });
+  return new Response(body, { status: 200 });
+}
+
+function redirectTo(location: string): Response {
+  return { ok: false, status: 302, headers: new Headers({ location }), body: null } as unknown as Response;
+}
+
+describe("citation full text outbound policy", () => {
+  const BLOCKED = [
+    "http://127.0.0.1:8080/paper.pdf",
+    "http://10.1.2.3/paper.pdf",
+    "http://172.16.0.9/paper.pdf",
+    "http://192.168.1.10/paper.pdf",
+    "http://169.254.169.254/paper.pdf",
+    "http://[::1]/paper.pdf",
+    "http://[fd00::1]/paper.pdf",
+    "http://[fe80::1]/paper.pdf",
+  ];
+
+  it.each(BLOCKED)("never sends a request to %s", async (link) => {
+    const cwd = await makeWorkspace();
+    await seedOaLink(cwd, "doi", DOI, link);
+    const fetchFn = fakeFetch((url) => (url.host === "www.ebi.ac.uk" && url.pathname.endsWith("/search") ? response(epmcMiss) : undefined));
+
+    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, lookup: PUBLIC_DNS, minimumInterval: FAST });
+
+    const reached = fetchFn.mock.calls.map(([input]) => new URL(String(input)).host);
+    expect(reached).not.toContain(new URL(link).host);
+    expect(snapshot.state).toBe("download_failed");
+    expect(snapshot.note).toContain("private or reserved address");
+  });
+
+  it("never follows an open-access link that redirects into a private address", async () => {
+    const cwd = await makeWorkspace();
+    await seedOaLink(cwd, "doi", DOI, "https://example.org/redirect.pdf");
+    const fetchFn = fakeFetch((url) => {
+      if (url.host === "www.ebi.ac.uk" && url.pathname.endsWith("/search")) return response(epmcMiss);
+      if (url.host === "example.org" && url.pathname === "/redirect.pdf") return redirectTo("http://10.0.0.5/secret.pdf");
+      return undefined;
+    });
+
+    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, lookup: PUBLIC_DNS, minimumInterval: FAST });
+
+    expect(fetchFn.mock.calls.map(([input]) => new URL(String(input)).host)).not.toContain("10.0.0.5");
+    expect(snapshot.state).toBe("download_failed");
+    expect(snapshot.note).toContain("private or reserved address");
+  });
+
+  it("stops reading an open-access PDF that declares more bytes than the limit", async () => {
+    const cwd = await makeWorkspace();
+    await seedOaLink(cwd, "doi", DOI, "https://example.org/huge.pdf");
+    const huge = { ok: true, status: 200, headers: new Headers({ "content-length": "999999999" }), body: null, arrayBuffer: async () => new ArrayBuffer(0) } as unknown as Response;
+    const fetchFn = fakeFetch((url) => {
+      if (url.host === "www.ebi.ac.uk" && url.pathname.endsWith("/search")) return response(epmcMiss);
+      if (url.host === "example.org" && url.pathname === "/huge.pdf") return huge;
+      return undefined;
+    });
+
+    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, lookup: PUBLIC_DNS, minimumInterval: FAST });
+
+    expect(snapshot.state).toBe("download_failed");
+    expect(snapshot.note).toContain("size limit");
+  });
+
+  it("stops reading an open-access PDF that streams past the limit with no Content-Length", async () => {
+    const cwd = await makeWorkspace();
+    await seedOaLink(cwd, "doi", DOI, "https://example.org/stream.pdf");
+    const fetchFn = fakeFetch((url) => {
+      if (url.host === "www.ebi.ac.uk" && url.pathname.endsWith("/search")) return response(epmcMiss);
+      if (url.host === "example.org" && url.pathname === "/stream.pdf") return oversizedStream();
+      return undefined;
+    });
+
+    const snapshot = await fetchFullTextSnapshot(cwd, doiRef, { fetch: fetchFn, lookup: PUBLIC_DNS, minimumInterval: FAST });
+
+    expect(snapshot.state).toBe("download_failed");
+    expect(snapshot.note).toContain("size limit");
   });
 });

@@ -13,7 +13,7 @@ const SESSION = "session-a";
 const OTHER_SESSION = "session-b";
 /** A fetch that must never be reached: every fixture below is already on disk. */
 const NO_FETCH = (() => { throw new Error("network must not be used"); }) as unknown as typeof fetch;
-const DEPS: FullTextDeps = { fetch: NO_FETCH, minimumInterval: { "www.ebi.ac.uk": 0, "arxiv.org": 0 } };
+const DEPS: FullTextDeps = { fetch: NO_FETCH, lookup: async () => [{ address: "93.184.216.34", family: 4 }], minimumInterval: { "www.ebi.ac.uk": 0, "arxiv.org": 0 } };
 
 beforeEach(async () => {
   const home = await mkdtemp(join(tmpdir(), "pi-science-evidence-home-"));
@@ -49,8 +49,26 @@ function snapshot(passages: FullTextPassage[], contentSha256: string): FullTextS
 }
 
 async function seed(cwd: string, value: FullTextSnapshot): Promise<string> {
-  await writeJsonAtomic(fullTextSnapshotPath(cwd, value.kind, value.id), value);
+  await writeJsonAtomic(fullTextSnapshotPath(cwd, value.kind, value.id, value.requested_version), value);
   return String(snapshotIdOf(value));
+}
+
+function arxivSnapshot(version: string, text: string): FullTextSnapshot {
+  return {
+    kind: "arxiv",
+    id: "2401.12345",
+    requested_id: `2401.12345v${version}`,
+    requested_version: version,
+    state: "available",
+    note: null,
+    provider: "arxiv_html",
+    url: `https://arxiv.org/html/2401.12345v${version}`,
+    retrieved_at: new Date().toISOString(),
+    content_sha256: `sha-v${version}`,
+    license: null,
+    sections: [{ id: "S1", title: "Results" }],
+    passages: [{ index: 0, section_title: "Results", section_id: "S1", page: null, text }],
+  };
 }
 
 async function read(cwd: string, session = SESSION, source = KEY, extra: Record<string, unknown> = {}) {
@@ -70,6 +88,32 @@ describe("generation-time evidence", () => {
     expect(result.passages.map((passage) => passage.passage_id)).toEqual(["p0", "p1", "p2", "p3"]);
     expect(result.passages[1]?.text).toBe(RESULTS_TEXT);
     expect(result.passages[1]?.section_title).toBe("Results");
+  });
+
+  it("delivers, and records, the text of the arXiv version each citation names", async () => {
+    const cwd = await makeWorkspace();
+    const V1_TEXT = "The first version reports that the encoder adds no recurrent state of its own to the model.";
+    const V2_TEXT = "The second version reports that the encoder was replaced by a convolutional stem in every experiment.";
+    const v1 = arxivSnapshot("1", V1_TEXT);
+    const v2 = arxivSnapshot("2", V2_TEXT);
+    await writeJsonAtomic(fullTextSnapshotPath(cwd, "arxiv", "2401.12345", "1"), v1);
+    await writeJsonAtomic(fullTextSnapshotPath(cwd, "arxiv", "2401.12345", "2"), v2);
+
+    const readV1 = await read(cwd, SESSION, "arxiv:2401.12345v1");
+    const readV2 = await read(cwd, SESSION, "arxiv:2401.12345v2");
+
+    expect(readV1.passages.map((passage) => passage.text)).toEqual([V1_TEXT]);
+    expect(readV1.snapshot_id).toBe(snapshotIdOf(v1));
+    expect(readV2.passages.map((passage) => passage.text)).toEqual([V2_TEXT]);
+    expect(readV2.snapshot_id).toBe(snapshotIdOf(v2));
+    expect(readV2.snapshot_id).not.toBe(readV1.snapshot_id);
+
+    const recorded = await citationEvidenceService.record(cwd, { session_id: SESSION, selections: [{ source: "arxiv:2401.12345v2", claim: V2_TEXT, snapshot_id: String(readV2.snapshot_id), passage_ids: ["p0"] }] });
+    expect(recorded).toMatchObject({ accepted: 1, rejected: 0 });
+
+    const [position] = await citationPassagesService.positions(cwd, { session_id: SESSION, positions: [{ key: "arxiv:2401.12345v2", claim: V2_TEXT }] }, DEPS);
+    expect(position?.origin).toBe("generation");
+    expect(position?.excerpts.map((excerpt) => excerpt.text)).toEqual([V2_TEXT]);
   });
 
   it("pages through a source without repeating a passage", async () => {

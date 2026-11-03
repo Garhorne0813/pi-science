@@ -34,7 +34,14 @@ export function parseOutboundHttpUrl(raw: string): URL {
   return url;
 }
 
-export async function validateOutboundHttpUrl(raw: string, options: { allowPrivate?: boolean } = {}): Promise<URL> {
+/** Injectable name resolution. Production leaves it unset so every request
+ *  resolves through the system resolver; tests answer from a fixture so the
+ *  policy can be exercised without a DNS server or a real destination. */
+export type ConnectorLookup = (hostname: string) => Promise<Array<{ address: string; family: number }>>;
+
+export type OutboundUrlOptions = { allowPrivate?: boolean; lookup?: ConnectorLookup };
+
+export async function validateOutboundHttpUrl(raw: string, options: OutboundUrlOptions = {}): Promise<URL> {
   const url = parseOutboundHttpUrl(raw);
   const allowPrivate = options.allowPrivate ?? process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0";
   // In environment-proxy mode DNS belongs to the proxy. Defer only when
@@ -52,7 +59,7 @@ export async function validateOutboundHttpUrl(raw: string, options: { allowPriva
   // URL.hostname keeps the brackets for IPv6 literals ("[::1]"); strip them
   // so isIP can classify the address without a DNS round-trip.
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
-  const addresses = isIP(hostname) ? [hostname] : (await lookup(url.hostname, { all: true, verbatim: true })).map((entry) => entry.address);
+  const addresses = isIP(hostname) ? [hostname] : (options.lookup ? await options.lookup(url.hostname) : await lookup(url.hostname, { all: true, verbatim: true })).map((entry) => entry.address);
   if (!addresses.length || (!allowPrivate && addresses.some(isPrivateOrReservedAddress))) throw new Error("outbound URL resolves to a private or reserved address");
   return url;
 }
@@ -70,7 +77,7 @@ export async function validateOutboundHttpUrl(raw: string, options: { allowPriva
  * pass `allowPrivate: false` explicitly; treat this function as permissive
  * unless the caller opts into strictness.
  */
-export async function validateConnectorOutboundUrl(raw: string, options: { allowPrivate?: boolean } = {}): Promise<URL> {
+export async function validateConnectorOutboundUrl(raw: string, options: OutboundUrlOptions = {}): Promise<URL> {
   return validateOutboundHttpUrl(raw, options);
 }
 
@@ -89,6 +96,11 @@ export type ConnectorFetchOptions = {
   method?: string;
   headers?: Record<string, string>;
   body?: BodyInit | null;
+  /** Transport override. Production leaves it unset; tests supply a fixture so
+   *  the policy above still runs on every hop. */
+  fetchImpl?: typeof fetch;
+  /** Name resolution override, paired with `fetchImpl` for tests. */
+  lookup?: ConnectorLookup;
 };
 
 /** Headers that must never leak to a cross-origin redirect target. */
@@ -119,7 +131,8 @@ export async function safeConnectorFetch(raw: string, options: ConnectorFetchOpt
   const maxBytes = options.maxResponseBytes ?? 10 * 1024 * 1024;
   const allowedTypes = options.allowedContentTypes ?? null;
   const timeoutMs = options.timeoutMs ?? 30_000;
-  let current = await validateConnectorOutboundUrl(raw, { allowPrivate });
+  const request = options.fetchImpl ?? fetch;
+  let current = await validateConnectorOutboundUrl(raw, { allowPrivate, lookup: options.lookup });
   const initialOrigin = current.origin;
   let redirects = 0;
   const controller = new AbortController();
@@ -136,7 +149,7 @@ export async function safeConnectorFetch(raw: string, options: ConnectorFetchOpt
       // every redirect is independently revalidated before the next request.
       // lgtm[js/request-forgery]
       signal.throwIfAborted();
-      const response = await fetch(current, { method: options.method ?? "GET", headers: hopHeaders, body: options.body, redirect: "manual", signal });
+      const response = await request(current, { method: options.method ?? "GET", headers: hopHeaders, body: options.body, redirect: "manual", signal });
       const location = response.headers.get("location");
       if (response.status >= 300 && response.status < 400 && location) {
         void response.body?.cancel().catch(() => undefined);
@@ -147,7 +160,7 @@ export async function safeConnectorFetch(raw: string, options: ConnectorFetchOpt
         // (a public server steering us into a private range is the classic
         // SSRF redirect vector).
         const sameOrigin = next.origin === current.origin;
-        current = await validateConnectorOutboundUrl(next.toString(), sameOrigin ? { allowPrivate } : { allowPrivate: false });
+        current = await validateConnectorOutboundUrl(next.toString(), sameOrigin ? { allowPrivate, lookup: options.lookup } : { allowPrivate: false, lookup: options.lookup });
         redirects += 1;
         continue;
       }

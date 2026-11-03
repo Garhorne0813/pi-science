@@ -19,6 +19,7 @@ import { constants as zlibConstants, inflateRawSync, inflateSync } from "node:zl
 import { arxivIdOf, arxivVersionOf } from "@pi-science/contracts";
 import { readJson, readJsonLines, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
 import { recordEgress } from "../../security/egress-audit.js";
+import { safeConnectorFetch, validateConnectorOutboundUrl, type ConnectorLookup } from "../../security/outbound-security.js";
 
 export type FullTextState = "available" | "no_open_fulltext" | "access_denied" | "download_failed" | "parse_failed" | "no_text_layer" | "version_mismatch";
 
@@ -43,7 +44,10 @@ export interface FullTextSnapshot {
 export interface FullTextRef { kind: "doi" | "arxiv"; id: string; requested_id: string; requested_version: string | null }
 
 export interface FullTextDeps {
+  /** Transport and name resolution for fixtures. Production leaves both unset,
+   *  so every request goes through the restricted connector fetch. */
   fetch?: typeof fetch;
+  lookup?: ConnectorLookup;
   now?: () => number;
   /** Per-domain minimum interval in ms, so tests need not sleep. */
   minimumInterval?: Record<string, number>;
@@ -58,6 +62,13 @@ export interface FullTextReadOptions {
 
 const SNAPSHOT_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 const REQUEST_TIMEOUT_MS = 20_000;
+/** A body past these sizes is a mislabelled dataset or an error page, not the
+ *  paper a reader asked about, and reading it would only cost memory. */
+const MAX_TEXT_BYTES = 12 * 1024 * 1024;
+const MAX_PDF_BYTES = 32 * 1024 * 1024;
+/** The PDF route states its own type, so a landing page that answers instead of
+ *  the file is refused before its bytes are parsed. */
+const PDF_CONTENT_TYPES = ["application/pdf", "application/octet-stream", "binary/octet-stream"];
 /** Per-domain minimum interval, mirroring the citation verify conventions. */
 const MINIMUM_INTERVAL: Record<string, number> = { "www.ebi.ac.uk": 350, "arxiv.org": 3_000 };
 /** A paragraph shorter than this is a label ("Table 1."), not a sentence
@@ -74,8 +85,12 @@ function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-export function fullTextSnapshotPath(cwd: string, kind: FullTextRef["kind"], id: string): string {
-  return workspaceFile(cwd, `citations-fulltext/${kind}-${createHash("sha1").update(id).digest("hex")}.json`);
+/** Where the current read of one source is kept. The requested version belongs
+ *  in the name: two versions of one paper are different text, and a citation of
+ *  v2 must never be answered from a cached v1. */
+export function fullTextSnapshotPath(cwd: string, kind: FullTextRef["kind"], id: string, requestedVersion: string | null = null): string {
+  const version = requestedVersion ? `-${requestedVersion}` : "";
+  return workspaceFile(cwd, `citations-fulltext/${kind}-${createHash("sha1").update(id).digest("hex")}${version}.json`);
 }
 
 /** Identity of one stored read of a source: the source, the version asked for
@@ -121,7 +136,7 @@ function escapeRegExp(value: string): string {
 
 /** A stored snapshot is only reused when it still describes the same source;
  *  a file written for another id would hand this citation someone else's text. */
-export async function readFullTextSnapshot(cwd: string, kind: FullTextRef["kind"], id: string, path = fullTextSnapshotPath(cwd, kind, id)): Promise<FullTextSnapshot | null> {
+async function readSnapshotFile(path: string, kind: FullTextRef["kind"], id: string): Promise<FullTextSnapshot | null> {
   const raw = await readJson<Record<string, unknown> | null>(path, null);
   if (!raw || raw.kind !== kind || raw.id !== id || !STATES.includes(raw.state as FullTextState)) return null;
   const sections = Array.isArray(raw.sections) ? raw.sections.filter((entry): entry is { id: string | null; title: string | null } => typeof entry === "object" && entry !== null) : [];
@@ -149,6 +164,14 @@ export async function readFullTextSnapshot(cwd: string, kind: FullTextRef["kind"
   };
 }
 
+/** The current read of one source, for the version the citation names. A file
+ *  written for another version of the same paper is not an answer: it reads as
+ *  no stored text, and the requested version is fetched instead. */
+export async function readFullTextSnapshot(cwd: string, kind: FullTextRef["kind"], id: string, requestedVersion: string | null = null): Promise<FullTextSnapshot | null> {
+  const snapshot = await readSnapshotFile(fullTextSnapshotPath(cwd, kind, id, requestedVersion), kind, id);
+  return snapshot && (snapshot.requested_version ?? null) === requestedVersion ? snapshot : null;
+}
+
 async function throttle(domain: string, deps: FullTextDeps): Promise<void> {
   const now = deps.now ?? Date.now;
   const interval = deps.minimumInterval?.[domain] ?? MINIMUM_INTERVAL[domain] ?? 350;
@@ -165,14 +188,43 @@ async function throttle(domain: string, deps: FullTextDeps): Promise<void> {
 
 type BytesAnswer = { ok: true; url: string; bytes: Buffer } | { ok: false; state: FullTextState; note: string };
 
-async function fetchBytes(url: URL, deps: FullTextDeps): Promise<BytesAnswer> {
+/** What one route may read: the cap on bytes and, where the route states its
+ *  own type, the types that answer for the document. */
+interface FetchLimits { maxBytes: number; allowedContentTypes?: readonly string[] }
+
+const TEXT_LIMITS: FetchLimits = { maxBytes: MAX_TEXT_BYTES };
+const PDF_LIMITS: FetchLimits = { maxBytes: MAX_PDF_BYTES, allowedContentTypes: PDF_CONTENT_TYPES };
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** One reader for every provider. The address is checked before the request is
+ *  recorded, and the restricted connector fetch checks it again on arrival and
+ *  on every redirect hop, caps the body whether or not the response declared a
+ *  length, and applies one deadline to the whole read. */
+async function fetchBytes(url: URL, deps: FullTextDeps, limits: FetchLimits): Promise<BytesAnswer> {
   const domain = url.hostname;
+  const options = { allowPrivate: false, lookup: deps.lookup };
+  try {
+    await validateConnectorOutboundUrl(url.toString(), options);
+  } catch (error) {
+    // Nothing left the process, so this is not an outage the reader may retry:
+    // the deployment is not allowed to reach the address the link names.
+    return { ok: false, state: "download_failed", note: `${domain} refused by the outbound policy: ${messageOf(error)}` };
+  }
   try {
     await throttle(domain, deps);
     // The audit normalizes a URL to its host, so the URL is passed rather than
     // the bare domain the throttle keys on.
     await recordEgress({ connector_type: "literature", connector_id: "citation-fulltext", target_domain: url.toString(), approved: true });
-    const response = await (deps.fetch ?? fetch)(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    const response = await safeConnectorFetch(url.toString(), {
+      ...options,
+      maxResponseBytes: limits.maxBytes,
+      allowedContentTypes: limits.allowedContentTypes,
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      fetchImpl: deps.fetch,
+    });
     if (response.status === 404 || response.status === 410) return { ok: false, state: "no_open_fulltext", note: `${domain} holds no full text at this address (HTTP ${response.status})` };
     // 402 is a payment demand: a closed paper, which is a refusal and not an
     // outage, and never a reason to look for a copy somewhere unapproved.
@@ -184,7 +236,7 @@ async function fetchBytes(url: URL, deps: FullTextDeps): Promise<BytesAnswer> {
     if (!bytes.length) return { ok: false, state: "parse_failed", note: `${domain} returned an empty body` };
     return { ok: true, url: url.toString(), bytes };
   } catch (error) {
-    return { ok: false, state: "download_failed", note: `${domain} request failed: ${error instanceof Error ? error.message : String(error)}` };
+    return { ok: false, state: "download_failed", note: `${domain} request failed: ${messageOf(error)}` };
   }
 }
 
@@ -390,7 +442,7 @@ async function europepmcAttempt(ref: FullTextRef, deps: FullTextDeps): Promise<A
   search.searchParams.set("format", "json");
   search.searchParams.set("resultType", "core");
   search.searchParams.set("pageSize", "5");
-  const found = await fetchBytes(search, deps);
+  const found = await fetchBytes(search, deps, TEXT_LIMITS);
   if (!found.ok) return found;
   let records: Array<Record<string, unknown>> = [];
   try {
@@ -404,7 +456,7 @@ async function europepmcAttempt(ref: FullTextRef, deps: FullTextDeps): Promise<A
   const hit = records.find((record) => String(record.doi ?? "").toLowerCase() === wanted && typeof record.pmcid === "string" && record.pmcid);
   const pmcid = hit ? String(hit.pmcid) : "";
   if (!pmcid) return absent(`europepmc: no open-access full text for ${ref.kind}:${ref.id}`);
-  const full = await fetchBytes(new URL(`https://www.ebi.ac.uk/europepmc/webservices/rest/${encodeURIComponent(pmcid)}/fullTextXML`), deps);
+  const full = await fetchBytes(new URL(`https://www.ebi.ac.uk/europepmc/webservices/rest/${encodeURIComponent(pmcid)}/fullTextXML`), deps, TEXT_LIMITS);
   if (!full.ok) return full.state === "no_open_fulltext" ? absent(`europepmc: ${pmcid} has no full-text XML`) : full;
   const xml = full.bytes.toString("utf8");
   const parsed = parseEpmcXml(xml);
@@ -413,7 +465,7 @@ async function europepmcAttempt(ref: FullTextRef, deps: FullTextDeps): Promise<A
 }
 
 async function arxivHtmlAttempt(ref: FullTextRef, deps: FullTextDeps): Promise<Attempt> {
-  const full = await fetchBytes(new URL(`https://arxiv.org/html/${encodeURIComponent(ref.requested_id)}`), deps);
+  const full = await fetchBytes(new URL(`https://arxiv.org/html/${encodeURIComponent(ref.requested_id)}`), deps, TEXT_LIMITS);
   if (!full.ok) return full.state === "no_open_fulltext" ? absent("arxiv: no HTML rendering for this id") : full;
   const html = full.bytes.toString("utf8");
   const declared = new RegExp(`${escapeRegExp(ref.id)}v(\\d+)`).exec(html)?.[1] ?? null;
@@ -447,7 +499,7 @@ async function openPdfAttempt(cwd: string, ref: FullTextRef, deps: FullTextDeps)
   const link = await openPdfLink(cwd, ref);
   if (!link) return absent("open_pdf: no open-access link was recorded for this source");
   if (!/\.pdf(?:$|[?#])/i.test(link)) return absent(`open_pdf: the open-access link is not a PDF (${link.slice(0, 120)})`);
-  const full = await fetchBytes(new URL(link), deps);
+  const full = await fetchBytes(new URL(link), deps, PDF_LIMITS);
   if (!full.ok) return full;
   const parsed = parsePdf(full.bytes);
   if (!parsed.ok) return parsed;
@@ -490,7 +542,7 @@ export async function fetchFullTextSnapshot(cwd: string, ref: FullTextRef, deps:
   if (!answer) {
     const state = failureState(attempts);
     const snapshot = emptySnapshot(ref, state, attempts.map((attempt) => (attempt.ok ? "" : attempt.note)).filter(Boolean).join("; ") || null, retrievedAt);
-    await writeJsonAtomic(fullTextSnapshotPath(cwd, ref.kind, ref.id), snapshot);
+    await writeJsonAtomic(fullTextSnapshotPath(cwd, ref.kind, ref.id, ref.requested_version), snapshot);
     return snapshot;
   }
   const versionNote = ref.requested_version && !new RegExp(`${escapeRegExp(ref.id)}v(\\d+)`).test(answer.body) ? "arxiv HTML does not state which version it renders" : null;
@@ -509,7 +561,7 @@ export async function fetchFullTextSnapshot(cwd: string, ref: FullTextRef, deps:
     sections: answer.sections,
     passages: answer.passages,
   };
-  await writeJsonAtomic(fullTextSnapshotPath(cwd, ref.kind, ref.id), snapshot);
+  await writeJsonAtomic(fullTextSnapshotPath(cwd, ref.kind, ref.id, ref.requested_version), snapshot);
   // The read that answered this fetch is kept beside the current snapshot. A
   // citation recorded against it has to keep resolving after the paper is
   // fetched again, and overwriting the one file would have erased its text.
@@ -522,7 +574,7 @@ export async function fetchFullTextSnapshot(cwd: string, ref: FullTextRef, deps:
  *  citation carries. A version file that no longer describes the same source
  *  answers null rather than someone else's text. */
 export async function readFullTextVersion(cwd: string, kind: FullTextRef["kind"], id: string, snapshotId: string): Promise<FullTextSnapshot | null> {
-  const snapshot = await readFullTextSnapshot(cwd, kind, id, fullTextVersionPath(cwd, kind, id, snapshotId));
+  const snapshot = await readSnapshotFile(fullTextVersionPath(cwd, kind, id, snapshotId), kind, id);
   return snapshot && snapshotIdOf(snapshot) === snapshotId ? snapshot : null;
 }
 
@@ -533,7 +585,7 @@ export async function readFullTextVersion(cwd: string, kind: FullTextRef["kind"]
  *  nothing is stored: a source that was never read is not a source without
  *  full text. */
 export async function fullTextSnapshot(cwd: string, ref: FullTextRef, options: FullTextReadOptions = {}, deps: FullTextDeps = {}): Promise<FullTextSnapshot | null> {
-  const cached = await readFullTextSnapshot(cwd, ref.kind, ref.id);
+  const cached = await readFullTextSnapshot(cwd, ref.kind, ref.id, ref.requested_version);
   const now = (deps.now ?? Date.now)();
   if (cached && !options.refresh && now - Date.parse(cached.retrieved_at ?? "") < SNAPSHOT_TTL_MS) return cached;
   if (options.fetch === false) return cached;

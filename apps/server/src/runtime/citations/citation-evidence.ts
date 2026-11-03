@@ -218,7 +218,7 @@ async function readRows(cwd: string): Promise<StoredRow[]> {
 async function recordedSnapshot(cwd: string, source: string, snapshotId: string): Promise<FullTextSnapshot | null> {
   const ref = refFromKey(source);
   if (!ref) return null;
-  const current = await readFullTextSnapshot(cwd, ref.kind, ref.id);
+  const current = await readFullTextSnapshot(cwd, ref.kind, ref.id, ref.requested_version);
   if (current && snapshotIdOf(current) === snapshotId) return current;
   return await readFullTextVersion(cwd, ref.kind, ref.id, snapshotId);
 }
