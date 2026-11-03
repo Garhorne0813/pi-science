@@ -149,7 +149,7 @@ jobs:
       # Native process integration tests launch Node, bash and taskkill trees.
       # Serializing server files on the two-core Windows runner prevents unrelated
       # 500 ms/15 s characterization deadlines from competing for process slots.
-      - name: Test contracts, serialized control plane, frontend and skills
+      - name: Test contracts and serialized control plane
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -157,6 +157,32 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm --filter @pi-science/server exec vitest run --fileParallelism=false
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  windows-frontend-skills:
+    name: Windows frontend and skills tests
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.16.0
+          cache: pnpm
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test frontend and skills
+        shell: pwsh
+        run: |
           pnpm --filter frontend test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm test:skills
@@ -371,7 +397,7 @@ jobs:
 
   verify:
     name: verify (${{ matrix.os }})
-    needs: [changes, static-checks, tests, build, browser, macos-launcher, production-install]
+    needs: [changes, static-checks, tests, windows-frontend-skills, build, browser, macos-launcher, production-install]
     if: always()
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
