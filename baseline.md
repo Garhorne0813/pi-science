@@ -96,6 +96,26 @@ GitHub Actions REST API 的 `GET /repos/Garhorne0813/pi-science/actions/runs?eve
 | sandbox acceptance / Linux Bubblewrap acceptance | 40 | 1 | 0 | 1 | 2.4% |
 | sandbox acceptance / macOS Seatbelt acceptance | 36 | 4 | 0 | 2 | 10.0% |
 
+### pnpm 缓存命中
+
+在上述 150 条工作流运行的 941 个最新 attempt job 中，421 个 job 包含 `Setup pnpm` 步骤。421 份日志均可读取：358 次恢复缓存，63 次未找到缓存。按这些 job 计，命中率为 85.0%。这个比率不包括旧 attempt、未执行该步骤的 job 或其他缓存。它不是按 PR 或不同 cache key 计算的命中率。
+
+| job | 恢复次数 / 运行次数 |
+| --- | ---: |
+| `macOS launcher smoke` | 44 / 53 |
+| `static-checks (ubuntu-24.04)` | 35 / 44 |
+| `static-checks (windows-latest)` | 44 / 53 |
+| `build (ubuntu-24.04)` | 38 / 47 |
+| `build (windows-latest)` | 44 / 53 |
+| `tests (ubuntu-24.04)` | 38 / 47 |
+| `tests (windows-latest)` | 44 / 53 |
+| `browser` | 50 / 50 |
+| `static-checks (ubuntu-latest)` | 9 / 9 |
+| `tests (ubuntu-latest)` | 6 / 6 |
+| `build (ubuntu-latest)` | 6 / 6 |
+
+`browser` 依赖 `build`。它的命中率不能单独代表冷启动的命中率。日志中的 `Cache restored from key` 记为恢复，`pnpm cache is not found` 记为未找到。
+
 ### 同一提交样本约束
 
 把 150 条 run 按 `head_sha + workflow name` 分组，没有任何组达到 3 条独立 run。仅 1 条 run 报告 `run_attempt=2`；jobs 集合默认只返回最新 attempt。基于这批数据不能满足同一个 commit 至少运行 3 次的要求。因此不报告 queue、setup、run、总时长的 p50/p95，也不把混合提交的时长分位数当成基线。需要取得同一提交至少 3 次真实的完整运行，且分别保存每次 attempt 的 jobs 和步骤。
@@ -104,7 +124,7 @@ API 中每个 job 的 `started_at`、`completed_at` 和 steps 的开始、结束
 
 ### 缺口
 
-- 还没有获取 150 条 run 所有 job 的缓存日志，不能计算缓存命中率。steps 的 success 不等于 cache hit。
+- 缓存统计只覆盖最新 attempt 的 `Setup pnpm` 日志。旧 attempt 和其他缓存尚未覆盖。
 - GitHub 的 run 集合可以按事件列出，但样本只有前 150 条 workflow run；没有覆盖一个完整自然月，不能据此计算月运行次数或月消耗。
 - GitHub API 中取到的 job 时间不是账单分钟数。尚未取得实际计费记录、免费额度、计费平台系数或账号费用，不能计算月费用。
 - 没有同一 commit 的 3 次完整 PR 测量，也没有足够的真实耗时数据证明关键路径。不能用 DAG 结构单独认定最慢链。
@@ -120,6 +140,8 @@ API 中每个 job 的 `started_at`、`completed_at` 和 steps 的开始、结束
 
 GitHub API 报告，2026-10-01 至 2026-10-31 按创建日期共有 1053 次工作流运行。这个数字包括所有事件，不只是 PR。它不等于 job 次数，也不包括之前创建、在 2026-10 重跑的所有情况。完整 job 分钟数和实际账单尚未取得。
 
+对这 1053 次运行，已读取所有可见 attempt 的 3844 个 job。3827 个 job 同时具有 `Set up job` 开始时间和 job 完成时间，且两个时间都在 2026 年 10 月内。这些可观测区间合计 774020 秒。另有 14 个 skipped job 和 3 个 cancelled job 缺少 setup 时间。这个合计只覆盖已观察的 job，不是完整月用量，也不是账单分钟数。它没有覆盖 2026 年 10 月之前创建、但在 2026 年 10 月重跑的运行。它也没有应用账单取整或平台费率。
+
 仓库是公开仓库。[GitHub 计费说明](https://docs.github.com/en/billing/concepts/product-billing/github-actions)称，公开仓库的标准 GitHub 托管 runner 计算免费。存储和其他服务仍须查看账单。现有数据不足以计算总费用。
 
 ## 判断和下一步
@@ -128,4 +150,4 @@ GitHub API 报告，2026-10-01 至 2026-10-31 按创建日期共有 1053 次工�
 
 配置存在 `changes → build → browser → verify` 依赖链。它只是候选关键路径。缺少符合约束的 3 次同提交运行，不能判断它是否是最慢链，也不能比较优化收益。
 
-所需补充数据：同一提交的 3 次完整 PR 运行及各 attempt 的 job 和 step；缓存日志；覆盖重跑和跨月执行的月度用量；实际账单。当前 `gh` 登录令牌无效。读取受限数据和创建远程 PR 需要恢复有效认证或提供有相应权限的连接。完成基线后，等待用户确认，再进入阶段 1。
+所需补充数据：同一提交的 3 次完整 PR 运行及各 attempt 的 job 和 step；旧 attempt 与其他缓存的日志；覆盖重跑和跨月执行的月度用量；实际账单。当前 `gh` 登录令牌无效。GitHub 连接器已用于创建草稿 PR 和读取公开运行数据。实际账单仍需具备账单读取权限的账号。完成基线后，等待用户确认，再进入阶段 1。
