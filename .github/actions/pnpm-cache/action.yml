@@ -1,0 +1,26 @@
+name: Restore pnpm store
+description: Restore the pnpm store for the current platform, Node, and pnpm version.
+runs:
+  using: composite
+  steps:
+    - name: Locate pnpm store
+      id: store
+      shell: bash
+      run: |
+        node <<'NODE'
+        const { execSync } = require('node:child_process');
+        const { appendFileSync } = require('node:fs');
+        const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+        const version = execSync(`${pnpm} --version`, { encoding: 'utf8' }).trim();
+        const store = execSync(`${pnpm} store path --silent`, { encoding: 'utf8' }).trim();
+        if (!version || !store) throw new Error('Cannot locate pnpm store');
+        appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\narch=${process.arch}\nnode=${process.version}\npath=${store}\n`);
+        NODE
+
+    - name: Restore pnpm store
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.store.outputs.path }}
+        key: pnpm-store-${{ runner.os }}-${{ steps.store.outputs.arch }}-${{ steps.store.outputs.node }}-${{ steps.store.outputs.version }}-${{ hashFiles('pnpm-lock.yaml') }}
+        restore-keys: |
+          pnpm-store-${{ runner.os }}-${{ steps.store.outputs.arch }}-${{ steps.store.outputs.node }}-${{ steps.store.outputs.version }}-

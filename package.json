@@ -17,6 +17,8 @@
     "uat:conversation": "pnpm --filter frontend test:uat:conversation",
     "migrate:sessions": "pnpm --filter @pi-science/server exec tsx src/cli/migrate-sessions.ts",
     "export:legacy-memory": "pnpm --filter @pi-science/server exec tsx src/cli/export-legacy-memory.ts",
-    "lint": "pnpm --parallel --filter @pi-science/server --filter frontend run lint"
+    "lint": "pnpm --parallel --filter @pi-science/server --filter frontend run lint",
+    "hooks:install": "node scripts/install-git-hooks.mjs",
+    "test:hooks": "node --test scripts/pre-push.node-test.mjs"
   }
 }
