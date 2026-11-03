@@ -83,6 +83,13 @@ export function applyInteractionEvent(event: PiScienceEvent): void {
       bumpConversationGeneration();
       const method = String(event.method || payload.method || "input") as PendingInteraction["method"];
       const kind = interactionKind(event.kind) ?? interactionKind(payload.kind) ?? (method === "confirm" ? "confirmation" : "question");
+      const rawGrant = event.mcpGrant ?? payload.mcpGrant;
+      const grant = rawGrant && typeof rawGrant === "object" && !Array.isArray(rawGrant)
+        ? rawGrant as Record<string, unknown> : null;
+      const mcpGrant = kind === "permission" && method === "confirm"
+        && typeof grant?.connectorId === "string" && grant.connectorId
+        && typeof grant?.toolName === "string" && grant.toolName
+        ? { connectorId: grant.connectorId, toolName: grant.toolName } : undefined;
       runtimeStore.setState({
         working: true,
         turnLifecycle: "waiting",
@@ -99,6 +106,7 @@ export function applyInteractionEvent(event: PiScienceEvent): void {
           operation: String(event.operation || payload.operation || ""),
           scope: String(event.scope || payload.scope || ""),
           effect: String(event.effect || payload.effect || ""),
+          ...(mcpGrant ? { mcpGrant } : {}),
           ...(event.toolCallId ? { toolCallId: String(event.toolCallId) } : {}),
           ...(event.questionnaire === true ? { questionnaire: true } : {}),
         }),

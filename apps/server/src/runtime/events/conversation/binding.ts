@@ -46,6 +46,7 @@ export class ConversationBindings {
     let turnNumber = 0;
     let turnStartedAt = boundAt;
     let eventQueue = Promise.resolve();
+    const pendingInteractions = new Map<string, Set<string>>();
     const stderr: StderrChunk[] = [];
     process.on("stderr", (chunk: string) => {
       stderr.push({ text: cap(chunk, 4_000), at: Date.now(), turn: turnNumber });
@@ -85,6 +86,12 @@ export class ConversationBindings {
           } else {
             await this.operations.flushPendingText(cwd, sessionId);
             await this.operations.publish(cwd, sessionId, normalized);
+            if (normalized.type === "interaction.requested" && typeof normalized.requestId === "string") {
+              const pending = pendingInteractions.get(sessionId) ?? new Set<string>();
+              pending.add(normalized.requestId); pendingInteractions.set(sessionId, pending);
+            } else if (normalized.type === "interaction.resolved" && typeof normalized.requestId === "string") {
+              pendingInteractions.get(sessionId)?.delete(normalized.requestId);
+            } else if (normalized.type === "operation.settled") pendingInteractions.delete(sessionId);
           }
         }
         await Promise.resolve(options.observe?.(input, sessionId, identity)).catch(() => undefined);
@@ -95,8 +102,7 @@ export class ConversationBindings {
       const sessionId = options.activeSessionId();
       options.onBusy(false);
       options.onExit();
-      if (this.expectedExits.has(process)) return;
-      if (!sessionId) return;
+      const expected = this.expectedExits.has(process);
       const now = Date.now();
       const recentStderr = stderr
         .filter((item) => item.turn === turnNumber && item.at >= turnStartedAt && now - item.at <= STDERR_WINDOW_MS)
@@ -104,6 +110,13 @@ export class ConversationBindings {
         .join("");
       const suffix = recentStderr ? `\n${cap(recentStderr, 8_000)}` : "";
       const terminal = eventQueue.catch(() => undefined).then(async () => {
+        // A killed worker cannot emit close() resolutions. Clear only this
+        // binding's request IDs, leaving replacement workers' prompts intact.
+        for (const [owner, requests] of pendingInteractions) {
+          for (const requestId of requests) await this.operations.publish(cwd, owner, { type: "interaction.resolved", sessionId: owner, requestId });
+        }
+        pendingInteractions.clear();
+        if (expected || !sessionId) return;
         await this.operations.publish(cwd, sessionId, {
           type: "error",
           sessionId,
@@ -112,7 +125,7 @@ export class ConversationBindings {
         });
         await this.operations.publish(cwd, sessionId, { type: "runtime.paused", sessionId });
       });
-      this.trackObservation(terminal, cwd, sessionId);
+      this.trackObservation(terminal, cwd, sessionId ?? "");
     });
   }
 }

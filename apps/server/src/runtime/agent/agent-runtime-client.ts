@@ -3,6 +3,7 @@ import { ModelConfigService, modelConfigBackend, isAllowedModelEnvRef } from "..
 import { fork, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { runtimeApprovalQueue } from "./approval-queue.js";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { AgentRuntimeExitedError, AgentRuntimeTimeoutError } from "./agent-runtime-errors.js";
@@ -64,6 +65,7 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
   private closed = false;
   private currentSessionId = "";
   private stderrTail = "";
+  private readonly approvalLeases = new Map<string, { controller: AbortController; release?: () => void }>();
 
   private constructor(
     readonly child: ChildProcess,
@@ -191,6 +193,19 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
       return;
     }
     const value = decoded.data;
+    if (value.type === "approval_acquire") {
+      if (this.approvalLeases.has(value.id) || this.closed) return;
+      const lease: { controller: AbortController; release?: () => void } = { controller: new AbortController() };
+      this.approvalLeases.set(value.id, lease);
+      void runtimeApprovalQueue.acquire(value.key, lease.controller.signal).then(async (release) => {
+        if (lease.controller.signal.aborted) { release(); return; }
+        lease.release = release;
+        try { await this.send({ type: "approval_granted", id: value.id }); }
+        catch { this.releaseApproval(value.id); }
+      }).catch(() => this.releaseApproval(value.id));
+      return;
+    }
+    if (value.type === "approval_release") { this.releaseApproval(value.id); return; }
     if (value.type === "runtime_event") this.emit("event", value.event);
     if (value.type === "fatal") this.emit("stderr", value.error);
     if (value.type === "ready") this.currentSessionId = value.sessionId;
@@ -208,6 +223,7 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
   private handleExit(code: number | null, signal: NodeJS.Signals | null, cause?: Error): void {
     if (this.closed) return;
     this.closed = true;
+    for (const id of this.approvalLeases.keys()) this.releaseApproval(id);
     const error = new AgentRuntimeExitedError(cause?.message ?? `agent worker exited with code ${code ?? "null"}${signal ? ` (${signal})` : ""}${this.stderrTail ? `: ${this.stderrTail.trim()}` : ""}`);
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
@@ -215,5 +231,13 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
     }
     this.pending.clear();
     this.emit("exit", { code, signal });
+  }
+
+  private releaseApproval(id: string): void {
+    const lease = this.approvalLeases.get(id);
+    if (!lease) return;
+    this.approvalLeases.delete(id);
+    lease.controller.abort();
+    lease.release?.();
   }
 }

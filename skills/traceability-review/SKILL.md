@@ -97,3 +97,8 @@ cards; keep it as the LAST thing in the message):
 - Evidence: the exact identifier / quoted sentence / file paths, plus what you
   observed.
 - The note must never claim the document has no errors.
+
+## Supporting references
+
+- [Scientific file formats](references/scientific-file-formats.md)
+- [Python environment](references/python-environment.md)

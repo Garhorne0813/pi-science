@@ -1,3 +1,4 @@
+import { registerMemoryRoutes } from "../http/routes/memory-routes.js";
 import { ModelConfigService } from "../model-config/model-config-service.js";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
@@ -31,7 +32,7 @@ import { importLegacyState } from "../storage/sqlite/legacy-state.js";
 import { internalAuthCookie, requestInternalToken, tokensMatch } from "../security/internal-auth.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, runtimeCatalog, settings, modelResources, mcp, jobs, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
+  const { sessions: nodeSessionService, events, sessionRepository, runtimeCatalog, settings, modelResources, mcp, jobs, memory, memoryBackground, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
   let stateReady = !sqliteEnabled;
   let stateError: unknown;
   const app = Fastify({
@@ -39,6 +40,14 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     bodyLimit: config.maxBodyBytes,
     requestIdHeader: "x-request-id",
     genReqId: (request) => request.headers["x-request-id"]?.toString() || randomUUID(),
+  });
+
+  app.addHook("onListen", async () => {
+    const address = app.server.address();
+    if (address && typeof address !== "string") {
+      const host = address.address === "0.0.0.0" ? "127.0.0.1" : address.address === "::" ? "::1" : address.address;
+      modules.configureBackendUrl?.(`http://${host.includes(":") ? `[${host}]` : host}:${address.port}`);
+    }
   });
 
   nodeSessionService.configureLogging((level, message) => app.log[level](message));
@@ -153,7 +162,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeSse || config.nodePiManager) registerSseRoutes(app, nodeSessionService, events);
   if (config.nodeFiles) registerFileReadRoutes(app);
   const titleRuntimes = new CoreTitleRuntimeFactory(undefined, environments);
-  if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository, new AiTitleService(titleRuntimes));
+  if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository, new AiTitleService(titleRuntimes), undefined, sqliteEnabled ? { mcp, events } : undefined);
   if (config.nodeJobs !== false) {
     // Keep command execution rate-limited without throttling read-only control
     // plane routes. The child scope ensures the plugin's onRoute hook sees the
@@ -168,7 +177,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);
   if (config.nodeArtifacts !== false) registerTurnArtifactRoutes(app);
   if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings, modelResources, runtimeCatalog, sqliteEnabled ? mcp : undefined);
-  if (config.nodeSettings !== false && sqliteEnabled) registerMcpRoutes(app, mcp);
+  if (sqliteEnabled) registerMcpRoutes(app, mcp, config.nodeSettings !== false);
   if (config.nodeSettings !== false) {
     registerModelResourceRoutes(app, modelResources, nodeSessionService);
   }
@@ -176,7 +185,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeExecutions !== false) registerKernelExecutionRoutes(app, config, environments, kernels);
   registerNotebookRoutes(app, notebooks, config.internalToken);
   if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, sqliteEnabled ? workspaces : undefined, sqliteEnabled ? mcp : undefined, nodeSessionService);
-  if (config.nodeProject !== false) registerProjectRoutes(app, projectReview);
+  if (config.nodeProject !== false) { registerProjectRoutes(app); registerMemoryRoutes(app, memory, memoryBackground, nodeSessionService, config.internalToken); };
   app.addHook("onReady", async () => {
     if (sqliteEnabled) {
       try {
@@ -191,12 +200,13 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     }
 
   });
+  app.addHook("onReady", async () => { await stateStore.start(); memoryBackground.start(); });
   app.addHook("onClose", async () => nodeSessionService.shutdownAll());
   app.addHook("onClose", async () => titleRuntimes.shutdownAll());
-  app.addHook("onClose", async () => projectReview.shutdown());
+  app.addHook("onClose", async () => memoryBackground.stop());
   app.addHook("onClose", async () => kernels.shutdownAll());
   app.addHook("onClose", async () => notebooks.shutdown());
-  app.addHook("onClose", async () => stateStore.close());
+  app.addHook("onClose", async () => { await memoryBackground.stop(); await stateStore.close(); });
   if (config.nodePiManager) {
     app.all("/api/sessions/*", async (request, reply) => reply.code(404).send({
       ok: false,

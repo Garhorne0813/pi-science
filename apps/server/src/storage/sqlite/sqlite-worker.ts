@@ -1,3 +1,4 @@
+import { executeMemory } from "../../memory/repository.js";
 import { DatabaseSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
 import type { Migration, SqlStatement, SqliteErrorResponse, SqliteRequest, SqliteResponse } from "./protocol.js";
@@ -22,6 +23,7 @@ port.on("message", (request: SqliteRequest) => {
   }
   try {
     switch (request.type) {
+      case "memory": respond(request.id, executeMemory(database, request.command)); break;
       case "get": {
         const value = database.prepare(request.sql).get(...request.params);
         respond(request.id, value ?? null);
@@ -38,6 +40,10 @@ port.on("message", (request: SqliteRequest) => {
         break;
       case "migrate":
         respond(request.id, runMigrations(request.migrations));
+        break;
+      case "backup":
+        database.prepare("VACUUM INTO ?").run(request.path);
+        respond(request.id, null);
         break;
       case "checkpoint":
         respond(request.id, database.prepare("PRAGMA wal_checkpoint(TRUNCATE)").all());
@@ -100,7 +106,7 @@ function respond(id: number, value: unknown): void {
 }
 
 function respondError(id: number, error: unknown, forcedCode?: string): void {
-  const value = error as { name?: unknown; message?: unknown; stack?: unknown; code?: unknown };
+  const value = error as { name?: unknown; message?: unknown; stack?: unknown; code?: unknown; statusCode?: number };
   const message: SqliteErrorResponse = {
     type: "response",
     id,
@@ -108,6 +114,7 @@ function respondError(id: number, error: unknown, forcedCode?: string): void {
     error: {
       name: typeof value?.name === "string" ? value.name : "SqliteWorkerError",
       message: typeof value?.message === "string" ? value.message : String(error),
+      ...((value.statusCode || value.name === "ZodError") ? { statusCode: value.statusCode ?? 400 } : {}),
       ...(forcedCode || typeof value?.code === "string" ? { code: forcedCode ?? String(value.code) } : {}),
       ...(typeof value?.stack === "string" ? { stack: value.stack } : {}),
     },

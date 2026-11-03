@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, rm, utimes } from "node:fs/promises";
+import { mkdtemp, writeFile, rm, utimes, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import net from "node:net";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { resolveFrontendDist } from "./resolve-frontend-dist.mjs";
 import { supportedNode, parsePort, writableDirectory, portAvailable, instanceLockAvailable } from "./doctor.mjs";
 
@@ -53,4 +55,23 @@ test("frontend build overrides are anchored to the checkout", () => {
   assert.equal(resolveFrontendDist(root, ""), join(root, "frontend", "dist"));
   const external = join(tmpdir(), "external frontend");
   assert.equal(resolveFrontendDist(root, external), external);
+});
+
+test("doctor rejects a denied nested helper and honors explicit trusted-host mode", { skip: process.platform !== "linux" }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "doctor nested seccomp "));
+  try {
+    for (const name of ["rg", "socat", "bwrap"]) {
+      const body = name === "bwrap" ? 'for arg do case "$arg" in */apply-seccomp) echo "nested helper denied" >&2; exit 1;; esac; done' : "exit 0";
+      await writeFile(join(root, name), `#!/bin/sh\n${body}\n`);
+      await chmod(join(root, name), 0o755);
+    }
+    const environment = { ...process.env, PI_SCIENCE_HOME: join(root, "missing-data"), PI_SCIENCE_SANDBOX_RIPGREP: join(root, "rg"), PI_SCIENCE_SANDBOX_SOCAT: join(root, "socat"), PI_SCIENCE_SANDBOX_BWRAP: join(root, "bwrap"), PI_SCIENCE_EXECUTION_MODE: "required" };
+    const run = (env) => spawnSync(process.execPath, [fileURLToPath(new URL("./doctor.mjs", import.meta.url))], { env, encoding: "utf8", timeout: 15000 });
+    const denied = run(environment);
+    assert.equal(denied.status, 1, denied.stderr);
+    assert.match(denied.stdout, /\[FAIL\] Linux sandbox: Linux nested seccomp startup check failed: nested helper denied/);
+    const trusted = run({ ...environment, PI_SCIENCE_EXECUTION_MODE: "trusted-host" });
+    assert.match(trusted.stdout, /\[OK\] Linux sandbox: skipped: operator explicitly selected trusted-host mode/);
+    assert.doesNotMatch(trusted.stdout, /nested helper denied/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

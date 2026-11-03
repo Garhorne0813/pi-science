@@ -11,13 +11,9 @@ const port = Number(process.env.PI_SCIENCE_SSE_BUDGET_PORT || 4174);
 const origin = `http://127.0.0.1:${port}`;
 const sessionEndpoint = `/api/sessions/${VISUAL_SESSION}/events`;
 const executionEndpoint = "/api/executions/events";
-const knowledgeEndpoint = "/api/project-knowledge/events";
-/** The session page's necessary subscriptions: its own conversation stream plus
- *  the workspace-wide project-knowledge signal. Anything else is over budget. */
-const SESSION_PAGE_BUDGET = [sessionEndpoint, knowledgeEndpoint];
-/** The executions page reads runs over REST, so it needs the lossy invalidation
- *  signal for that cache and the same workspace-wide signal as every route. */
-const RUNS_PAGE_BUDGET = [executionEndpoint, knowledgeEndpoint];
+// Memory badges poll REST; only the route's live conversation/execution stream is needed.
+const SESSION_PAGE_BUDGET = [sessionEndpoint];
+const RUNS_PAGE_BUDGET = [executionEndpoint];
 const server = spawn(process.execPath, ["tests/visual/fixtures/mock-server.mjs"], {
   cwd: frontendRoot,
   env: { ...process.env, PORT: String(port) },
@@ -91,7 +87,7 @@ async function installSourceTracker(context) {
 async function setHidden(page, hidden) {
   await page.evaluate((value) => {
     window.__sseBudgetHidden = value;
-    document.dispatchEvent(new Event("visibilitychange"));
+    document.dispatchEvent(new Event("visibilitychange", {bubbles:true}));
   }, hidden);
 }
 
@@ -230,7 +226,7 @@ try {
   assert(await activeSourceCount(runsPage, executionEndpoint) === 1, "Resuming executions must leave one invalidation SSE");
   await assertStreamBudget(runsPage, "Resuming executions", RUNS_PAGE_BUDGET);
 
-  // These three tabs already consume six HTTP/1.1 SSE sockets. Release them
+  // These three tabs already consume three HTTP/1.1 SSE sockets. Release them
   // before opening independent scenarios on the same fixture origin.
   console.log(`Observed session-page streams: ${(await activeSourcePaths(firstPage)).join(", ")}`);
   console.log(`Observed executions-page streams: ${(await activeSourcePaths(runsPage)).join(", ")}`);
@@ -239,22 +235,22 @@ try {
   await runsPage.close();
 
 
-  // A knowledge badge must use the REST count after a hidden interval.
-  const knowledgePage = await context.newPage();
+  // A Memory badge must refresh its authoritative REST count after a hidden interval.
+  const memoryPage = await context.newPage();
   let pendingCount = 1;
-  await knowledgePage.route("**/api/project-knowledge/proposals/count**", (route) =>
-    route.fulfill({ json: { pending_count: pendingCount } }));
-  await openSession(knowledgePage);
-  const badge = knowledgePage.getByRole("link", { name: /Project Knowledge/ });
+  await memoryPage.route("**/api/memory/summary**", (route) =>
+    route.fulfill({ json: { pendingCount, enabled:true, count:pendingCount } }));
+  await openSession(memoryPage);
+  const badge = memoryPage.getByRole("link", { name: /^Memory/ });
   await badge.getByText("1", { exact: true }).waitFor();
-  await setHidden(knowledgePage, true);
-  await waitForNoActiveSources(knowledgePage, "Knowledge hidden");
+  await setHidden(memoryPage, true);
+  await waitForNoActiveSources(memoryPage, "Memory hidden");
   pendingCount = 2;
-  await setHidden(knowledgePage, false);
+  await setHidden(memoryPage, false);
   await badge.getByText("2", { exact: true }).waitFor();
-  await waitForOpenSource(knowledgePage, knowledgeEndpoint);
-  await assertStreamBudget(knowledgePage, "Knowledge catch-up", SESSION_PAGE_BUDGET);
-  await knowledgePage.close();
+  await waitForOpenSource(memoryPage, sessionEndpoint);
+  await assertStreamBudget(memoryPage, "Memory count catch-up", SESSION_PAGE_BUDGET);
+  await memoryPage.close();
 
   // Runs and its Notebook inspector must share the execution signal.
   const notebookPage = await context.newPage();
@@ -309,21 +305,22 @@ try {
   await assertStreamBudget(notebookPage, "Leaving Runs releases execution SSE", SESSION_PAGE_BUDGET);
   await notebookPage.close();
 
-  // Historical Research bookmarks use Knowledge archives and open no Research stream.
+  // Historical Research bookmarks use Run history archives and only the execution signal.
   const archivePage = await context.newPage();
-  await archivePage.route("**/api/project-memory/archives**", (route) => route.fulfill({ json: { archives: [{ id: "old", title: "Historical research", objective: "Inspect saved evidence", status: "completed", path: "research/archives/old/history.json", record_count: 1 }] } }));
+  await archivePage.route("**/api/project/archives**", (route) => route.fulfill({ json: { archives: [{ id: "old", title: "Historical research", objective: "Inspect saved evidence", status: "completed", path: "research/archives/old/history.json", record_count: 1 }] } }));
   await archivePage.goto(`${origin}/workspace/${encodeURIComponent(cwd)}/research`, { waitUntil: "domcontentloaded" });
-  await archivePage.getByRole("button", { name: /Historical research/ }).waitFor();
-  assert(new URL(archivePage.url()).pathname.endsWith("/knowledge"), "Historical Research route redirects to Knowledge");
-  await assertStreamBudget(archivePage, "Historical archive", [knowledgeEndpoint]);
+  await archivePage.getByRole("heading", { name: "Historical research", exact: true }).waitFor();
+  assert(new URL(archivePage.url()).pathname.endsWith("/runs"), "Historical Research route redirects to Run history");
+  await waitForOpenSource(archivePage, executionEndpoint);
+  await assertStreamBudget(archivePage, "Historical archive", RUNS_PAGE_BUDGET);
   await setHidden(archivePage, true);
   await waitForNoActiveSources(archivePage, "Archive hidden");
   await setHidden(archivePage, false);
-  await waitForOpenSource(archivePage, knowledgeEndpoint);
-  await assertStreamBudget(archivePage, "Archive catch-up", [knowledgeEndpoint]);
+  await waitForOpenSource(archivePage, executionEndpoint);
+  await assertStreamBudget(archivePage, "Archive catch-up", RUNS_PAGE_BUDGET);
   await archivePage.close();
 
-  console.log("SSE connection budget passed: per-page subscription sets, two visible tabs, hidden-tab release, first CONNECTING resume, reload, executions resume, Knowledge count, shared Notebook stream, historical archive redirect, and /api/health.");
+  console.log("SSE connection budget passed: per-page subscription sets, two visible tabs, hidden-tab release, first CONNECTING resume, reload, executions resume, Memory REST count, shared Notebook stream, historical archive redirect, and /api/health.");
   await context.close();
 } finally {
   // A rejected close must never skip the SIGTERM: a leftover fixture server

@@ -343,13 +343,11 @@ describe("execution scope and timeline", () => {
     expect(screen.getByLabelText("location")).toHaveTextContent("execution=exec_job");
   });
 
+  // Rendering full 50-row pages and filtering need more CPU time on Windows CI.
   it("requests older pages and resets paging when search changes", async () => {
-    const defaultFetch = fetchMock.getMockImplementation()!;
-    fetchMock.mockImplementation(async (input) => {
-      const url = String(input);
-      if (url.includes("/api/executions?") && !new URL(url, "http://localhost").searchParams.get("search")) return jsonResponse({ executions: Array.from({ length: 50 }, (_, index) => ({ ...toolExecution, execution_id: `exec-page-${index}` })), total: 125, filtered_total: 125 });
-      return defaultFetch(input);
-    });
+    const records = [...Array.from({ length: 124 }, (_, index) => ({ ...toolExecution, execution_id: `exec-page-${index}` })), kernelExecution];
+    // Keep pages, target details and filtered totals consistent with one dataset.
+    fetchMock.mockImplementation((input) => fetchExecutions(input, records));
     renderPage();
     await screen.findByText("agent-event-observer");
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
@@ -359,7 +357,7 @@ describe("execution scope and timeline", () => {
     const lastListCall = fetchMock.mock.calls.filter(([input]) => String(input).includes("/api/executions?" )).at(-1);
     expect(String(lastListCall?.[0])).toContain("offset=0");
     expect(String(lastListCall?.[0])).toContain("search=result.csv");
-  });
+  }, 15_000);
 
   it.each(["automatic", "clicked", "deep-link"])("ordinary paging selects the new page while explicit deep links stay pinned: %s", async (mode) => {
     const deepLink = mode === "deep-link";

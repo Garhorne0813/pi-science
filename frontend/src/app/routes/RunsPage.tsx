@@ -1,3 +1,4 @@
+import { ProjectArchives } from "../../components/runs/ProjectArchives";
 import { useEffect, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, AlignLeft, Braces, FileSearch, Loader2, Play, AlertTriangle } from "lucide-react";
@@ -33,6 +34,7 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
   const setComposerDraft = useRuntimeStore((state) => state.setDraft);
   const sessions = useRuntimeStore((state) => state.sessions);
   const sessionTitles = Object.assign(Object.create(null) as Record<string, string>, Object.fromEntries((sessions ?? []).filter((session) => session.cwd === workspaceCwd && session.name).map((session) => [session.id, session.name!])));
+  const [showArchives,setShowArchives]=useState(()=>new URLSearchParams(window.location.search).has("archives"));
   const [searchParams, setSearchParams] = useSearchParams();
   const contextSessionId = sessionId || searchParams.get("session_id") || undefined;
   const activeSessionId = searchParams.get("scope") === "workspace" ? undefined : contextSessionId;
@@ -189,6 +191,8 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
   const outsidePage = Boolean(selected && !pageSelected && !loading && targetPage);
 
   return <WorkspacePage className="runs-page">
+    <button type="button" className="text-sm text-accent" onClick={()=>setShowArchives(v=>!v)}>{t("memory.archives")}</button>
+    {showArchives&&<ProjectArchives cwd={workspaceCwd} onError={message=>{if(message)toast(message,"error");}}/>}
     <WorkspacePageHeader title={t("runs.title")} description={<span title={activeSessionId}>{scopeLabel}{contextTitle && ` · ${contextTitle}`}</span>} actions={<>
       {hasSessionKernel && <button type="button" onClick={() => openInspector({ variant: "notebook-panel" })} className="flex min-h-9 items-center gap-2 rounded-input border border-border bg-surface px-3 text-sm text-text"><Braces size={15} />{t("notebook.openSessionKernel")}</button>}
       <WorkspacePageRefreshButton label={t("common.refresh")} loading={loading} onClick={() => { void runsResult.refetch(); if (selectedId && !pageSelected) void targetResult.refetch(); if (targetPage) void targetPageResult.refetch(); }} />

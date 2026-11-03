@@ -1,78 +1,58 @@
-import { WorkspaceLifecycleBusyError } from "../../runtime/workspace/workspace-lifecycle.js";
-import { randomUUID } from "node:crypto";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import {
+  legacyArchives,
+  exportLegacyArchive,
+} from "../../project-review/legacy-archives.js";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
-import { ProjectReviewBusyError, type ProjectReviewService } from "../../project-review/service.js";
-import { ensureKnowledgeItem, mutateProjectState, readProjectState as state, timestamp as now, type ProjectState } from "../../project-review/project-state.js";
-import { subscribeProjectKnowledgeEvents } from "../../project-review/events.js";
-import { exportLegacyArchive, legacyArchives, legacyMemoryRecords } from "../../project-review/legacy-archives.js";
-
-function q(request: { query: unknown }, key: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[key]; return typeof value === "string" && value ? value : fallback; }
-async function ws(request: { query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): Promise<string | null> { try { return await validateWorkspaceCwd(q(request, "cwd")); } catch (error) { reply.code(403).send({ error: String(error) }); return null; } }
-async function projectContent(cwd: string): Promise<string> { const path = join(cwd, "PROJECT.md"); try { return await readFile(path, "utf8"); } catch { return `# ${(cwd.split(/[\\/]/).at(-1) ?? "Project").replaceAll("-", " ")}\n\n## Project Goal / 项目目标\n\nDescribe the project goal, scope, and constraints here.\n`; } }
-function decideMemory(item: { approval: { required: "manual" | "explicit_user" | "policy"; status: "pending" | "approved" | "rejected"; actor: string | null; decided_at: string | null; reason: string | null; policy_version: string | null } }, status: "approved" | "rejected", reason: string | null): void {
-  item.approval = { ...item.approval, required: "manual", status, actor: "user", decided_at: now(), reason, policy_version: item.approval.policy_version ?? null };
-}
-function appendDecision(state: ProjectState, targetId: string, action: "accepted" | "rejected", reason: string | null): void {
-  state.decisions.push({ id: `decision-${randomUUID().slice(0, 12)}`, target_id: targetId, action, actor: "user", reason, created_at: now() });
-}
-class ProjectMemoryMutationError extends Error {
-  constructor(readonly statusCode: number, message: string) { super(message); this.name = "ProjectMemoryMutationError"; }
-}
-function mutationFailure(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, error: unknown): unknown {
-  if (error instanceof ProjectMemoryMutationError) return reply.code(error.statusCode).send({ error: error.message });
-  throw error;
-}
-
-export function registerProjectRoutes(app: FastifyInstance, review: ProjectReviewService): void {
-  // The ✨ Review button posts cwd in the body; the query form stays accepted so
-  // the route matches the rest of this file.
-  app.post("/api/project-knowledge/review", async (request, reply) => {
-    const body = (request.body ?? {}) as { cwd?: unknown; session_id?: unknown; force_full_session?: unknown };
-    let cwd: string;
-    try { cwd = await validateWorkspaceCwd(typeof body.cwd === "string" && body.cwd ? body.cwd : q(request, "cwd")); }
-    catch (error) { return reply.code(403).send({ error: String(error) }); }
-    if (review.isRunning(cwd)) return reply.code(409).send({ error: "A project review is already running for this workspace" });
-    try { return await review.run(cwd, { sessionId: typeof body.session_id === "string" ? body.session_id : null, forceFullSession: body.force_full_session === true, trigger: "manual" }); }
-    catch (error) { return reply.code(error instanceof ProjectReviewBusyError || error instanceof WorkspaceLifecycleBusyError ? 409 : 500).send({ error: error instanceof Error ? error.message : String(error) }); }
+export function registerProjectRoutes(app: FastifyInstance): void {
+  app.get("/api/project/archives", async (req) => {
+    const cwd = await projectWorkspace(
+      (req.query as { cwd?: string }).cwd ?? ".",
+    );
+    return { archives: await legacyArchives(cwd) };
   });
-  app.get("/api/project-knowledge/summary", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); return { workspace: cwd, project_file: "PROJECT.md", pending_count: current.proposals.filter((item) => item.status === "pending").length, knowledge_count: current.items.filter((item) => item.status === "active").length, auto_review: current.policy.auto_review }; });
-  app.post("/api/project-knowledge/initialize", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await mutateProjectState(cwd, (value) => value); return { workspace: cwd, project_file: "PROJECT.md", pending_count: 0, knowledge_count: current.items.length, auto_review: current.policy.auto_review }; });
-  app.get("/api/project-knowledge/project", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); return { workspace: cwd, project_file: "PROJECT.md", pending_count: current.proposals.filter((item) => item.status === "pending").length, knowledge_count: current.items.length, auto_review: current.policy.auto_review, content: await projectContent(cwd) }; });
-  app.get("/api/project-knowledge/project/versions", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); return { versions: current.project_versions.slice(-(Number((request.query as { limit?: string }).limit ?? 100))).reverse().map(({ content: _content, ...item }) => item) }; });
-  app.post<{ Params: { version_id: string } }>("/api/project-knowledge/project/versions/:version_id/restore", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); const version = current.project_versions.find((item) => item.id === request.params.version_id); if (!version) return reply.code(404).send({ error: "Project document version not found" }); await mkdir(cwd, { recursive: true }); await writeFile(join(cwd, "PROJECT.md"), version.content, "utf8"); return { ok: true, content: version.content, version_id: version.id }; });
-  app.get("/api/project-knowledge/items", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); const include = String((request.query as { include_inactive?: string }).include_inactive ?? "true") !== "false"; return { items: include ? current.items : current.items.filter((item) => item.status === "active") }; });
-  app.get("/api/project-knowledge/proposals", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); const status = (request.query as { status?: string }).status; const proposals = status ? current.proposals.filter((item) => item.status === status) : current.proposals; return { proposals, pending_count: current.proposals.filter((item) => item.status === "pending").length }; });
-  app.get("/api/project-knowledge/proposals/count", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; return { pending_count: (await state(cwd)).proposals.filter((item) => item.status === "pending").length }; });
-  app.get("/api/project-knowledge/events", async (request, reply) => {
-    const cwd = await ws(request, reply); if (!cwd) return;
-    reply.hijack();
-    reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "x-accel-buffering": "no" });
-    const push = (text: string) => { if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.write(text); };
-    push(": connected\n\n");
-    const unsubscribe = subscribeProjectKnowledgeEvents(cwd, (event) => push(`data: ${JSON.stringify(event)}\n\n`));
-    const heartbeat = setInterval(() => push(": ping\n\n"), 15_000);
-    let closed = false;
-    const cleanup = () => { if (closed) return; closed = true; clearInterval(heartbeat); unsubscribe(); };
-    request.raw.once("close", cleanup);
-    reply.raw.once("close", cleanup);
+  app.post<{ Params: { id: string } }>(
+    "/api/project/archives/:id/export",
+    async (req, reply) => {
+      const cwd = await projectWorkspace(
+        (req.query as { cwd?: string }).cwd ?? ".",
+      );
+      const archive = await exportLegacyArchive(cwd, req.params.id);
+      return archive
+        ? { archive }
+        : reply.code(404).send({ error: "Archive not found" });
+    },
+  );
+  app.get("/api/project/document", async (req) => {
+    const cwd = await projectWorkspace(
+      (req.query as { cwd?: string }).cwd ?? ".",
+    );
+    try {
+      return { content: await readFile(join(cwd, "PROJECT.md"), "utf8") };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        return { content: "" };
+      throw error;
+    }
   });
-  app.patch<{ Params: { proposal_id: string } }>("/api/project-knowledge/proposals/:proposal_id", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; try { return await mutateProjectState(cwd, (current) => { const item = current.proposals.find((row) => row.id === request.params.proposal_id); if (!item) throw new ProjectMemoryMutationError(404, "Proposal not found"); if (item.status !== "pending") throw new ProjectMemoryMutationError(409, "Only pending proposals can be edited"); Object.assign(item, request.body as Record<string, unknown>, { updated_at: now() }); return { proposal: item }; }); } catch (error) { return mutationFailure(reply, error); } });
-  app.get<{ Params: { proposal_id: string } }>("/api/project-knowledge/proposals/:proposal_id/preview", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const item = (await state(cwd)).proposals.find((row) => row.id === request.params.proposal_id); if (!item) return reply.code(404).send({ error: "Proposal not found" }); return { ok: true, proposal_type: item.proposal_type, before: "", after: `${item.title}\n${item.summary}`, conflicts_with: item.conflicts_with, supersedes: item.supersedes }; });
-  app.post<{ Params: { proposal_id: string } }>("/api/project-knowledge/proposals/:proposal_id/accept", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const body = (request.body ?? {}) as { title?: string; summary?: string }; try { return await mutateProjectState(cwd, (current) => { const proposal = current.proposals.find((row) => row.id === request.params.proposal_id); if (!proposal) throw new ProjectMemoryMutationError(404, "Proposal not found"); if (proposal.status !== "pending") throw new ProjectMemoryMutationError(409, "Proposal is not pending"); proposal.status = "accepted"; proposal.updated_at = now(); proposal.decision_reason = null; decideMemory(proposal, "approved", null); appendDecision(current, proposal.id, "accepted", null); if (body.title) proposal.title = body.title; if (body.summary) proposal.summary = body.summary; const knowledgeItem = ensureKnowledgeItem(current, proposal); return knowledgeItem ? { ok: true, proposal_id: proposal.id, knowledge_item: knowledgeItem } : { ok: true, proposal_id: proposal.id, file_operation: { id: `history-${randomUUID().slice(0, 12)}`, operations: proposal.operations } }; }); } catch (error) { return mutationFailure(reply, error); } });
-  app.post<{ Params: { proposal_id: string } }>("/api/project-knowledge/proposals/:proposal_id/reject", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const reason = String(((request.body ?? {}) as { reason?: unknown }).reason ?? ""); try { return await mutateProjectState(cwd, (current) => { const proposal = current.proposals.find((row) => row.id === request.params.proposal_id); if (!proposal) throw new ProjectMemoryMutationError(404, "Proposal not found"); if (proposal.status !== "pending") throw new ProjectMemoryMutationError(409, "Proposal is not pending"); proposal.status = "rejected"; proposal.decision_reason = reason; proposal.updated_at = now(); decideMemory(proposal, "rejected", reason); appendDecision(current, proposal.id, "rejected", reason); return { ok: true, proposal }; }); } catch (error) { return mutationFailure(reply, error); } });
-  app.post("/api/project-knowledge/proposals/batch", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const body = (request.body ?? {}) as { proposal_ids?: unknown; action?: string; reason?: string }; if (body.action !== "accept" && body.action !== "reject") return reply.code(400).send({ error: "Batch action must be accept or reject" }); return mutateProjectState(cwd, (current) => { const failures: unknown[] = []; const results: unknown[] = []; for (const id of Array.isArray(body.proposal_ids) ? body.proposal_ids.map(String) : []) { const proposal = current.proposals.find((row) => row.id === id); if (!proposal || proposal.status !== "pending") failures.push({ proposal_id: id, status: 409, detail: "Proposal is not pending" }); else { proposal.status = body.action === "accept" ? "accepted" : "rejected"; proposal.decision_reason = body.reason ?? null; proposal.updated_at = now(); decideMemory(proposal, body.action === "accept" ? "approved" : "rejected", body.reason ?? null); appendDecision(current, proposal.id, body.action === "accept" ? "accepted" : "rejected", body.reason ?? null); const knowledgeItem = body.action === "accept" ? ensureKnowledgeItem(current, proposal) : null; results.push({ proposal_id: id, status: proposal.status, ...(knowledgeItem ? { knowledge_item: knowledgeItem } : {}) }); } } return { ok: failures.length === 0, results, failures }; }); });
-  app.get("/api/project-knowledge/policy", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; return (await state(cwd)).policy; });
-  app.patch("/api/project-knowledge/policy", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; return mutateProjectState(cwd, (current) => { Object.assign(current.policy, request.body as Record<string, unknown>, { updated_at: now() }); return current.policy; }); });
-  app.get("/api/project-knowledge/history", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; return { history: (await state(cwd)).history }; });
-  app.get("/api/project-knowledge/files/views", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; return { updated_at: now(), files: [], by_type: {}, by_topic: {}, by_month: {} }; });
-  app.post<{ Params: { history_id: string } }>("/api/project-knowledge/file-operations/:history_id/undo", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); return current.history.some((item) => item.id === request.params.history_id) ? { ok: true, undo: { id: request.params.history_id, status: "not_required" } } : reply.code(404).send({ error: "File operation history not found" }); });
+  app.put("/api/project/document", async (req, reply) => {
+    const cwd = await projectWorkspace(
+      (req.query as { cwd?: string }).cwd ?? ".",
+    );
+    const { content } = (req.body ?? {}) as { content?: unknown };
+    if (typeof content !== "string")
+      return reply.code(400).send({ error: "content must be text" });
+    await writeFile(join(cwd, "PROJECT.md"), content, "utf8");
+    return { ok: true };
+  });
+}
 
-  app.get("/api/project-memory/overview", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); const rows = await legacyMemoryRecords(cwd); return { workspace: cwd, project_file: "PROJECT.md", pending_count: current.proposals.filter((item) => item.status === "pending").length, knowledge_count: current.items.length, auto_review: current.policy.auto_review, run_count: rows.filter((row) => row.record_type === "candidate.execution_finished").length, artifact_count: rows.reduce((sum, row) => sum + (Array.isArray((row.payload.evaluation as { artifact_refs?: unknown[] } | undefined)?.artifact_refs) ? (row.payload.evaluation as { artifact_refs: unknown[] }).artifact_refs.length : 0), 0), result_review_count: rows.filter((row) => row.record_type === "candidate.evaluated").length, research_record_count: rows.length, research_loop_count: new Set(rows.flatMap((row) => row.loop_id ? [row.loop_id] : [])).size, active_research_loop_count: 0 }; });
-  app.get("/api/project-memory/timeline", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; return { timeline: (await legacyMemoryRecords(cwd)).reverse().slice(0, Number((request.query as { limit?: string }).limit ?? 200)) }; });
-  app.get("/api/project-memory/archives", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; return { archives: await legacyArchives(cwd) }; });
-  app.post<{ Params: { archive_id: string } }>("/api/project-memory/archives/:archive_id/export", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const archive = await exportLegacyArchive(cwd, request.params.archive_id); return archive ? { archive } : reply.code(404).send({ error: "Historical archive not found" }); });
-  app.post("/api/project-memory/index/rebuild", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; return { ok: true, indexed_at: now(), records: (await legacyMemoryRecords(cwd)).length }; });
+async function projectWorkspace(value: string) {
+  try {
+    return await validateWorkspaceCwd(value);
+  } catch (error) {
+    throw Object.assign(new Error(String(error)), { statusCode: 403 });
+  }
 }

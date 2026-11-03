@@ -18,6 +18,44 @@ function request(domain = "api.example.org", profile: "analysis" | "mcp" = "anal
   const run = (signal?: AbortSignal) => tool.execute("request", { domain, profile, reason: "Download study data" }, () => {}, {} as never, {} as never, { ...BACKGROUND_CONTEXT, abortSignal: signal });
   return { events, bridge, run };
 }
+it.each(["allow", "deny"])("rechecks duplicate requests across workers after %s is saved", async (answer) => {
+  const first = request(), second = request();
+  const a = first.run();
+  await vi.waitFor(() => expect(first.events).toHaveLength(1));
+  const b = second.run();
+  await vi.waitFor(() => expect(second.bridge.hasPending).toBe(true));
+  expect(second.events).toHaveLength(0);
+  first.bridge.notify("extension_ui_response", { id: first.events[0]!.id, value: answer });
+  expect(await a).toMatchObject({ details: { status: answer === "allow" ? "granted" : "denied" } });
+  expect(await b).toMatchObject({ details: { status: answer === "allow" ? "already_allowed" : "denied" } });
+  expect(second.events).toHaveLength(0);
+});
+
+it("does not share a one-request network denial with a waiting caller", async () => {
+  const first = request(), second = request();
+  const a = first.run();
+  await vi.waitFor(() => expect(first.events).toHaveLength(1));
+  const b = second.run();
+  first.bridge.notify("extension_ui_response", { id: first.events[0]!.id, value: "deny_once" });
+  await a;
+  await vi.waitFor(() => expect(second.events).toHaveLength(1));
+  second.bridge.notify("extension_ui_response", { id: second.events[0]!.id, value: "allow" });
+  expect(await b).toMatchObject({ details: { status: "granted" } });
+});
+
+it("does not block a session-authorized caller behind another session's approval", async () => {
+  const waiting = request();
+  const pending = waiting.run();
+  try {
+    await vi.waitFor(() => expect(waiting.events).toHaveLength(1));
+    await saveSessionApproval(root, "already-authorized", "auto", 0);
+    const authorized = request("api.example.org", "analysis", "already-authorized");
+    expect(await authorized.run()).toMatchObject({ details: { status: "session_allowed" } });
+    expect(authorized.events).toEqual([]);
+    waiting.bridge.notify("extension_ui_response", { id: waiting.events[0]!.id, value: "deny_once" });
+    await pending;
+  } finally { waiting.bridge.close(); await Promise.allSettled([pending]); }
+});
 it.each(["api.example.org", "192.168.1.10:8080"])("persists %s only after approval and avoids reprompting", async (domain) => {
   const { events, bridge, run } = request(domain); const result = run();
   await vi.waitFor(() => expect(events).toHaveLength(1));

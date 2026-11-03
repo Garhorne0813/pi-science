@@ -31,7 +31,7 @@ describe("activityPolicy", () => {
 
 describe("toolEffect", () => {
   it("treats known read-only tools as observation", () => {
-    for (const tool of ["read", "read_file", "view_image", "grep", "glob", "web_fetch", "notebook_read"]) {
+    for (const tool of ["read", "read_file", "view_image", "ls", "grep", "glob", "web_fetch", "notebook_read"]) {
       expect(toolEffect(block(tool))).toBe("observe");
     }
   });

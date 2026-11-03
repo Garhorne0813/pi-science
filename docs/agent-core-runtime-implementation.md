@@ -6,7 +6,8 @@
 | --- | --- |
 | 对话 | `AgentCoreSessionService`：v4 会话、串行配置、稳定 admission、生命周期与恢复 |
 | 子代理 | 服务端 dispatch 和隐藏 Worker：single、chain、parallel、取消与容量限制 |
-| 研究/复查 | Core runner：结构化结果、usage、schema 修复、期限和停止 |
+| 研究 | 当前对话 Agent 执行 auto-research Skill，复用子代理、执行预算和文件检查点，见 [Auto Research](auto-research.md) |
+| Memory | 主 Agent 工具访问控制面 MemoryService；Extraction/Dream 独立调用模型，不创建隐藏 Core 会话，见[统一记忆](unified-memory.md) |
 | 标题 | 临时隐藏 Worker，禁用工具和技能，完成或关闭时清理 |
 | 模型 | pi-ai 官方目录和配置的 provider/endpoint，支持 canonical 模型引用 |
 | 工具 | read/bash/edit/write、todo、Notebook、问卷与 MCP SDK 适配 |

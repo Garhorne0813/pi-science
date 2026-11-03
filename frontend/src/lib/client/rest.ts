@@ -331,7 +331,7 @@ export async function respondToInteraction(
   requestId: string,
   response: InteractionResponse,
   cwd?: string,
-): Promise<void> {
+): Promise<{ persistentGrant?: boolean | null; warning?: string }> {
   const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
   const res = await request(
     `${baseUrl}/api/sessions/${sessionId}/interactions/${encodeURIComponent(requestId)}${params}`,
@@ -346,6 +346,7 @@ export async function respondToInteraction(
   if (!res.ok || data.ok === false) {
     throw new Error(responseError(data, `Interaction response failed: ${res.statusText}`));
   }
+  return { persistentGrant: data.persistentGrant, warning: data.warning };
 }
 
 /** What the control plane did with a title request. A request the server

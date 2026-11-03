@@ -13,7 +13,7 @@ import type { FileListEntry } from "./FileContextMenu";
 const entry = (name: string, path = name, isDir = true): FileListEntry => ({ name, path, isDir, size: 0, modified: 1 });
 const files = vi.hoisted(() => ({ sidebar: vi.fn(), directory: vi.fn(), invalidate: vi.fn() }));
 vi.mock("../../lib/workspace", async importOriginal => ({ ...await importOriginal<typeof import("../../lib/workspace")>(), workspaceFiles: files }));
-vi.mock("../../lib/knowledge", () => ({ usePendingProposalCount: () => ({ data: { pending_count: 0 } }) }));
+vi.mock("../../lib/memory", () => ({ useMemorySummary: () => ({ data: { pendingCount: 0 } }) }));
 vi.mock("../inspector/InspectorTabs", () => ({ InspectorTabs: () => null }));
 const feedback = { toast: vi.fn(), confirm: vi.fn(async () => true) };
 let narrow = false;

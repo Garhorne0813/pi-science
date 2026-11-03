@@ -21,7 +21,7 @@ it("pins the eager Rail static-import allowlist", () => {
     ...[...source.matchAll(RE_EXPORT)].map((match) => match[1]),
   ].sort();
   expect(valueImports).toEqual([
-    "../../lib/knowledge",
+    "../../lib/memory",
     "../../lib/ui",
     "../settings/settings-loading",
     "../ui/Icon",

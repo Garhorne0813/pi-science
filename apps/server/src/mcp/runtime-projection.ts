@@ -1,10 +1,11 @@
+import { fingerprintMcpConnection } from "./connection-identity.js";
 import { bindingError } from "./bindings.js";
 import { lstat, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { McpEnvironmentBinding } from "./runtime-projection-types.js";
 import type { McpRepository, McpToolDecision, StoredMcpConnector } from "../storage/sqlite/repositories/mcp-repository.js";
 import { validateWorkspaceCwd } from "../security/workspace-security.js";
-import { metadataRoot, writeJsonAtomic } from "../storage/persistence.js";
+import { metadataRoot, withFileWriteLock, writeJsonAtomic } from "../storage/persistence.js";
 
 export const MCP_RUNTIME_SNAPSHOT = ".pi-science/mcp-runtime.json";
 // Bump when the managed MCP implementation changes its tool/resource contract.
@@ -15,6 +16,8 @@ export const MCP_RUNTIME_CACHE_VERSION = 4;
 export interface ProjectedMcpServer {
   __piScienceAllowedTools?: string[];
   __piScienceConnectorId?: string;
+  __piScienceConnectorRevision?: number;
+  __piScienceSettingsRevision?: number;
   __piScienceBuiltin?: boolean;
   __piScienceAllowPrivate?: boolean;
   __piScienceProjectId?: string;
@@ -45,6 +48,14 @@ export class McpRuntimeProjection {
 
   async materialize(cwd: string, projectId: string): Promise<void> {
     const workspace = await validateWorkspaceCwd(cwd);
+    const directory = await snapshotDirectory(workspace);
+    // Lock before reading policy, through publication. Every queued publisher
+    // rereads current grants, so an older Allow cannot overwrite a newer Deny.
+    // The shared file lock also coordinates separate projection instances/processes.
+    return withFileWriteLock(join(directory, "mcp-runtime.json"), () => this.materializeLocked(workspace, projectId));
+  }
+
+  private async materializeLocked(workspace: string, projectId: string): Promise<void> {
     const connectors = (await this.repository.list()).filter((item) => item.enabled);
     const mcpServers: Record<string, ProjectedMcpServer> = {};
     for (const connector of connectors) {
@@ -61,7 +72,7 @@ export class McpRuntimeProjection {
       const includeTools = unique([...connector.runtime_config.include_tools, ...connector.include_tools]);
       const excludeTools = unique([...connector.runtime_config.exclude_tools, ...connector.exclude_tools, ...denied]);
       const approveTools: boolean | string[] = connector.approval_mode === "allow_all" ? (asks.length ? unique(asks) : false) : true;
-      const cache = await this.repository.toolCache(connector.connector_id);
+      const cache = await this.repository.toolCache(connector.connector_id, connector);
       const configuredToolCount = cache && cache.expires_at > Date.now() ? cache.tools.length : undefined;
       const server = projectServer(connector, includeTools, excludeTools, approveTools, projectId, configuredToolCount);
       if (allowed.length && approveTools === true) server.__piScienceAllowedTools = unique(allowed);
@@ -87,6 +98,8 @@ function projectServer(
     : undefined;
   return {
     __piScienceConnectorId: connector.connector_id,
+    __piScienceConnectorRevision: connector.revision,
+    __piScienceSettingsRevision: connector.settings_revision,
     ...(connector.source === "builtin" ? { __piScienceBuiltin: true } : {}),
     transport: connector.transport,
     __piScienceAllowPrivate: runtime.allow_private,
@@ -112,12 +125,22 @@ function projectServer(
   };
 }
 
+/** Reconstruct identity from SQLite, never from a caller-supplied snapshot hash. */
+export function projectedConnectionFingerprint(connector: StoredMcpConnector, projectId: string): string {
+  return fingerprintMcpConnection(connector.name, { ...projectServer(connector, [], [], true, projectId) });
+}
+
 async function atomicSnapshot(cwd: string, payload: unknown): Promise<void> {
+  const directory = await snapshotDirectory(cwd);
+  await writeJsonAtomic(join(directory, "mcp-runtime.json"), payload, { mode: 0o600 });
+}
+
+async function snapshotDirectory(cwd: string): Promise<string> {
   const directory = metadataRoot(cwd);
   try { if ((await lstat(directory)).isSymbolicLink()) throw new Error("Workspace .pi-science directory must not be a symbolic link"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   await mkdir(directory, { recursive: true });
-  await writeJsonAtomic(join(directory, "mcp-runtime.json"), payload, { mode: 0o600 });
+  return directory;
 }
 
 function unique(values: string[]): string[] { return [...new Set(values)].sort(); }

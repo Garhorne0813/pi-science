@@ -279,8 +279,8 @@ if ! echo "$JOB_STATE" | grep -q '"status":"succeeded"'; then
 fi
 assert_body_contains '"records"' "http://127.0.0.1:${NODE_PORT}/api/provenance?cwd=${WORKSPACE_Q}"
 
-echo "[smoke] native project memory and cleanup"
-assert_body_contains '"archives"' "http://127.0.0.1:${NODE_PORT}/api/project-memory/archives?cwd=${WORKSPACE_Q}"
+echo "[smoke] historical project archives and cleanup"
+assert_body_contains '"archives"' "http://127.0.0.1:${NODE_PORT}/api/project/archives?cwd=${WORKSPACE_Q}"
 curl --fail-with-body --silent --show-error -X DELETE \
     "http://127.0.0.1:${NODE_PORT}/api/files/renamed.txt?cwd=${WORKSPACE_Q}" >/dev/null
 

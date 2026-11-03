@@ -1,3 +1,5 @@
+import { MemoryService } from "../memory/service.js";
+import { MemoryBackground } from "../memory/background.js";
 import { ConversationEventHub } from "../runtime/events/conversation-event-hub.js";
 import { NodeSessionService } from "../runtime/node/node-session-service.js";
 import type { RuntimeCatalogService } from "../runtime/agent/runtime-catalog.js";
@@ -10,8 +12,6 @@ import type { ServerConfig } from "../config/config.js";
 import { WorkspaceEnvironmentService } from "../runtime/workspace/workspace-environment.js";
 import { NodeKernelManager } from "../runtime/kernel/node-kernel-manager.js";
 import { NotebookService } from "../runtime/notebooks/notebook-service.js";
-import { ProjectReviewService } from "../project-review/service.js";
-import { CoreReviewSubagentRunner } from "../project-review/core-subagent-runner.js";
 import { configPath } from "../storage/persistence.js";
 import { EnvironmentRepository } from "../storage/sqlite/repositories/environment-repository.js";
 import { JobRepository } from "../storage/sqlite/repositories/job-repository.js";
@@ -32,12 +32,14 @@ export interface ServerModules {
   readonly environments: WorkspaceEnvironmentService;
   readonly kernels: NodeKernelManager;
   readonly notebooks: NotebookService;
-  readonly projectReview: ProjectReviewService;
+  readonly memory: MemoryService;
+  readonly memoryBackground: MemoryBackground;
   readonly stateStore: SqliteStateStore;
   readonly workspaces: WorkspaceRepository;
   readonly environmentRepository: EnvironmentRepository;
   readonly jobRepository: JobRepository;
   readonly sqliteEnabled: boolean;
+  configureBackendUrl?: (url: string) => void;
   readonly mcp: McpConnectorService;
 }
 
@@ -68,15 +70,18 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
   const settings = new SettingsStore();
   const modelResources = new ModelResourceService({ settings, runtimeCatalog });
   const coreServer = { backendUrl: config ? `http://127.0.0.1:${config.port}` : undefined, internalToken: config?.internalToken, onWorkerExit: (cwd: string, owner: string) => kernels.shutdownOwner(cwd, owner), hasApprovalResources: (cwd: string, owner: string) => kernels.hasOwner(cwd, owner), revokeApprovalResources: (cwd: string, owner: string) => kernels.revokeOwner(cwd, owner) };
-  const projectReview = new ProjectReviewService(new CoreReviewSubagentRunner(environments, coreServer), sessionRepository);
-  const sessions = new NodeSessionService(events, sessionRepository, environments, projectReview, undefined, modelResources, {
+  const memory = new MemoryService(stateStore, workspaces, sqliteEnabled || process.env.NODE_ENV === "test");
+  const sessionServer = {
     backendUrl: config ? `http://127.0.0.1:${config.port}` : undefined,
     internalToken: config?.internalToken,
     onWorkerExit: coreServer.onWorkerExit,
-  });
+  };
+  const sessions = new NodeSessionService(events, sessionRepository, environments, null, undefined, modelResources, sessionServer);
   const mcpRepository = new McpRepository(stateStore);
   const mcp = new McpConnectorService(mcpRepository, workspaces, settings, sessions, new McpRuntimeProjection(mcpRepository));
   if (sqliteEnabled) sessions.configureBeforeRuntimeStart((cwd) => mcp.materializeWorkspace(cwd));
   const jobs = new JobCoordinator(environments, {}, undefined, sqliteEnabled ? jobRepository : undefined);
-  return { sessions, events, sessionRepository, runtimeCatalog, settings, modelResources, jobs, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled, mcp };
+  const memoryBackground = new MemoryBackground(memory, sessions, jobs);
+  sessions.configureMemory({ settled: (cwd, sessionId) => memoryBackground.turnCompleted(cwd, sessionId), deleted: async (cwd, sessionId) => { const {context} = await memory.context(cwd); await memory.command(context, "frame.delete", {sessionId}); } });
+  return { sessions, events, sessionRepository, runtimeCatalog, settings, modelResources, jobs, memory, memoryBackground, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled, mcp, configureBackendUrl: (url: string) => { coreServer.backendUrl = url; sessionServer.backendUrl = url; } };
 }

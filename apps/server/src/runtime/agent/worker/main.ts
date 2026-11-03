@@ -1,9 +1,11 @@
 import type { RuntimeResult } from "../agent-runtime-types.js";
 import { workerRequestSchema, type WorkerEvent } from "./protocol.js";
 import { SessionRuntime } from "./session-runtime.js";
+import { ApprovalBridge } from "./approval-bridge.js";
 
 let runtime: SessionRuntime | undefined;
 let shuttingDown = false;
+const approvals = new ApprovalBridge(send);
 
 function send(message: WorkerEvent): void {
   if (process.connected) process.send?.(message);
@@ -22,6 +24,7 @@ async function handle(input: unknown): Promise<void> {
     return;
   }
   const message = decoded.data;
+  if (message.type === "approval_granted") { approvals.grant(message.id); return; }
   if (message.type === "shutdown") {
     await shutdown();
     return;
@@ -32,7 +35,7 @@ async function handle(input: unknown): Promise<void> {
       runtime = await SessionRuntime.open(message.options, (event) => send({ type: "runtime_event", event }), (error) => {
         send({ type: "fatal", error: error instanceof Error ? error.message : String(error) });
         process.exit(1);
-      });
+      }, approvals.acquire);
       send({ type: "ready", sessionId: runtime.sessionId });
       send({ type: "result", requestId: message.requestId, result: { success: true, data: { sessionId: runtime.sessionId } } });
       return;

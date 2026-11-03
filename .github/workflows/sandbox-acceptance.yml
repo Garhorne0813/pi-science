@@ -11,11 +11,16 @@ on:
       - 'apps/server/src/runtime/workspace/**'
       - 'apps/server/src/mcp/**'
       - 'apps/server/package.json'
+      - 'apps/server/native/**'
+      - 'apps/server/scripts/build-workspace-discovery-native*.mjs'
+      - 'apps/server/scripts/verify-workspace-discovery.mjs'
       - 'apps/server/scripts/benchmark-skill-resources.ts'
       - 'patches/**'
       - 'pnpm-workspace.yaml'
       - 'pnpm-lock.yaml'
       - '.github/workflows/sandbox-acceptance.yml'
+      - '.github/scripts/*linux*sandbox*'
+      - '.github/scripts/probe-linux-seccomp.mjs'
   workflow_dispatch:
 # Superseded runs for the same branch/PR do not consume another full matrix.
 concurrency:
@@ -24,10 +29,13 @@ concurrency:
 
 permissions:
   contents: read
+# sandbox-runtime 0.0.79's nested user namespace helper fails on Ubuntu 26.04
+# (/proc/self/setgroups). Pin the validated runner; retain matrix labels so
+# required check names and artifact names stay stable.
 jobs:
   sandbox:
     name: ${{ matrix.os == 'macos-latest' && 'macOS Seatbelt acceptance' || 'Linux Bubblewrap acceptance' }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -47,25 +55,51 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = Linux ]; then
-            sudo apt-get update
-            sudo apt-get install -y bubblewrap socat ripgrep
-            # Dedicated ephemeral CI runner; Ubuntu's AppArmor default blocks user namespaces.
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+            bash .github/scripts/prepare-linux-sandbox.sh
           else
             brew install socat ripgrep
           fi
           python -m pip install numpy==2.3.5
           pnpm install --frozen-lockfile
+      - name: Test optional native build fallback
+        run: node --test apps/server/scripts/build-workspace-discovery-native.node-test.mjs
+      - name: Build native directory backend
+        run: pnpm --filter @pi-science/server build:native
+      - name: Probe complete Linux sandbox startup
+        if: runner.os == 'Linux'
+        run: node .github/scripts/probe-linux-seccomp.mjs
+      - name: Validate compiled discovery in a read-only Linux sandbox
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          pnpm --filter @pi-science/contracts build
+          pnpm --filter @pi-science/server build
+          bwrap --ro-bind / / --tmpfs /tmp --proc /proc --dev /dev --unshare-net --setenv PI_SCIENCE_HOME /tmp/discovery-service -- node apps/server/scripts/verify-workspace-discovery.mjs
+      - name: Validate compiled discovery in a read-only macOS sandbox
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          pnpm --filter @pi-science/contracts build
+          pnpm --filter @pi-science/server build
+          discovery_tmp="$(mktemp -d)"
+          trap 'rm -rf "$discovery_tmp"' EXIT
+          discovery_tmp="$(cd "$discovery_tmp" && pwd -P)"
+          TMPDIR="$discovery_tmp" /usr/bin/sandbox-exec -p "(version 1)(allow default)(deny network*)(deny file-write*)(allow file-write* (subpath \"$discovery_tmp\"))" node apps/server/scripts/verify-workspace-discovery.mjs
       - name: Validate real platform isolation and role policies
         shell: bash
         run: |
           export PI_SCIENCE_SANDBOX_TEST=1
+          if [ "$RUNNER_OS" = Linux ]; then
+            # Probe the actual helper, not merely an outer bwrap /bin/true.
+            helper="$(cd apps/server && node -p 'require("node:path").join(require("node:path").dirname(require.resolve("@anthropic-ai/sandbox-runtime/package.json")), "vendor/seccomp", process.arch, "apply-seccomp")')"
+            bwrap --unshare-user --unshare-pid --unshare-net --cap-drop ALL --ro-bind / / --dev /dev --proc /proc -- "$helper" /bin/true
+          fi
           PI_SCIENCE_SANDBOX_PYTHON="$(python -c 'import os,sys; print(os.path.realpath(sys.executable))')"
           PI_SCIENCE_SANDBOX_PYTHON_ROOT="$(python -c 'import os,sys; print(os.path.realpath(sys.base_prefix))')"
           PI_SCIENCE_SANDBOX_SOCAT="$(command -v socat)"
           PI_SCIENCE_SANDBOX_RIPGREP="$(command -v rg)"
           export PI_SCIENCE_SANDBOX_PYTHON PI_SCIENCE_SANDBOX_PYTHON_ROOT PI_SCIENCE_SANDBOX_SOCAT PI_SCIENCE_SANDBOX_RIPGREP
-          pnpm --filter @pi-science/server exec vitest run src/runtime/agent/worker/confined-read-tool.test.ts src/runtime/agent/agent-core-tools.test.ts src/runtime/sandbox/universal-sandbox.test.ts src/runtime/sandbox/execution-scope.test.ts src/runtime/sandbox/execution-grants.test.ts src/runtime/agent/subagent-dispatch.test.ts src/runtime/sandbox/platform-acceptance.test.ts src/runtime/sandbox/skill-resources.test.ts src/runtime/sandbox/session-approval.test.ts src/runtime/sandbox/profiles.test.ts src/runtime/sandbox/network.test.ts src/runtime/sandbox/network-grants.test.ts src/runtime/agent/worker/network-access-tool.test.ts src/runtime/executions/execution-budget.test.ts src/runtime/agent/worker/execution-budget.test.ts src/mcp/call-scheduler.test.ts --reporter=default --reporter=junit --outputFile.junit=sandbox-acceptance.xml
+          pnpm --filter @pi-science/server exec vitest run src/runtime/agent/worker/workspace-discovery-unavailable.test.ts src/runtime/agent/worker/workspace-discovery-directory.test.ts src/runtime/agent/worker/workspace-discovery.test.ts src/runtime/sandbox/workspace-read-authorization.test.ts src/runtime/agent/worker/session-runtime.test.ts src/runtime/agent/agent-definitions.test.ts src/runtime/agent/worker/confined-read-tool.test.ts src/runtime/agent/agent-core-tools.test.ts src/runtime/sandbox/universal-sandbox.test.ts src/runtime/sandbox/execution-scope.test.ts src/runtime/sandbox/execution-grants.test.ts src/runtime/agent/subagent-dispatch.test.ts src/runtime/sandbox/platform-acceptance.test.ts src/runtime/sandbox/skill-resources.test.ts src/runtime/sandbox/session-approval.test.ts src/runtime/sandbox/profiles.test.ts src/runtime/sandbox/network.test.ts src/runtime/sandbox/network-grants.test.ts src/runtime/agent/worker/network-access-tool.test.ts src/runtime/executions/execution-budget.test.ts src/runtime/agent/worker/execution-budget.test.ts src/mcp/call-scheduler.test.ts --reporter=default --reporter=junit --outputFile.junit=sandbox-acceptance.xml
       - name: Measure per-Bash Skill policy scans
         shell: bash
         run: pnpm --filter @pi-science/server exec tsx scripts/benchmark-skill-resources.ts > skill-resource-performance.json
