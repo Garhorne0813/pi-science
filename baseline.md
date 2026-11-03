@@ -151,3 +151,18 @@ GitHub API 报告，2026-10-01 至 2026-10-31 按创建日期共有 1053 次工�
 配置存在 `changes → build → browser → verify` 依赖链。它只是候选关键路径。缺少符合约束的 3 次同提交运行，不能判断它是否是最慢链，也不能比较优化收益。
 
 所需补充数据：同一提交的 3 次完整 PR 运行及各 attempt 的 job 和 step；旧 attempt 与其他缓存的日志；覆盖重跑和跨月执行的月度用量；实际账单。当前 `gh` 登录令牌无效。GitHub 连接器已用于创建草稿 PR 和读取公开运行数据。实际账单仍需具备账单读取权限的账号。完成基线后，等待用户确认，再进入阶段 1。
+
+## 补充测量与停止记录
+
+同一提交 `c7245242157a93865f2f80a0b88a1d41ebd81b47` 的 [quality 运行](https://github.com/Garhorne0813/pi-science/actions/runs/41571661769) 的 attempt 1 和 2 通过。attempt 3 的 `tests (windows-latest)` 失败。按停止条件，[PR #228](https://github.com/Garhorne0813/pi-science/pull/228) 已关闭，且没有合并。没有重试失败。
+
+失败发生在 `apps/server/src/model-config/model-config-review-v2.test.ts:51`。测试超时，随后同文件的 `afterEach` 也超时。相同提交的前两次运行通过，所以已观察到间歇性超时。测试会启动本地 HTTP 服务器和真实 worker，等待 worker 初始化与响应，最后关闭 worker、应用和服务器。`afterEach` 删除临时目录。日志没有各操作的进度或堆栈，未指出卡住的位置。不能确定是测试、runner 环境还是产品问题。[失败日志](https://github.com/Garhorne0813/pi-science/actions/runs/41571661769/job/125714771755)。`verify` 的失败是上游结果汇总。不能把这三次当作全绿的 PR 时长基线。
+
+`codeql` 的两个分析 job 各自运行 3 次，均成功。补测以单 job 触发，不能代表整套 PR 工作流的并行状态。下表时间单位为秒。p95 用最近秩法；3 个样本的 p95 是最大值，不能代表稳定的长期分布。总时长是对应 attempt 创建到 job 完成。queue 是 attempt 创建到 job 开始；setup 是 job 开始到 checkout 开始；run 是 `Perform CodeQL analysis` 步骤的耗时。三段不覆盖所有步骤。
+
+| job | 总时长 p50 / p95 | queue p50 / p95 | setup p50 / p95 | run p50 / p95 |
+| --- | ---: | ---: | ---: | ---: |
+| `analyze (python)` | 59 / 60 | 4 / 4 | 1 / 3 | 32 / 33 |
+| `analyze (javascript-typescript)` | 68 / 84 | 3 / 3 | 2 / 2 | 43 / 59 |
+
+`quality` 前两次通过的运行中，最后完成的工作 job 均为 `tests (windows-latest)`，随后 `verify` 汇总结果。这是已观察到的候选关键路径。第三次失败，尚不能确认全绿基线的 p50 和 p95。
