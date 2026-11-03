@@ -24,4 +24,3 @@ runs:
         key: pnpm-store-${{ runner.os }}-${{ steps.store.outputs.arch }}-${{ steps.store.outputs.node }}-${{ steps.store.outputs.version }}-${{ hashFiles('pnpm-lock.yaml') }}
         restore-keys: |
           pnpm-store-${{ runner.os }}-${{ steps.store.outputs.arch }}-${{ steps.store.outputs.node }}-${{ steps.store.outputs.version }}-
-          node-cache-${{ runner.os }}-${{ steps.store.outputs.arch }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}

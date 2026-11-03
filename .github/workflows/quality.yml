@@ -412,6 +412,12 @@ jobs:
           name: frontend-dist
           path: frontend/dist
 
+      # Reuses the build above. The browser-level SSE budget is the only gate on
+      # the frontend's subscription lifecycle, so it must not stay local-only.
+      - name: Enforce frontend SSE connection budget
+        if: runner.os == 'Linux'
+        run: pnpm --filter frontend test:sse-budget
+
       - name: Run workspace sidebar interaction tests
         if: runner.os == 'Linux'
         run: |
@@ -427,61 +433,12 @@ jobs:
           if-no-files-found: ignore
           include-hidden-files: true
 
-  browser-sse:
-    name: browser SSE budget
-    needs: [changes, build]
-    if: needs.changes.outputs.run == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24.16.0
-      - name: Restore pnpm store
-        uses: ./.github/actions/pnpm-cache
-      - name: Install JavaScript dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Restore the frontend build
-        uses: actions/download-artifact@v4
-        with:
-          name: frontend-dist
-          path: frontend/dist
-      - name: Enforce frontend SSE connection budget
-        run: pnpm --filter frontend test:sse-budget
-
-  browser-performance:
-    name: browser performance budgets
-    needs: [changes, build]
-    if: needs.changes.outputs.run == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24.16.0
-      - name: Restore pnpm store
-        uses: ./.github/actions/pnpm-cache
-      - name: Install JavaScript dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Restore the frontend build
-        uses: actions/download-artifact@v4
-        with:
-          name: frontend-dist
-          path: frontend/dist
       - name: Enforce Settings browser performance budgets
+        if: runner.os == 'Linux'
         run: pnpm --filter frontend exec playwright test --config playwright.visual.config.ts settings-performance.spec.ts model-selection-performance.spec.ts --project desktop-light --project mobile
+
       - name: Upload Settings browser performance metrics
-        if: always()
+        if: always() && runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: settings-browser-performance
@@ -602,7 +559,7 @@ jobs:
 
   verify:
     name: verify (${{ matrix.os }})
-    needs: [changes, static-checks, tests, linux-server-shard, linux-frontend-skills, windows-server-shard, windows-platform, windows-frontend-skills, build, browser, browser-sse, browser-performance, browser-accessibility, macos-launcher, production-install]
+    needs: [changes, static-checks, tests, linux-server-shard, linux-frontend-skills, windows-server-shard, windows-platform, windows-frontend-skills, build, browser, browser-accessibility, macos-launcher, production-install]
     if: always()
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
