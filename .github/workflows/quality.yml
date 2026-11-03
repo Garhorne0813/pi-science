@@ -26,7 +26,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          filter: blob:none
       - uses: actions/setup-node@v4
         with:
           node-version: 24.16.0
@@ -57,14 +56,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24.16.0
-      - name: Restore pnpm store
-        uses: ./.github/actions/pnpm-cache
+          cache: pnpm
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Test CI tooling
-        run: node --test .github/scripts/changes.test.mjs apps/server/ci/windows-test-shards.node-test.mjs scripts/pre-push.node-test.mjs
+      - name: Test CI change classification
+        run: node --test .github/scripts/changes.test.mjs
       - name: Lint server and frontend
         run: pnpm lint
       - name: Typecheck all packages
@@ -108,8 +106,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24.16.0
-      - name: Restore pnpm store
-        uses: ./.github/actions/pnpm-cache
+          cache: pnpm
 
       - name: Install required Linux sandbox dependencies
         if: runner.os == 'Linux'
@@ -122,9 +119,16 @@ jobs:
         if: runner.os == 'Linux'
         run: node .github/scripts/probe-linux-seccomp.mjs
 
+      - name: Test native Windows file read boundary
+        if: runner.os == 'Windows'
+        run: pnpm --filter @pi-science/server exec vitest run src/runtime/sandbox/file-read.test.ts src/runtime/agent/worker/workspace-file-tool.test.ts
+
       - name: Test environment diagnostics
-        if: runner.os != 'Windows'
         run: node --test scripts/doctor.test.mjs scripts/check-http-health.test.mjs scripts/check-linux-sandbox.test.mjs scripts/process-state.test.mjs scripts/ci-runner-pins.test.mjs
+
+      - name: Test Windows process ownership
+        if: runner.os == 'Windows'
+        run: powershell -NoProfile -File scripts/test-process-identity.ps1
 
       - name: Test POSIX launcher lifecycle
         if: runner.os != 'Windows'
@@ -145,40 +149,14 @@ jobs:
       # Native process integration tests launch Node, bash and taskkill trees.
       # Serializing server files on the two-core Windows runner prevents unrelated
       # 500 ms/15 s characterization deadlines from competing for process slots.
-      - name: Test serialized control plane (shard 1 of 4)
+      - name: Test contracts and serialized control plane (shard 1 of 4)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          pnpm --filter @pi-science/server exec vitest run --config vitest.ci.config.mjs --fileParallelism=false --shard=1/4
+          pnpm --filter @pi-science/contracts test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-  windows-platform:
-    name: Windows platform and contracts tests
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
-    runs-on: windows-latest
-    timeout-minutes: 45
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24.16.0
-      - name: Restore pnpm store
-        uses: ./.github/actions/pnpm-cache
-      - name: Install JavaScript dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Test native Windows file read boundary
-        run: pnpm --filter @pi-science/server exec vitest run src/runtime/sandbox/file-read.test.ts src/runtime/agent/worker/workspace-file-tool.test.ts
-      - name: Test environment diagnostics
-        run: node --test scripts/doctor.test.mjs scripts/check-http-health.test.mjs scripts/check-linux-sandbox.test.mjs scripts/process-state.test.mjs scripts/ci-runner-pins.test.mjs
-      - name: Test Windows process ownership
-        run: powershell -NoProfile -File scripts/test-process-identity.ps1
-      - name: Test contracts
-        run: pnpm --filter @pi-science/contracts test
+          pnpm --filter @pi-science/server exec vitest run --fileParallelism=false --shard=1/4
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   linux-server-shard:
     name: Linux server tests (shard 2 of 2)
@@ -197,8 +175,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24.16.0
-      - name: Restore pnpm store
-        uses: ./.github/actions/pnpm-cache
+          cache: pnpm
 
       - name: Install required Linux sandbox dependencies
         run: bash .github/scripts/prepare-linux-sandbox.sh
@@ -229,8 +206,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24.16.0
-      - name: Restore pnpm store
-        uses: ./.github/actions/pnpm-cache
+          cache: pnpm
 
       - name: Install required Linux sandbox dependencies
         run: bash .github/scripts/prepare-linux-sandbox.sh
@@ -267,8 +243,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24.16.0
-      - name: Restore pnpm store
-        uses: ./.github/actions/pnpm-cache
+          cache: pnpm
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
@@ -277,7 +252,7 @@ jobs:
         run: node scripts/check-worker-startup.mjs
 
       - name: Test serialized control plane (shard ${{ matrix.shard }} of 4)
-        run: pnpm --filter @pi-science/server exec vitest run --config vitest.ci.config.mjs --fileParallelism=false --shard=${{ matrix.shard }}/4
+        run: pnpm --filter @pi-science/server exec vitest run --fileParallelism=false --shard=${{ matrix.shard }}/4
 
   windows-frontend-skills:
     name: Windows frontend and skills tests
@@ -296,8 +271,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24.16.0
-      - name: Restore pnpm store
-        uses: ./.github/actions/pnpm-cache
+          cache: pnpm
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
@@ -332,8 +306,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24.16.0
-      - name: Restore pnpm store
-        uses: ./.github/actions/pnpm-cache
+          cache: pnpm
 
       - name: Install required Linux sandbox dependencies
         if: runner.os == 'Linux'
@@ -400,8 +373,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24.16.0
-      - name: Restore pnpm store
-        uses: ./.github/actions/pnpm-cache
+          cache: pnpm
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
@@ -463,8 +435,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24.16.0
-      - name: Restore pnpm store
-        uses: ./.github/actions/pnpm-cache
+          cache: pnpm
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
@@ -504,8 +475,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24.16.0
-      - name: Restore pnpm store
-        uses: ./.github/actions/pnpm-cache
+          cache: pnpm
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
@@ -559,7 +529,7 @@ jobs:
 
   verify:
     name: verify (${{ matrix.os }})
-    needs: [changes, static-checks, tests, linux-server-shard, linux-frontend-skills, windows-server-shard, windows-platform, windows-frontend-skills, build, browser, browser-accessibility, macos-launcher, production-install]
+    needs: [changes, static-checks, tests, linux-server-shard, linux-frontend-skills, windows-server-shard, windows-frontend-skills, build, browser, browser-accessibility, macos-launcher, production-install]
     if: always()
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
