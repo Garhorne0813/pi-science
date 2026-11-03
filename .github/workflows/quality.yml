@@ -134,13 +134,12 @@ jobs:
         if: runner.os != 'Windows'
         run: bash scripts/test-launcher.sh
 
-      - name: Test contracts, control plane, frontend and skills
+      - name: Test contracts and control plane
         if: runner.os != 'Windows'
-        # Each suite may use both runner cores. Running frontend and server
-        # together also competes with real child workers in the IPC tests.
+        # Keep contracts and server sequential on this runner to avoid
+        # contention with real child workers in the IPC tests.
         run: |
-          pnpm --workspace-concurrency=1 --filter @pi-science/contracts --filter @pi-science/server --filter frontend run test --maxWorkers=2
-          pnpm test:skills
+          pnpm --workspace-concurrency=1 --filter @pi-science/contracts --filter @pi-science/server run test --maxWorkers=2
 
       - name: Check Windows worker startup before the full IPC suite
         if: runner.os == 'Windows'
@@ -157,6 +156,39 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm --filter @pi-science/server exec vitest run --fileParallelism=false --shard=1/2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  linux-frontend-skills:
+    name: Linux frontend and skills tests
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.16.0
+          cache: pnpm
+
+      - name: Install required Linux sandbox dependencies
+        run: bash .github/scripts/prepare-linux-sandbox.sh
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Probe complete Linux sandbox startup
+        run: node .github/scripts/probe-linux-seccomp.mjs
+
+      - name: Test frontend and skills
+        run: |
+          pnpm --workspace-concurrency=1 --filter frontend run test --maxWorkers=2
+          pnpm test:skills
 
   windows-server-shard:
     name: Windows server tests (shard 2 of 2)
@@ -425,7 +457,7 @@ jobs:
 
   verify:
     name: verify (${{ matrix.os }})
-    needs: [changes, static-checks, tests, windows-server-shard, windows-frontend-skills, build, browser, macos-launcher, production-install]
+    needs: [changes, static-checks, tests, linux-frontend-skills, windows-server-shard, windows-frontend-skills, build, browser, macos-launcher, production-install]
     if: always()
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
