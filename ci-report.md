@@ -28,11 +28,11 @@
 - 变更检测的 checkout 使用 `filter: blob:none`，并保留完整历史。
 - `pnpm hooks:install` 可安装 pre-push hook。安装前会检查已有 hook；Git 配置由同一仓库的 worktree 共享。hook 检查提交的空白问题，并运行完整 lint 和 typecheck。它不是格式化器，也没有达到仅检查改动文件或耗时小于 10 秒的验收。
 
-这些后续改动尚需正常 PR CI 验证。它们的性能结果不能用四片旧方案的一次运行代替。
+提交 `fe623ae8` 的正常 PR `quality` 和 `codeql` 均已通过。Windows 四片分别运行 40、40、41、43 个文件，共 164 个；文件集合及逐文件测试数与旧方案一致，片间没有重复；1420 个测试通过，138 个按原配置跳过。这是单次运行，不能据此报告 p50/p95 或具体提速。
 
-提交 `d7f36c45` 的 Windows 静态检查失败后，已立即用 `be6377ef` 回滚。新增 hook 测试将 Git 配置文件路径设为 Node 的 Windows 空设备路径，Git 无法读取该路径，导致 `git init` 失败。修复使用临时空配置文件，继续隔离真实 Git 配置。尚需正常 Windows CI 验证修复。
+提交 `d7f36c45` 的 Windows 静态检查失败后，已立即用 `be6377ef` 回滚。新增 hook 测试将 Git 配置文件路径设为 Node 的 Windows 空设备路径，Git 无法读取该路径，导致 `git init` 失败。修复使用临时空配置文件，继续隔离真实 Git 配置。
 
-提交 `31123590` 的 Windows hook 测试再次失败，已立即用 `10ce0efe` 回滚。[隔离诊断](https://github.com/Garhorne0813/pi-science/actions/runs/41659647588) 显示，临时仓库提交的脚本使用 CRLF 换行，`git diff --check` 将行尾的回车判为尾随空白。测试仓库现已配置文本换行归一化；测试同时模拟 CRLF 输入，并保留普通尾随空格的负向检查。真实 hook 文件单独固定使用 LF。修复后仍需正常 Windows CI 验证。
+提交 `31123590` 的 Windows hook 测试再次失败，已立即用 `10ce0efe` 回滚。[隔离诊断](https://github.com/Garhorne0813/pi-science/actions/runs/41659647588) 显示，临时仓库提交的脚本使用 CRLF 换行，`git diff --check` 将行尾的回车判为尾随空白。测试仓库现已配置文本换行归一化；测试同时模拟 CRLF 输入，并保留普通尾随空格的负向检查。真实 hook 文件单独固定使用 LF。上述两项修复已在提交 `fe623ae8` 的 Windows 静态检查中通过。
 
 2026 年 10 月按创建日期有 1053 次工作流运行。完整的跨月重跑数据和实际账单尚未取得，不能计算完整月分钟数或费用。新增 job 会重复执行 runner 准备，实际分钟数变化待账单或完整数据确认。
 
