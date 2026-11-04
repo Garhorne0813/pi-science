@@ -99,17 +99,45 @@ export function registerSseRoutes(app: FastifyInstance, nodeSessionService: Node
     const lastEventId = resolveLastEventId(request.headers["last-event-id"]?.toString(), query.lastEventId);
     const pending = new SseBackpressureBuffer();
     let blocked = false;
+    let closed = false;
+    let replaying = true;
+    let heartbeat: NodeJS.Timeout | null = null;
+    let unsubscribe: (() => void) | null = null;
+    // Keep `blocked` set once the stream refuses a push. Resetting it just
+    // because the queue happened to drain re-enters the Readable's own buffer
+    // with the next record, which defeats these caps: a whole replay backlog
+    // then accumulates in memory instead of being bounded. Only the consumer
+    // asking for more data (`read()`) clears the flag.
     const flush = () => {
       pending.drain((text) => {
         if (!stream.push(text)) { blocked = true; return false; }
         return true;
       });
-      if (pending.length === 0) blocked = false;
     };
     const stream = new Readable({ highWaterMark: 64 * 1024, read() { blocked = false; flush(); } });
-    let closed = false;
-    let unsubscribe: (() => void) | null = null;
-    let heartbeat: NodeJS.Timeout | null = null;
+    // An overflowing stream must end with a signal the browser can act on.
+    // Write this gap straight into the response, never through the hub:
+    // publishing would stamp it with `<epoch>:<seq>`, and a sequenced gap opens
+    // exactly the sequence hole the client uses this signal to heal.
+    const closeWithGap = (reason: "replay_overflow" | "subscriber_overflow") => {
+      if (closed) return;
+      closed = true;
+      if (heartbeat) clearInterval(heartbeat);
+      unsubscribe?.();
+      pending.clear();
+      stream.push(serializeSseEvent({
+        event: "stream.gap",
+        id: null,
+        data: JSON.stringify({
+          type: "stream.gap",
+          sessionId,
+          reason,
+          message: "The replay backlog exceeded the SSE buffer; rebase from the conversation snapshot before resuming live events.",
+        }),
+        created_at: new Date().toISOString(),
+      }));
+      stream.push(null);
+    };
     const cleanup = () => {
       if (closed) return;
       closed = true;
@@ -121,7 +149,10 @@ export function registerSseRoutes(app: FastifyInstance, nodeSessionService: Node
     const enqueue = (text: string) => {
       if (closed) return false;
       if (!pending.enqueue(text)) {
-        cleanup();
+        // The consumer stopped draining (slow socket, or a replay that outran
+        // the buffer). A truncated-but-open stream looks healthy forever, so
+        // end it with a rebase hint instead of silently dropping events.
+        closeWithGap(replaying ? "replay_overflow" : "subscriber_overflow");
         return false;
       }
       if (!blocked) flush();
@@ -131,22 +162,63 @@ export function registerSseRoutes(app: FastifyInstance, nodeSessionService: Node
       if (pending.length < 100) enqueue(": ping\n\n");
     }, 15_000);
     request.raw.once("close", cleanup);
-    unsubscribe = await conversationEventHub.subscribe(
-      cwd,
-      sessionId,
-      lastEventId,
-      (record) => enqueue(serializeSseEvent(record)),
-      Boolean(lastEventId),
-    );
-    if (closed) unsubscribe();
-    // Emit an initial comment so Fastify flushes the SSE headers immediately.
-    // Otherwise an idle session can leave clients waiting until the 15s
-    // heartbeat before EventSource reports the connection as open.
-    enqueue(": connected\n\n");
+    // Attach the response BEFORE the replay starts. Awaiting subscribe() first
+    // leaves the Readable with no consumer while every replayed record is
+    // pushed: the backlog piles up in memory and the client only learns about
+    // events after the whole replay has already been buffered. Sending first
+    // makes the response the consumer, so replayed records are written to the
+    // socket and the caps above bound what a backlog may cost.
     reply.header("cache-control", "no-cache");
     reply.header("x-accel-buffering", "no");
     reply.header("x-pi-science-sse", "node-native");
-    return reply.type("text/event-stream").send(stream);
+    reply.type("text/event-stream").send(stream);
+    // Emit an initial comment so Fastify flushes the SSE headers immediately.
+    // Otherwise an idle session can leave clients waiting until the 15s
+    // heartbeat before EventSource reports the connection as open.
+    stream.push(": connected\n\n");
+    try {
+      unsubscribe = await conversationEventHub.subscribe(
+        cwd,
+        sessionId,
+        lastEventId,
+        (record) => enqueue(serializeSseEvent(record)),
+        Boolean(lastEventId),
+        // Delivery can give up on this subscriber (its own replay backlog cap,
+        // or a failed write). The only way the browser learns is if this route
+        // ends the response, so report it instead of leaving a connection that
+        // keeps heartbeating while every event is dropped.
+        (reason) => closeWithGap(reason === "replay_backlog_overflow" ? "replay_overflow" : "subscriber_overflow"),
+      );
+    } catch (error) {
+      // The reply is already committed to Fastify as a stream payload, so a
+      // rethrow goes through the error handler instead of ending the request
+      // cleanly: reply.sent only short-circuits once the response has ended, so
+      // the handler tries to write a 500 — if the headers have not flushed the
+      // client gets a JSON 500, otherwise writeHead throws ERR_HTTP_HEADERS_SENT
+      // and the connection is torn down. Either way the failure arrives as a
+      // transport fault, not a terminal event. Answer with the same terminal
+      // error frame as the not-found branch.
+      request.log.error({ err: error }, "SSE subscription failed");
+      if (!closed) {
+        stream.push(serializeSseEvent({
+          event: "error",
+          id: null,
+          data: JSON.stringify({
+            type: "error",
+            sessionId,
+            message: error instanceof Error ? error.message : String(error),
+            code: "subscribe_failed",
+            terminal: true,
+          }),
+          created_at: new Date().toISOString(),
+        }));
+      }
+      cleanup();
+    } finally {
+      replaying = false;
+    }
+    if (closed) unsubscribe?.();
+    return reply;
   });
 }
 

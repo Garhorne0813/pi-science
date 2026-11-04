@@ -1,12 +1,18 @@
 import type { ProductInput } from "../product-input.js";
 import type { EventPublishGuard, SseEventRecord } from "../event-store.js";
 
+/** Why delivery gave up on a subscriber. The owner of the consumer (the SSE
+ *  route) needs this: without it a subscriber can be dropped while its HTTP
+ *  response stays open and heartbeats keep the connection looking healthy. */
+export type SubscriberAbandonReason = "delivery_failed" | "replay_backlog_overflow";
+
 export type Subscriber = {
   ready: boolean;
   pending: SseEventRecord[];
   delivered: Set<string>;
   cancelled: boolean;
   deliver: (record: SseEventRecord) => unknown;
+  abandon?: (reason: SubscriberAbandonReason) => void;
 };
 
 export type EventStore = {

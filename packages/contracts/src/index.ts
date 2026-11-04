@@ -76,6 +76,10 @@ export const streamGapReasonSchema = z.enum([
   "epoch_changed",
   "invalid_cursor",
   "client_detected_gap",
+  // Emitted by the SSE route when it ends a stream it could not keep up with,
+  // so the client rebases from REST instead of reconnecting to the same cursor.
+  "replay_overflow",
+  "subscriber_overflow",
 ]);
 export type StreamGapReason = z.infer<typeof streamGapReasonSchema>;
 

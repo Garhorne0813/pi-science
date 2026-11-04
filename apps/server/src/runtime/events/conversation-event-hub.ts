@@ -6,7 +6,7 @@ import { ConversationDelivery } from "./conversation/delivery.js";
 import { ConversationPublication } from "./conversation/publication.js";
 import { ConversationTextBatch } from "./conversation/text-batch.js";
 import { ConversationBindings } from "./conversation/binding.js";
-import type { EventStore, ConversationEventHubOptions, BindingOptions, HubLogger } from "./conversation/types.js";
+import type { EventStore, ConversationEventHubOptions, BindingOptions, HubLogger, SubscriberAbandonReason } from "./conversation/types.js";
 
 /** Conversation event composition root. Each protocol owns its queues and state. */
 export class ConversationEventHub {
@@ -49,8 +49,15 @@ export class ConversationEventHub {
   resolvePendingInteraction(cwd: string, sessionId: string, requestId: string): void { this.delivery.resolvePendingInteraction(cwd, sessionId, requestId); }
   pendingInteraction(cwd: string, sessionId: string, requestId: string): Record<string, unknown> | undefined { return this.delivery.pendingInteraction(cwd, sessionId, requestId); }
   bind(cwd: string, process: RuntimeEventSource, options: BindingOptions): void { this.bindings.bind(cwd, process, options); }
-  subscribe(cwd: string, sessionId: string, lastEventId: string | undefined, deliver: (record: SseEventRecord) => unknown, replay = true): Promise<() => void> {
-    return this.delivery.subscribe(cwd, sessionId, lastEventId, deliver, replay);
+  subscribe(
+    cwd: string,
+    sessionId: string,
+    lastEventId: string | undefined,
+    deliver: (record: SseEventRecord) => unknown,
+    replay = true,
+    onAbandon?: (reason: SubscriberAbandonReason) => void,
+  ): Promise<() => void> {
+    return this.delivery.subscribe(cwd, sessionId, lastEventId, deliver, replay, onAbandon);
   }
   publish(cwd: string, sessionId: string, payload: Record<string, unknown>, guard?: EventPublishGuard): Promise<void> {
     return this.publication.publish(cwd, sessionId, payload, guard);
