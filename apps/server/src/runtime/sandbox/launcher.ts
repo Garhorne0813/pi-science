@@ -4,11 +4,16 @@ import type { NetworkGrantProfile } from "./network-grant-state.js";
 import { spawn, execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 const [manifestPath, ...shellArgs] = process.argv.slice(2);
-const manifest = JSON.parse(readFileSync(manifestPath!, "utf8")) as { networkPolicy?: import("./policy.js").SandboxPolicy["network"]; cli: string; settings: string; argv: string[]; env: Record<string, string>; timeoutSeconds: number; kernelBridge?: string; supervisor?: string; lifecycleTag?: string; deniedLifecycleTag?: string; executionGrant?: { sources: Array<{ path: string; sha256: string }>; deadline: number; budget: { path: string; nodeId: string; ownerHash: string } }; networkGrants?: { path: string; profile: NetworkGrantProfile } };
+const manifest = JSON.parse(readFileSync(manifestPath!, "utf8")) as { networkPolicy?: import("./policy.js").SandboxPolicy["network"]; cli: string; settings: string; argv: string[]; env: Record<string, string>; timeoutSeconds: number; setupTimeoutSeconds: number; phasePath: string; kernelBridge?: string; supervisor?: string; lifecycleTag?: string; deniedLifecycleTag?: string; executionGrant?: { sources: Array<{ path: string; sha256: string }>; deadline: number; budget: { path: string; nodeId: string; ownerHash: string } }; networkGrants?: { path: string; profile: NetworkGrantProfile } };
 if (process.platform === "darwin" && !manifest.supervisor) throw new Error("macOS sandbox requires the native descendant supervisor");
+const phases: Record<string, number> = {}; let terminal = false;
+const mark = (phase: string) => { phases[phase] = Date.now(); try { writeFileSync(manifest.phasePath, JSON.stringify(phases), { mode: 0o600 }); } catch { /* Phase evidence must not disable the watchdog. */ } };
+const finish = (phase: string) => { if (!terminal) { terminal = true; mark(phase); } };
+process.once("exit", () => finish("closed"));
+mark("started");
 const owner = process.ppid;
-const kill = () => { try { process.kill(-process.pid, "SIGKILL"); } catch { process.exit(1); } };
-process.once("disconnect", kill);
+const kill = (phase: string) => { finish(phase); try { process.kill(-process.pid, "SIGKILL"); } catch { process.exit(1); } };
+process.once("disconnect", () => kill("owner_lost"));
 const validGrant = () => {
   try {
     const grant = manifest.executionGrant; if (!grant) return true;
@@ -20,9 +25,9 @@ const validGrant = () => {
     return true;
   } catch { return false; }
 };
-if (!validGrant()) throw new Error("Execution grant revoked or expired before launch");
-const ownerTimer = setInterval(() => { if (process.ppid !== owner || process.ppid === 1 || !validGrant()) kill(); }, 250);
-const deadline = setTimeout(kill, (manifest.timeoutSeconds + 1) * 1000);
+if (!validGrant()) { finish("grant_revoked"); throw new Error("Execution grant revoked or expired before launch"); }
+const ownerTimer = setInterval(() => { if (process.ppid !== owner || process.ppid === 1) kill("owner_lost"); else if (!validGrant()) kill("grant_revoked"); }, 250);
+const setupDeadline = setTimeout(() => kill("setup_timeout"), manifest.setupTimeoutSeconds * 1000);
 const envArgs = Object.entries(manifest.env).map(([key, value]) => `${key}=${value}`);
 const { startSandboxNetwork } = await import(new URL(import.meta.url.endsWith(".ts") ? "./network.ts" : "./network.js", import.meta.url).href);
 const configured = JSON.parse(readFileSync(manifest.settings, "utf8"));
@@ -31,6 +36,7 @@ const baseNetwork = manifest.networkPolicy ?? (!configured.network.deniedDomains
   : { mode: "none" as const });
 const { networkGrantSource } = await import(new URL(import.meta.url.endsWith(".ts") ? "./network-grant-state.ts" : "./network-grant-state.js", import.meta.url).href) as typeof import("./network-grant-state.js");
 const network = await startSandboxNetwork(baseNetwork, manifest.networkGrants ? networkGrantSource(baseNetwork, manifest.networkGrants.path, manifest.networkGrants.profile) : undefined);
+mark("network");
 configured.network.httpProxyPort = network.httpPort;
 configured.network.socksProxyPort = network.socksPort;
 writeFileSync(manifest.settings, JSON.stringify(configured), { mode: 0o600 });
@@ -46,6 +52,7 @@ if (process.platform === "linux") {
   const { SandboxManager } = await import("@anthropic-ai/sandbox-runtime");
   linuxManager = SandboxManager;
   await SandboxManager.initialize(configured);
+  mark("initialized");
   await SandboxManager.waitForNetworkInitialization();
   // SRT mounts its bridge sockets before applying filesystem masks. Preserve
   // exactly those sockets under the root deny, never their private parent.
@@ -53,10 +60,13 @@ if (process.platform === "linux") {
   SandboxManager.updateConfig({ ...configured, filesystem: { ...configured.filesystem, allowRead: [...configured.filesystem.allowRead, ...sockets.map((path) => ({ path, literal: true }))] } });
   const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
   linuxLaunch = await SandboxManager.wrapWithSandboxArgv(runtimeArgs.slice(4).map(quote).join(" "));
+  mark("wrapped");
 }
-if (!validGrant()) throw new Error("Execution grant revoked before process start");
-const child = spawn(linuxLaunch?.argv[0] ?? manifest.supervisor ?? process.execPath, linuxLaunch ? linuxLaunch.argv.slice(1) : manifest.supervisor ? [String(manifest.timeoutSeconds + 1), manifest.lifecycleTag!, manifest.deniedLifecycleTag!, process.execPath, ...runtimeArgs] : runtimeArgs,
+if (!validGrant()) { finish("grant_revoked"); throw new Error("Execution grant revoked before process start"); }
+const child = spawn(linuxLaunch?.argv[0] ?? manifest.supervisor ?? process.execPath, linuxLaunch ? linuxLaunch.argv.slice(1) : manifest.supervisor ? [String(manifest.setupTimeoutSeconds + manifest.timeoutSeconds + 1), manifest.lifecycleTag!, manifest.deniedLifecycleTag!, process.execPath, ...runtimeArgs] : runtimeArgs,
   { shell: false, stdio: ["inherit", "inherit", "inherit"], env: linuxLaunch?.env ?? process.env, ...(manifest.supervisor ? { detached: true } : {}) });
+let commandDeadline: ReturnType<typeof setTimeout> | undefined;
+child.once("spawn", () => { mark("spawned"); clearTimeout(setupDeadline); commandDeadline = setTimeout(() => kill("command_timeout"), manifest.timeoutSeconds * 1000); });
 // Signal the real bridge, not the CLI (whose startup interrupt terminates srt).
 const interrupt = (pid: number) => {
   try {
@@ -82,5 +92,5 @@ const interrupt = (pid: number) => {
   } catch { /* exited while walking */ }
 };
 process.on("message", (message) => { if (message === "interrupt" && child.pid) interrupt(child.pid); });
-child.once("error", kill);
-child.once("close", (code) => { clearInterval(ownerTimer); clearTimeout(deadline); void Promise.all([network.close(), linuxManager?.reset()]).finally(() => process.exit(code ?? 1)); });
+child.once("error", () => kill("closed"));
+child.once("close", (code) => { finish("closed"); clearInterval(ownerTimer); clearTimeout(commandDeadline); clearTimeout(setupDeadline); void Promise.all([network.close(), linuxManager?.reset()]).finally(() => process.exit(code ?? 1)); });

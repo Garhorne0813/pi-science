@@ -4,7 +4,7 @@ import { withFileWriteLock, workspaceFile } from "../../../storage/persistence.j
 import { executionIdFor, executionRepository } from "../../executions/execution-repository.js";
 import { workspacePolicy } from "../../sandbox/policy.js";
 import { skillResourcePolicy } from "../../sandbox/skill-resources.js";
-import { prepareSandbox, type PreparedSandbox } from "../../sandbox/process.js";
+import { prepareSandbox, readLauncherTiming, type PreparedSandbox } from "../../sandbox/process.js";
 import { bashDependencies, SANDBOX_RUNTIME } from "../../sandbox/settings.js";
 import { executionGrantPolicy } from "../../sandbox/execution-grants.js";
 import { type SandboxIdentity } from "./confined-read-tool.js";
@@ -21,8 +21,10 @@ export function sandboxBashTool(identity: SandboxIdentity, hostEnvironment: Reco
     const confined = !!identity.executionGrantId || !!identity.candidateId || identity.executionScope === "candidate" || identity.executionScope === "confined";
     if (confined && !identity.executionGrantId) throw new Error("Candidate execution requires a server-bound candidate or generic execution grant");
     const revision = hostEnvironment.PI_SCIENCE_ENVIRONMENT_REVISION_ID;
+    const policyStarted = performance.now();
     const policy = confined ? await executionGrantPolicy(identity, revision, "bash")
       : await skillResourcePolicy(await workspacePolicy(identity.cwd, revision, "analysis", identity.delegatedAgent ? undefined : identity.sessionId), await skillDirectories());
+    const policy_ms = performance.now() - policyStarted;
     const binding = confined ? { directory: policy.cwd } : undefined;
     const values = params as { command: string; timeout?: number };
     const timeout = values.timeout ?? 600;
@@ -33,6 +35,8 @@ export function sandboxBashTool(identity: SandboxIdentity, hostEnvironment: Reco
       const executionId = executionIdFor("bash", identity.sessionId, invocation.operationId, invocation.invocationId);
       let prepared: PreparedSandbox | undefined;
       let env: NodeExecutionEnv | undefined;
+      let launcher: Awaited<ReturnType<typeof readLauncherTiming>>;
+      const setup = () => prepared ? { sandbox_setup: { policy_ms, ...prepared.timing, ...(launcher ? { launcher } : {}) } } : {};
       let started = false;
       let outcome: { exitCode?: number | null; errorCode?: string } = {};
       let before: Awaited<ReturnType<typeof snapshotSandboxOutputs>> | undefined;
@@ -58,26 +62,33 @@ export function sandboxBashTool(identity: SandboxIdentity, hostEnvironment: Reco
         // error. Observe its structured OS result without parsing output text.
         const exec = env.exec.bind(env);
         env.exec = async (...args) => {
-          const result = await exec(...args);
-          outcome = result.ok ? { exitCode: result.value.exitCode } : { errorCode: result.error.code };
+          // The launcher owns the sandbox command deadline; the host timer would include setup.
+          const result = await exec(args[0], prepared ? { ...args[1], timeout: undefined } : args[1], args[2]);
+          launcher = prepared ? await readLauncherTiming(prepared.phasePath) : undefined;
+          outcome = launcher?.terminal === "command_timeout" ? { errorCode: "timeout" } : result.ok ? { exitCode: result.value.exitCode } : { errorCode: result.error.code };
           return result;
         };
         before = await snapshotSandboxOutputs(identity.cwd, policy);
         const safeOriginal = createBashTool({ prepare(execution) { execution.env = prepared?.env ?? toolEnvironment(hostEnvironment); execution.inheritEnv = false; } });
         const result = await safeOriginal.execute(id, { ...values, timeout: Math.min(timeout, 600) }, update, { ...ctx, env }, invocation, context);
         const evidence = await outputs();
-        await executionRepository.finish(identity.cwd, executionId, { status: "succeeded", producer: "bash", result: { sandbox_policy_id: policy.id, exit_code: outcome.exitCode,
+        await executionRepository.finish(identity.cwd, executionId, { status: "succeeded", producer: "bash", result: { ...setup(), sandbox_policy_id: policy.id, exit_code: outcome.exitCode,
           output_preview: result.content.filter((part) => part.type === "text").map((part) => part.type === "text" ? part.text : "").join("\n").slice(0, 16 * 1024),
           ...(evidence.failures.length ? { artifact_publish_errors: evidence.failures } : {}) }, files: evidence.files, artifacts: evidence.artifacts });
         const references = { execution_id: executionId, artifact_refs: evidence.artifacts };
         return binding || evidence.artifacts.length ? { ...result, content: [...result.content, { type: "text" as const, text: JSON.stringify(references) }], details: { ...result.details, ...references } } : result;
       } catch (error) {
+        launcher = prepared ? await readLauncherTiming(prepared.phasePath) : undefined;
         const timedOut = outcome.errorCode === "timeout" || context.abortSignal?.reason instanceof Error && context.abortSignal.reason.message === "Execution time budget exhausted";
+        // The launcher owns the command deadline, so its SIGKILL reaches the host
+        // as a signal exit. Report the timeout it enforced, not that exit code.
+        const phase = launcher?.terminal && launcher.terminal !== "closed" ? ` (sandbox launcher: ${launcher.terminal})` : "";
+        const phaseError = `${timedOut ? "Command timed out" : error instanceof Error ? error.message : String(error)}${phase}`;
         if (started) {
           const evidence = await outputs();
-          await executionRepository.finish(identity.cwd, executionId, { status: timedOut ? "timed_out" : outcome.errorCode === "aborted" || context.abortSignal?.aborted ? "cancelled" : "failed", producer: "bash", result: { error: String(error), sandbox_policy_id: policy.id, ...(outcome.exitCode !== undefined ? { exit_code: outcome.exitCode } : {}), ...(outcome.errorCode ? { execution_error_code: outcome.errorCode } : {}),
+          await executionRepository.finish(identity.cwd, executionId, { status: timedOut ? "timed_out" : outcome.errorCode === "aborted" || context.abortSignal?.aborted ? "cancelled" : "failed", producer: "bash", result: { ...setup(), error: phaseError, sandbox_policy_id: policy.id, ...(outcome.exitCode !== undefined ? { exit_code: outcome.exitCode } : {}), ...(outcome.errorCode ? { execution_error_code: outcome.errorCode } : {}),
             ...(evidence.failures.length ? { artifact_publish_errors: evidence.failures } : {}) }, files: evidence.files, artifacts: evidence.artifacts });
-          throw new Error(`${error instanceof Error ? error.message : String(error)}\n${JSON.stringify({ execution_id: executionId, artifact_refs: evidence.artifacts })}`, { cause: error });
+          throw new Error(`${phaseError}\n${JSON.stringify({ execution_id: executionId, artifact_refs: evidence.artifacts })}`, { cause: error });
         }
         throw error;
       } finally { await env?.cleanup(context); await prepared?.cleanup(); }

@@ -1,4 +1,5 @@
 import { networkGrantsPath } from "./network-grants.js";
+import { CREDENTIAL_NAMES, expandCredentialDenies } from "./credential-denies.js";
 import { constants } from "node:fs";
 import { access, readFile, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
@@ -55,10 +56,12 @@ export async function processSettings(policy: SandboxPolicy, dependencies: strin
     await access(canonical, constants.X_OK);
   }
   const literal = (path: string) => ({ path, literal: true as const });
-  const credentialNames = [".pi-science", ".pi", ".npmrc", ".pypirc", ".netrc", "_netrc", ".git-credentials", ".modal.toml", "credentials.json", "credentials.toml", ".env", ".env.*"];
   const permissionRoot = dirname(networkGrantsPath());
-  const credentials = [...new Set([...policy.readPaths, ...policy.writePaths])].flatMap((root) => credentialNames.map((name) => join(root, "**", name)));
-  return {
+  const scanStarted = performance.now();
+  const scan = await expandCredentialDenies([...new Set([...policy.readPaths, ...policy.writePaths])], CREDENTIAL_NAMES, [permissionRoot, ...readPolicy.protectedRoots, ...policy.denyPaths]);
+  const timing = { credential_scan_ms: performance.now() - scanStarted, credential_directories: scan.directories, credential_entries: scan.entries };
+  const credentials = scan.paths.map(literal);
+  const config = {
     network: { allowedDomains: policy.network.mode === "allowlist" ? policy.network.allowedDomains : [], deniedDomains: policy.network.mode === "allowlist" ? policy.network.deniedDomains : ["*"], strictAllowlist: true,
       allowUnixSockets: [], allowAllUnixSockets: false, allowLocalBinding: false },
     filesystem: { denyRead: [...["/", permissionRoot, ...readPolicy.protectedRoots, ...policy.denyPaths].map(literal), ...credentials], allowRead: [...new Set([...reads, join(root, "vendor/seccomp"), ...(installation.socat ? [installation.socat] : []), ...policy.readPaths])].map(literal),
@@ -67,4 +70,5 @@ export async function processSettings(policy: SandboxPolicy, dependencies: strin
     ...(installation.bwrap ? { bwrapPath: installation.bwrap } : {}),
     ripgrep: { command: installation.ripgrep ?? "/usr/bin/rg" }, ...(installation.socat ? { socatPath: installation.socat } : {}),
   };
+  return { config, timing };
 }

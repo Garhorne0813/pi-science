@@ -209,3 +209,64 @@ the link, and `/etc/passwd` all stay unreadable. A second case runs the server's
 own node when it came from a keg, which covers what a compiled fixture cannot:
 `libnode` behind `@rpath`, a formula linking another formula, a dylib named
 through a symlink to a differently named file, and the keg's `openssl.cnf`.
+
+## macOS TLS trust
+
+A sandboxed process reads its trust anchors from one bundle in the sandbox
+scratch directory, exported through `SSL_CERT_FILE`, `CURL_CA_BUNDLE`,
+`REQUESTS_CA_BUNDLE` and `NODE_EXTRA_CA_CERTS`. On macOS that file is
+`security find-certificate -a -p
+/System/Library/Keychains/SystemRootCertificates.keychain`, the trust store the
+host itself verifies against. Apple's `/etc/ssl/cert.pem` is the fallback for a
+host where that export yields no certificate.
+
+The legacy PEM is not a substitute for the keychain. It is a LibreSSL snapshot
+that lags Apple's root program, so a host that reaches `https://example.com`
+can fail inside the sandbox with `curl: (60) ... unable to get local issuer
+certificate` once the site's chain anchors at a root the snapshot no longer
+carries. Reading the keychain also stops trusting a root Apple withdrew instead
+of pinning it forever. `certificate-bundle.test.ts` covers the export and both
+fallbacks; the real handshake through the policy proxy stays in
+`platform-acceptance.test.ts`.
+
+## Credential denies under broad grants
+
+Approval mode `full` adds the home directory to the session read and write
+grants, so a workspace Bash call can reach anything under it. Credential files
+stay denied by name regardless of depth: `.pi-science`, `.pi`, `.npmrc`,
+`.pypirc`, `.netrc`, `_netrc`, `.git-credentials`, `.modal.toml`,
+`credentials.json`, `credentials.toml`, `.env` and `.env.*`.
+
+`expandCredentialDenies` walks each granted root once and matches every name in
+that single pass. The matches become literal `denyRead` and `denyWrite`
+entries instead of one recursive glob per name. Upstream sandbox-runtime expands
+each `denyRead` glob with its own filesystem walk, so a home directory used to
+pay that traversal twelve times before the command started.
+
+The scan has no cross-invocation cache. A credential file created since the last
+Bash call is found on the next one, and an authorization revision change does not
+need cache invalidation because there is nothing to invalidate. Subtrees that
+another deny already covers are skipped, a matched directory is denied whole
+without being listed, and matches reached through a directory symlink are
+reported at their real locations. A directory that fails to list is denied
+itself.
+
+Literal entries also matter on Linux, where sandbox-runtime drops glob write
+rules and only read globs were actually enforced. Both sides now name concrete
+paths, and the real-sandbox acceptance test checks that a deep `.env` under a
+granted root cannot be read and keeps its original bytes after a write attempt.
+
+Preparation remains proportional to the size of the granted roots: one traversal
+is the floor for exact name matching at any depth. The [credential deny
+benchmark](performance/credential-denies-benchmark.md) records the difference
+against the previous twelve-glob expansion.
+
+Every Bash invocation now records where its preparation time went. The execution
+record carries `sandbox_setup` with `policy_ms`, `settings_ms`,
+`credential_scan_ms`, `credential_directories`, `credential_entries` and
+`prepare_ms`, plus a `launcher` object with `started_at`, `spawned_at`,
+`setup_ms` and the terminal phase. The launcher writes those phases into its
+private control directory and enforces two budgets: setup has its own bounded
+timeout, and the command timeout starts only once the command is spawned. A
+failed invocation names the phase it died in, so a timeout during preparation is
+no longer reported as a command timeout.
