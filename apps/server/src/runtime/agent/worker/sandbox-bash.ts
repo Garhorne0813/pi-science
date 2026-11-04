@@ -79,8 +79,11 @@ export function sandboxBashTool(identity: SandboxIdentity, hostEnvironment: Reco
         return binding || evidence.artifacts.length ? { ...result, content: [...result.content, { type: "text" as const, text: JSON.stringify(references) }], details: { ...result.details, ...references } } : result;
       } catch (error) {
         launcher = prepared ? await readLauncherTiming(prepared.phasePath) : undefined;
-        const phaseError = launcher?.terminal ? `${error instanceof Error ? error.message : String(error)} (sandbox launcher: ${launcher.terminal})` : error instanceof Error ? error.message : String(error);
         const timedOut = outcome.errorCode === "timeout" || context.abortSignal?.reason instanceof Error && context.abortSignal.reason.message === "Execution time budget exhausted";
+        // The launcher owns the command deadline, so its SIGKILL reaches the host
+        // as a signal exit. Report the timeout it enforced, not that exit code.
+        const phase = launcher?.terminal && launcher.terminal !== "closed" ? ` (sandbox launcher: ${launcher.terminal})` : "";
+        const phaseError = `${timedOut ? "Command timed out" : error instanceof Error ? error.message : String(error)}${phase}`;
         if (started) {
           const evidence = await outputs();
           await executionRepository.finish(identity.cwd, executionId, { status: timedOut ? "timed_out" : outcome.errorCode === "aborted" || context.abortSignal?.aborted ? "cancelled" : "failed", producer: "bash", result: { ...setup(), error: phaseError, sandbox_policy_id: policy.id, ...(outcome.exitCode !== undefined ? { exit_code: outcome.exitCode } : {}), ...(outcome.errorCode ? { execution_error_code: outcome.errorCode } : {}),
