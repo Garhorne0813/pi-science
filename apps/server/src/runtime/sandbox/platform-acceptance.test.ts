@@ -183,7 +183,9 @@ describe.skipIf(process.env.PI_SCIENCE_SANDBOX_TEST !== "1" || !["darwin", "linu
     expect(manager.hasOwner(cwd, "retiring-owner")).toBe(false);
     await new Promise((resolve) => setTimeout(resolve, 2200));
     await expect(readFile(join(cwd, "leaked.txt"))).rejects.toThrow();
-  }, 30_000);
+    // Sandbox preparation scans the runner home before the kernel starts, and
+    // this suite observes 3700ms to beyond 30000ms for the same commit.
+  }, 60_000);
   it.skipIf(!process.env.PI_SCIENCE_SANDBOX_PYTHON_ROOT)("grants and revokes network access in a running Python kernel without losing state", async () => {
     const cwd = await fixture(), home = await fixture();
     vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "required"); vi.stubEnv("PI_SCIENCE_HOME", home); vi.stubEnv("PI_SCIENCE_SANDBOX_PROFILES", "");
