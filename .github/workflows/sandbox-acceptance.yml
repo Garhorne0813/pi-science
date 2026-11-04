@@ -105,6 +105,9 @@ jobs:
       - name: Measure per-Bash Skill policy scans
         shell: bash
         run: pnpm --filter @pi-science/server exec tsx scripts/benchmark-skill-resources.ts > skill-resource-performance.json
+      - name: Measure credential deny expansion
+        shell: bash
+        run: pnpm --filter @pi-science/server exec tsx scripts/benchmark-credential-denies.ts > credential-deny-performance.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -112,3 +115,4 @@ jobs:
           path: |
             apps/server/sandbox-acceptance.xml
             skill-resource-performance.json
+            credential-deny-performance.json
