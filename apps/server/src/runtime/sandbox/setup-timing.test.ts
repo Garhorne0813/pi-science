@@ -2,13 +2,16 @@ import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BACKGROUND_CONTEXT, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import * as sandboxProcess from "./process.js";
 import { identifyPolicy } from "./policy.js";
 import { sandboxBashTool } from "../agent/worker/sandbox-bash.js";
 import { executionRepository } from "../executions/execution-repository.js";
 
+// The launcher is a POSIX watchdog: it execs /bin/sh, uses process groups and
+// signals. Windows has no sandbox backend to exercise.
+describe.skipIf(!["darwin", "linux"].includes(process.platform))("launcher setup timing", () => {
 let root: string;
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), "setup-timing-")));
@@ -74,4 +77,5 @@ it("degrades missing and unreadable phase evidence to no launcher object", async
   expect(await sandboxProcess.readLauncherTiming(join(root, "missing.json"))).toBeUndefined();
   expect(await sandboxProcess.readLauncherTiming(root)).toBeUndefined();
   await writeFile(join(root, "broken.json"), "broken"); expect(await sandboxProcess.readLauncherTiming(join(root, "broken.json"))).toBeUndefined();
+});
 });
