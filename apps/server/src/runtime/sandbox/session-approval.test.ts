@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -11,6 +11,7 @@ let root: string, cwd: string;
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), "session-approval-")));
   cwd = join(root, "workspace"); await mkdir(cwd);
+  const home = join(root, "home"); await mkdir(home); vi.stubEnv("HOME", home);
   vi.stubEnv("PI_SCIENCE_HOME", join(root, "private"));
   vi.stubEnv("PI_SCIENCE_SANDBOX_PROFILES", "");
   vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "required");
@@ -40,6 +41,8 @@ it("auto allows public HTTPS while retaining workspace files, operator denials a
   expect(domainAllowed("rest.uniprot.org", 443, ask.network)).toBe(false);
 });
 it("full expands home access, protects application state and never broadens confined policies", async () => {
+  const deep = join(homedir(), "projects", "nested", "config"); await mkdir(deep, { recursive: true });
+  const credential = join(deep, ".env.local"); await writeFile(credential, "TEST_SECRET=value");
   await saveSessionApproval(cwd, "a", "full", 0);
   const full = await workspacePolicy(cwd, undefined, "analysis", "a");
   expect(full.writePaths).toContain(await realpath(homedir()));
@@ -52,7 +55,11 @@ it("full expands home access, protects application state and never broadens conf
     return;
   }
   const prepared = await prepareSandbox(full, ["true"], [], 1);
-  await prepared.cleanup();
+  try {
+    const manifest = JSON.parse(await readFile(prepared.manifest, "utf8"));
+    const settings = JSON.parse(await readFile(manifest.settings, "utf8"));
+    expect(settings.filesystem.denyRead).toContainEqual({ path: credential, literal: true });
+  } finally { await prepared.cleanup(); }
 });
 it.skipIf(process.env.PI_SCIENCE_SANDBOX_TEST !== "1" || !["darwin", "linux"].includes(process.platform))("enforces full-mode home access and service-data denial in a real sandbox", async () => {
   const fixture = await realpath(await mkdtemp(join(homedir(), "pi-science-mode-test-")));
@@ -80,7 +87,6 @@ it.skipIf(process.env.PI_SCIENCE_SANDBOX_TEST !== "1" || !["darwin", "linux"].in
     await expect(call(workspaceFileTool(createReadTool(), cwd, [], "b"), join(fixture, "sample.txt"))).rejects.toThrow("outside");
     await expect(call(workspaceFileTool(createReadTool(), cwd, [], "a"), path)).rejects.toThrow("service-owned");
     await call(workspaceFileTool(createWriteTool(), cwd, [], "a"), join(fixture, "new.txt"));
-    const { readFile } = await import("node:fs/promises");
     expect(await readFile(join(fixture, "new.txt"), "utf8")).toBe("UPDATED_TEST_FILE");
   } finally { await rm(fixture, { recursive: true, force: true }); }
 }, 30_000);

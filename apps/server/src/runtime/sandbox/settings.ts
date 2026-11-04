@@ -1,4 +1,5 @@
 import { networkGrantsPath } from "./network-grants.js";
+import { CREDENTIAL_NAMES, expandCredentialDenies } from "./credential-denies.js";
 import { constants } from "node:fs";
 import { access, readFile, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
@@ -55,9 +56,8 @@ export async function processSettings(policy: SandboxPolicy, dependencies: strin
     await access(canonical, constants.X_OK);
   }
   const literal = (path: string) => ({ path, literal: true as const });
-  const credentialNames = [".pi-science", ".pi", ".npmrc", ".pypirc", ".netrc", "_netrc", ".git-credentials", ".modal.toml", "credentials.json", "credentials.toml", ".env", ".env.*"];
   const permissionRoot = dirname(networkGrantsPath());
-  const credentials = [...new Set([...policy.readPaths, ...policy.writePaths])].flatMap((root) => credentialNames.map((name) => join(root, "**", name)));
+  const credentials = (await expandCredentialDenies([...new Set([...policy.readPaths, ...policy.writePaths])], CREDENTIAL_NAMES, [permissionRoot, ...readPolicy.protectedRoots, ...policy.denyPaths])).paths.map(literal);
   return {
     network: { allowedDomains: policy.network.mode === "allowlist" ? policy.network.allowedDomains : [], deniedDomains: policy.network.mode === "allowlist" ? policy.network.deniedDomains : ["*"], strictAllowlist: true,
       allowUnixSockets: [], allowAllUnixSockets: false, allowLocalBinding: false },
