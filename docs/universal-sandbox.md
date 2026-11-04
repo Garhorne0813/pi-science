@@ -210,6 +210,25 @@ own node when it came from a keg, which covers what a compiled fixture cannot:
 `libnode` behind `@rpath`, a formula linking another formula, a dylib named
 through a symlink to a differently named file, and the keg's `openssl.cnf`.
 
+## macOS TLS trust
+
+A sandboxed process reads its trust anchors from one bundle in the sandbox
+scratch directory, exported through `SSL_CERT_FILE`, `CURL_CA_BUNDLE`,
+`REQUESTS_CA_BUNDLE` and `NODE_EXTRA_CA_CERTS`. On macOS that file is
+`security find-certificate -a -p
+/System/Library/Keychains/SystemRootCertificates.keychain`, the trust store the
+host itself verifies against. Apple's `/etc/ssl/cert.pem` is the fallback for a
+host where that export yields no certificate.
+
+The legacy PEM is not a substitute for the keychain. It is a LibreSSL snapshot
+that lags Apple's root program, so a host that reaches `https://example.com`
+can fail inside the sandbox with `curl: (60) ... unable to get local issuer
+certificate` once the site's chain anchors at a root the snapshot no longer
+carries. Reading the keychain also stops trusting a root Apple withdrew instead
+of pinning it forever. `certificate-bundle.test.ts` covers the export and both
+fallbacks; the real handshake through the policy proxy stays in
+`platform-acceptance.test.ts`.
+
 ## Credential denies under broad grants
 
 Approval mode `full` adds the home directory to the session read and write
