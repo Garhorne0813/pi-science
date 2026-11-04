@@ -11,7 +11,7 @@ import { workerEnvironment } from "../agent/agent-runtime-client.js";
 describe.skipIf(process.platform !== "linux")("shared operator runtime read grants", () => {
   let directory: string; let file: string; let dependency: string; let protectedRoot: string; let workspace: string;
   const save = async (dependencyRoots: string[], protectedRoots: string[]) => writeFile(file, JSON.stringify({ schemaVersion: 1, dependencyRoots, protectedRoots }), { mode: 0o600 });
-  const settings = (dependencies: string[]) => processSettings(identifyPolicy({ mode: "required", scope: "workspace", cwd: workspace, readPaths: [workspace], writePaths: [], denyPaths: [], network: { mode: "none" } }), dependencies, {});
+  const settings = async (dependencies: string[]) => (await processSettings(identifyPolicy({ mode: "required", scope: "workspace", cwd: workspace, readPaths: [workspace], writePaths: [], denyPaths: [], network: { mode: "none" } }), dependencies, {})).config;
   beforeEach(async () => {
     await mkdir(resolve("../../.runtime"), { recursive: true });
     directory = await mkdtemp(join(resolve("../../.runtime"), ".read-policy-test-"));
@@ -31,7 +31,7 @@ describe.skipIf(process.platform !== "linux")("shared operator runtime read gran
     const bwrap = join(dependency, "bwrap");
     await writeFile(bwrap, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
     const policy = identifyPolicy({ mode: "required", scope: "workspace", cwd: workspace, readPaths: [workspace], writePaths: [], denyPaths: [], network: { mode: "none" } });
-    expect((await processSettings(policy, [], { bwrap })).bwrapPath).toBe(bwrap);
+    expect((await processSettings(policy, [], { bwrap })).config.bwrapPath).toBe(bwrap);
     const undeclared = join(directory, "undeclared-bwrap");
     await writeFile(undeclared, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
     await expect(processSettings(policy, [], { bwrap: undeclared })).rejects.toThrow("outside the shared operator read policy");

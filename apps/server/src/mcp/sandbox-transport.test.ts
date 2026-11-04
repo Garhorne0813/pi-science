@@ -34,7 +34,7 @@ it.skipIf(!supported).each(["paper-search", "literature-graph"])("keeps %s outsi
   expect(policy.readPaths).toEqual([]); expect(policy.writePaths).toEqual([]);
   expect(policy.cwd).not.toBe(cwd);
   expect(policy.network).toMatchObject({ mode: "allowlist", allowedDomains: ["api.example.com:443"] });
-  const settings = await processSettings(policy, dependencies);
+  const { config: settings } = await processSettings(policy, dependencies);
   expect(JSON.stringify(settings.filesystem)).not.toContain(cwd);
   expect(JSON.stringify(settings.filesystem)).not.toContain(grant);
   expect(settings.filesystem.denyRead.every((entry) => typeof entry !== "string")).toBe(true);

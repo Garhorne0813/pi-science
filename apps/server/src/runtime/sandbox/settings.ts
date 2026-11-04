@@ -57,8 +57,11 @@ export async function processSettings(policy: SandboxPolicy, dependencies: strin
   }
   const literal = (path: string) => ({ path, literal: true as const });
   const permissionRoot = dirname(networkGrantsPath());
-  const credentials = (await expandCredentialDenies([...new Set([...policy.readPaths, ...policy.writePaths])], CREDENTIAL_NAMES, [permissionRoot, ...readPolicy.protectedRoots, ...policy.denyPaths])).paths.map(literal);
-  return {
+  const scanStarted = performance.now();
+  const scan = await expandCredentialDenies([...new Set([...policy.readPaths, ...policy.writePaths])], CREDENTIAL_NAMES, [permissionRoot, ...readPolicy.protectedRoots, ...policy.denyPaths]);
+  const timing = { credential_scan_ms: performance.now() - scanStarted, credential_directories: scan.directories, credential_entries: scan.entries };
+  const credentials = scan.paths.map(literal);
+  const config = {
     network: { allowedDomains: policy.network.mode === "allowlist" ? policy.network.allowedDomains : [], deniedDomains: policy.network.mode === "allowlist" ? policy.network.deniedDomains : ["*"], strictAllowlist: true,
       allowUnixSockets: [], allowAllUnixSockets: false, allowLocalBinding: false },
     filesystem: { denyRead: [...["/", permissionRoot, ...readPolicy.protectedRoots, ...policy.denyPaths].map(literal), ...credentials], allowRead: [...new Set([...reads, join(root, "vendor/seccomp"), ...(installation.socat ? [installation.socat] : []), ...policy.readPaths])].map(literal),
@@ -67,4 +70,5 @@ export async function processSettings(policy: SandboxPolicy, dependencies: strin
     ...(installation.bwrap ? { bwrapPath: installation.bwrap } : {}),
     ripgrep: { command: installation.ripgrep ?? "/usr/bin/rg" }, ...(installation.socat ? { socatPath: installation.socat } : {}),
   };
+  return { config, timing };
 }

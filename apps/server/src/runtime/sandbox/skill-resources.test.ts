@@ -31,7 +31,7 @@ it("grants only the selected skill directory and preserves parent and descendant
 });
 it.skipIf(!["linux", "darwin"].includes(process.platform))("emits a nested read exception with an independent write denial", async () => {
   const policy = await skillResourcePolicy(await workspacePolicy(cwd), [skill]);
-  const settings = await processSettings(policy, []);
+  const { config: settings } = await processSettings(policy, []);
   expect(settings.filesystem.allowRead).toContainEqual({ path: skill, literal: true });
   expect(settings.filesystem.denyRead).toContainEqual({ path: join(cwd, ".pi"), literal: true });
   expect(settings.filesystem.denyWrite).toContainEqual({ path: skill, literal: true });
