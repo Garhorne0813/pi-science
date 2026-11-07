@@ -37,6 +37,8 @@ export function useComposer(params: {
   const location = useLocation();
   const working = useRuntimeStore((s) => s.working);
   const sendPrompt = useRuntimeStore((s) => s.sendPrompt);
+  const sendSteer = useRuntimeStore((s) => s.sendSteer);
+  const enqueueMessage = useRuntimeStore((s) => s.enqueueMessage);
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
   const input = useRuntimeStore((s) => s.draft);
   const setDraft = useRuntimeStore((s) => s.setDraft);
@@ -51,6 +53,15 @@ export function useComposer(params: {
   const mentions = useMemo(() => validEntities.flatMap((entity) => entity.kind === "mention"
     ? [{ id: entity.id, name: entity.name, start: entity.start, end: entity.end }] : []), [validEntities]);
   const inlineReferences = useMemo(() => inlineWorkspaceReferences(validEntities), [validEntities]);
+  // While a turn runs the composer chooses between two explicit meanings.
+  // Steer is the default because it is the direct correction; the switch stays
+  // visible so the choice is never implicit.
+  const [sendMode, setSendModeState] = useState<"steer" | "queue">("steer");
+  const [runningNotice, setRunningNotice] = useState<"not_running" | null>(null);
+  const setSendMode = useCallback((mode: "steer" | "queue") => {
+    setRunningNotice(null);
+    setSendModeState(mode);
+  }, []);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -149,7 +160,51 @@ export function useComposer(params: {
     const text = input.trim();
     const references = [...inlineReferences, ...workspaceReferences].filter((reference, index, all) =>
       all.findIndex((other) => other.cwd === reference.cwd && other.path === reference.path) === index);
-    if (!selectedModel || (!text && files.length === 0 && references.length === 0 && !quote) || working || reviewingProject || configuringModel) return;
+    if (!selectedModel || (!text && files.length === 0 && references.length === 0 && !quote) || reviewingProject || configuringModel) return;
+
+    const composeMessage = (body: string): string => {
+      let message = body;
+      if (files.length > 0) {
+        const names = files.map((file) => file.name).join(", ");
+        message = message
+          ? `${message}\n\n[Attached files: ${names}]`
+          : `I've uploaded these files: ${names}`;
+      }
+      message = injectSubagentMentions(message, mentions);
+      message = injectWorkspaceReferences(message, references);
+      // The quote goes in before the research header, so the skill line stays
+      // the first thing the server reads.
+      if (quote) message = composeQuotedPrompt(quote, message);
+      const mode = research.mode;
+      return mode ? `/skill:auto-research [Workflow: ${mode}]\n${message}` : message;
+    };
+
+    if (working) {
+      // The draft, quote, mentions and attachments survive a rejected running
+      // send, so the user can switch mode or stop and send again without
+      // retyping.
+      const message = composeMessage(text);
+      try {
+        if (sendMode === "steer") await sendSteer(message);
+        else await enqueueMessage(message);
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        // A finished turn is not a prompt: say so instead of silently changing
+        // what the user asked for.
+        if (sendMode === "steer" && code === "not_running") setRunningNotice("not_running");
+        else toast(error instanceof Error ? error.message : t("conversation.runningSendFailed"), "error");
+        return;
+      }
+      setRunningNotice(null);
+      setInput("");
+      setEntities([]);
+      setFiles([]);
+      clearWorkspaceReferences(cwd);
+      if (quote) useMessageQuoteStore.getState().clearQuote(quote.source);
+      onSend?.();
+      return;
+    }
+
     // A quote turns the message into a real prompt, so a slash command cannot
     // swallow it. The quote would otherwise be dropped without a trace.
     if (!quote && text.startsWith("/") && mentions.length === 0 && files.length === 0 && references.length === 0) {
@@ -161,22 +216,8 @@ export function useComposer(params: {
       }
     }
 
-    let message = text;
-    if (files.length > 0) {
-      const names = files.map((f) => f.name).join(", ");
-      message = message
-        ? `${message}\n\n[Attached files: ${names}]`
-        : `I've uploaded these files: ${names}`;
-    }
-
-    message = injectSubagentMentions(message, mentions);
-    message = injectWorkspaceReferences(message, references);
-    // The quote goes in before the research header, so the skill line stays the
-    // first thing the server reads.
-    if (quote) message = composeQuotedPrompt(quote, message);
-
+    const message = composeMessage(text);
     const sentResearchMode = research.mode;
-    if (sentResearchMode) message = `/skill:auto-research [Workflow: ${sentResearchMode}]\n${message}`;
 
     const sentFiles = files;
     const sentReferences = workspaceReferences;
@@ -249,6 +290,7 @@ export function useComposer(params: {
   return {
     input, setInput, entities, setEntities, mentions, files, setFiles, dragOver, setDragOver,
     fileInputRef, inputRef, composingRef, workspaceReferences, quote,
+    sendMode, setSendMode, runningNotice,
     handleSend, handleKeyDown, handleDrop, handleFilePick,
   };
 }

@@ -24,6 +24,7 @@ import { sessionTitleRepository } from "../../runtime/node/session-titles.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { AiTitleService } from "../../runtime/title/ai-title-service.js";
 import { PromptRequestRepository } from "../../runtime/node/prompt-request-repository.js";
+import { SessionQueueRepository } from "../../modules/session/session-queue-repository.js";
 import { type McpConnectorService } from "../../mcp/connector-service.js";
 import type { ConversationEventHub } from "../../runtime/events/conversation-event-hub.js";
 
@@ -78,6 +79,18 @@ function sendUseCaseResult(reply: FastifyReply, result: SessionUseCaseResult) {
     .send(result.body);
 }
 
+async function pauseQueueAfterStop(
+  queue: SessionQueueRepository,
+  workspace: string,
+  sessionId: string,
+): Promise<void> {
+  // The stop already succeeded; a queue bookkeeping failure must not turn it
+  // into an error response. The next queue read exposes the unpaused state.
+  await validateWorkspaceCwd(workspace)
+    .then((resolved) => queue.pauseAfterStop(resolved, sessionId))
+    .catch(() => null);
+}
+
 function sendFailure(reply: FastifyReply, result: Record<string, unknown>) {
   return reply.code(sessionRuntimeStatus(result.code)).send({ ok: false, ...result });
 }
@@ -95,6 +108,7 @@ export function registerNodeSessionRoutes(
   },
 ): void {
   const promptRequests = new PromptRequestRepository(sessionRepository);
+  const sessionQueue = new SessionQueueRepository();
   const promptSubmissions =
     useCases?.promptSubmissions ??
     new PromptSubmissionService(nodeSessionService, sessionRepository, promptRequests);
@@ -330,6 +344,10 @@ export function registerNodeSessionRoutes(
           cwd(request),
           "abort",
         );
+        // A stop is not a queue flush. Undispatched follow-ups stay put and wait
+        // for the user to resume them, so a stop can never start new work.
+        if (result.success)
+          await pauseQueueAfterStop(sessionQueue, cwd(request), request.params.session_id);
         return result.success ? { ok: true } : sendFailure(reply, result);
       });
     },
