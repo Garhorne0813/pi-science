@@ -1,7 +1,7 @@
 ---
 name: literature-review
 description: Find, verify, and synthesize scientific literature with traceable citations. Use configured MCP tools for literature and scientific data retrieval, including Crossref, PubMed, arXiv, GenBank, PubChem, and UniProt. Use for literature searches, evidence tables, paper comparisons, and review-ready summaries.
-version: 0.3.0
+version: 0.5.0
 license: Apache-2.0
 category: research
 requirements:
@@ -89,17 +89,39 @@ Crossref retrieval uses `search_crossref`, including DOI-oriented searches. For 
 - Deduplicate across providers: match by normalized DOI first, then by normalized title plus year.
 - For every kept record, preserve: identifier(s), title, authors, year, venue, provider name, and retrieval timestamp (ISO 8601 UTC).
 
+## Citing from source text
+
+Two tools in this session read a cited source's open full text and record what you used.
+
+- `read_source_evidence` returns one source as numbered passages, with a `snapshot_id` for the read and a `passage_id` for each paragraph, plus its section and, when the PDF states one, its file page. Page a long paper with `skip`. A state other than `available` says why there is no text: no open full text, access refused, download failed, unreadable body, a PDF with no text layer, or only another version.
+- `cite_evidence` records which passages of which snapshot you used for one sentence.
+
+Rules:
+
+1. Read before you cite. Quote only a paragraph `read_source_evidence` returned, and only from the snapshot it named.
+2. After you put a citation into your answer, call `cite_evidence` with the source, the sentence exactly as you wrote it, the `snapshot_id` and the passage ids you used. A reader then opens the paragraph you chose, not one a search guessed afterwards.
+3. A rejected selection is not recorded. Read the source again and select a passage that was returned, or state only what the metadata supports.
+4. If you never read the source, do not call `cite_evidence`. The source then shows that no generation-time text was recorded, which is accurate.
+5. A recorded passage is text from the paper. It is not a finding that the paper supports the sentence, and saying it does is your reading, not the record's.
+
 ## Output format (mandatory)
 
-The frontend auto-detects DOI strings in assistant messages and renders citations from this exact convention. Every response produced with this skill must follow it:
+The frontend lifts the bare DOI and arXiv identifiers out of your prose and turns them into source links, and it numbers them per answer version. Write the identifiers; do not write numbers into a chat reply, because the numbering belongs to the rendered version and a hand-written number would survive a regenerated answer with the wrong source behind it.
+
+A report file you write to the workspace is different: nothing rewrites it after you write it, so the file has to carry both halves of the citation convention itself. See the report rule below.
 
 1. Inline citations: immediately after each claim, cite the bare identifier — `doi:10.xxxx/yyyy` for DOI-registered works, `arXiv:NNNN.NNNNN` for arXiv-only works. Keep sentence punctuation off the identifier: wrap the citation in parentheses, e.g. "... first demonstrated in dye-sensitized cells (doi:10.1021/ja809598r).", or leave a space before the punctuation.
 2. References section: end the response with a `## References` heading followed by one numbered entry per cited source: authors (year), title, venue, a resolvable link (`https://doi.org/<doi>` or `https://arxiv.org/abs/<id>`), the provider the record came from, and the retrieval date. Example:
 
        ## References
-       1. Kojima et al. (2009). Organometal halide perovskites as visible-light sensitizers for photovoltaic cells. Journal of the American Chemical Society. https://doi.org/10.1021/ja809598r — Crossref, retrieved 2026-07-26.
+       [1] Kojima et al. (2009). Organometal halide perovskites as visible-light sensitizers for photovoltaic cells. Journal of the American Chemical Society. https://doi.org/10.1021/ja809598r — Crossref, retrieved 2026-07-26.
 
-3. Unsourced claims: any claim without a retrieved source must be explicitly labeled as synthesis, e.g. "(synthesis, unverified)". Never attach an invented identifier to make a claim look sourced.
+3. Report files: a report written to the workspace must be read correctly on its own, without the app in front of it. So it carries the numbering in the document, not only on screen:
+   - Number in the body, paper style, at the claim: "该研究报告了这一结果 [1]". `doi:10.xxxx/yyyy` and `arXiv:NNNN.NNNNN` stay written wherever the text is about the identifier itself or where the link text carries meaning. Never replace a meaningful identifier with a bare number.
+   - Number in first-citation order. A source cited a second time reuses its number: `[1]`, `[1]`, `[2]`.
+   - End the file with a `## References` list that uses the same numbers as the body, one entry per source, carrying the title, authors, year, venue, and the DOI, arXiv id or link. A reader must be able to trace any `[n]` in the body to its entry without opening the app.
+   - Two versions of one arXiv paper are two entries, because a newer version is not evidence for what an older one said. Never merge two sources because their titles look alike.
+4. Unsourced claims: any claim without a retrieved source must be explicitly labeled as synthesis, e.g. "(synthesis, unverified)". Never attach an invented identifier to make a claim look sourced.
 
 ## Review artifacts
 

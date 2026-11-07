@@ -3,10 +3,22 @@ import { isIP } from "node:net";
 
 function ipv4IsBlocked(value: string): boolean {
   const octets = value.split(".").map(Number);
-  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true;
+  if (
+    octets.length !== 4 ||
+    octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
+  )
+    return true;
   const a = octets[0]!;
   const b = octets[1]!;
-  return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a >= 224;
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    a >= 224
+  );
 }
 
 function ipv6IsBlocked(value: string): boolean {
@@ -16,7 +28,15 @@ function ipv6IsBlocked(value: string): boolean {
     if (isIP(mapped) === 4) return ipv4IsBlocked(mapped);
     return true;
   }
-  return normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe8") || normalized.startsWith("fe9") || normalized.startsWith("fea") || normalized.startsWith("feb") || normalized.startsWith("ff");
+  return (
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd") ||
+    normalized.startsWith("fe8") ||
+    normalized.startsWith("fe9") ||
+    normalized.startsWith("fea") ||
+    normalized.startsWith("feb") ||
+    normalized.startsWith("ff")
+  );
 }
 
 export function isPrivateOrReservedAddress(address: string): boolean {
@@ -27,33 +47,68 @@ export function isPrivateOrReservedAddress(address: string): boolean {
 /** URL syntax validation without requiring DNS in a network-isolated process. */
 export function parseOutboundHttpUrl(raw: string): URL {
   let url: URL;
-  try { url = new URL(raw); } catch { throw new Error("base_url must be a valid absolute URL"); }
-  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("only http(s) URLs are allowed");
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("base_url must be a valid absolute URL");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:")
+    throw new Error("only http(s) URLs are allowed");
   if (url.username || url.password) throw new Error("URL credentials are not allowed");
   if (!url.hostname) throw new Error("URL hostname is required");
   return url;
 }
 
-export async function validateOutboundHttpUrl(raw: string, options: { allowPrivate?: boolean } = {}): Promise<URL> {
+/** Injectable name resolution. Production leaves it unset so every request
+ *  resolves through the system resolver; tests answer from a fixture so the
+ *  policy can be exercised without a DNS server or a real destination. */
+export type ConnectorLookup = (
+  hostname: string,
+) => Promise<Array<{ address: string; family: number }>>;
+
+export type OutboundUrlOptions = { allowPrivate?: boolean; lookup?: ConnectorLookup };
+
+export async function validateOutboundHttpUrl(
+  raw: string,
+  options: OutboundUrlOptions = {},
+): Promise<URL> {
   const url = parseOutboundHttpUrl(raw);
-  const allowPrivate = options.allowPrivate ?? process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0";
+  const allowPrivate =
+    options.allowPrivate ?? process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0";
   // In environment-proxy mode DNS belongs to the proxy. Defer only when
   // private destinations are permitted; public-only validation still fails closed.
-  const proxy = url.protocol === "https:" ? process.env.HTTPS_PROXY ?? process.env.https_proxy ?? process.env.HTTP_PROXY ?? process.env.http_proxy : process.env.HTTP_PROXY ?? process.env.http_proxy;
+  const proxy =
+    url.protocol === "https:"
+      ? (process.env.HTTPS_PROXY ??
+        process.env.https_proxy ??
+        process.env.HTTP_PROXY ??
+        process.env.http_proxy)
+      : (process.env.HTTP_PROXY ?? process.env.http_proxy);
   const hostnameForProxy = url.hostname.toLowerCase();
-  const bypassProxy = (process.env.NO_PROXY ?? process.env.no_proxy ?? "").split(",").some((entry) => {
-    const rule = entry.trim().toLowerCase();
-    if (!rule) return false;
-    if (rule === "*") return true;
-    const [name, port] = rule.replace(/^\*?\./, "").split(":");
-    return (!port || port === (url.port || (url.protocol === "https:" ? "443" : "80"))) && (hostnameForProxy === name || hostnameForProxy.endsWith("." + name));
-  });
+  const bypassProxy = (process.env.NO_PROXY ?? process.env.no_proxy ?? "")
+    .split(",")
+    .some((entry) => {
+      const rule = entry.trim().toLowerCase();
+      if (!rule) return false;
+      if (rule === "*") return true;
+      const [name, port] = rule.replace(/^\*?\./, "").split(":");
+      return (
+        (!port || port === (url.port || (url.protocol === "https:" ? "443" : "80"))) &&
+        (hostnameForProxy === name || hostnameForProxy.endsWith("." + name))
+      );
+    });
   if (allowPrivate && process.env.NODE_USE_ENV_PROXY === "1" && proxy && !bypassProxy) return url;
   // URL.hostname keeps the brackets for IPv6 literals ("[::1]"); strip them
   // so isIP can classify the address without a DNS round-trip.
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
-  const addresses = isIP(hostname) ? [hostname] : (await lookup(url.hostname, { all: true, verbatim: true })).map((entry) => entry.address);
-  if (!addresses.length || (!allowPrivate && addresses.some(isPrivateOrReservedAddress))) throw new Error("outbound URL resolves to a private or reserved address");
+  const addresses = isIP(hostname)
+    ? [hostname]
+    : (options.lookup
+        ? await options.lookup(url.hostname)
+        : await lookup(url.hostname, { all: true, verbatim: true })
+      ).map((entry) => entry.address);
+  if (!addresses.length || (!allowPrivate && addresses.some(isPrivateOrReservedAddress)))
+    throw new Error("outbound URL resolves to a private or reserved address");
   return url;
 }
 
@@ -70,7 +125,10 @@ export async function validateOutboundHttpUrl(raw: string, options: { allowPriva
  * pass `allowPrivate: false` explicitly; treat this function as permissive
  * unless the caller opts into strictness.
  */
-export async function validateConnectorOutboundUrl(raw: string, options: { allowPrivate?: boolean } = {}): Promise<URL> {
+export async function validateConnectorOutboundUrl(
+  raw: string,
+  options: OutboundUrlOptions = {},
+): Promise<URL> {
   return validateOutboundHttpUrl(raw, options);
 }
 
@@ -89,12 +147,19 @@ export type ConnectorFetchOptions = {
   method?: string;
   headers?: Record<string, string>;
   body?: BodyInit | null;
+  /** Transport override. Production leaves it unset; tests supply a fixture so
+   *  the policy above still runs on every hop. */
+  fetchImpl?: typeof fetch;
+  /** Name resolution override, paired with `fetchImpl` for tests. */
+  lookup?: ConnectorLookup;
 };
 
 /** Headers that must never leak to a cross-origin redirect target. */
 const SENSITIVE_HEADERS = new Set(["authorization", "cookie", "proxy-authorization", "x-api-key"]);
 
-function stripSensitiveHeaders(headers?: Record<string, string>): Record<string, string> | undefined {
+function stripSensitiveHeaders(
+  headers?: Record<string, string>,
+): Record<string, string> | undefined {
   if (!headers) return undefined;
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
@@ -113,17 +178,24 @@ function stripSensitiveHeaders(headers?: Record<string, string>): Record<string,
  * DNS is re-checked per hop right before each request, which closes the
  * parse-then-connect gap for hostnames that resolve to private ranges.
  */
-export async function safeConnectorFetch(raw: string, options: ConnectorFetchOptions = {}): Promise<Response> {
-  const allowPrivate = options.allowPrivate ?? process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0";
+export async function safeConnectorFetch(
+  raw: string,
+  options: ConnectorFetchOptions = {},
+): Promise<Response> {
+  const allowPrivate =
+    options.allowPrivate ?? process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0";
   const maxRedirects = options.maxRedirects ?? 3;
   const maxBytes = options.maxResponseBytes ?? 10 * 1024 * 1024;
   const allowedTypes = options.allowedContentTypes ?? null;
   const timeoutMs = options.timeoutMs ?? 30_000;
-  let current = await validateConnectorOutboundUrl(raw, { allowPrivate });
+  const request = options.fetchImpl ?? fetch;
+  let current = await validateConnectorOutboundUrl(raw, { allowPrivate, lookup: options.lookup });
   const initialOrigin = current.origin;
   let redirects = 0;
   const controller = new AbortController();
-  const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+  const signal = options.signal
+    ? AbortSignal.any([controller.signal, options.signal])
+    : controller.signal;
   const timeoutError = new Error(`connector fetch timed out after ${timeoutMs}ms`);
   const timer = setTimeout(() => controller.abort(timeoutError), timeoutMs);
   let timerOwnedByStream = false;
@@ -131,12 +203,19 @@ export async function safeConnectorFetch(raw: string, options: ConnectorFetchOpt
     for (;;) {
       // Sensitive headers (authorization, cookies, api keys) belong to the
       // original connector origin only; cross-origin hops must not receive them.
-      const hopHeaders = current.origin === initialOrigin ? options.headers : stripSensitiveHeaders(options.headers);
+      const hopHeaders =
+        current.origin === initialOrigin ? options.headers : stripSensitiveHeaders(options.headers);
       // Every URL reaches this sink only after DNS-aware validation above, and
       // every redirect is independently revalidated before the next request.
       // lgtm[js/request-forgery]
       signal.throwIfAborted();
-      const response = await fetch(current, { method: options.method ?? "GET", headers: hopHeaders, body: options.body, redirect: "manual", signal });
+      const response = await request(current, {
+        method: options.method ?? "GET",
+        headers: hopHeaders,
+        body: options.body,
+        redirect: "manual",
+        signal,
+      });
       const location = response.headers.get("location");
       if (response.status >= 300 && response.status < 400 && location) {
         void response.body?.cancel().catch(() => undefined);
@@ -147,12 +226,18 @@ export async function safeConnectorFetch(raw: string, options: ConnectorFetchOpt
         // (a public server steering us into a private range is the classic
         // SSRF redirect vector).
         const sameOrigin = next.origin === current.origin;
-        current = await validateConnectorOutboundUrl(next.toString(), sameOrigin ? { allowPrivate } : { allowPrivate: false });
+        current = await validateConnectorOutboundUrl(
+          next.toString(),
+          sameOrigin
+            ? { allowPrivate, lookup: options.lookup }
+            : { allowPrivate: false, lookup: options.lookup },
+        );
         redirects += 1;
         continue;
       }
       if (allowedTypes?.length) {
-        const contentType = (response.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
+        const contentType =
+          (response.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
         if (contentType && !allowedTypes.some((type) => contentType === type)) {
           void response.body?.cancel().catch(() => undefined);
           throw new Error(`unexpected content type: ${contentType}`);
@@ -184,7 +269,11 @@ export async function safeConnectorFetch(raw: string, options: ConnectorFetchOpt
             }
             received += value.byteLength;
             if (received > maxBytes) {
-              try { await reader.cancel(); } catch { /* the upstream may already be closed */ }
+              try {
+                await reader.cancel();
+              } catch {
+                /* the upstream may already be closed */
+              }
               release();
               stream.error(new Error(`response exceeds size limit (max ${maxBytes} bytes)`));
               return;
@@ -196,11 +285,18 @@ export async function safeConnectorFetch(raw: string, options: ConnectorFetchOpt
           }
         },
         async cancel(reason) {
-          try { await reader.cancel(reason); }
-          finally { release(); }
+          try {
+            await reader.cancel(reason);
+          } finally {
+            release();
+          }
         },
       });
-      return new Response(bounded, { status: response.status, statusText: response.statusText, headers: response.headers });
+      return new Response(bounded, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
     }
   } finally {
     // A Response body is consumed after this function returns. Keep the same

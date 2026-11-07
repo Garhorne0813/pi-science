@@ -711,7 +711,7 @@ describe("model change optimistic rollback", () => {
 
     await waitFor(() => expect(screen.getByTestId("model-control")).toHaveAttribute("data-model", "prov/m1"));
     expect(screen.getByTestId("model-control")).toHaveAttribute("data-thinking", "high");
-    expect(screen.getByTitle("settings unavailable")).toBeInTheDocument();
+    expect(screen.getByText("settings unavailable").closest("[role=alert]")).toBeInTheDocument();
   });
 
   it("rolls back a failed thinking-level change", async () => {
@@ -724,7 +724,7 @@ describe("model change optimistic rollback", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "pick thinking low" }));
 
-    await waitFor(() => expect(screen.getByTitle("thinking rejected")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("thinking rejected").closest("[role=alert]")).toBeInTheDocument());
     expect(screen.getByTestId("model-control")).toHaveAttribute("data-thinking", "high");
     expect(screen.getByTestId("model-control")).toHaveAttribute("data-model", "prov/m1");
   });

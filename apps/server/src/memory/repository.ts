@@ -13,11 +13,8 @@ import {
   type MemoryRecord,
   type MemorySettings,
 } from "./schema.js";
-export type MemoryCommand = {
-  action: string;
-  context: MemoryContext;
-  input: Record<string, unknown>;
-};
+export type { MemoryCommand } from "../modules/memory/commands.js";
+import { parseMemoryCommand, type MemoryCommand } from "../modules/memory/commands.js";
 type Proposal = {
   id: string;
   recordId: string;
@@ -29,18 +26,12 @@ type Proposal = {
   reason: string;
   mode: string;
 };
-export const hash = (v: unknown) =>
-  createHash("sha256").update(JSON.stringify(v)).digest("hex");
-export function executeMemory(
-  db: DatabaseSync,
-  command: MemoryCommand,
-): unknown {
+export const hash = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
+export function executeMemory(db: DatabaseSync, command: MemoryCommand): unknown {
+  command = parseMemoryCommand(command);
   db.exec("BEGIN IMMEDIATE");
   try {
-    const result = new Transaction(db, command.context).execute(
-      command.action,
-      command.input,
-    );
+    const result = new Transaction(db, command.context).execute(command.action, command.input);
     db.exec("COMMIT");
     return result;
   } catch (error) {
@@ -59,15 +50,11 @@ class Transaction {
   private all<T>(sql: string, ...params: (string | number | null)[]): T[] {
     return this.db.prepare(sql).all(...params) as T[];
   }
-  private one<T>(
-    sql: string,
-    ...params: (string | number | null)[]
-  ): T | undefined {
+  private one<T>(sql: string, ...params: (string | number | null)[]): T | undefined {
     return this.db.prepare(sql).get(...params) as T | undefined;
   }
   private user() {
-    if (this.ctx.actor !== "user")
-      throw new MemoryError(403, "Human operation required");
+    if (this.ctx.actor !== "user") throw new MemoryError("forbidden", "Human operation required");
   }
   private settings(): MemorySettings {
     const row = this.one<{ data: string; revision: number }>(
@@ -84,9 +71,7 @@ class Transaction {
       r.ownerId === this.ctx.ownerId &&
       (r.scope === "profile" || r.projectId === this.ctx.projectId) &&
       (!r.agentKey || r.agentKey === this.ctx.agentKey) &&
-      (r.scope !== "frame" ||
-        this.ctx.actor === "user" ||
-        r.subjectFrameId === this.ctx.sessionId)
+      (r.scope !== "frame" || this.ctx.actor === "user" || r.subjectFrameId === this.ctx.sessionId)
     );
   }
   private read(id: unknown): MemoryRecord {
@@ -95,16 +80,14 @@ class Transaction {
       String(id),
     );
     const r: MemoryRecord | undefined = row ? JSON.parse(row.data) : undefined;
-    if (!r || !this.visible(r)) throw new MemoryError(404, "Memory not found");
+    if (!r || !this.visible(r)) throw new MemoryError("not_found", "Memory not found");
     return this.reconcileReview(r);
   }
   private reconcileReview(r: MemoryRecord): MemoryRecord {
     if (
       r.status === "active" &&
       scientific(r) &&
-      !(
-        r.reviewStatus === "approved" && r.approvedContentHash === r.contentHash
-      )
+      !(r.reviewStatus === "approved" && r.approvedContentHash === r.contentHash)
     ) {
       r = {
         ...r,
@@ -129,7 +112,7 @@ class Transaction {
   }
   private cas(r: MemoryRecord, i: Record<string, unknown>) {
     if (r.revision !== i.expectedRevision || r.contentHash !== i.contentHash)
-      throw new MemoryError(409, "Memory revision or content hash changed");
+      throw new MemoryError("conflict", "Memory revision or content hash changed");
   }
   private assertMemorySources(
     c: MemoryContent,
@@ -151,14 +134,13 @@ class Transaction {
       if (
         r.status !== "active" ||
         (r.reviewRequired &&
-          (r.reviewStatus !== "approved" ||
-            r.approvedContentHash !== r.contentHash)) ||
+          (r.reviewStatus !== "approved" || r.approvedContentHash !== r.contentHash)) ||
         source.version !== String(r.revision) ||
         source.digest !== r.contentHash
       )
-        throw new MemoryError(409, "Memory evidence is stale or not accepted");
+        throw new MemoryError("conflict", "Memory evidence is stale or not accepted");
       if (chain.has(r.id) || chain.size >= 8 || --remaining.value < 0)
-        throw new MemoryError(400, "Cyclic or excessive memory evidence chain");
+        throw new MemoryError("invalid_input", "Cyclic or excessive memory evidence chain");
       const next = new Set(chain);
       next.add(r.id);
       this.assertMemorySources(r, next, remaining);
@@ -238,10 +220,7 @@ class Transaction {
         r.id,
         tokens(r.title + " " + r.body).join(" "),
       );
-    if (
-      previous &&
-      (previous.content_hash !== r.contentHash || r.status !== "active")
-    )
+    if (previous && (previous.content_hash !== r.contentHash || r.status !== "active"))
       this.invalidateDependents(r.id);
   }
   private audit(r: MemoryRecord, action: string) {
@@ -259,10 +238,10 @@ class Transaction {
   }
   private write(i: Record<string, unknown>, autoDream = false): unknown {
     const settings = this.settings();
-    if (!settings.enabled) throw new MemoryError(409, "Memory is disabled");
+    if (!settings.enabled) throw new MemoryError("conflict", "Memory is disabled");
     let op = String(i.operation ?? "append");
     if (!["append", "replace", "remove"].includes(op))
-      throw new MemoryError(400, "Invalid operation");
+      throw new MemoryError("invalid_input", "Invalid operation");
     const key = typeof i.operationKey === "string" ? i.operationKey : undefined;
     const fingerprint = hash({
       actor: this.ctx.actor,
@@ -278,10 +257,7 @@ class Transaction {
       );
       if (prior) {
         if (prior.request_hash !== fingerprint)
-          throw new MemoryError(
-            409,
-            "Operation key reused for different content",
-          );
+          throw new MemoryError("conflict", "Operation key reused for different content");
         return JSON.parse(prior.result);
       }
     }
@@ -289,27 +265,21 @@ class Transaction {
     let conflict = false;
     if (old) this.cas(old, i);
     const c =
-      op === "remove"
-        ? contentSchema.parse(pickContent(old!))
-        : contentSchema.parse(i.content);
+      op === "remove" ? contentSchema.parse(pickContent(old!)) : contentSchema.parse(i.content);
     if (
       old &&
       (old.scope !== c.scope ||
         old.artifactId !== c.artifactId ||
         old.subjectFrameId !== c.subjectFrameId)
     )
-      throw new MemoryError(
-        400,
-        "Create a new record to change scope or subject",
-      );
+      throw new MemoryError("invalid_input", "Create a new record to change scope or subject");
     if (c.scope === "artifact" && !c.artifactId)
-      throw new MemoryError(400, "Artifact scope requires artifactId");
+      throw new MemoryError("invalid_input", "Artifact scope requires artifactId");
     if (
       c.scope === "frame" &&
-      (!c.subjectFrameId ||
-        (this.ctx.actor !== "user" && c.subjectFrameId !== this.ctx.sessionId))
+      (!c.subjectFrameId || (this.ctx.actor !== "user" && c.subjectFrameId !== this.ctx.sessionId))
     )
-      throw new MemoryError(403, "Frame must be bound to the trusted session");
+      throw new MemoryError("forbidden", "Frame must be bound to the trusted session");
     if (
       c.categoryId &&
       !this.one(
@@ -318,16 +288,13 @@ class Transaction {
         this.ctx.ownerId,
       )
     )
-      throw new MemoryError(400, "Unknown category");
+      throw new MemoryError("invalid_input", "Unknown category");
     if (
       /(?:ignore (?:all |previous )?instructions|system prompt|忽略.{0,10}指令|sk-[A-Za-z0-9_-]{16,}|-----BEGIN .*PRIVATE KEY|(?:api[_ -]?key|password|密码|密钥)\s*[:=]\s*\S+)/i.test(
         c.body,
       )
     )
-      throw new MemoryError(
-        400,
-        "Sensitive credentials cannot be stored in memory",
-      );
+      throw new MemoryError("invalid_input", "Sensitive credentials cannot be stored in memory");
     if (op === "append" && this.ctx.actor !== "user") {
       const related = this.rows().filter(
         (r) =>
@@ -343,8 +310,7 @@ class Transaction {
       const duplicate = related.find(
         (r) =>
           r.contentHash === hash(c) ||
-          (!scientific(c) &&
-            r.body.trim().toLowerCase() === c.body.trim().toLowerCase()),
+          (!scientific(c) && r.body.trim().toLowerCase() === c.body.trim().toLowerCase()),
       );
       if (duplicate) {
         const result = { record: duplicate, duplicate: true };
@@ -368,9 +334,7 @@ class Transaction {
     const science = scientific(c),
       protectedOld =
         !!old &&
-        (scientific(old) ||
-          old.origin === "user_manual" ||
-          old.reviewStatus === "approved");
+        (scientific(old) || old.origin === "user_manual" || old.reviewStatus === "approved");
     const needsReview =
       science ||
       (this.ctx.actor !== "user" &&
@@ -395,12 +359,7 @@ class Transaction {
           dream: "dream",
         } as const
       )[this.ctx.actor],
-      status:
-        op === "remove"
-          ? "archived"
-          : needsReview
-            ? "pending_review"
-            : "active",
+      status: op === "remove" ? "archived" : needsReview ? "pending_review" : "active",
       revision: (old?.revision ?? 0) + 1,
       contentHash: hash(c),
       reviewRequired: needsReview,
@@ -456,7 +415,7 @@ class Transaction {
         String(i.proposalId),
         this.ctx.ownerId,
       );
-      if (!row) throw new MemoryError(404, "Proposal not found");
+      if (!row) throw new MemoryError("not_found", "Proposal not found");
       const p = JSON.parse(row.data) as Proposal;
       const old = this.read(p.recordId);
       if (
@@ -468,7 +427,7 @@ class Transaction {
             old.contentHash !== p.expectedHash ||
             p.status === "stale_proposal"))
       )
-        throw new MemoryError(409, "Stale proposal; re-evaluation required");
+        throw new MemoryError("conflict", "Stale proposal; re-evaluation required");
       if (approve) {
         const r = {
           ...p.candidate,
@@ -489,17 +448,13 @@ class Transaction {
         JSON.stringify(p),
         p.id,
       );
-      this.run(
-        "UPDATE memory_dream_proposals SET data=? WHERE id=?",
-        JSON.stringify(p),
-        p.id,
-      );
+      this.run("UPDATE memory_dream_proposals SET data=? WHERE id=?", JSON.stringify(p), p.id);
       return { proposal: p };
     }
     const r = this.read(i.id);
     this.cas(r, i);
     if (r.status !== "pending_review" && r.status !== "needs_review")
-      throw new MemoryError(409, "Record is not pending review");
+      throw new MemoryError("conflict", "Record is not pending review");
     if (approve) {
       this.requireEvidence(r);
       this.assertMemorySources(r, new Set([r.id]));
@@ -519,22 +474,17 @@ class Transaction {
   private requireEvidence(r: MemoryRecord) {
     if (scientific(r) && !r.sources.length)
       throw new MemoryError(
-        400,
+        "invalid_input",
         "Scientific claims require traceable sources before approval",
       );
   }
-  private search(
-    i: Record<string, unknown>,
-    automatic = false,
-    unbounded = false,
-  ): MemoryRecord[] {
+  private search(i: Record<string, unknown>, automatic = false, unbounded = false): MemoryRecord[] {
     const settings = this.settings();
     if (
       automatic &&
       (!settings.enabled ||
         !settings.recall.enabled ||
-        !(this.execute("project.settings", {}) as { autoRecall: boolean })
-          .autoRecall)
+        !(this.execute("project.settings", {}) as { autoRecall: boolean }).autoRecall)
     )
       return [];
     const disabled = new Set(
@@ -558,12 +508,10 @@ class Transaction {
         (r) =>
           r.status === "active" &&
           (!r.reviewRequired ||
-            (r.reviewStatus === "approved" &&
-              r.approvedContentHash === r.contentHash)) &&
+            (r.reviewStatus === "approved" && r.approvedContentHash === r.contentHash)) &&
           (!r.categoryId || !disabled.has(r.categoryId)) &&
           (r.scope !== "artifact" ||
-            (r.artifactId === i.artifactId &&
-              r.artifactVersionId === i.artifactVersionId)),
+            (r.artifactId === i.artifactId && r.artifactVersionId === i.artifactVersionId)),
       );
     const query = tokens(String(i.q ?? "")).slice(0, 64);
     if (!query.length)
@@ -595,31 +543,14 @@ class Transaction {
       .sort((a, b) => b.score - a.score);
     const score = new Map<string, number>();
     fts.forEach((r, n) => score.set(r.record_id, 1 / (60 + n + 1)));
-    jac.forEach((r, n) =>
-      score.set(r.r.id, (score.get(r.r.id) ?? 0) + 1 / (60 + n + 1)),
-    );
+    jac.forEach((r, n) => score.set(r.r.id, (score.get(r.r.id) ?? 0) + 1 / (60 + n + 1)));
     return rows
       .filter((r) => score.has(r.id))
-      .sort(
-        (a, b) =>
-          (score.get(b.id) ?? 0) - (score.get(a.id) ?? 0) ||
-          a.id.localeCompare(b.id),
-      )
-      .slice(
-        0,
-        automatic
-          ? settings.recall.maxItemsPerTurn
-          : unbounded
-            ? undefined
-            : 100,
-      );
+      .sort((a, b) => (score.get(b.id) ?? 0) - (score.get(a.id) ?? 0) || a.id.localeCompare(b.id))
+      .slice(0, automatic ? settings.recall.maxItemsPerTurn : unbounded ? undefined : 100);
   }
   execute(action: string, i: Record<string, unknown>): unknown {
-    if (
-      ["run.reconcile", "run.claim", "run.pending", "runs", "run.get"].includes(
-        action,
-      )
-    )
+    if (["run.reconcile", "run.claim", "run.pending", "runs", "run.get"].includes(action))
       this.reconcileUsage();
     switch (action) {
       case "settings":
@@ -636,7 +567,7 @@ class Transaction {
       case "project.settings.update": {
         this.user();
         if (typeof i.autoRecall !== "boolean")
-          throw new MemoryError(400, "autoRecall must be boolean");
+          throw new MemoryError("invalid_input", "autoRecall must be boolean");
         this.run(
           "INSERT INTO memory_project_settings VALUES(?,?,?) ON CONFLICT(owner_id,project_id) DO UPDATE SET auto_recall=excluded.auto_recall",
           this.ctx.ownerId,
@@ -650,10 +581,9 @@ class Transaction {
         this.user();
         const prev = this.settings();
         if (i.expectedRevision !== prev.revision)
-          throw new MemoryError(409, "Settings revision changed");
+          throw new MemoryError("conflict", "Settings revision changed");
         const parsed = settingsSchema.parse(i.settings);
-        if (parsed.review.mode === "all_manual")
-          parsed.dream.updatePolicy = "suggest_only";
+        if (parsed.review.mode === "all_manual") parsed.dream.updatePolicy = "suggest_only";
         const next = { ...parsed, revision: prev.revision + 1 };
         this.run(
           "INSERT INTO memory_settings VALUES(?,?,?) ON CONFLICT(owner_id) DO UPDATE SET revision=excluded.revision,data=excluded.data",
@@ -669,9 +599,7 @@ class Transaction {
             const r = JSON.parse(row.data);
             if (
               !next.enabled ||
-              !(r.kind === "dream"
-                ? next.dream.enabled
-                : next.extraction.enabled)
+              !(r.kind === "dream" ? next.dream.enabled : next.extraction.enabled)
             ) {
               r.status = "cancelled";
               r.endedAt = Date.now();
@@ -707,8 +635,7 @@ class Transaction {
       case "browse": {
         this.user();
         const query = memoryBrowseQuerySchema.parse(i);
-        const sort =
-          query.sort ?? (query.q.trim() ? "relevance" : "updated_desc");
+        const sort = query.sort ?? (query.q.trim() ? "relevance" : "updated_desc");
         const rows = this.search(query, false, true);
         if (sort !== "relevance" || !query.q.trim()) {
           const field = sort === "created_desc" ? "createdAt" : "updatedAt";
@@ -718,10 +645,7 @@ class Transaction {
         const totalPages = Math.max(1, Math.ceil(total / query.pageSize));
         const page = Math.min(query.page, totalPages);
         return {
-          records: rows.slice(
-            (page - 1) * query.pageSize,
-            page * query.pageSize,
-          ),
+          records: rows.slice((page - 1) * query.pageSize, page * query.pageSize),
           total,
           page,
           pageSize: query.pageSize,
@@ -779,10 +703,7 @@ class Transaction {
             "SELECT data FROM memory_revisions WHERE record_id=? ORDER BY revision DESC",
             r.id,
           ).map((r) => JSON.parse(r.data)),
-          reviews: this.all(
-            "SELECT * FROM memory_review_events WHERE record_id=?",
-            r.id,
-          ),
+          reviews: this.all("SELECT * FROM memory_review_events WHERE record_id=?", r.id),
         };
       }
       case "delete": {
@@ -823,8 +744,7 @@ class Transaction {
             run.messages = [];
             run.messageIds = [];
             run.results = [];
-            if (["queued", "running"].includes(run.status))
-              run.status = "cancelled";
+            if (["queued", "running"].includes(run.status)) run.status = "cancelled";
             this.updateRun(run);
           }
         }
@@ -839,19 +759,15 @@ class Transaction {
         };
       case "category.write": {
         this.user();
-        if (
-          typeof i.name !== "string" ||
-          !i.name.trim() ||
-          typeof i.autoRecall !== "boolean"
-        )
-          throw new MemoryError(400, "Invalid category");
+        if (typeof i.name !== "string" || !i.name.trim() || typeof i.autoRecall !== "boolean")
+          throw new MemoryError("invalid_input", "Invalid category");
         const id = String(i.id ?? randomUUID());
         const old = this.one<{ owner_id: string }>(
           "SELECT owner_id FROM memory_categories WHERE id=?",
           id,
         );
         if (old && old.owner_id !== this.ctx.ownerId)
-          throw new MemoryError(403, "Category is not owned");
+          throw new MemoryError("forbidden", "Category is not owned");
         this.run(
           "INSERT INTO memory_categories VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,auto_recall=excluded.auto_recall",
           id,
@@ -863,23 +779,21 @@ class Transaction {
       }
       case "recall": {
         const settings = this.settings();
-        if (!settings.enabled || !settings.recall.enabled)
-          return { records: [] };
+        if (!settings.enabled || !settings.recall.enabled) return { records: [] };
         const profile = this.search({ scope: "profile" }, true).slice(
           0,
           settings.recall.maxProfileItems,
         );
-        const ranked = (
-          String(i.q ?? "").trim() ? this.search(i, true) : []
-        ).filter((r) => r.scope !== "profile");
+        const ranked = (String(i.q ?? "").trim() ? this.search(i, true) : []).filter(
+          (r) => r.scope !== "profile",
+        );
         let budget = settings.recall.maxTokensPerTurn * 3;
         let profileBudget = 4800;
         const records: MemoryRecord[] = [];
         for (const r of [...profile, ...ranked]) {
           if (records.some((x) => x.id === r.id)) continue;
           const size = JSON.stringify(r).length;
-          if (size > budget || (r.scope === "profile" && size > profileBudget))
-            continue;
+          if (size > budget || (r.scope === "profile" && size > profileBudget)) continue;
           budget -= size;
           if (r.scope === "profile") profileBudget -= size;
           records.push(r);
@@ -896,10 +810,7 @@ class Transaction {
         );
         return { ok: true };
       case "schedules":
-        return this.all(
-          "SELECT * FROM memory_dream_schedules WHERE owner_id=?",
-          this.ctx.ownerId,
-        );
+        return this.all("SELECT * FROM memory_dream_schedules WHERE owner_id=?", this.ctx.ownerId);
       case "schedule.success":
         this.run(
           "UPDATE memory_dream_schedules SET failure_count=0,next_scan_at=0,diagnostic=NULL WHERE owner_id=? AND project_id=?",
@@ -916,8 +827,7 @@ class Transaction {
         );
         const failureCount = (previous?.failure_count ?? 0) + 1;
         const nextScanAt =
-          Date.now() +
-          Math.min(3600000, 60000 * 2 ** Math.min(failureCount - 1, 6));
+          Date.now() + Math.min(3600000, 60000 * 2 ** Math.min(failureCount - 1, 6));
         const safe = {
           code: diagnostic.code,
           stage: diagnostic.stage,
@@ -955,6 +865,7 @@ class Transaction {
             owner: this.ctx.ownerId,
             project: this.ctx.projectId,
             kind: i.kind,
+            purpose: i.purpose,
             reason: i.reason,
             minute: Math.floor(now / 60000),
           });
@@ -963,6 +874,7 @@ class Transaction {
           kind: i.kind,
           status: "skipped",
           reason: i.reason,
+          ...(i.purpose ? { purpose: i.purpose } : {}),
           ...(i.diagnostic ? { diagnostic: i.diagnostic } : {}),
           createdAt: now,
           reviewMode: this.settings().review.mode,
@@ -1034,7 +946,7 @@ class Transaction {
           !s.enabled ||
           !(r.kind === "dream" ? s.dream.enabled : s.extraction.enabled)
         )
-          throw new MemoryError(409, "Run cannot dispatch");
+          throw new MemoryError("conflict", "Run cannot dispatch");
         const result = this.run(
           "UPDATE memory_run_usage SET state='dispatched',dispatched_at=? WHERE run_id=? AND lease_token=? AND state='reserved'",
           now,
@@ -1042,10 +954,7 @@ class Transaction {
           r.leaseToken,
         );
         if (!result.changes)
-          throw new MemoryError(
-            409,
-            "Lease was already dispatched or released",
-          );
+          throw new MemoryError("conflict", "Lease was already dispatched or released");
         return { ok: true };
       }
       case "run.usage": {
@@ -1064,17 +973,14 @@ class Transaction {
           !["dispatched", "estimated", "settled"].includes(usage.state) ||
           !this.validUsage(i)
         )
-          throw new MemoryError(409, "Invalid lease usage");
+          throw new MemoryError("conflict", "Invalid lease usage");
         if (
           usage.state === "settled" &&
           (usage.tokens !== i.tokens || usage.cost_usd !== i.costUsd)
         )
-          throw new MemoryError(409, "Usage already settled");
+          throw new MemoryError("conflict", "Usage already settled");
         this.settleUsage({ ...i, id: r.id });
-        if (
-          r.leaseToken === i.leaseToken &&
-          !["queued", "running"].includes(r.status)
-        ) {
+        if (r.leaseToken === i.leaseToken && !["queued", "running"].includes(r.status)) {
           r.tokens = i.tokens;
           r.costUsd = i.costUsd;
           r.actualModel = i.model;
@@ -1093,10 +999,7 @@ class Transaction {
         const r = this.runRecord(i.id);
         if (r.status === "cancelled") return r;
         if (!["queued", "running"].includes(r.status))
-          throw new MemoryError(
-            409,
-            "Only queued or running runs can be cancelled",
-          );
+          throw new MemoryError("conflict", "Only queued or running runs can be cancelled");
         r.status = "cancelled";
         r.endedAt = Date.now();
         this.updateRun(r);
@@ -1114,14 +1017,12 @@ class Transaction {
           r.status !== "failed" ||
           (r.attempts ?? 1) >= 3
         )
-          throw new MemoryError(409, "Run cannot be retried");
+          throw new MemoryError("conflict", "Run cannot be retried");
         r.attempts = (r.attempts ?? 1) + 1;
         r.priorReservedTokens =
-          (r.priorReservedTokens ?? 0) +
-          Math.max(r.reservedTokens ?? 0, r.tokens ?? 0);
+          (r.priorReservedTokens ?? 0) + Math.max(r.reservedTokens ?? 0, r.tokens ?? 0);
         r.priorReservedCostUsd =
-          (r.priorReservedCostUsd ?? 0) +
-          Math.max(r.reservedCostUsd ?? 0, r.costUsd ?? 0);
+          (r.priorReservedCostUsd ?? 0) + Math.max(r.reservedCostUsd ?? 0, r.costUsd ?? 0);
         r.tokens = 0;
         r.costUsd = 0;
         r.reservedTokens = 0;
@@ -1144,7 +1045,7 @@ class Transaction {
           !s.enabled ||
           !(r.kind === "dream" ? s.dream.enabled : s.extraction.enabled)
         )
-          throw new MemoryError(409, "Run cancelled");
+          throw new MemoryError("conflict", "Run cancelled");
         r.leaseUntil = Math.min(r.deadline, Date.now() + 120000);
         this.updateRun(r);
         return { ok: true };
@@ -1154,7 +1055,7 @@ class Transaction {
       case "run.fail": {
         const r = this.runRecord(i.id);
         if (r.leaseToken !== i.leaseToken || r.status !== "running")
-          throw new MemoryError(409, "Run lease changed");
+          throw new MemoryError("conflict", "Run lease changed");
         r.status = "failed";
         r.error = String(i.error).slice(0, 2000);
         if (this.validUsage(i)) {
@@ -1174,13 +1075,11 @@ class Transaction {
         return {
           version: 1,
           records: this.rows(),
-          history: this.rows().map((r) =>
-            this.execute("history", { id: r.id }),
-          ),
+          history: this.rows().map((r) => this.execute("history", { id: r.id })),
           categories: this.execute("categories", {}),
         };
       default:
-        throw new MemoryError(400, "Unknown memory command");
+        throw new MemoryError("invalid_input", "Unknown memory command");
     }
   }
   private erase(r: MemoryRecord) {
@@ -1199,18 +1098,13 @@ class Transaction {
     )) {
       const run = JSON.parse(row.data);
       if (JSON.stringify(run).includes(r.id)) {
-        run.records = (run.records ?? []).filter(
-          (item: MemoryRecord) => item.id !== r.id,
-        );
-        run.recordIds = (run.recordIds ?? []).filter(
-          (id: string) => id !== r.id,
-        );
+        run.records = (run.records ?? []).filter((item: MemoryRecord) => item.id !== r.id);
+        run.recordIds = (run.recordIds ?? []).filter((id: string) => id !== r.id);
         run.results = (run.results ?? []).filter(
           (item: { record?: MemoryRecord; proposal?: Proposal }) =>
             item.record?.id !== r.id && item.proposal?.recordId !== r.id,
         );
-        if (["queued", "running"].includes(run.status))
-          run.status = "cancelled";
+        if (["queued", "running"].includes(run.status)) run.status = "cancelled";
         this.updateRun(run);
       }
     }
@@ -1222,7 +1116,7 @@ class Transaction {
       this.ctx.ownerId,
       this.ctx.projectId,
     );
-    if (!row) throw new MemoryError(404, "Run not found");
+    if (!row) throw new MemoryError("not_found", "Run not found");
     return JSON.parse(row.data);
   }
   private updateRun(r: Record<string, any>) {
@@ -1238,11 +1132,8 @@ class Transaction {
   private enqueue(i: Record<string, unknown>): unknown {
     const s = this.settings();
     const kind = i.kind === "extraction" ? "extraction" : "dream";
-    if (
-      !s.enabled ||
-      !(kind === "dream" ? s.dream.enabled : s.extraction.enabled)
-    )
-      throw new MemoryError(409, "Background feature disabled");
+    if (!s.enabled || !(kind === "dream" ? s.dream.enabled : s.extraction.enabled))
+      throw new MemoryError("conflict", "Background feature disabled");
     const key = String(i.logicalKey);
     if (i.automatic !== true) this.execute("schedule.success", {});
     const prior = this.one<{ data: string }>(
@@ -1373,9 +1264,7 @@ class Transaction {
         Number(estimated),
         estimated ? "estimated" : "released",
         now,
-        u.run_status === "running"
-          ? "lease_expired_or_superseded"
-          : u.run_status,
+        u.run_status === "running" ? "lease_expired_or_superseded" : u.run_status,
         u.lease_token,
       );
       this.run(
@@ -1393,7 +1282,7 @@ class Transaction {
     );
     if (prior?.state === "settled") {
       if (prior.tokens !== r.tokens || prior.cost_usd !== r.costUsd)
-        throw new MemoryError(409, "Usage already settled");
+        throw new MemoryError("conflict", "Usage already settled");
       return;
     }
     this.run(
@@ -1417,12 +1306,9 @@ class Transaction {
       !s.enabled ||
       !(r.kind === "dream" ? s.dream.enabled : s.extraction.enabled)
     )
-      throw new MemoryError(
-        409,
-        "Cancelled, expired or disabled background run",
-      );
+      throw new MemoryError("conflict", "Cancelled, expired or disabled background run");
     if (!this.validUsage(i) || Number(i.tokens) > r.reservedTokens)
-      throw new MemoryError(409, "Invalid usage or token budget exceeded");
+      throw new MemoryError("conflict", "Invalid usage or token budget exceeded");
     const outputs = Array.isArray(i.outputs) ? i.outputs.slice(0, 5) : [];
     const results: unknown[] = [];
     const ctx = this.ctx;
@@ -1436,6 +1322,19 @@ class Transaction {
         const output = raw as Record<string, unknown>;
         const c = contentSchema.parse(output.content);
         if (
+          r.purpose === "science_review" &&
+          (c.scope !== "project" ||
+            c.kind !== "finding" ||
+            c.evidenceLevel !== "inferred" ||
+            c.sources.length === 0 ||
+            (output.operation && output.operation !== "append") ||
+            output.id)
+        )
+          throw new MemoryError(
+            "invalid_input",
+            "Science review must create sourced findings for human review",
+          );
+        if (
           r.kind === "extraction" &&
           c.sources.some(
             (source) =>
@@ -1447,13 +1346,13 @@ class Transaction {
               ),
           )
         )
-          throw new MemoryError(400, "Extractor fabricated a source");
+          throw new MemoryError("invalid_input", "Extractor fabricated a source");
         if (r.kind === "dream") {
           if (!output.id) continue;
           const old = this.read(output.id);
-          const collectedSources = (
-            (r.records ?? []) as MemoryRecord[]
-          ).flatMap((record) => record.sources);
+          const collectedSources = ((r.records ?? []) as MemoryRecord[]).flatMap(
+            (record) => record.sources,
+          );
           if (
             c.sources.some((source) =>
               source.kind === "memory"
@@ -1468,17 +1367,11 @@ class Transaction {
                   ),
             )
           )
-            throw new MemoryError(
-              403,
-              "Dream evidence outside collected range",
-            );
+            throw new MemoryError("forbidden", "Dream evidence outside collected range");
           if (!Array.isArray(r.recordIds) || !r.recordIds.includes(old.id))
-            throw new MemoryError(403, "Dream source outside collected range");
-          if (
-            old.revision !== output.expectedRevision ||
-            old.contentHash !== output.contentHash
-          )
-            throw new MemoryError(409, "stale_proposal");
+            throw new MemoryError("forbidden", "Dream source outside collected range");
+          if (old.revision !== output.expectedRevision || old.contentHash !== output.contentHash)
+            throw new MemoryError("conflict", "stale_proposal");
           // Automatic changes are limited to exact, unprotected presentation duplicates.
           const duplicate = this.rows().some(
             (other) =>
@@ -1525,7 +1418,7 @@ class Transaction {
     } finally {
       this.ctx = ctx;
     }
-    if (r.kind === "extraction")
+    if (r.kind === "extraction" && r.purpose !== "science_review")
       this.run(
         "INSERT INTO memory_extraction_cursors VALUES(?,?,?,?) ON CONFLICT(owner_id,project_id,session_id) DO UPDATE SET watermark=MAX(watermark,excluded.watermark)",
         ctx.ownerId,

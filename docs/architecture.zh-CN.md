@@ -134,7 +134,7 @@ flowchart LR
 
 Core 会话由 `JsonlSessionRepo` 管理。旧 v3 会话先校验和复制，再由官方 SDK 升级，原件保持不变；registry 保存归属与条目 ID 映射，删除 tombstone 防止会话被重新导入。转换可离线执行，不需要 Worker、模型密钥或网络。见[会话转换](agent-core-session-conversion.md)。
 
-Memory 记录、来源、版本、审核事件、变更提案、全文索引、提取游标与后台任务状态由同一个 SQLite StateStore 持有。迁移 `0005_unified_memory.sql` 初始化空的 Memory 域；不会导入、覆盖或删除旧 `memory/ledger.json` 和 `project-state.json`，这些文件不再是当前 Memory 的权威存储。`PROJECT.md` 是普通项目文档，批准记忆不会改写它。页面 JSON 导出用于交换和审计；完整 StateStore 一致性快照使用 `SqliteStateStore.backup(path)`，恢复须先停止服务。迁移 0006 增加逐次租约的 UTC 日用量账本，0007 记录模型调用阶段，回收未使用预留、单独记录未知用量估算，并持久化安全的调度诊断与重试退避；`pnpm export:legacy-memory` 可只读导出旧数据，供核对来源后手动迁移，不沿用旧审核标记。
+Memory 记录、来源、版本、审核事件、变更提案、全文索引、提取游标与后台任务状态由同一个 SQLite StateStore 持有。迁移 `0005_unified_memory.sql` 初始化空的 Memory 域；不会导入、覆盖或删除旧 `memory/ledger.json` 和 `project-state.json`，这些文件不再是当前 Memory 的权威存储。工作区 `AGENTS.md` 是用户拥有的可选项目指令，用户可以修改、清空或删除，批准记忆不会改写它。应用级规则独立保存在 `harness/SYSTEM.md`。页面 JSON 导出用于交换和审计；完整 StateStore 一致性快照使用 `SqliteStateStore.backup(path)`，恢复须先停止服务。迁移 0006 增加逐次租约的 UTC 日用量账本，0007 记录模型调用阶段，回收未使用预留、单独记录未知用量估算，并持久化安全的调度诊断与重试退避；`pnpm export:legacy-memory` 可只读导出旧数据，供核对来源后手动迁移，不沿用旧审核标记。
 
 ## 统一记忆
 
@@ -185,7 +185,7 @@ MCP 定义、启用状态、发现元数据和全局/项目工具策略由控制
 
 Session Notebook 展示智能体和用户的执行历史。文件型 `.ipynb` 使用 `notebook_read`、`notebook_edit` 和 `notebook_run`。编辑检查文件 SHA-256 或指定 cell revision；源代码变更清除旧输出。执行原子写回受限输出，并记录执行/产物谱系；产物发布失败保留为可见的执行证据。
 
-Auto Research 是当前对话 Agent 执行的技能，由 Agent 规划、委派、迭代和决定停止，协议、评价与检查点保存在普通研究文件中。通用 `execution_budget` 约束持久的工具调用/时间预算，既有内核、任务和连接器超时继续生效，不再提供独立 Research API、监督者或调度器。历史记录与引用产物在运行历史的只读归档及 `/api/project/archives` 中查看，旧 Memory/Knowledge API 返回 404。迁移与恢复边界见 [Auto Research](auto-research.md)。
+Auto Research 是当前对话 Agent 执行的技能，由 Agent 规划、委派、迭代和决定停止，协议、评价与检查点保存在普通研究文件中。宿主层执行控制约束工具调用次数、超时和取消，无需模型调用预算工具，既有内核、任务和连接器超时继续生效，不再提供独立 Research API、监督者或调度器。历史记录与引用产物在运行历史的只读归档及 `/api/project/archives` 中查看，旧 Memory/Knowledge API 返回 404。迁移与恢复边界见 [Auto Research](auto-research.md)。
 
 ## 信任、诊断与实现参考
 

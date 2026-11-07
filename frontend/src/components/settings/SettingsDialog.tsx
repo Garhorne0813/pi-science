@@ -43,10 +43,15 @@ export function SettingsDialog() {
   // Escape lives on the overlay so it still closes when focus escaped once.
   const handlePanelKeyDown = (event: React.KeyboardEvent) => {
     if (event.key !== "Tab") return;
-    const focusables = panelRef.current?.querySelectorAll<HTMLElement>(
-      'button:not([disabled]):not([tabindex="-1"]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])',
+    const candidates = panelRef.current?.querySelectorAll<HTMLElement>(
+      'summary, button:not([disabled]):not([tabindex="-1"]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])',
     );
-    if (!focusables || focusables.length === 0) return;
+    const focusables = Array.from(candidates ?? []).filter((element) => {
+      if (element.closest("[hidden], [inert]")) return false;
+      const collapsed = element.closest("details:not([open])");
+      return !collapsed || element === collapsed.querySelector("summary");
+    });
+    if (focusables.length === 0) return;
     const first = focusables[0];
     const last = focusables[focusables.length - 1];
     // The panel itself is the initial focus target, so Shift+Tab right after
@@ -84,7 +89,7 @@ export function SettingsDialog() {
       >
         <Suspense fallback={(
           <div className="flex min-h-0 min-w-0 flex-1">
-            <div className="flex w-14 shrink-0 flex-col border-r border-faint bg-sidebar px-2.5 pt-panel pb-panel md:w-[188px] md:px-3 md:pt-[22px] md:pb-0" />
+            <div className="flex w-14 shrink-0 flex-col border-r border-faint bg-sidebar px-2.5 pt-panel pb-panel md:w-[220px] md:px-3 md:pt-[22px] md:pb-0" />
             <div className="settings-page min-w-0 flex-1 overflow-y-auto">
               <div className="mx-auto flex min-h-full w-full max-w-[820px] flex-col md:px-6">
                 <header className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-card border-b border-faint bg-surface-raised px-card py-panel md:px-0 md:py-4">

@@ -75,6 +75,16 @@ describe("literature-review skill content", () => {
     expect(body).toContain("ISO 8601");
   });
 
+  it("makes the model record the passage it cited while it writes", async () => {
+    const body = await readFile(SKILL_MD, "utf8");
+    expect(body).toContain("`read_source_evidence`");
+    expect(body).toContain("`cite_evidence`");
+    expect(body).toContain("snapshot_id");
+    expect(body).toContain("passage_id");
+    // The record is text from the paper, not a support verdict.
+    expect(body).toContain("not a finding that the paper supports the sentence");
+  });
+
   it("states the mandatory citation output convention the frontend renders", async () => {
     const body = await readFile(SKILL_MD, "utf8");
 
@@ -152,5 +162,17 @@ describe("literature-review skill content", () => {
     expect(allRequired.has("references_section")).toBe(true);
     expect(allRequired.has("inline_identifier_citations")).toBe(true);
     expect(allRequired.has("missing_connector_guidance")).toBe(true);
+  });
+
+  it("makes a written report file carry the numbering it renders", async () => {
+    const body = await readFile(SKILL_MD, "utf8");
+    expect(body).toContain("3. Report files:");
+    expect(body).toContain("[1] Kojima et al. (2009)");
+    // The rule a report must obey, stated as the two things a reader checks.
+    expect(body).toContain("Number in first-citation order");
+    expect(body).toContain("reuses its number");
+    expect(body).toContain("Two versions of one arXiv paper are two entries");
+    // A chat reply must not hand-write numbers: the app numbers the rendered version.
+    expect(body).toContain("do not write numbers into a chat reply");
   });
 });

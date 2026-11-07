@@ -7,21 +7,30 @@ import { registerNodeSessionRoutes } from "./node-session-routes.js";
 import { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import { registerSessionReadRoutes } from "./session-routes.js";
 import { sessionRepository } from "../../runtime/node/session-repository.js";
+import { SessionTitleRepository } from "../../runtime/node/session-titles.js";
 import { AI_TITLE_PROMPT_INSTRUCTION } from "../../runtime/title/title-prompt.js";
 
 const cleanup: string[] = [];
 const nodeSessionService = new NodeSessionService(undefined, undefined, {
-  async environment(_cwd: string, inherited: NodeJS.ProcessEnv = process.env) { return { ...inherited }; },
+  async environment(_cwd: string, inherited: NodeJS.ProcessEnv = process.env) {
+    return { ...inherited };
+  },
 });
 const original = { home: process.env.PI_SCIENCE_HOME };
 
 beforeEach(async () => {
-  const root = join(tmpdir(), `pi-science-node-routes-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const root = join(
+    tmpdir(),
+    `pi-science-node-routes-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
   cleanup.push(root);
   await mkdir(root, { recursive: true });
   process.env.PI_SCIENCE_HOME = join(root, "data");
   await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
-  await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), JSON.stringify({ model: "openai/gpt-4.1-mini", thinking: "off" }));
+  await writeFile(
+    join(process.env.PI_SCIENCE_HOME!, "config.json"),
+    JSON.stringify({ model: "openai/gpt-4.1-mini", thinking: "off" }),
+  );
 });
 
 afterEach(async () => {
@@ -32,20 +41,49 @@ afterEach(async () => {
     if (value === undefined) delete process.env[environmentKey];
     else process.env[environmentKey] = value;
   }
-  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
+  await Promise.all(
+    cleanup
+      .splice(0)
+      .map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })),
+  );
 });
 
 async function workspaceWithSessions(...ids: string[]): Promise<string> {
-  const cwd = join(tmpdir(), `pi-science-route-workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const cwd = join(
+    tmpdir(),
+    `pi-science-route-workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
   cleanup.push(cwd);
   const directory = join(cwd, ".pi-science", "sessions");
   await mkdir(directory, { recursive: true });
   for (const id of ids) {
-    await writeFile(join(directory, `${id}.jsonl`), [
-      JSON.stringify({ type: "session", version: 3, id, cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
-      JSON.stringify({ type: "message", id: `${id}-user`, parentId: null, timestamp: "2026-07-23T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: `<hello ${id}>` }] } }),
-      JSON.stringify({ type: "message", id: `${id}-assistant`, parentId: `${id}-user`, timestamp: "2026-07-23T00:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: `answer ${id}` }] } }),
-    ].join("\n") + "\n", "utf8");
+    await writeFile(
+      join(directory, `${id}.jsonl`),
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id,
+          cwd,
+          timestamp: "2026-07-23T00:00:00.000Z",
+        }),
+        JSON.stringify({
+          type: "message",
+          id: `${id}-user`,
+          parentId: null,
+          timestamp: "2026-07-23T00:00:01.000Z",
+          message: { role: "user", content: [{ type: "text", text: `<hello ${id}>` }] },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: `${id}-assistant`,
+          parentId: `${id}-user`,
+          timestamp: "2026-07-23T00:00:02.000Z",
+          message: { role: "assistant", content: [{ type: "text", text: `answer ${id}` }] },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
   }
   return realpath(cwd);
 }
@@ -63,32 +101,83 @@ it("validates, persists and isolates session approval modes", async () => {
   registerNodeSessionRoutes(server, nodeSessionService, sessionRepository);
   const url = `/api/sessions/mode-a/approval-mode?${new URLSearchParams({ cwd })}`;
   try {
-    expect((await server.inject({ method: "GET", url })).json()).toEqual({ mode: "ask", revision: 0 });
-    expect((await server.inject({ method: "PUT", url, payload: { mode: "full", revision: 0 } })).statusCode).toBe(400);
-    expect((await server.inject({ method: "PUT", url, payload: { mode: "unsafe", revision: 0 } })).statusCode).toBe(400);
+    expect((await server.inject({ method: "GET", url })).json()).toEqual({
+      mode: "ask",
+      revision: 0,
+    });
+    expect(
+      (await server.inject({ method: "PUT", url, payload: { mode: "full", revision: 0 } }))
+        .statusCode,
+    ).toBe(400);
+    expect(
+      (await server.inject({ method: "PUT", url, payload: { mode: "unsafe", revision: 0 } }))
+        .statusCode,
+    ).toBe(400);
     const set = await server.inject({ method: "PUT", url, payload: { mode: "auto", revision: 0 } });
     expect(set.statusCode).toBe(200);
-    expect(set.json()).toEqual({ mode: "auto", revision: 1, runtimeRestarted: false, kernelRestartCount: 0 });
-    expect((await server.inject({ method: "PUT", url, payload: { mode: "ask", revision: 0 } })).statusCode).toBe(409);
-    expect((await server.inject({ method: "GET", url: url.replace("mode-a", "mode-b") })).json()).toEqual({ mode: "ask", revision: 0 });
-    expect((await server.inject({ method: "GET", url })).json()).toEqual({ mode: "auto", revision: 1 });
-    const full = await server.inject({ method: "PUT", url, payload: { mode: "full", revision: 1, acknowledgeFullAccess: true } });
-    expect(full.json()).toEqual({ mode: "full", revision: 2, runtimeRestarted: false, kernelRestartCount: 0 });
+    expect(set.json()).toEqual({
+      mode: "auto",
+      revision: 1,
+      runtimeRestarted: false,
+      kernelRestartCount: 0,
+    });
+    expect(
+      (await server.inject({ method: "PUT", url, payload: { mode: "ask", revision: 0 } }))
+        .statusCode,
+    ).toBe(409);
+    expect(
+      (await server.inject({ method: "GET", url: url.replace("mode-a", "mode-b") })).json(),
+    ).toEqual({ mode: "ask", revision: 0 });
+    expect((await server.inject({ method: "GET", url })).json()).toEqual({
+      mode: "auto",
+      revision: 1,
+    });
+    const full = await server.inject({
+      method: "PUT",
+      url,
+      payload: { mode: "full", revision: 1, acknowledgeFullAccess: true },
+    });
+    expect(full.json()).toEqual({
+      mode: "full",
+      revision: 2,
+      runtimeRestarted: false,
+      kernelRestartCount: 0,
+    });
     const ask = await server.inject({ method: "PUT", url, payload: { mode: "ask", revision: 2 } });
     expect(ask.statusCode).toBe(200);
-    expect(ask.json()).toEqual({ mode: "ask", revision: 3, runtimeRestarted: false, kernelRestartCount: 0 });
-    expect((await server.inject({ method: "GET", url })).json()).toEqual({ mode: "ask", revision: 3 });
-  } finally { await server.close(); }
+    expect(ask.json()).toEqual({
+      mode: "ask",
+      revision: 3,
+      runtimeRestarted: false,
+      kernelRestartCount: 0,
+    });
+    expect((await server.inject({ method: "GET", url })).json()).toEqual({
+      mode: "ask",
+      revision: 3,
+    });
+  } finally {
+    await server.close();
+  }
 });
 
 describe("native Node conversation routes", () => {
   it("serves cold-session commands despite failed model migration while preserving validation and legacy import", async () => {
     const cwd = await workspaceWithSessions("catalogue-session");
     const ensureMigrated = vi.fn().mockRejectedValue(new Error("Model resource store unavailable"));
-    const environment = vi.fn().mockRejectedValue(new Error("A metadata request must not start a worker"));
-    const service = new NodeSessionService(undefined, sessionRepository, { environment }, null, undefined, {
-      ensureMigrated, isModelAvailable: vi.fn(),
-    });
+    const environment = vi
+      .fn()
+      .mockRejectedValue(new Error("A metadata request must not start a worker"));
+    const service = new NodeSessionService(
+      undefined,
+      sessionRepository,
+      { environment },
+      null,
+      undefined,
+      {
+        ensureMigrated,
+        isModelAvailable: vi.fn(),
+      },
+    );
     const beforeStart = vi.fn();
     service.configureBeforeRuntimeStart(beforeStart);
     const server = Fastify();
@@ -99,14 +188,22 @@ describe("native Node conversation routes", () => {
       for (let request = 0; request < 2; request++) {
         const response = await server.inject({ method: "GET", url });
         expect(response.statusCode).toBe(200);
-        expect(response.json().commands).toEqual(expect.arrayContaining([
-          expect.objectContaining({ name: "skill:literature-review", source: "skill" }),
-        ]));
+        expect(response.json().commands).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ name: "skill:literature-review", source: "skill" }),
+          ]),
+        );
       }
       expect(await sessionRepository.messages(cwd, "catalogue-session")).toHaveLength(2);
-      const missing = await server.inject({ method: "GET", url: url.replace("catalogue-session", "missing-session") });
+      const missing = await server.inject({
+        method: "GET",
+        url: url.replace("catalogue-session", "missing-session"),
+      });
       expect(missing.json()).toEqual({ commands: [] });
-      const invalid = await server.inject({ method: "GET", url: `/api/sessions/catalogue-session/commands?${new URLSearchParams({ cwd: join(cwd, "missing-directory") })}` });
+      const invalid = await server.inject({
+        method: "GET",
+        url: `/api/sessions/catalogue-session/commands?${new URLSearchParams({ cwd: join(cwd, "missing-directory") })}`,
+      });
       expect(invalid.statusCode).not.toBe(200);
       expect(ensureMigrated).not.toHaveBeenCalled();
       expect(environment).not.toHaveBeenCalled();
@@ -114,22 +211,39 @@ describe("native Node conversation routes", () => {
       expect(service.liveSessions(cwd)).toEqual([]);
       // The retired legacy migration is no longer consulted; this fixture has no live
       // worker, so the runtime command fails for that reason instead.
-      expect(await service.command("catalogue-session", cwd, "get_state")).toMatchObject({ success: false, code: "runtime_command_failed" });
+      expect(await service.command("catalogue-session", cwd, "get_state")).toMatchObject({
+        success: false,
+        code: "runtime_command_failed",
+      });
       expect(ensureMigrated).not.toHaveBeenCalled();
-    } finally { await server.close(); await service.shutdownAll(); }
+    } finally {
+      await server.close();
+      await service.shutdownAll();
+    }
   });
 
   it("serves composer commands for a workspace without opening a session", async () => {
     const cwd = await workspaceWithSessions();
     const composerCommands = vi.fn(async (_workspace: string) => ({
       success: true as const,
-      data: { commands: [{ name: "skill:review", description: "Review files", source: "skill", group: "skill" }], revision: "test-revision" },
+      data: {
+        commands: [
+          { name: "skill:review", description: "Review files", source: "skill", group: "skill" },
+        ],
+        revision: "test-revision",
+      },
     }));
-    const fakeService = { composerCommands, liveSessions: () => [] } as unknown as NodeSessionService;
+    const fakeService = {
+      composerCommands,
+      liveSessions: () => [],
+    } as unknown as NodeSessionService;
     const server = Fastify({ logger: false });
     registerNodeSessionRoutes(server, fakeService, sessionRepository);
 
-    const response = await server.inject({ method: "GET", url: `/api/composer/commands?cwd=${encodeURIComponent(cwd)}` });
+    const response = await server.inject({
+      method: "GET",
+      url: `/api/composer/commands?cwd=${encodeURIComponent(cwd)}`,
+    });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       revision: "test-revision",
@@ -152,18 +266,33 @@ describe("native Node conversation routes", () => {
     const id = "8fd824aa-51d3-4f63-839c-09e021b7970b";
     const url = `/api/sessions/prompt-idempotency/prompt?cwd=${encodeURIComponent(cwd)}`;
 
-    const first = await server.inject({ method: "POST", url, payload: { message: "status", client_message_id: id } });
+    const first = await server.inject({
+      method: "POST",
+      url,
+      payload: { message: "status", client_message_id: id },
+    });
     expect(first.statusCode).toBe(202);
     expect(first.json()).toMatchObject({ ok: true, status: "accepted", client_message_id: id });
-    const duplicate = await server.inject({ method: "POST", url, payload: { message: "status", client_message_id: id } });
+    const duplicate = await server.inject({
+      method: "POST",
+      url,
+      payload: { message: "status", client_message_id: id },
+    });
     expect(duplicate.statusCode).toBe(202);
     expect(duplicate.json()).toMatchObject({ ok: true, status: "accepted", client_message_id: id });
     expect(command).toHaveBeenCalledTimes(1);
 
-    const conflict = await server.inject({ method: "POST", url, payload: { message: "other text", client_message_id: id } });
+    const conflict = await server.inject({
+      method: "POST",
+      url,
+      payload: { message: "other text", client_message_id: id },
+    });
     expect(conflict.statusCode).toBe(409);
     expect(conflict.json()).toMatchObject({ code: "client_message_id_conflict" });
-    const statusResponse = await server.inject({ method: "GET", url: `/api/sessions/prompt-idempotency/prompt-requests/${id}?cwd=${encodeURIComponent(cwd)}` });
+    const statusResponse = await server.inject({
+      method: "GET",
+      url: `/api/sessions/prompt-idempotency/prompt-requests/${id}?cwd=${encodeURIComponent(cwd)}`,
+    });
     expect(statusResponse.json()).toMatchObject({ status: "accepted", client_message_id: id });
     await server.close();
   });
@@ -171,9 +300,12 @@ describe("native Node conversation routes", () => {
   it("serializes distinct prompt IDs for a session and blocks the next send until association resolves", async () => {
     const cwd = await workspaceWithSessions("prompt-serialized");
     let releaseCommand!: () => void;
-    const command = vi.fn(() => new Promise<{ success: boolean }>((resolve) => {
-      releaseCommand = () => resolve({ success: true });
-    }));
+    const command = vi.fn(
+      () =>
+        new Promise<{ success: boolean }>((resolve) => {
+          releaseCommand = () => resolve({ success: true });
+        }),
+    );
     const fakeService = {
       command,
       liveSessions: () => [],
@@ -184,9 +316,17 @@ describe("native Node conversation routes", () => {
     const secondId = "91d824aa-51d3-4f63-839c-09e021b7970b";
     const url = `/api/sessions/prompt-serialized/prompt?cwd=${encodeURIComponent(cwd)}`;
 
-    const first = server.inject({ method: "POST", url, payload: { message: "status", client_message_id: firstId } });
+    const first = server.inject({
+      method: "POST",
+      url,
+      payload: { message: "status", client_message_id: firstId },
+    });
     await vi.waitFor(() => expect(command).toHaveBeenCalledTimes(1));
-    const second = server.inject({ method: "POST", url, payload: { message: "status", client_message_id: secondId } });
+    const second = server.inject({
+      method: "POST",
+      url,
+      payload: { message: "status", client_message_id: secondId },
+    });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(command).toHaveBeenCalledTimes(1);
 
@@ -194,7 +334,10 @@ describe("native Node conversation routes", () => {
     expect((await first).statusCode).toBe(202);
     const blocked = await second;
     expect(blocked.statusCode).toBe(409);
-    expect(blocked.json()).toMatchObject({ code: "prompt_request_in_flight", blocking_client_message_id: firstId });
+    expect(blocked.json()).toMatchObject({
+      code: "prompt_request_in_flight",
+      blocking_client_message_id: firstId,
+    });
     expect(command).toHaveBeenCalledTimes(1);
     await server.close();
   });
@@ -209,11 +352,23 @@ describe("native Node conversation routes", () => {
       },
     };
     const server = Fastify({ logger: false });
-    registerNodeSessionRoutes(server, nodeSessionService, sessionRepository, aiTitleService as never);
-    const ok = await server.inject({ method: "POST", url: `/api/sessions/session-title/title?cwd=${encodeURIComponent(cwd)}` });
+    registerNodeSessionRoutes(
+      server,
+      nodeSessionService,
+      sessionRepository,
+      aiTitleService as never,
+    );
+    const ok = await server.inject({
+      method: "POST",
+      url: `/api/sessions/session-title/title?cwd=${encodeURIComponent(cwd)}`,
+    });
     expect(ok.statusCode).toBe(200);
-    expect(ok.json()).toEqual({ ok: true, title: "AI 标题" });
-    const missing = await server.inject({ method: "POST", url: `/api/sessions/no-such/title?cwd=${encodeURIComponent(cwd)}` });
+    expect(ok.json()).toEqual({ ok: true, title: "AI 标题", revision: 1 });
+    const missing = await server.inject({
+      method: "POST",
+      url: `/api/sessions/no-such/title?cwd=${encodeURIComponent(cwd)}`,
+    });
+
     expect(missing.statusCode).toBe(404);
     await server.close();
   });
@@ -221,43 +376,330 @@ describe("native Node conversation routes", () => {
   it("persists the generated AI title server-side without a client PUT", async () => {
     const cwd = await workspaceWithSessions("session-title-persist");
     const aiTitleService = {
-      async generateTitle() { return "AI 自动标题"; },
+      async generateTitle() {
+        return "AI 自动标题";
+      },
     };
     const server = Fastify({ logger: false });
     registerSessionReadRoutes(server, sessionRepository, nodeSessionService);
-    registerNodeSessionRoutes(server, nodeSessionService, sessionRepository, aiTitleService as never);
-    const response = await server.inject({ method: "POST", url: `/api/sessions/session-title-persist/title?cwd=${encodeURIComponent(cwd)}` });
+    registerNodeSessionRoutes(
+      server,
+      nodeSessionService,
+      sessionRepository,
+      aiTitleService as never,
+    );
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/sessions/session-title-persist/title?cwd=${encodeURIComponent(cwd)}`,
+    });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ ok: true, title: "AI 自动标题" });
+    expect(response.json()).toEqual({ ok: true, title: "AI 自动标题", revision: 1 });
     // No client PUT involved: the title is already on disk and in the list.
     const raw = await readFile(join(cwd, ".pi-science", "session-titles.jsonl"), "utf8");
     expect(raw).toContain('"session_id":"session-title-persist"');
     expect(raw).toContain("AI 自动标题");
-    const listed = await server.inject({ method: "GET", url: `/api/sessions?cwd=${encodeURIComponent(cwd)}` });
-    expect((listed.json() as Array<{ id: string; name: string | null }>).find((s) => s.id === "session-title-persist")?.name).toBe("AI 自动标题");
+    const listed = await server.inject({
+      method: "GET",
+      url: `/api/sessions?cwd=${encodeURIComponent(cwd)}`,
+    });
+    expect(
+      (listed.json() as Array<{ id: string; name: string | null }>).find(
+        (s) => s.id === "session-title-persist",
+      )?.name,
+    ).toBe("AI 自动标题");
     await server.close();
   });
 
   it("does not persist when AI title generation returns null", async () => {
     const cwd = await workspaceWithSessions("session-title-null");
-    const aiTitleService = { async generateTitle() { return null; } };
+    const aiTitleService = {
+      async generateTitle() {
+        return null;
+      },
+    };
     const server = Fastify({ logger: false });
-    registerNodeSessionRoutes(server, nodeSessionService, sessionRepository, aiTitleService as never);
-    const response = await server.inject({ method: "POST", url: `/api/sessions/session-title-null/title?cwd=${encodeURIComponent(cwd)}` });
+    registerNodeSessionRoutes(
+      server,
+      nodeSessionService,
+      sessionRepository,
+      aiTitleService as never,
+    );
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/sessions/session-title-null/title?cwd=${encodeURIComponent(cwd)}`,
+    });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ ok: true, title: null });
-    await expect(readFile(join(cwd, ".pi-science", "session-titles.jsonl"), "utf8")).rejects.toThrow();
+    await expect(
+      readFile(join(cwd, ".pi-science", "session-titles.jsonl"), "utf8"),
+    ).rejects.toThrow();
     await server.close();
+  });
+
+  it("refuses a generation that finished after a later manual title write", async () => {
+    const cwd = await workspaceWithSessions("session-title-race");
+    let release!: (title: string) => void;
+    const aiTitleService = {
+      generateTitle: () =>
+        new Promise<string>((done) => {
+          release = done;
+        }),
+    };
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(
+      server,
+      nodeSessionService,
+      sessionRepository,
+      aiTitleService as never,
+    );
+    const url = `/api/sessions/session-title-race/title?cwd=${encodeURIComponent(cwd)}`;
+    try {
+      const slow = server.inject({ method: "POST", url, payload: {} });
+      await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+      const put = await server.inject({ method: "PUT", url, payload: { title: "用户标题" } });
+      expect(put.statusCode).toBe(200);
+      release("生成的标题");
+      expect((await slow).json()).toEqual({ ok: true, title: null, superseded: true });
+      const raw = await readFile(join(cwd, ".pi-science", "session-titles.jsonl"), "utf8");
+      expect(JSON.parse(raw.trim())).toMatchObject({
+        session_id: "session-title-race",
+        title: "用户标题",
+        revision: 1,
+      });
+      expect(raw).not.toContain("生成的标题");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("refuses a manual title request while the session is running", async () => {
+    const cwd = await workspaceWithSessions("session-busy");
+    const generateTitle = vi.fn(async () => "AI 标题");
+    const service = {
+      sessionBusy: () => true,
+      liveSessions: () => [],
+    } as unknown as NodeSessionService;
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(server, service, sessionRepository, { generateTitle } as never);
+    try {
+      const response = await server.inject({
+        method: "POST",
+        url: `/api/sessions/session-busy/title?cwd=${encodeURIComponent(cwd)}`,
+        payload: { manual: true },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ ok: false, code: "session_busy" });
+      expect(generateTitle).not.toHaveBeenCalled();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("leaves the automatic title request unaffected by a busy session", async () => {
+    const cwd = await workspaceWithSessions("session-busy-auto");
+    const generateTitle = vi.fn(async () => "AI 标题");
+    const service = {
+      sessionBusy: () => true,
+      liveSessions: () => [],
+    } as unknown as NodeSessionService;
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(server, service, sessionRepository, { generateTitle } as never);
+    try {
+      const response = await server.inject({
+        method: "POST",
+        url: `/api/sessions/session-busy-auto/title?cwd=${encodeURIComponent(cwd)}`,
+        payload: {},
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ ok: true, title: "AI 标题", revision: 1 });
+      expect(generateTitle).toHaveBeenCalledOnce();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not resurrect a title when the session is deleted between the existence check and the write", async () => {
+    const cwd = await workspaceWithSessions("session-delete-race");
+    const sessionFile = join(cwd, ".pi-science", "sessions", "session-delete-race.jsonl");
+    // A delete that lands after the route's existence check and before the
+    // write: the delete route removes the session file, then clears the title
+    // store. Both happen here at the exact interleaving under test.
+    class DeleteLandsBeforeWrite extends SessionTitleRepository {
+      override async commitGeneratedTitle(
+        ...args: Parameters<SessionTitleRepository["commitGeneratedTitle"]>
+      ) {
+        await rm(sessionFile);
+        await this.deleteTitle(cwd, "session-delete-race");
+        return super.commitGeneratedTitle(...args);
+      }
+    }
+    const titles = new DeleteLandsBeforeWrite();
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(
+      server,
+      nodeSessionService,
+      sessionRepository,
+      {
+        async generateTitle() {
+          return "AI 标题";
+        },
+      } as never,
+      titles,
+    );
+    try {
+      const response = await server.inject({
+        method: "POST",
+        url: `/api/sessions/session-delete-race/title?cwd=${encodeURIComponent(cwd)}`,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ ok: true, title: null, deleted: true });
+      await expect(
+        readFile(join(cwd, ".pi-science", "session-titles.jsonl"), "utf8"),
+      ).rejects.toThrow();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("fills an empty title from the first message without replacing a stored one", async () => {
+    const cwd = await workspaceWithSessions("session-title-init");
+    const server = app();
+    const url = `/api/sessions/session-title-init/title?cwd=${encodeURIComponent(cwd)}`;
+    try {
+      const typed = await server.inject({
+        method: "PUT",
+        url,
+        payload: { title: "手写标题", mode: "override" },
+      });
+      expect(typed.json()).toEqual({ ok: true, applied: true, title: "手写标题" });
+      // A second browser backfills history with empty localStorage and derives
+      // its own name; that name must not replace the stored title.
+      const derived = await server.inject({
+        method: "PUT",
+        url,
+        payload: { title: "首条消息", mode: "initialize" },
+      });
+      expect(derived.json()).toEqual({ ok: true, applied: false, title: "手写标题" });
+      const listed = await server.inject({
+        method: "GET",
+        url: `/api/sessions?cwd=${encodeURIComponent(cwd)}`,
+      });
+      expect(
+        (listed.json() as Array<{ id: string; name: string | null }>).find(
+          (s) => s.id === "session-title-init",
+        )?.name,
+      ).toBe("手写标题");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("lets a manual regenerate replace an automatic title that finished first", async () => {
+    const cwd = await workspaceWithSessions("session-title-priority");
+    const releases: Array<(title: string) => void> = [];
+    const aiTitleService = {
+      generateTitle: () =>
+        new Promise<string>((done) => {
+          releases.push(done);
+        }),
+    };
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(
+      server,
+      nodeSessionService,
+      sessionRepository,
+      aiTitleService as never,
+    );
+    const url = `/api/sessions/session-title-priority/title?cwd=${encodeURIComponent(cwd)}`;
+    try {
+      const automatic = server.inject({ method: "POST", url, payload: {} });
+      const manual = server.inject({ method: "POST", url, payload: { manual: true } });
+      await vi.waitFor(() => expect(releases).toHaveLength(2));
+      // The automatic generation returns first, but the user has asked again.
+      releases[0]!("自动标题");
+      expect((await automatic).json()).toEqual({ ok: true, title: null, superseded: true });
+      releases[1]!("手动标题");
+      expect((await manual).json()).toEqual({ ok: true, title: "手动标题", revision: 1 });
+      const raw = await readFile(join(cwd, ".pi-science", "session-titles.jsonl"), "utf8");
+      expect(JSON.parse(raw.trim())).toMatchObject({ title: "手动标题", revision: 1 });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("writes nothing when the session disappears while the title generates", async () => {
+    const cwd = await workspaceWithSessions("session-vanished");
+    const aiTitleService = {
+      async generateTitle() {
+        await rm(join(cwd, ".pi-science", "sessions", "session-vanished.jsonl"));
+        return "AI 标题";
+      },
+    };
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(
+      server,
+      nodeSessionService,
+      sessionRepository,
+      aiTitleService as never,
+    );
+    try {
+      const response = await server.inject({
+        method: "POST",
+        url: `/api/sessions/session-vanished/title?cwd=${encodeURIComponent(cwd)}`,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ ok: true, title: null, deleted: true });
+      await expect(
+        readFile(join(cwd, ".pi-science", "session-titles.jsonl"), "utf8"),
+      ).rejects.toThrow();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("overwrites an existing title on a manual regenerate and bumps the revision", async () => {
+    const cwd = await workspaceWithSessions("session-manual");
+    const aiTitleService = {
+      async generateTitle() {
+        return "AI 新标题";
+      },
+    };
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(
+      server,
+      nodeSessionService,
+      sessionRepository,
+      aiTitleService as never,
+    );
+    const url = `/api/sessions/session-manual/title?cwd=${encodeURIComponent(cwd)}`;
+    try {
+      expect(
+        (await server.inject({ method: "PUT", url, payload: { title: "旧标题" } })).json(),
+      ).toEqual({ ok: true, applied: true, title: "旧标题" });
+      const response = await server.inject({ method: "POST", url, payload: { manual: true } });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ ok: true, title: "AI 新标题", revision: 2 });
+      const raw = await readFile(join(cwd, ".pi-science", "session-titles.jsonl"), "utf8");
+      expect(JSON.parse(raw.trim())).toMatchObject({ title: "AI 新标题", revision: 2 });
+    } finally {
+      await server.close();
+    }
   });
 
   it("accepts a title PUT for a live session before its file exists on disk", async () => {
     const cwd = await workspaceWithSessions();
     const server = app();
     const created = await server.inject({ method: "POST", url: "/api/sessions", payload: { cwd } });
-    expect(created.statusCode).toBe(200);
+    expect(created.statusCode).toBe(201);
     const sessionId = created.json().id as string;
-    expect(nodeSessionService.liveSessions(cwd).some((session) => session.id === sessionId)).toBe(true);
-    const put = await server.inject({ method: "PUT", url: `/api/sessions/${sessionId}/title?cwd=${encodeURIComponent(cwd)}`, payload: { title: "live session title" } });
+    expect(nodeSessionService.liveSessions(cwd).some((session) => session.id === sessionId)).toBe(
+      true,
+    );
+    const put = await server.inject({
+      method: "PUT",
+      url: `/api/sessions/${sessionId}/title?cwd=${encodeURIComponent(cwd)}`,
+      payload: { title: "live session title" },
+    });
     expect(put.statusCode).toBe(200);
     expect(put.json()).toMatchObject({ ok: true, title: "live session title" });
     await server.close();
@@ -270,8 +712,16 @@ describe("native Node conversation routes", () => {
       },
     };
     const server = Fastify({ logger: false });
-    registerNodeSessionRoutes(server, nodeSessionService, sessionRepository, aiTitleService as never);
-    const response = await server.inject({ method: "POST", url: "/api/sessions/session-title/title?cwd=/definitely/not/a/workspace" });
+    registerNodeSessionRoutes(
+      server,
+      nodeSessionService,
+      sessionRepository,
+      aiTitleService as never,
+    );
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/sessions/session-title/title?cwd=/definitely/not/a/workspace",
+    });
     expect(response.statusCode).toBe(403);
     expect(response.json()).toMatchObject({ ok: false, code: "workspace_invalid" });
     await server.close();
@@ -280,7 +730,10 @@ describe("native Node conversation routes", () => {
   it("returns 404 when the title service is not configured", async () => {
     const cwd = await workspaceWithSessions("session-title");
     const server = app();
-    const response = await server.inject({ method: "POST", url: `/api/sessions/session-title/title?cwd=${encodeURIComponent(cwd)}` });
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/sessions/session-title/title?cwd=${encodeURIComponent(cwd)}`,
+    });
     expect(response.statusCode).toBe(404);
     await server.close();
   });
@@ -298,13 +751,27 @@ describe("native Node conversation routes", () => {
       ["runtime_not_found", 404],
     ] as const) {
       const service = {
-        async create() { return { error: "Core runtime failure", code, diagnostics: [{ type: "error", message: "detail" }] }; },
+        async create() {
+          return {
+            error: "Core runtime failure",
+            code,
+            diagnostics: [{ type: "error", message: "detail" }],
+          };
+        },
       } as unknown as NodeSessionService;
       const server = Fastify({ logger: false });
       registerNodeSessionRoutes(server, service, sessionRepository);
-      const response = await server.inject({ method: "POST", url: "/api/sessions", payload: { cwd: "/tmp/workspace" } });
+      const response = await server.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { cwd: "/tmp/workspace" },
+      });
       expect(response.statusCode).toBe(statusCode);
-      expect(response.json()).toMatchObject({ ok: false, code, diagnostics: [{ message: "detail" }] });
+      expect(response.json()).toMatchObject({
+        ok: false,
+        code,
+        diagnostics: [{ message: "detail" }],
+      });
       await server.close();
     }
   });
@@ -313,17 +780,29 @@ describe("native Node conversation routes", () => {
     const cwd = await workspaceWithSessions("session-a", "session-b");
     const server = app();
     const created = await server.inject({ method: "POST", url: "/api/sessions", payload: { cwd } });
-    expect(created.statusCode).toBe(200);
+    expect(created.statusCode).toBe(201);
     const blankId = created.json().id as string;
-    const secondCreated = await server.inject({ method: "POST", url: "/api/sessions", payload: { cwd } });
-    expect(secondCreated.statusCode).toBe(200);
+    const secondCreated = await server.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { cwd },
+    });
+    expect(secondCreated.statusCode).toBe(201);
     const secondBlankId = secondCreated.json().id as string;
 
-    const listed = await server.inject({ method: "GET", url: `/api/sessions?cwd=${encodeURIComponent(cwd)}` });
-    expect(listed.json().map((item: { id: string }) => item.id)).toEqual(expect.arrayContaining([blankId, secondBlankId, "session-a", "session-b"]));
+    const listed = await server.inject({
+      method: "GET",
+      url: `/api/sessions?cwd=${encodeURIComponent(cwd)}`,
+    });
+    expect(listed.json().map((item: { id: string }) => item.id)).toEqual(
+      expect.arrayContaining([blankId, secondBlankId, "session-a", "session-b"]),
+    );
 
     for (const id of ["session-a", "session-b", "session-a"]) {
-      const state = await server.inject({ method: "GET", url: `/api/sessions/${id}/state?cwd=${encodeURIComponent(cwd)}` });
+      const state = await server.inject({
+        method: "GET",
+        url: `/api/sessions/${id}/state?cwd=${encodeURIComponent(cwd)}`,
+      });
       expect(state.statusCode).toBe(200);
       expect(state.json()).toMatchObject({ ok: true, id });
     }
@@ -332,16 +811,80 @@ describe("native Node conversation routes", () => {
 
   it("serves whole-session stats for an idle session by folding its JSONL", async () => {
     const cwd = await workspaceWithSessions("session-a");
-    await writeFile(join(cwd, ".pi-science", "sessions", "session-a.jsonl"), [
-      JSON.stringify({ type: "session", version: 3, id: "session-a", cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
-      JSON.stringify({ type: "message", id: "u1", parentId: null, timestamp: "2026-07-23T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: "hello" }] } }),
-      JSON.stringify({ type: "message", id: "a1", parentId: "u1", timestamp: "2026-07-23T00:00:02.000Z", message: { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "read" }], usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 12, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } }),
-      JSON.stringify({ type: "message", id: "r1", parentId: "a1", timestamp: "2026-07-23T00:00:03.000Z", message: { role: "toolResult", toolCallId: "t1", toolName: "read", content: [{ type: "text", text: "ok" }] } }),
-      JSON.stringify({ type: "message", id: "a2", parentId: "r1", timestamp: "2026-07-23T00:00:04.000Z", message: { role: "assistant", content: [{ type: "text", text: "answer" }], usage: { input: 5, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 8, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } }),
-    ].join("\n") + "\n", "utf8");
+    await writeFile(
+      join(cwd, ".pi-science", "sessions", "session-a.jsonl"),
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-a",
+          cwd,
+          timestamp: "2026-07-23T00:00:00.000Z",
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "u1",
+          parentId: null,
+          timestamp: "2026-07-23T00:00:01.000Z",
+          message: { role: "user", content: [{ type: "text", text: "hello" }] },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "a1",
+          parentId: "u1",
+          timestamp: "2026-07-23T00:00:02.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "t1", name: "read" }],
+            usage: {
+              input: 10,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 12,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "r1",
+          parentId: "a1",
+          timestamp: "2026-07-23T00:00:03.000Z",
+          message: {
+            role: "toolResult",
+            toolCallId: "t1",
+            toolName: "read",
+            content: [{ type: "text", text: "ok" }],
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "a2",
+          parentId: "r1",
+          timestamp: "2026-07-23T00:00:04.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "answer" }],
+            usage: {
+              input: 5,
+              output: 3,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 8,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
     const server = app();
 
-    const res = await server.inject({ method: "GET", url: `/api/sessions/session-a/stats?cwd=${encodeURIComponent(cwd)}` });
+    const res = await server.inject({
+      method: "GET",
+      url: `/api/sessions/session-a/stats?cwd=${encodeURIComponent(cwd)}`,
+    });
     expect(res.statusCode, res.body).toBe(200);
     const body = res.json();
     expect(body.ok).toBe(true);
@@ -354,7 +897,10 @@ describe("native Node conversation routes", () => {
       tokens: { input: 15, output: 5, cacheRead: 0, cacheWrite: 0, total: 20 },
     });
 
-    const missing = await server.inject({ method: "GET", url: `/api/sessions/no-such/stats?cwd=${encodeURIComponent(cwd)}` });
+    const missing = await server.inject({
+      method: "GET",
+      url: `/api/sessions/no-such/stats?cwd=${encodeURIComponent(cwd)}`,
+    });
     expect(missing.statusCode).toBe(404);
     await server.close();
   });
@@ -362,17 +908,34 @@ describe("native Node conversation routes", () => {
   it("does not re-add a hidden AI-title session merely because it was resumed", async () => {
     const cwd = await workspaceWithSessions();
     const sessionId = "legacy-title-runtime";
-    await writeFile(join(cwd, ".pi-science", "sessions", `${sessionId}.jsonl`), [
-      JSON.stringify({ type: "session", version: 3, id: sessionId, cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
-      JSON.stringify({
-        type: "message",
-        id: "title-prompt", parentId: null, timestamp: "2026-07-23T00:00:01.000Z",
-        message: {
-          role: "user",
-          content: [{ type: "text", text: `${AI_TITLE_PROMPT_INSTRUCTION}\n\nConversation:\nuser: hidden` }],
-        },
-      }),
-    ].join("\n") + "\n", "utf8");
+    await writeFile(
+      join(cwd, ".pi-science", "sessions", `${sessionId}.jsonl`),
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: sessionId,
+          cwd,
+          timestamp: "2026-07-23T00:00:00.000Z",
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "title-prompt",
+          parentId: null,
+          timestamp: "2026-07-23T00:00:01.000Z",
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `${AI_TITLE_PROMPT_INSTRUCTION}\n\nConversation:\nuser: hidden`,
+              },
+            ],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
     const server = app();
 
     const resumed = await server.inject({
@@ -382,37 +945,71 @@ describe("native Node conversation routes", () => {
     expect(resumed.statusCode).toBe(200);
     expect(nodeSessionService.liveSessions(cwd).map((session) => session.id)).toContain(sessionId);
 
-    const listed = await server.inject({ method: "GET", url: `/api/sessions?cwd=${encodeURIComponent(cwd)}` });
-    expect((listed.json() as Array<{ id: string }>).some((session) => session.id === sessionId)).toBe(false);
+    const listed = await server.inject({
+      method: "GET",
+      url: `/api/sessions?cwd=${encodeURIComponent(cwd)}`,
+    });
+    expect(
+      (listed.json() as Array<{ id: string }>).some((session) => session.id === sessionId),
+    ).toBe(false);
     await server.close();
   }, 20_000);
 
   it("serves older history pages from an opaque cursor and rejects invalid pagination", async () => {
     const cwd = await workspaceWithSessions("session-page");
-    await writeFile(join(cwd, ".pi-science", "sessions", "session-page.jsonl"), [
-      JSON.stringify({ type: "session", version: 3, id: "session-page", cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
-      ...["m1", "m2", "m3"].map((id, index) => JSON.stringify({
-        type: "message", id, parentId: index ? `m${index}` : null, timestamp: `2026-07-23T00:00:0${index + 1}.000Z`,
-        message: { role: "user", content: id },
-      })),
-    ].join("\n") + "\n", "utf8");
+    await writeFile(
+      join(cwd, ".pi-science", "sessions", "session-page.jsonl"),
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-page",
+          cwd,
+          timestamp: "2026-07-23T00:00:00.000Z",
+        }),
+        ...["m1", "m2", "m3"].map((id, index) =>
+          JSON.stringify({
+            type: "message",
+            id,
+            parentId: index ? `m${index}` : null,
+            timestamp: `2026-07-23T00:00:0${index + 1}.000Z`,
+            message: { role: "user", content: id },
+          }),
+        ),
+      ].join("\n") + "\n",
+      "utf8",
+    );
     const server = app();
 
     const [first, index] = await Promise.all([
-      server.inject({ method: "GET", url: `/api/sessions/session-page/messages?cwd=${encodeURIComponent(cwd)}&limit=2` }),
-      server.inject({ method: "GET", url: `/api/sessions/session-page/messages/index?cwd=${encodeURIComponent(cwd)}` }),
+      server.inject({
+        method: "GET",
+        url: `/api/sessions/session-page/messages?cwd=${encodeURIComponent(cwd)}&limit=2`,
+      }),
+      server.inject({
+        method: "GET",
+        url: `/api/sessions/session-page/messages/index?cwd=${encodeURIComponent(cwd)}`,
+      }),
     ]);
     expect(first.statusCode).toBe(200);
     expect(first.json()).toMatchObject({
-      messages: [{ content: [{ type: "text", text: "m2" }] }, { content: [{ type: "text", text: "m3" }] }],
+      messages: [
+        { content: [{ type: "text", text: "m2" }] },
+        { content: [{ type: "text", text: "m3" }] },
+      ],
       has_more: true,
       next_cursor: expect.any(String),
       snapshot_version: expect.any(String),
     });
 
-    const { AgentSessionRepository } = await import("../../runtime/agent/agent-session-repository.js");
+    const { AgentSessionRepository } = await import(
+      "../../runtime/agent/agent-session-repository.js"
+    );
     const entryIds = await new AgentSessionRepository().migrationEntryIds(cwd, "session-page");
-    expect(first.json().messages.map((message: { id: string }) => message.id)).toEqual([entryIds.m2, entryIds.m3]);
+    expect(first.json().messages.map((message: { id: string }) => message.id)).toEqual([
+      entryIds.m2,
+      entryIds.m3,
+    ]);
     expect(nodeSessionService.processCount).toBe(0);
     const cursor = first.json().next_cursor as string;
     const second = await server.inject({
@@ -420,7 +1017,11 @@ describe("native Node conversation routes", () => {
       url: `/api/sessions/session-page/messages?cwd=${encodeURIComponent(cwd)}&before=${encodeURIComponent(cursor)}&limit=2`,
     });
     expect(second.statusCode).toBe(200);
-    expect(second.json()).toMatchObject({ messages: [{ id: entryIds.m1 }], has_more: false, next_cursor: null });
+    expect(second.json()).toMatchObject({
+      messages: [{ id: entryIds.m1 }],
+      has_more: false,
+      next_cursor: null,
+    });
 
     expect(index.statusCode).toBe(200);
     expect(index.json()).toMatchObject({
@@ -432,40 +1033,89 @@ describe("native Node conversation routes", () => {
       snapshot_version: expect.any(String),
     });
 
-    expect((await server.inject({ method: "GET", url: `/api/sessions/session-page/messages?cwd=${encodeURIComponent(cwd)}&limit=0` })).statusCode).toBe(400);
-    expect((await server.inject({ method: "GET", url: `/api/sessions/session-page/messages?cwd=${encodeURIComponent(cwd)}&before=not-a-cursor` })).statusCode).toBe(400);
+    expect(
+      (
+        await server.inject({
+          method: "GET",
+          url: `/api/sessions/session-page/messages?cwd=${encodeURIComponent(cwd)}&limit=0`,
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await server.inject({
+          method: "GET",
+          url: `/api/sessions/session-page/messages?cwd=${encodeURIComponent(cwd)}&before=not-a-cursor`,
+        })
+      ).statusCode,
+    ).toBe(400);
     await server.close();
   });
 
   it("forwards persisted trajectory metadata in history messages", async () => {
     const cwd = await workspaceWithSessions("session-metadata");
-    await writeFile(join(cwd, ".pi-science", "sessions", "session-metadata.jsonl"), [
-      JSON.stringify({ type: "session", version: 3, id: "session-metadata", cwd, timestamp: "2026-09-14T00:00:00.000Z" }),
-      JSON.stringify({
-        type: "message", id: "a1", parentId: null, timestamp: "2026-09-14T00:00:00.000Z",
-        message: {
-          role: "assistant", content: [{ type: "text", text: "done" }], details: { rows: 3 },
-          presentationRole: "final", turnId: "turn-1", runId: "run-1", itemId: "item-1",
-          revision: 2, sequence: 7, classificationSource: "explicit",
-        },
-      }),
-    ].join("\n") + "\n", "utf8");
+    await writeFile(
+      join(cwd, ".pi-science", "sessions", "session-metadata.jsonl"),
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-metadata",
+          cwd,
+          timestamp: "2026-09-14T00:00:00.000Z",
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "a1",
+          parentId: null,
+          timestamp: "2026-09-14T00:00:00.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "done" }],
+            details: { rows: 3 },
+            presentationRole: "final",
+            turnId: "turn-1",
+            runId: "run-1",
+            itemId: "item-1",
+            revision: 2,
+            sequence: 7,
+            classificationSource: "explicit",
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
     const server = app();
-    const response = await server.inject({ method: "GET", url: `/api/sessions/session-metadata/messages?cwd=${encodeURIComponent(cwd)}` });
+    const response = await server.inject({
+      method: "GET",
+      url: `/api/sessions/session-metadata/messages?cwd=${encodeURIComponent(cwd)}`,
+    });
     expect(response.statusCode).toBe(200);
     expect(response.json().messages[0]).toMatchObject({
-      details: { rows: 3 }, presentationRole: "final", turnId: "turn-1", runId: "run-1",
-      itemId: "item-1", revision: 2, sequence: 7, classificationSource: "explicit",
+      details: { rows: 3 },
+      presentationRole: "final",
+      turnId: "turn-1",
+      runId: "run-1",
+      itemId: "item-1",
+      revision: 2,
+      sequence: 7,
+      classificationSource: "explicit",
     });
     await server.close();
   });
 
   it("paginates the session index without losing rows when timestamps tie", async () => {
-    const ids = Array.from({ length: 35 }, (_, index) => `session-${String(index).padStart(2, "0")}`);
+    const ids = Array.from(
+      { length: 35 },
+      (_, index) => `session-${String(index).padStart(2, "0")}`,
+    );
     const cwd = await workspaceWithSessions(...ids);
     const server = app();
 
-    const first = await server.inject({ method: "GET", url: `/api/sessions?cwd=${encodeURIComponent(cwd)}&limit=20` });
+    const first = await server.inject({
+      method: "GET",
+      url: `/api/sessions?cwd=${encodeURIComponent(cwd)}&limit=20`,
+    });
     expect(first.statusCode).toBe(200);
     expect(first.json()).toMatchObject({ has_more: true, next_cursor: expect.any(String) });
     expect(first.json().sessions).toHaveLength(20);
@@ -477,72 +1127,164 @@ describe("native Node conversation routes", () => {
     expect(second.statusCode).toBe(200);
     expect(second.json()).toMatchObject({ has_more: false, next_cursor: null });
     expect(second.json().sessions).toHaveLength(15);
-    expect(new Set([...first.json().sessions, ...second.json().sessions].map((session: { id: string }) => session.id)).size).toBe(35);
-    expect((await server.inject({ method: "GET", url: `/api/sessions?cwd=${encodeURIComponent(cwd)}&limit=0` })).statusCode).toBe(400);
-    expect((await server.inject({ method: "GET", url: `/api/sessions?cwd=${encodeURIComponent(cwd)}&cursor=broken` })).statusCode).toBe(400);
+    expect(
+      new Set(
+        [...first.json().sessions, ...second.json().sessions].map(
+          (session: { id: string }) => session.id,
+        ),
+      ).size,
+    ).toBe(35);
+    expect(
+      (
+        await server.inject({
+          method: "GET",
+          url: `/api/sessions?cwd=${encodeURIComponent(cwd)}&limit=0`,
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await server.inject({
+          method: "GET",
+          url: `/api/sessions?cwd=${encodeURIComponent(cwd)}&cursor=broken`,
+        })
+      ).statusCode,
+    ).toBe(400);
     await server.close();
   });
 
   it("enforces busy status and owns fork, interaction, commands, model, export, and exact delete routes", async () => {
     const cwd = await workspaceWithSessions("session-a", "session-b");
-    vi.spyOn(nodeSessionService, "configure").mockResolvedValue({ success: true, model: "openrouter/openai/gpt-5.1" });
-    vi.spyOn(nodeSessionService, "command").mockImplementation(async (_id, _cwd, type) => type === "compact" ? { success: false, code: "busy" } : type === "get_commands" ? { success: true, data: { commands: [{ name: "review", source: "skill" }] } } : { success: true });
+    vi.spyOn(nodeSessionService, "configure").mockResolvedValue({
+      success: true,
+      model: "openrouter/openai/gpt-5.1",
+    });
+    vi.spyOn(nodeSessionService, "command").mockImplementation(async (_id, _cwd, type) =>
+      type === "compact"
+        ? { success: false, code: "busy" }
+        : type === "get_commands"
+          ? { success: true, data: { commands: [{ name: "review", source: "skill" }] } }
+          : { success: true },
+    );
     vi.spyOn(nodeSessionService, "notify").mockResolvedValue({ success: true });
     vi.spyOn(nodeSessionService, "fork").mockResolvedValue({ success: true, sessionId: "forked" });
     const server = app();
     const query = `cwd=${encodeURIComponent(cwd)}`;
 
-    expect((await server.inject({ method: "GET", url: `/api/sessions/session-a/state?${query}` })).statusCode).toBe(200);
-    const model = await server.inject({ method: "POST", url: `/api/sessions/session-a/model?${query}`, payload: { model: "openrouter/openai/gpt-5.1", thinking: "high" } });
+    expect(
+      (await server.inject({ method: "GET", url: `/api/sessions/session-a/state?${query}` }))
+        .statusCode,
+    ).toBe(200);
+    const model = await server.inject({
+      method: "POST",
+      url: `/api/sessions/session-a/model?${query}`,
+      payload: { model: "openrouter/openai/gpt-5.1", thinking: "high" },
+    });
     expect(model.statusCode).toBe(200);
     expect(model.json()).toMatchObject({ ok: true, model: "openrouter/openai/gpt-5.1" });
 
-    const commands = await server.inject({ method: "GET", url: `/api/sessions/session-a/commands?${query}` });
+    const commands = await server.inject({
+      method: "GET",
+      url: `/api/sessions/session-a/commands?${query}`,
+    });
     expect(commands.json()).toMatchObject({ commands: [{ name: "review", source: "skill" }] });
-    const interaction = await server.inject({ method: "POST", url: `/api/sessions/session-a/interactions/question-1?${query}`, payload: { confirmed: true } });
+    const interaction = await server.inject({
+      method: "POST",
+      url: `/api/sessions/session-a/interactions/question-1?${query}`,
+      payload: { confirmed: true },
+    });
     expect(interaction.statusCode).toBe(200);
 
-    const exported = await server.inject({ method: "GET", url: `/api/sessions/session-a/export?${query}&format=html` });
+    const exported = await server.inject({
+      method: "GET",
+      url: `/api/sessions/session-a/export?${query}&format=html`,
+    });
     expect(exported.statusCode).toBe(200);
     expect(exported.headers["content-disposition"]).toContain("session-session-");
     expect(exported.body).toContain("&lt;hello session-a&gt;");
 
-    const forked = await server.inject({ method: "POST", url: `/api/sessions/session-a/fork?${query}`, payload: { entry_id: "entry-7" } });
+    const forked = await server.inject({
+      method: "POST",
+      url: `/api/sessions/session-a/fork?${query}`,
+      payload: { entry_id: "entry-7" },
+    });
     expect(forked.statusCode, forked.body).toBe(200);
     expect(forked.json().id).not.toBe("session-a");
 
-    const prompt = await server.inject({ method: "POST", url: `/api/sessions/${forked.json().id}/prompt?${query}`, payload: { message: "hold" } });
+    const prompt = await server.inject({
+      method: "POST",
+      url: `/api/sessions/${forked.json().id}/prompt?${query}`,
+      payload: { message: "hold" },
+    });
     expect(prompt.statusCode).toBe(200);
-    const compact = await server.inject({ method: "POST", url: `/api/sessions/${forked.json().id}/compact?${query}` });
+    const compact = await server.inject({
+      method: "POST",
+      url: `/api/sessions/${forked.json().id}/compact?${query}`,
+    });
     expect(compact.statusCode).toBe(409);
     expect(compact.json()).toMatchObject({ code: "busy" });
-    const createWhileBusy = await server.inject({ method: "POST", url: "/api/sessions", payload: { cwd } });
-    expect(createWhileBusy.statusCode).toBe(200);
+    const createWhileBusy = await server.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { cwd },
+    });
+    expect(createWhileBusy.statusCode).toBe(201);
     expect(createWhileBusy.json().id).toEqual(expect.any(String));
-    await server.inject({ method: "POST", url: `/api/sessions/${forked.json().id}/abort?${query}` });
+    await server.inject({
+      method: "POST",
+      url: `/api/sessions/${forked.json().id}/abort?${query}`,
+    });
 
-    const deleted = await server.inject({ method: "DELETE", url: `/api/sessions/session-b?${query}` });
+    const deleted = await server.inject({
+      method: "DELETE",
+      url: `/api/sessions/session-b?${query}`,
+    });
     expect(deleted.statusCode).toBe(200);
     // Migration retains the original; deletion hides the imported session durably.
     expect((await sessionRepository.list(cwd)).some((row) => row.id === "session-b")).toBe(false);
-    await expect(readFile(join(cwd, ".pi-science", "sessions", "session-a.jsonl"), "utf8")).resolves.toContain('"id":"session-a"');
+    await expect(
+      readFile(join(cwd, ".pi-science", "sessions", "session-a.jsonl"), "utf8"),
+    ).resolves.toContain('"id":"session-a"');
     // Deleting a session that never existed is idempotent success (ghost).
-    const ghost = await server.inject({ method: "DELETE", url: `/api/sessions/ghost-no-such?${query}` });
+    const ghost = await server.inject({
+      method: "DELETE",
+      url: `/api/sessions/ghost-no-such?${query}`,
+    });
     expect(ghost.statusCode).toBe(200);
     expect(ghost.json()).toMatchObject({ ok: true });
 
-    expect(nodeSessionService.configure).toHaveBeenCalledWith("session-a", cwd, "openrouter/openai/gpt-5.1", "high");
-    expect(nodeSessionService.notify).toHaveBeenCalledWith("session-a", cwd, "extension_ui_response", { id: "question-1", confirmed: true });
+    expect(nodeSessionService.configure).toHaveBeenCalledWith(
+      "session-a",
+      cwd,
+      "openrouter/openai/gpt-5.1",
+      "high",
+    );
+    expect(nodeSessionService.notify).toHaveBeenCalledWith(
+      "session-a",
+      cwd,
+      "extension_ui_response",
+      { id: "question-1", confirmed: true },
+    );
     expect(nodeSessionService.fork).toHaveBeenCalledWith("session-a", cwd, "entry-7");
     await server.close();
   }, 20_000);
 
   it("returns runtime command errors and cancellations instead of disguising them as an empty command list", async () => {
-    for (const [mode, statusCode, code] of [["commands-error", 502, "commands_failed"], ["commands-cancelled", 409, "cancelled"]] as const) {
-      vi.spyOn(nodeSessionService, "command").mockResolvedValue(mode === "commands-error" ? { success: false, code: "commands_failed", error: "unavailable" } : { success: false, code: "cancelled", error: "cancelled" });
+    for (const [mode, statusCode, code] of [
+      ["commands-error", 502, "commands_failed"],
+      ["commands-cancelled", 409, "cancelled"],
+    ] as const) {
+      vi.spyOn(nodeSessionService, "command").mockResolvedValue(
+        mode === "commands-error"
+          ? { success: false, code: "commands_failed", error: "unavailable" }
+          : { success: false, code: "cancelled", error: "cancelled" },
+      );
       const cwd = await workspaceWithSessions(`session-${mode}`);
       const server = app();
-      const response = await server.inject({ method: "GET", url: `/api/sessions/session-${mode}/commands?cwd=${encodeURIComponent(cwd)}` });
+      const response = await server.inject({
+        method: "GET",
+        url: `/api/sessions/session-${mode}/commands?cwd=${encodeURIComponent(cwd)}`,
+      });
       expect(response.statusCode).toBe(statusCode);
       expect(response.json()).toMatchObject({ ok: false, code });
       await server.close();
@@ -594,7 +1336,11 @@ describe("native Node conversation routes", () => {
       payload: { title: "新标题" },
     });
     const updated = await server.inject({ method: "GET", url: `/api/sessions?${query}` });
-    expect((updated.json() as Array<{ id: string; name: string | null }>).find((s) => s.id === "session-a")?.name).toBe("新标题");
+    expect(
+      (updated.json() as Array<{ id: string; name: string | null }>).find(
+        (s) => s.id === "session-a",
+      )?.name,
+    ).toBe("新标题");
     await server.close();
   });
 
@@ -603,17 +1349,33 @@ describe("native Node conversation routes", () => {
     const server = app();
     const query = `cwd=${encodeURIComponent(cwd)}`;
 
-    const empty = await server.inject({ method: "PUT", url: `/api/sessions/session-a/title?${query}`, payload: { title: "   " } });
+    const empty = await server.inject({
+      method: "PUT",
+      url: `/api/sessions/session-a/title?${query}`,
+      payload: { title: "   " },
+    });
     expect(empty.statusCode).toBe(400);
     expect(empty.json()).toMatchObject({ code: "invalid_request" });
 
-    const tooLong = await server.inject({ method: "PUT", url: `/api/sessions/session-a/title?${query}`, payload: { title: "x".repeat(101) } });
+    const tooLong = await server.inject({
+      method: "PUT",
+      url: `/api/sessions/session-a/title?${query}`,
+      payload: { title: "x".repeat(101) },
+    });
     expect(tooLong.statusCode).toBe(400);
 
-    const missing = await server.inject({ method: "PUT", url: `/api/sessions/ghost-no-such/title?${query}`, payload: { title: "ok" } });
+    const missing = await server.inject({
+      method: "PUT",
+      url: `/api/sessions/ghost-no-such/title?${query}`,
+      payload: { title: "ok" },
+    });
     expect(missing.statusCode).toBe(404);
 
-    const badWorkspace = await server.inject({ method: "PUT", url: `/api/sessions/session-a/title?cwd=${encodeURIComponent("/no/such/workspace")}`, payload: { title: "ok" } });
+    const badWorkspace = await server.inject({
+      method: "PUT",
+      url: `/api/sessions/session-a/title?cwd=${encodeURIComponent("/no/such/workspace")}`,
+      payload: { title: "ok" },
+    });
     expect(badWorkspace.statusCode).toBe(403);
     await server.close();
   });
@@ -622,9 +1384,16 @@ describe("native Node conversation routes", () => {
     const cwd = await workspaceWithSessions("session-a");
     const server = app();
     const query = `cwd=${encodeURIComponent(cwd)}`;
-    await server.inject({ method: "PUT", url: `/api/sessions/session-a/title?${query}`, payload: { title: "gone soon" } });
+    await server.inject({
+      method: "PUT",
+      url: `/api/sessions/session-a/title?${query}`,
+      payload: { title: "gone soon" },
+    });
 
-    const deleted = await server.inject({ method: "DELETE", url: `/api/sessions/session-a?${query}` });
+    const deleted = await server.inject({
+      method: "DELETE",
+      url: `/api/sessions/session-a?${query}`,
+    });
     expect(deleted.statusCode).toBe(200);
 
     const list = await server.inject({ method: "GET", url: `/api/sessions?${query}` });
@@ -633,9 +1402,40 @@ describe("native Node conversation routes", () => {
 
     // The title file no longer references the deleted session.
     const { readFile } = await import("node:fs/promises");
-    const raw = await readFile(join(cwd, ".pi-science", "session-titles.jsonl"), "utf8").catch(() => "");
+    const raw = await readFile(join(cwd, ".pi-science", "session-titles.jsonl"), "utf8").catch(
+      () => "",
+    );
     expect(raw.includes("gone soon")).toBe(false);
     await server.close();
   });
 });
 
+it("requires a submission ID on the new prompt endpoint and shares deduplication with the compatibility endpoint", async () => {
+  const cwd = await workspaceWithSessions("prompt-v2");
+  const command = vi.fn(async () => ({ success: true }));
+  const server = Fastify();
+  registerNodeSessionRoutes(
+    server,
+    { command, liveSessions: () => [] } as unknown as NodeSessionService,
+    sessionRepository,
+  );
+  const url = `/api/sessions/prompt-v2/prompts?cwd=${encodeURIComponent(cwd)}`;
+  try {
+    expect(
+      (await server.inject({ method: "POST", url, payload: { message: "hello" } })).statusCode,
+    ).toBe(400);
+    expect(command).not.toHaveBeenCalled();
+    const payload = { message: "hello", client_message_id: "8fd824aa-51d3-4f63-839c-09e021b7970b" };
+    expect((await server.inject({ method: "POST", url, payload })).statusCode).toBe(202);
+    const compatible = await server.inject({
+      method: "POST",
+      url: url.replace("/prompts?", "/prompt?"),
+      payload,
+    });
+    expect(compatible.statusCode).toBe(202);
+    expect(compatible.headers.deprecation).toBe("true");
+    expect(command).toHaveBeenCalledTimes(1);
+  } finally {
+    await server.close();
+  }
+});

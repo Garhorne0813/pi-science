@@ -153,9 +153,11 @@ test("sidebar tabs preserve session lifecycle and collapsed New stays blank", as
   const trigger = page.getByRole("button", { name: "Manage conversation: Markdown rendering demo" });
   await trigger.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("menuitem", { name: "Fork conversation" })).toBeFocused();
-  await page.keyboard.press("ArrowDown");
-  await expect(page.getByRole("menuitem", { name: "Delete conversation" })).toBeFocused();
+  await expect(page.getByRole("menuitem", { name: "Rename conversation" })).toBeFocused();
+  for (const name of ["Regenerate title with AI", "Fork conversation", "Delete conversation"]) {
+    await page.keyboard.press("ArrowDown");
+    await expect(page.getByRole("menuitem", { name })).toBeFocused();
+  }
   await page.keyboard.press("Escape");
   await expect(trigger).toBeFocused();
   await page.getByRole("searchbox").fill("Data");

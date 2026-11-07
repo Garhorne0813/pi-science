@@ -3,11 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SqliteStateStore } from "../storage/sqlite/state-store.js";
-import {
-  type MemoryContext,
-  type MemoryRecord,
-  type MemorySettings,
-} from "./schema.js";
+import { type MemoryContext, type MemoryRecord, type MemorySettings } from "./schema.js";
 const user: MemoryContext = {
   ownerId: "alice",
   projectId: "project-a",
@@ -18,16 +14,9 @@ const agent = { ...user, actor: "agent" as const };
 let stores: SqliteStateStore[] = [];
 let root: string;
 let store: SqliteStateStore;
-const call = (
-  action: string,
-  input: Record<string, unknown> = {},
-  context = user,
-) => store.memory<any>({ action, input, context });
-const content = (
-  body = "用户偏好中文回答",
-  kind = "preference",
-  scope = "project",
-) => ({
+const call = (action: string, input: Record<string, unknown> = {}, context = user) =>
+  store.memory<any>({ action, input, context });
+const content = (body = "用户偏好中文回答", kind = "preference", scope = "project") => ({
   scope,
   kind,
   title: "Language preference",
@@ -42,8 +31,7 @@ async function settings(update: (s: MemorySettings) => void) {
   return call("settings.update", { expectedRevision: revision, settings: s });
 }
 async function write(body?: string, kind?: string, ctx: MemoryContext = agent) {
-  return (await call("write", { content: content(body, kind) }, ctx))
-    .record as MemoryRecord;
+  return (await call("write", { content: content(body, kind) }, ctx)).record as MemoryRecord;
 }
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "memory-test-"));
@@ -77,9 +65,9 @@ describe("unified worker transactions", () => {
         input: { id: r.id },
       }),
     ).toMatchObject({ record: { body: r.body, contentHash: r.contentHash } });
-    expect(
-      await restored.memory({ action: "settings", context: user, input: {} }),
-    ).toMatchObject({ review: { mode: "all_manual" } });
+    expect(await restored.memory({ action: "settings", context: user, input: {} })).toMatchObject({
+      review: { mode: "all_manual" },
+    });
   });
   it("defaults features off, enables only validated low-risk smart writes and never self-approves science", async () => {
     const fresh = new SqliteStateStore({ path: ":memory:" });
@@ -113,7 +101,7 @@ describe("unified worker transactions", () => {
         },
         agent,
       ),
-    ).rejects.toMatchObject({ statusCode: 403 });
+    ).rejects.toMatchObject({ kind: "forbidden" });
   });
   it("all_manual queues agent writes while direct user editing low-risk facts remains immediate", async () => {
     await settings((s) => {
@@ -125,17 +113,14 @@ describe("unified worker transactions", () => {
     expect((await write(undefined, undefined, user)).status).toBe("active");
   });
   it("binds approval to content hash and revision, preserving old scientific versions until CAS approval", async () => {
-    const r = await write(
-      "Observed model performance depends on the dataset",
-      "finding",
-    );
+    const r = await write("Observed model performance depends on the dataset", "finding");
     await expect(
       call("approve", {
         id: r.id,
         expectedRevision: r.revision,
         contentHash: "bad",
       }),
-    ).rejects.toMatchObject({ statusCode: 409 });
+    ).rejects.toMatchObject({ kind: "conflict" });
     const approved = (
       await call("approve", {
         id: r.id,
@@ -173,7 +158,7 @@ describe("unified worker transactions", () => {
         expectedRevision: proposal.expectedRevision,
         contentHash: proposal.contentHash,
       }),
-    ).rejects.toMatchObject({ statusCode: 409 });
+    ).rejects.toMatchObject({ kind: "conflict" });
     expect((await call("history", { id: r.id })).revisions).toHaveLength(2);
   });
   it("rejecting proposed edits preserves current record; concurrent proposals cannot overwrite the winner", async () => {
@@ -194,9 +179,7 @@ describe("unified worker transactions", () => {
       expectedRevision: p.expectedRevision,
       contentHash: p.contentHash,
     });
-    expect((await call("read", { id: r.id })).record.contentHash).toBe(
-      r.contentHash,
-    );
+    expect((await call("read", { id: r.id })).record.contentHash).toBe(r.contentHash);
     const a = (await call("write", input, agent)).proposal;
     const b = (await call("write", input, agent)).proposal;
     await call("approve", {
@@ -210,7 +193,7 @@ describe("unified worker transactions", () => {
         expectedRevision: b.expectedRevision,
         contentHash: b.contentHash,
       }),
-    ).rejects.toMatchObject({ statusCode: 409 });
+    ).rejects.toMatchObject({ kind: "conflict" });
   });
   it("enforces scope, category, Chinese recall, approval filters and hard-delete cleanup", async () => {
     const r = await write();
@@ -224,11 +207,7 @@ describe("unified worker transactions", () => {
       agent,
     );
     const profile = (
-      await call(
-        "write",
-        { content: content("用户偏好深色界面", "preference", "profile") },
-        agent,
-      )
+      await call("write", { content: content("用户偏好深色界面", "preference", "profile") }, agent)
     ).record;
     const frame = (
       await call(
@@ -243,36 +222,26 @@ describe("unified worker transactions", () => {
       )
     ).record;
     expect(
-      new Set(
-        (await call("recall", { q: "中文" })).records.map(
-          (r: MemoryRecord) => r.id,
-        ),
-      ),
+      new Set((await call("recall", { q: "中文" })).records.map((r: MemoryRecord) => r.id)),
     ).toEqual(new Set([r.id, profile.id]));
     const other = { ...agent, projectId: "project-b" };
-    expect(
-      (await call("list", {}, other)).records.map((r: MemoryRecord) => r.id),
-    ).toEqual([profile.id]);
+    expect((await call("list", {}, other)).records.map((r: MemoryRecord) => r.id)).toEqual([
+      profile.id,
+    ]);
     await expect(call("read", { id: r.id }, other)).rejects.toMatchObject({
-      statusCode: 404,
+      kind: "not_found",
     });
     await call("frame.delete", { sessionId: "session-a" });
     await expect(call("read", { id: frame.id })).rejects.toMatchObject({
-      statusCode: 404,
+      kind: "not_found",
     });
     await call("delete", {
       id: r.id,
       expectedRevision: r.revision,
       contentHash: r.contentHash,
     });
-    expect(
-      await store.all("SELECT * FROM memory_revisions WHERE record_id=?", [
-        r.id,
-      ]),
-    ).toEqual([]);
-    expect(
-      await store.all("SELECT * FROM memory_fts WHERE record_id=?", [r.id]),
-    ).toEqual([]);
+    expect(await store.all("SELECT * FROM memory_revisions WHERE record_id=?", [r.id])).toEqual([]);
+    expect(await store.all("SELECT * FROM memory_fts WHERE record_id=?", [r.id])).toEqual([]);
   });
   it("serializes competing writers across separate SQLite workers and survives restart", async () => {
     const r = await write();
@@ -303,7 +272,7 @@ describe("unified worker transactions", () => {
     expect(await call("write", input, agent)).toEqual(a);
     await expect(
       call("write", { ...input, content: content("用户偏好英文") }, agent),
-    ).rejects.toMatchObject({ statusCode: 409 });
+    ).rejects.toMatchObject({ kind: "conflict" });
     expect((await call("list")).records).toHaveLength(1);
   });
   it("re-evaluates review mode at background commit; cursor and writes are atomic; cancellation blocks late results", async () => {
@@ -356,7 +325,7 @@ describe("unified worker transactions", () => {
         tokens: 0,
         costUsd: 0,
       }),
-    ).rejects.toMatchObject({ statusCode: 409 });
+    ).rejects.toMatchObject({ kind: "conflict" });
     expect(await call("cursor", { sessionId: "session-a" })).toBe(3);
   });
   it("forged sources roll back both new facts and extraction cursor", async () => {
@@ -380,7 +349,7 @@ describe("unified worker transactions", () => {
         tokens: 1,
         costUsd: 0,
       }),
-    ).rejects.toMatchObject({ statusCode: 400 });
+    ).rejects.toMatchObject({ kind: "invalid_input" });
     expect(await call("cursor", { sessionId: "session-a" })).toBe(0);
     expect((await call("list")).records).toEqual([]);
   });
@@ -439,15 +408,9 @@ it("deduplicates extraction and sends conflicting preferences to review without 
     record: { id: original.id },
     duplicate: true,
   });
-  const changed = await call(
-    "write",
-    { content: content("用户偏好英文回答") },
-    extractor,
-  );
+  const changed = await call("write", { content: content("用户偏好英文回答") }, extractor);
   expect(changed.proposal.status).toBe("pending");
-  expect((await call("read", { id: original.id })).record.body).toBe(
-    original.body,
-  );
+  expect((await call("read", { id: original.id })).record.body).toBe(original.body);
 });
 
 it("browses all authorized matches beyond legacy caps before sorting and paging", async () => {
@@ -458,10 +421,7 @@ it("browses all authorized matches beyond legacy caps before sorting and paging"
   const inserted: MemoryRecord[] = [];
   for (let n = 0; n < 230; n++) {
     const c = {
-      ...content(
-        "User prefers concise reply formatting",
-        n % 3 === 0 ? "workflow" : "preference",
-      ),
+      ...content("User prefers concise reply formatting", n % 3 === 0 ? "workflow" : "preference"),
       title: "Reply style",
       ...(n % 2 === 0 ? { categoryId: category.id } : {}),
     };
@@ -520,18 +480,11 @@ it("browses all authorized matches beyond legacy caps before sorting and paging"
     pageSize: 100,
   };
   const expected = inserted
-    .filter(
-      (r) =>
-        r.kind === "preference" &&
-        r.status === "active" &&
-        r.categoryId === category.id,
-    )
+    .filter((r) => r.kind === "preference" && r.status === "active" && r.categoryId === category.id)
     .reverse();
   const filtered = await call("browse", filters);
   expect(filtered.total).toBe(expected.length);
-  expect(filtered.records.map((r: MemoryRecord) => r.id)).toEqual(
-    expected.map((r) => r.id),
-  );
+  expect(filtered.records.map((r: MemoryRecord) => r.id)).toEqual(expected.map((r) => r.id));
   expect(await call("browse", { q: "NoSuchMemory" })).toMatchObject({
     records: [],
     total: 0,

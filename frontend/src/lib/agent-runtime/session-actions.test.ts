@@ -16,7 +16,7 @@ describe("runtime session actions", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/sessions" && init?.method === "POST") return pending;
-      if (url.includes("/prompt?") && init?.method === "POST") {
+      if (url.includes("/prompts?") && init?.method === "POST") {
         const body = JSON.parse(String(init.body));
         return jsonResponse({ ok: true, status: "persisted", client_message_id: body.client_message_id, durable_message_id: "first-message" }, 202);
       }
@@ -541,7 +541,7 @@ describe("runtime session actions", () => {
     const sentIds: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("/prompt?") && init?.method === "POST") {
+      if (url.includes("/prompts?") && init?.method === "POST") {
         const body = JSON.parse(String(init.body)) as { client_message_id: string };
         sentIds.push(body.client_message_id);
         return jsonResponse({ ok: true, status: "persisted", client_message_id: body.client_message_id, durable_message_id: `durable-${sentIds.length}` }, 202);
@@ -570,7 +570,7 @@ describe("runtime session actions", () => {
         const id = url.split("/prompt-requests/")[1]!.split("?")[0]!;
         return jsonResponse({ ok: true, status: "rejected", client_message_id: id, error_code: "runtime_busy" });
       }
-      if (url.includes("/prompt?") && init?.method === "POST") {
+      if (url.includes("/prompts?") && init?.method === "POST") {
         const body = JSON.parse(String(init.body)) as { client_message_id: string };
         sentIds.push(body.client_message_id);
         if (sentIds.length === 1) return jsonResponse({ ok: false, status: "rejected", client_message_id: body.client_message_id, code: "runtime_busy" }, 409);

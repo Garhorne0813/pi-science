@@ -4,6 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { FilePreviewInspector } from "./FilePreviewInspector";
 import { FeedbackContext } from "../feedback/feedback-context";
 import type { FilePreviewInspector as FilePreviewInspectorT } from "../../types/thread";
@@ -114,6 +115,22 @@ describe("FilePreviewInspector edit capability", () => {
     fireEvent.keyDown(preview, { key: "a", metaKey: true });
 
     expect(window.getSelection()?.toString()).toBe("line1\nline2\n");
+  });
+
+  it("numbers a body citation in a written document so the preview reads like the answer", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(["settings", "config", "proj"], { citation_inline_style: "number" });
+    const data = { kind: "file", path: "reports/draft.md", filename: "draft.md", root: "workspace", content: "该研究报告了这一结果 [10.1000/alpha](https://doi.org/10.1000/alpha)。" } as unknown as FilePreviewInspectorT;
+    render(
+      <QueryClientProvider client={client}>
+        <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
+          <FilePreviewInspector data={data} onClose={() => {}} cwd="proj" />
+        </FeedbackContext.Provider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findAllByText("[1]")).toHaveLength(1);
+    expect(screen.queryByText("10.1000/alpha")).toBeNull();
   });
 
   it("limits select-all to the rendered markdown preview", async () => {

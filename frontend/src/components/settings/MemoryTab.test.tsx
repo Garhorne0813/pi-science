@@ -5,7 +5,6 @@ import {
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { settingsSchema } from "@pi-science/contracts";
@@ -50,7 +49,7 @@ beforeEach(() => {
     }),
   );
 });
-afterEach(() => {
+afterEach(() => { sessionStorage.clear();
   cleanup();
   vi.unstubAllGlobals();
 });
@@ -99,6 +98,7 @@ it("shows settings conflicts instead of a saved notice", async () => {
     name: "Review mode: Smart review (recommended)",
   });
   conflict = true;
+  fireEvent.click(screen.getByRole("checkbox", { name: "Allow automatic recall" }));
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await screen.findByRole("alert");
   expect(screen.getByRole("alert")).toHaveTextContent(
@@ -107,7 +107,7 @@ it("shows settings conflicts instead of a saved notice", async () => {
   expect(screen.queryByText("Saved")).not.toBeInTheDocument();
 });
 it("is available in application Settings with global scope even when opened inside a project", async () => {
-  const { container } = mount(
+  mount(
     <SettingsContent scope="project" initialTab="memory" />,
   );
   await screen.findByRole("button", {
@@ -118,7 +118,7 @@ it("is available in application Settings with global scope even when opened insi
     "true",
   );
   expect(
-    within(container.querySelector("aside")!).getByText("Global settings"),
+    screen.getByText("Global settings"),
   ).toBeInTheDocument();
   expect(
     screen.queryByLabelText("Allow recall in this project"),

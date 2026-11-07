@@ -54,7 +54,9 @@ describe("native model Settings", () => {
     setup();
     expect(await screen.findByText(/Environment: LAB_KEY/)).toBeInTheDocument();
     expect(screen.getByText(/Worker reload does not reload OS variables/)).toBeInTheDocument();
+    expect(screen.queryByText(i18n.t("settings.native.capabilitySource"))).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Lab" }));
+    expect(screen.getByText(i18n.t("settings.native.capabilitySource"))).toBeInTheDocument();
     expect(await screen.findByRole("columnheader", { name: "Model" })).toBeInTheDocument();
     expect(screen.getByRole("cell", { name: "8K" })).toBeInTheDocument();
     expect(screen.queryByText(/Inference not verified/)).not.toBeInTheDocument();

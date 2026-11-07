@@ -37,6 +37,9 @@ vi.mock("../../lib/workspace", async (importOriginal) => {
       })),
       refreshDirectory: vi.fn(),
       remove: vi.fn(async () => undefined),
+      mkdir: vi.fn(async () => undefined),
+      createFile: vi.fn(async () => undefined),
+      rename: vi.fn(async () => undefined),
       formatSize: actual.workspaceFiles.formatSize,
     },
   };
@@ -50,7 +53,7 @@ vi.mock("../../components/feedback/feedback-context", () => {
   return { useFeedback: () => ({ toast, confirm }) };
 });
 
-let files: ReturnType<typeof vi.mocked> & { sidebar: ReturnType<typeof vi.fn>; directory: ReturnType<typeof vi.fn>; invalidate: ReturnType<typeof vi.fn> };
+let files: ReturnType<typeof vi.mocked> & { sidebar: ReturnType<typeof vi.fn>; directory: ReturnType<typeof vi.fn>; invalidate: ReturnType<typeof vi.fn>; mkdir: ReturnType<typeof vi.fn>; createFile: ReturnType<typeof vi.fn>; rename: ReturnType<typeof vi.fn> };
 
 beforeAll(async () => {
   await i18n.changeLanguage("en");
@@ -302,6 +305,100 @@ describe("FileBrowser", () => {
   });
 });
 
+describe("FileBrowser inline create and rename", () => {
+  const entry = (path: string, isDir = false): FileListEntry => ({ path, name: path.split("/").at(-1)!, isDir, size: 0, modified: 1 });
+  const useTree = (root: FileListEntry[], children: Record<string, FileListEntry[]> = {}) => {
+    files.sidebar.mockReset().mockResolvedValue(root);
+    files.directory.mockReset().mockImplementation(async (_cwd: string, subdir: string) => ({ entries: children[subdir] ?? [], breadcrumbs: [] }));
+  };
+  const openMenu = (row: HTMLElement) => fireEvent.contextMenu(row, { clientX: 20, clientY: 30 });
+  const menuLabels = () => screen.getAllByRole("menuitem").map((item) => item.textContent);
+
+  it("lists New file and New folder first in the row menu for file and folder rows", async () => {
+    useTree([entry("work", true), entry("notes.md")], { work: [] });
+    render(<FileBrowser cwd="/workspaces/proj" embedded />);
+    for (const name of ["work", "notes.md"]) {
+      const row = await screen.findByRole("button", { name });
+      openMenu(row);
+      await screen.findByRole("menu");
+      expect(menuLabels().slice(0, 2)).toEqual(["New file", "New folder"]);
+      fireEvent.keyDown(document, { key: "Escape" });
+      await vi.waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    }
+  });
+
+  it("creates a folder inside the folder row the menu was opened on", async () => {
+    useTree([entry("work", true)], { work: [] });
+    render(<FileBrowser cwd="/workspaces/proj" embedded />);
+    openMenu(await screen.findByRole("button", { name: "work" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "New folder" }));
+    const input = await screen.findByRole("textbox", { name: "Folder name" });
+    fireEvent.change(input, { target: { value: "sub" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await vi.waitFor(() => expect(files.mkdir).toHaveBeenCalledWith("/workspaces/proj", "work/sub", { exclusive: true }));
+  });
+
+  it("creates a file beside the file row the menu was opened on", async () => {
+    useTree([entry("work", true)], { work: [entry("work/data.csv")] });
+    render(<FileBrowser cwd="/workspaces/proj" embedded />);
+    openMenu(await screen.findByRole("button", { name: "data.csv" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "New file" }));
+    const input = await screen.findByRole("textbox", { name: "File name" });
+    fireEvent.change(input, { target: { value: "x.csv" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await vi.waitFor(() => expect(files.createFile).toHaveBeenCalledWith("/workspaces/proj", "work/x.csv"));
+  });
+
+  it("renames the row in place with the current name prefilled", async () => {
+    useTree([entry("data.csv")]);
+    render(<FileBrowser cwd="/workspaces/proj" embedded />);
+    openMenu(await screen.findByRole("button", { name: "data.csv" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Rename" }));
+    const input = await screen.findByRole("textbox", { name: "Rename" });
+    expect(input).toHaveValue("data.csv");
+    fireEvent.change(input, { target: { value: "renamed.csv" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await vi.waitFor(() => expect(files.rename).toHaveBeenCalledWith("/workspaces/proj", "data.csv", "renamed.csv"));
+  });
+
+  it("keeps a single name input when a nested create replaces an open one", async () => {
+    useTree([entry("work", true)], { work: [] });
+    render(<FileBrowser cwd="/workspaces/proj" embedded />);
+    fireEvent.click(screen.getByRole("button", { name: "New folder" }));
+    expect(await screen.findAllByRole("textbox")).toHaveLength(1);
+    openMenu(await screen.findByRole("button", { name: "work" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "New folder" }));
+    await vi.waitFor(() => expect(screen.getAllByRole("textbox")).toHaveLength(1));
+  });
+
+  it("keeps the typed name and shows the inline conflict on a duplicate", async () => {
+    useTree([entry("work", true)], { work: [] });
+    files.createFile.mockRejectedValueOnce(new ApiError("File already exists", 409));
+    render(<FileBrowser cwd="/workspaces/proj" embedded />);
+    await screen.findByRole("button", { name: "work" });
+    fireEvent.click(screen.getByRole("button", { name: "New file" }));
+    const input = await screen.findByRole("textbox", { name: "File name" });
+    fireEvent.change(input, { target: { value: "dup.csv" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await vi.waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("A file or folder with that name already exists"));
+    expect(screen.getByRole("textbox", { name: "File name" })).toHaveValue("dup.csv");
+    expect(useFeedback().toast).not.toHaveBeenCalled();
+  });
+
+  it("submits exactly once when Enter is followed by blur", async () => {
+    useTree([entry("work", true)], { work: [] });
+    render(<FileBrowser cwd="/workspaces/proj" embedded />);
+    await screen.findByRole("button", { name: "work" });
+    fireEvent.click(screen.getByRole("button", { name: "New file" }));
+    const input = await screen.findByRole("textbox", { name: "File name" });
+    fireEvent.change(input, { target: { value: "one.csv" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.blur(input);
+    await vi.waitFor(() => expect(useFeedback().toast).toHaveBeenCalledWith("File \"one.csv\" created", "success"));
+    expect(files.createFile).toHaveBeenCalledTimes(1);
+  });
+});
+
 
 describe("FileBrowser external file uploads", () => {
   const entry = (path: string, isDir = false): FileListEntry => ({
@@ -386,14 +483,14 @@ describe("FileBrowser external file uploads", () => {
     fireEvent.drop(zone, { dataTransfer: transfer(["z-upload.csv"]) });
     await screen.findByRole("button", { name: "z-upload.csv" });
     expect(new URL(String(request.mock.calls[0][0]), "http://localhost").searchParams.get("path")).toBe("z-upload.csv");
-    expect(screen.getAllByRole("button")).toHaveLength(31); // 30 entries and refresh
+    expect(screen.getAllByRole("button")).toHaveLength(33); // 30 entries, new-file, new-folder, refresh
     expect(zone).not.toHaveClass("ring-accent/60");
     vi.useFakeTimers();
     view.rerender(<FileBrowser cwd="proj" embedded active={false} />);
     view.rerender(<FileBrowser cwd="proj" embedded />);
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     expect(files.sidebar).toHaveBeenLastCalledWith("proj", undefined, ["z-upload.csv"]);
-    expect(screen.getAllByRole("button")).toHaveLength(31);
+    expect(screen.getAllByRole("button")).toHaveLength(33); //
     expect(screen.getByRole("button", { name: "z-upload.csv" })).toBeInTheDocument();
     view.rerender(<FileBrowser cwd="other" embedded />);
     await act(async () => {});
@@ -419,7 +516,7 @@ describe("FileBrowser external file uploads", () => {
     fireEvent.drop(rootZone(), { dataTransfer: transfer(names) });
     await vi.waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(`Uploaded: ${count}; failed/skipped: 0.`));
     const assertRoot = () => {
-      expect(screen.getAllByRole("button")).toHaveLength(31); // 3 folders, 27 uploads, refresh
+      expect(screen.getAllByRole("button")).toHaveLength(33); // 3 folders, 27 uploads, new-file, new-folder, refresh
       for (const name of ["work", "data", "reports"]) expect(screen.getByRole("button", { name })).toBeInTheDocument();
       expect(work).toHaveAttribute("aria-expanded", "true");
       expect(screen.getByRole("button", { name: names.at(-1)! })).toBeInTheDocument();

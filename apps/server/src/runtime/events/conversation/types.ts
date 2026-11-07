@@ -11,7 +11,12 @@ export type Subscriber = {
 
 export type EventStore = {
   append(cwd: string, sessionId: string, event: SseEventRecord): Promise<void>;
-  appendConditional?: (cwd: string, sessionId: string, event: SseEventRecord, guard: EventPublishGuard) => Promise<boolean>;
+  appendConditional?: (
+    cwd: string,
+    sessionId: string,
+    event: SseEventRecord,
+    guard: EventPublishGuard,
+  ) => Promise<boolean>;
   readAfter(cwd: string, sessionId: string, lastEventId?: string | null): Promise<SseEventRecord[]>;
   nextSequence?: (cwd: string, sessionId: string) => Promise<number>;
 };
@@ -28,9 +33,15 @@ export type ConversationEventHubOptions = {
 
 export type BindingOptions = {
   activeSessionId: () => string | null;
+  /** Worker startup cost measured by the runtime client, for the startup log line. */
+  startupMs?: number;
   onBusy: (busy: boolean) => void;
   onExit: () => void;
-  observe?: (event: ProductInput, sessionId: string, identity: { turnId: string; turnOrdinal: number } | undefined) => Promise<void> | void;
+  observe?: (
+    event: ProductInput,
+    sessionId: string,
+    identity: { turnId: string; turnOrdinal: number } | undefined,
+  ) => Promise<void> | void;
 };
 
 export type TurnState = {

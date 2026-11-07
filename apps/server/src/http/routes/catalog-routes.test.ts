@@ -1,5 +1,15 @@
 import { resolve } from "node:path";
-import { mkdtemp, mkdir, opendir, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  opendir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,11 +27,15 @@ describe("catalog route platform defaults", () => {
   it("probes the Windows Python command without relying on cached host status", () => {
     expect(catalogToolCommands({}, "win32")[0]).toEqual(["python", "python"]);
     expect(catalogToolCommands({}, "linux")[0]).toEqual(["python", "python3"]);
-    expect(catalogToolCommands({ PYTHON: "py-custom" }, "win32")[0]).toEqual(["python", "py-custom"]);
+    expect(catalogToolCommands({ PYTHON: "py-custom" }, "win32")[0]).toEqual([
+      "python",
+      "py-custom",
+    ]);
   });
 });
 
 const originalHome = process.env.PI_SCIENCE_HOME;
+const originalWorkspaces = process.env.PI_SCIENCE_WORKSPACES;
 let home: string;
 const cleanups: string[] = [];
 
@@ -37,12 +51,18 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   if (originalHome === undefined) delete process.env.PI_SCIENCE_HOME;
   else process.env.PI_SCIENCE_HOME = originalHome;
-  await Promise.all(cleanups.splice(0).map((path) => rm(path, {
-    recursive: true,
-    force: true,
-    maxRetries: 5,
-    retryDelay: 100,
-  })));
+  if (originalWorkspaces === undefined) delete process.env.PI_SCIENCE_WORKSPACES;
+  else process.env.PI_SCIENCE_WORKSPACES = originalWorkspaces;
+  await Promise.all(
+    cleanups.splice(0).map((path) =>
+      rm(path, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      }),
+    ),
+  );
 }, 30_000);
 
 async function workspaceWithMcp(servers: Record<string, unknown>): Promise<string> {
@@ -69,7 +89,10 @@ describe("MCP health and egress routes", () => {
     const cwd = await workspaceWithMcp({ "stdio-tool": { command: "no-such-binary-xyz" } });
     const app = Fastify();
     registerCatalogRoutes(app);
-    const response = await app.inject({ method: "GET", url: `/api/mcp/health/stdio-tool?cwd=${encodeURIComponent(cwd)}` });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/mcp/health/stdio-tool?cwd=${encodeURIComponent(cwd)}`,
+    });
     expect(response.statusCode).toBe(200);
     const body = response.json() as Record<string, unknown>;
     expect(body.health).toBe("error");
@@ -82,7 +105,10 @@ describe("MCP health and egress routes", () => {
     const cwd = await workspaceWithMcp({ "http-api": { url: "http://127.0.0.1:9999/" } });
     const app = Fastify();
     registerCatalogRoutes(app);
-    const response = await app.inject({ method: "GET", url: `/api/mcp/health/http-api?cwd=${encodeURIComponent(cwd)}` });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/mcp/health/http-api?cwd=${encodeURIComponent(cwd)}`,
+    });
     const body = response.json() as Record<string, unknown>;
     expect(body.health).toBe("error");
     expect(String(body.error)).toContain("private or reserved");
@@ -94,7 +120,10 @@ describe("MCP health and egress routes", () => {
     await writeFile(join(home, "config.json"), JSON.stringify({ mcp_servers: [] }), "utf8");
     const app = Fastify();
     registerCatalogRoutes(app);
-    const response = await app.inject({ method: "GET", url: `/api/mcp/health/stdio-tool?cwd=${encodeURIComponent(cwd)}` });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/mcp/health/stdio-tool?cwd=${encodeURIComponent(cwd)}`,
+    });
     const body = response.json() as Record<string, unknown>;
     expect(body.health).toBe("blocked");
     expect(body.error).toBe("server disabled");
@@ -105,7 +134,10 @@ describe("MCP health and egress routes", () => {
     const cwd = await workspaceWithMcp({});
     const app = Fastify();
     registerCatalogRoutes(app);
-    const response = await app.inject({ method: "GET", url: `/api/mcp/health/nope?cwd=${encodeURIComponent(cwd)}` });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/mcp/health/nope?cwd=${encodeURIComponent(cwd)}`,
+    });
     expect(response.statusCode).toBe(404);
     await app.close();
   });
@@ -113,7 +145,10 @@ describe("MCP health and egress routes", () => {
     const cwd = await workspaceWithMcp({ "http-api": { url: "https://eutils.ncbi.nlm.nih.gov/" } });
     const app = Fastify();
     registerCatalogRoutes(app);
-    const response = await app.inject({ method: "GET", url: `/api/mcp/egress/http-api?cwd=${encodeURIComponent(cwd)}` });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/mcp/egress/http-api?cwd=${encodeURIComponent(cwd)}`,
+    });
     const body = response.json() as Record<string, unknown>;
     expect(body.audit_enabled).toBe(true);
     expect(body.warning).toContain("Review the destination");
@@ -129,9 +164,14 @@ describe("MCP health and egress routes", () => {
     const cwd = await workspaceWithMcp({ "stdio-tool": { command: "node" } });
     const app = Fastify();
     registerCatalogRoutes(app);
-    const response = await app.inject({ method: "GET", url: `/api/mcp/egress/stdio-tool?cwd=${encodeURIComponent(cwd)}` });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/mcp/egress/stdio-tool?cwd=${encodeURIComponent(cwd)}`,
+    });
     expect((response.json() as Record<string, unknown>).audit_enabled).toBe(true);
-    await expect(readFile(join(home, "egress-audit.jsonl"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(home, "egress-audit.jsonl"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     await app.close();
   });
 });
@@ -141,7 +181,10 @@ describe("skill readiness route", () => {
     const cwd = await workspaceWithSkill([{ name: "no-such-binary-xyz", kind: "command" }]);
     const app = Fastify();
     registerCatalogRoutes(app);
-    const response = await app.inject({ method: "GET", url: `/api/skills/probe-skill/readiness?cwd=${encodeURIComponent(cwd)}` });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/skills/probe-skill/readiness?cwd=${encodeURIComponent(cwd)}`,
+    });
     expect(response.statusCode).toBe(200);
     const body = response.json() as Record<string, unknown>;
     expect(body.ready).toBe(false);
@@ -156,21 +199,33 @@ describe("skill readiness route", () => {
     const cwd = await workspaceWithSkill([{ name: "node", kind: "command" }]);
     const app = Fastify();
     registerCatalogRoutes(app);
-    const response = await app.inject({ method: "GET", url: `/api/skills/probe-skill/readiness?cwd=${encodeURIComponent(cwd)}` });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/skills/probe-skill/readiness?cwd=${encodeURIComponent(cwd)}`,
+    });
     const body = response.json() as Record<string, unknown>;
     expect(body.ready).toBe(true);
-    expect((body.requirements as Array<Record<string, unknown>>)[0]).toMatchObject({ status: "ready" });
+    expect((body.requirements as Array<Record<string, unknown>>)[0]).toMatchObject({
+      status: "ready",
+    });
     await app.close();
   });
 
   it("does not block on missing optional requirements", async () => {
-    const cwd = await workspaceWithSkill([{ name: "no-such-binary-xyz", kind: "command", optional: true }]);
+    const cwd = await workspaceWithSkill([
+      { name: "no-such-binary-xyz", kind: "command", optional: true },
+    ]);
     const app = Fastify();
     registerCatalogRoutes(app);
-    const response = await app.inject({ method: "GET", url: `/api/skills/probe-skill/readiness?cwd=${encodeURIComponent(cwd)}` });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/skills/probe-skill/readiness?cwd=${encodeURIComponent(cwd)}`,
+    });
     const body = response.json() as Record<string, unknown>;
     expect(body.ready).toBe(true);
-    expect((body.requirements as Array<Record<string, unknown>>)[0]).toMatchObject({ status: "missing-optional" });
+    expect((body.requirements as Array<Record<string, unknown>>)[0]).toMatchObject({
+      status: "missing-optional",
+    });
     await app.close();
   });
 
@@ -178,7 +233,10 @@ describe("skill readiness route", () => {
     const cwd = await workspaceWithSkill([]);
     const app = Fastify();
     registerCatalogRoutes(app);
-    const response = await app.inject({ method: "GET", url: `/api/skills/no-such-skill/readiness?cwd=${encodeURIComponent(cwd)}` });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/skills/no-such-skill/readiness?cwd=${encodeURIComponent(cwd)}`,
+    });
     expect(response.statusCode).toBe(404);
     await app.close();
   });
@@ -190,35 +248,57 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 describe("workspace activity", () => {
-  it.each([false, true])("keeps the whole project list available when a background scan encounters EIO (reverse registration: %s)", async (reverseRegistration) => {
-    const app = Fastify();
-    const warn = vi.spyOn(app.log, "warn");
-    registerCatalogRoutes(app);
-    const paths = [join(home, "broken-workspace"), join(home, "healthy-workspace")];
-    for (const path of paths) {
-      await mkdir(path);
-      await ensureProject(path);
-      // Node rounds Stats.mtime, while new Date(mtimeMs) truncates fractional ms.
-      await utimes(path, 1000.1239, 1000.1239);
-    }
-    await writeFile(join(home, "registered-workspaces.json"), JSON.stringify(reverseRegistration ? [...paths].reverse() : paths));
-    const error = Object.assign(new Error("Disk unavailable"), { code: "EIO" });
-    const openDirectory = vi.mocked(opendir).getMockImplementation()!;
-    // Workspace preparation is concurrent; inject by identity, not call order.
-    vi.mocked(opendir).mockImplementation((path, options) => String(path) === paths[0]
-      ? Promise.reject(error)
-      : openDirectory(path, options));
-    try {
-      const response = await app.inject({ method: "GET", url: "/api/workspaces" });
-      expect(response.statusCode).toBe(200);
-      expect(response.json()).toHaveLength(2);
-      await vi.waitFor(() => expect(warn).toHaveBeenCalledWith({ err: error, workspace: paths[0] }, expect.any(String)));
-      const refreshed = await app.inject({ method: "GET", url: "/api/workspaces" });
-      expect(refreshed.statusCode).toBe(200);
-      expect(refreshed.json()).toHaveLength(2);
-      expect(refreshed.json()).toEqual(expect.arrayContaining([expect.objectContaining({ path: paths[0], last_activity_at: (await stat(paths[0]!)).mtime.toISOString() })]));
-    } finally { vi.mocked(opendir).mockRestore(); warn.mockRestore(); await app.close(); }
-  });
+  it.each([false, true])(
+    "keeps the whole project list available when a background scan encounters EIO (reverse registration: %s)",
+    async (reverseRegistration) => {
+      const app = Fastify();
+      const warn = vi.spyOn(app.log, "warn");
+      registerCatalogRoutes(app);
+      const paths = [join(home, "broken-workspace"), join(home, "healthy-workspace")];
+      for (const path of paths) {
+        await mkdir(path);
+        await ensureProject(path);
+        // Node rounds Stats.mtime, while new Date(mtimeMs) truncates fractional ms.
+        await utimes(path, 1000.1239, 1000.1239);
+      }
+      await writeFile(
+        join(home, "registered-workspaces.json"),
+        JSON.stringify(reverseRegistration ? [...paths].reverse() : paths),
+      );
+      const error = Object.assign(new Error("Disk unavailable"), { code: "EIO" });
+      const openDirectory = vi.mocked(opendir).getMockImplementation()!;
+      // Workspace preparation is concurrent; inject by identity, not call order.
+      vi.mocked(opendir).mockImplementation((path, options) =>
+        String(path) === paths[0] ? Promise.reject(error) : openDirectory(path, options),
+      );
+      try {
+        const response = await app.inject({ method: "GET", url: "/api/workspaces" });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toHaveLength(2);
+        await vi.waitFor(() =>
+          expect(warn).toHaveBeenCalledWith(
+            { err: error, workspace: paths[0] },
+            expect.any(String),
+          ),
+        );
+        const refreshed = await app.inject({ method: "GET", url: "/api/workspaces" });
+        expect(refreshed.statusCode).toBe(200);
+        expect(refreshed.json()).toHaveLength(2);
+        expect(refreshed.json()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              path: paths[0],
+              last_activity_at: (await stat(paths[0]!)).mtime.toISOString(),
+            }),
+          ]),
+        );
+      } finally {
+        vi.mocked(opendir).mockRestore();
+        warn.mockRestore();
+        await app.close();
+      }
+    },
+  );
   it("includes nested file activity and relocated session activity without changing last_modified", async () => {
     const app = Fastify();
     registerCatalogRoutes(app);
@@ -247,14 +327,39 @@ describe("workspace activity", () => {
     try {
       const response = await app.inject({ method: "GET", url: "/api/workspaces" });
       expect(response.statusCode).toBe(200);
-      expect(response.json()).toEqual([expect.objectContaining({ last_modified: rootTime, last_activity_at: rootTime })]);
+      expect(response.json()).toEqual([
+        expect.objectContaining({ last_modified: rootTime, last_activity_at: rootTime }),
+      ]);
       await vi.waitFor(async () => {
         const refreshed = await app.inject({ method: "GET", url: "/api/workspaces" });
-        expect(refreshed.json()).toEqual([expect.objectContaining({ last_modified: rootTime, last_activity_at: recent.toISOString() })]);
+        expect(refreshed.json()).toEqual([
+          expect.objectContaining({
+            last_modified: rootTime,
+            last_activity_at: recent.toISOString(),
+          }),
+        ]);
       });
-      sessions.mockResolvedValue([{ id: "s1", cwd, project_id: null, name: null, created_at: old.toISOString(), updated_at: "2026-09-20T00:00:00Z" }]);
+      sessions.mockResolvedValue([
+        {
+          id: "s1",
+          cwd,
+          project_id: null,
+          name: null,
+          created_at: old.toISOString(),
+          updated_at: "2026-09-20T00:00:00Z",
+        },
+      ]);
       const updated = await app.inject({ method: "GET", url: "/api/workspaces" });
-      expect(updated.json()).toEqual([expect.objectContaining({ last_modified: rootTime, last_activity_at: "2026-09-20T00:00:00.000Z", session_count: 1 })]);
-    } finally { sessions.mockRestore(); await app.close(); }
+      expect(updated.json()).toEqual([
+        expect.objectContaining({
+          last_modified: rootTime,
+          last_activity_at: "2026-09-20T00:00:00.000Z",
+          session_count: 1,
+        }),
+      ]);
+    } finally {
+      sessions.mockRestore();
+      await app.close();
+    }
   });
 });

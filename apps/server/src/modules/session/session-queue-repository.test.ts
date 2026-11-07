@@ -34,30 +34,52 @@ describe("SessionQueueRepository", () => {
     const replay = await queue.enqueue(cwd, sessionId, { id: first, text: "first" });
     const snapshot = await queue.read(cwd, sessionId);
     expect(created).toMatchObject({ ok: true, created: true });
-    expect(replay).toMatchObject({ ok: true, created: false, entry: { id: first, status: "queued" } });
-    expect(snapshot.entries.map((entry) => [entry.id, entry.text, entry.status])).toEqual([[first, "first", "queued"], [second, "second", "queued"]]);
+    expect(replay).toMatchObject({
+      ok: true,
+      created: false,
+      entry: { id: first, status: "queued" },
+    });
+    expect(snapshot.entries.map((entry) => [entry.id, entry.text, entry.status])).toEqual([
+      [first, "first", "queued"],
+      [second, "second", "queued"],
+    ]);
   });
 
   it("rejects a reused request id with different content", async () => {
     const queue = new SessionQueueRepository();
     await queue.enqueue(cwd, sessionId, { id: first, text: "first" });
-    expect(await queue.enqueue(cwd, sessionId, { id: first, text: "changed" })).toEqual({ ok: false, code: "conflict" });
+    expect(await queue.enqueue(cwd, sessionId, { id: first, text: "changed" })).toEqual({
+      ok: false,
+      code: "conflict",
+    });
   });
 
   it("edits a queued entry and refuses one that already left the queue", async () => {
     const queue = new SessionQueueRepository();
     await queue.enqueue(cwd, sessionId, { id: first, text: "first" });
-    expect(await queue.edit(cwd, sessionId, first, "edited")).toMatchObject({ ok: true, entry: { text: "edited", status: "queued" } });
+    expect(await queue.edit(cwd, sessionId, first, "edited")).toMatchObject({
+      ok: true,
+      entry: { text: "edited", status: "queued" },
+    });
     await queue.claimNext(cwd, sessionId);
-    expect(await queue.edit(cwd, sessionId, first, "too late")).toEqual({ ok: false, code: "not_editable" });
+    expect(await queue.edit(cwd, sessionId, first, "too late")).toEqual({
+      ok: false,
+      code: "not_editable",
+    });
   });
 
   it("cancels queued entries and never pretends a dispatched entry can be retracted", async () => {
     const queue = new SessionQueueRepository();
     await queue.enqueue(cwd, sessionId, { id: first, text: "first" });
     await queue.enqueue(cwd, sessionId, { id: second, text: "second" });
-    expect(await queue.cancel(cwd, sessionId, first)).toMatchObject({ ok: true, entry: { status: "cancelled" } });
-    expect(await queue.cancel(cwd, sessionId, first)).toMatchObject({ ok: true, entry: { status: "cancelled" } });
+    expect(await queue.cancel(cwd, sessionId, first)).toMatchObject({
+      ok: true,
+      entry: { status: "cancelled" },
+    });
+    expect(await queue.cancel(cwd, sessionId, first)).toMatchObject({
+      ok: true,
+      entry: { status: "cancelled" },
+    });
     const claimed = await queue.claimNext(cwd, sessionId);
     expect(claimed?.id).toBe(second);
     expect(await queue.cancel(cwd, sessionId, second)).toEqual({ ok: false, code: "not_editable" });
@@ -68,9 +90,15 @@ describe("SessionQueueRepository", () => {
     await queue.enqueue(cwd, sessionId, { id: first, text: "first" });
     const claimed = await queue.claimNext(cwd, sessionId);
     expect(claimed).toMatchObject({ id: first, status: "dispatching" });
-    await queue.settle(cwd, sessionId, first, { status: "dispatched", delivered_message_id: "message-1" });
+    await queue.settle(cwd, sessionId, first, {
+      status: "dispatched",
+      delivered_message_id: "message-1",
+    });
     const reopened = await new SessionQueueRepository().read(cwd, sessionId);
-    expect(reopened.entries[0]).toMatchObject({ status: "dispatched", delivered_message_id: "message-1" });
+    expect(reopened.entries[0]).toMatchObject({
+      status: "dispatched",
+      delivered_message_id: "message-1",
+    });
   });
 
   it("returns a failed entry to the head of the queue with its error kept", async () => {
@@ -85,10 +113,16 @@ describe("SessionQueueRepository", () => {
   it("stops dispatching after a stop until the user resumes", async () => {
     const queue = new SessionQueueRepository();
     await queue.enqueue(cwd, sessionId, { id: first, text: "first" });
-    expect(await queue.pauseAfterStop(cwd, sessionId)).toMatchObject({ paused: true, paused_reason: "stop" });
+    expect(await queue.pauseAfterStop(cwd, sessionId)).toMatchObject({
+      paused: true,
+      paused_reason: "stop",
+    });
     expect(await queue.claimNext(cwd, sessionId)).toBeNull();
     expect(await queue.resume(cwd, sessionId)).toMatchObject({ paused: false });
-    expect(await queue.claimNext(cwd, sessionId)).toMatchObject({ id: first, status: "dispatching" });
+    expect(await queue.claimNext(cwd, sessionId)).toMatchObject({
+      id: first,
+      status: "dispatching",
+    });
   });
 
   it("leaves the queue running when a stop happens with nothing queued", async () => {
@@ -103,7 +137,11 @@ describe("SessionQueueRepository", () => {
     const queue = new SessionQueueRepository();
     await queue.enqueue(cwd, sessionId, { id: first, text: "for a" });
     await queue.enqueue(cwd, otherSessionId, { id: second, text: "for b" });
-    expect((await queue.read(cwd, sessionId)).entries.map((entry) => entry.text)).toEqual(["for a"]);
-    expect((await queue.read(cwd, otherSessionId)).entries.map((entry) => entry.text)).toEqual(["for b"]);
+    expect((await queue.read(cwd, sessionId)).entries.map((entry) => entry.text)).toEqual([
+      "for a",
+    ]);
+    expect((await queue.read(cwd, otherSessionId)).entries.map((entry) => entry.text)).toEqual([
+      "for b",
+    ]);
   });
 });

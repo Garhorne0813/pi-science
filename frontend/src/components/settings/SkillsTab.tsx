@@ -257,7 +257,7 @@ export function SkillsTab({ workspaceCwd }: { workspaceCwd: string | null }) {
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {configured && (
-            <button type="button" onClick={() => void reset()} disabled={saving !== null} className="flex min-h-9 items-center gap-1.5 rounded-input border border-border px-3 text-ui-caption text-muted hover:bg-surface-2 hover:text-text disabled:opacity-50">
+            <button type="button" onClick={() => void reset()} disabled={saving !== null} className="flex min-h-10 items-center gap-1.5 rounded-input border border-border px-3 text-ui-caption text-muted hover:bg-surface-2 hover:text-text disabled:opacity-50">
               {saving === "reset" ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
               {t("skills.resetDiscovery")}
             </button>
@@ -265,7 +265,7 @@ export function SkillsTab({ workspaceCwd }: { workspaceCwd: string | null }) {
           {workspaceCwd && (
             <DropdownMenu.Root>
               <DropdownMenu.Trigger asChild>
-                <button type="button" disabled={saving !== null} className="flex min-h-9 items-center gap-1.5 rounded-input bg-accent px-3 text-ui-caption text-white hover:opacity-90 disabled:opacity-50">
+                <button type="button" disabled={saving !== null} className="flex min-h-10 items-center gap-1.5 rounded-input bg-accent px-3 text-ui-caption text-white hover:opacity-90 disabled:opacity-50">
                   <Plus size={12} />
                   {t("skills.add")}
                   <ChevronDown size={12} />
@@ -273,16 +273,16 @@ export function SkillsTab({ workspaceCwd }: { workspaceCwd: string | null }) {
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
                 <DropdownMenu.Content align="end" sideOffset={6} collisionPadding={8} className="ui-popover z-[110] min-w-[15rem] rounded-card p-1.5 text-ui-label text-text outline-none">
-                  <DropdownMenu.Item onSelect={() => { setEditing(null); setEditorOpen(true); }} className="flex min-h-9 cursor-default select-none items-center gap-2 rounded-input px-2.5 py-2 outline-none data-[highlighted]:bg-surface-hover">
+                  <DropdownMenu.Item onSelect={() => { setEditing(null); setEditorOpen(true); }} className="flex min-h-10 cursor-default select-none items-center gap-2 rounded-input px-2.5 py-2 outline-none data-[highlighted]:bg-surface-hover">
                     {t("skills.writeFromScratch")}
                   </DropdownMenu.Item>
-                  <DropdownMenu.Item onSelect={() => setUploadOpen(true)} className="flex min-h-9 cursor-default select-none items-center gap-2 rounded-input px-2.5 py-2 outline-none data-[highlighted]:bg-surface-hover">
+                  <DropdownMenu.Item onSelect={() => setUploadOpen(true)} className="flex min-h-10 cursor-default select-none items-center gap-2 rounded-input px-2.5 py-2 outline-none data-[highlighted]:bg-surface-hover">
                     {t("skills.uploadSkill")}
                   </DropdownMenu.Item>
-                  <DropdownMenu.Item onSelect={() => setGithubOpen(true)} className="flex min-h-9 cursor-default select-none items-center gap-2 rounded-input px-2.5 py-2 outline-none data-[highlighted]:bg-surface-hover">
+                  <DropdownMenu.Item onSelect={() => setGithubOpen(true)} className="flex min-h-10 cursor-default select-none items-center gap-2 rounded-input px-2.5 py-2 outline-none data-[highlighted]:bg-surface-hover">
                     {t("skills.githubImport")}
                   </DropdownMenu.Item>
-                  <DropdownMenu.Item onSelect={() => setChatOpen(true)} className="flex min-h-9 cursor-default select-none items-center gap-2 rounded-input px-2.5 py-2 outline-none data-[highlighted]:bg-surface-hover">
+                  <DropdownMenu.Item onSelect={() => setChatOpen(true)} className="flex min-h-10 cursor-default select-none items-center gap-2 rounded-input px-2.5 py-2 outline-none data-[highlighted]:bg-surface-hover">
                     {t("skills.chatWithClaude")}
                   </DropdownMenu.Item>
                 </DropdownMenu.Content>
@@ -323,8 +323,8 @@ export function SkillsTab({ workspaceCwd }: { workspaceCwd: string | null }) {
             <h2 className="text-ui-title font-medium text-text">{t("skills.deleteTitle", { name: deleteConfirm.name })}</h2>
             <p className="mt-2 text-ui-body text-muted">{t("skills.deleteMessage", { name: deleteConfirm.name })}</p>
             <div className="mt-4 flex justify-end gap-2">
-              <button type="button" className="rounded-input border border-border px-3 py-1.5 text-ui-caption text-muted hover:bg-surface-2" onClick={() => setDeleteConfirm(null)}>{t("common.cancel")}</button>
-              <button type="button" onClick={() => void confirmDelete(deleteConfirm)} className="rounded-input bg-error px-3 py-1.5 text-ui-caption text-white">{t("skills.deleteConfirm")}</button>
+              <button type="button" className="min-h-10 rounded-input border border-border px-3 text-ui-caption text-muted hover:bg-surface-2" onClick={() => setDeleteConfirm(null)}>{t("common.cancel")}</button>
+              <button type="button" onClick={() => void confirmDelete(deleteConfirm)} className="min-h-10 rounded-input bg-error px-3 text-ui-caption text-white">{t("skills.deleteConfirm")}</button>
             </div>
           </div>
         </div>

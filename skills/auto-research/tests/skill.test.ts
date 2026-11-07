@@ -10,7 +10,7 @@ it("ships a validated declarative protocol with three bounded roles and no unive
   for (const path of ["agents/experimenter.md", "references/research-protocol.md", "references/experimental-research.md", "references/experiment-safety.md", "agents/researcher.md", "agents/reviewer.md", "templates/research-manifest.json", "scripts/validate-manifest.mjs"]) expect(await stat(join(root, path))).toBeTruthy();
   await expect(stat(join(root, "scripts/evaluate.py"))).rejects.toThrow();
   const protocol = await readFile(join(root, "SKILL.md"), "utf8");
-  expect(protocol).toContain("execution_budget"); expect(protocol).toContain("versioned");
+  expect(protocol).toContain("Execution limits and cancellation are managed by the host"); expect(protocol).toContain("versioned");
   const review = await readFile(join(root, "agents/reviewer.md"), "utf8");
   expect(review).toContain("PASS/PARTIAL/FAIL"); expect(review).toContain("override objective failure");
 });
@@ -45,7 +45,7 @@ it("keeps literature prerequisites independent of experimental runtime capabilit
   expect(record.metadata.required_tools).toEqual(["read", "write"]);
   expect(record.metadata.risk).toBe("medium");
   const lite = await readFile(join(root, "references/literature-research.md"), "utf8");
-  expect(lite).toContain("No execution_budget tool");
+  expect(lite).toContain("No budget tool call");
   expect(lite).toContain("conversation itself can hold the entire record");
   expect(lite).toContain("contradictions and gaps");
   expect(lite).toContain("synthetic excerpts as synthetic");

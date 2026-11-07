@@ -1,0 +1,20 @@
+[
+  "cycle: apps/server/src/runtime/sandbox/policy.ts -> apps/server/src/runtime/sandbox/profiles.ts",
+  "cycle: apps/server/src/runtime/sandbox/profiles.ts -> apps/server/src/runtime/sandbox/policy.ts",
+  "legacy-repository-location: apps/server/src/memory/repository.ts",
+  "legacy-repository-location: apps/server/src/model-resources/model-resource-repository.ts",
+  "legacy-repository-location: apps/server/src/model-resources/repositories/binding-repository.ts",
+  "legacy-repository-location: apps/server/src/model-resources/repositories/endpoint-repository.ts",
+  "legacy-repository-location: apps/server/src/model-resources/repositories/model-repository.ts",
+  "legacy-repository-location: apps/server/src/model-resources/repositories/provider-repository.ts",
+  "legacy-repository-location: apps/server/src/runtime/agent/agent-session-repository.ts",
+  "legacy-repository-location: apps/server/src/runtime/artifacts/turn-artifact-repository.ts",
+  "legacy-repository-location: apps/server/src/runtime/executions/execution-repository.ts",
+  "legacy-repository-location: apps/server/src/runtime/node/prompt-request-repository.ts",
+  "legacy-repository-location: apps/server/src/runtime/node/session-repository.ts",
+  "legacy-repository-location: apps/server/src/runtime/node/session-stats-repository.ts",
+  "legacy-repository-location: apps/server/src/storage/sqlite/repositories/environment-repository.ts",
+  "legacy-repository-location: apps/server/src/storage/sqlite/repositories/job-repository.ts",
+  "legacy-repository-location: apps/server/src/storage/sqlite/repositories/mcp-repository.ts",
+  "legacy-repository-location: apps/server/src/storage/sqlite/repositories/workspace-repository.ts"
+]

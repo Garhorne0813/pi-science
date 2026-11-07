@@ -6,6 +6,41 @@ import { collectCodeRanges, containerContinuationPrefix, markdownCodeRanges, typ
 
 export type MarkdownRenderMode = "streaming" | "final";
 
+/** Streaming frames re-parse the whole buffer, and that cost grows with it:
+ *  measurable single-frame spikes reach ~190 ms at 500 lines and ~274 ms at
+ *  1000 lines, so the main thread never catches up while a long message
+ *  streams. Past this budget the view shows the same characters as plain
+ *  monospace text and renders Markdown once the message settles (`final`
+ *  bypasses the budget entirely), so what the reader ends up with is
+ *  unchanged.
+ *
+ *  The two limits are the first of "long enough that formatting still helps"
+ *  (16 KB) and "long enough that the reader scrolls instead of reading
+ *  structure" (200 lines). Constants are exported so the behavior is testable
+ *  without hard-coding 16 * 1024 / 200 in the view. */
+export const STREAMING_PLAIN_TEXT_MAX_BYTES = 16 * 1024;
+export const STREAMING_PLAIN_TEXT_MAX_LINES = 200;
+
+/**
+ * Whether an in-flight buffer is too large to re-render as Markdown on every
+ * animation frame. Bytes are counted as UTF-8 (the cost driver for the parser),
+ * lines by `\n`. One pass, with early exits: this runs per frame.
+ */
+export function exceedsStreamingMarkdownBudget(markdown: string): boolean {
+  let bytes = 0;
+  let lines = 1;
+  for (let index = 0; index < markdown.length; index += 1) {
+    const code = markdown.charCodeAt(index);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff) { bytes += 4; index += 1; }
+    else bytes += 3;
+    if (code === 10) lines += 1;
+    if (bytes > STREAMING_PLAIN_TEXT_MAX_BYTES || lines > STREAMING_PLAIN_TEXT_MAX_LINES) return true;
+  }
+  return false;
+}
+
 export type PreparedStreamingMarkdown = {
   text: string;
   /** Code ranges of `text`, present only when stabilization changed it. */

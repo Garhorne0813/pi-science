@@ -78,8 +78,8 @@ export function CompletionMenu({ id, label, items, activeIndex, onSelect, onActi
       onMouseDown={(event) => event.preventDefault()}
       onMouseEnter={() => onActiveChange(index)}
       onClick={() => onSelect(item)}
-      // tailwind-merge does not know the custom font-size names and treats text-ui-caption
-      // as a color, dropping it when text-text/text-muted follows. Keep the size explicit.
+      // A plain template string, not `cn()`: nothing merges here, so the size and the colour
+      // both reach the DOM. (`cn()` registers the `ui-*` steps for the call sites that do merge.)
       className={`flex min-w-0 w-full items-center gap-2 rounded-input px-2 py-1.5 text-left text-ui-caption ${index === activeIndex ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2"}`}
     >
       {item.kind === "directory" && <FolderOpen size={12} className="shrink-0 text-accent" />}

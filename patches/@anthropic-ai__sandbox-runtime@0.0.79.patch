@@ -1,8 +1,15 @@
 diff --git a/dist/sandbox/macos-sandbox-utils.js b/dist/sandbox/macos-sandbox-utils.js
-index 9d5dc7e3dd0a9d80f10e8855edf4251161fa14b0..dae568044fffa06faee658d1b580a04f4307a9df 100644
+index 9d5dc7e3dd0a9d80f10e8855edf4251161fa14b0..eabc91b5b252cbf3c4bc6f22bc1deb3cddd36e86 100644
 --- a/dist/sandbox/macos-sandbox-utils.js
 +++ b/dist/sandbox/macos-sandbox-utils.js
-@@ -244,7 +244,13 @@ function lateReadDenyFilters(resolved) {
+@@ -1,5 +1,6 @@
+ import { quote } from '../utils/shell-quote.js';
+ import { spawn } from 'child_process';
++import { lstatSync, realpathSync } from 'node:fs';
+ import * as path from 'path';
+ import { logForDebugging } from '../utils/debug.js';
+ import { whichSync } from '../utils/which.js';
+@@ -244,7 +245,13 @@ function lateReadDenyFilters(resolved) {
      for (const deny of resolved.denies) {
          if (!deny.glob) {
              if (literalAllowDirs.some(a => isStrictlyUnder(deny, a))) {
@@ -17,3 +24,55 @@ index 9d5dc7e3dd0a9d80f10e8855edf4251161fa14b0..dae568044fffa06faee658d1b580a04f
              }
              continue;
          }
+@@ -535,6 +542,31 @@ function literalDenyGroupFilters(group) {
+ function generateMoveBlockingRules(entries, logTag) {
+     return renderRule('deny', ['file-write-unlink', 'file-write-create'], moveBlockingFilters(entries), logTag);
+ }
++/** The symlinked components of a concrete path, nearest the root first. Each
++ * is a vnode Seatbelt checks on its own, and a link is neither a file nor a
++ * directory, so it needs its own metadata grant. Both the spelling the caller
++ * wrote and the one its parent resolves to are emitted, because Seatbelt
++ * reports the second for a link whose earlier components are themselves links.
++ * Missing components are skipped: an allow for a path that does not exist
++ * grants nothing anyway. */
++function symlinkComponents(path) {
++    const links = [];
++    let current = '';
++    for (const part of path.split('/').filter(Boolean)) {
++        current += `/${part}`;
++        try {
++            if (lstatSync(current).isSymbolicLink()) {
++                links.push(current);
++                // Seatbelt matches a link at the path its parent resolves to, so a
++                // versioned dylib reached through a link needs both spellings.
++                const parent = current.slice(0, current.lastIndexOf('/'));
++                links.push(`${realpathSync(parent)}/${current.slice(parent.length + 1)}`);
++            }
++        }
++        catch { /* absent or unreadable component */ }
++    }
++    return links;
++}
+ /** The filters {@link generateMoveBlockingRules} emits, for normalized entries. */
+ function moveBlockingFilters(entries) {
+     const filters = new Set();
+@@ -616,6 +648,19 @@ function generateReadRules(resolved, logTag) {
+     if (resolved.denies.length > 0) {
+         rules.push(`(allow file-read-metadata`, `  (vnode-type DIRECTORY))`);
+     }
++    // A symlinked path component is not a DIRECTORY vnode either, so the rule
++    // above does not let a loader or realpath() traverse it. Allow metadata on
++    // exactly the links an allow runs through: the link exists and its target
++    // is visible, while everything beneath the target stays behind the read
++    // denies. Literal filters only — a subpath here would re-open the target.
++    const linkFilters = new Set();
++    for (const allow of resolved.allows) {
++        if (allow.glob)
++            continue;
++        for (const link of symlinkComponents(allow.path))
++            linkFilters.add(`(literal ${escapePath(link)})`);
++    }
++    rules.push(...renderRule('allow', ['file-read-metadata'], linkFilters, logTag));
+     // Block file movement to prevent bypass via mv/rename
+     rules.push(...generateMoveBlockingRules(resolved.denies, logTag));
+     // Re-allow file-write-unlink / file-write-create for paths that are explicitly

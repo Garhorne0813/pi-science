@@ -1,11 +1,10 @@
+import { ApplicationError } from "../../modules/application-error.js";
+import { applicationErrorStatus } from "../application-error.js";
+import { parseMemoryInput } from "../../modules/memory/commands.js";
 import { AgentSessionRegistry } from "../../runtime/agent/agent-session-registry.js";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
-import {
-  MemoryService,
-  verifyMemoryGrant,
-  LOCAL_OWNER,
-} from "../../memory/service.js";
+import { MemoryService, verifyMemoryGrant, LOCAL_OWNER } from "../../memory/service.js";
 import type { MemoryBackground } from "../../memory/background.js";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import { MemoryError } from "../../memory/schema.js";
@@ -21,17 +20,14 @@ export function registerMemoryRoutes(
     const q = req.query as Record<string, string>;
     if (req.url.split("?")[0]?.startsWith("/api/memory/agent/")) {
       const grant = verifyMemoryGrant(req.headers["x-memory-grant"], secret);
-      const registration = await new AgentSessionRegistry().get(
-        grant.cwd,
-        grant.sessionId,
-      );
+      const registration = await new AgentSessionRegistry().get(grant.cwd, grant.sessionId);
       if (
         registration?.parentSessionId ||
         (registration?.purpose && registration.purpose !== "conversation")
       )
-        throw new MemoryError(403, "Delegated Memory capability denied");
+        throw new MemoryError("forbidden", "Delegated Memory capability denied");
       if (!(await sessions.exists(grant.sessionId, grant.cwd)))
-        throw new MemoryError(404, "Main session not found");
+        throw new MemoryError("not_found", "Main session not found");
       return memory.context(grant.cwd, "agent", grant.sessionId);
     }
     if (req.url.split("?")[0] === "/api/memory/settings" && !q.cwd)
@@ -61,18 +57,14 @@ export function registerMemoryRoutes(
           return await handler(request, await getContext(request));
         } catch (e) {
           if (e instanceof ZodError)
-            return reply
-              .code(400)
-              .send({ error: e.issues.map((i) => i.message).join("; ") });
-          const err = e as Error & { statusCode?: number };
-          if (err.statusCode)
-            return reply.code(err.statusCode).send({ error: err.message });
+            return reply.code(400).send({ error: e.issues.map((i) => i.message).join("; ") });
+          if (e instanceof ApplicationError)
+            return reply.code(applicationErrorStatus(e)).send({ error: e.message });
           throw e;
         }
       },
     });
-  const body = (req: FastifyRequest) =>
-    (req.body ?? {}) as Record<string, unknown>;
+  const body = (req: FastifyRequest) => (req.body ?? {}) as Record<string, unknown>;
   const id = (req: FastifyRequest) => (req.params as { id: string }).id;
   route("GET", "/summary", async (_, ctx) => {
     const { total } = await memory.command(ctx.context, "browse", {
@@ -95,11 +87,7 @@ export function registerMemoryRoutes(
     memory.command(ctx.context, "write", {
       ...body(req),
       operation: "append",
-      content: await memory.validateContent(
-        ctx.cwd,
-        ctx.context,
-        body(req).content,
-      ),
+      content: await memory.validateContent(ctx.cwd, ctx.context, body(req).content),
     }),
   );
   route("PATCH", "/records/:id", async (req, ctx) =>
@@ -107,11 +95,7 @@ export function registerMemoryRoutes(
       ...body(req),
       id: id(req),
       operation: "replace",
-      content: await memory.validateContent(
-        ctx.cwd,
-        ctx.context,
-        body(req).content,
-      ),
+      content: await memory.validateContent(ctx.cwd, ctx.context, body(req).content),
     }),
   );
   route("POST", "/records/:id/archive", async (req, ctx) =>
@@ -122,7 +106,11 @@ export function registerMemoryRoutes(
     }),
   );
   route("DELETE", "/records/:id", async (req, ctx) =>
-    memory.command(ctx.context, "delete", { ...body(req), id: id(req) }),
+    memory.command(
+      ctx.context,
+      "delete",
+      parseMemoryInput("delete", { ...body(req), id: id(req) }),
+    ),
   );
   route("GET", "/records/:id/history", async (req, ctx) =>
     memory.command(ctx.context, "history", { id: id(req) }),
@@ -130,45 +118,31 @@ export function registerMemoryRoutes(
   for (const action of ["approve", "reject"] as const)
     route("POST", "/records/:id/" + action, async (req, ctx) => {
       if (action === "approve") {
-        const current = (
-          await memory.command(ctx.context, "read", { id: id(req) })
-        ).record;
-        await memory.validateContent(
-          ctx.cwd,
-          ctx.context,
-          pickContent(current),
-          {requirePinnedMemory:true},
-        );
+        const current = (await memory.command(ctx.context, "read", { id: id(req) })).record;
+        await memory.validateContent(ctx.cwd, ctx.context, pickContent(current), {
+          requirePinnedMemory: true,
+        });
       }
       return memory.command(ctx.context, action, { ...body(req), id: id(req) });
     });
-  route("GET", "/reviews", async (_, ctx) =>
-    memory.command(ctx.context, "reviews"),
-  );
+  route("GET", "/reviews", async (_, ctx) => memory.command(ctx.context, "reviews"));
   route("GET", "/dream/proposals", async (_, ctx) => ({
     proposals: (await memory.command(ctx.context, "reviews")).proposals,
   }));
   for (const action of ["accept", "reject"] as const)
     route("POST", "/dream/proposals/:id/" + action, async (req, ctx) => {
       if (action === "accept") {
-        const proposals = (await memory.command(ctx.context, "reviews"))
-          .proposals;
-        const proposal = proposals.find(
-          (p: { id: string }) => p.id === id(req),
-        );
-        if (!proposal) throw new MemoryError(404, "Proposal not found");
-        await memory.validateContent(
-          ctx.cwd,
-          ctx.context,
-          pickContent(proposal.candidate),
-          {requirePinnedMemory:true},
-        );
+        const proposals = (await memory.command(ctx.context, "reviews")).proposals;
+        const proposal = proposals.find((p: { id: string }) => p.id === id(req));
+        if (!proposal) throw new MemoryError("not_found", "Proposal not found");
+        await memory.validateContent(ctx.cwd, ctx.context, pickContent(proposal.candidate), {
+          requirePinnedMemory: true,
+        });
       }
-      return memory.command(
-        ctx.context,
-        action === "accept" ? "approve" : "reject",
-        { ...body(req), proposalId: id(req) },
-      );
+      return memory.command(ctx.context, action === "accept" ? "approve" : "reject", {
+        ...body(req),
+        proposalId: id(req),
+      });
     });
   route("GET", "/settings", async (_, ctx) => {
     if (ctx.cwd) await memory.command(ctx.context, "touch", { cwd: ctx.cwd });
@@ -176,23 +150,27 @@ export function registerMemoryRoutes(
   });
   route("PATCH", "/settings", async (req, ctx) => {
     if (ctx.cwd) await memory.command(ctx.context, "touch", { cwd: ctx.cwd });
-    return memory.command(ctx.context, "settings.update", body(req));
+    return memory.command(
+      ctx.context,
+      "settings.update",
+      parseMemoryInput("settings.update", body(req)),
+    );
   });
   route("GET", "/project-settings", async (_, ctx) =>
     memory.command(ctx.context, "project.settings"),
   );
   route("PATCH", "/project-settings", async (req, ctx) =>
-    memory.command(ctx.context, "project.settings.update", body(req)),
+    memory.command(
+      ctx.context,
+      "project.settings.update",
+      parseMemoryInput("project.settings.update", body(req)),
+    ),
   );
-  route("GET", "/categories", async (_, ctx) =>
-    memory.command(ctx.context, "categories"),
-  );
+  route("GET", "/categories", async (_, ctx) => memory.command(ctx.context, "categories"));
   route("POST", "/categories", async (req, ctx) =>
-    memory.command(ctx.context, "category.write", body(req)),
+    memory.command(ctx.context, "category.write", parseMemoryInput("category.write", body(req))),
   );
-  route("GET", "/background-runs", async (_, ctx) =>
-    memory.command(ctx.context, "runs"),
-  );
+  route("GET", "/background-runs", async (_, ctx) => memory.command(ctx.context, "runs"));
   route("POST", "/dream/run", async (req, ctx) => {
     const b = body(req);
     return background.enqueue(ctx.context, ctx.cwd, "dream", {
@@ -214,21 +192,22 @@ export function registerMemoryRoutes(
   route("POST", "/background-runs/:id/retry", async (req, ctx) =>
     background.retry(ctx.context, ctx.cwd, id(req)),
   );
-  route("GET", "/export", async (_, ctx) =>
-    memory.command(ctx.context, "export"),
-  );
+  route("GET", "/export", async (_, ctx) => memory.command(ctx.context, "export"));
   route("POST", "/agent/search", async (req, ctx) =>
     memory.command(ctx.context, "agent.search", body(req)),
   );
   route("POST", "/agent/read", async (req, ctx) =>
-    memory.command(ctx.context, "read", body(req)),
+    memory.command(ctx.context, "read", parseMemoryInput("read", body(req))),
   );
   route("POST", "/agent/recall", async (req, ctx) =>
     memory.recall(ctx.cwd, ctx.context, body(req)),
   );
   route("POST", "/agent/write", async (req, ctx) => {
     if (!(await memory.command(ctx.context, "settings")).enabled)
-      throw new MemoryError(409, "Memory is disabled. Enable Settings → Memory before saving memories.");
+      throw new MemoryError(
+        "conflict",
+        "Memory is disabled. Enable Settings → Memory before saving memories.",
+      );
     const b = body(req);
     if (b.operation !== "remove")
       b.content = await memory.validateContent(ctx.cwd, ctx.context, b.content);

@@ -1,3 +1,4 @@
+import { ApplicationError, type ApplicationErrorKind } from "../modules/application-error.js";
 import type { MemoryContent } from "@pi-science/contracts";
 export {
   sourceSchema,
@@ -11,13 +12,9 @@ export type {
   MemoryRecord,
   MemorySettings,
 } from "@pi-science/contracts";
-export class MemoryError extends Error {
-  constructor(
-    readonly statusCode: number,
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
+export class MemoryError extends ApplicationError {
+  constructor(kind: ApplicationErrorKind, message: string, options?: ErrorOptions) {
+    super(kind, `memory_${kind}`, message, undefined, options);
   }
 }
 export function tokens(text: string): string[] {
@@ -26,8 +23,7 @@ export function tokens(text: string): string[] {
   for (const match of lower.matchAll(/[\p{Script=Han}]+/gu)) {
     const chars = [...match[0]];
     words.push(...chars);
-    for (let i = 0; i < chars.length - 1; i++)
-      words.push(chars[i]! + chars[i + 1]!);
+    for (let i = 0; i < chars.length - 1; i++) words.push(chars[i]! + chars[i + 1]!);
   }
   return [...new Set(words)];
 }

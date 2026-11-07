@@ -1,3 +1,4 @@
+import { SettingsSaveMode } from "./SettingsSaveMode";
 import { useSyncExternalStore } from "react";
 import { Check, Monitor, Moon, Sun } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -29,7 +30,7 @@ export function GeneralTab() {
   const setPreviewPaneSide = useUiStore((state) => state.setPreviewPaneSide);
   return (
     <div className="space-y-6">
-      <p className="text-ui-caption leading-relaxed text-muted">{t("settings.redesign.generalDescription")}</p>
+      <SettingsSaveMode automatic />
       <section aria-labelledby="settings-appearance-title">
         <h3 id="settings-appearance-title" className="text-ui-body font-medium text-text">{t("settings.appearance.label")}</h3>
         <p className="mt-1 text-ui-caption text-muted">{t("settings.redesign.appearanceHelp")}</p>

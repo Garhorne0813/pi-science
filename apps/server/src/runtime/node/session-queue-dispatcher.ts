@@ -1,5 +1,5 @@
 import type { QueuedMessage } from "@pi-science/contracts";
-import { SessionQueueRepository } from "./session-queue-repository.js";
+import { SessionQueueRepository } from "../../modules/session/session-queue-repository.js";
 
 export interface QueueSessionFacts {
   is_streaming?: boolean;
@@ -14,15 +14,25 @@ export interface QueueSessionFailure {
 
 export interface QueueDispatchSessions {
   state(sessionId: string, cwd: string): Promise<QueueSessionFacts | QueueSessionFailure>;
-  command(sessionId: string, cwd: string, type: string, params: Record<string, unknown>): Promise<{ success: boolean; code?: string; data?: unknown }>;
+  command(
+    sessionId: string,
+    cwd: string,
+    type: string,
+    params: Record<string, unknown>,
+  ): Promise<{ success: boolean; code?: string; data?: unknown }>;
 }
 
 /** Outcomes that mean "not now" rather than "this entry is broken". The worker
  *  is still busy or a permission barrier is mid-flight, so the entry goes back
  *  to the head of the queue and the next tick tries again. */
 const RETRYABLE = new Set([
-  "busy", "session_busy", "runtime_busy", "approval_revision_conflict",
-  "permission_transition_failed", "runtime_evicted", "runtime_capacity_exceeded",
+  "busy",
+  "session_busy",
+  "runtime_busy",
+  "approval_revision_conflict",
+  "permission_transition_failed",
+  "runtime_evicted",
+  "runtime_capacity_exceeded",
   "agent_turn_capacity_exceeded",
 ]);
 
@@ -52,10 +62,13 @@ export class SessionQueueDispatcher {
   kick(cwd: string, sessionId: string, options: { immediate?: boolean } = {}): void {
     const key = `${cwd}\u0000${sessionId}`;
     if (this.timers.has(key)) return;
-    const timer = setTimeout(() => {
-      this.timers.delete(key);
-      void this.tick(cwd, sessionId);
-    }, options.immediate ? 0 : this.intervalMs);
+    const timer = setTimeout(
+      () => {
+        this.timers.delete(key);
+        void this.tick(cwd, sessionId);
+      },
+      options.immediate ? 0 : this.intervalMs,
+    );
     timer.unref?.();
     this.timers.set(key, timer);
   }
@@ -74,7 +87,9 @@ export class SessionQueueDispatcher {
       if (queue.paused) return "paused";
       if (!queue.entries.some((entry) => entry.status === "queued")) return "empty";
 
-      const state = await this.sessions.state(sessionId, cwd).catch((error: unknown) => ({ failure: String(error), code: "state_failed" }));
+      const state = await this.sessions
+        .state(sessionId, cwd)
+        .catch((error: unknown) => ({ failure: String(error), code: "state_failed" }));
       if ("failure" in state) return "unknown_session";
       if (state.is_streaming || state.is_compacting || (state.pending_message_count ?? 0) > 0) {
         this.kick(cwd, sessionId);
@@ -92,25 +107,38 @@ export class SessionQueueDispatcher {
     }
   }
 
-  private async dispatch(cwd: string, sessionId: string, entry: QueuedMessage): Promise<DispatchTick> {
+  private async dispatch(
+    cwd: string,
+    sessionId: string,
+    entry: QueuedMessage,
+  ): Promise<DispatchTick> {
     let result: { success: boolean; code?: string; data?: unknown };
     try {
       // The entry id doubles as the prompt's client message id, so the existing
       // prompt ledger recognises a retried dispatch instead of sending twice.
-      result = await this.sessions.command(sessionId, cwd, "prompt", { message: entry.text, client_message_id: entry.id });
+      result = await this.sessions.command(sessionId, cwd, "prompt", {
+        message: entry.text,
+        client_message_id: entry.id,
+      });
     } catch {
-      await this.queue.settle(cwd, sessionId, entry.id, { status: "queued", error_code: "dispatch_threw" });
+      await this.queue.settle(cwd, sessionId, entry.id, {
+        status: "queued",
+        error_code: "dispatch_threw",
+      });
       return "requeued";
     }
     if (result.success) {
       const data = result.data as { durable_message_id?: string } | undefined;
       await this.queue.settle(cwd, sessionId, entry.id, {
         status: "dispatched",
-        ...(typeof data?.durable_message_id === "string" ? { delivered_message_id: data.durable_message_id } : {}),
+        ...(typeof data?.durable_message_id === "string"
+          ? { delivered_message_id: data.durable_message_id }
+          : {}),
       });
       return "dispatched";
     }
-    const code = typeof result.code === "string" && result.code ? result.code : "runtime_command_failed";
+    const code =
+      typeof result.code === "string" && result.code ? result.code : "runtime_command_failed";
     if (RETRYABLE.has(code)) {
       await this.queue.settle(cwd, sessionId, entry.id, { status: "queued", error_code: code });
       return "requeued";

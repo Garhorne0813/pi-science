@@ -359,7 +359,7 @@ describe("MarkdownViewer images", () => {
     expect(container.querySelector("img")).toHaveAttribute("src", "https://example.com/recovered.png");
   });
 
-  it("opens a workspace-relative local link in the inspector", () => {
+  it("opens a workspace-relative local link in the inspector", async () => {
     render(
       <MarkdownViewer variant="document" resourceContext={{ cwd: CWD, documentPath: `${CWD}/reports/readme.md` }}>
         {"[data](../data/raw.csv)"}
@@ -367,9 +367,10 @@ describe("MarkdownViewer images", () => {
     );
     const link = screen.getByRole("link", { name: "data" });
     fireEvent.click(link);
-    const state = useUiStore.getState();
-    expect(state.inspectorOpen).toBe(true);
-    expect(state.inspectorData).toMatchObject({ path: "data/raw.csv" });
+    // The link first resolves the newest published version (async), then
+    // falls back to the live file when the path was never published.
+    await waitFor(() => expect(useUiStore.getState().inspectorOpen).toBe(true));
+    expect(useUiStore.getState().inspectorData).toMatchObject({ path: "data/raw.csv" });
   });
 });
 

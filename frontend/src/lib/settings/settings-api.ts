@@ -49,7 +49,7 @@ async function writeSettings<T>(path: string, init: RequestInit, fallback: strin
 }
 
 /** Config is read often and changes rarely — it kept a 3s TTL, now the client default. */
-const configQuery = <T,>(cwd?: string | null) => ({
+export const configQuery = <T,>(cwd?: string | null) => ({
   queryKey: settingsKey("config", cwd ?? null),
   queryFn: () => apiRequest<T & SettingsEnvelope>(`/api/settings/config${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`),
 });

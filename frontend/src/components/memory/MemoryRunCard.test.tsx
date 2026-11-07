@@ -72,3 +72,7 @@ it("keeps measured-only and legacy usage labeled as measured", () => {
   expect(screen.getByText("Measured usage: $0.12")).toBeVisible();
   expect(screen.getByText("120 tokens")).toBeVisible();
 });
+it("labels science review separately from normal extraction", () => {
+  mount({ kind: "extraction", purpose: "science_review" });
+  expect(screen.getByText("Science review")).toBeVisible();
+});

@@ -1,5 +1,5 @@
 import { aiTitleAttemptedAt, hasAiTitle, markAiTitleAttempted } from "../../client/pi-science-client";
-import { applyAiSessionName } from "../naming";
+import { regenerateSessionTitle } from "../naming";
 import { listenerBinding } from "./binding";
 
 /** AI title generation is best-effort: one in-flight request per session,
@@ -11,18 +11,15 @@ const aiTitleInFlight = new Set<string>();
 const AI_TITLE_RETRY_MS = 60 * 60 * 1000;
 
 export function maybeGenerateAiTitle(sessionId: string, cwd?: string): void {
-  const client = listenerBinding.client;
-  if (!client || !cwd || hasAiTitle(cwd, sessionId)) return;
+  if (!listenerBinding.client || !cwd || hasAiTitle(cwd, sessionId)) return;
   const attemptedAt = aiTitleAttemptedAt(cwd, sessionId);
   if (attemptedAt && Date.now() - attemptedAt < AI_TITLE_RETRY_MS) return;
   const key = `${cwd}\u0000${sessionId}`;
   if (aiTitleInFlight.has(key)) return;
   aiTitleInFlight.add(key);
-  void client
-    .generateSessionTitle(sessionId, cwd)
-    .then((title) => {
-      if (title) applyAiSessionName(cwd, sessionId, title);
-      else markAiTitleAttempted(cwd, sessionId);
+  void regenerateSessionTitle(cwd, sessionId, "automatic")
+    .then((result) => {
+      if (result === "failed") markAiTitleAttempted(cwd, sessionId);
     })
     .catch(() => {
       markAiTitleAttempted(cwd, sessionId);

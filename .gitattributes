@@ -5,3 +5,8 @@
 *.yml text eol=lf
 *.yaml text eol=lf
 *.json text eol=lf
+
+# Keep source formatting and legacy format hashes stable on Windows.
+*.ts text eol=lf
+*.tsx text eol=lf
+*.mjs text eol=lf

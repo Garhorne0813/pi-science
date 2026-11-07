@@ -11,8 +11,8 @@ export function CapabilitiesTab({ workspaceCwd, onOpenMcp, onOpenWeb }: { worksp
       </Section>
       <Section title={t("settings.capabilities.webTitle")}>
         <p className="text-ui-caption leading-relaxed text-muted">{t("settings.capabilities.webDescription")}</p>
-        <button type="button" onClick={onOpenWeb} className="mt-3 min-h-9 rounded-input px-3 text-ui-caption text-link hover:bg-surface-hover">{t("settings.webSearch.title")}</button>
-        <button type="button" onClick={onOpenMcp} className="mt-3 min-h-9 rounded-input px-3 text-ui-caption text-link hover:bg-surface-hover">
+        <button type="button" onClick={onOpenWeb} className="mt-3 min-h-10 rounded-input px-3 text-ui-caption text-link hover:bg-surface-hover">{t("settings.webSearch.title")}</button>
+        <button type="button" onClick={onOpenMcp} className="mt-3 min-h-10 rounded-input px-3 text-ui-caption text-link hover:bg-surface-hover">
           {t("settings.capabilities.manageMcp")}
         </button>
       </Section>

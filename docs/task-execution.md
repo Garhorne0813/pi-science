@@ -4,13 +4,18 @@ The host owns capabilities, admission counters and deadlines. Agent tool paramet
 can narrow these permissions and limits; they cannot grant access to a connector,
 change an inherited task scope, replenish an exhausted quota or extend a deadline.
 
-## Shared budgets
+## Host execution limits
 
-`execution_budget` configures or inspects the current operation's durable ledger:
+Ordinary tasks need no budget setup call. The host applies operation timeouts,
+cancellation, execution-count limits and child concurrency/depth ceilings.
+`execution_budget` is no longer a model tool, and subagent schemas no longer
+advertise per-kind or local budget parameters. Auto Research does not bind a
+runtime research ID before executing.
 
-```json
-{"max_seconds":300,"max_executions":20,"by_kind":{"mcp":8,"subagent":4,"bash":6}}
-```
+The durable ledger remains an internal compatibility boundary for existing
+execution grants, cancellation and recovery. Trusted host code can narrow it
+through `ExecutionBudgetLedger.configure`; existing saved scopes and task
+records retain their original constraints and are never reset on recovery.
 
 All descendants spend against the same global limits. Each child also has a local
 node, and every reservation checks and updates that node, all of its ancestors and
@@ -26,11 +31,9 @@ Failures retain their admission. Historical counters remain authoritative; missi
 or corrupt inherited ledgers fail closed. Child-local changes leave sibling limits
 alone. Limits can only shrink, including on reopen.
 
-Defaults are 100 admissions and one hour per operation. Bind `research_id` before
-explicit budget configuration or the first execution to share the ledger across
-continuation operations. Merely starting the operation's deadline monitor does not
-lock out this binding. The binding and reservations serialize on the same scope
-lock. Query results include global usage, local usage, remaining admissions by
+Defaults are 100 admissions and one hour per operation. Legacy host-bound
+`research_id` scopes remain readable across continuation operations. The binding
+and reservations serialize on the same scope lock. Query results include global usage, local usage, remaining admissions by
 kind, cancellation and the effective deadline.
 
 ## Child permissions and local budgets
@@ -40,7 +43,6 @@ kind, cancellation and the effective deadline.
   "agent":"researcher",
   "task":"Find supporting evidence using the permitted connector.",
   "tools":["read","mcp__papers__search"],
-  "budget":{"max_seconds":60,"max_executions":4,"by_kind":{"mcp":3}},
   "wait_seconds":0
 }
 ```
@@ -101,7 +103,11 @@ connector identities have independent queues.
 
 After queue admission the worker rechecks parent/role authorization and connector
 policy before sending the RPC. MCP request timeout remains connector-configurable
-(default sixty seconds), separate from queue waiting and the task deadline. The
+(default sixty seconds of active execution), separate from queue waiting and the
+task deadline. The ten-second discovery budget and request timers pause during
+network authorization for that connection only. Discovery starts after prompt
+admission so browser responses and abort remain available. Authorization waits
+are bounded to 120 seconds; task deadlines and cancellation remain hard limits. The
 adapter adds no automatic retry for side-effecting calls. Tool results record queue
 and execution durations. Cancellation is forwarded through the MCP protocol;
 termination of work already accepted by a remote service depends on that service.

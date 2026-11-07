@@ -9,7 +9,7 @@ import { requiresVerification } from "./changes.mjs";
 
 test("only documentation and root README files skip expensive checks", () => {
   assert.equal(requiresVerification(["docs/architecture.md", "README.zh-CN.md"]), false);
-  for (const path of ["skills/auto-research/SKILL.md", "harness/AGENTS.md", "AGENTS.md", "apps/server/src/app/app.ts", ".github/workflows/quality.yml", "pnpm-lock.yaml"]) {
+  for (const path of ["skills/auto-research/SKILL.md", "harness/SYSTEM.md", "harness/roles/main.md", "AGENTS.md", "apps/server/src/app/app.ts", ".github/workflows/quality.yml", "pnpm-lock.yaml"]) {
     assert.equal(requiresVerification(["docs/architecture.md", path]), true, path);
   }
   assert.equal(requiresVerification([]), true);

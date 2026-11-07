@@ -98,12 +98,39 @@ Blocks override configured allows. Removing a decision
 restores the operator baseline. Operator and built-in deny rules always win.
 Candidate, install, control and BYOC processes do not inherit these decisions.
 
-The main agent exposes `request_network_access({ domain, profile?, reason? })`.
-Its browser permission card offers **Always allow**, **Deny this request**, and
-**Never allow**. The profile defaults to `analysis`. Candidate and delegated
-workers cannot request their own network approvals. Invalid targets, URLs,
+When a workspace Bash/kernel or local MCP process reaches an unapproved
+proxy destination, the trusted launcher sends an authenticated request to the
+owning session's approval channel. The browser permission card offers **Always allow**, **Deny this request**, and
+**Never allow**. The launch profile selects `analysis` or `mcp`; the model does not choose it. Confined/Candidate workers cannot request network approvals. Workspace-scope
+delegated workers have separate protected channels that forward requests to their
+authenticated Parent session, including nested delegation. Parent approval does
+not inherit its filesystem grants or session approval mode into the child.
+Closing the Parent, stopping the child or aborting an MCP request cancels pending
+authorizations. Invalid targets, URLs,
 wildcards, non-RFC1918 IP literals, invalid ports and internal hostnames are rejected. DNS resolution
 is still checked by the existing resolved-address guard at connection time.
+
+MCP discovery begins before the first model generation of an admitted operation,
+after the session is registered and can receive browser responses. Admission and
+abort remain responsive during discovery. Pending MCP tool selections remain in
+the durable lane configuration across opens without prompts; the executable
+registry contains only discovered, permitted tools. Discovery reconciles those
+selections before model generation. Only newly created sessions opt into initial
+MCP defaults; missing runtime settings on an imported session do not imply opt-in.
+Each local MCP connection carries a
+private context ID: discovery and RPC active-time limits pause only while that
+connection waits for network approval. The 120-second authorization wait and the
+host task deadline still apply; unrelated connectors do not receive extra time.
+
+There is no model-facing `request_network_access` tool. Approval holds the
+original proxy request; after approval, the proxy reloads policy before continuing
+that connection. No Bash command or MCP operation is replayed. Denials, closed
+connections, missing session channels and unreadable policy fail closed. The
+channel token lives only in service-owned state and the private launcher manifest,
+never in workload arguments or environment. Remote MCP services' own internal
+network traffic is outside the local proxy's visibility. Approval scope remains
+persistent across projects, explicitly stated on the card; temporary grants are
+not introduced by this change.
 
 Decisions are atomically persisted to the service-owned `network-permissions/grants.json`
 in `PI_SCIENCE_HOME`, with cross-process locking and revision fencing. A settings
@@ -144,7 +171,10 @@ accepted ClientHello prefix before upstream connection; bare plaintext connectio
 and UDP remain blocked. Normal HTTPS clients validate certificates themselves.
 Clients must use the provided proxy variables; applications that bypass them
 receive OS denials. Node's environment proxy support is enabled, and the system
-CA bundle is copied into private scratch for curl, Python and Node.
+CA bundle in private scratch combines Node's bundled Mozilla roots, platform
+trust-store roots and the existing OS certificate file for curl, Python and Node.
+This avoids relying solely on macOS's potentially older `/etc/ssl/cert.pem`;
+normal certificate and hostname verification remain enabled.
 
 General workloads receive a rebuilt environment without model keys or internal
 tokens. MCP receives only its own explicit credential bindings. Web Access gets
@@ -273,7 +303,7 @@ while `/proc` is read.
 
 ### Private IPv4 services
 
-Settings → Network and `request_network_access` accept exact RFC1918 IPv4
+Settings → Network and network permission cards accept exact RFC1918 IPv4
 addresses (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) with an optional
 port, for example `192.168.1.10:8080`. These entries allow HTTP and a
 destination-bounded TCP tunnel after TLS ClientHello inspection on that port;

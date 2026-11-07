@@ -106,6 +106,13 @@ export interface ToolCallBlock extends ConversationBlockIdentity {
    *  this without needing live events. */
   details?: unknown;
   partialOutput?: string;
+  /** The server kept only the tail of this output because the full text
+   *  exceeded its per-event budget. The flag is authoritative: the visible
+   *  text may look short and complete, and a refreshed history that carries
+   *  the full output drops it. */
+  outputTruncated?: boolean;
+  /** Size of the untruncated output, when the server reports it. */
+  originalOutputBytes?: number;
   diff?: string;
   startedAt?: string;
   endedAt?: string;
@@ -295,6 +302,12 @@ export interface FilePreviewInspector {
   /** Published content to preview, independently of the current workspace file. */
   sha256?: string;
   version?: number;
+  /** Artifact identity for version diffs; present when the inspector was
+   *  opened from a published version rather than the live file. */
+  artifactId?: string;
+  /** `pinned` when the reference named its version, `latest` when it fell back
+   *  to the newest published one. Absent when the version came from elsewhere. */
+  versionSource?: "pinned" | "latest";
   artifact?: ArtifactKind;
   language?: string;
   content?: string;

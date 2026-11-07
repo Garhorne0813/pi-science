@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { GitFork, MoreHorizontal, Trash2 } from "lucide-react";
+import { GitFork, Loader2, MoreHorizontal, Pencil, Sparkles, Trash2 } from "lucide-react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { useTranslation } from "react-i18next";
 import type { SessionInfo } from "../../lib/client/types";
 import { useRuntimeStore } from "../../lib/agent-runtime";
+import { regenerateSessionTitle, renameSession } from "../../lib/agent-runtime/naming";
+import { normalizeSessionTitle } from "../../lib/client/pi-science-client";
 import { cn } from "../../lib/ui";
 import { useFeedback } from "../feedback/feedback-context";
+import { Modal } from "../ui/Modal";
 import { useLocalDay } from "./use-local-day";
 import { closeSidebarOnNarrow } from "./workspace-navigation";
 import { blocksRootAutoNavigation, deletedSessionLandingState } from "./blank-landing";
@@ -41,6 +44,7 @@ export function WorkspaceSessionList({ cwd, query = "" }: { cwd: string; query?:
   const sessionsHasMore = useRuntimeStore((s) => s.cwd === cwd && s.sessionsHasMore);
   const sessionsLoading = useRuntimeStore((s) => s.cwd === cwd && s.sessionsLoading);
   const deleteSession = useRuntimeStore((s) => s.deleteSession);
+  const working = useRuntimeStore((s) => s.cwd === cwd && s.working);
   const navigate = useNavigate();
   const location = useLocation();
   const workspaceRoot = `/workspace/${encodeURIComponent(cwd)}`;
@@ -51,6 +55,17 @@ export function WorkspaceSessionList({ cwd, query = "" }: { cwd: string; query?:
   const sessionsEmpty = sessions.length === 0;
   const [deleting, setDeleting] = useState<string | null>(null);
   const [forking, setForking] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<{ id: string; label: string; value: string } | null>(null);
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [renameError, setRenameError] = useState("");
+  const [regenerating, setRegenerating] = useState<Set<string>>(new Set());
+  const [settledTitle, setSettledTitle] = useState<Set<string>>(new Set());
+  // A ref, not the state above: two Enter presses in one tick both see
+  // `renameBusy === false` before React re-renders, and each would send a PUT.
+  const renameInFlight = useRef(false);
+  const settleTimer = useRef<number | null>(null);
+
+  useEffect(() => () => { if (settleTimer.current !== null) window.clearTimeout(settleTimer.current); }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -117,6 +132,57 @@ export function WorkspaceSessionList({ cwd, query = "" }: { cwd: string; query?:
     }
   };
 
+  const openRename = (label: string, sessionId: string) => {
+    setRenaming({ id: sessionId, label, value: label });
+    setRenameError("");
+  };
+
+  const handleRename = async () => {
+    if (!renaming || renameInFlight.current) return;
+    const normalized = normalizeSessionTitle(renaming.value);
+    if (!normalized) return;
+    if (normalized === renaming.label) { setRenaming(null); return; }
+    renameInFlight.current = true;
+    setRenameBusy(true);
+    setRenameError("");
+    try {
+      await renameSession(cwd, renaming.id, normalized);
+      setRenaming(null);
+    } catch (error) {
+      // Keep the dialog and the typed text so the user can retry the same value.
+      setRenameError(error instanceof Error ? error.message : t("sidebar.renameError"));
+    } finally {
+      renameInFlight.current = false;
+      setRenameBusy(false);
+    }
+  };
+
+  /** Tint the title the AI just wrote so the row visibly settles, then fade
+   *  back. A colour change carries no motion, so reduced motion is unaffected. */
+  const showSettledTitle = (sessionId: string) => {
+    setSettledTitle((current) => new Set(current).add(sessionId));
+    if (settleTimer.current !== null) window.clearTimeout(settleTimer.current);
+    settleTimer.current = window.setTimeout(() => { setSettledTitle(new Set()); settleTimer.current = null; }, 1600);
+  };
+
+  const handleRegenerate = async (sessionId: string) => {
+    if (regenerating.has(sessionId)) return;
+    setRegenerating((current) => new Set(current).add(sessionId));
+    try {
+      const result = await regenerateSessionTitle(cwd, sessionId, "manual");
+      if (result === "applied") showSettledTitle(sessionId);
+      // `superseded` and `gone` are the server cancelling a request that no
+      // longer applies; only a real failure is worth an error toast.
+      else if (result === "failed") toast(t("sidebar.regenerateError"), "error");
+    } finally {
+      setRegenerating((current) => {
+        const next = new Set(current);
+        next.delete(sessionId);
+        return next;
+      });
+    }
+  };
+
   const localDay = useLocalDay();
   const groups = useMemo(() => groupSessions(sessions, query, new Date(localDay), t("conversation.newSession")), [sessions, query, localDay, t]);
   return (
@@ -134,8 +200,11 @@ export function WorkspaceSessionList({ cwd, query = "" }: { cwd: string; query?:
                 onClick={() => { navigate(`${workspaceRoot}/session/${session.id}`); closeSidebarOnNarrow(); }}
                 className={cn("flex h-nav min-w-0 flex-1 items-center gap-2 px-2 text-left text-ui-label", isCurrent && "font-medium")}>
                 <span aria-hidden="true" className={cn("h-1.5 w-1.5 shrink-0 rounded-full", isConnected ? "bg-accent" : "bg-transparent")} />
-                <span className="min-w-0 flex-1 truncate">{label}</span>
+                <span className={cn("min-w-0 flex-1 truncate transition-colors duration-300", settledTitle.has(session.id) && "text-accent")}>{label}</span>
               </button>
+              {/* Outside the row button so the live region is a normal element and
+                  the row's accessible name stays the title. */}
+              {regenerating.has(session.id) && <span role="status" className="shrink-0 text-muted"><Loader2 size={12} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /><span className="sr-only">{t("sidebar.generatingTitle")}</span></span>}
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger asChild>
                   <button type="button" aria-label={t("sidebar.manageSession", { name: label })} disabled={!!deleting || !!forking}
@@ -145,6 +214,8 @@ export function WorkspaceSessionList({ cwd, query = "" }: { cwd: string; query?:
                 </DropdownMenu.Trigger>
                 <DropdownMenu.Portal>
                   <DropdownMenu.Content align="end" sideOffset={4} collisionPadding={8} className="ui-popover z-[110] min-w-40 rounded-card p-1 text-ui-label text-text shadow-lg">
+                    <DropdownMenu.Item onSelect={(e) => { e.stopPropagation(); openRename(label, session.id); }} className="flex h-nav cursor-default select-none items-center gap-2 rounded-input px-2 outline-none data-[highlighted]:bg-surface-hover"><Pencil size={14} />{t("sidebar.renameSession")}</DropdownMenu.Item>
+                    <DropdownMenu.Item disabled={regenerating.has(session.id) || (isConnected && working)} onSelect={(e) => { e.stopPropagation(); void handleRegenerate(session.id); }} className="flex h-nav cursor-default select-none items-center gap-2 rounded-input px-2 outline-none data-[highlighted]:bg-surface-hover data-[disabled]:opacity-60">{regenerating.has(session.id) ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}{t("sidebar.regenerateTitle")}</DropdownMenu.Item>
                     <DropdownMenu.Item onSelect={(e) => void handleFork(e, session.id)} className="flex h-nav cursor-default select-none items-center gap-2 rounded-input px-2 outline-none data-[highlighted]:bg-surface-hover"><GitFork size={14} />{t("sidebar.forkSession")}</DropdownMenu.Item>
                     <DropdownMenu.Item onSelect={(e) => void handleDelete(e, session.id)} className="flex h-nav cursor-default select-none items-center gap-2 rounded-input px-2 text-error-text outline-none data-[highlighted]:bg-surface-hover"><Trash2 size={14} />{t("sidebar.deleteSession")}</DropdownMenu.Item>
                   </DropdownMenu.Content>
@@ -156,6 +227,10 @@ export function WorkspaceSessionList({ cwd, query = "" }: { cwd: string; query?:
         {sessionsHasMore && <button type="button" disabled={sessionsLoading} onClick={() => void loadMoreSessions().catch(error => toast(error instanceof Error ? error.message : t("sidebar.loadError"), "error"))} className="mx-2 mb-2 rounded-input px-2 py-2 text-ui-meta text-muted hover:bg-surface-hover disabled:opacity-60">{t(sessionsLoading ? "conversation.loadingSessions" : "conversation.loadMoreSessions")}</button>}
         {query.trim() && sessionsHasMore && <p className="px-2 pb-2 text-ui-micro text-muted">{t("sidebar.searchScope")}</p>}
       </div>
+      {renaming && <Modal title={t("sidebar.renameSession")} onClose={() => { if (!renameBusy) setRenaming(null); }} footer={<div className="flex justify-end gap-2"><button type="button" disabled={renameBusy} onClick={() => setRenaming(null)} className="min-h-9 rounded-input border border-border px-3 text-ui-caption text-text hover:bg-surface-hover disabled:opacity-40">{t("common.cancel")}</button><button type="button" disabled={renameBusy || normalizeSessionTitle(renaming.value) === ""} onClick={() => void handleRename()} className="min-h-9 rounded-input bg-accent-fill px-3 text-ui-caption font-medium text-accent-fg disabled:opacity-40">{t("common.save")}</button></div>}>
+        <input autoFocus disabled={renameBusy} aria-label={t("sidebar.renameSession")} value={renaming.value} onChange={(event) => setRenaming({ ...renaming, value: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void handleRename(); } }} className="min-h-10 w-full rounded-input border border-border bg-bg px-3 py-2 text-ui-label text-text outline-none focus:border-accent disabled:opacity-60" />
+        {renameError ? <p role="alert" className="mt-2 text-ui-caption text-error-text">{renameError}</p> : <p className="mt-2 text-ui-caption text-muted">{t("sidebar.renameHint")}</p>}
+      </Modal>}
     </div>
   );
 }

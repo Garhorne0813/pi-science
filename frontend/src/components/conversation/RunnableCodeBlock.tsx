@@ -38,8 +38,10 @@ export function RunnableCodeBlock({ code, language, preClassName, children, runn
       >
         {children}
       </CodeBlockFrame>
+      {/* Run output exists only in this panel, never in the message markdown, so
+          a quote must not be able to claim it came from the message. */}
       {result && (
-        <div className="mb-3 rounded-input bg-surface-2 font-mono text-[12px]">
+        <div data-quote-exclude="" className="mb-3 rounded-input bg-surface-2 font-mono text-[12px]">
           <div className="flex items-center justify-between gap-2 border-b border-faint px-3 py-1.5 font-sans text-[10px] uppercase tracking-wider text-muted">
             <span>{t("conversation.codeOutput")}</span>
             <button type="button" aria-label={t("conversation.closeOutput")} onClick={onCloseResult} className="text-muted hover:text-text">

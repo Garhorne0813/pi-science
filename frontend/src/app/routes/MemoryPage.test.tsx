@@ -12,6 +12,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { settingsSchema } from "@pi-science/contracts";
 import i18n from "../../i18n";
+import { FeedbackProvider } from "../../components/feedback/FeedbackProvider";
 import { MemoryPage } from "./MemoryPage";
 import { useUiStore } from "../../lib/ui";
 const record = {
@@ -175,7 +176,7 @@ function mount(initialEntry = "/workspace/project/memory", navigation = false) {
   });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[initialEntry]}>
+      <FeedbackProvider><MemoryRouter initialEntries={[initialEntry]}>
         {navigation && (
           <>
             <Link to="/workspace/other-project/memory">Switch project</Link>
@@ -187,7 +188,7 @@ function mount(initialEntry = "/workspace/project/memory", navigation = false) {
         <Routes>
           <Route path="/workspace/:cwd/memory" element={<MemoryPage />} />
         </Routes>
-      </MemoryRouter>
+      </MemoryRouter></FeedbackProvider>
     </QueryClientProvider>,
   );
 }
@@ -199,7 +200,7 @@ it("shows one Memory product with three sections and labeled scientific candidat
   expect(
     screen.getByRole("navigation", { name: "Memory" }),
   ).toBeInTheDocument();
-  for (const name of ["Memories", "Pending review (1)", "Run history"])
+  for (const name of ["Memories", "Pending review (1)", "Memory tasks"])
     expect(screen.getByRole("button", { name })).toBeInTheDocument();
   expect(requests.every((r) => r.path.startsWith("/api/memory/"))).toBe(true);
 });
@@ -232,8 +233,9 @@ it("opens the application Memory settings directly and keeps project recall on t
     settingsScope: "project",
     settingsSection: "memory",
   });
+  fireEvent.click(screen.getByRole("button", { name: "Categories and automatic recall" }));
   expect(
-    screen.getByLabelText("Allow recall in this project"),
+    await screen.findByLabelText("Allow recall in this project"),
   ).toBeInTheDocument();
 });
 
@@ -374,6 +376,7 @@ it("opens editing in a focused modal and resets the draft when switching records
     target: { value: "Unsaved first draft" },
   });
   fireEvent.click(within(first).getByRole("button", { name: "Close" }));
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard changes" }));
   await waitFor(() => {
     expect(
       screen.getByRole("button", {
@@ -419,7 +422,7 @@ it("distinguishes measured usage, estimates and holds and displays safe retry di
   ];
   mount();
   await screen.findByText("Result includes limitations");
-  fireEvent.click(screen.getByRole("button", { name: "Run history" }));
+  fireEvent.click(screen.getByRole("button", { name: "Memory tasks" }));
   expect(
     await screen.findByText(
       "Budget total (includes estimates / reservations): $0.101",
@@ -520,10 +523,12 @@ it("keeps an unsaved editor open when discard is declined", async () => {
   });
   fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
   expect(dialog).toBeVisible();
-  expect(within(dialog).getByRole("textbox", { name: "Title" })).toHaveValue(
-    "Draft",
-  );
-  expect(window.confirm).toHaveBeenCalledWith("Discard unsaved changes?");
+
+  const confirmation = await screen.findByRole("alertdialog");
+  expect(confirmation).toHaveTextContent("Discard unsaved changes?");
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(within(dialog).getByRole("textbox", { name: "Title" })).toHaveValue("Draft");
 });
 
 it.each([true, false])(
@@ -609,7 +614,7 @@ it.each([true, false])(
         ),
       ).toBe(true);
     });
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByText("Saved")).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "View pending review" }),
@@ -644,7 +649,7 @@ it("clears the previous project's error and review dialog when switching project
     ).toBe(true);
   });
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  expect(screen.queryByText("Saved")).not.toBeInTheDocument();
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
 

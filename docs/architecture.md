@@ -201,8 +201,10 @@ Memory records, sources, revisions, review events, proposals, FTS indexes,
 extraction cursors and durable background state belong to this same SQLite
 StateStore. Migration `0005_unified_memory.sql` initializes an empty Memory
 domain; old `memory/ledger.json` and `project-state.json` files are not imported,
-overwritten or deleted. They are no longer canonical Memory stores. `PROJECT.md`
-remains an ordinary document and is not rewritten by approval. Memory JSON export
+overwritten or deleted. They are no longer canonical Memory stores. Optional
+workspace `AGENTS.md` belongs to the user and is not rewritten by approval.
+Application system rules and project guidance have separate ownership; see
+[Agent prompts](agent-prompts.md). Memory JSON export
 is for interchange/audit; use `SqliteStateStore.backup(path)` for a consistent
 whole-StateStore snapshot and restore only while the service is stopped.
 Migration 0006 adds a per-lease UTC-day usage journal. Migration 0007 tracks provider
@@ -326,7 +328,7 @@ provenance. Artifact-publication failures remain visible as execution evidence.
 Auto Research is a skill executed by the current Conversation Agent. The Agent
 owns planning, dynamic delegation, iteration and stop decisions; task-specific
 evaluation protocols/evaluators and checkpoints are ordinary research files.
-Generic `execution_budget` enforces durable tool-call/time limits, and existing
+Host execution controls enforce durable tool-call/time limits, and existing
 kernel/job/connector timeouts remain in force. Researcher/Reviewer skill-local
 roles use the existing dispatcher and narrower child permissions. No standalone
 Research API, supervisor or scheduler remains. Historical records and referenced

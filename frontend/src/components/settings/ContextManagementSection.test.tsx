@@ -26,7 +26,7 @@ describe("context settings drafts", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save context settings" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     expect(screen.queryByText("Settings saved")).not.toBeInTheDocument();
-    expect(screen.getByRole("slider")).toBeDisabled();
+    expect(screen.queryByRole("slider")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save context settings" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Save context settings" }));
     expect(await screen.findByText("Settings saved")).toBeInTheDocument();

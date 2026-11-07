@@ -23,7 +23,9 @@ it.each(["api.example.org", "192.168.1.10:8080"])("adds and revokes a permission
   await screen.findByText("No domain permissions have been added.");
   expect(screen.getByText(/Tunnels can carry raw TCP; the proxy does not verify a TLS handshake/)).toBeVisible();
   fireEvent.change(screen.getByLabelText("Hostname or private IPv4 address"), { target: { value: domain } });
-  fireEvent.change(screen.getByLabelText("Applies to"), { target: { value: "mcp" } });
+  const profile = screen.getByRole("button", { name: /^Applies to:/ });
+  fireEvent.pointerDown(profile); fireEvent.click(profile);
+  fireEvent.click(await screen.findByRole("menuitemradio", { name: "Local MCP" }));
   fireEvent.click(screen.getByRole("button", { name: "Save permission" }));
   await screen.findByText(domain);
   expect(requests[0]).toEqual({ method: "POST", body: { profile: "mcp", domain, decision: "allow" } });

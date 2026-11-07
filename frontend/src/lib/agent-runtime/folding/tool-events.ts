@@ -33,6 +33,16 @@ export function reduceToolEvent(event: PiScienceEvent, { foldState, blocks, inde
       // fallback: first sight starts the clock, a terminal status ends it.
       const nowIso = new Date().toISOString();
       const revision = numberValue(event.revision) ?? ((previous?.revision ?? -1) + 1);
+      // A completed call is authoritative: the server recomputes truncation
+      // for the final output, so an earlier truncated partial must not leave a
+      // stale badge behind. While running, the flag is sticky — the tail shown
+      // stays a tail until the call finishes.
+      const outputTruncated = event.type === "tool.completed"
+        ? event.outputTruncated === true
+        : (event.outputTruncated as boolean | undefined) ?? previous?.outputTruncated ?? false;
+      const originalOutputBytes = outputTruncated
+        ? numberValue(event.originalOutputBytes) ?? previous?.originalOutputBytes
+        : undefined;
       const block: ThreadBlock = {
         kind: "tool",
         id: blockId,
@@ -54,6 +64,7 @@ export function reduceToolEvent(event: PiScienceEvent, { foldState, blocks, inde
         details: event.details ?? previous?.details,
         presentation: (event.presentation as ToolCallBlock["presentation"] | undefined) ?? previous?.presentation,
         partialOutput: (event.partialOutput as string | undefined) ?? previous?.partialOutput,
+        ...(outputTruncated ? { outputTruncated: true, ...(originalOutputBytes === undefined ? {} : { originalOutputBytes }) } : {}),
         diff: (event.diff as string | undefined) ?? previous?.diff,
         startedAt: (event.startedAt as string | undefined) ?? previous?.startedAt ?? nowIso,
         endedAt: (event.endedAt as string | undefined) ?? previous?.endedAt

@@ -1,4 +1,5 @@
-import type { MemoryCommand } from "../../memory/repository.js";
+import type { ApplicationErrorKind } from "../../modules/application-error.js";
+import type { MemoryCommand } from "../../modules/memory/commands.js";
 export type SqlValue = null | number | bigint | string | Uint8Array;
 
 export interface SqlStatement {
@@ -58,7 +59,14 @@ export interface SqliteErrorResponse {
   type: "response";
   id: number;
   ok: false;
-  error: { name: string; message: string; code?: string; statusCode?: number; stack?: string };
+  error: {
+    name: string;
+    message: string;
+    code?: string;
+    kind?: ApplicationErrorKind;
+    details?: unknown;
+    stack?: string;
+  };
 }
 
 export type SqliteWorkerMessage = SqliteReadyMessage | SqliteResponse | SqliteErrorResponse;

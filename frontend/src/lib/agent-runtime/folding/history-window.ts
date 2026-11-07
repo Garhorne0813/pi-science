@@ -198,9 +198,17 @@ export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], 
       }
     }
   }
+  // Prompts the snapshot already carries under their durable id. An optimistic
+  // user block that is still waiting in the older prefix describes the same
+  // prompt; keeping it would render the message twice.
+  const durablePromptIds = new Set<string>();
+  for (const block of authoritative.blocks) {
+    if (block.kind === "user" && block.client_message_id) durablePromptIds.add(block.client_message_id);
+  }
   const prefix: ThreadBlock[] = [];
   const coveredLive: ThreadBlock[] = [];
   for (const block of current.blocks.slice(0, firstOverlap)) {
+    if (block.kind === "user" && block.client_message_id && durablePromptIds.has(block.client_message_id)) continue;
     if (block.kind !== "user" && "turnId" in block && block.turnId && coveredTurnOwners.has(block.turnId)) {
       coveredLive.push(block);
     } else {
@@ -243,11 +251,26 @@ export function mergeHistoryWithLive(history: Thread, live: Thread): Thread {
     matches.push(block);
     durableUsersByClientId.set(block.client_message_id, matches);
   }
+  // A page that starts mid-turn proves its window lost the user message that
+  // opened the oldest turn. A live user block that precedes blocks the window
+  // already holds belongs *before* them: appending it would render the prompt
+  // under the whole window and split one turn into two groups. Keep the gap
+  // visible instead of reordering it.
+  const windowStartsMidTurn = history.blocks.length > 0 && history.blocks[0]!.kind !== "user";
+  const persistedLater = new Array<boolean>(live.blocks.length + 1).fill(false);
+  for (let position = live.blocks.length - 1; position >= 0; position -= 1) {
+    const candidate = live.blocks[position]!;
+    persistedLater[position] = ids.has(candidate.id)
+      || (candidate.kind === "tool" && toolCallIds.has(candidate.callId))
+      || persistedLater[position + 1]!;
+  }
   const blocks = [...history.blocks];
-  for (const block of live.blocks) {
+  for (let position = 0; position < live.blocks.length; position += 1) {
+    const block = live.blocks[position]!;
     if (ids.has(block.id)) continue;
     if (block.kind === "tool" && toolCallIds.has(block.callId)) continue;
     if (block.kind === "user") {
+      if (windowStartsMidTurn && persistedLater[position + 1]) continue;
       if (block.client_message_id) {
         // Only an exact request identity proves that this durable row is the
         // optimistic send. If history has duplicate IDs, preserve the live

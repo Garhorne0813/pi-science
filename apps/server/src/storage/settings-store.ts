@@ -1,6 +1,11 @@
 import { configPath, readJson, writeJsonAtomic } from "./persistence.js";
 import { isDeepStrictEqual } from "node:util";
-import { defaultProgressAppearance, progressAppearanceInputSchema, progressAppearanceSchema, type ProgressAppearance } from "@pi-science/contracts";
+import {
+  defaultProgressAppearance,
+  progressAppearanceInputSchema,
+  progressAppearanceSchema,
+  type ProgressAppearance,
+} from "@pi-science/contracts";
 import type { RuntimeSkillPolicy } from "../runtime/agent/agent-runtime-types.js";
 
 export type SettingsData = {
@@ -9,10 +14,28 @@ export type SettingsData = {
   model?: string;
   thinking?: string;
   compaction_enabled?: boolean;
+  /** Automatic citation verification on every settled turn. On when unset;
+   *  an explicit false is a stored user choice that stays off. */
+  citation_auto_verify?: boolean;
+  /** How an inline citation reads in the answer body. `number` when unset. */
+  citation_inline_style?: "number" | "identifier";
   compaction_threshold_percent?: number;
   model_context_window?: number;
   model_context_window_override?: { model: string; context_window: number };
-  custom_providers?: Array<{ id: string; name: string; base_url: string; api_key?: string; api: string; models: string[]; reasoning?: boolean; context_window?: number; model_hints?: Record<string, { context_window?: number; reasoning?: boolean; thinking_levels?: string[] }> }>;
+  custom_providers?: Array<{
+    id: string;
+    name: string;
+    base_url: string;
+    api_key?: string;
+    api: string;
+    models: string[];
+    reasoning?: boolean;
+    context_window?: number;
+    model_hints?: Record<
+      string,
+      { context_window?: number; reasoning?: boolean; thinking_levels?: string[] }
+    >;
+  }>;
   allow_private_providers?: boolean;
   mcp_servers?: string[];
   skills_configured?: boolean;
@@ -32,7 +55,9 @@ export type SettingsData = {
 const storedProgressAppearanceSchema = progressAppearanceSchema.extend({
   preset: progressAppearanceInputSchema.shape.preset.catch(defaultProgressAppearance.preset),
   motion: progressAppearanceInputSchema.shape.motion.catch(defaultProgressAppearance.motion),
-  colorMode: progressAppearanceInputSchema.shape.colorMode.catch(defaultProgressAppearance.colorMode),
+  colorMode: progressAppearanceInputSchema.shape.colorMode.catch(
+    defaultProgressAppearance.colorMode,
+  ),
   patterns: progressAppearanceSchema.shape.patterns.catch(defaultProgressAppearance.patterns),
 });
 
@@ -51,22 +76,36 @@ export class SettingsStore {
 
   async read(): Promise<SettingsData> {
     await this.writes.catch(() => undefined);
-    if (this.cached && this.cached.expiresAt > Date.now()) return structuredClone(this.cached.value);
-    const value = normalizeSettingsData(await readJson<SettingsData>(configPath("config.json"), {}));
+    if (this.cached && this.cached.expiresAt > Date.now())
+      return structuredClone(this.cached.value);
+    const value = normalizeSettingsData(
+      await readJson<SettingsData>(configPath("config.json"), {}),
+    );
     this.cached = { expiresAt: Date.now() + this.cacheTtlMs, value: structuredClone(value) };
     return value;
   }
 
-  async update<T>(operation: (config: SettingsData) => T | Promise<T>, options: { skipUnchanged?: boolean } = {}): Promise<T> {
-    const pending = this.writes.catch(() => undefined).then(async () => {
-      const config = normalizeSettingsData(await readJson<SettingsData>(configPath("config.json"), {}));
-      const before = options.skipUnchanged ? structuredClone(config) : undefined;
-      const result = await operation(config);
-      if (!options.skipUnchanged || !isDeepStrictEqual(before, config)) await writeJsonAtomic(configPath("config.json"), config);
-      this.cached = { expiresAt: Date.now() + this.cacheTtlMs, value: structuredClone(config) };
-      return result;
-    });
-    this.writes = pending.then(() => undefined, () => undefined);
+  async update<T>(
+    operation: (config: SettingsData) => T | Promise<T>,
+    options: { skipUnchanged?: boolean } = {},
+  ): Promise<T> {
+    const pending = this.writes
+      .catch(() => undefined)
+      .then(async () => {
+        const config = normalizeSettingsData(
+          await readJson<SettingsData>(configPath("config.json"), {}),
+        );
+        const before = options.skipUnchanged ? structuredClone(config) : undefined;
+        const result = await operation(config);
+        if (!options.skipUnchanged || !isDeepStrictEqual(before, config))
+          await writeJsonAtomic(configPath("config.json"), config);
+        this.cached = { expiresAt: Date.now() + this.cacheTtlMs, value: structuredClone(config) };
+        return result;
+      });
+    this.writes = pending.then(
+      () => undefined,
+      () => undefined,
+    );
     return pending;
   }
 }

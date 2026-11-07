@@ -2,8 +2,12 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SessionQueueRepository } from "./session-queue-repository.js";
-import { SessionQueueDispatcher, type QueueDispatchSessions, type QueueSessionFacts } from "./session-queue-dispatcher.js";
+import { SessionQueueRepository } from "../../modules/session/session-queue-repository.js";
+import {
+  SessionQueueDispatcher,
+  type QueueDispatchSessions,
+  type QueueSessionFacts,
+} from "./session-queue-dispatcher.js";
 
 const cleanup: string[] = [];
 const original = process.env.PI_SCIENCE_HOME;
@@ -25,7 +29,10 @@ afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-function sessions(facts: QueueSessionFacts, commandResult: { success: boolean; code?: string } = { success: true }) {
+function sessions(
+  facts: QueueSessionFacts,
+  commandResult: { success: boolean; code?: string } = { success: true },
+) {
   const command = vi.fn(async () => commandResult);
   const state = vi.fn(async () => facts);
   return { sessions: { state, command } as unknown as QueueDispatchSessions, command, state };
@@ -49,7 +56,10 @@ describe("SessionQueueDispatcher", () => {
     const fake = sessions({ is_streaming: false, pending_message_count: 0 });
     const dispatcher = new SessionQueueDispatcher(fake.sessions, queue, 5);
     expect(await dispatcher.tick(cwd, sessionId)).toBe("dispatched");
-    expect(fake.command).toHaveBeenCalledWith(sessionId, cwd, "prompt", { message: "next", client_message_id: first });
+    expect(fake.command).toHaveBeenCalledWith(sessionId, cwd, "prompt", {
+      message: "next",
+      client_message_id: first,
+    });
     expect((await queue.read(cwd, sessionId)).entries[0]?.status).toBe("dispatched");
     dispatcher.stop();
   });
@@ -60,7 +70,10 @@ describe("SessionQueueDispatcher", () => {
     const fake = sessions({ is_streaming: false }, { success: false, code: "session_busy" });
     const dispatcher = new SessionQueueDispatcher(fake.sessions, queue, 5);
     expect(await dispatcher.tick(cwd, sessionId)).toBe("requeued");
-    expect((await queue.read(cwd, sessionId)).entries[0]).toMatchObject({ status: "queued", error_code: "session_busy" });
+    expect((await queue.read(cwd, sessionId)).entries[0]).toMatchObject({
+      status: "queued",
+      error_code: "session_busy",
+    });
     dispatcher.stop();
   });
 
@@ -70,7 +83,10 @@ describe("SessionQueueDispatcher", () => {
     const fake = sessions({ is_streaming: false }, { success: false, code: "invalid_model" });
     const dispatcher = new SessionQueueDispatcher(fake.sessions, queue, 5);
     expect(await dispatcher.tick(cwd, sessionId)).toBe("failed");
-    expect((await queue.read(cwd, sessionId)).entries[0]).toMatchObject({ status: "failed", error_code: "invalid_model" });
+    expect((await queue.read(cwd, sessionId)).entries[0]).toMatchObject({
+      status: "failed",
+      error_code: "invalid_model",
+    });
     dispatcher.stop();
   });
 

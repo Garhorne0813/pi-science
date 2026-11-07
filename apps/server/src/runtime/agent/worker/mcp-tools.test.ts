@@ -1,5 +1,5 @@
 import { writeJsonAtomic } from "../../../storage/persistence.js";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
@@ -18,11 +18,24 @@ import { CredentialStore } from "../../../model-resources/credential-store.js";
 vi.mock("../../../mcp/runtime-policy.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../mcp/runtime-policy.js")>();
   const { loadProjectedSnapshot } = await import("../../shared/extensions/pi-science-mcp.js");
-  return { ...actual, authorizeMcpConnector: vi.fn(async () => undefined), authorizeMcpTool: vi.fn(async (cwd: string, expected: { connectorId: string; toolName: string }) => {
-    const server = Object.values(loadProjectedSnapshot(cwd).mcpServers).find((value) => value.__piScienceConnectorId === expected.connectorId)!;
-    return (server.__piScienceAllowedTools as string[] | undefined)?.includes(expected.toolName) || server.approveTools === false
-      || Array.isArray(server.approveTools) && !server.approveTools.includes(expected.toolName) ? "allow" : "ask";
-  }) };
+  return {
+    ...actual,
+    authorizeMcpConnector: vi.fn(async () => undefined),
+    authorizeMcpTool: vi.fn(
+      async (cwd: string, expected: { connectorId: string; toolName: string }) => {
+        const server = Object.values(loadProjectedSnapshot(cwd).mcpServers).find(
+          (value) => value.__piScienceConnectorId === expected.connectorId,
+        )!;
+        return (server.__piScienceAllowedTools as string[] | undefined)?.includes(
+          expected.toolName,
+        ) ||
+          server.approveTools === false ||
+          (Array.isArray(server.approveTools) && !server.approveTools.includes(expected.toolName))
+          ? "allow"
+          : "ask";
+      },
+    ),
+  };
 });
 
 // These protocol/authorization fixtures deliberately run on the host. Real
@@ -39,29 +52,69 @@ describe("agent-core managed MCP tools", () => {
       await mkdir(join(cwd, ".pi-science"));
       const marker = join(cwd, "unrelated-started");
       const server = join(cwd, "scoped.mjs");
-      await writeFile(server, [
-        `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
-        `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
-        `const server = new McpServer({ name: "scoped", version: "1" });`,
-        `for (const name of ["bar", "other", "forbidden"]) server.registerTool(name, { description: name }, async () => ({ content: [{ type: "text", text: name }] }));`,
-        `await server.connect(new StdioServerTransport());`,
-      ].join("\n"));
-      await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test",
-        mcpServers: {
-          foo: { command: process.execPath, args: [server], approveTools: false, excludeTools: ["forbidden"], __piScienceConnectorId: "connector_foo" },
-          unrelated: { command: process.execPath, args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`],
-            __piScienceConnectorId: "connector_unrelated" },
-          protected: { transport: "streamable_http", url: "https://unused.example/mcp", __piScienceConnectorId: "connector_protected",
-            __piScienceHeaders: { Authorization: { kind: "credential", credential_ref: "unrelated-secret" } } },
-        } }));
-      mcp = await AgentMcpTools.open(cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "" }, undefined,
-        ["read", "mcp__foo__bar", "mcp__foo__forbidden"]);
+      await writeFile(
+        server,
+        [
+          `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
+          `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
+          `const server = new McpServer({ name: "scoped", version: "1" });`,
+          `for (const name of ["bar", "other", "forbidden"]) server.registerTool(name, { description: name }, async () => ({ content: [{ type: "text", text: name }] }));`,
+          `await server.connect(new StdioServerTransport());`,
+        ].join("\n"),
+      );
+      await writeFile(
+        join(cwd, ".pi-science", "mcp-runtime.json"),
+        JSON.stringify({
+          version: 1,
+          project_id: "project_test",
+          mcpServers: {
+            foo: {
+              command: process.execPath,
+              args: [server],
+              approveTools: false,
+              excludeTools: ["forbidden"],
+              __piScienceConnectorId: "connector_foo",
+            },
+            unrelated: {
+              command: process.execPath,
+              args: [
+                "-e",
+                `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`,
+              ],
+              __piScienceConnectorId: "connector_unrelated",
+            },
+            protected: {
+              transport: "streamable_http",
+              url: "https://unused.example/mcp",
+              __piScienceConnectorId: "connector_protected",
+              __piScienceHeaders: {
+                Authorization: { kind: "credential", credential_ref: "unrelated-secret" },
+              },
+            },
+          },
+        }),
+      );
+      mcp = await AgentMcpTools.open(
+        cwd,
+        new InteractionBridge(() => undefined),
+        { PATH: process.env.PATH ?? "" },
+        undefined,
+        ["read", "mcp__foo__bar", "mcp__foo__forbidden"],
+      );
       expect(mcp.diagnostics).toEqual([]);
       expect(credentials).not.toHaveBeenCalled();
       expect(await readFile(marker, "utf8").catch(() => null)).toBeNull();
       expect(mcp.tools.map((tool) => tool.name)).toEqual(["mcp__foo__bar"]);
-      expect(await mcp.tools[0]!.execute("scoped-call", {}, () => undefined, {} as never, {} as never, {} as never))
-        .toMatchObject({ content: [{ type: "text", text: "bar" }] });
+      expect(
+        await mcp.tools[0]!.execute(
+          "scoped-call",
+          {},
+          () => undefined,
+          {} as never,
+          {} as never,
+          {} as never,
+        ),
+      ).toMatchObject({ content: [{ type: "text", text: "bar" }] });
     } finally {
       credentials.mockRestore();
       await mcp?.close();
@@ -75,33 +128,59 @@ describe("agent-core managed MCP tools", () => {
     try {
       await mkdir(join(cwd, ".pi-science"));
       const server = join(cwd, "server.mjs");
-      await writeFile(server, [
-        `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
-        `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
-        `const server = new McpServer({ name: "test", version: "1" });`,
-        `server.registerTool("lookup", { description: "Lookup", annotations: { readOnlyHint: true } }, async () => ({ content: [{ type: "text", text: "source" }] }));`,
-        `await server.connect(new StdioServerTransport());`,
-      ].join("\n"));
-      const base = { command: process.execPath, args: [server], __piScienceConnectorId: "connector_test", approveTools: true };
-      const project = async (policy: Record<string, unknown> | null) => writeJsonAtomic(join(cwd, ".pi-science/mcp-runtime.json"),
-        { version: 1, project_id: "project_test", mcpServers: policy ? { science: policy } : {} });
+      await writeFile(
+        server,
+        [
+          `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
+          `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
+          `const server = new McpServer({ name: "test", version: "1" });`,
+          `server.registerTool("lookup", { description: "Lookup", annotations: { readOnlyHint: true } }, async () => ({ content: [{ type: "text", text: "source" }] }));`,
+          `await server.connect(new StdioServerTransport());`,
+        ].join("\n"),
+      );
+      const base = {
+        command: process.execPath,
+        args: [server],
+        __piScienceConnectorId: "connector_test",
+        approveTools: true,
+      };
+      const project = async (policy: Record<string, unknown> | null) =>
+        writeJsonAtomic(join(cwd, ".pi-science/mcp-runtime.json"), {
+          version: 1,
+          project_id: "project_test",
+          mcpServers: policy ? { science: policy } : {},
+        });
       await project(base);
       const interactions: unknown[] = [];
-      mcp = await AgentMcpTools.open(cwd, new InteractionBridge((event) => interactions.push(event)), { PATH: process.env.PATH ?? "" }, undefined,
-        ["mcp__science__lookup"], true);
+      mcp = await AgentMcpTools.open(
+        cwd,
+        new InteractionBridge((event) => interactions.push(event)),
+        { PATH: process.env.PATH ?? "" },
+        undefined,
+        ["mcp__science__lookup"],
+        true,
+      );
       expect(mcp.diagnostics).toEqual([]);
-      const call = () => mcp!.tools[0]!.execute("lookup", {}, () => {}, {} as never, {} as never, {} as never);
+      const call = () =>
+        mcp!.tools[0]!.execute("lookup", {}, () => {}, {} as never, {} as never, {} as never);
       await expect(call()).rejects.toThrow("explicit preauthorization");
       expect(interactions).toEqual([]); // readOnlyHint must not silently grant authorization or wait for hidden UI.
       await project({ ...base, __piScienceAllowedTools: ["lookup"] });
       expect(await call()).toMatchObject({ content: [{ text: "source" }] });
-      const slots = await Promise.all(Array.from({ length: 4 }, () => acquireMcpCall(cwd, JSON.stringify(["project_test", "connector_test"]))));
+      const slots = await Promise.all(
+        Array.from({ length: 4 }, () =>
+          acquireMcpCall(cwd, JSON.stringify(["project_test", "connector_test"])),
+        ),
+      );
       try {
         const queued = call();
         const rejected = expect(queued).rejects.toThrow("disabled or connector changed");
         await project({ ...base, __piScienceAllowedTools: ["lookup"], excludeTools: ["lookup"] });
-        await slots[0]!.release(); await rejected;
-      } finally { await Promise.all(slots.map((slot) => slot.release())); }
+        await slots[0]!.release();
+        await rejected;
+      } finally {
+        await Promise.all(slots.map((slot) => slot.release()));
+      }
       await project(base);
       await expect(call()).rejects.toThrow("explicit preauthorization");
       await project({ ...base, approveTools: false, excludeTools: ["lookup"] });
@@ -110,7 +189,10 @@ describe("agent-core managed MCP tools", () => {
       await expect(call()).rejects.toThrow("disabled or connector changed");
       await project(null);
       await expect(call()).rejects.toThrow("disabled or connector changed");
-    } finally { await mcp?.close(); await rm(cwd, { recursive: true, force: true }); }
+    } finally {
+      await mcp?.close();
+      await rm(cwd, { recursive: true, force: true });
+    }
   }, 20000);
 
   it("projects only each stdio connector's credentials and ordinary system variables", async () => {
@@ -125,33 +207,75 @@ describe("agent-core managed MCP tools", () => {
       process.env.PR115_MCP_SECOND = "second-test-token";
       await mkdir(join(cwd, ".pi-science"));
       const server = join(cwd, "environment.mjs");
-      await writeFile(server, [
-        `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
-        `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
-        `const server = new McpServer({ name: "environment-test", version: "1" });`,
-        `server.registerTool("inspect", { description: "Inspect allowed environment" }, async () => ({ content: [{ type: "text", text: JSON.stringify({token:process.env.TOKEN,model:!!process.env.OPENAI_API_KEY,internal:!!process.env.PI_SCIENCE_INTERNAL_TOKEN,firstSource:!!process.env.PR115_MCP_FIRST,secondSource:!!process.env.PR115_MCP_SECOND,path:!!process.env.PATH,proxy:!!process.env.HTTPS_PROXY,ca:!!process.env.NODE_EXTRA_CA_CERTS}) }] }));`,
-        `await server.connect(new StdioServerTransport());`,
-      ].join("\n"));
-      await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test",
-        mcpServers: Object.fromEntries(["first", "second"].map((name) => [name, { command: process.execPath, args: [server],
-          approveTools: false, __piScienceConnectorId: `connector_${name}`, __piScienceBuiltin: name === "first",
-          __piScienceEnvironment: { TOKEN: { kind: "environment", name: `PR115_MCP_${name.toUpperCase()}` } } }])) }));
-      mcp = await AgentMcpTools.open(cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "",
-        OPENAI_API_KEY: "model-test-token", PI_SCIENCE_INTERNAL_TOKEN: "server-test-token",
-        PR115_MCP_FIRST: "first-test-token", PR115_MCP_SECOND: "second-test-token" });
+      await writeFile(
+        server,
+        [
+          `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
+          `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
+          `const server = new McpServer({ name: "environment-test", version: "1" });`,
+          `server.registerTool("inspect", { description: "Inspect allowed environment" }, async () => ({ content: [{ type: "text", text: JSON.stringify({token:process.env.TOKEN,model:!!process.env.OPENAI_API_KEY,internal:!!process.env.PI_SCIENCE_INTERNAL_TOKEN,firstSource:!!process.env.PR115_MCP_FIRST,secondSource:!!process.env.PR115_MCP_SECOND,path:!!process.env.PATH,proxy:!!process.env.HTTPS_PROXY,ca:!!process.env.NODE_EXTRA_CA_CERTS}) }] }));`,
+          `await server.connect(new StdioServerTransport());`,
+        ].join("\n"),
+      );
+      await writeFile(
+        join(cwd, ".pi-science", "mcp-runtime.json"),
+        JSON.stringify({
+          version: 1,
+          project_id: "project_test",
+          mcpServers: Object.fromEntries(
+            ["first", "second"].map((name) => [
+              name,
+              {
+                command: process.execPath,
+                args: [server],
+                approveTools: false,
+                __piScienceConnectorId: `connector_${name}`,
+                __piScienceBuiltin: name === "first",
+                __piScienceEnvironment: {
+                  TOKEN: { kind: "environment", name: `PR115_MCP_${name.toUpperCase()}` },
+                },
+              },
+            ]),
+          ),
+        }),
+      );
+      mcp = await AgentMcpTools.open(cwd, new InteractionBridge(() => undefined), {
+        PATH: process.env.PATH ?? "",
+        OPENAI_API_KEY: "model-test-token",
+        PI_SCIENCE_INTERNAL_TOKEN: "server-test-token",
+        PR115_MCP_FIRST: "first-test-token",
+        PR115_MCP_SECOND: "second-test-token",
+      });
       expect(mcp.diagnostics).toEqual([]);
       for (const name of ["first", "second"]) {
         const tool = mcp.tools.find((item) => item.name === `mcp__${name}__inspect`)!;
-        const result = await tool.execute("inspect-environment", {}, () => undefined, {} as never, {} as never, {} as never);
+        const result = await tool.execute(
+          "inspect-environment",
+          {},
+          () => undefined,
+          {} as never,
+          {} as never,
+          {} as never,
+        );
         const text = result.content[0];
         expect(text?.type).toBe("text");
-        expect(JSON.parse(text && text.type === "text" ? text.text : "")).toEqual({ token: `${name}-test-token`,
-          model: false, internal: false, firstSource: false, secondSource: false, path: true, proxy: name === "first", ca: name === "first" });
+        expect(JSON.parse(text && text.type === "text" ? text.text : "")).toEqual({
+          token: `${name}-test-token`,
+          model: false,
+          internal: false,
+          firstSource: false,
+          secondSource: false,
+          path: true,
+          proxy: name === "first",
+          ca: name === "first",
+        });
       }
     } finally {
       vi.unstubAllEnvs();
-      if (previousFirst === undefined) delete process.env.PR115_MCP_FIRST; else process.env.PR115_MCP_FIRST = previousFirst;
-      if (previousSecond === undefined) delete process.env.PR115_MCP_SECOND; else process.env.PR115_MCP_SECOND = previousSecond;
+      if (previousFirst === undefined) delete process.env.PR115_MCP_FIRST;
+      else process.env.PR115_MCP_FIRST = previousFirst;
+      if (previousSecond === undefined) delete process.env.PR115_MCP_SECOND;
+      else process.env.PR115_MCP_SECOND = previousSecond;
       await mcp?.close();
       await rm(cwd, { recursive: true, force: true });
     }
@@ -162,26 +286,61 @@ describe("agent-core managed MCP tools", () => {
     try {
       await mkdir(join(cwd, ".pi-science"));
       const server = join(cwd, "server.mjs");
-      await writeFile(server, [
-        `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
-        `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
-        `import { z } from ${JSON.stringify(import.meta.resolve("zod"))};`,
-        `const server = new McpServer({ name: "test", version: "1" });`,
-        `server.registerTool("echo", { description: "Echo", inputSchema: { value: z.string() } }, async ({ value }) => ({ content: [{ type: "text", text: value }] }));`,
-        `await server.connect(new StdioServerTransport());`,
-      ].join("\n"));
-      await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test",
-        mcpServers: { local: { command: process.execPath, args: [server], approveTools: true,
-          __piScienceConnectorId: "connector_test", __piScienceConnectorRevision: 7, __piScienceSettingsRevision: 3, includeTools: ["echo"] } } }));
+      await writeFile(
+        server,
+        [
+          `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
+          `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
+          `import { z } from ${JSON.stringify(import.meta.resolve("zod"))};`,
+          `const server = new McpServer({ name: "test", version: "1" });`,
+          `server.registerTool("echo", { description: "Echo", inputSchema: { value: z.string() } }, async ({ value }) => ({ content: [{ type: "text", text: value }] }));`,
+          `await server.connect(new StdioServerTransport());`,
+        ].join("\n"),
+      );
+      await writeFile(
+        join(cwd, ".pi-science", "mcp-runtime.json"),
+        JSON.stringify({
+          version: 1,
+          project_id: "project_test",
+          mcpServers: {
+            local: {
+              command: process.execPath,
+              args: [server],
+              approveTools: true,
+              __piScienceConnectorId: "connector_test",
+              __piScienceConnectorRevision: 7,
+              __piScienceSettingsRevision: 3,
+              includeTools: ["echo"],
+            },
+          },
+        }),
+      );
       const interactions: Array<Record<string, unknown>> = [];
       const bridge = new InteractionBridge((event) => interactions.push(event));
       mcp = await AgentMcpTools.open(cwd, bridge, { PATH: process.env.PATH ?? "" });
       expect(mcp.diagnostics).toEqual([]);
       expect(mcp.tools.map((tool) => tool.name)).toEqual(["mcp__local__echo"]);
       const updates: unknown[] = [];
-      const pending = mcp.tools[0]!.execute("call-1", { value: "hello" }, (update) => { updates.push(update); },
-        {} as never, {} as never, { abortSignal: undefined } as never);
-      await vi.waitFor(() => expect(interactions).toMatchObject([{ type: "interaction.requested", kind: "permission", method: "confirm", id: expect.any(String) }]));
+      const pending = mcp.tools[0]!.execute(
+        "call-1",
+        { value: "hello" },
+        (update) => {
+          updates.push(update);
+        },
+        {} as never,
+        {} as never,
+        { abortSignal: undefined } as never,
+      );
+      await vi.waitFor(() =>
+        expect(interactions).toMatchObject([
+          {
+            type: "interaction.requested",
+            kind: "permission",
+            method: "confirm",
+            id: expect.any(String),
+          },
+        ]),
+      );
       bridge.notify("extension_ui_response", { id: interactions[0]!.id, confirmed: true });
       const result = await pending;
       expect(result.content).toEqual([{ type: "text", text: "hello" }]);
@@ -189,8 +348,18 @@ describe("agent-core managed MCP tools", () => {
         { content: [], details: { approval: "waiting" } },
         { content: [], details: { approval: "resolved" } },
       ]);
-      expect(interactions[0]).toMatchObject({ toolCallId: "call-1", mcpGrant: { connectorId: "connector_test", toolName: "echo", connectorRevision: 7, settingsRevision: 3 } });
-      expect(result.details).toMatchObject({ scheduling: { approval_ms: expect.any(Number), execution_ms: expect.any(Number) } });
+      expect(interactions[0]).toMatchObject({
+        toolCallId: "call-1",
+        mcpGrant: {
+          connectorId: "connector_test",
+          toolName: "echo",
+          connectorRevision: 7,
+          settingsRevision: 3,
+        },
+      });
+      expect(result.details).toMatchObject({
+        scheduling: { approval_ms: expect.any(Number), execution_ms: expect.any(Number) },
+      });
     } finally {
       await mcp?.close();
       await rm(cwd, { recursive: true, force: true });
@@ -204,70 +373,148 @@ describe("agent-core managed MCP tools", () => {
     { mode: "auto", safe: false, builtin: true, asks: true },
     { mode: "auto", safe: false, builtin: false, asks: true },
     { mode: "full", safe: false, builtin: false, asks: false },
-  ] as const)("applies $mode to safe=$safe builtin=$builtin tools using session-owned policy", async ({ mode, safe, builtin, asks }) => {
-    const cwd = await mkdtemp(join(tmpdir(), "mcp-approval-mode-"));
-    vi.stubEnv("PI_SCIENCE_HOME", join(cwd, "service-private"));
-    let mcp: AgentMcpTools | undefined;
-    try {
-      await mkdir(join(cwd, ".pi-science"));
-      const server = join(cwd, "server.mjs");
-      await writeFile(server, [
-        `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
-        `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
-        `const server = new McpServer({ name: "test", version: "1" });`,
-        `server.registerTool("echo", { description: "Echo", annotations: ${JSON.stringify(safe ? { readOnlyHint: true, destructiveHint: false, idempotentHint: true } : {})} }, async () => ({ content: [{ type: "text", text: "ok" }] }));`,
-        `await server.connect(new StdioServerTransport());`,
-      ].join("\n"));
-      const definition = { command: process.execPath, args: [server], approveTools: true, __piScienceConnectorId: "connector_mode", ...(builtin ? { __piScienceBuiltin: true } : {}) };
-      await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_mode", mcpServers: { local: definition } }));
-      const { saveSessionApproval } = await import("../../sandbox/session-approval.js");
-      await saveSessionApproval(cwd, "mode-session", mode, 0);
-      const events: Array<Record<string, unknown>> = [];
-      const bridge = new InteractionBridge((event) => events.push(event));
-      mcp = await AgentMcpTools.open(cwd, bridge, { PATH: process.env.PATH ?? "" }, undefined, undefined, false, undefined, "mode-session");
-      expect(mcp.diagnostics).toEqual([]);
-      const pending = mcp.tools[0]!.execute("call-mode", {}, () => {}, {} as never, {} as never, {} as never);
-      if (asks) {
-        await vi.waitFor(() => expect(events).toHaveLength(1));
-        bridge.notify("extension_ui_response", { id: events[0]!.id, confirmed: true });
+  ] as const)(
+    "applies $mode to safe=$safe builtin=$builtin tools using session-owned policy",
+    async ({ mode, safe, builtin, asks }) => {
+      const cwd = await mkdtemp(join(tmpdir(), "mcp-approval-mode-"));
+      vi.stubEnv("PI_SCIENCE_HOME", join(cwd, "service-private"));
+      let mcp: AgentMcpTools | undefined;
+      try {
+        await mkdir(join(cwd, ".pi-science"));
+        const server = join(cwd, "server.mjs");
+        await writeFile(
+          server,
+          [
+            `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
+            `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
+            `const server = new McpServer({ name: "test", version: "1" });`,
+            `server.registerTool("echo", { description: "Echo", annotations: ${JSON.stringify(safe ? { readOnlyHint: true, destructiveHint: false, idempotentHint: true } : {})} }, async () => ({ content: [{ type: "text", text: "ok" }] }));`,
+            `await server.connect(new StdioServerTransport());`,
+          ].join("\n"),
+        );
+        const definition = {
+          command: process.execPath,
+          args: [server],
+          approveTools: true,
+          __piScienceConnectorId: "connector_mode",
+          ...(builtin ? { __piScienceBuiltin: true } : {}),
+        };
+        await writeFile(
+          join(cwd, ".pi-science", "mcp-runtime.json"),
+          JSON.stringify({
+            version: 1,
+            project_id: "project_mode",
+            mcpServers: { local: definition },
+          }),
+        );
+        const { saveSessionApproval } = await import("../../sandbox/session-approval.js");
+        await saveSessionApproval(cwd, "mode-session", mode, 0);
+        const events: Array<Record<string, unknown>> = [];
+        const bridge = new InteractionBridge((event) => events.push(event));
+        mcp = await AgentMcpTools.open(
+          cwd,
+          bridge,
+          { PATH: process.env.PATH ?? "" },
+          undefined,
+          undefined,
+          false,
+          undefined,
+          "mode-session",
+        );
+        expect(mcp.diagnostics).toEqual([]);
+        const pending = mcp.tools[0]!.execute(
+          "call-mode",
+          {},
+          () => {},
+          {} as never,
+          {} as never,
+          {} as never,
+        );
+        if (asks) {
+          await vi.waitFor(() => expect(events).toHaveLength(1));
+          bridge.notify("extension_ui_response", { id: events[0]!.id, confirmed: true });
+        }
+        expect(await pending).toMatchObject({ content: [{ text: "ok" }] });
+        expect(events).toHaveLength(asks ? 1 : 0);
+        if (mode === "full") {
+          const slots = [];
+          try {
+            for (let i = 0; i < 4; i++)
+              slots.push(
+                await acquireMcpCall(cwd, JSON.stringify(["project_mode", "connector_mode"])),
+              );
+            const queued = mcp.tools[0]!.execute(
+              "old-full-queued",
+              {},
+              () => {},
+              {} as never,
+              {} as never,
+              {} as never,
+            ).then(
+              () => null,
+              (error: Error) => error,
+            );
+            const { workspaceFile } = await import("../../../storage/persistence.js");
+            const { createHash } = await import("node:crypto");
+            const queue = workspaceFile(
+              cwd,
+              `mcp-call-queues/${createHash("sha256")
+                .update(JSON.stringify(["project_mode", "connector_mode"]))
+                .digest("hex")}.json`,
+            );
+            await vi.waitFor(async () =>
+              expect(JSON.parse(await readFile(queue, "utf8")).waiting).toHaveLength(1),
+            );
+            await saveSessionApproval(cwd, "mode-session", "ask", 1);
+            await Promise.all(slots.splice(0).map((slot) => slot.release()));
+            expect((await queued)?.message).toContain("approval revision changed while queued");
+          } finally {
+            await Promise.all(slots.map((slot) => slot.release()));
+          }
+        }
+        await writeFile(
+          join(cwd, ".pi-science", "mcp-runtime.json"),
+          JSON.stringify({
+            version: 1,
+            project_id: "project_mode",
+            mcpServers: { local: { ...definition, excludeTools: ["echo"] } },
+          }),
+        );
+        await expect(
+          mcp.tools[0]!.execute("revoked", {}, () => {}, {} as never, {} as never, {} as never),
+        ).rejects.toThrow("disabled");
+      } finally {
+        await mcp?.close();
+        await rm(cwd, { recursive: true, force: true });
       }
-      expect(await pending).toMatchObject({ content: [{ text: "ok" }] });
-      expect(events).toHaveLength(asks ? 1 : 0);
-      if (mode === "full") {
-        const slots = [];
-        try {
-          for (let i = 0; i < 4; i++) slots.push(await acquireMcpCall(cwd, JSON.stringify(["project_mode", "connector_mode"])));
-          const queued = mcp.tools[0]!.execute("old-full-queued", {}, () => {}, {} as never, {} as never, {} as never).then(() => null, (error: Error) => error);
-          const { workspaceFile } = await import("../../../storage/persistence.js");
-          const { createHash } = await import("node:crypto");
-          const queue = workspaceFile(cwd, `mcp-call-queues/${createHash("sha256").update(JSON.stringify(["project_mode", "connector_mode"])).digest("hex")}.json`);
-          await vi.waitFor(async () => expect(JSON.parse(await readFile(queue, "utf8")).waiting).toHaveLength(1));
-          await saveSessionApproval(cwd, "mode-session", "ask", 1);
-          await Promise.all(slots.splice(0).map((slot) => slot.release()));
-          expect((await queued)?.message).toContain("approval revision changed while queued");
-        } finally { await Promise.all(slots.map((slot) => slot.release())); }
-      }
-      await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_mode", mcpServers: { local: { ...definition, excludeTools: ["echo"] } } }));
-      await expect(mcp.tools[0]!.execute("revoked", {}, () => {}, {} as never, {} as never, {} as never)).rejects.toThrow("disabled");
-    } finally { await mcp?.close(); await rm(cwd, { recursive: true, force: true }); }
-  }, 20_000);
+    },
+    20_000,
+  );
 
   it("uses the checked HTTP transport for a managed local endpoint", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-mcp-http-"));
     const serverErrors: string[] = [];
-    const http = createServer((request, response) => { void (async () => {
-      const server = new McpServer({ name: "http-test", version: "1" });
-      server.registerTool("echo", { description: "Echo", inputSchema: { value: z.string() } },
-        async ({ value }) => ({ content: [{ type: "text", text: value }] }));
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      await server.connect(transport);
-      response.once("close", () => { void transport.close(); void server.close(); });
-      await transport.handleRequest(request, response);
-    })().catch((error) => {
-      serverErrors.push(String(error));
-      if (!response.headersSent) response.writeHead(500);
-      response.end(String(error));
-    }); });
+    const http = createServer((request, response) => {
+      void (async () => {
+        const server = new McpServer({ name: "http-test", version: "1" });
+        server.registerTool(
+          "echo",
+          { description: "Echo", inputSchema: { value: z.string() } },
+          async ({ value }) => ({ content: [{ type: "text", text: value }] }),
+        );
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+        await server.connect(transport);
+        response.once("close", () => {
+          void transport.close();
+          void server.close();
+        });
+        await transport.handleRequest(request, response);
+      })().catch((error) => {
+        serverErrors.push(String(error));
+        if (!response.headersSent) response.writeHead(500);
+        response.end(String(error));
+      });
+    });
     http.listen(0, "127.0.0.1");
     await once(http, "listening");
     let mcp: AgentMcpTools | undefined;
@@ -275,14 +522,37 @@ describe("agent-core managed MCP tools", () => {
       await mkdir(join(cwd, ".pi-science"));
       const address = http.address();
       if (!address || typeof address === "string") throw new Error("missing port");
-      await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test",
-        mcpServers: { remote: { url: `http://127.0.0.1:${address.port}/mcp`, approveTools: false,
-          __piScienceConnectorId: "connector_http", __piScienceAllowPrivate: true } } }));
-      mcp = await AgentMcpTools.open(cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "" });
-      expect({ diagnostics: mcp.diagnostics, serverErrors }).toEqual({ diagnostics: [], serverErrors: [] });
+      await writeFile(
+        join(cwd, ".pi-science", "mcp-runtime.json"),
+        JSON.stringify({
+          version: 1,
+          project_id: "project_test",
+          mcpServers: {
+            remote: {
+              url: `http://127.0.0.1:${address.port}/mcp`,
+              approveTools: false,
+              __piScienceConnectorId: "connector_http",
+              __piScienceAllowPrivate: true,
+            },
+          },
+        }),
+      );
+      mcp = await AgentMcpTools.open(cwd, new InteractionBridge(() => undefined), {
+        PATH: process.env.PATH ?? "",
+      });
+      expect({ diagnostics: mcp.diagnostics, serverErrors }).toEqual({
+        diagnostics: [],
+        serverErrors: [],
+      });
       expect(mcp.tools.map((tool) => tool.name)).toEqual(["mcp__remote__echo"]);
-      const result = await mcp.tools[0]!.execute("call-1", { value: "over HTTP" }, () => undefined,
-        {} as never, {} as never, { abortSignal: undefined } as never);
+      const result = await mcp.tools[0]!.execute(
+        "call-1",
+        { value: "over HTTP" },
+        () => undefined,
+        {} as never,
+        {} as never,
+        { abortSignal: undefined } as never,
+      );
       expect(result.content).toEqual([{ type: "text", text: "over HTTP" }]);
     } finally {
       await mcp?.close();
@@ -301,11 +571,25 @@ describe("agent-core managed MCP tools", () => {
       if (!address || typeof address === "string") throw new Error("missing port");
       await mkdir(join(cwd, ".pi-science"));
       const endpoint = `http://127.0.0.1:${address.port}/mcp`;
-      await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test",
-        mcpServers: Object.fromEntries(["first", "second"].map((name) => [name, {
-          url: endpoint, transport: "streamable_http", requestTimeoutMs: 15_000,
-          __piScienceConnectorId: `connector_${name}`, __piScienceAllowPrivate: true,
-        }])) }));
+      await writeFile(
+        join(cwd, ".pi-science", "mcp-runtime.json"),
+        JSON.stringify({
+          version: 1,
+          project_id: "project_test",
+          mcpServers: Object.fromEntries(
+            ["first", "second"].map((name) => [
+              name,
+              {
+                url: endpoint,
+                transport: "streamable_http",
+                requestTimeoutMs: 15_000,
+                __piScienceConnectorId: `connector_${name}`,
+                __piScienceAllowPrivate: true,
+              },
+            ]),
+          ),
+        }),
+      );
       const started = Date.now();
       const mcp = await AgentMcpTools.open(cwd, new InteractionBridge(() => undefined), {}, 300);
       expect(Date.now() - started).toBeLessThan(2_000);
@@ -323,12 +607,197 @@ describe("agent-core managed MCP tools", () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-mcp-missing-"));
     try {
       await mkdir(join(cwd, ".pi-science"));
-      await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test",
-        mcpServers: { unavailable: { __piScienceConnectorId: "connector_missing", command: "node",
-          __piScienceEnvironment: { TOKEN: { kind: "environment", name: "UNSET_LAB_KEY_FOR_TEST" } } } } }));
+      await writeFile(
+        join(cwd, ".pi-science", "mcp-runtime.json"),
+        JSON.stringify({
+          version: 1,
+          project_id: "project_test",
+          mcpServers: {
+            unavailable: {
+              __piScienceConnectorId: "connector_missing",
+              command: "node",
+              __piScienceEnvironment: {
+                TOKEN: { kind: "environment", name: "UNSET_LAB_KEY_FOR_TEST" },
+              },
+            },
+          },
+        }),
+      );
       const mcp = await AgentMcpTools.open(cwd, new InteractionBridge(() => undefined), {});
       expect(mcp.tools).toEqual([]);
-      expect(mcp.diagnostics).toEqual(["unavailable: Missing MCP environment variable: UNSET_LAB_KEY_FOR_TEST"]);
-    } finally { await rm(cwd, { recursive: true, force: true }); }
+      expect(mcp.diagnostics).toEqual([
+        "unavailable: Missing MCP environment variable: UNSET_LAB_KEY_FOR_TEST",
+      ]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 });
+
+it("continues local MCP initialization and a tool call after network approvals exceed their active timeouts", async () => {
+  const { startNetworkApprovalChannel, networkApprovalEndpoint } = await import(
+    "../../sandbox/network-approval-channel.js"
+  );
+  const { requestNetworkApproval } = await import("../../sandbox/network-approval-client.js");
+  const { requestNetworkAccess } = await import("./network-approval.js");
+  const { startSandboxNetwork } = await import("../../sandbox/network.js");
+  const { networkGrantSource } = await import("../../sandbox/network-grant-state.js");
+  const { networkGrantsPath } = await import("../../sandbox/network-grants.js");
+  const { McpExecutionClock } = await import("./mcp-execution-clock.js");
+  const transportModule = await import("../../../mcp/sandbox-transport.js");
+  const original = transportModule.localMcpTransport;
+  const clock = new McpExecutionClock();
+  const cwd = await realpath(await mkdtemp(join(tmpdir(), "mcp-network-wait-")));
+  vi.stubEnv("PI_SCIENCE_HOME", join(cwd, "service"));
+  await mkdir(join(cwd, ".pi-science"));
+  let cancelledCard!: () => void;
+  let next!: (event: Record<string, unknown>) => void;
+  let requested = new Promise<Record<string, unknown>>((resolve) => {
+    next = resolve;
+  });
+  const bridge = new InteractionBridge((event) => {
+    if (event.type === "interaction.requested") next(event);
+    if (event.type === "interaction.resolved") cancelledCard?.();
+  });
+  const channel = await startNetworkApprovalChannel(
+    cwd,
+    "parent",
+    async ({ domain, profile, contextId }, signal) => {
+      const finish = clock.beginApproval(contextId!);
+      try {
+        return ["granted", "already_allowed"].includes(
+          (
+            await requestNetworkAccess(
+              bridge,
+              { domain, profile },
+              clock.approvalSignal(contextId!, signal),
+            )
+          ).details.status,
+        );
+      } finally {
+        finish();
+      }
+    },
+  );
+  const endpoint = (await networkApprovalEndpoint(cwd, "parent"))!;
+  const proxies: Array<Awaited<ReturnType<typeof startSandboxNetwork>>> = [];
+  const spy = vi.spyOn(transportModule, "localMcpTransport").mockImplementation(async (...args) => {
+    expect(args[6]).toBe("parent");
+    expect(args[7]).toEqual(expect.any(String));
+    const proxy = await startSandboxNetwork(
+      { mode: "none" },
+      networkGrantSource({ mode: "none" }, networkGrantsPath(), "mcp"),
+      (host, _port, _transport, signal) =>
+        requestNetworkApproval(endpoint, host, "mcp", signal, args[7]),
+    );
+    proxies.push(proxy);
+    args[4] = { ...args[4], FIXTURE_PROXY_PORT: String(proxy.httpPort) };
+    return original(...args);
+  });
+  const server = join(cwd, "server.mjs");
+  await writeFile(
+    server,
+    [
+      `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
+      `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
+      'import { request } from "node:http";',
+      'const probe = host => new Promise((resolve,reject) => { const req=request({host:"127.0.0.1",port:Number(process.env.FIXTURE_PROXY_PORT),method:"CONNECT",path:host+":443"}); req.on("error",reject); req.on("connect",(res,socket)=>{socket.destroy();res.statusCode===200?resolve():reject(new Error("network denied"));});req.end(); });',
+      'await probe("initialize.example.org");',
+      'const server = new McpServer({name:"network-wait",version:"1"});',
+      'let calls=0; server.registerTool("lookup", {}, async () => { await probe(++calls===1?"call.example.org":"cancel.example.org"); return {content:[{type:"text",text:"approved source"}]}; });',
+      "await server.connect(new StdioServerTransport());",
+      // Force the SDK's timed shutdown escalation on every platform, including
+      // POSIX hosts where closing stdin would otherwise let the fixture exit.
+      "setInterval(() => {}, 1000);",
+    ].join("\n"),
+  );
+  await writeJsonAtomic(join(cwd, ".pi-science/mcp-runtime.json"), {
+    version: 1,
+    project_id: "project_test",
+    mcpServers: {
+      science: {
+        command: process.execPath,
+        args: [server],
+        approveTools: false,
+        __piScienceConnectorId: "connector_science",
+      },
+    },
+  });
+  let mcp: AgentMcpTools | undefined;
+  // Only advance the clock read by McpExecutionClock. The real stdio child,
+  // sockets and SDK shutdown escalation must retain their native timers.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const opening = AgentMcpTools.open(
+      cwd,
+      bridge,
+      { PATH: process.env.PATH ?? "" },
+      undefined,
+      undefined,
+      false,
+      undefined,
+      "parent",
+      clock,
+    );
+    const initial = await Promise.race([
+      requested,
+      opening.then((result) => {
+        throw new Error(
+          `MCP discovery completed without requesting network approval: ${result.diagnostics.join("; ")}`,
+        );
+      }),
+    ]);
+    vi.setSystemTime(Date.now() + 90_000);
+    bridge.notify("extension_ui_response", { id: initial.id, value: "allow" });
+    mcp = await opening;
+    expect(mcp.diagnostics).toEqual([]);
+    requested = new Promise((resolve) => {
+      next = resolve;
+    });
+    const result = mcp.tools[0]!.execute(
+      "lookup",
+      {},
+      () => {},
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const call = await requested;
+    vi.setSystemTime(Date.now() + 90_000);
+    bridge.notify("extension_ui_response", { id: call.id, value: "allow" });
+    expect(await result).toMatchObject({ content: [{ text: "approved source" }] });
+    requested = new Promise((resolve) => {
+      next = resolve;
+    });
+    const controller = new AbortController();
+    const resolvedCard = new Promise<void>((resolve) => {
+      cancelledCard = resolve;
+    });
+    const cancelled = mcp.tools[0]!.execute(
+      "cancel",
+      {},
+      () => {},
+      {} as never,
+      {} as never,
+      { abortSignal: controller.signal } as never,
+    );
+    const rejected = expect(cancelled).rejects.toThrow("cancelled");
+    await requested;
+    controller.abort(new Error("cancelled"));
+    await rejected;
+    await resolvedCard;
+    expect(bridge.hasPending).toBe(false);
+    const { readNetworkGrants } = await import("../../sandbox/network-grants.js");
+    expect(
+      (await readNetworkGrants()).rules.some((rule) => rule.domain === "cancel.example.org"),
+    ).toBe(false);
+  } finally {
+    vi.useRealTimers();
+    await mcp?.close();
+    bridge.close();
+    await channel.close();
+    await Promise.all(proxies.map((proxy) => proxy.close()));
+    spy.mockRestore();
+    await rm(cwd, { recursive: true, force: true });
+  }
+}, 15_000);

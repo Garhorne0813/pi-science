@@ -5,7 +5,11 @@ import { access, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promi
 import { createServer } from "node:net";
 import { join, resolve, sep } from "node:path";
 import { configPath, metadataRoot } from "../../storage/persistence.js";
-import { environmentPythonExecutable, type EnvironmentRevision, type WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
+import {
+  environmentPythonExecutable,
+  type EnvironmentRevision,
+  type WorkspaceEnvironmentService,
+} from "../workspace/workspace-environment.js";
 
 export interface NotebookFile {
   path: string;
@@ -40,12 +44,18 @@ export interface NotebookServiceDependencies {
   platform?: NodeJS.Platform;
   micromambaExecutable?: string;
   micromambaResolver?: () => Promise<string>;
-  environments?: Pick<WorkspaceEnvironmentService, "installPackages"> & Partial<Pick<WorkspaceEnvironmentService, "list">>;
+  environments?: Pick<WorkspaceEnvironmentService, "installPackages"> &
+    Partial<Pick<WorkspaceEnvironmentService, "list" | "ensure">>;
   now?: () => Date;
 }
 
 async function pathExists(target: string): Promise<boolean> {
-  try { await access(target); return true; } catch { return false; }
+  try {
+    await access(target);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function findAvailablePort(): Promise<number> {
@@ -62,12 +72,19 @@ async function findAvailablePort(): Promise<number> {
 }
 
 function packageName(spec: string): string {
-  return spec.trim().toLowerCase().match(/^[^<>=![\s]+/)?.[0] ?? "";
+  return (
+    spec
+      .trim()
+      .toLowerCase()
+      .match(/^[^<>=![\s]+/)?.[0] ?? ""
+  );
 }
 
 function hasPackage(packages: unknown, name: string): boolean {
-  return Array.isArray(packages)
-    && packages.some((item) => typeof item === "string" && packageName(item) === name);
+  return (
+    Array.isArray(packages) &&
+    packages.some((item) => typeof item === "string" && packageName(item) === name)
+  );
 }
 
 export class NotebookService {
@@ -76,7 +93,8 @@ export class NotebookService {
   private readonly micromamba?: string;
   private readonly micromambaConfigured: boolean;
   private readonly micromambaResolver?: () => Promise<string>;
-  private readonly environments?: Pick<WorkspaceEnvironmentService, "installPackages"> & Partial<Pick<WorkspaceEnvironmentService, "list">>;
+  private readonly environments?: Pick<WorkspaceEnvironmentService, "installPackages"> &
+    Partial<Pick<WorkspaceEnvironmentService, "list" | "ensure">>;
   readonly jupyterPrefix: string;
   readonly jupyterBin: string;
   private jupyterProcess?: ChildProcess;
@@ -92,7 +110,8 @@ export class NotebookService {
     this.platform = deps.platform ?? process.platform;
     this.environments = deps.environments;
     this.micromambaResolver = deps.micromambaResolver;
-    const configuredMicromamba = deps.micromambaExecutable ?? process.env.PI_SCIENCE_MICROMAMBA_EXECUTABLE;
+    const configuredMicromamba =
+      deps.micromambaExecutable ?? process.env.PI_SCIENCE_MICROMAMBA_EXECUTABLE;
     this.micromambaConfigured = Boolean(configuredMicromamba);
     const prefix = this.configPath(join("micromamba", "envs", "pi-science-jupyter-runtime"));
     this.jupyterPrefix = prefix;
@@ -102,7 +121,9 @@ export class NotebookService {
   }
 
   private managedMicromamba(): string | undefined {
-    const candidate = this.configPath(join("micromamba", "bin", this.platform === "win32" ? "micromamba.exe" : "micromamba"));
+    const candidate = this.configPath(
+      join("micromamba", "bin", this.platform === "win32" ? "micromamba.exe" : "micromamba"),
+    );
     return existsSync(candidate) ? candidate : undefined;
   }
 
@@ -111,7 +132,11 @@ export class NotebookService {
     const out: NotebookFile[] = [];
     const walk = async (dir: string): Promise<void> => {
       let entries;
-      try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
       for (const entry of entries) {
         if (entry.name.startsWith(".")) continue;
         const full = join(dir, entry.name);
@@ -119,7 +144,10 @@ export class NotebookService {
         else if (entry.isFile() && entry.name.endsWith(".ipynb")) {
           const info = await stat(full);
           out.push({
-            path: full.slice(root.length + 1).split(sep).join("/"),
+            path: full
+              .slice(root.length + 1)
+              .split(sep)
+              .join("/"),
             name: entry.name,
             size: info.size,
             modified: info.mtime.toISOString(),
@@ -133,14 +161,19 @@ export class NotebookService {
 
   async envStatus(_cwd: string): Promise<JupyterEnvStatus> {
     const ready = await pathExists(this.jupyterBin);
-    const manager = this.micromamba && this.micromamba !== "unavailable" ? "micromamba" : "unavailable";
+    const manager =
+      this.micromamba && this.micromamba !== "unavailable" ? "micromamba" : "unavailable";
     return { ready, path: this.jupyterPrefix, manager };
   }
 
-  async setup(cwd: string, onEvent?: (event: JupyterSetupEvent) => void): Promise<JupyterSetupEvent> {
+  async setup(
+    cwd: string,
+    onEvent?: (event: JupyterSetupEvent) => void,
+  ): Promise<JupyterSetupEvent> {
     if (this.setupInProgress) throw new Error("Setup already in progress");
     const micromamba = this.micromamba;
-    if (!micromamba || micromamba === "unavailable") throw new Error("Micromamba runtime is unavailable");
+    if (!micromamba || micromamba === "unavailable")
+      throw new Error("Micromamba runtime is unavailable");
     // Claim the slot before the first await so concurrent callers cannot both pass the check.
     this.setupInProgress = true;
     try {
@@ -151,12 +184,23 @@ export class NotebookService {
         onEvent?.(event);
       };
       emit("progress", "Creating application Jupyter runtime...");
-      const resolvedMicromamba = !this.micromambaConfigured && this.micromambaResolver
-        ? await this.micromambaResolver()
-        : micromamba;
+      const resolvedMicromamba =
+        !this.micromambaConfigured && this.micromambaResolver
+          ? await this.micromambaResolver()
+          : micromamba;
       const result = await this.run(
         resolvedMicromamba,
-        ["create", "--yes", "--prefix", prefix, "--channel", "conda-forge", "--strict-channel-priority", "python=3.12", "jupyterlab"],
+        [
+          "create",
+          "--yes",
+          "--prefix",
+          prefix,
+          "--channel",
+          "conda-forge",
+          "--strict-channel-priority",
+          "python=3.12",
+          "jupyterlab",
+        ],
         15 * 60_000,
         this.micromambaEnvironment(),
       );
@@ -178,7 +222,10 @@ export class NotebookService {
     const payload: JupyterStatusPayload = {
       running,
       port: running ? this.jupyterPort : null,
-      url: running && this.jupyterPort && this.jupyterToken ? `http://127.0.0.1:${this.jupyterPort}/lab?token=${this.jupyterToken}` : null,
+      url:
+        running && this.jupyterPort && this.jupyterToken
+          ? `http://127.0.0.1:${this.jupyterPort}/lab?token=${this.jupyterToken}`
+          : null,
       cwd: running ? this.jupyterCwd : null,
       matches_workspace: !running || cwd === undefined || this.jupyterCwd === resolve(cwd),
     };
@@ -188,8 +235,14 @@ export class NotebookService {
   /** Starts are serialized so two concurrent requests cannot spawn competing Jupyter processes. */
   start(cwd: string): Promise<JupyterStatusPayload> {
     const generation = this.lifecycleGeneration;
-    const run = this.startQueue.then(() => this.startUnlocked(cwd, generation), () => this.startUnlocked(cwd, generation));
-    this.startQueue = run.then(() => undefined, () => undefined);
+    const run = this.startQueue.then(
+      () => this.startUnlocked(cwd, generation),
+      () => this.startUnlocked(cwd, generation),
+    );
+    this.startQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
     return run;
   }
 
@@ -208,7 +261,11 @@ export class NotebookService {
     const process = this.jupyterProcess;
     if (process && process.exitCode === null) {
       process.kill("SIGTERM");
-      try { process.kill("SIGKILL"); } catch { /* best effort */ }
+      try {
+        process.kill("SIGKILL");
+      } catch {
+        /* best effort */
+      }
     }
     this.clearJupyterState();
   }
@@ -216,15 +273,21 @@ export class NotebookService {
   private async startUnlocked(cwd: string, generation: number): Promise<JupyterStatusPayload> {
     const workspace = resolve(cwd);
     this.assertStartActive(generation);
-    if (!(await pathExists(workspace))) throw new Error(`Workspace directory does not exist: ${workspace}`);
+    if (!(await pathExists(workspace)))
+      throw new Error(`Workspace directory does not exist: ${workspace}`);
     this.assertStartActive(generation);
     if (this.jupyterProcess && this.jupyterProcess.exitCode === null) {
       if (this.jupyterCwd === workspace) return { ...this.status(), message: "Already running" };
-      throw new Error(`Jupyter Lab is already running for another workspace: ${this.jupyterCwd ?? "unknown"}`);
+      throw new Error(
+        `Jupyter Lab is already running for another workspace: ${this.jupyterCwd ?? "unknown"}`,
+      );
     }
     this.stopProcess();
     this.assertStartActive(generation);
-    if (!(await pathExists(this.jupyterBin))) throw new Error("The application Jupyter runtime is not installed");
+    if (!(await pathExists(this.jupyterBin)))
+      throw new Error("The application Jupyter runtime is not installed");
+    this.assertStartActive(generation);
+    await this.environments?.ensure?.(workspace);
     this.assertStartActive(generation);
     await this.installProjectKernelspec(workspace);
     this.assertStartActive(generation);
@@ -260,7 +323,12 @@ export class NotebookService {
   }
 
   stop(cwd?: string): JupyterStatusPayload {
-    if (cwd !== undefined && this.jupyterProcess && this.jupyterProcess.exitCode === null && this.jupyterCwd !== resolve(cwd)) {
+    if (
+      cwd !== undefined &&
+      this.jupyterProcess &&
+      this.jupyterProcess.exitCode === null &&
+      this.jupyterCwd !== resolve(cwd)
+    ) {
       throw new Error("Cannot stop Jupyter Lab owned by another workspace");
     }
     this.lifecycleGeneration += 1;
@@ -273,7 +341,10 @@ export class NotebookService {
     await this.startQueue;
   }
 
-  private async installProjectKernelspec(workspace: string, allowDependencyInstall = true): Promise<void> {
+  private async installProjectKernelspec(
+    workspace: string,
+    allowDependencyInstall = true,
+  ): Promise<void> {
     const bindingPath = join(metadataRoot(workspace), "environment.json");
     let binding: { environment_id?: unknown; revision_id?: unknown };
     try {
@@ -284,15 +355,21 @@ export class NotebookService {
     if (typeof binding.revision_id !== "string") return;
     let revision: EnvironmentRevision | Record<string, unknown> | undefined;
     if (this.environments?.list) {
-      revision = (await this.environments.list()).find((item) => item.revision_id === binding.revision_id && item.status === "ready");
+      revision = (await this.environments.list()).find(
+        (item) => item.revision_id === binding.revision_id && item.status === "ready",
+      );
     } else {
       let registry: { revisions?: Array<Record<string, unknown>> };
       try {
-        registry = JSON.parse(await readFile(this.configPath(join("environments", "registry.json")), "utf8")) as typeof registry;
+        registry = JSON.parse(
+          await readFile(this.configPath(join("environments", "registry.json")), "utf8"),
+        ) as typeof registry;
       } catch {
         return;
       }
-      revision = registry.revisions?.find((item) => item.revision_id === binding.revision_id && item.status === "ready");
+      revision = registry.revisions?.find(
+        (item) => item.revision_id === binding.revision_id && item.status === "ready",
+      );
     }
     if (!revision || typeof revision.prefix !== "string") return;
     const prefix = revision.prefix;
@@ -301,63 +378,93 @@ export class NotebookService {
     const kernelPackage = language === "r" ? "r-irkernel" : "ipykernel";
     if (!hasPackage(revision.packages, kernelPackage)) {
       if (!allowDependencyInstall || !this.environments) {
-        throw new Error(`The ${language} environment must include ${kernelPackage} before a Jupyter kernelspec can be created`);
+        throw new Error(
+          `The ${language} environment must include ${kernelPackage} before a Jupyter kernelspec can be created`,
+        );
       }
       await this.environments.installPackages(workspace, [kernelPackage]);
       return this.installProjectKernelspec(workspace, false);
     }
-    const displayName = typeof revision.display_name === "string" ? revision.display_name : "Pi-Science Project";
-    const executable = language === "r"
-      ? join(binDir, this.platform === "win32" ? "R.exe" : "R")
-      : environmentPythonExecutable(prefix, this.platform);
+    const displayName =
+      typeof revision.display_name === "string" ? revision.display_name : "Pi-Science Project";
+    const executable =
+      language === "r"
+        ? join(binDir, this.platform === "win32" ? "R.exe" : "R")
+        : environmentPythonExecutable(prefix, this.platform);
     if (!(await pathExists(executable))) return;
-    const kernelDir = join(this.jupyterPrefix, "share", "jupyter", "kernels", `pi-science-${binding.revision_id.toLowerCase()}`);
+    const kernelDir = join(
+      this.jupyterPrefix,
+      "share",
+      "jupyter",
+      "kernels",
+      `pi-science-${binding.revision_id.toLowerCase()}`,
+    );
     await mkdir(kernelDir, { recursive: true });
-    const argv = language === "r"
-      ? [executable, "--slave", "-e", "IRkernel::main()", "--args", "{connection_file}"]
-      : [executable, "-m", "ipykernel_launcher", "-f", "{connection_file}"];
+    const argv =
+      language === "r"
+        ? [executable, "--slave", "-e", "IRkernel::main()", "--args", "{connection_file}"]
+        : [executable, "-m", "ipykernel_launcher", "-f", "{connection_file}"];
     await writeFile(
       join(kernelDir, "kernel.json"),
-      JSON.stringify({
-        argv,
-        display_name: `${displayName} (${binding.revision_id.slice(0, 12)})`,
-        language,
-        metadata: { pi_science_environment_revision_id: binding.revision_id },
-      }, null, 2) + "\n",
+      JSON.stringify(
+        {
+          argv,
+          display_name: `${displayName} (${binding.revision_id.slice(0, 12)})`,
+          language,
+          metadata: { pi_science_environment_revision_id: binding.revision_id },
+        },
+        null,
+        2,
+      ) + "\n",
       "utf8",
     );
   }
 
   private micromambaEnvironment(): NodeJS.ProcessEnv {
-    const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => {
-      const normalized = key.toUpperCase();
-      return normalized !== "VIRTUAL_ENV"
-        && normalized !== "UV_PROJECT_ENVIRONMENT"
-        && normalized !== "CONDA_DEFAULT_ENV"
-        && normalized !== "CONDA_EXE"
-        && normalized !== "CONDA_PYTHON_EXE"
-        && normalized !== "CONDA_SHLVL"
-        && normalized !== "CONDA_PROMPT_MODIFIER"
-        && normalized !== "CONDARC"
-        && normalized !== "MAMBARC"
-        && normalized !== "MAMBA_ROOT_PREFIX"
-        && normalized !== "MAMBA_EXE"
-        && !/^CONDA_PREFIX(?:_\d+)?$/.test(normalized);
-    }));
+    const environment = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => {
+        const normalized = key.toUpperCase();
+        return (
+          normalized !== "VIRTUAL_ENV" &&
+          normalized !== "UV_PROJECT_ENVIRONMENT" &&
+          normalized !== "CONDA_DEFAULT_ENV" &&
+          normalized !== "CONDA_EXE" &&
+          normalized !== "CONDA_PYTHON_EXE" &&
+          normalized !== "CONDA_SHLVL" &&
+          normalized !== "CONDA_PROMPT_MODIFIER" &&
+          normalized !== "CONDARC" &&
+          normalized !== "MAMBARC" &&
+          normalized !== "MAMBA_ROOT_PREFIX" &&
+          normalized !== "MAMBA_EXE" &&
+          !/^CONDA_PREFIX(?:_\d+)?$/.test(normalized)
+        );
+      }),
+    );
     environment.MAMBA_ROOT_PREFIX = this.configPath("micromamba");
     environment.MAMBA_NO_RC = "true";
     return environment;
   }
 
-  private run(command: string, args: string[], timeoutMs: number, env: NodeJS.ProcessEnv = process.env): Promise<{ code: number | null; output: string }> {
+  private run(
+    command: string,
+    args: string[],
+    timeoutMs: number,
+    env: NodeJS.ProcessEnv = process.env,
+  ): Promise<{ code: number | null; output: string }> {
     return new Promise((done) => {
       const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] });
       const output: Buffer[] = [];
       child.stdout.on("data", (chunk: Buffer) => output.push(chunk));
       child.stderr.on("data", (chunk: Buffer) => output.push(chunk));
       const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
-      child.once("error", () => { clearTimeout(timer); done({ code: -1, output: Buffer.concat(output).toString("utf8") }); });
-      child.once("close", (code) => { clearTimeout(timer); done({ code, output: Buffer.concat(output).toString("utf8") }); });
+      child.once("error", () => {
+        clearTimeout(timer);
+        done({ code: -1, output: Buffer.concat(output).toString("utf8") });
+      });
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        done({ code, output: Buffer.concat(output).toString("utf8") });
+      });
     });
   }
 }

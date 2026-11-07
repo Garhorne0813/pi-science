@@ -1,3 +1,5 @@
+import { jobRecordSchema } from "@pi-science/contracts";
+import { publicJobRecord } from "./job-types.js";
 import { describe, expect, it } from "vitest";
 import { canTransitionJobStatus, transitionJobStatus, type JobRecord } from "./job-types.js";
 
@@ -24,7 +26,20 @@ describe("job lifecycle state machine", () => {
   });
 
   it("rejects terminal rewrites and preserves the record shape", () => {
-    expect(transitionJobStatus(record("pending"), "running")).toMatchObject({ status: "running", job_id: "job_test0000000000" });
-    expect(() => transitionJobStatus(record("succeeded"), "failed")).toThrow("invalid job status transition");
+    expect(transitionJobStatus(record("pending"), "running")).toMatchObject({
+      status: "running",
+      job_id: "job_test0000000000",
+    });
+    expect(() => transitionJobStatus(record("succeeded"), "failed")).toThrow(
+      "invalid job status transition",
+    );
   });
 });
+
+it.each(["pending", "running", "succeeded", "failed", "cancelled", "timed_out"] as const)(
+  "validates public %s job responses",
+  (status) => {
+    const response = publicJobRecord(record(status));
+    expect(jobRecordSchema.parse(response)).toEqual(response);
+  },
+);

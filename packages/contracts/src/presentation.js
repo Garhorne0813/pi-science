@@ -1,0 +1,2 @@
+// Native Node source-loading adapter; keep paired with the TypeScript module.
+export * from "./presentation.ts";

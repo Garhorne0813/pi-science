@@ -76,14 +76,14 @@ export function MemoryRecordCard({
                   <> · {categories.find((c) => c.id === r.categoryId)?.name}</>
                 )}
               </p>
-              <p className="mt-1 line-clamp-2 break-words text-ui-caption leading-5 text-muted group-open:hidden">
+              <p className="mt-1 line-clamp-2 break-words text-ui-label leading-5 text-muted group-open:hidden">
                 {r.body}
               </p>
             </div>
           </div>
         </summary>
         <div className="space-y-3 border-t border-faint px-3 py-3 sm:pl-8">
-          <p className="whitespace-pre-wrap break-words text-ui-label leading-relaxed">
+          <p className="whitespace-pre-wrap break-words text-ui-body leading-relaxed">
             {r.body}
           </p>
           <div className="text-ui-caption text-muted">

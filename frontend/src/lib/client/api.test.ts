@@ -6,6 +6,9 @@ afterEach(() => {
 });
 
 describe("apiErrorMessage", () => {
+  it("reads structured error contracts", () => {
+    expect(apiErrorMessage({ error: { code: "invalid_request", message: "Invalid limit" }, request_id: "r1" })).toBe("Invalid limit");
+  });
   it("prefers detail, then error, then message", () => {
     expect(apiErrorMessage({ detail: "d", error: "e", message: "m" })).toBe("d");
     expect(apiErrorMessage({ error: "e", message: "m" })).toBe("e");

@@ -11,7 +11,12 @@ import { matchesWorkspace } from "./records.js";
 interface BindingOperations {
   publish(cwd: string, sessionId: string, payload: Record<string, unknown>): Promise<void>;
   normalize(cwd: string, sessionId: string, event: ProductInput): Record<string, unknown>[];
-  queueText(cwd: string, sessionId: string, payload: Record<string, unknown>, kind: AssistantContentKind): Promise<void>;
+  queueText(
+    cwd: string,
+    sessionId: string,
+    payload: Record<string, unknown>,
+    kind: AssistantContentKind,
+  ): Promise<void>;
   flushPendingText(cwd: string, sessionId: string): Promise<void>;
   log: HubLogger;
 }
@@ -23,7 +28,9 @@ export class ConversationBindings {
   private readonly stderrLogAt = new WeakMap<RuntimeEventSource, number>();
   constructor(private readonly operations: BindingOperations) {}
   pending(cwd?: string): Promise<void>[] {
-    return [...this.observing].filter(([, key]) => matchesWorkspace(key, cwd)).map(([promise]) => promise);
+    return [...this.observing]
+      .filter(([, key]) => matchesWorkspace(key, cwd))
+      .map(([promise]) => promise);
   }
   private trackObservation(pending: Promise<void>, cwd: string, sessionId: string): void {
     this.observing.set(pending, streamKey(cwd, sessionId));
@@ -43,6 +50,8 @@ export class ConversationBindings {
     if (this.bound.has(process)) return;
     this.bound.add(process);
     const boundAt = Date.now();
+    if (typeof options.startupMs === "number")
+      this.operations.log("info", `Agent worker ready in ${options.startupMs}ms`);
     let turnNumber = 0;
     let turnStartedAt = boundAt;
     let eventQueue = Promise.resolve();
@@ -63,7 +72,13 @@ export class ConversationBindings {
     });
     process.on("malformed", (line: string) => {
       const sessionId = options.activeSessionId();
-      if (sessionId) void this.operations.publish(cwd, sessionId, { type: "error", sessionId, message: `Malformed agent worker output: ${cap(line, 500)}`, recoverable: true });
+      if (sessionId)
+        void this.operations.publish(cwd, sessionId, {
+          type: "error",
+          sessionId,
+          message: `Malformed agent worker output: ${cap(line, 500)}`,
+          recoverable: true,
+        });
     });
     process.on("event", (input: ProductInput) => {
       const event = input;
@@ -76,56 +91,93 @@ export class ConversationBindings {
         options.onBusy(true);
       }
       if (event.type === "operation.settled") options.onBusy(false);
-      eventQueue = eventQueue.catch(() => undefined).then(async () => {
-        const normalizedEvents = this.operations.normalize(cwd, sessionId, event);
-        const owner = normalizedEvents.find((item) => typeof item.turnId === "string");
-        const identity = owner ? { turnId: String(owner.turnId), turnOrdinal: Number(owner.turnOrdinal) } : undefined;
-        for (const normalized of normalizedEvents) {
-          if ((normalized.type === "message.delta" || normalized.type === "message.reasoning.delta")) {
-            await this.operations.queueText(cwd, sessionId, normalized, normalized.kind === "thinking" ? "thinking" : "text");
-          } else {
-            await this.operations.flushPendingText(cwd, sessionId);
-            await this.operations.publish(cwd, sessionId, normalized);
-            if (normalized.type === "interaction.requested" && typeof normalized.requestId === "string") {
-              const pending = pendingInteractions.get(sessionId) ?? new Set<string>();
-              pending.add(normalized.requestId); pendingInteractions.set(sessionId, pending);
-            } else if (normalized.type === "interaction.resolved" && typeof normalized.requestId === "string") {
-              pendingInteractions.get(sessionId)?.delete(normalized.requestId);
-            } else if (normalized.type === "operation.settled") pendingInteractions.delete(sessionId);
+      eventQueue = eventQueue
+        .catch(() => undefined)
+        .then(async () => {
+          const normalizedEvents = this.operations.normalize(cwd, sessionId, event);
+          const owner = normalizedEvents.find((item) => typeof item.turnId === "string");
+          const identity = owner
+            ? { turnId: String(owner.turnId), turnOrdinal: Number(owner.turnOrdinal) }
+            : undefined;
+          for (const normalized of normalizedEvents) {
+            if (
+              normalized.type === "message.delta" ||
+              normalized.type === "message.reasoning.delta"
+            ) {
+              await this.operations.queueText(
+                cwd,
+                sessionId,
+                normalized,
+                normalized.kind === "thinking" ? "thinking" : "text",
+              );
+            } else {
+              await this.operations.flushPendingText(cwd, sessionId);
+              await this.operations.publish(cwd, sessionId, normalized);
+              if (
+                normalized.type === "interaction.requested" &&
+                typeof normalized.requestId === "string"
+              ) {
+                const pending = pendingInteractions.get(sessionId) ?? new Set<string>();
+                pending.add(normalized.requestId);
+                pendingInteractions.set(sessionId, pending);
+              } else if (
+                normalized.type === "interaction.resolved" &&
+                typeof normalized.requestId === "string"
+              ) {
+                pendingInteractions.get(sessionId)?.delete(normalized.requestId);
+              } else if (normalized.type === "operation.settled")
+                pendingInteractions.delete(sessionId);
+            }
           }
-        }
-        await Promise.resolve(options.observe?.(input, sessionId, identity)).catch(() => undefined);
-      });
+          await Promise.resolve(options.observe?.(input, sessionId, identity)).catch(
+            () => undefined,
+          );
+        });
       this.trackObservation(eventQueue, cwd, sessionId);
     });
-    process.on("exit", ({ code, signal }: { code: number | null; signal: NodeJS.Signals | null }) => {
-      const sessionId = options.activeSessionId();
-      options.onBusy(false);
-      options.onExit();
-      const expected = this.expectedExits.has(process);
-      const now = Date.now();
-      const recentStderr = stderr
-        .filter((item) => item.turn === turnNumber && item.at >= turnStartedAt && now - item.at <= STDERR_WINDOW_MS)
-        .map((item) => item.text)
-        .join("");
-      const suffix = recentStderr ? `\n${cap(recentStderr, 8_000)}` : "";
-      const terminal = eventQueue.catch(() => undefined).then(async () => {
-        // A killed worker cannot emit close() resolutions. Clear only this
-        // binding's request IDs, leaving replacement workers' prompts intact.
-        for (const [owner, requests] of pendingInteractions) {
-          for (const requestId of requests) await this.operations.publish(cwd, owner, { type: "interaction.resolved", sessionId: owner, requestId });
-        }
-        pendingInteractions.clear();
-        if (expected || !sessionId) return;
-        await this.operations.publish(cwd, sessionId, {
-          type: "error",
-          sessionId,
-          message: `Agent worker exited with code ${code ?? "null"}${signal ? ` (${signal})` : ""}.${suffix}`,
-          terminal: true,
-        });
-        await this.operations.publish(cwd, sessionId, { type: "runtime.paused", sessionId });
-      });
-      this.trackObservation(terminal, cwd, sessionId ?? "");
-    });
+    process.on(
+      "exit",
+      ({ code, signal }: { code: number | null; signal: NodeJS.Signals | null }) => {
+        const sessionId = options.activeSessionId();
+        options.onBusy(false);
+        options.onExit();
+        const expected = this.expectedExits.has(process);
+        const now = Date.now();
+        const recentStderr = stderr
+          .filter(
+            (item) =>
+              item.turn === turnNumber &&
+              item.at >= turnStartedAt &&
+              now - item.at <= STDERR_WINDOW_MS,
+          )
+          .map((item) => item.text)
+          .join("");
+        const suffix = recentStderr ? `\n${cap(recentStderr, 8_000)}` : "";
+        const terminal = eventQueue
+          .catch(() => undefined)
+          .then(async () => {
+            // A killed worker cannot emit close() resolutions. Clear only this
+            // binding's request IDs, leaving replacement workers' prompts intact.
+            for (const [owner, requests] of pendingInteractions) {
+              for (const requestId of requests)
+                await this.operations.publish(cwd, owner, {
+                  type: "interaction.resolved",
+                  sessionId: owner,
+                  requestId,
+                });
+            }
+            pendingInteractions.clear();
+            if (expected || !sessionId) return;
+            await this.operations.publish(cwd, sessionId, {
+              type: "error",
+              sessionId,
+              message: `Agent worker exited with code ${code ?? "null"}${signal ? ` (${signal})` : ""}.${suffix}`,
+              terminal: true,
+            });
+            await this.operations.publish(cwd, sessionId, { type: "runtime.paused", sessionId });
+          });
+        this.trackObservation(terminal, cwd, sessionId ?? "");
+      },
+    );
   }
 }

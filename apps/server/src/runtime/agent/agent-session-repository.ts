@@ -2,39 +2,107 @@ import { stat } from "node:fs/promises";
 import { listWorkspaceSessions } from "./workspace-session-identity.js";
 import { boundedToolDetails } from "../node/message-details.js";
 import { join } from "node:path";
-import { BACKGROUND_CONTEXT, JsonlSessionRepo, NodeExecutionEnv, laneConfig, operationResult, type Session, type OperationResultRecord, type Entry, type JsonlSessionMetadata, type LaneConfiguration } from "@earendil-works/pi-agent-core/node";
+import {
+  BACKGROUND_CONTEXT,
+  JsonlSessionRepo,
+  NodeExecutionEnv,
+  laneConfig,
+  operationResult,
+  type Session,
+  type OperationResultRecord,
+  type Entry,
+  type JsonlSessionMetadata,
+  type LaneConfiguration,
+} from "@earendil-works/pi-agent-core/node";
 import { AgentSessionRegistry } from "./agent-session-registry.js";
+import { modelFailureFrom, modelFailureText } from "./model-failure.js";
 import { readProject } from "../../project/project-registry.js";
 import { metadataRoot } from "../../storage/persistence.js";
 import type { SessionStats } from "@pi-science/contracts";
 import { appliedRuntimeSettings, contextUsage } from "./agent-runtime-settings.js";
-import type { SessionInfoRecord, SessionMessagePage, SessionMessageRecord, SessionUserMessageIndexEntry } from "../node/session-repository.js";
+import type {
+  SessionInfoRecord,
+  SessionMessagePage,
+  SessionMessageRecord,
+  SessionUserMessageIndexEntry,
+} from "../node/session-repository.js";
 
 const context = BACKGROUND_CONTEXT;
 const PAGE_SIZE = 50;
+/** The newest page must start at a turn boundary (a user message), because the
+ * conversation UI groups a turn by its user message. A turn longer than this
+ * keeps a mid-turn first page rather than paging back forever. */
+const FIRST_PAGE_TURN_MAX_MESSAGES = 200;
+
+function messageRole(entry: Entry): string {
+  return entry.type === "message" ? String((entry.message as { role?: unknown }).role ?? "") : "";
+}
+
+/** Extend the newest page until its oldest entry is the user message that
+ * opened the turn, so a page never begins in the middle of a turn. */
+function firstPageWindow(entries: Entry[], limit: number): Entry[] {
+  let count = Math.min(limit, entries.length);
+  while (
+    count > 0 &&
+    count < entries.length &&
+    count < FIRST_PAGE_TURN_MAX_MESSAGES &&
+    messageRole(entries[count - 1]!) !== "user"
+  )
+    count += 1;
+  return entries.slice(0, count);
+}
 
 function asMessage(entry: Entry): SessionMessageRecord | null {
   if (entry.type !== "message") return null;
   const message = entry.message as unknown as Record<string, unknown>;
+  const content = Array.isArray(message.content)
+    ? (message.content as Array<Record<string, unknown>>)
+    : typeof message.content === "string"
+      ? [{ type: "text", text: message.content }]
+      : [];
+  // A provider failure is persisted as an assistant message with no content at all; keep the reason
+  // visible in history instead of returning an empty array.
+  const failure = content.length === 0 ? modelFailureFrom(message) : null;
   return {
     id: entry.id,
     role: String(message.role ?? ""),
-    ...(typeof message.client_message_id === "string" ? { client_message_id: message.client_message_id } : {}),
-    content: Array.isArray(message.content) ? message.content as Array<Record<string, unknown>>
-      : typeof message.content === "string" ? [{ type: "text", text: message.content }] : [],
+    ...(typeof message.client_message_id === "string"
+      ? { client_message_id: message.client_message_id }
+      : {}),
+    content: failure ? [{ type: "text", text: modelFailureText(failure) }] : content,
     ...(typeof message.toolCallId === "string" ? { toolCallId: message.toolCallId } : {}),
     ...(typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
     ...(typeof message.isError === "boolean" ? { isError: message.isError } : {}),
-    ...(boundedToolDetails(message.details) === undefined ? {} : { details: boundedToolDetails(message.details) }),
-      ...(message.presentation && typeof message.presentation === "object" && !Array.isArray(message.presentation) ? { presentation: message.presentation as Record<string, unknown> } : {}),
-      ...(message.presentationRole === "intermediate" || message.presentationRole === "final" ? { presentationRole: message.presentationRole } : {}),
-      ...(typeof message.turnId === "string" ? { turnId: message.turnId } : {}),
-      ...(typeof message.runId === "string" ? { runId: message.runId } : {}),
-      ...(typeof message.itemId === "string" ? { itemId: message.itemId } : {}),
-      ...(typeof message.parentItemId === "string" ? { parentItemId: message.parentItemId } : {}),
-      ...(typeof message.revision === "number" && Number.isInteger(message.revision) && message.revision >= 0 ? { revision: message.revision } : {}),
-      ...(typeof message.sequence === "number" && Number.isInteger(message.sequence) && message.sequence >= 0 ? { sequence: message.sequence } : {}),
-      ...(message.classificationSource === "explicit" || message.classificationSource === "legacy_inferred" || message.classificationSource === "unknown" ? { classificationSource: message.classificationSource } : {}),
+    ...(boundedToolDetails(message.details) === undefined
+      ? {}
+      : { details: boundedToolDetails(message.details) }),
+    ...(message.presentation &&
+    typeof message.presentation === "object" &&
+    !Array.isArray(message.presentation)
+      ? { presentation: message.presentation as Record<string, unknown> }
+      : {}),
+    ...(message.presentationRole === "intermediate" || message.presentationRole === "final"
+      ? { presentationRole: message.presentationRole }
+      : {}),
+    ...(typeof message.turnId === "string" ? { turnId: message.turnId } : {}),
+    ...(typeof message.runId === "string" ? { runId: message.runId } : {}),
+    ...(typeof message.itemId === "string" ? { itemId: message.itemId } : {}),
+    ...(typeof message.parentItemId === "string" ? { parentItemId: message.parentItemId } : {}),
+    ...(typeof message.revision === "number" &&
+    Number.isInteger(message.revision) &&
+    message.revision >= 0
+      ? { revision: message.revision }
+      : {}),
+    ...(typeof message.sequence === "number" &&
+    Number.isInteger(message.sequence) &&
+    message.sequence >= 0
+      ? { sequence: message.sequence }
+      : {}),
+    ...(message.classificationSource === "explicit" ||
+    message.classificationSource === "legacy_inferred" ||
+    message.classificationSource === "unknown"
+      ? { classificationSource: message.classificationSource }
+      : {}),
     timestamp: new Date(entry.timestamp).toISOString(),
   };
 }
@@ -42,7 +110,10 @@ function asMessage(entry: Entry): SessionMessageRecord | null {
 /** Associate persisted terminal results by entry ancestry, never by timestamps.
  * Read all ancestors even for a one-message page, so page boundaries do not
  * discard cancellation or accidentally attach it to an earlier turn. */
-async function projectMessages(session: Session, entries: Entry[]): Promise<SessionMessageRecord[]> {
+async function projectMessages(
+  session: Session,
+  entries: Entry[],
+): Promise<SessionMessageRecord[]> {
   const results = await session.scanValues(operationResult(""), context);
   const byEntry = new Map<string, OperationResultRecord>();
   for (const { value: result } of results) {
@@ -59,19 +130,31 @@ async function projectMessages(session: Session, entries: Entry[]): Promise<Sess
     const message = asMessage(entry);
     if (!message) return [];
     const result = byEntry.get(entry.id);
-    return [{ ...message, ...(result ? {
-      turnId: result.operationId, runId: result.operationId,
-      turnStatus: result.status,
-      turnStartedAt: new Date(result.startedAt).toISOString(),
-      turnEndedAt: new Date(result.endedAt).toISOString(),
-    } : {}) }];
+    return [
+      {
+        ...message,
+        ...(result
+          ? {
+              turnId: result.operationId,
+              runId: result.operationId,
+              turnStatus: result.status,
+              turnStartedAt: new Date(result.startedAt).toISOString(),
+              turnEndedAt: new Date(result.endedAt).toISOString(),
+            }
+          : {}),
+      },
+    ];
   });
 }
 
 /** Read-only projection of AgentHarness v4 sessions into the existing browser history protocol. */
 export class AgentSessionRepository {
   private readonly registry = new AgentSessionRegistry();
-  private async withRepo<T>(cwd: string, read: (repo: JsonlSessionRepo) => Promise<T>, readOnly = true): Promise<T> {
+  private async withRepo<T>(
+    cwd: string,
+    read: (repo: JsonlSessionRepo) => Promise<T>,
+    readOnly = true,
+  ): Promise<T> {
     const environment = new NodeExecutionEnv({ cwd });
     if (readOnly) {
       const readTextFile = environment.readTextFile.bind(environment);
@@ -86,34 +169,59 @@ export class AgentSessionRepository {
         return { ...result, value: result.value.slice(0, result.value.lastIndexOf("\n") + 1) };
       };
     }
-    const repo = new JsonlSessionRepo({ fileSystem: environment, sessionsRoot: join(metadataRoot(cwd), "agent-sessions") });
-    try { return await read(repo); }
-    finally {
+    const repo = new JsonlSessionRepo({
+      fileSystem: environment,
+      sessionsRoot: join(metadataRoot(cwd), "agent-sessions"),
+    });
+    try {
+      return await read(repo);
+    } finally {
       await repo.close(context);
       await environment.cleanup(context);
     }
   }
 
-  private async metadata(repo: JsonlSessionRepo, cwd: string, sessionId: string): Promise<JsonlSessionMetadata | undefined> {
+  private async metadata(
+    repo: JsonlSessionRepo,
+    cwd: string,
+    sessionId: string,
+  ): Promise<JsonlSessionMetadata | undefined> {
     if ((await this.registry.get(cwd, sessionId))?.state === "deleted") return undefined;
     return (await listWorkspaceSessions(repo, cwd)).find((item) => item.id === sessionId);
   }
 
-  async upgradeLegacy(cwd: string, sessionId: string, source: string, messageIds: string[]): Promise<void> {
-    return this.withRepo(cwd, async (repo) => {
-      const metadata = await this.metadata(repo, cwd, sessionId);
-      if (!metadata) throw new Error("imported session not found");
-      const session = await repo.open(metadata, context);
-      try {
-        const entries = await session.findEntries({ type: "message", order: "asc" }, context);
-        if (entries.length !== messageIds.length) throw new Error("Legacy message count changed during conversion");
-        const entryIds = Object.fromEntries(messageIds.map((id, index) => [id, entries[index]!.id]));
-        // Legacy UUID allocation belongs to this open session. Store the map in
-        // the same transaction that upgrades it; reopening v3 would allocate different IDs.
-        await session.setValue({ kind: "value", namespace: "pi-science", key: "legacy-import" }, { source, entryIds, importedAt: new Date().toISOString() }, context);
-      }
-      finally { await session.close(context); }
-    }, false);
+  async upgradeLegacy(
+    cwd: string,
+    sessionId: string,
+    source: string,
+    messageIds: string[],
+  ): Promise<void> {
+    return this.withRepo(
+      cwd,
+      async (repo) => {
+        const metadata = await this.metadata(repo, cwd, sessionId);
+        if (!metadata) throw new Error("imported session not found");
+        const session = await repo.open(metadata, context);
+        try {
+          const entries = await session.findEntries({ type: "message", order: "asc" }, context);
+          if (entries.length !== messageIds.length)
+            throw new Error("Legacy message count changed during conversion");
+          const entryIds = Object.fromEntries(
+            messageIds.map((id, index) => [id, entries[index]!.id]),
+          );
+          // Legacy UUID allocation belongs to this open session. Store the map in
+          // the same transaction that upgrades it; reopening v3 would allocate different IDs.
+          await session.setValue(
+            { kind: "value", namespace: "pi-science", key: "legacy-import" },
+            { source, entryIds, importedAt: new Date().toISOString() },
+            context,
+          );
+        } finally {
+          await session.close(context);
+        }
+      },
+      false,
+    );
   }
 
   async migrationEntryIds(cwd: string, sessionId: string): Promise<Record<string, string>> {
@@ -121,8 +229,18 @@ export class AgentSessionRepository {
       const metadata = await this.metadata(repo, cwd, sessionId);
       if (!metadata) return {};
       const session = await repo.open(metadata, context);
-      try { return (await session.getValue<{ entryIds: Record<string, string> }>({ kind: "value", namespace: "pi-science", key: "legacy-import" }, context))?.value.entryIds ?? {}; }
-      finally { await session.close(context); }
+      try {
+        return (
+          (
+            await session.getValue<{ entryIds: Record<string, string> }>(
+              { kind: "value", namespace: "pi-science", key: "legacy-import" },
+              context,
+            )
+          )?.value.entryIds ?? {}
+        );
+      } finally {
+        await session.close(context);
+      }
     });
   }
 
@@ -131,13 +249,19 @@ export class AgentSessionRepository {
       const metadata = await this.metadata(repo, cwd, sessionId);
       if (!metadata) return null;
       const session = await repo.open(metadata, context);
-      try { return (await session.getValue(laneConfig("main"), context))?.value ?? null; }
-      finally { await session.close(context); }
+      try {
+        return (await session.getValue(laneConfig("main"), context))?.value ?? null;
+      } finally {
+        await session.close(context);
+      }
     });
   }
 
   async findPath(cwd: string, sessionId: string): Promise<string | null> {
-    return this.withRepo(cwd, async (repo) => (await this.metadata(repo, cwd, sessionId))?.path ?? null);
+    return this.withRepo(
+      cwd,
+      async (repo) => (await this.metadata(repo, cwd, sessionId))?.path ?? null,
+    );
   }
 
   async runtimeState(cwd: string, sessionId: string) {
@@ -148,29 +272,41 @@ export class AgentSessionRepository {
       try {
         const applied = (await session.getValue(appliedRuntimeSettings, context))?.value;
         const branch = await session.branch("main", context);
-        return { ...await contextUsage(await branch?.findEntries({ order: "oldestFirst" }, context) ?? [], applied?.contextWindow ?? null),
+        return {
+          ...(await contextUsage(
+            (await branch?.findEntries({ order: "oldestFirst" }, context)) ?? [],
+            applied?.contextWindow ?? null,
+          )),
           compaction_enabled: applied?.compaction.enabled,
-          compaction_threshold_percent: applied?.thresholdPercent ?? null };
-      } finally { await session.close(context); }
+          compaction_threshold_percent: applied?.thresholdPercent ?? null,
+        };
+      } finally {
+        await session.close(context);
+      }
     });
   }
 
   async list(cwd: string): Promise<SessionInfoRecord[]> {
     const project = await readProject(cwd);
     const registered = await this.registry.all(cwd);
-    return this.withRepo(cwd, async (repo) => (await listWorkspaceSessions(repo, cwd))
-      .filter((item) => {
-        const owner = Object.hasOwn(registered, item.id) ? registered[item.id] : undefined;
-        return owner?.state !== "deleted" && (owner ? (owner.purpose ?? "conversation") === "conversation" : !item.parentSessionId);
-      })
-      .map((item) => ({
-        id: item.id,
-        cwd,
-        project_id: project?.id ?? null,
-        name: null,
-        created_at: new Date(item.createdAt).toISOString(),
-        updated_at: new Date(item.modifiedAt).toISOString(),
-      })));
+    return this.withRepo(cwd, async (repo) =>
+      (await listWorkspaceSessions(repo, cwd))
+        .filter((item) => {
+          const owner = Object.hasOwn(registered, item.id) ? registered[item.id] : undefined;
+          return (
+            owner?.state !== "deleted" &&
+            (owner ? (owner.purpose ?? "conversation") === "conversation" : !item.parentSessionId)
+          );
+        })
+        .map((item) => ({
+          id: item.id,
+          cwd,
+          project_id: project?.id ?? null,
+          name: null,
+          created_at: new Date(item.createdAt).toISOString(),
+          updated_at: new Date(item.modifiedAt).toISOString(),
+        })),
+    );
   }
 
   async messages(cwd: string, sessionId: string): Promise<SessionMessageRecord[]> {
@@ -178,8 +314,11 @@ export class AgentSessionRepository {
       const metadata = await this.metadata(repo, cwd, sessionId);
       if (!metadata) return [];
       const session = await repo.open(metadata, context);
-      try { return await projectMessages(session, await session.findEntries({ order: "asc" }, context)); }
-      finally { await session.close(context); }
+      try {
+        return await projectMessages(session, await session.findEntries({ order: "asc" }, context));
+      } finally {
+        await session.close(context);
+      }
     });
   }
 
@@ -189,53 +328,102 @@ export class AgentSessionRepository {
       if (!metadata) return null;
       const session = await repo.open(metadata, context);
       try {
-        const [entries, totals] = await Promise.all([session.findEntries({ type: "message" }, context), session.getStats(context)]);
+        const [entries, totals] = await Promise.all([
+          session.findEntries({ type: "message" }, context),
+          session.getStats(context),
+        ]);
         const messages = entries.flatMap((entry) => asMessage(entry) ?? []);
         const userMessages = messages.filter((message) => message.role === "user").length;
         const assistantMessages = messages.filter((message) => message.role === "assistant").length;
         const toolResults = messages.filter((message) => message.role === "toolResult").length;
-        const toolCalls = messages.filter((message) => message.role === "assistant")
-          .flatMap((message) => message.content).filter((part) => part.type === "toolCall").length;
+        const toolCalls = messages
+          .filter((message) => message.role === "assistant")
+          .flatMap((message) => message.content)
+          .filter((part) => part.type === "toolCall").length;
         const usage = totals.usage;
-        return { userMessages, assistantMessages, toolCalls, toolResults, totalMessages: messages.length,
-          tokens: { input: usage.input, output: usage.output, cacheRead: usage.cacheRead,
-            cacheWrite: usage.cacheWrite, total: usage.totalTokens }, cost: usage.cost.total };
-      } finally { await session.close(context); }
+        return {
+          userMessages,
+          assistantMessages,
+          toolCalls,
+          toolResults,
+          totalMessages: messages.length,
+          tokens: {
+            input: usage.input,
+            output: usage.output,
+            cacheRead: usage.cacheRead,
+            cacheWrite: usage.cacheWrite,
+            total: usage.totalTokens,
+          },
+          cost: usage.cost.total,
+        };
+      } finally {
+        await session.close(context);
+      }
     });
   }
 
-  async messagesPage(cwd: string, sessionId: string, options: { before?: string; limit?: number } = {}): Promise<SessionMessagePage> {
+  async messagesPage(
+    cwd: string,
+    sessionId: string,
+    options: { before?: string; limit?: number } = {},
+  ): Promise<SessionMessagePage> {
     const limit = options.limit ?? PAGE_SIZE;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("history limit must be between 1 and 100");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+      throw new Error("history limit must be between 1 and 100");
     let cursor: { seq: number } | undefined;
     if (options.before) {
       try {
-        const decoded = JSON.parse(Buffer.from(options.before, "base64url").toString("utf8")) as { v?: unknown; s?: unknown };
-        if (decoded.v !== 4 || !Number.isSafeInteger(decoded.s) || Number(decoded.s) < 1) throw new Error();
+        const decoded = JSON.parse(Buffer.from(options.before, "base64url").toString("utf8")) as {
+          v?: unknown;
+          s?: unknown;
+        };
+        if (decoded.v !== 4 || !Number.isSafeInteger(decoded.s) || Number(decoded.s) < 1)
+          throw new Error();
         cursor = { seq: Number(decoded.s) };
-      } catch { throw new Error("invalid history cursor"); }
+      } catch {
+        throw new Error("invalid history cursor");
+      }
     }
     return this.withRepo(cwd, async (repo) => {
       const metadata = await this.metadata(repo, cwd, sessionId);
-      if (!metadata) return { messages: [], next_cursor: null, has_more: false, snapshot_version: "0:0" };
+      if (!metadata)
+        return { messages: [], next_cursor: null, has_more: false, snapshot_version: "0:0" };
       const session = await repo.open(metadata, context);
       try {
         const [entries, file] = await Promise.all([
-          session.findEntries({ type: "message", order: "desc", limit: limit + 1, cursor }, context),
+          session.findEntries(
+            {
+              type: "message",
+              order: "desc",
+              limit: cursor ? limit + 1 : FIRST_PAGE_TURN_MAX_MESSAGES + 1,
+              cursor,
+            },
+            context,
+          ),
           stat(metadata.path),
         ]);
-        const selected = entries.slice(0, limit).reverse();
+        const page = cursor ? entries.slice(0, limit) : firstPageWindow(entries, limit);
+        const selected = page.reverse();
         const oldest = selected[0];
-        return { messages: await projectMessages(session, selected),
-          next_cursor: entries.length > limit && oldest
-            ? Buffer.from(JSON.stringify({ v: 4, s: oldest.seq })).toString("base64url") : null,
-          has_more: entries.length > limit,
-          snapshot_version: `${file.size}:${file.mtimeMs}` };
-      } finally { await session.close(context); }
+        return {
+          messages: await projectMessages(session, selected),
+          next_cursor:
+            entries.length > page.length && oldest
+              ? Buffer.from(JSON.stringify({ v: 4, s: oldest.seq })).toString("base64url")
+              : null,
+          has_more: entries.length > page.length,
+          snapshot_version: `${file.size}:${file.mtimeMs}`,
+        };
+      } finally {
+        await session.close(context);
+      }
     });
   }
 
-  async userMessageIndex(cwd: string, sessionId: string): Promise<{ messages: SessionUserMessageIndexEntry[]; snapshot_version: string }> {
+  async userMessageIndex(
+    cwd: string,
+    sessionId: string,
+  ): Promise<{ messages: SessionUserMessageIndexEntry[]; snapshot_version: string }> {
     const path = await this.findPath(cwd, sessionId);
     if (!path) return { messages: [], snapshot_version: "0:0" };
     return this.withRepo(cwd, async (repo) => {
@@ -243,17 +431,36 @@ export class AgentSessionRepository {
       if (!metadata) return { messages: [], snapshot_version: "0:0" };
       const session = await repo.open(metadata, context);
       try {
-        const [entries, file] = await Promise.all([session.findEntries({ type: "message", order: "asc" }, context), stat(path)]);
-        return { messages: entries.flatMap((entry) => {
-        const message = asMessage(entry);
-        if (!message) return [];
-        if (message.role !== "user") return [];
-        const text = message.content.filter((part) => part.type === "text").map((part) => String(part.text ?? "")).join("\n");
-        if (!text) return [];
-        return [{ id: message.id, text, timestamp: message.timestamp ?? null,
-          before: Buffer.from(JSON.stringify({ v: 4, s: entry.seq + 1 })).toString("base64url") }];
-        }), snapshot_version: `${file.size}:${file.mtimeMs}` };
-      } finally { await session.close(context); }
+        const [entries, file] = await Promise.all([
+          session.findEntries({ type: "message", order: "asc" }, context),
+          stat(path),
+        ]);
+        return {
+          messages: entries.flatMap((entry) => {
+            const message = asMessage(entry);
+            if (!message) return [];
+            if (message.role !== "user") return [];
+            const text = message.content
+              .filter((part) => part.type === "text")
+              .map((part) => String(part.text ?? ""))
+              .join("\n");
+            if (!text) return [];
+            return [
+              {
+                id: message.id,
+                text,
+                timestamp: message.timestamp ?? null,
+                before: Buffer.from(JSON.stringify({ v: 4, s: entry.seq + 1 })).toString(
+                  "base64url",
+                ),
+              },
+            ];
+          }),
+          snapshot_version: `${file.size}:${file.mtimeMs}`,
+        };
+      } finally {
+        await session.close(context);
+      }
     });
   }
 }

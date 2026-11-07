@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useUiStore } from "../lib/ui";
-import { extractArtifactRefs, fileInspectorFromBlock, publishedArtifactRefs, refToArtifactBlock } from "../lib/artifacts";
+import { useRuntimeStore } from "../lib/agent-runtime";
+import { extractArtifactRefs, pinnedFileInspector, publishedArtifactRefs } from "../lib/artifacts";
 import { pickAutoPreviewArtifact } from "../lib/artifacts/artifact-autopreview";
 import { parseSuggestions } from "../lib/conversation";
 import type { ThreadBlock } from "../types/thread";
@@ -32,7 +33,8 @@ export function useTurnEffects(working: boolean, blocks: ThreadBlock[]) {
     // a plan is not evidence that the file was written to the workspace.
     const refs = publishedArtifactRefs(extractArtifactRefs(agentText), blocks);
     const pick = pickAutoPreviewArtifact(refs, { inspectorOpen: ui.inspectorOpen });
-    if (pick) ui.openInspector(fileInspectorFromBlock(refToArtifactBlock(pick) as any) as any);
+    // Auto-preview pins to the newest published version when one exists.
+    if (pick) void pinnedFileInspector(pick, undefined, "workspace", useRuntimeStore.getState().cwd).then((inspector) => ui.openInspector(inspector));
   }, [working, blocks]);
 
   return { suggestions, setSuggestions };
