@@ -18,7 +18,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Ref } from "react";
-import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import type { VirtuosoHandle } from "react-virtuoso";
 
 const { virtuosoProps } = vi.hoisted(() => ({ virtuosoProps: [] as Array<Record<string, unknown>> }));
@@ -63,6 +63,7 @@ import { FeedbackContext } from "../../components/feedback/feedback-context";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
 import { queryClient } from "../../lib/client/query-client";
+import { promptContentDigest, saveLocalPromptRequest } from "../../lib/client/prompt-request-cache";
 import type { PendingInteraction, PendingQuestionnaire } from "../../lib/agent-runtime";
 import i18n from "../../i18n";
 import type { ThreadBlock } from "../../types/thread";
@@ -235,6 +236,30 @@ function renderSwitchableLanding() {
     </QueryClientProvider>,
   );
   return (path: string) => navigate!(path);
+}
+
+/** Landing route with the conversation route mounted too, so a replay that
+ *  adopts a session URL can be observed without unmounting the page. */
+function renderLandingWithLocation() {
+  let location = { pathname: "" };
+  function LocationProbe() {
+    location = useLocation();
+    return null;
+  }
+  render(
+    <QueryClientProvider client={queryClient}>
+      <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
+        <MemoryRouter initialEntries={[`/workspace/${CWD}`]}>
+          <LocationProbe />
+          <Routes>
+            <Route path="/workspace/:cwd" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
+            <Route path="/workspace/:cwd/session/:sessionId" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
+          </Routes>
+        </MemoryRouter>
+      </FeedbackContext.Provider>
+    </QueryClientProvider>,
+  );
+  return () => location.pathname;
 }
 
 /** Render and wait until the model list has loaded (handleSend no-ops without it). */
@@ -1614,5 +1639,48 @@ describe("route-level completion lifecycle", () => {
     expect(within(screen.getByRole("listbox")).queryByText("/summarize")).toBeNull();
     expect(within(screen.getByRole("listbox")).getByText("/summaries")).toBeInTheDocument();
 
+  });
+});
+
+describe("prompt replay after a refresh during session create", () => {
+  const REPLAY_ID = "6ad1c1f6-6c3e-4a4f-9c37-6c2a1f2c6a11";
+  const REPLAY_TEXT = "replay me after the refresh";
+
+  function strandedPrompt() {
+    saveLocalPromptRequest({
+      cwd: CWD,
+      sessionId: "",
+      clientMessageId: REPLAY_ID,
+      contentDigest: promptContentDigest(REPLAY_TEXT),
+      text: REPLAY_TEXT,
+      createdAt: Date.now(),
+      status: "pending",
+    });
+  }
+
+  it("opens the conversation the replayed prompt landed in", async () => {
+    strandedPrompt();
+    const connect = vi.fn(async () => undefined);
+    const sendPrompt = vi.fn(async (_message: string, _id?: string, _options?: { replay?: boolean }): Promise<string | null> => "s2");
+    useRuntimeStore.setState({ sessions: [], activeSessionId: null, connect, sendPrompt });
+
+    const pathname = renderLandingWithLocation();
+
+    await waitFor(() => expect(sendPrompt).toHaveBeenCalledWith(REPLAY_TEXT, REPLAY_ID, { replay: true }));
+    await waitFor(() => expect(pathname()).toBe(`/workspace/${CWD}/session/s2`));
+    // The replay ran once: the session route that follows does not replay again.
+    expect(sendPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay on a route that already names a session", async () => {
+    strandedPrompt();
+    const sendPrompt = vi.fn(async (): Promise<string | null> => null);
+    useRuntimeStore.setState({ sendPrompt });
+
+    renderPage();
+    await screen.findByTestId("model-control");
+    await act(async () => { await Promise.resolve(); });
+
+    expect(sendPrompt).not.toHaveBeenCalled();
   });
 });

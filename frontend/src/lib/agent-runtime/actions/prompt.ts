@@ -17,7 +17,7 @@ import { monitorPromptRequest, updateOptimisticStatus } from "./prompt-delivery"
 export function createPromptActions(set: SetState, get: GetState): Pick<RuntimeState, "sendPrompt" | "abort"> {
 
   return {
-    sendPrompt: async (message: string, requestedClientMessageId?: string): Promise<string | null> => {
+    sendPrompt: async (message: string, requestedClientMessageId?: string, options?: { replay?: boolean }): Promise<string | null> => {
       if (!message.trim()) return null;
       const initialState = get();
       if (initialState.working || initialState.pendingInteraction || initialState.pendingQuestionnaire) {
@@ -26,8 +26,11 @@ export function createPromptActions(set: SetState, get: GetState): Pick<RuntimeS
       let { activeSessionId, cwd } = initialState;
       const contentDigest = promptContentDigest(message);
       // A retry identity is meaningful only while the original session is
-      // active; a new-session send always receives a fresh scoped ID.
-      let clientMessageId = activeSessionId ? requestedClientMessageId : undefined;
+      // active; a new-session send always receives a fresh scoped ID. A replay
+      // is the one exception: it must reuse the ID the server ledger may already
+      // know, so a duplicate replay returns that state instead of dispatching
+      // the turn a second time.
+      let clientMessageId = activeSessionId || options?.replay ? requestedClientMessageId : undefined;
       let recoveredStatus: PromptRequestStatus | null = null;
       // A normal composer submission always means a new user send, even when
       // its text matches an older pending/rejected send. Only an explicit
@@ -71,6 +74,10 @@ export function createPromptActions(set: SetState, get: GetState): Pick<RuntimeS
         sessionId: activeSessionId ?? "",
         clientMessageId: requestId,
         contentDigest,
+        // The text is persisted before the create round trip so a reload in
+        // that window can replay what the user typed instead of losing it.
+        text: message,
+        createdAt: Date.now(),
         status: recoveredStatus?.status ?? "pending",
       });
 

@@ -1,12 +1,13 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, ReactNode, Ref } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useParams, useSearchParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import type { VirtuosoHandle, VirtuosoProps } from "react-virtuoso";
 import { getClient, getSessionName } from "../../lib/client/pi-science-client";
 import { queryClient } from "../../lib/client/query-client";
 import { useRuntimeStore } from "../../lib/agent-runtime";
+import { replayPendingPrompts } from "../../lib/agent-runtime/recovery/prompt-replay";
 import { useUiStore } from "../../lib/ui";
 import { cn } from "../../lib/ui";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace";
@@ -51,6 +52,7 @@ export function renderConversationTurnSlot(
 export function LiveSessionPage() {
   const { t } = useTranslation();
   const { sessionId } = useParams<{ sessionId: string }>();
+  const navigate = useNavigate();
   const workspaceCwd = useRequiredWorkspaceCwd();
   const [searchParams] = useSearchParams();
   const showRuns = searchParams.get("view") === "runs";
@@ -97,15 +99,32 @@ export function LiveSessionPage() {
   }, queryClient);
 
   useEffect(() => {
-    connect(workspaceCwd, sessionId || undefined);
+    let cancelled = false;
+    const connecting = connect(workspaceCwd, sessionId || undefined);
+    // A refresh while the first prompt was still creating its session leaves
+    // the text in the local ledger and the URL on the bare workspace route.
+    // Replay it once the workspace has connected, then adopt the session it
+    // landed in, so the page the user comes back to is their conversation
+    // rather than a landing that merely carries the text.
+    if (!sessionId) {
+      void connecting
+        .then(async () => {
+          if (cancelled) return;
+          const replayed = await replayPendingPrompts(workspaceCwd, useRuntimeStore.getState);
+          if (cancelled || !replayed) return;
+          navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/session/${replayed}`, { replace: true });
+        })
+        .catch(() => undefined);
+    }
     const workspacePrefix = `/workspace/${encodeURIComponent(workspaceCwd)}`;
     return () => {
+      cancelled = true;
       // Keep the conversation stream alive while the user inspects files,
       // notebooks, runs, or project knowledge in the same workspace. A later
       // session connect will replace it, and leaving the workspace closes it.
       if (!window.location.pathname.startsWith(workspacePrefix)) disconnect();
     };
-  }, [sessionId, workspaceCwd, connect, disconnect]);
+  }, [sessionId, workspaceCwd, connect, disconnect, navigate]);
 
   const turns = useMemo(() => buildTurnPresentations(thread.blocks, { lastTurnLifecycle: turnLifecycle, lastTurnId: thread.foldState?.activeTurnId }), [thread.blocks, thread.foldState?.activeTurnId, turnLifecycle]);
   // Copy-button eligibility computed across the WHOLE thread (not per group):

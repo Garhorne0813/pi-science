@@ -121,7 +121,7 @@ export interface RuntimeState {
   // Actions
   connect: (cwd: string, sessionId?: string) => Promise<void>;
   disconnect: () => void;
-  sendPrompt: (message: string, clientMessageId?: string) => Promise<string | null>;
+  sendPrompt: (message: string, clientMessageId?: string, options?: { replay?: boolean }) => Promise<string | null>;
   abort: () => Promise<void>;
   setModel: (model: string, thinking?: string) => Promise<string | null>;
   respondToInteraction: (response: { value?: string; confirmed?: boolean; cancelled?: boolean; alwaysAllow?: boolean }) => Promise<void>;

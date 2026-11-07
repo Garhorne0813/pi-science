@@ -24,7 +24,8 @@
     "lint": "oxlint --deny-warnings",
     "preview": "vite preview",
     "test:uat:model-oauth": "node scripts/uat-model-oauth.mjs",
-    "test:uat:memory": "node scripts/uat-memory.mjs"
+    "test:uat:memory": "node scripts/uat-memory.mjs",
+    "test:uat:prompt-replay": "node scripts/uat-prompt-replay.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",

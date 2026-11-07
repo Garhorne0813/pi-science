@@ -82,6 +82,8 @@ export function createConnectionActions(set: SetState, get: GetState): Pick<Runt
           turnLifecycle: "settled",
         });
         void loadSessionsInternal();
+        // A replayed prompt needs a URL change, so the landing route owns it
+        // (LiveSessionPage); the store stays independent of React Router.
         return;
       }
       const targetSessionId = sessionId;
