@@ -209,3 +209,35 @@ the link, and `/etc/passwd` all stay unreadable. A second case runs the server's
 own node when it came from a keg, which covers what a compiled fixture cannot:
 `libnode` behind `@rpath`, a formula linking another formula, a dylib named
 through a symlink to a differently named file, and the keg's `openssl.cnf`.
+
+## Credential denies under broad grants
+
+Approval mode `full` adds the home directory to the session read and write
+grants, so a workspace Bash call can reach anything under it. Credential files
+stay denied by name regardless of depth: `.pi-science`, `.pi`, `.npmrc`,
+`.pypirc`, `.netrc`, `_netrc`, `.git-credentials`, `.modal.toml`,
+`credentials.json`, `credentials.toml`, `.env` and `.env.*`.
+
+`expandCredentialDenies` walks each granted root once and matches every name in
+that single pass. The matches become literal `denyRead` and `denyWrite`
+entries instead of one recursive glob per name. Upstream sandbox-runtime expands
+each `denyRead` glob with its own filesystem walk, so a home directory used to
+pay that traversal twelve times before the command started.
+
+The scan has no cross-invocation cache. A credential file created since the last
+Bash call is found on the next one, and an authorization revision change does not
+need cache invalidation because there is nothing to invalidate. Subtrees that
+another deny already covers are skipped, a matched directory is denied whole
+without being listed, and matches reached through a directory symlink are
+reported at their real locations. A directory that fails to list is denied
+itself.
+
+Literal entries also matter on Linux, where sandbox-runtime drops glob write
+rules and only read globs were actually enforced. Both sides now name concrete
+paths, and the real-sandbox acceptance test checks that a deep `.env` under a
+granted root cannot be read and keeps its original bytes after a write attempt.
+
+Preparation remains proportional to the size of the granted roots: one traversal
+is the floor for exact name matching at any depth. The [credential deny
+benchmark](performance/credential-denies-benchmark.md) records the difference
+against the previous twelve-glob expansion.
