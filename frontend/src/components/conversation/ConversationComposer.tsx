@@ -1,10 +1,10 @@
 import { McpDiagnosticsNotice } from "./McpDiagnosticsNotice";
 import { ApprovalModeMenu } from "./ApprovalModeMenu";
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowDown, ArrowUp, File, FolderOpen, Loader2, Plus, Sparkles, Square, X } from "lucide-react";
-import type { SessionStats } from "../../lib/client/pi-science-client";
+import type { QueuedMessage, SessionStats } from "../../lib/client/pi-science-client";
 import type { useComposer } from "../../hooks/useComposer";
 import type { useModelConfig } from "../../hooks/useModelConfig";
 import type { useAutoResearch } from "../../hooks/useAutoResearch";
@@ -12,10 +12,14 @@ import { useRuntimeStore } from "../../lib/agent-runtime";
 import { findLocalPromptRequest, promptContentDigest } from "../../lib/client/prompt-request-cache";
 import { ConversationStatsLine } from "./ConversationStatsLine";
 import { MentionComposer } from "./MentionComposer";
+import { QueuedMessagesPanel } from "./QueuedMessagesPanel";
 import { ModelControlMenu } from "./ModelControlMenu";
 import { cn } from "../../lib/ui";
 
 const ComposerTodo = lazy(() => import("../todo/ComposerTodo").then((module) => ({ default: module.ComposerTodo })));
+
+/** Stable empty list: a fresh array in a store selector re-renders forever. */
+const NO_QUEUED_MESSAGES: QueuedMessage[] = [];
 
 type ComposerState = ReturnType<typeof useComposer>;
 type ModelState = ReturnType<typeof useModelConfig>;
@@ -57,7 +61,28 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
   const { input, setInput, files, setFiles, workspaceReferences } = composer;
   const mcpDiagnostics = useRuntimeStore((state) => state.cwd === workspaceCwd && state.activeSessionId === activeSessionId ? state.mcpDiagnostics : undefined);
   const sendPrompt = useRuntimeStore((state) => state.sendPrompt);
+  const queuedMessages = useRuntimeStore((state) => (state.queueSessionId === activeSessionId ? state.queuedMessages : NO_QUEUED_MESSAGES));
+  const queuePaused = useRuntimeStore((state) => (state.queueSessionId === activeSessionId ? state.queuePaused : false));
+  const loadQueue = useRuntimeStore((state) => state.loadQueue);
+  const resumeQueue = useRuntimeStore((state) => state.resumeQueue);
+  const editQueuedMessage = useRuntimeStore((state) => state.editQueuedMessage);
+  const cancelQueuedMessage = useRuntimeStore((state) => state.cancelQueuedMessage);
+  const pendingQueueCount = queuedMessages.filter((entry) => entry.status === "queued" || entry.status === "dispatching").length;
   const [composing, setComposing] = useState(false);
+
+  useEffect(() => {
+    if (!activeSessionId) return;
+    void loadQueue();
+  }, [activeSessionId, working, loadQueue]);
+
+  useEffect(() => {
+    // The server dispatches queued messages on its own clock, so the list is
+    // authoritative and has to be re-read while something can still move.
+    // A paused queue only moves when the user acts, and that path refreshes it.
+    if (!activeSessionId || pendingQueueCount === 0 || queuePaused) return;
+    const timer = setInterval(() => { void loadQueue(); }, 3000);
+    return () => clearInterval(timer);
+  }, [activeSessionId, pendingQueueCount, queuePaused, loadQueue]);
   const retryRequest = activeSessionId && input.trim()
     ? findLocalPromptRequest(workspaceCwd, activeSessionId, promptContentDigest(input.trim()))
     : null;
@@ -84,6 +109,19 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
         <McpDiagnosticsNotice diagnostics={mcpDiagnostics} />
         {promptDeliveryNotice === "indeterminate" && <div role="status" className="mb-2 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-muted">{t("conversation.promptDelivery.indeterminate")}</div>}
         {retryRequest && <button type="button" onClick={() => { void sendPrompt(input.trim(), retryRequest.clientMessageId).catch(() => undefined); }} className="mb-2 text-xs text-accent hover:underline">{t("conversation.promptDelivery.retrySameRequest")}</button>}
+        {composer.runningNotice === "not_running" && (
+          <div role="status" className="mb-2 flex flex-wrap items-center gap-2 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-muted">
+            <span>{t("conversation.steerNotRunning")}</span>
+            <button type="button" onClick={() => composer.setSendMode("queue")} className="text-accent hover:underline">{t("conversation.switchToQueue")}</button>
+          </div>
+        )}
+        <QueuedMessagesPanel
+          entries={queuedMessages}
+          paused={queuePaused}
+          onResume={resumeQueue}
+          onEdit={editQueuedMessage}
+          onCancel={cancelQueuedMessage}
+        />
         {/* Fixed 36px fade band above the composer card (reference:
             ConversationRoot composer seat gradient). The card sits at the
             bottom of the column, so the band softens the transcript edge
@@ -201,9 +239,41 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
                 />
               )}
               {working ? (
-                <button type="button" aria-label={t("conversation.stopGeneration")} onClick={() => void onAbort().catch(() => undefined)} className="flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full bg-accent-fill text-accent-fg transition-colors hover:bg-error-fill">
-                  <Square size={14} fill="currentColor" />
-                </button>
+                <>
+                  <div role="group" aria-label={t("conversation.sendMode.groupLabel")} className="flex items-center gap-0.5 rounded-full bg-surface-2 p-0.5">
+                    {(["steer", "queue"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        aria-pressed={composer.sendMode === mode}
+                        title={t(mode === "steer" ? "conversation.sendMode.steerHint" : "conversation.sendMode.queueHint")}
+                        onClick={() => composer.setSendMode(mode)}
+                        className={cn(
+                          "h-6 rounded-full px-2 text-[11px] transition-colors",
+                          composer.sendMode === mode ? "bg-surface text-text shadow-sm" : "text-muted hover:text-text",
+                        )}
+                      >
+                        {t(mode === "steer" ? "conversation.sendMode.steer" : "conversation.sendMode.queue")}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    aria-label={composer.sendMode === "steer" ? t("conversation.sendSteer") : t("conversation.sendToQueue")}
+                    title={composer.sendMode === "steer" ? t("conversation.sendSteer") : t("conversation.sendToQueue")}
+                    onClick={() => { void composer.handleSend().catch(() => undefined); }}
+                    disabled={model.configuringModel || interactionPending || reviewingProject || !model.selectedModel || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
+                    className={cn(
+                      "flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full",
+                      (model.selectedModel && !model.configuringModel && !interactionPending && !reviewingProject && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent-fill text-accent-fg" : "bg-surface-2 text-muted cursor-default",
+                    )}
+                  >
+                    <ArrowUp size={16} />
+                  </button>
+                  <button type="button" aria-label={t("conversation.stopGeneration")} title={t("conversation.stopGeneration")} onClick={() => void onAbort().catch(() => undefined)} className="flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full bg-accent-fill text-accent-fg transition-colors hover:bg-error-fill">
+                    <Square size={14} fill="currentColor" />
+                  </button>
+                </>
               ) : (
                 <button
                   type="button"
