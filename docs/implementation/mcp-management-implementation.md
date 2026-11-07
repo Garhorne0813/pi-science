@@ -1,6 +1,6 @@
 # Pi Science MCP 管理实现
 
-MCP 配置与策略由 Node 控制面管理，React 设置页提供 connector、凭据绑定、项目工具覆盖和健康状态入口。Worker 使用官方 MCP SDK 执行连接和工具调用。当前运行架构见[架构说明](architecture.zh-CN.md)。
+MCP 配置与策略由 Node 控制面管理，React 设置页提供 connector、凭据绑定、项目工具覆盖和健康状态入口。Worker 使用官方 MCP SDK 执行连接和工具调用。当前运行架构见[架构说明](../architecture.zh-CN.md)。
 
 ## 配置与凭据
 

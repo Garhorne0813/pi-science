@@ -1,15 +1,7 @@
 import { z } from "zod";
 export const sourceSchema = z
   .object({
-    kind: z.enum([
-      "message",
-      "session",
-      "run",
-      "artifact",
-      "file",
-      "citation",
-      "memory",
-    ]),
+    kind: z.enum(["message", "session", "run", "artifact", "file", "citation", "memory"]),
     locator: z.string().min(1).max(500),
     projectId: z.string().max(200).optional(),
     digest: z.string().max(128).optional(),
@@ -34,9 +26,7 @@ export const contentSchema = z
     artifactVersionId: z.string().max(100).optional(),
     subjectFrameId: z.string().max(200).optional(),
     categoryId: z.string().max(100).optional(),
-    evidenceLevel: z
-      .enum(["user_stated", "observed", "inferred"])
-      .default("inferred"),
+    evidenceLevel: z.enum(["user_stated", "observed", "inferred"]).default("inferred"),
     sources: z.array(sourceSchema).max(20).default([]),
   })
   .strict();
@@ -54,13 +44,7 @@ export type MemoryRecord = MemoryContent & {
   projectId?: string;
   agentKey?: string;
   origin: "user_manual" | "agent_tool" | "background_extractor" | "dream";
-  status:
-    | "active"
-    | "pending_review"
-    | "needs_review"
-    | "rejected"
-    | "superseded"
-    | "archived";
+  status: "active" | "pending_review" | "needs_review" | "rejected" | "superseded" | "archived";
   revision: number;
   contentHash: string;
   reviewRequired: boolean;
@@ -84,11 +68,7 @@ const windowSchema = z
       .string()
       .refine((v) => {
         try {
-          if (
-            v !== "UTC" &&
-            v !== "GMT" &&
-            !/^[A-Za-z_+-]+\/[A-Za-z0-9_+/-]+$/.test(v)
-          )
+          if (v !== "UTC" && v !== "GMT" && !/^[A-Za-z_+-]+\/[A-Za-z0-9_+/-]+$/.test(v))
             return false;
           new Intl.DateTimeFormat("en", { timeZone: v });
           return true;
@@ -99,13 +79,10 @@ const windowSchema = z
       .default("UTC"),
   })
   .strict()
-  .refine(
-    (v) => !v.enabled || v.start !== v.end,
-    "Window start and end must differ",
-  );
+  .refine((v) => !v.enabled || v.start !== v.end, "Window start and end must differ");
 export const settingsSchema = z
   .object({
-    enabled: z.boolean().default(false),
+    enabled: z.boolean().default(true),
     review: z
       .object({
         mode: z.enum(["smart", "all_manual"]).default("smart"),
@@ -138,9 +115,7 @@ export const settingsSchema = z
     dream: z
       .object({
         enabled: z.boolean().default(false),
-        mode: z
-          .enum(["manual", "idle", "interval", "window"])
-          .default("manual"),
+        mode: z.enum(["manual", "idle", "interval", "window"]).default("manual"),
         allowedWindow: windowSchema.default({
           enabled: true,
           start: "00:00",
@@ -154,9 +129,7 @@ export const settingsSchema = z
         intervalHours: z.number().min(1).max(8760).default(24),
         minIntervalHours: z.number().min(0).max(8760).default(24),
         maxRuntimeMinutes: z.number().min(1).max(60).default(10),
-        updatePolicy: z
-          .enum(["suggest_only", "auto_low_risk"])
-          .default("suggest_only"),
+        updatePolicy: z.enum(["suggest_only", "auto_low_risk"]).default("suggest_only"),
         model: z.string().max(200).default("inherit"),
       })
       .strict()

@@ -1,8 +1,8 @@
 # Auto Research implementation history
 
-Archived development notes through 3be2480. Tool lists, defaults and security statements below describe historical revisions, not the current contract. See [current Auto Research documentation](auto-research.md) and the three canonical Skill references for current behavior. Do not supply this history as Agent runtime instructions.
+Archived development notes through 3be2480. Tool lists, defaults and security statements below describe historical revisions, not the current contract. See [current Auto Research documentation](../auto-research.md) and the three canonical Skill references for current behavior. Do not supply this history as Agent runtime instructions.
 
-> Bash 与持久 Python Notebook 已接入共享 Sandbox；服务端默认 required，Candidate 始终强制隔离。通用工具配置、限制及验收见 [Universal Sandbox](universal-sandbox.md)。sandbox_run 工具已删除；下文的 opt-in 设置、工具声明与限额仅为历史实现记录，不再适用于当前版本。
+> Bash 与持久 Python Notebook 已接入共享 Sandbox；服务端默认 required，Candidate 始终强制隔离。通用工具配置、限制及验收见 [Universal Sandbox](../universal-sandbox.md)。sandbox_run 工具已删除；下文的 opt-in 设置、工具声明与限额仅为历史实现记录，不再适用于当前版本。
 
 # Conversation-native Auto Research
 

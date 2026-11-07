@@ -26,7 +26,7 @@ Pi-Science brings AI conversations, scientific computation, data previews and re
 - **Run analyses in context.** Execute Python/R code on session kernels and inspect the resulting tables, plots and files alongside the conversation.
 - **Keep execution evidence.** Runs record code, environment revisions, artifact hashes and provenance so results can be inspected and reproduced.
 - **Research in Conversation.** The Auto Research skill guides dynamic subquestions, independent review and task-specific evaluation, with saved checkpoints and runtime tool budgets.
-- **Find scientific sources.** Built-in connectors retrieve papers and scientific data, with linked citation metadata you can verify.
+- **Check scientific citations.** Search papers and scientific data, open the source behind a citation, and inspect the passages the agent recorded when writing its answer.
 - **Explore workspace files.** Native read-only `ls`, `glob` and `grep` discover files and search text with bounded output and `.gitignore` support. Enabled on Linux and macOS (with the native directory backend built); linked, hidden, sensitive and protected paths are excluded. See [tool limits and platform status](docs/workspace-discovery-tools.md).
 - **Use ordinary project folders.** Research files stay in your workspace. Model requests and external connector calls use the services you configure.
 
@@ -68,7 +68,7 @@ powershell -File scripts/install.ps1
 powershell -File scripts/start.ps1
 ```
 
-Open **http://127.0.0.1:8787**. In **Settings → LLM**, configure a provider and default model, then open a workspace and start a conversation. Use **Settings → Skills** to manage skills and **Settings → MCP** to enable scientific connectors; Paper Search is enabled initially; configure built-in web search and fetching in **Settings → Web search**. The control-plane API runs on `127.0.0.1:8787`.
+Open **http://127.0.0.1:8787**. Connect a provider in **Settings → Models** and choose the default for new conversations in **Settings → Agent**. Then open a workspace and start a conversation. Use **Settings → Skills** to manage skills, **Settings → MCP** to enable scientific connectors, and **Settings → Web access** to configure built-in search and fetching. Paper Search is enabled initially. The control-plane API uses the same port.
 
 Linux/WSL requires `ripgrep`, `socat` and `bubblewrap` (Debian/Ubuntu: `sudo apt-get install ripgrep socat bubblewrap`). Installation, startup and `pi-science doctor` check these tools and run an offline Bubblewrap namespace probe. Missing dependencies or blocked namespaces stop installation/startup with a diagnostic.
 
@@ -105,7 +105,7 @@ PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 
 Production launchers invoke Node directly; npm/pnpm is needed only for installation, builds and dependency updates. `doctor` performs local checks without downloads or persistent database writes: runtime, build/Worker files, dependencies, loopback ports, directory permissions and an in-memory SQLite query. It reports Python/R/Micromamba and LLM configuration as optional setup; persistent SQLite readiness is checked during startup. It checks port availability, so stop a running instance before using it as a pre-start check.
 
-For development, use `pi-science start --dev` (direct Node + tsx, plus Vite), `bash scripts/start.sh --dev`, or `powershell -File scripts/start.ps1 -Dev`. Set `PI_SCIENCE_SERVER_WATCH=1` to opt into `tsx watch`; Bash and PowerShell default to direct tsx in development. `PI_SCIENCE_CONTROL_PLANE_PORT` changes the production port; `PI_SCIENCE_FRONTEND_PORT` is used only in development. Both launchers bind the control plane to `127.0.0.1`. The internal browser cookie is not user login: do not expose this service to the public network.
+For development, use `pi-science start --dev`, `bash scripts/start.sh --dev`, or `powershell -File scripts/start.ps1 -Dev`. Open Vite on port `5173` for the live frontend. It proxies `/api` to the control plane on `8787`, which can also serve an existing production bundle from `frontend/dist`. Run `pnpm --filter frontend build` to update that bundle. Set `PI_SCIENCE_SERVER_WATCH=1` to opt into `tsx watch`. `PI_SCIENCE_CONTROL_PLANE_PORT` changes the control-plane port, and `PI_SCIENCE_FRONTEND_PORT` changes the Vite port. Both launchers bind the control plane to loopback and use an internal browser cookie, so keep the service local.
 
 The pnpm store is shared between checkouts by default (`${XDG_CACHE_HOME:-~/.cache}/pi-science/pnpm-store` on POSIX, `%LOCALAPPDATA%\pi-science\pnpm-store` on Windows). Set `PNPM_STORE_DIR` to choose an independent cache, including the previous checkout-local `.cache/pnpm-store`. Startup has a 90-second readiness deadline, configurable with `PI_SCIENCE_STARTUP_TIMEOUT_SECONDS`. Launchers track process identity for shutdown and refuse to overwrite an unrelated launcher path. Windows stop checks checkout, executable, entry point, creation time and a per-launch marker; missing or stale state never permits stopping by port alone.
 
@@ -121,11 +121,11 @@ Application state uses `PI_SCIENCE_HOME` or `~/.pi-science`, with a checkout-loc
 
 | Area | What Pi-Science provides |
 |---|---|
-| Agent workspace | Streaming conversations, tool cards, Markdown, LaTeX, slash commands, and browser questionnaires and approvals |
+| Agent workspace | Streaming conversations, expandable tool details, Markdown, LaTeX, slash commands, and browser questionnaires and approvals |
 | Concurrent sessions | Independent Agent Core Worker processes for active, restored, and forked conversations |
 | Scientific files | Native previews for molecular structures, FITS, genomics, phase data, 3D models, tables, office documents, media, and code |
 | Reproducibility | Live session-scoped execution records, artifact hashes, generating code and diffs, environment snapshots, provenance history, reproduce actions, and artifact references pinned to published versions with text/table/image version diffs |
-| Memory | SQLite records, version-bound human review, scoped recall, optional Extraction/Dream, and shared budgets (disabled by default) |
+| Memory | SQLite records, version-bound human review, scoped recall, optional Extraction/Dream, and shared budgets |
 | Computation | Shared versioned Micromamba environments, isolated Python/R Session kernels, executable `.ipynb` files, agent notebook cell read/edit/run tools, conversation-linked runs, and an optional app-managed Jupyter Lab |
 | Extensibility | Pi skills, prompt templates, MCP servers, subagents, custom model providers, and managed endpoints |
 | Workspace safety | Project-scoped metadata, validated paths, isolated session state, and controlled outbound provider discovery |
@@ -138,10 +138,11 @@ Application state uses `PI_SCIENCE_HOME` or `~/.pi-science`, with a checkout-loc
 > read-only legacy export. Recreate useful entries with verified sources and new
 > approvals; legacy approval flags are not reused. See [upgrade steps](docs/unified-memory.md#upgrade-from-ledger--project-knowledge).
 
-Open **Settings → Memory** to enable Memory for the local user across all
-projects. Memory, automatic Extraction and Dream start disabled and have separate
-switches. Dependent controls expand when enabled; changing a switch or trigger
-mode preserves the stored values. Configure models, review policy, scheduling and
+Open **Settings → Memory** to configure Memory for the local user across all
+projects. Memory and automatic recall start enabled, with smart review. Extraction and
+Dream start disabled and have separate switches. Dependent controls expand when
+enabled, and changing a switch or trigger mode preserves the stored values.
+Configure models, review policy, scheduling and
 shared background budgets here. Project/category recall switches stay on the
 project's Memory page.
 
@@ -170,9 +171,9 @@ Application rules live separately in `harness/SYSTEM.md`. See
 
 ## Scientific MCP Connectors
 
-Pi-Science includes 19 managed MCP connectors for public scientific data and general
-web search. They run as local MCP processes and expose typed tools to the agent;
-the upstream searches still make outbound network requests.
+Pi-Science includes 18 managed MCP connectors for public scientific data.
+They run as local MCP processes and expose typed tools to the agent. Searches
+make outbound requests to the listed upstream services.
 
 | Connector | Upstream services | Default |
 |---|---|---|
@@ -195,17 +196,17 @@ the upstream searches still make outbound network requests.
 | Target Discovery | Open Targets Platform | Disabled |
 | ChEMBL | ChEMBL | Disabled |
 
-Together they expose 89 tools. Enable only the domains you need from
+Together they expose 85 tools. Enable the domains you need from
 **Settings → MCP**, where you can inspect discovered tools, test a connection,
 filter exposed tools, and choose `Ask`, `Allow`, or `Deny` decisions. Built-in
 definitions are read-only, while custom `stdio`, Streamable HTTP, SSE, and
-socket connectors can also be registered. Settings apply globally; individual
-projects may override tool decisions. Connector changes are projected into
-active agent runtimes without manually editing Pi configuration files.
+socket connectors can also be registered. Settings apply globally, and projects
+can override tool decisions. Workers discover tools during initialization and
+check current connector and tool policy before a call.
 
 Connector authentication can reference a managed key/token or a named environment variable, delivered as a process variable, HTTP header or Bearer token. Policy snapshots contain only credential references; permitted credentials are resolved in Worker memory. OAuth login/refresh is not currently supported.
 
-`web_search` and `web_fetch` are built-in Agent tools backed by the pinned `pi-web-access@0.40.0` core. Configure global tool switches, search provider and API keys in **Settings → Web search**. They execute directly in the trusted worker, outside the code-execution sandbox, with public-address/redirect/size checks. Paper Search remains an MCP connector for scholarly databases. See [Web access configuration](docs/web-access-mcp.md).
+`web_search` and `web_fetch` use the pinned `pi-web-access@0.40.0` core in the trusted Worker with public-address, redirect and size checks. Configure them in **Settings → Web access**. Ordinary preferences save automatically, and API keys have a separate update action. See [Web access configuration](docs/web-access-mcp.md).
 
 ## Scientific Viewers
 
@@ -273,9 +274,9 @@ through the control plane.
 
 ## Model Configuration
 
-Providers can be configured from **Settings → LLM**. Pi-Science supports built-in vendors, OpenAI-compatible endpoints, Anthropic-compatible endpoints, and trusted keyless local services such as Ollama or LM Studio. Managed endpoints can be registered, enabled or disabled, and health-checked from the same page. Health checks are bounded outbound requests; private-network endpoints are allowed by default for local model servers and can be disabled with `PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=0`.
+**Settings → Models** manages built-in providers, custom OpenAI- and Anthropic-compatible services, and trusted keyless local endpoints such as Ollama or LM Studio. It also manages API keys, explicit environment-variable bindings and subscription authorization for supported providers. Private-network endpoints are allowed by default for local model servers and can be disabled with `PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=0`. See [native model configuration](docs/model-config-native.md).
 
-API keys are managed through **Settings → LLM**. Environment-backed credentials require an explicit variable reference in model-resource configuration; exporting a vendor variable alone does not establish a binding.
+**Settings → Agent** saves the default model and thinking level for new conversations. Existing conversations keep their own durable selection, which can be changed from the composer.
 
 ## AI Session Titles
 
@@ -309,6 +310,7 @@ pnpm test
 
 # Static checks
 pnpm typecheck
+pnpm lint
 
 # Production build
 pnpm build
@@ -328,6 +330,7 @@ Focused frontend UAT commands:
 pnpm --filter frontend test:uat:memory
 pnpm --filter frontend test:uat:notebook
 pnpm --filter frontend test:uat:office
+pnpm verify:ui --scenario conversation-baseline
 ```
 
 ## Documentation
@@ -337,12 +340,15 @@ pnpm --filter frontend test:uat:office
 | Process boundaries, state ownership, events and recovery | [Architecture](docs/architecture.md) |
 | Memory setup, review, recall, background runs and retention | [Unified Memory](docs/unified-memory.md) |
 | Supported tools and known limits | [Agent Core capability inventory](docs/agent-core-capability-inventory.md) |
+| Model providers, credentials and migration | [Native model configuration](docs/model-config-native.md) |
 | Existing sessions and offline conversion | [Session conversion](docs/agent-core-session-conversion.md) |
-| Scientific connectors, credentials and tool policy | [MCP management](docs/mcp-management-implementation.md) |
+| Scientific connectors, credentials and tool policy | [MCP management](docs/implementation/mcp-management-implementation.md) |
 | Research orchestration and deterministic evaluation | [Conversation-native Auto Research](docs/auto-research.md) |
 | Writing project skills | [Skill authoring](docs/skill-authoring.md) |
 
-Implementation notes are linked from the architecture reference. Documents without an English counterpart are available in their original language.
+See the [documentation index](docs/README.md) for current guides and the
+[implementation documents](docs/implementation/README.md) for feature internals,
+design decisions and validation records.
 
 ## Contributing
 
@@ -351,9 +357,5 @@ Issues and pull requests are welcome. Before submitting a change, run the releva
 ## License
 
 MIT
-
-The opt-in [Pi-native model configuration backend](docs/model-config-native.md)
-adds versioned configuration, explicit credential sources and conservative legacy
-migration. The deployment default remains `legacy` until rollout gates pass.
 
 [Documentation index / 文档索引](docs/README.md) · [Development verification / 开发检查](docs/development-quality.md)

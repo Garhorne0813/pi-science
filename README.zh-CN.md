@@ -26,7 +26,7 @@ Pi-Science 将 AI 对话、科学计算、数据预览和统一记忆整合到�
 - **在上下文中运行分析。** 在会话内核执行 Python/R 代码，与对话一起查看表格、图像和生成文件。
 - **保留执行证据。** 运行记录保存代码、环境版本、产物哈希和谱系，便于检查与复现结果。
 - **在对话中开展研究。** Auto Research 技能指导动态子问题、独立审查和任务专属评价，保存恢复检查点，并由运行时限制工具预算。
-- **检索科学来源。** 内置连接器获取论文和科学数据，提供可以核对的引用元数据。
+- **核对科学引用。** 检索论文和科学数据，打开引用来源，并查看 Agent 在生成回答时记录的原文段落。
 - **探索工作区文件。** 原生只读工具 `ls`、`glob`、`grep` 支持目录浏览、文件发现和文本检索，遵守 `.gitignore` 与输出上限。支持 Linux 和 macOS（需构建原生目录模块）；排除隐藏、敏感、受保护和链接路径，参见[工具限制与平台状态](docs/workspace-discovery-tools.md)。
 - **使用普通项目目录。** 科研文件保存在工作区，模型请求和外部检索使用你配置的服务。
 
@@ -68,7 +68,7 @@ powershell -File scripts/install.ps1
 powershell -File scripts/start.ps1
 ```
 
-打开 **http://127.0.0.1:8787**，在 **设置 → LLM** 配置提供商和默认模型，再打开工作区开始对话。**设置 → Skills** 管理技能，**设置 → MCP** 启用科学连接器；初始启用 Paper Search；在**设置 → 联网搜索**中配置内置网页搜索与抓取。控制面 API 位于同一端口。
+打开 **http://127.0.0.1:8787**。在 **设置 → 模型**连接提供商，在 **设置 → Agent** 选择新会话的默认模型，然后打开工作区开始对话。在 **设置 → 技能**管理技能，在 **设置 → MCP** 启用科学连接器，在 **设置 → 网页访问**配置内置搜索与抓取。Paper Search 初始启用。控制面 API 使用同一端口。
 
 Linux/WSL 需要安装 `ripgrep`、`socat` 和 `bubblewrap`（Debian/Ubuntu：`sudo apt-get install ripgrep socat bubblewrap`）。安装、启动和 `pi-science doctor` 都会检查这些工具，并离线验证 Bubblewrap 能否创建隔离命名空间；缺少依赖或系统禁止隔离时，会停止安装/启动并提示原因。
 
@@ -105,7 +105,7 @@ PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 
 生产启动器直接调用 Node，npm/pnpm 仅用于安装、构建和依赖更新。`doctor` 执行本地检查，不下载软件、不写入持久数据库；检查范围包括运行时、构建和 Worker 文件、依赖、回环端口、目录权限以及 SQLite 内存查询。Python/R/Micromamba 和 LLM 配置作为按需设置单独说明，持久 SQLite 数据库的就绪状态在启动时检查。`doctor` 会检查端口是否可用，因此请先停止运行中的实例，再进行启动前诊断。
 
-开发时使用 `pi-science start --dev`（Node 直接运行 tsx，另启动 Vite）、`bash scripts/start.sh --dev` 或 `powershell -File scripts/start.ps1 -Dev`。设置 `PI_SCIENCE_SERVER_WATCH=1` 才会启用 `tsx watch`；Bash 和 PowerShell 的开发模式均默认直接运行 tsx。`PI_SCIENCE_CONTROL_PLANE_PORT` 修改生产端口，`PI_SCIENCE_FRONTEND_PORT` 仅用于开发模式。两种启动器都将控制面绑定到 `127.0.0.1`。浏览器内部认证 Cookie 不等于用户登录，不应将服务暴露到公网。
+开发时使用 `pi-science start --dev`、`bash scripts/start.sh --dev` 或 `powershell -File scripts/start.ps1 -Dev`。打开 Vite 的 `5173` 端口查看当前前端源码。Vite 将 `/api` 转发到 `8787` 的控制面，控制面也可以提供 `frontend/dist` 中已有的生产前端。运行 `pnpm --filter frontend build` 更新该产物。设置 `PI_SCIENCE_SERVER_WATCH=1` 可启用 `tsx watch`。`PI_SCIENCE_CONTROL_PLANE_PORT` 修改控制面端口，`PI_SCIENCE_FRONTEND_PORT` 修改 Vite 端口。启动器将控制面绑定到本机回环地址，并使用内部认证 Cookie，服务应仅在本机使用。
 
 pnpm store 默认由多个仓库目录共享：POSIX 使用 `${XDG_CACHE_HOME:-~/.cache}/pi-science/pnpm-store`，Windows 使用 `%LOCALAPPDATA%\pi-science\pnpm-store`。可用 `PNPM_STORE_DIR` 指定独立缓存，包括原先的仓库内 `.cache/pnpm-store`。默认就绪期限为 90 秒，可用 `PI_SCIENCE_STARTUP_TIMEOUT_SECONDS` 调整。启动器根据进程身份停止服务，并拒绝覆盖无关的启动器路径。Windows 停止前检查仓库目录、可执行文件、入口文件、进程创建时间和每次启动的标识；状态缺失或过期时，不会仅凭端口号停止进程。
 
@@ -125,7 +125,7 @@ Windows 停止失败时保留身份记录以便重试，并返回退出码 1。W
 | 并行会话 | 活跃、恢复和分叉的对话使用独立的 Agent Core Worker 进程 |
 | 科学文件 | 原生预览分子结构、FITS、基因组、相图、3D 模型、表格、办公文档、媒体和代码 |
 | 可复现性 | 实时的会话级执行记录、产物哈希、生成代码与差异、环境快照、谱系历史、一键复现，以及固定到已发布版本的产物引用与文本/表格/图片版本差异 |
-| 记忆 | SQLite 统一记录、版本绑定人工审核、分作用域召回、可选 Extraction/Dream 与共享预算（默认关闭） |
+| 记忆 | SQLite 统一记录、版本绑定人工审核、分作用域召回、可选 Extraction/Dream 与共享预算 |
 | 科学计算 | 可复用的 Micromamba 环境、隔离的 Python/R Session 内核、可执行 `.ipynb` 文件、与对话关联的运行记录和应用级 Jupyter Lab |
 | 扩展能力 | Pi skills、提示模板、MCP、subagents、自定义模型提供商和托管端点 |
 | 工作区安全 | 项目级元数据、路径校验、会话状态隔离和受控的模型端点发现 |
@@ -134,7 +134,7 @@ Windows 停止失败时保留身份记录以便重试，并返回退出码 1。W
 
 > **升级注意：** 新 Memory 初始为空，旧 Ledger / Project Knowledge 文件保留但不自动导入。停止应用后，可运行 `pnpm export:legacy-memory /absolute/workspace /absolute/new-export.json` 只读导出旧数据。迁移时核对原始来源，重新创建并审核记忆，不沿用旧审核标记。详见[升级步骤](docs/unified-memory.md#upgrade-from-ledger--project-knowledge)。
 
-在 **设置 → 记忆** 中启用 Memory，全局策略对当前本地用户的所有项目生效。Memory、自动提取 Extraction 和 Dream 默认关闭，分别启用。子选项随开关和触发模式展开，收起时保留已填写的值；模型、审核模式、运行计划和共享后台预算也在这里配置。项目与分类的召回开关保留在项目记忆页面。
+在 **设置 → 记忆** 中配置 Memory，全局策略对当前本地用户的所有项目生效。Memory 和自动召回默认开启，默认使用智能审核。自动提取 Extraction 和 Dream 默认关闭，可分别启用。子选项随开关和触发模式展开，收起时保留已填写的值；模型、审核模式、运行计划和共享后台预算也在这里配置。项目与分类的召回开关保留在项目记忆页面。
 
 记忆页面分为 **记忆、待审核、运行历史** 三个页签。支持关键词搜索、状态/类型/作用域/分类筛选、排序和每页 20 条的分页，显示全部授权匹配记录的总数；手机端以底部抽屉选择条件，点击应用后生效，关闭会放弃本次修改；主页面优先展示记忆列表。条目默认显示紧凑预览和明确状态，展开后查看完整正文、来源、版本与历史；编辑、归档、删除位于“更多”菜单。新增候选展开后提供批准/拒绝操作，修改提案展示当前内容与建议内容对照。待审核内容不参与自动召回。智能审核只允许严格识别的低风险偏好等内容直接生效，科学内容始终需要批准指定版本；全部人工审核会将所有 Agent/后台变更送审。批准表示采用该版本，不表示科学结论已被证明。
 
@@ -150,7 +150,7 @@ Windows 停止失败时保留身份记录以便重试，并返回退出码 1。W
 
 ## 科学 MCP 连接器
 
-Pi-Science 内置 19 个 MCP 连接器，覆盖公共科学数据服务和通用网页搜索。它们以本地 MCP
+Pi-Science 内置 18 个 MCP 连接器，覆盖公共科学数据服务。它们以本地 MCP
 进程运行，向 Agent 提供带类型的工具；实际检索仍会向上游服务发送网络请求。
 
 | 连接器 | 上游服务 | 默认状态 |
@@ -174,15 +174,14 @@ Pi-Science 内置 19 个 MCP 连接器，覆盖公共科学数据服务和通用
 | Target Discovery | Open Targets Platform | 关闭 |
 | ChEMBL | ChEMBL | 关闭 |
 
-这些连接器共提供 89 个工具。可在 **设置 → MCP** 中仅启用需要的科研领域，查看已发现
+这些连接器共提供 85 个工具。可在 **设置 → MCP** 中启用需要的科研领域，查看已发现
 工具、测试连接、筛选暴露的工具，并为工具选择 `询问`、`允许` 或 `拒绝`。内置连接器
 定义只读；也可以注册自定义 `stdio`、Streamable HTTP、SSE 和 socket 连接器。连接器
-设置全局生效，单个项目可以覆盖工具决策。配置变更会自动投影到活跃 Agent runtime，
-无需手工编辑 Pi 配置文件。
+设置全局生效，单个项目可以覆盖工具决策。Worker 初始化时发现工具，调用前校验当前连接器和工具策略。
 
 连接器认证可引用托管密钥/令牌或具名环境变量，作为进程变量、HTTP Header 或 Bearer Token 传递。策略快照只含凭据引用，获准使用的凭据在 Worker 内存中解析。目前不支持 OAuth 登录与刷新。
 
-`web_search` 和 `web_fetch` 是 Agent 内置工具，复用固定版本的 `pi-web-access@0.40.0` 核心。在**设置 → 联网搜索**中配置全局工具开关、搜索服务和 API Key。工具直接在可信 Worker 中执行，不经过代码执行沙箱，保留公网地址、重定向和响应体大小检查。Paper Search 继续作为学术数据库 MCP 连接器。详见 [Web Access 配置与验证](docs/web-access-mcp.md)。
+`web_search` 和 `web_fetch` 在可信 Worker 中使用固定版本的 `pi-web-access@0.40.0`，并检查公网地址、重定向和响应体大小。在 **设置 → 网页访问**中配置工具开关和搜索服务，普通设置自动保存，API Key 单独提交。详见[网页访问配置](docs/web-access-mcp.md)。
 
 ## 科学文件查看器
 
@@ -228,7 +227,7 @@ Core 会话格式 **v4** 与产品 SSE 协议 **v3** 是独立版本。历史是
 | `/export <html\|jsonl>` | 导出对话历史 |
 | `/skill:<name>` | 调用动态发现的工作区技能 |
 
-Pi-Science 托管的工作区默认信任 `.pi/skills/`；其中的项目内置 skills 会参与 Pi 的命令发现。可在 **设置 → Skills** 中查看和控制已发现的 skills。
+Pi-Science 托管的工作区默认信任 `.pi/skills/`；其中的项目内置 skills 会参与 Pi 的命令发现。可在 **设置 → 技能**中查看和控制已发现的技能。
 
 ## 执行证据
 
@@ -244,9 +243,9 @@ Python/R 代码块后，会把受限的执行次数、标准输出/错误、MIME
 
 ## 模型配置
 
-可以在 **设置 → LLM** 中配置提供商。Pi-Science 支持内置厂商、OpenAI-compatible、Anthropic-compatible，以及 Ollama、LM Studio 等可信的无 Key 本地服务。还可以在同一页面注册、启停并检查托管模型端点。健康检查是带超时和响应大小限制的出站请求；为支持本地模型服务，默认允许私网端点，可通过 `PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=0` 禁用。
+在 **设置 → 模型**管理内置提供商、自定义 OpenAI 或 Anthropic 兼容服务，以及 Ollama、LM Studio 等可信的无 Key 本地服务。这里也管理 API Key、显式环境变量绑定和受支持提供商的订阅授权。为支持本地模型服务，默认允许私网端点，可通过 `PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=0` 禁用。详见[原生模型配置](docs/model-config-native.md)。
 
-API Key 通过 **设置 → LLM** 管理。环境凭据需要在模型资源配置中明确引用变量名，仅导出厂商环境变量不会建立凭据绑定。
+在 **设置 → Agent** 中保存新会话的默认模型和思考等级。已有会话保留各自的模型选择，可在输入框工具栏修改。
 
 ## AI 会话标题
 
@@ -270,6 +269,7 @@ pnpm test
 
 # 静态类型检查
 pnpm typecheck
+pnpm lint
 
 # 生产构建
 pnpm build
@@ -289,6 +289,7 @@ pnpm smoke:agent-core
 pnpm --filter frontend test:uat:memory
 pnpm --filter frontend test:uat:notebook
 pnpm --filter frontend test:uat:office
+pnpm verify:ui --scenario conversation-baseline
 ```
 
 ## 文档
@@ -298,12 +299,13 @@ pnpm --filter frontend test:uat:office
 | 进程边界、状态归属、事件与恢复 | [架构文档](docs/architecture.zh-CN.md) |
 | 记忆设置、审核、召回、后台任务与数据保留 | [统一记忆](docs/unified-memory.md) |
 | 支持的工具与已知限制 | [Agent Core 能力清单](docs/agent-core-capability-inventory.md) |
+| 模型提供商、凭据与迁移 | [原生模型配置](docs/model-config-native.md) |
 | 旧会话与离线转换 | [会话转换](docs/agent-core-session-conversion.md) |
-| 科学连接器、凭据与工具策略 | [MCP 管理](docs/mcp-management-implementation.md) |
+| 科学连接器、凭据与工具策略 | [MCP 管理](docs/implementation/mcp-management-implementation.md) |
 | 研究编排与确定性评估 | [对话原生 Auto Research](docs/auto-research.md) |
 | 编写项目技能 | [技能编写](docs/skill-authoring.md) |
 
-架构文档提供对应的实现记录链接，未提供双语版本的文档保留原语言。
+当前使用与部署说明见[文档索引](docs/README.md)。功能内部机制、设计决策和验证记录见[实现文档](docs/implementation/README.md)。
 
 ## 参与贡献
 
@@ -312,7 +314,5 @@ pnpm --filter frontend test:uat:office
 ## 许可证
 
 MIT
-
-可选的 [Pi 原生模型配置后端](docs/model-config-native.md) 支持版本化配置、显式凭证来源和保守的旧资源迁移。发布门槛通过前，部署默认仍为 `legacy`。
 
 [Documentation index / 文档索引](docs/README.md) · [Development verification / 开发检查](docs/development-quality.md)

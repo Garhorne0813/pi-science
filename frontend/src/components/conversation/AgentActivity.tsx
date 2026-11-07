@@ -13,6 +13,7 @@ import { ProgressVisual, useProgressAppearance } from "../progress/ProgressVisua
 import type { ProgressActivityState } from "../progress/progress-activity-map";
 import { cn } from "../../lib/ui";
 import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
+import { DiffView } from "../code-viewer/DiffView";
 import { parseSuggestions } from "../../lib/conversation";
 import { activityRendererRegistry } from "./activity-renderers/registry";
 import styles from "./AgentActivity.module.css";
@@ -400,7 +401,7 @@ function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
     {expanded && hasDetails && details && <div className={cn(styles.details, "space-y-2 pb-2 pl-6 text-xs")}>
       {details.map((detail, index) => detail.pre || detail.plain
         ? <Detail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} pre={detail.pre} />
-        : <OutputDetail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} fullValue={detail.fullValue} partial={detail.partial} t={t} />)}
+        : <OutputDetail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} fullValue={detail.fullValue} partial={detail.partial} diff={detail.diff} t={t} />)}
     </div>}
   </div>;
 }
@@ -422,12 +423,14 @@ function OutputDetail({
   value,
   fullValue,
   partial = false,
+  diff = false,
   t,
 }: {
   label: string;
   value: string;
   fullValue?: string;
   partial?: boolean;
+  diff?: boolean;
   t: (key: string, options?: Record<string, unknown>) => string;
 }) {
   const [showFull, setShowFull] = useState(false);
@@ -436,7 +439,9 @@ function OutputDetail({
   const rendered = showFull && canShowFull ? fullValue! : value.slice(0, DETAIL_PREVIEW_LIMIT);
   return <div>
     <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted">{label}</div>
-    <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-input bg-surface px-2 py-1.5 font-mono text-xs leading-5 text-text">{rendered}</pre>
+    {diff
+      ? <DiffView diff={rendered} className="max-h-48 overflow-auto break-all rounded-input bg-surface px-2 py-1.5 leading-5" />
+      : <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-input bg-surface px-2 py-1.5 font-mono text-xs leading-5 text-text">{rendered}</pre>}
     {truncated && <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-muted">
       <span>{t("conversation.activity.previewTruncated", { count: DETAIL_PREVIEW_LIMIT })}</span>
       {canShowFull
@@ -446,4 +451,4 @@ function OutputDetail({
     {partial && !truncated && <div className="mt-1 text-[10px] text-muted">{t("conversation.activity.fullOutputUnavailable")}</div>}
   </div>;
 }
-function Detail({ label, value, pre = false }: { label: string; value: string; pre?: boolean }) { return <div><div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted">{label}</div>{pre ? <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-input bg-surface px-2 py-1.5 font-mono text-xs leading-5 text-text">{value}</pre> : <div className="font-mono text-xs text-text">{value}</div>}</div>; }
+function Detail({ label, value, pre = false }: { label: string; value: string; pre?: boolean }) { return <div><div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted">{label}</div>{pre ? <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-input bg-surface px-2 py-1.5 font-mono text-xs leading-5 text-text">{value}</pre> : <div className="break-all font-mono text-xs text-text">{value}</div>}</div>; }

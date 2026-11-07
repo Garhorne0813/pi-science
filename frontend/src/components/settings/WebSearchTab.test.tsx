@@ -25,7 +25,6 @@ it("saves switches without resending or exposing a configured key", async () => 
   expect(screen.getByLabelText("API key")).toHaveAttribute("type", "password");
   expect(screen.getByLabelText("API key")).toHaveValue("");
   fireEvent.click(checkbox);
-  fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await screen.findByText("Settings saved");
   expect(writes).toEqual([{ search_enabled: false, fetch_enabled: true, provider: "brave" }]);
 });
@@ -33,7 +32,7 @@ it("replaces and removes the selected provider key", async () => {
   render(<WebSearchTab />);
   const key = await screen.findByLabelText("API key");
   fireEvent.change(key, { target: { value: "replacement-key" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  fireEvent.click(screen.getByRole("button", { name: "Update API key" }));
   await screen.findByText("Settings saved");
   expect(writes[0].api_keys).toEqual({ brave: "replacement-key" });
   expect(key).toHaveValue("");
@@ -51,10 +50,9 @@ it("keeps edits available after save errors and clears unsaved keys when switchi
   fireEvent.click(await screen.findByRole("menuitemradio", { name: "Exa" }));
   expect(key).toHaveValue("");
   failSave = true;
-  fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Reload failed");
   expect(screen.getByRole("button", { name: /^Search provider:/ })).toHaveTextContent("Exa");
-  expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
 });
 
 it("offers DeepSeek with Search/Fetch guidance and saves its own API key", async () => {
@@ -64,9 +62,9 @@ it("offers DeepSeek with Search/Fetch guidance and saves its own API key", async
   fireEvent.click(await screen.findByRole("menuitemradio", { name: "DeepSeek" }));
   expect(screen.getByText(/Uses DeepSeek Search and Fetch/)).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("API key"), { target: { value: "deepseek-fixture" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  fireEvent.click(screen.getByRole("button", { name: "Update API key" }));
   await screen.findByText("Settings saved");
-  expect(writes[0]).toMatchObject({ provider: "deepseek", api_keys: { deepseek: "deepseek-fixture" } });
+  await waitFor(() => expect(writes).toEqual([{ api_keys: { deepseek: "deepseek-fixture" } }, { search_enabled: true, fetch_enabled: true, provider: "deepseek" }]));
   expect(screen.getByLabelText("API key")).toHaveValue("");
 });
 
@@ -76,7 +74,6 @@ it("collapses shared provider settings only when both tools are off and keeps va
   expect(screen.getByLabelText("API key")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("checkbox", { name: "Enable webpage and PDF reading" }));
   expect(screen.queryByLabelText("API key")).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
   fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
   expect(screen.getByRole("checkbox", { name: "Enable web search" })).toBeChecked();
   expect(screen.getByLabelText("API key")).toBeInTheDocument();
@@ -85,7 +82,6 @@ it("removes only a credential without committing unrelated switch drafts", async
   render(<WebSearchTab />);
   fireEvent.click(await screen.findByRole("checkbox", { name: "Enable web search" }));
   fireEvent.click(screen.getByRole("button", { name: "Remove saved key" }));
-  await waitFor(() => expect(writes).toEqual([{ api_keys: { brave: "" } }]));
+  await waitFor(() => expect(writes).toEqual([{ api_keys: { brave: "" } }, { search_enabled: false, fetch_enabled: true, provider: "brave" }]));
   expect(screen.getByRole("checkbox", { name: "Enable web search" })).not.toBeChecked();
-  expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
 });

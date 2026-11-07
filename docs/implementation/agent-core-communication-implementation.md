@@ -1,6 +1,6 @@
 # Agent Core 通信实现记录
 
-当前实现按[产品协议说明](archive/prd-agent-core-communication-optimization.md)运行，浏览器通过 REST/SSE 与 Node 服务通信，服务端通过结构化 IPC 管理独立 Core Worker。
+当前实现按[产品协议说明](../archive/prd-agent-core-communication-optimization.md)运行，浏览器通过 REST/SSE 与 Node 服务通信，服务端通过结构化 IPC 管理独立 Core Worker。
 
 | 层 | 实现 |
 | --- | --- |
@@ -10,9 +10,9 @@
 | 投影 | `AgentCoreEventAdapter`：稳定 operation 生命周期、消息、工具、压缩和重试进展 |
 | 产品服务 | `AgentCoreSessionService`：先绑定/读 snapshot 后激活；admission、配置与恢复串行管理 |
 | 产品事件 | `ConversationEventHub`：观察者持久化、SSE cursor/去重、关闭 drain 和交互恢复 |
-| 后台任务 | 标题任务使用隐藏 Core Worker；Memory Extraction/Dream 由控制面管理无工具模型调用与 SQLite 持久任务，见[统一记忆](unified-memory.md) |
+| 后台任务 | 标题任务使用隐藏 Core Worker；Memory Extraction/Dream 由控制面管理无工具模型调用与 SQLite 持久任务，见[统一记忆](../unified-memory.md) |
 
-实时 Worker 事件以 `ProductInput` 为唯一输入。`ConversationEventHub` 持久化并发布 SSE v3，前端使用同名的 operation/message/tool 生命周期，不在实时链路中解码旧事件。历史展示格式只在 event store 读取时转换；Core 会话格式 v4 与 SSE 协议 v3 是独立版本。事件族、状态归属和诊断入口以[架构说明](architecture.zh-CN.md#产品事件与浏览器状态)为准。
+实时 Worker 事件以 `ProductInput` 为唯一输入。`ConversationEventHub` 持久化并发布 SSE v3，前端使用同名的 operation/message/tool 生命周期，不在实时链路中解码旧事件。历史展示格式只在 event store 读取时转换；Core 会话格式 v4 与 SSE 协议 v3 是独立版本。事件族、状态归属和诊断入口以[架构说明](../architecture.zh-CN.md#产品事件与浏览器状态)为准。
 
 真实本地 provider stream 永久停住时，Worker IPC 仍能返回 busy snapshot。watchdog 的进展期限会强制终止旧 Worker，从同一 durable operation 恢复，并保持浏览器消息 ID 去重。连续卡死达到恢复上限会停机报错，保留显式重试路径。
 

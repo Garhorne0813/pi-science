@@ -448,7 +448,6 @@ try {
   await page
     .getByRole("menuitemradio", { name: "Review everything manually" })
     .click();
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await dialog.getByRole("status").filter({ hasText: "Saved" }).waitFor();
   assert.equal((await api("/settings")).review.mode, "all_manual");
   await page.screenshot({

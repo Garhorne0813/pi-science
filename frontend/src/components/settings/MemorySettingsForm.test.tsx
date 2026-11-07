@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { settingsSchema } from "@pi-science/contracts";
 import { MemorySettingsForm } from "./MemorySettingsForm";
 import i18n from "../../i18n";
@@ -61,8 +61,7 @@ it("collapses Memory and extraction options without losing edited values on save
     screen.getByRole("button", { name: "Extraction model: Configured model" }),
   ).toBeInTheDocument();
   toggle("Enable Memory");
-  fireEvent.click(screen.getByRole("button", { name: "Save" }));
-  expect(save).toHaveBeenCalledWith(
+  await waitFor(() => expect(save).toHaveBeenCalledWith(
     expect.objectContaining({
       enabled: false,
       extraction: expect.objectContaining({
@@ -71,7 +70,7 @@ it("collapses Memory and extraction options without losing edited values on save
         minMessages: 8,
       }),
     }),
-  );
+  ));
 });
 it("shows Dream scheduling controls according to trigger mode and idle requirement", async () => {
   mount();
@@ -131,7 +130,7 @@ it("shows Dream scheduling controls according to trigger mode and idle requireme
     screen.getByRole("spinbutton", { name: "Trigger interval (hours)" }),
   ).toHaveValue(48);
 });
-it("preserves time-window values while its restriction is collapsed", () => {
+it("preserves time-window values while its restriction is collapsed", async () => {
   const save = mount();
   toggle("Automatically organize memories");
   if (screen.queryByText("Advanced: consolidation conditions")) fireEvent.click(screen.getByText("Advanced: consolidation conditions"));
@@ -144,8 +143,7 @@ it("preserves time-window values while its restriction is collapsed", () => {
   toggle("Restrict allowed execution window");
   expect(screen.getByLabelText("Start")).toHaveValue("02:30");
   toggle("Restrict allowed execution window");
-  fireEvent.click(screen.getByRole("button", { name: "Save" }));
-  expect(save).toHaveBeenCalledWith(
+  await waitFor(() => expect(save).toHaveBeenCalledWith(
     expect.objectContaining({
       dream: expect.objectContaining({
         allowedWindow: expect.objectContaining({
@@ -154,19 +152,20 @@ it("preserves time-window values while its restriction is collapsed", () => {
         }),
       }),
     }),
-  );
+  ));
 });
 
-it("retains a draft across tab unmounts and allows explicit discard", () => {
+it("flushes a valid draft when closed and retains it until the server confirms", () => {
   const value = { ...settingsSchema.parse({ enabled: true }), revision: 1 };
   const save = vi.fn(async () => true);
   const first = render(<MemorySettingsForm value={value} busy={false} save={save} />);
-  expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
   fireEvent.change(screen.getByRole("spinbutton", { name: "Daily token limit" }), { target: { value: "12345" } });
   first.unmount();
+  expect(save).toHaveBeenCalledWith(expect.objectContaining({ budget: expect.objectContaining({ dailyTokens: 12345 }) }));
   render(<MemorySettingsForm value={value} busy={false} save={save} />);
   expect(screen.getByRole("spinbutton", { name: "Daily token limit" })).toHaveValue(12345);
   fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
   expect(screen.getByRole("spinbutton", { name: "Daily token limit" })).toHaveValue(value.budget.dailyTokens);
-  expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
 });

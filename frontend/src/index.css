@@ -217,7 +217,7 @@
   --space-page: 1.5rem;
   /* Structure geometry (reference-confirmed values; see reference doc). */
   --conversation-content-width: clamp(748px, 52vw, 1100px);
-  --conversation-composer-width: clamp(780px, 54vw, 1132px);
+  --conversation-composer-width: var(--conversation-content-width);
   --user-message-width: clamp(525px, 38vw, 800px);
   --composer-fade-height: 36px;
   --send-button-size: 34px;

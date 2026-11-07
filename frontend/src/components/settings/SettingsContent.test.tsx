@@ -334,10 +334,9 @@ describe("SettingsContent", () => {
     expect(model).toBeEnabled();
     fireEvent.pointerDown(model); fireEvent.click(model);
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "DeepSeek V4 Flash" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save default model" }));
     await waitFor(() => expect(putCalls).toContainEqual({ url: "/api/model-selection/default", body: { model: "deepseek/deepseek-v4-flash", thinking: "off" } }));
     expect(await screen.findByText(/Default model saved. Context settings could not refresh/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save default model" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Save default model" })).not.toBeInTheDocument();
   });
 
   it.each(["save", "delete"])("propagates native credential %s failures to the open dialog", async (operation) => {

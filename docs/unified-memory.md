@@ -30,8 +30,8 @@ Retain the original files/export until the reviewed transfer is verified.
 
 ## Enabling and reviewing
 
-Memory, Extraction and Dream start disabled. Enable Memory in application
-Settings → Memory, then independently opt into Extraction or Dream.
+Memory starts enabled with automatic recall and smart review. Extraction and
+Dream can be enabled independently in Settings → Memory.
 Persistent SQLite state is required outside tests; disabling it with
 `PI_SCIENCE_SQLITE_STATE=0` prevents enabling Memory.
 

@@ -6,6 +6,22 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/settings/approval", route => route.fulfill({ json: { defaultMode: "ask" } }));
 });
 
+test("the General scroll hint follows the bottom of the panel", async ({ page }) => {
+  await page.setViewportSize({ width: Math.min(page.viewportSize()?.width ?? 1024, 1024), height: 620 });
+  await page.goto("/settings");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const panel = dialog.getByRole("tabpanel");
+  const hint = dialog.getByText(/scroll for more settings/i);
+  await expect(dialog.locator("..")).toHaveCSS("backdrop-filter", "none");
+  await expect(hint).toBeVisible();
+  await panel.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await expect(hint).toBeHidden();
+  await panel.evaluate((element) => { element.scrollTop = 0; });
+  await expect(hint).toBeVisible();
+  await dialog.getByRole("tab", { name: "Memory", exact: true }).click();
+  await expect(hint).toBeHidden();
+});
+
 test("settings navigation, model facts and saved compaction across viewports", async ({ page }, testInfo) => {
   let threshold = 70;
   let enabled = true;
@@ -49,9 +65,8 @@ test("settings navigation, model facts and saved compaction across viewports", a
   }
   await dialog.getByRole("slider").fill("80");
   await expect(dialog.getByText("51,200 tokens", { exact: true })).toBeVisible();
-  await dialog.getByRole("button", { name: "Save context settings", exact: true }).click();
   await expect(dialog.getByText("Settings saved", { exact: true })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Save context settings", exact: true })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "Save context settings", exact: true })).toHaveCount(0);
   await dialog.getByRole("button", { name: "Manage models", exact: true }).click();
   await expect(dialog.getByRole("tab", { name: "Models", exact: true })).toHaveAttribute("aria-selected", "true");
 });
@@ -109,11 +124,18 @@ test("native web search settings save provider credentials and switches @accessi
   await expect(dialog.getByRole("checkbox", { name: "Enable web search" })).toBeChecked();
   await dialog.getByRole("button", { name: /^Search provider:/ }).click();
   await page.getByRole("menuitemradio", { name: "Brave", exact: true }).click();
-  await dialog.getByLabel("API key", { exact: true }).fill("fixture-key");
+  await expect.poll(() => writes.length).toBe(1);
   await dialog.getByRole("checkbox", { name: "Enable web search" }).uncheck();
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => writes.length).toBe(2);
+  await dialog.getByLabel("API key", { exact: true }).fill("fixture-key");
+  expect(writes).toHaveLength(2);
+  await dialog.getByRole("button", { name: "Update API key", exact: true }).click();
   await expect(dialog.getByText("Settings saved", { exact: true })).toBeVisible();
-  expect(writes).toEqual([{ search_enabled: false, fetch_enabled: true, provider: "brave", api_keys: { brave: "fixture-key" } }]);
+  expect(writes).toEqual([
+    { search_enabled: true, fetch_enabled: true, provider: "brave" },
+    { search_enabled: false, fetch_enabled: true, provider: "brave" },
+    { api_keys: { brave: "fixture-key" } },
+  ]);
   await expect(dialog.getByLabel("API key", { exact: true })).toHaveValue("");
   expect(await dialog.getByRole("tabpanel").evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   const violations = (await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations.filter(item => item.impact === "critical" || item.impact === "serious");
@@ -122,28 +144,40 @@ test("native web search settings save provider credentials and switches @accessi
 });
 
 
-test("settings switches preserve drafts across tabs and expose only applicable controls", async ({ page }) => {
-  await page.route("**/api/settings/web-access", route => route.fulfill({ json: { web_access: { search_enabled: true, fetch_enabled: true, provider: "brave", api_keys: {} } } }));
+test("settings switches autosave and expose only applicable controls", async ({ page }) => {
+  let web = { search_enabled: true, fetch_enabled: true, provider: "brave", api_keys: {} };
+  let compaction = true;
+  await page.route("**/api/settings/config*", route => route.fulfill({
+    json: { ...FIXTURES.config, compaction_enabled: compaction },
+  }));
+  await page.route("**/api/settings/compaction*", route => {
+    compaction = route.request().postDataJSON().enabled;
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.route("**/api/settings/web-access", route => {
+    if (route.request().method() === "PUT") web = { ...web, ...route.request().postDataJSON() };
+    return route.fulfill({ json: { ok: true, web_access: web, session_replacements: [] } });
+  });
   await page.goto("/settings");
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog.getByRole("tab", { name: "Agent Capabilities", exact: true })).toHaveCount(0);
-  await dialog.getByRole("tab", { name: "Web access", exact: true }).click();
+  const webTab = dialog.getByRole("tab", { name: "Web access", exact: true });
+  await webTab.click();
   await dialog.getByRole("checkbox", { name: "Enable web search", exact: true }).uncheck();
   await expect(dialog.getByLabel("API key", { exact: true })).toBeVisible();
   await dialog.getByRole("checkbox", { name: "Enable webpage and PDF reading", exact: true }).uncheck();
   await expect(dialog.getByLabel("API key", { exact: true })).toHaveCount(0);
-  await expect(dialog.getByRole("tab", { name: "Web access", exact: true }).locator('[title="Unsaved changes"]')).toBeVisible();
-  await dialog.getByRole("tab", { name: "Agent", exact: true }).click();
+  const agentTab = dialog.getByRole("tab", { name: "Agent", exact: true });
+  await agentTab.click();
   const compact = dialog.getByRole("checkbox", { name: "Automatic compaction", exact: true });
   await compact.uncheck();
   await expect(dialog.getByRole("slider")).toHaveCount(0);
-  await expect(dialog.getByRole("button", { name: "Save context settings", exact: true })).toBeEnabled();
-  await dialog.getByRole("tab", { name: "Web access", exact: true }).click();
+  await expect(dialog.getByRole("status").filter({ hasText: /^Settings saved$/ })).toBeVisible();
+  await webTab.click();
   await expect(dialog.getByRole("checkbox", { name: "Enable web search", exact: true })).not.toBeChecked();
-  await dialog.getByRole("button", { name: "Discard changes", exact: true }).click();
-  await expect(dialog.getByRole("checkbox", { name: "Enable web search", exact: true })).toBeChecked();
-  await dialog.getByRole("tab", { name: "Agent", exact: true }).click();
+  await expect(dialog.getByRole("checkbox", { name: "Enable webpage and PDF reading", exact: true })).not.toBeChecked();
+  await expect(webTab.locator('[title="Unsaved changes"]')).toHaveCount(0);
+  expect(web).toMatchObject({ search_enabled: false, fetch_enabled: false });
+  await agentTab.click();
   await expect(compact).not.toBeChecked();
-  await expect(dialog.getByRole("tab", { name: "Web access", exact: true }).locator('[title="Unsaved changes"]')).toHaveCount(0);
-  await expect(dialog.getByRole("tab", { name: "Agent", exact: true }).locator('[title="Unsaved changes"]')).toBeVisible();
 });

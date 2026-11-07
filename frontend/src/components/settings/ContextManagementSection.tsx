@@ -6,12 +6,14 @@ import { SettingsSaveBar } from "./SettingsSaveBar";
 import { useTranslation } from "react-i18next";
 import type { SettingsConfig } from "../../lib/settings";
 import { contextPolicy } from "./agent/context-policy";
+import { useSettingsAutosave } from "./useSettingsAutosave";
 
 export function ContextManagementSection({ config, saving, onSave }: { config: SettingsConfig; saving: boolean; onSave: (enabled: boolean, threshold: number) => Promise<void> }) {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState(config.compaction_enabled !== false);
   const [threshold, setThreshold] = useState(config.compaction_threshold_percent ?? 85);
   const [saved, setSaved] = useState(false);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     setEnabled(config.compaction_enabled !== false);
     setThreshold(config.compaction_threshold_percent ?? 85);
@@ -21,25 +23,27 @@ export function ContextManagementSection({ config, saving, onSave }: { config: S
   const policy = contextPolicy(config, threshold);
   const submit = async () => {
     setSaved(false);
+    setFailed(false);
     try { await onSave(enabled, threshold); setSaved(true); }
-    catch { /* The settings shell displays the server error; retain the draft. */ }
+    catch { setFailed(true); }
   };
+  useSettingsAutosave(dirty && !saving && !failed && !saved ? `${enabled}:${threshold}` : null, submit, 300);
   return (
     <section aria-labelledby="context-management-title" className="rounded-card border border-faint bg-surface-2/40 p-4">
-      <SettingsSaveMode />
+      <SettingsSaveMode automatic />
       <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <h2 id="context-management-title" className="text-ui-body font-medium text-text">{t("settings.context.title")}</h2>
           <p className="mt-1 text-ui-caption leading-relaxed text-muted">{t("settings.context.description")}</p>
         </div>
-        <SettingsToggle label={t("settings.context.autoCompact")} checked={enabled} disabled={saving} onChange={(next) => { setEnabled(next); setSaved(false); }} />
+        <SettingsToggle label={t("settings.context.autoCompact")} checked={enabled} disabled={saving} onChange={(next) => { setEnabled(next); setSaved(false); setFailed(false); }} />
       </div>
       {enabled && <div className="mt-4 border-t border-faint pt-4">
         <div className="flex items-center justify-between gap-3">
           <label htmlFor="compaction-threshold" className="text-ui-label text-text">{t("settings.context.threshold")}</label>
           <output htmlFor="compaction-threshold" className="rounded-input bg-surface-2 px-2 py-1 font-mono text-ui-caption text-text">{threshold}%</output>
         </div>
-        <input id="compaction-threshold" type="range" min={50} max={95} step={1} value={threshold} disabled={!enabled || saving} onChange={(event) => { setThreshold(Number(event.target.value)); setSaved(false); }} aria-describedby="compaction-preview" className="mt-2 h-8 w-full cursor-pointer accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50" />
+        <input id="compaction-threshold" type="range" min={50} max={95} step={1} value={threshold} disabled={!enabled || saving} onChange={(event) => { setThreshold(Number(event.target.value)); setSaved(false); setFailed(false); }} aria-describedby="compaction-preview" className="mt-2 h-8 w-full cursor-pointer accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50" />
         <div id="compaction-preview" className="mt-2 rounded-card bg-sidebar p-4">
           <p className="text-ui-caption text-muted">{t(enabled ? "settings.redesign.contextPreview" : "settings.redesign.compactionOff")}</p>
           {policy ? <>
@@ -52,7 +56,7 @@ export function ContextManagementSection({ config, saving, onSave }: { config: S
         </div>
       </div>}
       {!enabled && <p className="mt-3 text-ui-caption text-muted">{t("settings.redesign.compactionOff")}</p>}
-      <SettingsSaveBar dirty={dirty} busy={saving} saved={saved} label={t("settings.redesign.saveContext")} onDiscard={() => { setEnabled(config.compaction_enabled !== false); setThreshold(config.compaction_threshold_percent ?? 85); }} onSave={() => void submit()} />
+      <SettingsSaveBar dirty={dirty && !saved} busy={saving} saved={saved} failed={failed} onDiscard={() => { setEnabled(config.compaction_enabled !== false); setThreshold(config.compaction_threshold_percent ?? 85); setFailed(false); }} onRetry={() => void submit()} />
     </section>
   );
 }

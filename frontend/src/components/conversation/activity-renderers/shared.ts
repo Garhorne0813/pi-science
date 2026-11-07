@@ -1,13 +1,13 @@
 import type { ToolCallBlock } from "../../../types/thread";
 import type { ActivityDetailView, ActivityRendererProps } from "./types";
 
-export function genericDetails({ source, t }: ActivityRendererProps): ActivityDetailView[] {
+export function genericDetails({ source, t }: ActivityRendererProps, outputLabel = t("conversation.activity.output")): ActivityDetailView[] {
   const discovery = ["ls", "glob", "grep"].includes(source.tool);
   const details: ActivityDetailView[] = [{ label: t("conversation.activity.toolLabel"), value: source.tool, plain: true }];
   if (source.input) details.push({ label: t("conversation.activity.input"), value: stringify(source.input), pre: true });
   const output = source.output ?? source.partialOutput;
   if (output) details.push({
-    label: t("conversation.activity.output"),
+    label: outputLabel,
     value: output,
     ...(discovery ? { pre: true } : {}),
     ...(source.output ? { fullValue: source.output } : {}),
@@ -27,15 +27,6 @@ export function record(value: unknown): Record<string, unknown> | null {
 
 export function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-export function meaningfulActivityTitle(title: string, tool: string): string | undefined {
-  const value = text(title);
-  if (!value) return undefined;
-  const normalizedTitle = value.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
-  const normalizedTool = tool.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
-  if (normalizedTitle === normalizedTool || normalizedTitle === `running ${normalizedTool}`) return undefined;
-  return value;
 }
 
 export function count(value: unknown): number | undefined {

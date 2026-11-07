@@ -62,7 +62,7 @@ export async function waitForConversationSettled(page: import("@playwright/test"
   await expect(page.getByRole("table")).toBeVisible();
   await expect(page.locator("pre code").first()).toBeVisible();
   await expect(page.getByRole("button", { name: /report\.md/ }).first()).toBeVisible();
-  await expect(page.getByPlaceholder(/Ask anything/)).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Message", exact: true })).toBeVisible();
 }
 
 /** Workspace route helper — the cwd is always URL-encoded in the path. */

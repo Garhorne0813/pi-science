@@ -252,9 +252,9 @@ describe("AgentActivity live stream", () => {
     expect(document.querySelector('[data-orb-variant="B3"]')).toBeInTheDocument();
   });
 
-  it("uses the thinking pattern when a tool has no semantics", () => {
+  it("shows the shell action without replacing the turn's working indicator", () => {
     render(<AgentActivity blocks={[tool("bash", "bash", "running", { command: "git status" })]} />);
-    expect(screen.getByText("Running bash")).toBeInTheDocument();
+    expect(screen.getByText("Running git status")).toBeInTheDocument();
     expect(screen.getByText("Working")).toBeInTheDocument();
   });
 
@@ -393,6 +393,33 @@ describe("AgentActivity live stream", () => {
     rerender(<AgentActivity blocks={[{ ...bash, status: "done", output: "Installed", startedAt: "2026-09-09T00:00:00.000Z", endedAt: "2026-09-09T00:00:01.900Z" }]} />);
     expect(screen.queryByText("Downloading numpy-1.26.4.whl (56 MB)")).not.toBeInTheDocument();
     expect(screen.getByText("1.9s")).toBeInTheDocument();
+  });
+
+  it("renders a shell command, exit code and output in the expanded tool row", () => {
+    render(<AgentActivity blocks={[{
+      ...tool("bash", "bash", "done", { command: "pnpm test --filter ui" }),
+      details: { exit_code: 0 },
+      output: "7 passed",
+    }]} />);
+    expect(screen.queryByText("pnpm test --filter ui")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Running pnpm test/ }));
+    expect(screen.getByText("Command").parentElement).toHaveTextContent("pnpm test --filter ui");
+    expect(screen.getByText("Exit code").parentElement).toHaveTextContent("0");
+    expect(screen.getByText("Output").parentElement).toHaveTextContent("7 passed");
+  });
+
+  it("shows the read path and contents and highlights a structured edit diff", () => {
+    render(<AgentActivity blocks={[
+      { ...tool("read", "read", "done", { path: "src/main.ts", offset: 2 }), output: "const value = 1;" },
+      { ...tool("edit", "edit", "done", { path: "src/main.ts" }), details: { diff: "-2 const value = 1;\n+2 const value = 2;" } },
+    ]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Reading main.ts" }));
+    expect(screen.getByText("File path").parentElement).toHaveTextContent("src/main.ts");
+    expect(screen.getByText("File contents").parentElement).toHaveTextContent("const value = 1;");
+    fireEvent.click(screen.getByRole("button", { name: "Updating main.ts" }));
+    const diff = within(screen.getByText("Diff").parentElement!);
+    expect(diff.getByText("-2 const value = 1;")).toHaveClass("text-error-text");
+    expect(diff.getByText("+2 const value = 2;")).toHaveClass("text-ok-text");
   });
 
   it("shows interaction, failure, and abort lifecycle copy", () => {

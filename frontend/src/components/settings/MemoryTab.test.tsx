@@ -21,6 +21,8 @@ beforeEach(() => {
   calls = [];
   conflict = false;
   memoryEnabled = true;
+  let savedSettings: ReturnType<typeof settingsSchema.parse> | undefined;
+  let revision = 4;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -29,6 +31,10 @@ beforeEach(() => {
         body = init.body ? JSON.parse(String(init.body)) : undefined;
       calls.push({ url, method, body });
       const status = method === "PATCH" && conflict ? 409 : 200;
+      if (method === "PATCH" && status === 200) {
+        savedSettings = settingsSchema.parse(body.settings);
+        revision++;
+      }
       return new Response(
         JSON.stringify(
           status === 409
@@ -40,8 +46,8 @@ beforeEach(() => {
                   ],
                 }
               : {
-                  ...settingsSchema.parse({ enabled: memoryEnabled }),
-                  revision: 4,
+                  ...(savedSettings ?? settingsSchema.parse({ enabled: memoryEnabled })),
+                  revision,
                 },
         ),
         { status, headers: { "content-type": "application/json" } },
@@ -76,7 +82,6 @@ it("edits global Memory policy with CAS, without requiring cwd or permitting sci
       name: "Review everything manually",
     }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await screen.findByRole("status");
   await waitFor(() =>
     expect(calls.some((c) => c.method === "PATCH")).toBe(true),
@@ -99,7 +104,6 @@ it("shows settings conflicts instead of a saved notice", async () => {
   });
   conflict = true;
   fireEvent.click(screen.getByRole("checkbox", { name: "Allow automatic recall" }));
-  fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await screen.findByRole("alert");
   expect(screen.getByRole("alert")).toHaveTextContent(
     "Settings revision changed",
@@ -125,17 +129,19 @@ it("is available in application Settings with global scope even when opened insi
   ).not.toBeInTheDocument();
 });
 
-it("loads configured models during first-time setup before Memory has been saved as enabled", async () => {
+it("loads configured models during first-time setup and autosaves the extraction model", async () => {
   memoryEnabled = false;
   mount();
   fireEvent.click(
     await screen.findByRole("checkbox", { name: "Enable Memory" }),
   );
+  await screen.findByText("Saved");
   fireEvent.click(
     screen.getByRole("checkbox", {
       name: "Check increments after completed turns",
     }),
   );
+  await screen.findByText("Saved");
   const model = screen.getByRole("button", {
     name: "Extraction model: Use default model",
   });
@@ -144,11 +150,9 @@ it("loads configured models during first-time setup before Memory has been saved
   fireEvent.click(
     await screen.findByRole("menuitemradio", { name: "Configured model" }),
   );
-  expect(calls.some((c) => c.method === "PATCH")).toBe(false);
-  fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() =>
     expect(
-      calls.find((c) => c.method === "PATCH")?.body.settings,
+      calls.filter((c) => c.method === "PATCH").at(-1)?.body.settings,
     ).toMatchObject({
       enabled: true,
       extraction: { enabled: true, model: "configured/model" },

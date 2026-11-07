@@ -33,8 +33,16 @@ test("memory errors keep unknown counts and offer section retry", async ({ page 
   await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
 });
 
-test("memory settings draft survives navigation and save stays in the desktop viewport", async ({ page }, info) => {
-  await page.route("**/api/memory/settings*", route => route.fulfill({ json: { ...settingsSchema.parse({ enabled: true }), revision: 1 } }));
+test("memory settings autosave survives switching tabs", async ({ page }, info) => {
+  let settings = { ...settingsSchema.parse({ enabled: true }), revision: 1 };
+  await page.route("**/api/memory/settings*", route => {
+    if (route.request().method() === "PATCH") {
+      const patch = route.request().postDataJSON();
+      expect(patch.expectedRevision).toBe(settings.revision);
+      settings = { ...settingsSchema.parse(patch.settings), revision: settings.revision + 1 };
+    }
+    return route.fulfill({ json: settings });
+  });
   await page.goto(workspaceRoute(VISUAL_CWD, "/memory"));
   await page.getByRole("button", { name: "Memory settings", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Settings", exact: true });
@@ -42,12 +50,10 @@ test("memory settings draft survives navigation and save stays in the desktop vi
   await dialog.getByRole("tab", { name: "General", exact: true }).click();
   await dialog.getByRole("tab", { name: "Memory", exact: true }).click();
   await expect(dialog.getByRole("spinbutton", { name: "Daily token limit", exact: true })).toHaveValue("12345");
-  const save = dialog.getByRole("button", { name: "Save", exact: true });
-  await expect(save).toBeInViewport({ ratio: 1 });
-  await expect(save).toBeEnabled();
-  await page.screenshot({ path: info.outputPath("settings-draft.png") });
-  await dialog.getByRole("button", { name: "Discard changes", exact: true }).click();
-  await expect(save).toBeDisabled();
+  await expect(dialog.getByRole("status").filter({ hasText: /^Saved$/ })).toBeVisible();
+  expect(settings.budget.dailyTokens).toBe(12345);
+  await expect(dialog.getByRole("button", { name: "Save", exact: true })).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath("settings-autosave.png") });
 });
 
 test("discard confirmation traps focus and Escape preserves the underlying memory editor", async ({ page }) => {

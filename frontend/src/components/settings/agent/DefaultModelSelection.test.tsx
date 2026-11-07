@@ -23,21 +23,18 @@ async function select(name: string, option: string) {
   fireEvent.click(await screen.findByRole("menuitemradio", { name: option }));
 }
 describe("default model selection", () => {
-  it("saves an explicit draft and retains it after a failed save for retry", async () => {
+  it("automatically saves a draft and retains it after a failed save for retry", async () => {
     const onSave = vi.mocked(modelSelectionApi.saveDefault);
     onSave.mockRejectedValueOnce(new Error("disk unavailable"));
     render(<DefaultModelSelection />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Default model: flash" })).toBeEnabled());
     await select("Default model", "pro");
-    await select("Thinking Level", "High");
-    expect(onSave).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Save default model" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("disk unavailable");
     expect(screen.getByRole("button", { name: "Default model: pro" })).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Save default model" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
-    expect(onSave).toHaveBeenLastCalledWith({ model: "deepseek/pro", thinking: "high" }, null);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Save default model" })).toBeDisabled());
+    expect(onSave).toHaveBeenLastCalledWith({ model: "deepseek/pro", thinking: "off" }, null);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Save default model" })).not.toBeInTheDocument());
   });
   it("uses the picker workspace only for save validation while committing the global default", async () => {
     const scope = "/lab/workspace";
@@ -45,20 +42,20 @@ describe("default model selection", () => {
     render(<DefaultModelSelection scope={scope} />);
     await waitFor(() => expect(screen.getByRole("button", { name: /^Default model:/ })).toBeEnabled());
     await select("Default model", "pro");
+    await waitFor(() => expect(modelSelectionApi.saveDefault).toHaveBeenCalledWith({ model: "deepseek/pro", thinking: "off" }, scope));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Thinking Level:/ })).toBeEnabled());
     await select("Thinking Level", "High");
-    fireEvent.click(screen.getByRole("button", { name: "Save default model" }));
     await waitFor(() => expect(modelSelectionApi.saveDefault).toHaveBeenCalledWith({ model: "deepseek/pro", thinking: "high" }, scope));
     expect(queryClient.getQueryData(modelSelectionKeys.default)).toEqual({ scope: "default", selection: { model: "deepseek/pro", thinking: "high" } });
   });
 
-  it("clears the default only after Save", async () => {
+  it("automatically persists clearing the default", async () => {
     const onSave = vi.mocked(modelSelectionApi.saveDefault);
     render(<DefaultModelSelection />);
     const clear = await screen.findByRole("button", { name: "Clear default model" });
     await waitFor(() => expect(clear).toBeEnabled());
     fireEvent.click(clear);
     expect(onSave).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Save default model" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({ model: null, thinking: "off" }, null));
   });
   it("bounds a large default-model menu while keeping searched models reachable", async () => {
@@ -80,16 +77,15 @@ describe("default model selection", () => {
     render(<DefaultModelSelection onCommitted={onCommitted} />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Default model: flash" })).toBeEnabled());
     await select("Default model", "pro");
-    fireEvent.click(screen.getByRole("button", { name: "Save default model" }));
     await waitFor(() => expect(screen.getByText("Default model saved. Context settings could not refresh: context offline")).toBeInTheDocument());
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Default model: pro" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Save default model" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Save default model" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Retry loading" }));
     await waitFor(() => expect(screen.getByText("Default model saved")).toBeInTheDocument());
     expect(modelSelectionApi.saveDefault).toHaveBeenCalledTimes(1);
     await select("Thinking Level", "High");
-    expect(screen.getByRole("button", { name: "Save default model" })).toBeEnabled();
+    await waitFor(() => expect(modelSelectionApi.saveDefault).toHaveBeenCalledTimes(2));
   });
 
 });

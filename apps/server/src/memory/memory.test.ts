@@ -69,7 +69,7 @@ describe("unified worker transactions", () => {
       review: { mode: "all_manual" },
     });
   });
-  it("defaults features off, enables only validated low-risk smart writes and never self-approves science", async () => {
+  it("defaults to Memory with automatic recall and smart review while keeping background features off", async () => {
     const fresh = new SqliteStateStore({ path: ":memory:" });
     stores.push(fresh);
     await fresh.start();
@@ -79,7 +79,8 @@ describe("unified worker transactions", () => {
       context: user,
     });
     expect(s).toMatchObject({
-      enabled: false,
+      enabled: true,
+      recall: { enabled: true },
       review: { mode: "smart" },
       extraction: { enabled: false },
       dream: { enabled: false },

@@ -47,7 +47,7 @@ test("projects page has no serious axe violations @accessibility", async ({ page
 
 test("workspace landing has no serious axe violations @accessibility", async ({ page }) => {
   await page.goto(workspaceRoute(VISUAL_CWD));
-  await expect(page.getByPlaceholder(/Ask anything/)).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Message", exact: true })).toBeVisible();
   await expectNoSeriousViolations(page, "workspace landing");
 });
 
@@ -59,7 +59,7 @@ test("conversation has no serious axe violations @accessibility", async ({ page 
 
 test("settings dialog has no serious axe violations @accessibility", async ({ page }) => {
   await page.goto(workspaceRoute(VISUAL_CWD));
-  await expect(page.getByPlaceholder(/Ask anything/)).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Message", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
   await expectNoSeriousViolations(page, "settings dialog");

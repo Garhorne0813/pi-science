@@ -13,9 +13,15 @@ export function DiffView(props: DiffViewProps) {
         ...props.original.split("\n").map((line) => `-${line}`),
         ...props.modified.split("\n").map((line) => `+${line}`),
       ].join("\n");
+  const lines = text.split("\n");
   return (
     <pre className={cn("whitespace-pre-wrap font-mono text-xs text-muted", props.className)}>
-      {text}
+      {lines.map((line, index) => (
+        <span key={index} className={cn(
+          !line.startsWith("+++ ") && line.startsWith("+") && "text-ok-text",
+          !line.startsWith("--- ") && line.startsWith("-") && "text-error-text",
+        )}>{line}{index < lines.length - 1 ? "\n" : ""}</span>
+      ))}
     </pre>
   );
 }

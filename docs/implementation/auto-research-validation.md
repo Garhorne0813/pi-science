@@ -55,7 +55,7 @@ The Skill used more calls/tokens in this sample while reaching the same known-an
 
 ## Reproduce
 
-Provision the Linux dependencies described in [Universal Sandbox](universal-sandbox.md). Supply `DEEPSEEK_API_KEY` only through the process environment, then run:
+Provision the Linux dependencies described in [Universal Sandbox](../universal-sandbox.md). Supply `DEEPSEEK_API_KEY` only through the process environment, then run:
 
 ```bash
 PI_SCIENCE_RESEARCH_LIVE_TEST=1 \
@@ -110,7 +110,7 @@ The P1 legacy executor escape is removed by sandbox_run retirement. Real Worker 
 
 ## Review follow-up: confined authorization traversal (2026-10-19)
 
-The bounded large-workspace benchmark reproduced the repeated traversal concern on `1b9b051c`: a delegated read of one small grant input with 20,000 unrelated scientific files took 1,136.85 ms p50 / 1,166.48 ms p95. Scoping current protection discovery to the actual grant roots plus sensitive ancestors reduced this fixture to 4.68 ms / 6.60 ms. Full methodology, limits and raw before/after samples are in [Confined authorization benchmark](performance/execution-grants-benchmark.md); these local five-sample measurements are not native Windows/macOS acceptance.
+The bounded large-workspace benchmark reproduced the repeated traversal concern on `1b9b051c`: a delegated read of one small grant input with 20,000 unrelated scientific files took 1,136.85 ms p50 / 1,166.48 ms p95. Scoping current protection discovery to the actual grant roots plus sensitive ancestors reduced this fixture to 4.68 ms / 6.60 ms. Full methodology, limits and raw before/after samples are in [Confined authorization benchmark](../performance/execution-grants-benchmark.md); these local five-sample measurements are not native Windows/macOS acceptance.
 
 No authorization data is cached across calls. Grant/config sources, ancestor revocation, budgets, directory identities, tool ceilings and current operator-protected roots remain live checks. A structural test verifies inaccessible siblings are not traversed, while regression tests cover newly sensitive descendants, sensitive root ancestors and newly configured protected roots. Confined read capture uses the policy from the locked recheck, including protection added after initial authorization.
 

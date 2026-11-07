@@ -338,10 +338,10 @@ describe("composer send-failure restore", () => {
     expect(screen.getByRole("heading", { name: "Persisted experiment title" })).toBeInTheDocument();
   });
 
-  it("uses compact spacing for the composer toolbar", async () => {
+  it("uses compact bottom padding on the composer toolbar", async () => {
     await renderReady();
     const toolbar = screen.getByLabelText("Send message").parentElement?.parentElement;
-    expect(toolbar).toHaveClass("pb-1");
+    expect(toolbar).toHaveClass("px-3", "pb-2");
   });
 
   it("loads the configured model and sends from a workspace without an active session", async () => {
@@ -1284,6 +1284,7 @@ describe("defensive thread shape and copy actions (docs/pr30markdown.md 3.4/3.5/
       thread: { blocks: "garbage" as unknown as ThreadBlock[], index: {}, loaded: true },
     });
     await renderReady();
+    expect(screen.getByRole("heading", { name: "What are you researching today?" })).toBeInTheDocument();
     expect(screen.getByLabelText("Send message")).toBeInTheDocument();
   });
 

@@ -26,17 +26,21 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (!this.state.error) return this.props.children;
+    const chunkFailed = /failed to fetch dynamically imported module|importing a module script failed|error loading dynamically imported module|unable to preload css/i.test(this.state.error.message);
     return (
       this.props.fallback ?? (
         <div className="rounded-card border border-error/30 bg-error/5 p-4 text-sm text-text">
           <p className="font-medium text-error-text">{i18n.t("errors.somethingWentWrong")}</p>
-          <p className="mt-1 text-muted">{this.state.error.message}</p>
+          <p className="mt-1 text-muted">{chunkFailed ? i18n.t("errors.moduleLoadFailed") : this.state.error.message}</p>
           <button
             type="button"
-            onClick={() => this.setState({ error: null })}
+            onClick={() => {
+              if (chunkFailed) window.location.reload();
+              else this.setState({ error: null });
+            }}
             className="mt-2 rounded-input bg-surface-2 px-3 py-1 text-xs text-text hover:bg-surface"
           >
-            {i18n.t("common.tryAgain")}
+            {i18n.t(chunkFailed ? "errors.reloadApplication" : "common.tryAgain")}
           </button>
         </div>
       )

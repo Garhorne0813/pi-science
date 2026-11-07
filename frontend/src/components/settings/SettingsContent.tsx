@@ -57,17 +57,17 @@ export function SettingsContent({ scope, onClose, initialTab="general" }: { scop
   const [showKey, setShowKey] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollEndRef = useRef<HTMLDivElement>(null);
   const [canScrollMore, setCanScrollMore] = useState(false);
   useEffect(() => {
-    const scroller = scrollRef.current;
-    if (!scroller) return;
-    const update = () => setCanScrollMore(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop > 8);
-    update();
-    scroller.addEventListener("scroll", update, { passive: true });
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
-    observer?.observe(scroller);
-    if (scroller.firstElementChild) observer?.observe(scroller.firstElementChild);
-    return () => { scroller.removeEventListener("scroll", update); observer?.disconnect(); };
+    const root = scrollRef.current;
+    const end = scrollEndRef.current;
+    if (!root || !end || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry) setCanScrollMore(!entry.isIntersecting);
+    }, { root });
+    observer.observe(end);
+    return () => observer.disconnect();
   }, [tab]);
   const needsModelConfig = tab === "agent";
   const requestId = useRef(0);
@@ -199,7 +199,7 @@ export function SettingsContent({ scope, onClose, initialTab="general" }: { scop
           the close control is always reachable on mobile; it lives in the
           content header (not the sidebar) like the DeepSeek settings panel. */}
       <div ref={scrollRef} id="settings-tabpanel" role="tabpanel" aria-labelledby={`settings-tab-${tab}`} className="settings-page settings-scroll min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex min-h-full w-full max-w-[820px] flex-col md:px-6">
+        <div className="relative mx-auto flex min-h-full w-full max-w-[820px] flex-col md:px-6">
           <header className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-card border-b border-faint bg-surface-raised px-card py-panel md:px-0 md:py-4">
             <div className="min-w-0">
               <p className="mb-1 text-ui-meta text-muted">{t("nav.settings")} / {t(tab === "skills" || tab === "capabilities" || tab === "mcp" || tab === "network" || tab === "web-search" ? "settings.redesign.capabilities" : tab === "environments" || tab === "compute" ? "settings.redesign.computeGroup" : "settings.redesign.workbench")}</p>
@@ -228,6 +228,7 @@ export function SettingsContent({ scope, onClose, initialTab="general" }: { scop
                 {visited.includes("environments") && <div key={`environments:${scope ?? "global"}`} hidden={tab !== "environments"}><Suspense fallback={<p role="status">{t("common.loading")}</p>}><EnvironmentSettings workspaceCwd={scope} /></Suspense></div>}
             </Suspense>
           </div>
+          {tab === "general" && <div ref={scrollEndRef} aria-hidden="true" className="pointer-events-none absolute bottom-2 left-0 size-px" />}
         </div>
       </div>
       {canScrollMore && tab === "general" && <div aria-hidden="true" className="pointer-events-none absolute bottom-0 left-14 right-3 flex h-9 items-end justify-center bg-gradient-to-t from-surface-raised to-transparent pb-1 md:left-[220px]"><span className="rounded-full bg-surface-raised px-3 py-1 text-ui-meta text-muted">↓ {t("settings.consistency.scrollMore")}</span></div>}

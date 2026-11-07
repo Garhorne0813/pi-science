@@ -8,14 +8,13 @@ const config: SettingsConfig = { api_keys: {}, model: "lab/one", thinking: "high
 beforeAll(async () => { await i18n.changeLanguage("en"); });
 
 describe("context settings drafts", () => {
-  it("previews a changed threshold and persists only after Save", async () => {
+  it("previews a changed threshold and persists after edits settle", async () => {
     const onSave = vi.fn(async () => undefined);
     render(<ContextManagementSection config={config} saving={false} onSave={onSave} />);
     fireEvent.change(screen.getByRole("slider"), { target: { value: "95" } });
     expect(screen.getByText("121,600 tokens")).toBeInTheDocument();
     expect(screen.getByText("6,400 tokens")).toBeInTheDocument();
     expect(onSave).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Save context settings" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(true, 95));
     expect(await screen.findByText("Settings saved")).toBeInTheDocument();
   });
@@ -23,12 +22,11 @@ describe("context settings drafts", () => {
     const onSave = vi.fn().mockRejectedValueOnce(new Error("busy")).mockResolvedValueOnce(undefined);
     render(<ContextManagementSection config={config} saving={false} onSave={onSave} />);
     fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "Save context settings" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     expect(screen.queryByText("Settings saved")).not.toBeInTheDocument();
     expect(screen.queryByRole("slider")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save context settings" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Save context settings" }));
+    expect(await screen.findByRole("button", { name: "Retry" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("Settings saved")).toBeInTheDocument();
     expect(onSave).toHaveBeenLastCalledWith(false, 85);
   });

@@ -2,12 +2,13 @@ import { SettingsSaveMode } from "./SettingsSaveMode";
 import { useSettingsDraftStatus } from "./SettingsDraftStatus";
 import { SettingsToggle } from "./SettingsToggle";
 import { useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { MemorySettings } from "@pi-science/contracts";
+import { settingsSchema, type MemorySettings } from "@pi-science/contracts";
 import { Section } from "./Section";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSelectMenu } from "./SettingsSelectMenu";
+import { SettingsSaveBar } from "./SettingsSaveBar";
+import { useSettingsAutosave } from "./useSettingsAutosave";
 
 const draftKey = "pi-science.memory-settings-draft";
 export function clearMemorySettingsDraft() { try { sessionStorage.removeItem(draftKey); } catch { /* storage unavailable */ } }
@@ -30,7 +31,19 @@ export function MemorySettingsForm({
 }) {
   const { t } = useTranslation();
   const [s, set] = useState(() => { try { const draft = JSON.parse(sessionStorage.getItem(draftKey) || "null"); if (draft?.recall && draft?.extraction && draft?.dream && draft?.budget && draft?.review) return draft as MemorySettings; } catch { /* invalid draft */ } return value; });
-  const dirty = JSON.stringify(s) !== JSON.stringify(value);
+  const draft = JSON.stringify(s);
+  const dirty = draft !== JSON.stringify(value);
+  const [attempt, setAttempt] = useState<{ draft: string; saved: boolean } | null>(null);
+  const saved = attempt?.draft === draft && attempt.saved;
+  const failed = attempt?.draft === draft && !attempt.saved;
+  const { revision, ...settings } = s;
+  const validation = dirty ? settingsSchema.safeParse(settings) : null;
+  const canSave = dirty && validation?.success && revision === value.revision;
+  const submit = async () => {
+    if (!canSave || busy) return;
+    setAttempt({ draft, saved: await save(settings) });
+  };
+  useSettingsAutosave(canSave && !busy && !failed && !saved ? draft : null, submit, 400);
   useSettingsDraftStatus("memory", dirty);
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => { try { if (dirty) sessionStorage.setItem(draftKey, JSON.stringify(s)); else clearMemorySettingsDraft(); } catch { /* storage unavailable */ } }, [s, dirty]);
@@ -54,9 +67,9 @@ export function MemorySettingsForm({
         type="number"
         step={label === "dailyCostUsd" ? 0.01 : 1}
         aria-label={t(`memory.${label}`)}
-        value={value}
+        value={Number.isNaN(value) || value === null ? "" : value}
         disabled={busy}
-        onChange={(e) => change(Number(e.target.value))}
+        onChange={(e) => change(e.target.valueAsNumber)}
         className={inputClass + " sm:w-28"}
       />
     </SettingsRow>
@@ -114,15 +127,8 @@ export function MemorySettingsForm({
     </SettingsRow>
   );
   return (
-    <form
-      className="space-y-5"
-      onSubmit={(e) => {
-        e.preventDefault();
-        const { revision: _, ...rest } = s;
-        void save(rest);
-      }}
-    >
-      <SettingsSaveMode />
+    <div className="space-y-5">
+      <SettingsSaveMode automatic />
       {!s.enabled && <p className="text-ui-caption text-muted">{t("settings.consistency.memoryDisabled")}</p>}
       {s.revision !== value.revision && <p role="alert" className="text-ui-body text-warn-text">{t("memory.draftConflict")}</p>}
       <Section title={t("memory.title")}>
@@ -334,18 +340,8 @@ export function MemorySettingsForm({
           </Section>
         </>
       )}
-      <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-end gap-3 border-t border-border bg-surface-raised py-card">
-        <p aria-live="polite" className="mr-auto text-ui-caption text-muted">{dirty ? t("memory.draftKept") : t("memory.noChanges")}</p>
-        {dirty && <button type="button" disabled={busy} className="text-ui-label text-muted" onClick={() => { clearMemorySettingsDraft(); set(value); }}>{t("common.discard")}</button>}
-        <button
-          type="submit"
-          disabled={busy || !dirty}
-          className="flex min-h-10 items-center gap-2 rounded-input bg-accent-fill px-3 text-ui-caption font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {busy && <Loader2 size={14} className="animate-spin" />}
-          {t(busy ? "common.saving" : "memory.save")}
-        </button>
-      </div>
-    </form>
+      {validation && !validation.success && <p role="alert" className="text-ui-caption text-error-text">{t("settings.consistency.invalidDraft")}</p>}
+      <SettingsSaveBar dirty={dirty && !saved} busy={busy} saved={saved} failed={failed} onDiscard={() => { clearMemorySettingsDraft(); set(value); setAttempt(null); }} onRetry={canSave ? () => void submit() : undefined} />
+    </div>
   );
 }

@@ -20,7 +20,7 @@
 | “Run history”、Dream 等术语不易区分，焦点样式较弱 | Memory 改称记忆任务，补充整理/审核解释；统一实线高可见焦点轮廓。 |
 | 视觉测试模型接口落后于 dev，Linux 桌面截图缺失 | 更新 native model-config 测试夹具和断言；补充桌面截图与失败重试、草稿、键盘和嵌套确认验收。 |
 
-设计参数与提案见 [设计基准](deepseek-harness-reference.md)。
+设计参数与提案见 [设计基准](../../ui/deepseek-harness-reference.md)。
 
 ## 验证结果
 

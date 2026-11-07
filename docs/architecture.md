@@ -40,11 +40,12 @@ agent host. The SQLite service uses a separate **worker thread**.
 | Scientific services | Kernel, notebook, execution, artifact and scientific execution state | Model reasoning |
 
 The repository installer builds the control plane, Workers and frontend. Default
-startup serves the frontend and API from compiled JavaScript at
-`http://127.0.0.1:8787`. Explicit `start --dev` uses source code, with Vite at
-`http://127.0.0.1:5173` and the control plane at `http://127.0.0.1:8787`.
-Workers have no public HTTP endpoint. See [deployment](deployment.md) for
-installation, diagnostics and recovery.
+startup serves the built frontend and API on `http://127.0.0.1:8787`. With
+`start --dev`, Vite serves the frontend source on `http://127.0.0.1:5173` and
+proxies `/api` to the control plane on `8787`. The control plane can still serve
+an existing production frontend from `frontend/dist`. Workers communicate
+through IPC. See [deployment](deployment.md) for installation, diagnostics and
+recovery.
 
 ## Agent execution and configuration
 
@@ -59,11 +60,12 @@ configuration. Compaction settings use the Harness APIs. Skills and prompt
 templates use Core loaders for configured skill paths, `.pi/skills/` and
 `.pi/prompts/`; product policy determines which resources can be invoked.
 
-The tool set combines Core `read`, `bash`, `edit` and `write` with product tools
-for notebooks, todo, subagents, execution budgets, Memory search/read/write and browser questionnaires. Notebook tools call
-the Node notebook/kernel services. There is no general-purpose extension runtime
-implied by this integration; supported tools and limits are listed in the
-[capability inventory](agent-core-capability-inventory.md).
+The tool set combines Core `read`, `bash`, `edit` and `write` with
+product tools for workspace discovery, notebooks, todo, subagents, Memory,
+web access, citations and browser questionnaires. Execution budgets constrain
+tool calls. Notebook tools call the Node notebook and kernel services.
+See the [capability inventory](agent-core-capability-inventory.md) for supported
+tools and limits.
 
 Hidden tasks share the same manager capacity and session repository:
 
@@ -91,6 +93,11 @@ request timeout is an uncertain admission result: the service reconciles durable
 state before declaring failure or admitting the prompt again. Configuration
 mutations are serialized; aborts and interaction responses remain available
 while normal mutations are pending.
+
+For eligible Workers, the first admitted operation waits for MCP discovery
+before driving the lane. Connectors are discovered in parallel. The product
+adapter publishes `operation.started` at Core's first `turn_start`, so the
+durable operation start can precede the browser event.
 
 The supervisor distinguishes process liveness from operation progress. A healthy
 IPC response alone does not reset the progress deadline. IPC failure, runtime
@@ -147,6 +154,17 @@ updates. Reconnection uses SSE cursors; epoch and gap checks protect replay and
 history recovery. The frontend retains the distinction between working,
 waiting, recovering and terminal states.
 
+The conversation shows a live tool trace with compact summaries and expandable
+details. After a turn settles, its trace folds into a summary separate from the
+final answer. Tool commands, output and diffs are presented from projected tool
+events. The elapsed time shown for a settled turn uses the durable start and
+end timestamps when available.
+
+Production pages load route chunks on demand. The HTML entry is revalidated
+and hashed assets can be cached. Missing `/assets/` files return HTTP 404.
+If an open tab requests a chunk removed by a rebuild, the route error offers
+an application reload.
+
 Earlier persisted presentation events are decoded only in the event-store read
 path. Their original bytes, timestamps, cursors and sequence numbers remain
 unchanged. This is separate from **Core session v3 → v4 conversion**: session
@@ -183,8 +201,8 @@ The metadata root contains these stores, created as needed:
 ```
 
 The global config root is `PI_SCIENCE_HOME`, or `~/.pi-science` by default, with a
-checkout-local `.runtime/pi-science` fallback when the preferred root is not
-writable. SQLite `state.sqlite` owns workspace registration, environment
+process-working-directory `.runtime/pi-science` fallback when the preferred
+root is not writable. SQLite `state.sqlite` owns workspace registration, environment
 revisions, durable jobs/leases, MCP resources, Memory records/settings/reviews/
 background runs and import/schema migration state.
 It uses WAL and a dedicated worker thread. Startup migrations complete before
@@ -270,8 +288,9 @@ cooldowns and maximum runtimes bound admission; active main work defers or
 interrupts background work. The in-process scheduler requires a running server.
 
 Settings → Memory owns the global enablement, review, model, schedule and budget
-policy and is available without a project. Memory, Extraction and Dream start
-disabled. The project Memory page owns record management, pending review, run
+policy and is available without a project. Memory and automatic recall start
+enabled with smart review. Extraction and Dream start disabled. The project
+Memory page owns record management, pending review, run
 history and project/category recall controls. Its browser API filters and sorts
 all authorized matches before returning a bounded page and exact matching total;
 automatic recall retains its independent limits. See [Unified Memory](unified-memory.md)
@@ -285,6 +304,11 @@ model reference is `<provider_id>/<model_id>`. `RuntimeModelResolver` selects
 available routes according to enablement, capabilities, endpoint policy,
 priority and authentication.
 
+Native model configuration uses the `pi_ai_v1` backend. Settings → Models
+manages provider connections and credentials. Settings → Agent manages the
+default for new conversations. An existing session's model and thinking level
+are owned by its durable lane configuration.
+
 The Worker [`agentModels()` adapter](../apps/server/src/runtime/agent/worker/agent-models.ts)
 combines pi-ai's official providers with managed routes and resolves credentials
 in backend memory. It constructs model/provider objects directly; it does not
@@ -294,7 +318,7 @@ not keys. Environment-backed credentials require an explicit variable reference.
 MCP definitions, enablement, discovered metadata and global/project tool policy
 are managed by the control plane. `McpRuntimeProjection` writes an atomic,
 mode-0600 `mcp-runtime.json` containing effective policy and credential references.
-`AgentMcpTools` uses the Core MCP APIs to load permitted connectors in the Worker.
+`AgentMcpTools` uses the MCP SDK to load permitted connectors in the Worker.
 
 Capability checks precede discovery and credential materialization. An empty or
 non-MCP `allowedTools` list skips MCP entirely. Exact MCP capabilities restrict
@@ -308,7 +332,11 @@ Search is enabled initially. Built-ins are read-only, and custom connectors can
 use stdio, Streamable HTTP, SSE or socket transports. Probes perform handshake
 and tool discovery with revision-based caching. Connector credentials use the
 separate `CredentialStore` and are not copied into policy snapshots. See
-[MCP management](mcp-management-implementation.md) for its resource/API design.
+[MCP management](implementation/mcp-management-implementation.md) for its resource/API design.
+
+Built-in web search and fetch use a separate provider path in the trusted
+Worker, with public-address, redirect and size checks. See
+[web access](web-access-mcp.md) for configuration and network boundaries.
 
 ## Scientific execution and research
 
@@ -324,6 +352,13 @@ notebooks use `notebook_read`, `notebook_edit` and `notebook_run`. Edits validat
 file SHA-256 or selected cell revisions; source changes clear stale outputs.
 Execution writes bounded outputs atomically and records execution/artifact
 provenance. Artifact-publication failures remain visible as execution evidence.
+
+The control plane verifies supported DOI and arXiv citations in completed
+answers when automatic verification is enabled, the default in Settings →
+Agent. Metadata checks and generation-time evidence are separate. Workers can
+read available open full text with `read_source_evidence` and attach exact
+snapshot passages to an answer sentence with `cite_evidence`. The conversation
+can display those passages beside the citation.
 
 Auto Research is a skill executed by the current Conversation Agent. The Agent
 owns planning, dynamic delegation, iteration and stop decisions; task-specific
@@ -358,11 +393,15 @@ are logged in `egress-audit.jsonl` unless disabled in `config.json`.
 | `/api/health` | Public health, including `active_agent_workers` |
 | `/internal/live`, `/internal/ready` | Launcher liveness and readiness |
 | `/internal/diagnostics` | Store, migration and local runtime diagnostics |
-| [Runtime implementation](agent-core-runtime-implementation.md) | Runtime entry points and supervision |
-| [Communication implementation](agent-core-communication-implementation.md) | IPC, event projection and recovery boundaries |
+| [Runtime implementation](implementation/agent-core-runtime-implementation.md) | Runtime entry points and supervision |
+| [Communication implementation](implementation/agent-core-communication-implementation.md) | IPC, event projection and recovery boundaries |
 | [Capability inventory](agent-core-capability-inventory.md) | Supported tools, explicit limits and acceptance scope |
 | [Unified Memory](unified-memory.md) | Scopes, review, recall, background budgets and retention |
 | [Session conversion](agent-core-session-conversion.md) | Offline command, automatic conversion and tombstones |
+
+The [implementation index](implementation/README.md) collects feature designs,
+reviews and validation records. Use this architecture reference and the
+[documentation index](README.md) for the current system boundaries and supported behavior.
 
 CI results establish the checks run on that commit. They do not imply all
 external providers, complex user transcripts or every platform UI path were

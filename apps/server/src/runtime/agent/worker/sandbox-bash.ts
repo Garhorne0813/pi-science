@@ -199,6 +199,10 @@ export function sandboxBashTool(
             artifacts: evidence.artifacts,
           });
           const references = { execution_id: executionId, artifact_refs: evidence.artifacts };
+          const details = {
+            ...result.details,
+            ...(typeof outcome.exitCode === "number" ? { exit_code: outcome.exitCode } : {}),
+          };
           return binding || evidence.artifacts.length
             ? {
                 ...result,
@@ -206,9 +210,9 @@ export function sandboxBashTool(
                   ...result.content,
                   { type: "text" as const, text: JSON.stringify(references) },
                 ],
-                details: { ...result.details, ...references },
+                details: { ...details, ...references },
               }
-            : result;
+            : { ...result, details };
         } catch (error) {
           const timedOut =
             outcome.errorCode === "timeout" ||

@@ -10,7 +10,7 @@ This change branches from PR #115 at `6b4a8480`. The supplied
 PR #115 already uses Core 0.99.2 exclusively. This Settings change uses the
 current implementation and does not repeat the migration or change dependencies.
 
-The visual parameters follow [the frozen DeepSeek reference](ui/deepseek-harness-reference.md).
+The visual parameters follow [the frozen DeepSeek reference](../ui/deepseek-harness-reference.md).
 Grouped navigation, visible resource scope and explicit unavailable-provider
 states also draw on ZCode's `packages/ui/src/SettingsPage.tsx` and
 `settings/SettingsResourceGroup.tsx`. These are design references; upstream

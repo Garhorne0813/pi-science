@@ -159,7 +159,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
             composingRef={composer.composingRef}
             placeholder={composer.dragOver ? t("conversation.dropFiles") : research.prompt}
           />
-          <div className="flex items-center justify-between gap-2 px-3 pb-1">
+          <div className="flex items-center justify-between gap-2 px-3 pb-2">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <button
                 type="button"

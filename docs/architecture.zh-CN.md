@@ -34,7 +34,7 @@ Agent Core 是唯一的智能体执行后端。对话、子代理、研究和 AI
 | `MemoryService` / `MemoryBackground` | 记忆权限、来源校验、召回与有预算的后台任务 | 第二套智能体循环或科学内容的人工审批权 |
 | 科学计算服务 | 内核、Notebook、执行、产物和研究编排状态 | 模型推理 |
 
-仓库安装器构建控制面、Worker 和前端。默认启动运行编译后的 JavaScript，在 `http://127.0.0.1:8787` 同时提供前端和 API。显式使用 `start --dev` 时才运行源码，Vite 前端位于 `http://127.0.0.1:5173`，控制面位于 `http://127.0.0.1:8787`。Worker 不暴露 HTTP 端点。安装、诊断和故障恢复见[安装与部署](deployment.zh-CN.md)。
+仓库安装器构建控制面、Worker 和前端。默认启动在 `http://127.0.0.1:8787` 同时提供生产前端和 API。`start --dev` 让 Vite 在 `http://127.0.0.1:5173` 提供前端源码，并将 `/api` 转发到 `8787` 的控制面。控制面也可以提供 `frontend/dist` 中已有的生产前端。Worker 通过 IPC 通信。安装、诊断和故障恢复见[安装与部署](deployment.zh-CN.md)。
 
 ## 智能体执行与配置
 
@@ -42,7 +42,7 @@ Agent Core 是唯一的智能体执行后端。对话、子代理、研究和 AI
 
 Harness 会话数据、`laneState` 和 `operationResult` 是权威状态。配置变更串行执行，并与持久 lane 配置同步；上下文压缩使用 Harness API。技能和提示模板由 Core loader 从配置目录、`.pi/skills/` 和 `.pi/prompts/` 加载，产品策略决定哪些资源可以调用。
 
-工具集合包括 Core 的 `read`、`bash`、`edit`、`write`，以及 Notebook、todo、子代理、执行预算、Memory 搜索/读取/写入和浏览器问卷等产品工具。Notebook 工具调用 Node 的 Notebook/内核服务。这不意味着存在通用扩展运行时；实际支持的工具和限制见[能力清单](agent-core-capability-inventory.md)。
+工具集合包括 Core 的 `read`、`bash`、`edit`、`write`，以及工作区检索、Notebook、todo、子代理、Memory、网页访问、引用和浏览器问卷等产品工具。执行预算约束工具调用，Notebook 工具调用 Node 的 Notebook 与内核服务。支持的工具和限制见[能力清单](agent-core-capability-inventory.md)。
 
 隐藏任务共享管理器容量和会话存储：
 
@@ -64,6 +64,8 @@ Harness 会话数据、`laneState` 和 `operationResult` 是权威状态。配�
 4. 激活 Worker，再执行或恢复 operation。
 
 提示使用稳定的 operation ID 和浏览器 `client_message_id`。IPC 请求超时意味着提交结果尚不确定；服务先与持久状态对账，再决定报错或重新提交。配置变更串行执行，取消和交互响应不必等待普通配置变更完成。
+
+具备 MCP 能力的 Worker 在驱动首个已受理操作前等待 MCP 发现，各连接器并行初始化。产品适配器在 Core 的首个 `turn_start` 发布 `operation.started`，因此持久操作的开始时间可能早于浏览器收到的事件。
 
 监督器区分进程存活与操作进展。成功读取 IPC 状态不会重置进展期限。IPC 失败、运行故障、事件丢失，或繁忙操作长期无真实进展，都可触发 Worker 替换和持久操作恢复。等待浏览器问卷或审批的时间不计入无进展期限。
 
@@ -102,6 +104,10 @@ flowchart LR
 
 完整事件名称由 [`packages/contracts/src/conversation-events.ts`](../packages/contracts/src/conversation-events.ts) 共享。事件信封携带 `schemaVersion: 3`、工作区/会话身份、流 epoch、事件 ID、序号、时间，以及适用时的操作和条目身份。文本 revision 与有序分块防止重复和过期更新。重连使用 SSE 游标；epoch 和缺口检查保护事件重放与历史恢复。前端保留执行中、等待、恢复中和终态的区别。
 
+对话实时显示工具摘要，展开可查看投影事件中的命令、输出或差异。整轮结束后，执行过程折叠为独立于最终回答的摘要。若有持久起止时间，完成行用它们计算整轮耗时。
+
+生产前端按需加载路由资源。浏览器会重新验证 HTML 入口，并可缓存文件名带哈希的资源。缺失的 `/assets/` 文件返回 HTTP 404。如果重建后旧标签页仍请求已替换的资源，错误界面会提供重新加载入口。
+
 旧的持久展示事件仅在 event store 读取路径解码，不修改原文件字节、时间戳、游标和序号。这与 **Core 会话 v3 → v4 转换** 是两个独立边界：会话格式版本与 SSE 协议版本不能混为一谈。
 
 ## 持久化与数据归属
@@ -130,7 +136,7 @@ flowchart LR
 └── research-records-v2.jsonl
 ```
 
-全局配置目录由 `PI_SCIENCE_HOME` 指定，默认 `~/.pi-science`；首选目录不可写时回退到 checkout 内的 `.runtime/pi-science`。SQLite `state.sqlite` 管理工作区注册、环境 revision、持久任务/租约、MCP 资源、Memory 记录/设置/审核/后台任务和导入/schema 迁移状态，使用 WAL 与专用 worker thread。启动迁移在 ready 之前完成，数据库故障使 `/internal/ready` 保持 HTTP 503。文件投影和历史导入不构成另一套规范存储。
+全局配置目录由 `PI_SCIENCE_HOME` 指定，默认 `~/.pi-science`。首选目录不可写时，持久层尝试使用进程工作目录下的 `.runtime/pi-science`。SQLite `state.sqlite` 管理工作区注册、环境 revision、持久任务和租约、MCP 资源、Memory 记录和后台任务，以及导入和 schema 迁移状态。数据库使用 WAL 与专用 worker thread，启动迁移在服务就绪前完成，数据库故障使 `/internal/ready` 保持 HTTP 503。
 
 Core 会话由 `JsonlSessionRepo` 管理。旧 v3 会话先校验和复制，再由官方 SDK 升级，原件保持不变；registry 保存归属与条目 ID 映射，删除 tombstone 防止会话被重新导入。转换可离线执行，不需要 Worker、模型密钥或网络。见[会话转换](agent-core-session-conversion.md)。
 
@@ -165,25 +171,31 @@ flowchart LR
 
 `MemoryBackground` 通过配置的模型路由发起独立、无工具的模型调用。Extraction 增量读取已完成对话，结果与游标原子提交；Dream 独立整理已有记忆，默认只提建议。低风险自动处理只允许归档完全重复、未受保护的非科学偏好/流程。二者共享当前用户按 UTC 日重置的 token/美元预算，后台模型调用并发上限为 1。持久逻辑键、租约、取消和提交前策略检查阻止旧 Worker 提交；运行时段、空闲要求、冷却与最大时长限制调度，主任务活跃时后台任务推迟或中断。调度器在服务进程内运行，不能唤醒电脑或在服务退出后执行。
 
-设置 → 记忆管理全局开关、审核、模型、运行计划和预算，无需打开项目即可访问。Memory、Extraction、Dream 默认分别关闭。项目记忆页面管理条目、待审核、运行历史及项目/分类召回开关；浏览接口先筛选和排序全部授权匹配记录，再返回有界分页与准确匹配总数，自动召回保留独立限制。界面、来源、保留、恢复和验证边界详见[统一记忆](unified-memory.md)。
+设置 → 记忆管理全局开关、审核、模型、运行计划和预算，无需打开项目即可访问。Memory 和自动召回默认开启，默认使用智能审核。Extraction 和 Dream 默认关闭。项目记忆页面管理条目、待审核、运行历史及项目/分类召回开关；浏览接口先筛选和排序全部授权匹配记录，再返回有界分页与准确匹配总数，自动召回保留独立限制。界面、来源、保留、恢复和验证边界详见[统一记忆](unified-memory.md)。
 
 ## 模型、凭据与 MCP
 
 模型资源区分 `Provider`、`Model`、`Endpoint` 和 `ProviderEndpointBinding`，凭据单独保存。规范模型引用为 `<provider_id>/<model_id>`。`RuntimeModelResolver` 根据启用状态、能力、端点策略、优先级和认证筛选可用路由。
 
+原生模型配置使用 `pi_ai_v1` 后端。设置 → 模型管理提供商连接和凭据，设置 → Agent 管理新会话默认值。已有会话的模型和思考等级以其持久 lane 配置为准。
+
 Worker 的 [`agentModels()` 适配器](../apps/server/src/runtime/agent/worker/agent-models.ts) 将 pi-ai 官方提供商与托管路由组合，在后端内存中解析凭据，直接构造模型和提供商对象，不生成 `models.json` 运行目录。浏览器 API 只返回凭据元数据，不返回密钥。环境凭据需要显式引用变量名。
 
-MCP 定义、启用状态、发现元数据和全局/项目工具策略由控制面管理。`McpRuntimeProjection` 原子写入权限为 0600 的 `mcp-runtime.json`，其中只有有效策略和凭据引用。`AgentMcpTools` 在 Worker 中通过 Core MCP API 加载允许的连接器。
+MCP 定义、启用状态、发现元数据和全局/项目工具策略由控制面管理。`McpRuntimeProjection` 原子写入权限为 0600 的 `mcp-runtime.json`，其中只有有效策略和凭据引用。`AgentMcpTools` 在 Worker 中通过 MCP SDK 加载允许的连接器。
 
 能力检查发生在发现和凭据解析之前。空 `allowedTools` 或仅含非 MCP 工具时跳过整个 MCP；精确 MCP 能力限制启动哪些连接器，再将发现结果与工具能力及托管 include/exclude 策略取交集。`Deny` 优先于项目决策、全局决策和连接器审批默认值。浏览器审批由 Worker 的 interaction bridge 处理。
 
-内置 18 个科学连接器定义、85 个工具，初始仅启用 Paper Search。内置定义只读，自定义连接器支持 stdio、Streamable HTTP、SSE 和 socket。探测执行 handshake 与工具发现，按 revision 缓存。连接器凭据保存在独立 `CredentialStore`，不写入策略快照。资源/API 设计见 [MCP 管理说明](mcp-management-implementation.md)。
+内置 18 个科学连接器定义、85 个工具，初始仅启用 Paper Search。内置定义只读，自定义连接器支持 stdio、Streamable HTTP、SSE 和 socket。探测执行 handshake 与工具发现，按 revision 缓存。连接器凭据保存在独立 `CredentialStore`，不写入策略快照。资源/API 设计见 [MCP 管理说明](implementation/mcp-management-implementation.md)。
+
+内置网页搜索与抓取在可信 Worker 中走独立的提供商路径，并检查公网地址、重定向和响应大小。配置与网络边界见[网页访问](web-access-mcp.md)。
 
 ## 科学执行与研究
 
 每个对话和语言使用独立 Python/R 内核进程，从项目绑定的不可变 Micromamba revision 启动。内核按需启动，通过 JSONL 与 Node 通信；安装包创建新 revision。旧工作区 `.venv` 保留为迁移回退，JavaScript 包保存在工作区中。JupyterLab 是可选功能，使用应用级工具环境和项目 kernelspec。
 
 Session Notebook 展示智能体和用户的执行历史。文件型 `.ipynb` 使用 `notebook_read`、`notebook_edit` 和 `notebook_run`。编辑检查文件 SHA-256 或指定 cell revision；源代码变更清除旧输出。执行原子写回受限输出，并记录执行/产物谱系；产物发布失败保留为可见的执行证据。
+
+自动核验引用默认开启，可在设置 → Agent 中调整。控制面核验已完成回答中受支持的 DOI 和 arXiv 引用。元数据核验与生成时记录的证据分开。Worker 可通过 `read_source_evidence` 读取可用的开放全文，再用 `cite_evidence` 将快照中的具体段落关联到回答中的句子。用户可以在对话引用旁查看这些段落。
 
 Auto Research 是当前对话 Agent 执行的技能，由 Agent 规划、委派、迭代和决定停止，协议、评价与检查点保存在普通研究文件中。宿主层执行控制约束工具调用次数、超时和取消，无需模型调用预算工具，既有内核、任务和连接器超时继续生效，不再提供独立 Research API、监督者或调度器。历史记录与引用产物在运行历史的只读归档及 `/api/project/archives` 中查看，旧 Memory/Knowledge API 返回 404。迁移与恢复边界见 [Auto Research](auto-research.md)。
 
@@ -198,30 +210,22 @@ Worker 进程提供故障隔离，**不提供 OS sandbox 保证**。工作区路
 | `/api/health` | 应用健康状态，包括 `active_agent_workers` |
 | `/internal/live`、`/internal/ready` | 启动器存活和就绪检查 |
 | `/internal/diagnostics` | 存储、迁移和本地运行诊断 |
-| [运行时实现](agent-core-runtime-implementation.md) | 执行入口和监督机制 |
-| [通信实现](agent-core-communication-implementation.md) | IPC、事件投影和恢复边界 |
+| [运行时实现](implementation/agent-core-runtime-implementation.md) | 执行入口和监督机制 |
+| [通信实现](implementation/agent-core-communication-implementation.md) | IPC、事件投影和恢复边界 |
 | [能力清单](agent-core-capability-inventory.md) | 支持的工具、明确限制与验收范围 |
 | [统一记忆](unified-memory.md) | 作用域、审核、召回、后台预算与数据保留 |
 | [会话转换](agent-core-session-conversion.md) | 离线命令、自动转换和 tombstone |
+
+[实现文档索引](implementation/README.md)汇集功能设计、复核和验证记录。当前系统边界与受支持行为以本文和[文档索引](README.md)为准。
 
 CI 结果证明对应提交执行过的检查，不意味着所有外部提供商、复杂用户会话和各平台全部界面路径都已人工验收。
 
 ## Workspace contracts 与 Node 运行时
 
-The workspace requires Node.js >=24.16.0 (enforced by the installer and CI).
-`@pi-science/contracts` exports `src/*.ts` for both type and runtime resolution.
-Its build emits declarations only; checked-in `.js` files are explicit re-export
-shims for `.js` imports inside the TypeScript sources, not generated copies.
-Native Node uses built-in type stripping; Vite and development/test tooling
-transform the same sources. A compiled server installation must therefore keep
-contracts source files and workspace links, not just `contracts/dist`.
-The version floor is the supported/tested repository baseline; it is not a claim
-that type stripping first appeared in that Node release.
+工作区要求 Node.js >=24.16.0，安装器和 CI 都会校验此版本下限。
+`@pi-science/contracts` 的类型解析和运行时解析均使用导出的 `src/*.ts`。构建只生成声明文件，仓库里的 `.js` 文件为 TypeScript 源码中的 `.js` 导入提供显式重导出。
+Node 使用内置类型擦除执行源码，Vite 和开发测试工具转换同一份源码。因此，部署编译后的服务端时需要保留 contracts 源文件和工作区链接。
 
-[Production-install CI](../.github/workflows/quality.yml) exercises the native
-compiled server on Linux, Windows and macOS. [Deployment](deployment.md) describes
-installation. See also [frontend runtime](frontend-agent-runtime.md),
-[verification](development-quality.md), [patch maintenance](../patches/README.md)
-and the [documentation index](README.md).
+[生产安装 CI](../.github/workflows/quality.yml)在 Linux、Windows 和 macOS 上验证编译后的服务端。安装步骤见[部署说明](deployment.zh-CN.md)，其余参考见[前端运行时](frontend-agent-runtime.md)、[开发验证](development-quality.md)和[依赖补丁维护](../patches/README.md)。
 
-See [server service boundaries](server-service-boundaries.md) for model resources, conversation event delivery and agent session protocol ownership.
+模型资源、对话事件交付和 Agent 会话协议的职责划分见[服务端边界](server-service-boundaries.md)。

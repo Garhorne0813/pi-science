@@ -11,12 +11,17 @@ const cleanup: string[] = [];
 afterEach(async () => {
   if (originalDist === undefined) delete process.env.PI_SCIENCE_FRONTEND_DIST;
   else process.env.PI_SCIENCE_FRONTEND_DIST = originalDist;
-  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
+  await Promise.all(
+    cleanup
+      .splice(0)
+      .map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })),
+  );
 });
 
 async function asText(stream: NodeJS.ReadableStream): Promise<string> {
   const chunks: Buffer[] = [];
-  for await (const chunk of Readable.from(stream as never)) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  for await (const chunk of Readable.from(stream as never))
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
   return Buffer.concat(chunks).toString("utf8");
 }
 
@@ -49,6 +54,9 @@ describe("frontend static serving", () => {
     if (!("type" in asset)) return;
     expect(asset.type).toBe("text/javascript");
     expect(asset.cacheControl).toBe("public, max-age=31536000, immutable");
+    expect(await serveFrontend("/assets/MemoryPage-old.js")).toEqual({
+      error: "Frontend asset not found",
+    });
   });
 
   it("blocks path traversal and reports a missing build", async () => {
@@ -60,7 +68,9 @@ describe("frontend static serving", () => {
     expect(traversal).toEqual({ error: "Forbidden" });
 
     const missing = await serveFrontend("/");
-    expect(missing).toEqual({ error: "Frontend build not found; run pnpm build first or set PI_SCIENCE_FRONTEND_DIST" });
+    expect(missing).toEqual({
+      error: "Frontend build not found; run pnpm build first or set PI_SCIENCE_FRONTEND_DIST",
+    });
     const asAny = missing as { error?: string };
     expect(asAny.error).toBeDefined();
   });

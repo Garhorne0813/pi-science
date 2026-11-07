@@ -41,7 +41,7 @@ Supported custom APIs: openai-completions, openai-responses, anthropic-messages.
 Builtin providers retain official factories/stream implementations. Model metadata
 and thinking maps are explicit; unknown capability metadata is shown as unknown.
 Models are selectable only with resolved authentication; selectability does not
-prove real inference. Subscription OAuth uses the installed pi-ai 0.99.2 provider adapters through the [connection UI](ai-models-connections.md#subscription-oauth-on-pi-0992). Inline keys, ambient file/env auth, shell command expansion and newer Pi configuration fields remain unsupported.
+prove real inference. Subscription OAuth uses the installed pi-ai 0.99.2 provider adapters through the [connection UI](implementation/ai-models-connections.md#subscription-oauth-on-pi-0992). Inline keys, ambient file/env auth, shell command expansion and newer Pi configuration fields remain unsupported.
 
 All writes validate the complete structural schema and provider/model semantics.
 Revision checks, a cross-process configuration lock, mode 0600 on POSIX and atomic

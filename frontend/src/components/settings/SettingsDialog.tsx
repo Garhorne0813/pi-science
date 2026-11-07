@@ -70,7 +70,7 @@ export function SettingsDialog() {
 
   return (
     <div
-      className="fixed inset-0 z-[95] flex items-center justify-center bg-black/40 p-0 backdrop-blur-[2px] sm:p-2 md:p-4"
+      className="fixed inset-0 z-[95] flex items-center justify-center bg-black/40 p-0 sm:p-2 md:p-4"
       role="presentation"
       onMouseDown={(event) => { if (event.target === event.currentTarget) closeSettings(); }}
       onKeyDown={(event) => { if (event.key === "Escape") closeSettings(); }}

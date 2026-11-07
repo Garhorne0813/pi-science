@@ -1,4 +1,5 @@
-import { count, detailRecord, genericDetails, meaningfulActivityTitle, record, text } from "./shared";
+import { meaningfulActivityTitle } from "../../../lib/conversation/activity-presenters";
+import { count, detailRecord, genericDetails, record, text } from "./shared";
 import type { ActivityRenderer } from "./types";
 
 function kernelName(tool: string): string {
