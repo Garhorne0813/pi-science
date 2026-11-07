@@ -9,6 +9,7 @@ import { sessionTitleRepository } from "../../runtime/node/session-titles.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { AiTitleService } from "../../runtime/title/ai-title-service.js";
 import { PromptRequestRepository, isPromptDeliveryIndeterminate } from "../../runtime/node/prompt-request-repository.js";
+import { SessionQueueRepository } from "../../runtime/node/session-queue-repository.js";
 import { McpServiceError, type McpConnectorService } from "../../mcp/connector-service.js";
 import type { ConversationEventHub } from "../../runtime/events/conversation-event-hub.js";
 
@@ -70,6 +71,7 @@ export function registerNodeSessionRoutes(
   approvals?: { mcp: McpConnectorService; events: ConversationEventHub },
 ): void {
   const promptRequests = new PromptRequestRepository(sessionRepository);
+  const sessionQueue = new SessionQueueRepository();
   app.post("/api/sessions", async (request, reply) => {
     const parsed = createSessionRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid session request", code: "invalid_request" });
@@ -220,8 +222,11 @@ export function registerNodeSessionRoutes(
 
   app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/abort", async (request, reply) => {
     return admitSessionRequest(request, reply, async () => {
-    const result = await nodeSessionService.command(request.params.session_id, cwd(request), "abort");
-    return result.success ? { ok: true } : sendFailure(reply, result);
+      const result = await nodeSessionService.command(request.params.session_id, cwd(request), "abort");
+      // A stop is not a queue flush. Undispatched follow-ups stay put and wait
+      // for the user to resume them, so a stop can never start new work.
+      if (result.success) await pauseQueueAfterStop(sessionQueue, cwd(request), request.params.session_id);
+      return result.success ? { ok: true } : sendFailure(reply, result);
     });
   });
 
@@ -352,6 +357,14 @@ export function registerNodeSessionRoutes(
     return result.success ? { ok: true } : sendFailure(reply, result as Record<string, unknown>);
     });
   });
+}
+
+async function pauseQueueAfterStop(queue: SessionQueueRepository, workspace: string, sessionId: string): Promise<void> {
+  // The stop already succeeded; a queue bookkeeping failure must not turn it
+  // into an error response. The next queue read exposes the unpaused state.
+  await validateWorkspaceCwd(workspace)
+    .then((resolved) => queue.pauseAfterStop(resolved, sessionId))
+    .catch(() => null);
 }
 
 function messageText(content: Array<Record<string, unknown>>): string {

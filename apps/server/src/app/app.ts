@@ -11,6 +11,7 @@ import { registerSessionReadRoutes } from "../http/routes/session-routes.js";
 import { registerSseRoutes } from "../http/routes/sse-routes.js";
 import { registerFileReadRoutes } from "../http/routes/file-routes.js";
 import { registerNodeSessionRoutes } from "../http/routes/node-session-routes.js";
+import { registerSessionMessageRoutes } from "../http/routes/session-message-routes.js";
 import { registerJobRoutes } from "../http/routes/job-routes.js";
 import { registerArtifactRoutes } from "../http/routes/artifact-routes.js";
 import { registerTurnArtifactRoutes } from "../http/routes/turn-artifact-routes.js";
@@ -163,6 +164,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeFiles) registerFileReadRoutes(app);
   const titleRuntimes = new CoreTitleRuntimeFactory(undefined, environments);
   if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository, new AiTitleService(titleRuntimes), undefined, sqliteEnabled ? { mcp, events } : undefined);
+  if (config.nodePiManager) registerSessionMessageRoutes(app, nodeSessionService, sessionRepository);
   if (config.nodeJobs !== false) {
     // Keep command execution rate-limited without throttling read-only control
     // plane routes. The child scope ensures the plugin's onRoute hook sees the
