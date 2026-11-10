@@ -174,14 +174,15 @@ describe("agent-core managed MCP tools", () => {
         },
       ]);
       // An external server may re-estimate its total, so a rising then falling
-      // percentage must never be shown as a fixed measurement.
+      // percentage must never be shown as a fixed measurement: it draws the
+      // estimated bar instead, and the unknown-total update stays a count.
       expect(
         emitted.map(
           (update) =>
             selectToolProgressDisplay("running", normalizeToolProgress(update.details.progress))
               .mode,
         ),
-      ).toEqual(["count", "count", "count"]);
+      ).toEqual(["estimated", "estimated", "count"]);
     } finally {
       credentials.mockRestore();
       await mcp?.close();
