@@ -13,7 +13,7 @@ afterEach(async () => { await Promise.all(roots.splice(0).map((path) => rm(path,
 const invocation: AgentHarnessToolInvocation = { operationId: "op", invocationId: "progress", turnId: "turn", getMemo: async () => undefined, setMemo: async () => {} };
 const progressLine = `<<pi-progress>> ${JSON.stringify({ version: 1, scopeId: "scan:1", scopeLabel: "Scanning files", current: 3, total: 5, unit: "files", totalKind: "fixed" })}`;
 
-it("carries real Bash progress into a tool.updated event with the sentinel removed", async () => {
+it.skipIf(!["linux", "darwin"].includes(process.platform))("carries real Bash progress into a tool.updated event with the sentinel removed", async () => {
   const cwd = await realpath(await mkdtemp(join(tmpdir(), "pi-progress-roundtrip-")));
   roots.push(cwd);
   await mkdir(join(cwd, ".pi-science"));
