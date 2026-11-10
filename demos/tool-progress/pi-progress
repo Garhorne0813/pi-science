@@ -1,0 +1,25 @@
+#!/bin/sh
+# Report measurable progress to Pi-Science from any shell program.
+#
+#   pi-progress --current 3 --total 10 --label "Scanning files" --scope scan:1
+#   pi-progress --current 3 --label "Scanned"          # count, no bar
+#
+# The record goes to stderr, so stdout stays the program's own output.
+set -eu
+current=; total=; scope=shell; label="Progress"; unit=
+while [ $# -gt 0 ]; do
+  case $1 in
+    --current) current=$2; shift 2 ;;
+    --total) total=$2; shift 2 ;;
+    --scope) scope=$2; shift 2 ;;
+    --label) label=$2; shift 2 ;;
+    --unit) unit=$2; shift 2 ;;
+    *) echo "pi-progress: unknown option $1" >&2; exit 2 ;;
+  esac
+done
+[ -n "$current" ] || { echo "pi-progress: --current is required" >&2; exit 2; }
+if [ -n "$total" ]; then kind=fixed; else kind=unknown; fi
+# A total and a unit are appended only when they were given.
+record=$(printf '{"version":1,"scopeId":"%s","scopeLabel":"%s","current":%s%s%s,"totalKind":"%s"}' \
+  "$scope" "$label" "$current" "${total:+,\"total\":$total}" "${unit:+,\"unit\":\"$unit\"}" "$kind")
+printf '<<pi-progress>> %s\n' "$record" >&2
