@@ -87,7 +87,7 @@ describe("Pi-Science notebook extension", () => {
     registerNotebook({ registerTool: (tool: any) => tools.set(tool.name, tool) });
     const onUpdate = vi.fn();
     await tools.get("notebook_run").execute("run-1", { path: "test.ipynb", cell_ids: ["c1", "c2"], continue_on_error: continueOnError }, undefined, onUpdate, { cwd: "/workspace" });
-    expect(onUpdate.mock.calls.map(([update]) => update.details.progress.current)).toEqual(continueOnError ? [1, 2] : []);
+    expect(onUpdate.mock.calls.map(([update]) => [update.details.progress.current, update.details.progress.total])).toEqual(continueOnError ? [[1, 2], [2, 2]] : [[1, 2]]);
   });
 
   it("marks control-plane failures as tool errors", async () => {
