@@ -48,11 +48,14 @@ it.skipIf(!posix)("reads tqdm's own counter from a stream that rewrites one line
 }, 60_000);
 
 it("counts bytes for dd status=progress and shows no bar it cannot support", async (context) => {
-  const { seen, texts } = await run("truncate -s 4M dd.bin && dd if=dd.bin of=\"$TMPDIR/dd.img\" bs=1m count=4 status=progress");
+  const { seen, texts } = await run("truncate -s 4M dd.bin && dd if=dd.bin of=\"$TMPDIR/dd.img\" bs=1M count=4 status=progress");
   const counted = seen.filter((value) => value.scopeId === "dd:dd:progress");
   // A host without dd, or a sandbox that denies it, cannot exercise the
   // adapter. Saying so beats asserting a bar the machine never produced.
-  if (counted.length === 0) context.skip(`dd is not usable here: ${texts.at(-1)?.trim().slice(0, 200) ?? "no output"}`);
+  if (counted.length === 0) {
+    console.error("dd probe failed:", JSON.stringify(texts.join("").slice(0, 400)));
+    context.skip(`dd is not usable here: ${texts.at(-1)?.trim().slice(0, 200) ?? "no output"}`);
+  }
   expect(counted.at(-1)).toMatchObject({ unit: "bytes", totalKind: "unknown", determinate: false });
   expect(counted.at(-1)?.current).toBe(4 * 1024 * 1024);
 }, 60_000);
