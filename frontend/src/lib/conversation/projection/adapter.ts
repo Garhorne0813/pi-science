@@ -1,4 +1,5 @@
 import type { Thread } from "../../agent-runtime/event-fold";
+import { selectToolProgressDisplay } from "@pi-science/contracts";
 import type { AgentMessageBlock, ConversationBlockIdentity, ThreadBlock, ToolCallBlock, TurnArtifactItem } from "../../../types/thread";
 import { activityPolicy } from "../activity-policy";
 import { buildTurnPresentations, type TurnLifecycle, type TurnPresentation } from "../turn-presentation";
@@ -13,6 +14,7 @@ import type {
   InteractionProjection,
   ProjectionSessionState,
   RevisionedProjection,
+  StructuredProgress,
   TurnProjection,
   UserMessageProjection,
 } from "./types";
@@ -126,6 +128,7 @@ function projectActivity(block: Extract<ThreadBlock, { kind: "agent" | "thinking
  * event-fold compatibility model. */
 export function projectToolActivity(block: ToolCallBlock): ActivityProjection {
   const kind = activityKind(block);
+  const progress = projectProgress(block);
   return {
     // event-fold already makes retries/attempts distinct in the block id;
     // an enclosing protocol item id is not necessarily attempt-specific.
@@ -136,6 +139,7 @@ export function projectToolActivity(block: ToolCallBlock): ActivityProjection {
     title: block.presentation?.title ?? block.title ?? block.tool,
     ...(block.presentation?.description ? { subtitle: block.presentation.description } : {}),
     toolName: block.tool,
+    ...(progress ? { progress } : {}),
     ...(block.input ? { inputSummary: block.input } : {}),
     ...(block.output ?? block.partialOutput ? { outputSummary: block.output ?? block.partialOutput } : {}),
     detailRef: block.id,
@@ -147,6 +151,14 @@ export function projectToolActivity(block: ToolCallBlock): ActivityProjection {
       importance: block.presentation?.importance === "interrupt" ? "high" : "normal",
     },
   };
+}
+
+function projectProgress(block: ToolCallBlock): StructuredProgress | undefined {
+  const display = selectToolProgressDisplay(block.status, block.progress);
+  if (display.mode === "hidden") return undefined;
+  if (display.mode === "indeterminate") return { indeterminate: true, ...(display.label ? { label: display.label } : {}) };
+  if (display.mode === "count") return { scopeLabel: display.scopeLabel, current: display.value, ...(display.unit ? { unit: display.unit } : {}), ...(display.phase ? { phase: display.phase } : {}) };
+  return { scopeLabel: display.scopeLabel, current: display.current, total: display.total, percent: display.percent, ...(display.unit ? { unit: display.unit } : {}), ...(display.phase ? { phase: display.phase } : {}) };
 }
 
 function projectInteraction(block: ToolCallBlock): InteractionProjection {

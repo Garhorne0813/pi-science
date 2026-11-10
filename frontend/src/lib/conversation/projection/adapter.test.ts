@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { normalizeToolProgress } from "@pi-science/contracts";
 import type { Thread } from "../../agent-runtime/event-fold";
 import type { ThreadBlock } from "../../../types/thread";
-import { activityKind, latestByRevision, LEGACY_STREAM_EPOCH, projectConversation } from "./adapter";
+import { activityKind, latestByRevision, LEGACY_STREAM_EPOCH, projectConversation, projectToolActivity } from "./adapter";
 
 function thread(blocks: ThreadBlock[], foldState?: Thread["foldState"]): Thread {
   return { blocks, index: Object.fromEntries(blocks.map((block, index) => [block.id, index])), loaded: true, ...(foldState ? { foldState } : {}) };
@@ -71,4 +72,18 @@ describe("conversation projection adapter", () => {
 
 it.each(["ls", "glob", "grep"])("classifies %s as a file activity", (tool) => {
   expect(activityKind({ kind: "tool", id: tool, callId: tool, tool, status: "done" })).toBe("file");
+});
+
+it("carries the contract's progress decision into the activity projection", () => {
+  const progress = normalizeToolProgress({ version: 1, scopeId: "cells", scopeLabel: "Indexing cells", current: 7, total: 10, totalKind: "fixed", unit: "cells" });
+  const activity = projectToolActivity({ kind: "tool", id: "tool-1", callId: "call-1", tool: "python", status: "running", progress });
+
+  expect(activity.progress).toEqual({ scopeLabel: "Indexing cells", current: 7, total: 10, percent: 70, unit: "cells" });
+});
+
+it("drops progress from a finished activity projection", () => {
+  const progress = normalizeToolProgress({ version: 1, scopeId: "cells", scopeLabel: "Indexing cells", current: 10, total: 10, totalKind: "fixed" });
+  const activity = projectToolActivity({ kind: "tool", id: "tool-1", callId: "call-1", tool: "python", status: "done", progress });
+
+  expect(activity.progress).toBeUndefined();
 });
