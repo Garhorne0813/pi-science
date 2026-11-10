@@ -146,6 +146,8 @@
   "conversation.activity.narrative.generate.document": "Generating the output",
   "conversation.activity.narrative.recover": "Resuming the task",
   "conversation.activity.trace": "Execution trace",
+  "conversation.activity.progressDeterminate": "{{scope}} · {{current}} of {{total}} {{unit}}",
+  "conversation.activity.progressCount": "{{scope}} · {{count}} so far",
   "conversation.activity.toolLabel": "Tool",
   "conversation.activity.input": "Input",
   "conversation.activity.output": "Output",
