@@ -536,6 +536,48 @@ describe("AgentActivity measured progress", () => {
     }
   });
 
+  it("yields the live tail to the progress layer once the layer appears", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-08T00:00:00.000Z"));
+      render(<AgentActivity blocks={[{
+        ...tool("bash-1", "bash", "running", { description: "Check Python", command: "python3 -V" }),
+        startedAt: "2026-09-08T00:00:00.000Z",
+        partialOutput: "Processing files: 50%|███| 15/30 [00:01<00:01, 15.00file/s]",
+        progress: measuredProgress({ scopeLabel: "Processing files", current: 15, total: 30, unit: "file" }),
+      }]} />);
+      const row = screen.getByRole("button", { name: /Check Python/ });
+      expect(row).toHaveTextContent(/Processing files: 50%/);
+
+      act(() => { vi.advanceTimersByTime(500); });
+
+      // The title stays and the right edge is empty: no tail, no compact.detail fallback.
+      expect(row).toHaveTextContent(/^Check Python$/);
+      expect(screen.getByRole("progressbar")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the live tail while a running step has no measured progress", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-08T00:00:00.000Z"));
+      render(<AgentActivity blocks={[{
+        ...tool("bash-1", "bash", "running", { description: "Check Python" }),
+        startedAt: "2026-09-08T00:00:00.000Z",
+        partialOutput: "Compiling module 3 of 7",
+      }]} />);
+
+      act(() => { vi.advanceTimersByTime(5_000); });
+
+      expect(screen.getByRole("button", { name: /Check Python/ })).toHaveTextContent("Compiling module 3 of 7");
+      expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not lower the rendered value when a stale count arrives in the same scope", () => {
     const progress = (current: number) => ({ version: 1, scopeId: "cells", scopeLabel: "Indexing cells", current, total: 100, totalKind: "fixed" });
     let thread = foldEvent(emptyThread(), { sessionId: "s", type: "tool.started", turnId: "t1", callId: "c1", tool: "python", status: "running", startedAt: startedLongAgo(), progress: progress(80) });
