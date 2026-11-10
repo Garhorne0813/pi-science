@@ -11,7 +11,7 @@ import { useUiStore } from "../../lib/ui";
 import { cn } from "../../lib/ui";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace";
 import { memoryRequest, useMemorySettings } from "../../lib/memory";
-import { agentActionTextByBlock } from "../../lib/conversation";
+import { agentActionTextByTurns } from "../../lib/conversation";
 import { ConversationComposer } from "../../components/conversation/ConversationComposer";
 import { ConversationWelcome } from "../../components/conversation/ConversationWelcome";
 import { ConversationInteractionDock } from "../../components/conversation/ConversationInteractionDock";
@@ -109,10 +109,12 @@ export function LiveSessionPage() {
 
   const turns = useMemo(() => buildTurnPresentations(thread.blocks, { lastTurnLifecycle: turnLifecycle, lastTurnId: thread.foldState?.activeTurnId }), [thread.blocks, thread.foldState?.activeTurnId, turnLifecycle]);
   // Copy-button eligibility computed across the WHOLE thread (not per group):
-  // agentActionTextByBlock needs the trailing tool blocks after an agent block
-  // to decide whether it is the final answer. A per-group computation would
-  // give every agent block a copy button.
-  const actionTextByBlock = useMemo(() => agentActionTextByBlock(thread.blocks), [thread.blocks]);
+  // the final-agent decision needs the trailing tool blocks after an agent
+  // block, which the turn presentations already hold. Reusing `turns` keeps a
+  // streamed delta to a single pass over the thread.
+  const actionTextByBlock = useMemo(() => agentActionTextByTurns(turns), [turns]);
+  // Stable so memoized turns are not invalidated on every streamed token.
+  const conversationCodeRunner = useMemo(() => ({ cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }), [workspaceCwd, activeSessionId]);
 
   const { suggestions, setSuggestions } = useTurnEffects(working, thread.blocks);
 
@@ -300,7 +302,7 @@ export function LiveSessionPage() {
                   }}
                   itemContent={(_index, turn) => renderConversationTurnSlot(turn, (safeTurn) => (
                     <div className="mx-auto w-full max-w-[calc(var(--conversation-content-width)+4rem)] px-8 pb-3">
-                      {renderTurn(safeTurn, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
+                      {renderTurn(safeTurn, conversationCodeRunner, actionTextByBlock)}
                       {showSuggestions && safeTurn.blocks.some((block) => block.id === suggestionAnchorBlockId) && (
                         <div className="mt-3 flex flex-wrap gap-2" aria-label={t("conversation.suggestions")}>
                           {suggestions.map((suggestion) => (

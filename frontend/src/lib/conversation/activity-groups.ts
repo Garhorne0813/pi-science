@@ -21,9 +21,10 @@ const MAX_EXPLORATION_GAP_MS = 2_000;
  * therefore filtering the final trace cannot accidentally join operations
  * that were separated in the event stream.
  */
-export function groupActivityBlocks(blocks: ThreadBlock[]): ActivityGroup[] {
+export function groupActivityBlocks(blocks: ThreadBlock[], visibleToolIds?: ReadonlySet<string>): ActivityGroup[] {
   const groups: ActivityGroup[] = [];
   let exploration: ActivityGroup | null = null;
+  const toolVisible = (block: ToolCallBlock): boolean => visibleToolIds ? visibleToolIds.has(block.id) : activityPolicy(block).visibleInExecutionTrace;
 
   const flush = () => {
     if (exploration) groups.push(exploration);
@@ -49,7 +50,7 @@ export function groupActivityBlocks(blocks: ThreadBlock[]): ActivityGroup[] {
       flush();
       continue;
     }
-    if (!activityPolicy(block).visibleInExecutionTrace) {
+    if (!toolVisible(block)) {
       flush();
       continue;
     }

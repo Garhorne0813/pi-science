@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2, File, FolderOpen } from "lucide-react";
 import { cn } from "../../lib/ui";
@@ -10,7 +10,7 @@ import { normalizeArtifactPath, pinnedFileInspector, pinnedReferenceMap } from "
 import type { PublishedReference } from "../../lib/artifacts/artifact-versions";
 import { ReferencedArtifactStrip, TurnArtifactStrip } from "./TurnArtifactStrip";
 import { referencesFromMessage, visibleUserMessage } from "../../lib/files";
-import { agentActionTextByBlock } from "../../lib/conversation";
+import { agentActionTextByTurns } from "../../lib/conversation";
 import { numberCitations, withReferences, type CitationNumbering, type CitationReferenceDetail } from "../../lib/citations";
 import { useCitationCwd, useCitationEvidence, type CitationEvidence } from "../../lib/citations/citation-evidence";
 import { CitationNumberingProvider } from "../markdown-viewer/CitationNumbering";
@@ -24,16 +24,18 @@ import { AgentActivity } from "./AgentActivity";
 import { isLiveLifecycle } from "../../lib/conversation/turn-presentation";
 
 export function renderTurn(turn: TurnPresentation, codeRunner: CodeRunner, actionTextByBlock?: Map<string, string>) {
-  return <ConversationTurn key={turn.id} turn={turn} codeRunner={codeRunner} actionTextByBlock={actionTextByBlock} />;
+  const actionText = turn.finalAgent ? actionTextByBlock?.get(turn.finalAgent.id) : undefined;
+  return <ConversationTurn key={turn.id} turn={turn} codeRunner={codeRunner} actionText={actionText} />;
 }
 
 export function renderBlocks(blocks: ThreadBlock[], codeRunner: CodeRunner) {
   if (!Array.isArray(blocks)) return null;
-  const actionTextByBlock = agentActionTextByBlock(blocks);
-  return buildTurnPresentations(blocks).map((turn) => renderTurn(turn, codeRunner, actionTextByBlock));
+  const turns = buildTurnPresentations(blocks);
+  const actionTextByBlock = agentActionTextByTurns(turns);
+  return turns.map((turn) => renderTurn(turn, codeRunner, actionTextByBlock));
 }
 
-function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnPresentation; codeRunner: CodeRunner; actionTextByBlock?: Map<string, string> }) {
+const ConversationTurn = memo(function ConversationTurn({ turn, codeRunner, actionText }: { turn: TurnPresentation; codeRunner: CodeRunner; actionText?: string }) {
   const visibleAgent = turn.finalAgent ?? turn.provisionalAgent;
   const finalText = turn.finalAgent?.parts.map((part) => part.text).join("") ?? "";
   const publishedPaths = turn.artifacts.flatMap((block) => block.artifacts.map((item) => item.path));
@@ -51,14 +53,14 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
     <div data-thread-block-ids={turnBlockIds(turn).join(" ")} className="flex flex-col gap-0 scroll-mt-4">
       {turn.user && <UserMessage block={turn.user} scope={scope} />}
       {showActivity && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} turnStartedAt={turn.startedAt ?? turn.user?.timestamp} turnEndedAt={turn.endedAt ?? turn.finalAgent?.timestamp} part={isLiveLifecycle(turn.lifecycle) ? "content" : "both"} />}
-      {visibleAgent && <AgentMessage key={visibleAgent.id} block={visibleAgent} actionText={turn.finalAgent ? actionTextByBlock?.get(turn.finalAgent.id) : undefined} codeRunner={codeRunner} pinnedReferences={pinnedReferences} scope={scope} />}
+      {visibleAgent && <AgentMessage key={visibleAgent.id} block={visibleAgent} actionText={actionText} codeRunner={codeRunner} pinnedReferences={pinnedReferences} scope={scope} />}
       {(turn.active || turn.activityBlocks.length > 0) && isLiveLifecycle(turn.lifecycle) && <AgentActivity blocks={turn.activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} hasFinalAnswer={Boolean(turn.finalAgent)} turnStartedAt={turn.startedAt ?? turn.user?.timestamp} part="status" />}
       {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} pinnedReferences={pinnedReferences} />)}
       {turn.artifacts.map((block) => <TurnArtifactStrip key={block.id} artifacts={block.artifacts} cwd={codeRunner?.cwd} />)}
       {finalText && <ReferencedArtifactStrip text={finalText} cwd={codeRunner?.cwd} exclude={publishedPaths} />}
     </div>
   );
-}
+});
 
 function UserMessage({ block, scope }: { block: UserMessageBlock; scope: MessageQuoteScope }) {
   const { t } = useTranslation();

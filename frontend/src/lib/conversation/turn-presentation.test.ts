@@ -267,3 +267,26 @@ it("routes a replayed older run back to its owner instead of completing the newe
   expect(turns[0].finalAgent?.id).toBe("replayed-answer");
   expect(turns[1]).toMatchObject({ lifecycle: "aborted", finalAgent: null });
 });
+
+describe("presentation reuse", () => {
+  const final = (id: string): ThreadBlock => ({ ...agent(id), presentationRole: "final" });
+
+  it("keeps an untouched settled turn referentially equal when another turn receives a delta", () => {
+    const settled: ThreadBlock[] = [user("u1"), final("answer-1"), tool("read-1")];
+    const live: ThreadBlock[] = [user("u2"), final("answer-2")];
+    const before = buildTurnPresentations([...settled, ...live], { lastTurnLifecycle: "settled" });
+    const after = buildTurnPresentations([...settled, ...live, tool("read-2", "read", "running")], { lastTurnLifecycle: "active" });
+    expect(after).toHaveLength(2);
+    expect(after[0]).toBe(before[0]);
+    expect(after[1]).not.toBe(before[1]);
+  });
+
+  it("rebuilds a turn when one of its blocks is replaced", () => {
+    const blocks: ThreadBlock[] = [user("u1"), final("answer-1")];
+    const before = buildTurnPresentations(blocks, { lastTurnLifecycle: "settled" })[0]!;
+    const replaced = [blocks[0]!, { ...(blocks[1] as AgentMessageBlock), parts: [{ id: "answer-1-p0", text: "answer-1 revised" }] } as ThreadBlock];
+    const after = buildTurnPresentations(replaced, { lastTurnLifecycle: "settled" })[0]!;
+    expect(after).not.toBe(before);
+    expect(after.finalAgent?.parts[0]?.text).toBe("answer-1 revised");
+  });
+});

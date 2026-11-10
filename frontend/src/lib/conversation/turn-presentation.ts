@@ -88,7 +88,7 @@ export function buildTurnPresentations(blocks: ThreadBlock[], opts: { lastTurnLi
     // Only a live lifecycle may override its persisted terminal result.
     const live = turn.key === activeKey && opts.lastTurnLifecycle && isLiveLifecycle(opts.lastTurnLifecycle);
     const lifecycle = live ? opts.lastTurnLifecycle! : status ? persisted : turn.key === activeKey ? opts.lastTurnLifecycle ?? "settled" : "settled";
-    return buildTurnPresentation(turn.blocks, lifecycle);
+    return cachedTurnPresentation(turn.blocks, lifecycle);
   });
 }
 
@@ -101,6 +101,53 @@ function invalidatesExplicitFinal(block: ThreadBlock): boolean {
   if (block.status === "error") return true;
   const effect = toolEffect(block);
   return effect === "mutate" || effect === "execute" || effect === "interaction";
+}
+
+/** Same result as scanning the tail once per candidate, without the O(n²). */
+function latestUninvalidatedFinalAgent(blocks: ThreadBlock[]): AgentMessageBlock | null {
+  let invalidated = false;
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index]!;
+    if (block.kind === "agent" && block.presentationRole === "final" && !invalidated) return block;
+    if (invalidatesExplicitFinal(block)) invalidated = true;
+  }
+  return null;
+}
+
+interface CachedTurnPresentation {
+  blocks: ThreadBlock[];
+  lifecycle: TurnLifecycle;
+  presentation: TurnPresentation;
+}
+
+/** Fold updates rebuild the block array but keep untouched blocks by reference.
+ *  Reusing the presentation of a turn whose inputs did not change keeps settled
+ *  turns referentially equal across a parent re-render, so `memo` can skip them. */
+const presentationCache = new WeakMap<ThreadBlock, CachedTurnPresentation[]>();
+const MAX_CACHED_PRESENTATIONS = 4;
+
+function sameBlocks(left: readonly ThreadBlock[], right: readonly ThreadBlock[]): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+function cachedTurnPresentation(blocks: ThreadBlock[], lifecycle: TurnLifecycle): TurnPresentation {
+  const anchor = blocks[0];
+  if (!anchor) return buildTurnPresentation(blocks, lifecycle);
+  const entries = presentationCache.get(anchor);
+  if (entries) {
+    for (const entry of entries) {
+      if (entry.lifecycle === lifecycle && sameBlocks(entry.blocks, blocks)) return entry.presentation;
+    }
+  }
+  const presentation = buildTurnPresentation(blocks, lifecycle);
+  const next = entries ? [...entries, { blocks, lifecycle, presentation }] : [{ blocks, lifecycle, presentation }];
+  presentationCache.set(anchor, next.slice(-MAX_CACHED_PRESENTATIONS));
+  return presentation;
 }
 
 function buildTurnPresentation(blocks: ThreadBlock[], lifecycle: TurnLifecycle): TurnPresentation {
@@ -119,9 +166,7 @@ function buildTurnPresentation(blocks: ThreadBlock[], lifecycle: TurnLifecycle):
   // opaque execution, interaction, or failed tools can change or invalidate
   // the state it describes, so they require a newer final answer. Legacy
   // unclassified messages retain the stricter structural fallback below.
-  const finalAgent = blocks.findLast((block, index): block is AgentMessageBlock => block.kind === "agent"
-    && block.presentationRole === "final"
-    && !blocks.slice(index + 1).some(invalidatesExplicitFinal))
+  const finalAgent = latestUninvalidatedFinalAgent(blocks)
     ?? (lifecycle === "settled" ? finalAgentInCompletedTurn(blocks) : null);
   const hasTerminalError = lifecycle === "failed" && blocks.some((block) => block.kind === "status-line" && block.level === "error");
   const provisionalAgent = !finalAgent && (active || hasTerminalError) ? provisionalAgentInActiveTurn(blocks) : null;

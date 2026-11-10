@@ -46,21 +46,48 @@ export function ThinkingActivity({ className }: { className?: string }) {
 export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both", hasFinalAnswer, turnStartedAt, turnEndedAt }: { blocks: ActivityBlock[]; lifecycle?: TurnLifecycle; cwd?: string; part?: "both" | "content" | "status"; hasFinalAnswer?: boolean; turnStartedAt?: string; turnEndedAt?: string }) {
   const { t } = useTranslation();
   const progressAppearance = useProgressAppearance();
-  const tools = useMemo(() => blocks.filter((block): block is ToolCallBlock => block.kind === "tool"), [blocks]);
-  const activities = useMemo(() => blocks.filter((block) => block.kind === "agent"
-    ? Boolean(parseSuggestions(block.parts.map((part) => part.text).join("")).clean.trim())
-    : block.kind === "thinking"
-      ? block.parts.some((part) => part.text.trim())
-      : activityPolicy(block).visibleInExecutionTrace), [blocks]);
+  // The turn already handed us the filtered activity blocks, so one pass is
+  // enough: tool list for the displayed-activity policy, visible narration and
+  // tools, and the visibility set the single grouping pass below reuses.
+  const { tools, activities, visibleToolIds } = useMemo(() => {
+    const toolBlocks: ToolCallBlock[] = [];
+    const visibleBlocks: ActivityBlock[] = [];
+    const visible = new Set<string>();
+    for (const block of blocks) {
+      if (block.kind === "tool") {
+        toolBlocks.push(block);
+        if (activityPolicy(block).visibleInExecutionTrace) {
+          visible.add(block.id);
+          visibleBlocks.push(block);
+        }
+      } else if (block.kind === "agent") {
+        if (parseSuggestions(block.parts.map((part) => part.text).join("")).clean.trim()) visibleBlocks.push(block);
+      } else if (block.parts.some((part) => part.text.trim())) {
+        visibleBlocks.push(block);
+      }
+    }
+    return { tools: toolBlocks, activities: visibleBlocks, visibleToolIds: visible };
+  }, [blocks]);
+  const groups = useMemo(() => groupActivityBlocks(blocks, visibleToolIds), [blocks, visibleToolIds]);
   // groupActivityBlocks drops the entries the trace never shows; the flat list
   // below keeps that filtering (and its ordering) and nothing else.
-  const activityEntries = useMemo(() => groupActivityBlocks(blocks).flatMap((group) => group.blocks), [blocks]);
-  const traceId = useId();
+  const activityEntries = useMemo(() => groups.flatMap((group) => group.blocks), [groups]);
   // Final answers are rendered by ConversationTurn. Everything else is
   // process history and collapses together once the turn is terminal.
-  const traceBlocks = useMemo(() => activities.filter((block) => block.kind !== "agent" || block.presentationRole !== "final"), [activities]);
-  const traceTools = useMemo(() => traceBlocks.filter((block): block is ToolCallBlock => block.kind === "tool"), [traceBlocks]);
+  const trace = useMemo(() => {
+    const traceBlocks: ActivityBlock[] = [];
+    const traceTools: ToolCallBlock[] = [];
+    for (const block of activities) {
+      if (block.kind === "agent" && block.presentationRole === "final") continue;
+      traceBlocks.push(block);
+      if (block.kind === "tool") traceTools.push(block);
+    }
+    return { blocks: traceBlocks, tools: traceTools };
+  }, [activities]);
+  const traceBlocks = trace.blocks;
+  const traceTools = trace.tools;
   const shown = useDisplayedActivity(tools, lifecycle);
+  const traceId = useId();
   const [traceExpanded, setTraceExpanded] = useState(false);
 
   if (isLiveLifecycle(lifecycle)) {
@@ -180,7 +207,7 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
       <div aria-live="polite" aria-atomic="true" className={cn(styles.summary, "flex min-h-primary w-full items-center py-1 text-sm font-medium text-text")}>{headline}</div>
     ) : null}
     {traceExpanded && traceBlocks.length > 0 && <div id={traceId} role="region" className={cn(styles.trace, styles.traceOpen)} aria-label={t("conversation.activity.trace")}>
-      <ActivityTrace blocks={groupActivityBlocks(traceBlocks).flatMap((group) => group.blocks)} cwd={cwd} />
+      <ActivityTrace blocks={traceBlocks} cwd={cwd} />
     </div>}
   </div>;
 }
