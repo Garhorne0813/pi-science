@@ -3,4 +3,4 @@ import type { RuntimeState } from "../types";
 
 export type SetState = StoreApi<RuntimeState>["setState"];
 export type GetState = StoreApi<RuntimeState>["getState"];
-export type RuntimeActions = Pick<RuntimeState, "connect" | "disconnect" | "sendPrompt" | "abort" | "sendSteer" | "enqueueMessage" | "loadQueue" | "editQueuedMessage" | "cancelQueuedMessage" | "resumeQueue" | "setModel" | "respondToInteraction" | "loadSessions" | "loadMoreSessions" | "loadSession" | "loadOlderMessages" | "forkSession" | "createNewSession" | "deleteSession" | "removeSession" | "setDraft">;
+export type RuntimeActions = Pick<RuntimeState, "connect" | "disconnect" | "sendPrompt" | "abort" | "sendSteer" | "enqueueMessage" | "loadQueue" | "editQueuedMessage" | "cancelQueuedMessage" | "resumeQueue" | "dispatchQueuedMessage" | "setModel" | "respondToInteraction" | "loadSessions" | "loadMoreSessions" | "loadSession" | "loadOlderMessages" | "forkSession" | "createNewSession" | "deleteSession" | "removeSession" | "setDraft">;

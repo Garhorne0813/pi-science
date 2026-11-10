@@ -12,7 +12,7 @@ interface QueueSnapshot {
   paused_reason?: string;
 }
 
-export function createQueueActions(set: SetState, get: GetState): Pick<RuntimeState, "sendSteer" | "enqueueMessage" | "loadQueue" | "editQueuedMessage" | "cancelQueuedMessage" | "resumeQueue"> {
+export function createQueueActions(set: SetState, get: GetState): Pick<RuntimeState, "sendSteer" | "enqueueMessage" | "loadQueue" | "editQueuedMessage" | "cancelQueuedMessage" | "resumeQueue" | "dispatchQueuedMessage"> {
   const apply = (cwd: string, sessionId: string, snapshot: QueueSnapshot) => {
     const current = get();
     if (current.cwd !== cwd || current.activeSessionId !== sessionId) return;
@@ -59,6 +59,11 @@ export function createQueueActions(set: SetState, get: GetState): Pick<RuntimeSt
     cancelQueuedMessage: async (entryId: string) => {
       const { sessionId, cwd } = session();
       await getClient().cancelQueuedMessage(sessionId, entryId, cwd);
+      await get().loadQueue();
+    },
+    dispatchQueuedMessage: async (entryId: string) => {
+      const { sessionId, cwd } = session();
+      await getClient().dispatchQueuedMessage(sessionId, entryId, cwd);
       await get().loadQueue();
     },
     resumeQueue: async () => {

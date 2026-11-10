@@ -14,7 +14,12 @@ const entry = (overrides: Record<string, unknown> = {}) => ({
 });
 
 function renderPanel(props: Partial<React.ComponentProps<typeof QueuedMessagesPanel>> = {}) {
-  const callbacks = { onResume: vi.fn(async () => undefined), onEdit: vi.fn(async () => undefined), onCancel: vi.fn(async () => undefined) };
+  const callbacks = {
+    onResume: vi.fn(async () => undefined),
+    onEdit: vi.fn(async () => undefined),
+    onCancel: vi.fn(async () => undefined),
+    onDispatch: vi.fn(async () => undefined),
+  };
   render(
     <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
       <QueuedMessagesPanel entries={[entry()]} paused={false} {...callbacks} {...props} />
@@ -52,6 +57,12 @@ describe("QueuedMessagesPanel", () => {
     expect(screen.getByText("Sent")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit queued message" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove from queue" })).not.toBeInTheDocument();
+  });
+
+  it("delivers a queued message immediately when asked", async () => {
+    const callbacks = renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
+    await waitFor(() => expect(callbacks.onDispatch).toHaveBeenCalledWith(entry().id));
   });
 
   it("continues a queue that a stop paused", async () => {

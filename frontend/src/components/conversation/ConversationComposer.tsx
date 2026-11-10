@@ -82,6 +82,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
   const resumeQueue = useRuntimeStore((state) => state.resumeQueue);
   const editQueuedMessage = useRuntimeStore((state) => state.editQueuedMessage);
   const cancelQueuedMessage = useRuntimeStore((state) => state.cancelQueuedMessage);
+  const dispatchQueuedMessage = useRuntimeStore((state) => state.dispatchQueuedMessage);
   const pendingQueueCount = queuedMessages.filter((entry) => entry.status === "queued" || entry.status === "dispatching").length;
 
   useEffect(() => {
@@ -133,6 +134,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
           onResume={resumeQueue}
           onEdit={editQueuedMessage}
           onCancel={cancelQueuedMessage}
+          onDispatch={dispatchQueuedMessage}
         />
         {/* Fixed 36px fade band above the composer card (reference:
             ConversationRoot composer seat gradient). The card sits at the
@@ -198,7 +200,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
             composingRef={composer.composingRef}
             placeholder={composer.dragOver ? t("conversation.dropFiles") : research.prompt}
           />
-          <div className={cn("flex items-center justify-between gap-2 px-3 pb-1", working && "flex-wrap")}>
+          <div className={cn("flex items-center justify-between gap-2 px-3 pb-2", working && "flex-wrap")}>
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <button
                 type="button"

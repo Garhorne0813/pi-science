@@ -33,7 +33,7 @@ export type {
   TurnArtifactTurn,
 } from "./types";
 export { clampThinkingLevel, conversationModelOptions } from "./models";
-export { aiTitleAttemptedAt, clearAiTitle, clearAiTitleAttempted, clearSessionName, deriveSessionName, getSessionName, hasAiTitle, markAiTitle, markAiTitleAttempted, moveSessionName, setSessionName } from "./session-names";
+export { aiTitleAttemptedAt, cacheSessionName, clearAiTitle, clearAiTitleAttempted, clearSessionName, deriveSessionName, getSessionName, hasAiTitle, markAiTitle, markAiTitleAttempted, moveSessionName, normalizeSessionTitle, noteManualTitleWrite, SESSION_TITLE_MAX_LENGTH, setSessionName, titleWriteEpoch } from "./session-names";
 export { clearCachedMessages } from "./message-cache";
 
 // ── Client ──
@@ -156,6 +156,10 @@ export class PiScienceClient {
     return rest.cancelQueuedMessage(this.baseUrl, sessionId, entryId, cwd);
   }
 
+  async dispatchQueuedMessage(sessionId: string, entryId: string, cwd?: string): Promise<QueuedMessage> {
+    return rest.dispatchQueuedMessage(this.baseUrl, sessionId, entryId, cwd);
+  }
+
   async resumeQueue(sessionId: string, cwd?: string): Promise<SessionQueue> {
     return rest.resumeSessionQueue(this.baseUrl, sessionId, cwd);
   }
@@ -175,8 +179,8 @@ export class PiScienceClient {
 
   /** Persist a session display title on the server (best-effort; the
    *  localStorage registry remains the immediate/fallback source). */
-  async setSessionTitle(sessionId: string, title: string, cwd?: string): Promise<void> {
-    await rest.setSessionTitle(this.baseUrl, sessionId, title, cwd);
+  async setSessionTitle(sessionId: string, title: string, cwd?: string, mode: rest.SessionTitleWriteMode = "override"): Promise<rest.SessionTitleWrite> {
+    return rest.setSessionTitle(this.baseUrl, sessionId, title, cwd, mode);
   }
 
   async deleteSession(sessionId: string, cwd?: string): Promise<void> {
@@ -211,8 +215,13 @@ export class PiScienceClient {
   }
 
   /** Ask the control plane to generate an AI title via an isolated Pi runtime. */
-  async generateSessionTitle(sessionId: string, cwd: string): Promise<string | null> {
-    return rest.generateSessionTitle(this.baseUrl, sessionId, cwd);
+  async generateSessionTitle(sessionId: string, cwd: string, manual: boolean): Promise<rest.TitleGenerationResult> {
+    return rest.generateSessionTitle(this.baseUrl, sessionId, cwd, manual);
+  }
+
+  /** Request science review; skipped responses include a reason. */
+  async requestScienceReview(sessionId: string, cwd: string, trigger: "manual" | "auto" = "manual", turnId?: string): Promise<{ id: string; status: string; reason?: string }> {
+    return rest.requestScienceReview(this.baseUrl, sessionId, cwd, trigger, turnId);
   }
 
   // ── SSE ──

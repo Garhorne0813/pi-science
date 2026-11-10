@@ -8,9 +8,9 @@ const first = "8fd824aa-51d3-4f63-839c-09e021b7970b";
 const queued = (overrides: Record<string, unknown> = {}) => ({
   id: first, text: "then summarize", status: "queued", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z", ...overrides,
 });
-const queueResponse = (entries: Array<Record<string, unknown>>, paused = false) => jsonResponse({
+const queueResponse = (entries: Array<Record<string, unknown>>, paused = false, pausedReason?: string) => jsonResponse({
   ok: true,
-  queue: { session_id: "session-1", paused, ...(paused ? { paused_reason: "stop" } : {}), entries, updated_at: "2026-01-01T00:00:00.000Z" },
+  queue: { session_id: "session-1", paused, ...(pausedReason ? { paused_reason: pausedReason } : {}), entries, updated_at: "2026-01-01T00:00:00.000Z" },
 });
 
 function ready(overrides: Record<string, unknown> = {}) {
@@ -70,6 +70,24 @@ describe("follow-up queue actions", () => {
     await useRuntimeStore.getState().enqueueMessage("then summarize", first);
     expect(calls).toEqual([`POST /api/sessions/session-1/queue?cwd=%2Fworkspace`, `GET /api/sessions/session-1/queue?cwd=%2Fworkspace`]);
     expect(useRuntimeStore.getState().queuedMessages).toHaveLength(1);
+  });
+
+  it("delivers one queued message immediately and refreshes the queue", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url.includes(`/queue/${first}/dispatch`)) return jsonResponse({ ok: true, status: "accepted", entry: queued({ status: "dispatched" }) });
+      if (url.includes("/queue?")) return queueResponse([queued({ status: "dispatched" })]);
+      return jsonResponse({});
+    }));
+    ready();
+    await useRuntimeStore.getState().dispatchQueuedMessage(first);
+    expect(calls).toEqual([
+      `POST /api/sessions/session-1/queue/${first}/dispatch?cwd=%2Fworkspace`,
+      `GET /api/sessions/session-1/queue?cwd=%2Fworkspace`,
+    ]);
+    expect(useRuntimeStore.getState().queuedMessages[0]).toMatchObject({ status: "dispatched" });
   });
 
   it("edits, cancels and resumes through the server and refreshes each time", async () => {

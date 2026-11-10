@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Loader2, Pencil, Play, X } from "lucide-react";
+import { Check, Loader2, Pencil, Play, Send, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { QueuedMessage } from "../../lib/client/pi-science-client";
 import { cn } from "../../lib/ui";
@@ -11,6 +11,7 @@ export interface QueuedMessagesPanelProps {
   onResume: () => Promise<void>;
   onEdit: (entryId: string, text: string) => Promise<void>;
   onCancel: (entryId: string) => Promise<void>;
+  onDispatch: (entryId: string) => Promise<void>;
 }
 
 const STATUS_TONE: Record<QueuedMessage["status"], string> = {
@@ -23,7 +24,7 @@ const STATUS_TONE: Record<QueuedMessage["status"], string> = {
 
 /** The follow-up queue as the server reports it. Only a queued entry can be
  *  edited or removed; a dispatched one already belongs to a running turn. */
-export function QueuedMessagesPanel({ entries, paused, onResume, onEdit, onCancel }: QueuedMessagesPanelProps) {
+export function QueuedMessagesPanel({ entries, paused, onResume, onEdit, onCancel, onDispatch }: QueuedMessagesPanelProps) {
   const { t } = useTranslation();
   const { toast } = useFeedback();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -98,6 +99,18 @@ export function QueuedMessagesPanel({ entries, paused, onResume, onEdit, onCance
                     </p>
                     {editable && (
                       <div className="flex shrink-0 items-center gap-1">
+                        {entry.status === "queued" && (
+                          <button
+                            type="button"
+                            aria-label={t("conversation.queue.dispatch")}
+                            title={t("conversation.queue.dispatch")}
+                            disabled={busyId === entry.id}
+                            onClick={() => { void run(entry.id, () => onDispatch(entry.id)); }}
+                            className="text-muted hover:text-accent disabled:opacity-50"
+                          >
+                            <Send size={11} />
+                          </button>
+                        )}
                         <button
                           type="button"
                           aria-label={t("conversation.queue.edit")}
