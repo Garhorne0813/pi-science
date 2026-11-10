@@ -78,6 +78,20 @@ export class SessionQueueDispatcher {
     this.timers.clear();
   }
 
+  /** Stop scheduling and wait for an in-flight tick to finish. A tick that was
+   *  already running may queue its successor after `stop`, so the timers are
+   *  cleared again once it returns; callers that delete the queue directory
+   *  right afterwards must not race a pending write. */
+  async stopAndDrain(timeoutMs = 2_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    this.stop();
+    while (this.ticking.size > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      this.stop();
+    }
+    this.stop();
+  }
+
   async tick(cwd: string, sessionId: string): Promise<DispatchTick> {
     const key = `${cwd}\u0000${sessionId}`;
     if (this.ticking.has(key)) return "busy";

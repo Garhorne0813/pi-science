@@ -30,7 +30,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const dispatcher of dispatchers.splice(0)) dispatcher.stop();
+  // A queued drain may still be writing when the test ends; let it settle
+  // before the temporary workspace is removed.
+  await Promise.all(dispatchers.splice(0).map((dispatcher) => dispatcher.stopAndDrain()));
   if (original === undefined) delete process.env.PI_SCIENCE_HOME;
   else process.env.PI_SCIENCE_HOME = original;
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
@@ -42,6 +44,8 @@ function harness(
     pending?: number;
     command?: { success: boolean; code?: string };
     nodeRoutes?: boolean;
+    stateError?: Error;
+    commandThrows?: boolean;
   } = {},
 ) {
   const queue = new SessionQueueRepository();
@@ -54,12 +58,16 @@ function harness(
   const command = vi.fn(async (_sessionId: string, _cwd: string, type: string) => {
     // A real stop ends the running turn; the session reports idle right after.
     if (type === "abort") facts.is_streaming = false;
+    if (type === "steer" && options.commandThrows) throw new Error("ipc down");
     return options.command ?? { success: true };
   });
   const dispatcher = new SessionQueueDispatcher({ state: async () => facts, command }, queue, 1000);
   dispatchers.push(dispatcher);
   const sessions = {
-    state: async () => facts,
+    state: async () => {
+      if (options.stateError) throw options.stateError;
+      return facts;
+    },
     command,
     liveSessions: () => [{ id: sessionId, cwd }],
   } as unknown as NodeSessionService;
@@ -67,7 +75,7 @@ function harness(
   const app = Fastify({ logger: false });
   registerSessionMessageRoutes(app, sessions, repository, { queue, steers, dispatcher });
   if (options.nodeRoutes) registerNodeSessionRoutes(app, sessions, repository);
-  return { app, queue, command, dispatcher };
+  return { app, queue, command, dispatcher, steers };
 }
 
 describe("steer route", () => {
@@ -297,6 +305,122 @@ describe("follow-up queue routes", () => {
     });
     expect(dispatch.statusCode).toBe(404);
     expect(dispatch.json()).toMatchObject({ code: "not_found" });
+  });
+
+  it("returns a claimed entry to the queue when the session state request fails", async () => {
+    const { app, queue, command, dispatcher } = harness({
+      streaming: false,
+      stateError: new Error("ipc down"),
+    });
+    await queue.enqueue(cwd, sessionId, { id: first, text: "try again" });
+    const dispatch = await app.inject({
+      method: "POST",
+      url: `/api/sessions/${sessionId}/queue/${first}/dispatch?cwd=${encodeURIComponent(cwd)}`,
+    });
+    expect(dispatch.statusCode).toBe(500);
+    expect(dispatch.json()).toMatchObject({ ok: false, code: "state_failed" });
+    // The stale claim is not left behind: the entry is reachable again.
+    expect((await queue.read(cwd, sessionId)).entries[0]).toMatchObject({
+      id: first,
+      status: "queued",
+      error_code: "state_failed",
+    });
+    expect(await dispatcher.tick(cwd, sessionId)).toBe("dispatched");
+    expect(command).toHaveBeenCalledWith(sessionId, cwd, "prompt", {
+      message: "try again",
+      client_message_id: first,
+    });
+  });
+
+  it("settles a steer whose transport threw as indeterminate instead of losing it", async () => {
+    const { app, queue, command, steers } = harness({ streaming: true, commandThrows: true });
+    await queue.enqueue(cwd, sessionId, { id: first, text: "do this now" });
+    const url = `/api/sessions/${sessionId}/queue/${first}/dispatch?cwd=${encodeURIComponent(cwd)}`;
+    const dispatch = await app.inject({ method: "POST", url });
+    expect(dispatch.statusCode).toBe(202);
+    expect(dispatch.json()).toMatchObject({
+      ok: true,
+      status: "indeterminate",
+      error_code: "steer_unconfirmed",
+      entry: { id: first, status: "dispatched", error_code: "indeterminate" },
+    });
+    expect(await steers.claim(cwd, sessionId, first, "do this now")).toMatchObject({
+      dispatch: false,
+      status: "indeterminate",
+      error_code: "steer_unconfirmed",
+    });
+    // Replaying the same id is answered by the receipt, not by the worker.
+    await queue.settle(cwd, sessionId, first, { status: "queued" });
+    const retry = await app.inject({ method: "POST", url });
+    expect(retry.statusCode).toBe(202);
+    expect(retry.json()).toMatchObject({
+      status: "indeterminate",
+      entry: { id: first, status: "dispatched", error_code: "indeterminate" },
+    });
+    expect(command).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a stale dispatching entry to the queue on the next read", async () => {
+    const { queue, command, dispatcher } = harness({ streaming: false });
+    await queue.enqueue(cwd, sessionId, { id: first, text: "recover me" });
+    const snapshot = await queue.read(cwd, sessionId);
+    const stale = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+    await writeFile(
+      queue.file(cwd, sessionId),
+      JSON.stringify({
+        ...snapshot,
+        entries: snapshot.entries.map((entry) => ({
+          ...entry,
+          status: "dispatching",
+          updated_at: stale,
+        })),
+      }),
+    );
+    const recovered = await queue.read(cwd, sessionId);
+    expect(recovered.entries[0]).toMatchObject({
+      id: first,
+      status: "queued",
+      error_code: "stale_claim",
+    });
+    expect(await dispatcher.tick(cwd, sessionId)).toBe("dispatched");
+    expect(command).toHaveBeenCalledWith(sessionId, cwd, "prompt", {
+      message: "recover me",
+      client_message_id: first,
+    });
+  });
+
+  it("lets only one of two concurrent dispatches claim an entry", async () => {
+    const { app, queue, command } = harness({ streaming: true });
+    await queue.enqueue(cwd, sessionId, { id: first, text: "do this now" });
+    const url = `/api/sessions/${sessionId}/queue/${first}/dispatch?cwd=${encodeURIComponent(cwd)}`;
+    const [a, b] = await Promise.all([
+      app.inject({ method: "POST", url }),
+      app.inject({ method: "POST", url }),
+    ]);
+    expect([a.statusCode, b.statusCode].sort()).toEqual([202, 409]);
+    expect(command).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a failed entry but refuses a queued one", async () => {
+    const { app, queue } = harness({ streaming: true });
+    await queue.enqueue(cwd, sessionId, { id: first, text: "retry me" });
+    const url = `/api/sessions/${sessionId}/queue/${first}/retry?cwd=${encodeURIComponent(cwd)}`;
+    const refused = await app.inject({ method: "POST", url });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ code: "not_retryable" });
+    await queue.settle(cwd, sessionId, first, { status: "failed", error_code: "steer_failed" });
+    const retried = await app.inject({ method: "POST", url });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json()).toMatchObject({ ok: true, entry: { id: first, status: "queued" } });
+    const entry = (await queue.read(cwd, sessionId)).entries[0];
+    expect(entry).toBeDefined();
+    expect(entry?.error_code).toBeUndefined();
+    const missing = await app.inject({
+      method: "POST",
+      url: `/api/sessions/${sessionId}/queue/${second}/retry?cwd=${encodeURIComponent(cwd)}`,
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toMatchObject({ code: "not_found" });
   });
 
   it("refuses to touch a session that does not belong to the workspace", async () => {

@@ -325,6 +325,38 @@ export function registerSessionMessageRoutes(
   );
 
   app.post<{ Params: { session_id: string; entry_id: string } }>(
+    "/api/sessions/:session_id/queue/:entry_id/retry",
+    async (request, reply) => {
+      return withWorkspace(request, reply, async () => {
+        let workspace: string;
+        try {
+          workspace = await validateWorkspaceCwd(rawCwd(request));
+        } catch (error) {
+          return reply
+            .code(403)
+            .send({ ok: false, code: "workspace_invalid", error: String(error) });
+        }
+        const sessionId = request.params.session_id;
+        if (!(await knownSession(workspace, sessionId))) {
+          return reply
+            .code(404)
+            .send({ ok: false, code: "not_found", error: "session not found in this workspace" });
+        }
+        const result = await queue.retry(workspace, sessionId, request.params.entry_id);
+        if (result.ok) return { ok: true, entry: result.entry };
+        return reply.code(result.code === "not_found" ? 404 : 409).send({
+          ok: false,
+          code: result.code,
+          error:
+            result.code === "not_found"
+              ? "queued message not found"
+              : "only a failed message can be retried",
+        });
+      });
+    },
+  );
+
+  app.post<{ Params: { session_id: string; entry_id: string } }>(
     "/api/sessions/:session_id/queue/:entry_id/dispatch",
     async (request, reply) => {
       return withWorkspace(request, reply, async () => {
@@ -356,14 +388,33 @@ export function registerSessionMessageRoutes(
         const entry = claimed.entry;
         // A rejected attempt must stay retryable: the entry goes back to the
         // queue and no ledger row is written, so the same id can be claimed again.
+        // The claim already wrote `dispatching`, so a failed requeue is recovered
+        // by the stale-claim sweep instead of masking the original error.
         const requeue = async (errorCode: string) => {
-          await queue.settle(workspace, sessionId, entry.id, {
-            status: "queued",
-            error_code: errorCode,
+          await queue
+            .settle(workspace, sessionId, entry.id, { status: "queued", error_code: errorCode })
+            .catch(() => null);
+        };
+        // The worker may have taken the steer before the transport broke, so a
+        // retry could deliver it twice. Settle it visibly as sent-but-unconfirmed
+        // instead of pretending the delivery failed.
+        const settleUnconfirmed = async (code: string) => {
+          await steers
+            .settle(workspace, sessionId, entry.id, entry.text, "indeterminate", code)
+            .catch(() => undefined);
+          return queue.settle(workspace, sessionId, entry.id, {
+            status: "dispatched",
+            error_code: "indeterminate",
           });
         };
 
-        const receipt = await steers.claim(workspace, sessionId, entry.id, entry.text);
+        let receipt: Awaited<ReturnType<typeof steers.claim>>;
+        try {
+          receipt = await steers.claim(workspace, sessionId, entry.id, entry.text);
+        } catch (error) {
+          await requeue("ledger_failed");
+          return reply.code(500).send({ ok: false, code: "ledger_failed", error: String(error) });
+        }
         if ("conflict" in receipt) {
           await requeue("client_message_id_conflict");
           return reply.code(409).send({
@@ -379,8 +430,14 @@ export function registerSessionMessageRoutes(
           if (receipt.status === "accepted" || receipt.status === "indeterminate") {
             const settled = await queue.settle(workspace, sessionId, entry.id, {
               status: "dispatched",
+              ...(receipt.status === "indeterminate" ? { error_code: "indeterminate" } : {}),
             });
-            return reply.code(202).send({ ok: true, status: "accepted", entry: settled ?? entry });
+            return reply.code(202).send({
+              ok: true,
+              status: receipt.status === "indeterminate" ? "indeterminate" : "accepted",
+              ...(receipt.status === "indeterminate" ? { error_code: "indeterminate" } : {}),
+              entry: settled ?? entry,
+            });
           }
           await requeue(receipt.error_code ?? "rejected");
           return reply.code(409).send({
@@ -391,7 +448,13 @@ export function registerSessionMessageRoutes(
           });
         }
 
-        const state = await nodeSessionService.state(sessionId, workspace);
+        let state: Awaited<ReturnType<typeof nodeSessionService.state>>;
+        try {
+          state = await nodeSessionService.state(sessionId, workspace);
+        } catch (error) {
+          await requeue("state_failed");
+          return reply.code(500).send({ ok: false, code: "state_failed", error: String(error) });
+        }
         if ("error" in state) {
           await requeue(String(state.code ?? "state_failed"));
           return reply.code(sessionRuntimeStatus(state.code)).send({
@@ -409,9 +472,21 @@ export function registerSessionMessageRoutes(
           });
         }
 
-        const result = await nodeSessionService.command(sessionId, workspace, "steer", {
-          message: entry.text,
-        });
+        let result: Awaited<ReturnType<typeof nodeSessionService.command>>;
+        try {
+          result = await nodeSessionService.command(sessionId, workspace, "steer", {
+            message: entry.text,
+          });
+        } catch (error) {
+          const settled = await settleUnconfirmed("steer_unconfirmed");
+          return reply.code(202).send({
+            ok: true,
+            status: "indeterminate",
+            error_code: "steer_unconfirmed",
+            error: String(error),
+            entry: settled ?? entry,
+          });
+        }
         if (result.success) {
           await steers.settle(workspace, sessionId, entry.id, entry.text, "accepted");
           const settled = await queue.settle(workspace, sessionId, entry.id, {
@@ -421,10 +496,7 @@ export function registerSessionMessageRoutes(
         }
         const code = typeof result.code === "string" && result.code ? result.code : "steer_failed";
         if (isPromptDeliveryIndeterminate(code)) {
-          await steers.settle(workspace, sessionId, entry.id, entry.text, "indeterminate", code);
-          const settled = await queue.settle(workspace, sessionId, entry.id, {
-            status: "dispatched",
-          });
+          const settled = await settleUnconfirmed(code);
           return reply.code(202).send({
             ok: true,
             status: "indeterminate",

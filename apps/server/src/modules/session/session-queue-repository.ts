@@ -12,6 +12,10 @@ import {
  *  what happened, but the document must not grow without bound. */
 const TERMINAL_ENTRY_LIMIT = 20;
 const TERMINAL_STATUSES = new Set<QueuedMessage["status"]>(["dispatched", "cancelled"]);
+/** A claim settles in milliseconds on the normal path, so an entry that stays
+ *  `dispatching` for minutes belongs to a request that died mid-flight. The
+ *  generous window only has to cover a slow worker turn, never a live claim. */
+const STALE_CLAIM_MS = 5 * 60 * 1000;
 
 export type QueueEditResult =
   | { ok: true; entry: QueuedMessage }
@@ -25,8 +29,12 @@ export type QueueClaimResult =
   | { ok: true; entry: QueuedMessage }
   | { ok: false; code: "not_found" | "not_queued" };
 
+export type QueueRetryResult =
+  | { ok: true; entry: QueuedMessage }
+  | { ok: false; code: "not_found" | "not_retryable" };
+
 export type DispatchOutcome =
-  | { status: "dispatched"; delivered_message_id?: string }
+  | { status: "dispatched"; delivered_message_id?: string; error_code?: string }
   | { status: "failed"; error_code: string }
   | { status: "queued"; error_code?: string };
 
@@ -54,6 +62,34 @@ function clearLegacyStopPause(doc: SessionQueue): { doc: SessionQueue; migrated:
   return { doc: next, migrated: true };
 }
 
+/** A dispatch that threw between the claim and the settle leaves its entry in
+ *  `dispatching`, a state no other operation accepts. Reading recovers such an
+ *  entry once its claim is old enough, and `stale_claim` records the reason. */
+function recoverStaleClaims(
+  doc: SessionQueue,
+  now: number,
+): { doc: SessionQueue; recovered: boolean } {
+  if (!doc.entries.some((entry) => entry.status === "dispatching"))
+    return { doc, recovered: false };
+  const timestamp = new Date(now).toISOString();
+  let recovered = false;
+  const entries = doc.entries.map((entry) => {
+    if (entry.status !== "dispatching") return entry;
+    const claimedAt = Date.parse(entry.updated_at);
+    if (Number.isFinite(claimedAt) && now - claimedAt < STALE_CLAIM_MS) return entry;
+    recovered = true;
+    return {
+      ...entry,
+      status: "queued" as const,
+      error_code: "stale_claim",
+      updated_at: timestamp,
+    };
+  });
+  return recovered
+    ? { doc: { ...doc, entries, updated_at: timestamp }, recovered: true }
+    : { doc, recovered: false };
+}
+
 function trim(doc: SessionQueue): SessionQueue {
   const terminal = doc.entries.filter((entry) => TERMINAL_STATUSES.has(entry.status));
   if (terminal.length <= TERMINAL_ENTRY_LIMIT) return doc;
@@ -75,8 +111,9 @@ export class SessionQueueRepository {
     const stored = await readJson<SessionQueue | null>(this.file(cwd, sessionId), null);
     if (!stored || stored.session_id !== sessionId || !Array.isArray(stored.entries))
       return emptyQueue(sessionId);
-    const normalised = clearLegacyStopPause(trim({ ...stored, paused: stored.paused === true }));
-    if (normalised.migrated) await this.persistStopPauseMigration(cwd, sessionId);
+    const legacy = clearLegacyStopPause(trim({ ...stored, paused: stored.paused === true }));
+    const normalised = recoverStaleClaims(legacy.doc, Date.now());
+    if (legacy.migrated || normalised.recovered) await this.persistNormalisation(cwd, sessionId);
     return normalised.doc;
   }
 
@@ -147,6 +184,26 @@ export class SessionQueueRepository {
         error_code: undefined,
         updated_at: new Date().toISOString(),
       };
+      await this.replace(file, doc, updated);
+      return { ok: true, entry: updated };
+    });
+  }
+
+  /** A failed delivery can be attempted again: the entry returns to the queue
+   *  with no error and the dispatcher claims it on the next read. */
+  async retry(cwd: string, sessionId: string, entryId: string): Promise<QueueRetryResult> {
+    const file = this.file(cwd, sessionId);
+    return withFileWriteLock(file, async () => {
+      const doc = await this.readLocked(file, sessionId);
+      const entry = doc.entries.find((candidate) => candidate.id === entryId);
+      if (!entry) return { ok: false, code: "not_found" };
+      if (entry.status !== "failed") return { ok: false, code: "not_retryable" };
+      const updated: QueuedMessage = {
+        ...entry,
+        status: "queued",
+        updated_at: new Date().toISOString(),
+      };
+      delete updated.error_code;
       await this.replace(file, doc, updated);
       return { ok: true, entry: updated };
     });
@@ -240,17 +297,19 @@ export class SessionQueueRepository {
     const stored = await readJson<SessionQueue | null>(file, null);
     if (!stored || stored.session_id !== sessionId || !Array.isArray(stored.entries))
       return emptyQueue(sessionId);
-    return clearLegacyStopPause(trim({ ...stored, paused: stored.paused === true })).doc;
+    const legacy = clearLegacyStopPause(trim({ ...stored, paused: stored.paused === true }));
+    return recoverStaleClaims(legacy.doc, Date.now()).doc;
   }
 
-  private async persistStopPauseMigration(cwd: string, sessionId: string): Promise<void> {
+  private async persistNormalisation(cwd: string, sessionId: string): Promise<void> {
     const file = this.file(cwd, sessionId);
     try {
       await withFileWriteLock(file, async () => {
         const stored = await readJson<SessionQueue | null>(file, null);
         if (!stored || stored.session_id !== sessionId || !Array.isArray(stored.entries)) return;
-        const current = clearLegacyStopPause(trim({ ...stored, paused: stored.paused === true }));
-        if (current.migrated) await writeJsonAtomic(file, current.doc);
+        const legacy = clearLegacyStopPause(trim({ ...stored, paused: stored.paused === true }));
+        const current = recoverStaleClaims(legacy.doc, Date.now());
+        if (legacy.migrated || current.recovered) await writeJsonAtomic(file, current.doc);
       });
     } catch {
       // The queue is advisory for rendering; a later read retries the migration.
