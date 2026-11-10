@@ -1,3 +1,4 @@
+import { normalizeToolProgress } from "@pi-science/contracts";
 import type { ProductInput } from "../product-input.js";
 import { boundedToolDetails } from "../../node/message-details.js";
 import {
@@ -233,9 +234,11 @@ export class ConversationProjection {
         }
         const partialDetails =
           snapshot && typeof snapshot === "object"
-            ? (snapshot as { details?: { approval?: unknown } }).details
+            ? (snapshot as { details?: { approval?: unknown; progress?: unknown } }).details
             : undefined;
         if (partialDetails?.approval === "waiting") record.status = "waiting-approval";
+        const progress = normalizeToolProgress(partialDetails?.progress);
+        if (progress) record.progress = progress;
         // Partial results arrive as result-shaped snapshots; unwrap the text
         // so the live row shows real output. An empty snapshot must not
         // clobber an already accumulated tail, so it is simply omitted.
