@@ -126,3 +126,19 @@ test("10,000-model Composer menu limits mounted items and meets interaction budg
   await testInfo.attach("composer-model-performance", { path: artifact, contentType: "application/json" });
   for (const [key, budget] of Object.entries(budgets)) expect(metrics[key as keyof typeof budgets], `${key} exceeds ${budget}ms`).toBeLessThanOrEqual(budget);
 });
+
+// Mobile-only focus guard. It asserts no timing budget: each performance test above
+// starts and stops its own clock, so this case cannot shift their measurements.
+test("keeps focus in the search field while the narrow model list filters", async ({ page }) => {
+  test.skip(test.info().project.name !== "mobile", "the panel replaces the menu below the sm breakpoint");
+  await page.goto(workspaceRoute(VISUAL_CWD, `/session/${VISUAL_SESSION}`));
+  await page.getByRole("button", { name: "Select model and thinking level and view context", exact: true }).click();
+  await page.getByRole("menuitem", { name: /^Model/ }).click();
+  const search = page.getByRole("textbox", { name: "Search models", exact: true });
+  await expect(search).toBeVisible();
+  await expect(search).toBeFocused();
+  await page.waitForTimeout(200);
+  await search.pressSequentially("mode");
+  await expect(search).toHaveValue("mode");
+  await expect(search).toBeFocused();
+});
