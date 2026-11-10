@@ -11,15 +11,19 @@ import type { useAutoResearch } from "../../hooks/useAutoResearch";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { findLocalPromptRequest, promptContentDigest } from "../../lib/client/prompt-request-cache";
 import { ConversationStatsLine } from "./ConversationStatsLine";
+import { MessageQuoteCard } from "./MessageQuoteCard";
 import { MentionComposer } from "./MentionComposer";
 import { QueuedMessagesPanel } from "./QueuedMessagesPanel";
 import { ModelControlMenu } from "./ModelControlMenu";
-import { cn } from "../../lib/ui";
+import { useMessageQuoteStore } from "../../lib/conversation/message-quote";
+import { composeQuotedPrompt } from "../../lib/conversation/quoted-message";
+import { cn, useUiStore } from "../../lib/ui";
 
-const ComposerTodo = lazy(() => import("../todo/ComposerTodo").then((module) => ({ default: module.ComposerTodo })));
 
 /** Stable empty list: a fresh array in a store selector re-renders forever. */
 const NO_QUEUED_MESSAGES: QueuedMessage[] = [];
+
+const ComposerTodo = lazy(() => import("../todo/ComposerTodo").then((module) => ({ default: module.ComposerTodo })));
 
 type ComposerState = ReturnType<typeof useComposer>;
 type ModelState = ReturnType<typeof useModelConfig>;
@@ -58,9 +62,20 @@ export interface ConversationComposerProps {
 export function ConversationComposer({ workspaceCwd, status, activeSessionId, sessionStats, contextTokens, contextWindow, contextPercent, compactionEnabled, compactionThresholdPercent, working, promptDeliveryNotice, interactionPending, reviewingProject, reviewNotice, autoReviewOn, modelControlsDisabled, showWelcome, showScrollDown, composer, model, research, onScrollToBottom, onReview, onAbort, onRemoveWorkspaceReference }: ConversationComposerProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const openSettings = useUiStore((s) => s.openSettings);
   const { input, setInput, files, setFiles, workspaceReferences } = composer;
   const mcpDiagnostics = useRuntimeStore((state) => state.cwd === workspaceCwd && state.activeSessionId === activeSessionId ? state.mcpDiagnostics : undefined);
   const sendPrompt = useRuntimeStore((state) => state.sendPrompt);
+  const [composing, setComposing] = useState(false);
+  const quote = composer.quote;
+  const clearQuote = useMessageQuoteStore((state) => state.clearQuote);
+  // The retry lookup matches the request the server recorded, which carried the
+  // quote too. A draft-only digest would miss it after a failed send.
+  const composedDraft = quote ? composeQuotedPrompt(quote, input.trim()) : input.trim();
+  const retryRequest = activeSessionId && composedDraft
+    ? findLocalPromptRequest(workspaceCwd, activeSessionId, promptContentDigest(composedDraft))
+    : null;
+  const canSend = Boolean(input.trim() || files.length > 0 || workspaceReferences.length > 0 || quote);
   const queuedMessages = useRuntimeStore((state) => (state.queueSessionId === activeSessionId ? state.queuedMessages : NO_QUEUED_MESSAGES));
   const queuePaused = useRuntimeStore((state) => (state.queueSessionId === activeSessionId ? state.queuePaused : false));
   const loadQueue = useRuntimeStore((state) => state.loadQueue);
@@ -68,7 +83,6 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
   const editQueuedMessage = useRuntimeStore((state) => state.editQueuedMessage);
   const cancelQueuedMessage = useRuntimeStore((state) => state.cancelQueuedMessage);
   const pendingQueueCount = queuedMessages.filter((entry) => entry.status === "queued" || entry.status === "dispatching").length;
-  const [composing, setComposing] = useState(false);
 
   useEffect(() => {
     if (!activeSessionId) return;
@@ -83,9 +97,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
     const timer = setInterval(() => { void loadQueue(); }, 3000);
     return () => clearInterval(timer);
   }, [activeSessionId, pendingQueueCount, queuePaused, loadQueue]);
-  const retryRequest = activeSessionId && input.trim()
-    ? findLocalPromptRequest(workspaceCwd, activeSessionId, promptContentDigest(input.trim()))
-    : null;
+
   return (
     <div className={cn("px-4 sm:px-8 shrink-0", showWelcome ? "py-0" : "pb-1 pt-1")}>
       {!showWelcome && (
@@ -108,7 +120,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
       <div className="relative mx-auto max-w-[var(--conversation-composer-width)]">
         <McpDiagnosticsNotice diagnostics={mcpDiagnostics} />
         {promptDeliveryNotice === "indeterminate" && <div role="status" className="mb-2 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-muted">{t("conversation.promptDelivery.indeterminate")}</div>}
-        {retryRequest && <button type="button" onClick={() => { void sendPrompt(input.trim(), retryRequest.clientMessageId).catch(() => undefined); }} className="mb-2 text-xs text-accent hover:underline">{t("conversation.promptDelivery.retrySameRequest")}</button>}
+        {retryRequest && <button type="button" onClick={() => { void sendPrompt(composedDraft, retryRequest.clientMessageId).catch(() => undefined); }} className="mb-2 text-xs text-accent hover:underline">{t("conversation.promptDelivery.retrySameRequest")}</button>}
         {composer.runningNotice === "not_running" && (
           <div role="status" className="mb-2 flex flex-wrap items-center gap-2 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-muted">
             <span>{t("conversation.steerNotRunning")}</span>
@@ -145,10 +157,11 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
             <div className="border-b border-faint px-3 py-2">
               <div className="flex flex-wrap gap-1.5">
                 {workspaceReferences.map((reference) => (
-                  <span key={reference.path} className="flex max-w-full items-center gap-1 rounded-input bg-accent/5 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-accent/20 cursor-pointer hover:bg-accent/10" title={`${t("conversation.clickToInsert")} ${reference.path}`} onClick={() => { const current = input; setInput(current ? `${current} ${reference.path}` : reference.path); }}>
+                  <span key={reference.path} className="flex max-w-full items-center gap-1 rounded-input bg-accent/5 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-accent/20">
+                    <button type="button" className="flex min-w-0 items-center gap-1 text-left" title={`${t("conversation.clickToInsert")} ${reference.path}`} aria-label={`${t("conversation.clickToInsert")} ${reference.path}`} onClick={() => { setInput(input ? `${input} ${reference.path}` : reference.path); composer.inputRef.current?.focus(); }}>
                     {reference.isDir ? <FolderOpen size={11} className="shrink-0 text-accent" /> : <File size={11} className="shrink-0 text-accent" />}
-                    <span className="truncate">{reference.path}</span>
-                    <button type="button" aria-label={`Remove reference ${reference.name}`} onClick={(event) => { event.stopPropagation(); onRemoveWorkspaceReference(workspaceCwd, reference.path); }} className="shrink-0 text-muted hover:text-error-text">
+                    <span className="truncate">{reference.path}</span></button>
+                    <button type="button" aria-label={t("conversation.removeReference", { name: reference.name })} onClick={(event) => { event.stopPropagation(); onRemoveWorkspaceReference(workspaceCwd, reference.path); }} className="shrink-0 text-muted hover:text-error-text">
                       <X size={11} />
                     </button>
                   </span>
@@ -161,13 +174,17 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
               {files.map((file, index) => (
                 <span key={index} className="flex items-center gap-1 rounded-input bg-surface-2 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-border">
                   {file.name}
-                  <button type="button" onClick={() => setFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))} className="text-muted hover:text-error-text">
+                  <button type="button" aria-label={t("conversation.removeAttachment", { name: file.name })} onClick={() => setFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))} className="text-muted hover:text-error-text">
                     <X size={11} />
                   </button>
                 </span>
               ))}
             </div>
           )}
+          {quote && <MessageQuoteCard quote={quote} onRemove={() => clearQuote(quote.source)} />}
+          {model.modelError && <p role="alert" className="mx-3 my-2 break-words rounded-input border border-error/30 bg-error/5 px-3 py-2 text-ui-body text-error-text">{model.modelError}<button type="button" className="ml-3 underline" onClick={() => openSettings(workspaceCwd, "models")}>{t("settings.models.title")}</button></p>}
+          {reviewNotice && <p role="status" className="mx-3 my-2 break-words text-ui-label text-muted">{reviewNotice}</p>}
+
           <MentionComposer
             cwd={workspaceCwd}
             value={input}
@@ -179,9 +196,9 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
             inputRef={composer.inputRef}
             composing={composing}
             composingRef={composer.composingRef}
-            placeholder={composer.dragOver ? "Drop files here…" : research.prompt}
+            placeholder={composer.dragOver ? t("conversation.dropFiles") : research.prompt}
           />
-          <div className="flex items-center justify-between gap-2 px-3 pb-1">
+          <div className={cn("flex items-center justify-between gap-2 px-3 pb-1", working && "flex-wrap")}>
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <button
                 type="button"
@@ -216,11 +233,13 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
                   <span className="composer-review-label">{t("conversation.review")}</span>
                 </button>
               )}
-              {model.modelError && <span className="max-w-[180px] truncate text-[10px] text-error-text" title={model.modelError}>{model.modelError}</span>}
-              {reviewNotice && <span className="max-w-[220px] truncate text-[10px] text-muted" title={reviewNotice}>{reviewNotice}</span>}
             </div>
             <input ref={composer.fileInputRef} type="file" multiple className="hidden" onChange={composer.handleFilePick} />
-            <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
+            {/* While running the trailing controls give up horizontal space before
+                they leave the card: the segment and the send/stop buttons hold their
+                size, the model menu truncates, and below the sm breakpoint the buttons
+                wrap onto their own line. The idle row keeps its single-line geometry. */}
+            <div className={cn("ml-auto flex min-w-0 items-center justify-end gap-1.5", working ? "max-sm:flex-wrap" : "shrink-0")}>
               {model.models.length > 0 && (
                 <ModelControlMenu
                   models={model.models}
@@ -240,7 +259,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
               )}
               {working ? (
                 <>
-                  <div role="group" aria-label={t("conversation.sendMode.groupLabel")} className="flex items-center gap-0.5 rounded-full bg-surface-2 p-0.5">
+                  <div role="group" aria-label={t("conversation.sendMode.groupLabel")} className="flex shrink-0 items-center gap-0.5 rounded-full bg-surface-2 p-0.5">
                     {(["steer", "queue"] as const).map((mode) => (
                       <button
                         key={mode}
@@ -262,15 +281,15 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
                     aria-label={composer.sendMode === "steer" ? t("conversation.sendSteer") : t("conversation.sendToQueue")}
                     title={composer.sendMode === "steer" ? t("conversation.sendSteer") : t("conversation.sendToQueue")}
                     onClick={() => { void composer.handleSend().catch(() => undefined); }}
-                    disabled={model.configuringModel || interactionPending || reviewingProject || !model.selectedModel || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
+                    disabled={model.configuringModel || interactionPending || reviewingProject || !model.selectedModel || !canSend}
                     className={cn(
-                      "flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full",
-                      (model.selectedModel && !model.configuringModel && !interactionPending && !reviewingProject && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent-fill text-accent-fg" : "bg-surface-2 text-muted cursor-default",
+                      "flex h-[var(--send-button-size)] w-[var(--send-button-size)] shrink-0 items-center justify-center rounded-full",
+                      (model.selectedModel && !model.configuringModel && !interactionPending && !reviewingProject && canSend) ? "bg-accent-fill text-accent-fg" : "bg-surface-2 text-muted cursor-default",
                     )}
                   >
                     <ArrowUp size={16} />
                   </button>
-                  <button type="button" aria-label={t("conversation.stopGeneration")} title={t("conversation.stopGeneration")} onClick={() => void onAbort().catch(() => undefined)} className="flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full bg-accent-fill text-accent-fg transition-colors hover:bg-error-fill">
+                  <button type="button" aria-label={t("conversation.stopGeneration")} title={t("conversation.stopGeneration")} onClick={() => void onAbort().catch(() => undefined)} className="flex h-[var(--send-button-size)] w-[var(--send-button-size)] shrink-0 items-center justify-center rounded-full bg-accent-fill text-accent-fg transition-colors hover:bg-error-fill">
                     <Square size={14} fill="currentColor" />
                   </button>
                 </>
@@ -279,10 +298,10 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
                   type="button"
                   aria-label={t("conversation.sendMessage")}
                   onClick={composer.handleSend}
-                  disabled={working || model.configuringModel || interactionPending || !model.selectedModel || reviewingProject || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
+                  disabled={working || model.configuringModel || interactionPending || !model.selectedModel || reviewingProject || (!activeSessionId && status === "connecting") || !canSend}
                   className={cn(
-                    "flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full",
-                    (model.selectedModel && !model.configuringModel && !interactionPending && !reviewingProject && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent-fill text-accent-fg" : "bg-surface-2 text-muted cursor-default",
+                    "flex h-[var(--send-button-size)] w-[var(--send-button-size)] shrink-0 items-center justify-center rounded-full",
+                    (model.selectedModel && !model.configuringModel && !interactionPending && !reviewingProject && (activeSessionId || status !== "connecting") && canSend) ? "bg-accent-fill text-accent-fg" : "bg-surface-2 text-muted cursor-default",
                   )}
                 >
                   <ArrowUp size={16} />
