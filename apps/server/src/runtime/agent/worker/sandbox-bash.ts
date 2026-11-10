@@ -12,13 +12,15 @@ import { toolEnvironment } from "../agent-runtime-environment.js";
 import { snapshotSandboxOutputs, sandboxArtifactCapture } from "../../sandbox/artifacts.js";
 import { diffWorkspaceSnapshots } from "../../artifacts/workspace-artifact-snapshot.js";
 import { publishWorkspaceArtifactsDetailed } from "../../artifacts/workspace-artifact-publisher.js";
+import { ToolProgressCollector } from "./progress/collector.js";
+import { DEFAULT_PROGRESS_ADAPTERS } from "./progress/registry.js";
 import { readToolProgressStream } from "./tool-progress-stream.js";
 
 type Tool = AgentHarnessTool<{ env: NodeExecutionEnv }>;
 /** Keep upstream schema, output capture/checkpoints and result contract. Only replace its OS backend. */
 export function sandboxBashTool(identity: SandboxIdentity, hostEnvironment: Record<string, string> = toolEnvironment(process.env), skillDirectories: () => Promise<string[]> = async () => []): Tool {
   const original = createBashTool();
-  return { ...original, description: `Use for running programs, scripts, tests, builds, scientific computations and operations that require a shell. When available, prefer the dedicated ls tool for directory browsing, glob for finding files by name, grep for searching file contents, and read for inspecting a known file. Keep routine file inspection in those tools rather than combining ls/find/rg/grep/cat into a Bash command for convenience. Use Bash when the task requires program execution or shell processing beyond those tools' supported operations. A dedicated tool's access_denied result is not a reason to retry the same access through Bash.\n${original.description}\nSandbox paths: use "$TMPDIR" or Python tempfile for temporary files within this call; they are removed afterwards. For cross-call intermediates use a normal workspace directory such as data/work/. Do not hard-code /tmp or hidden .tmp/. Skill resource directories, when granted, are read-only; place helper outputs in the workspace or "$TMPDIR". HTTP downloads must check failure status and use timeouts. Scripts can report progress by writing a line starting with <<pi-progress>> followed by a space and a JSON object such as {"version":1,"scopeId":"process-files:1","scopeLabel":"Processing files","current":72,"total":100,"unit":"files","totalKind":"fixed"}.`, async execute(id, params, update, ctx, invocation, context) {
+  return { ...original, description: `Use for running programs, scripts, tests, builds, scientific computations and operations that require a shell. When available, prefer the dedicated ls tool for directory browsing, glob for finding files by name, grep for searching file contents, and read for inspecting a known file. Keep routine file inspection in those tools rather than combining ls/find/rg/grep/cat into a Bash command for convenience. Use Bash when the task requires program execution or shell processing beyond those tools' supported operations. A dedicated tool's access_denied result is not a reason to retry the same access through Bash.\n${original.description}\nSandbox paths: use "$TMPDIR" or Python tempfile for temporary files within this call; they are removed afterwards. For cross-call intermediates use a normal workspace directory such as data/work/. Do not hard-code /tmp or hidden .tmp/. Skill resource directories, when granted, are read-only; place helper outputs in the workspace or "$TMPDIR". HTTP downloads must check failure status and use timeouts. Progress is read automatically from tqdm bars, \`pv --format '%b/%s '\`, \`rsync --info=progress2\` and \`dd status=progress\`. Any other program can report its own count by writing a complete line starting with <<pi-progress>> followed by a space and a JSON object such as {"version":1,"scopeId":"process-files:1","scopeLabel":"Processing files","current":72,"total":100,"unit":"files","totalKind":"fixed"}. Ready-made helpers for Python, R and shell live in the repository's demos/tool-progress directory.`, async execute(id, params, update, ctx, invocation, context) {
     const confined = !!identity.executionGrantId || !!identity.candidateId || identity.executionScope === "candidate" || identity.executionScope === "confined";
     if (confined && !identity.executionGrantId) throw new Error("Candidate execution requires a server-bound candidate or generic execution grant");
     const revision = hostEnvironment.PI_SCIENCE_ENVIRONMENT_REVISION_ID;
@@ -65,12 +67,23 @@ export function sandboxBashTool(identity: SandboxIdentity, hostEnvironment: Reco
         };
         before = await snapshotSandboxOutputs(identity.cwd, policy);
         const safeOriginal = createBashTool({ prepare(execution) { execution.env = prepared?.env ?? toolEnvironment(hostEnvironment); execution.inheritEnv = false; } });
+        const collector = new ToolProgressCollector({ command: values.command, adapters: DEFAULT_PROGRESS_ADAPTERS });
+        let latestUpdate: [Parameters<typeof update>[0], Parameters<typeof update>[1]] | undefined;
         const rawResult = await safeOriginal.execute(id, { ...values, timeout: Math.min(timeout, 600) }, (snapshot, options) => {
-          const content = snapshot.content.map((part) => part.type === "text" ? readToolProgressStream(part.text) : undefined);
-          const progress = content.map((part) => part?.progress).filter((value) => value !== undefined).at(-1);
+          const readings = snapshot.content.map((part) => part.type === "text" ? collector.observe(part.text) : undefined);
+          const progress = readings.map((reading) => reading?.progress).filter((value) => value !== undefined).at(-1);
+          latestUpdate = [snapshot, options];
           if (!progress && !snapshot.content.some((part) => part.type === "text" && part.text)) return update(snapshot, options);
-          return update({ ...snapshot, content: snapshot.content.map((part, index) => part.type === "text" ? { ...part, text: content[index]!.text } : part), details: { ...snapshot.details, ...(progress ? { progress } : {}) } }, options);
+          return update({ ...snapshot, content: snapshot.content.map((part, index) => part.type === "text" ? { ...part, text: readings[index]!.text } : part), details: { ...snapshot.details, ...(progress ? { progress } : {}) } }, options);
         }, { ...ctx, env }, invocation, context);
+        // The refresh limit can hold the newest value back. The call is not
+        // allowed to end showing a count the tool has already passed.
+        const finalProgress = collector.finish().progress;
+        if (finalProgress && latestUpdate) {
+          const [snapshot, options] = latestUpdate;
+          const details = snapshot.details && typeof snapshot.details === "object" ? snapshot.details as Record<string, unknown> : {};
+          update({ ...snapshot, details: { ...details, progress: finalProgress } }, options);
+        }
         const result = { ...rawResult, content: rawResult.content.map((part) => part.type === "text" ? { ...part, text: readToolProgressStream(part.text).text } : part) };
         const evidence = await outputs();
         await executionRepository.finish(identity.cwd, executionId, { status: "succeeded", producer: "bash", result: { sandbox_policy_id: policy.id, exit_code: outcome.exitCode,
