@@ -485,9 +485,9 @@ describe("AgentActivity measured progress", () => {
   it("renders the measured portion of a named scope", () => {
     render(<AgentActivity blocks={[{ ...tool("python-1", "python", "running"), startedAt: startedLongAgo(), progress: measuredProgress({ current: 72, total: 100, unit: "cells" }) }]} />);
 
-    expect(screen.getByText("Indexing files · 72 of 100 cells")).toBeInTheDocument();
+    expect(screen.getByText("Indexing files · 72 / 100 cells")).toBeInTheDocument();
     expect(screen.getByText("72%")).toBeInTheDocument();
-    const bar = screen.getByRole("progressbar", { name: "Indexing files" });
+    const bar = screen.getByRole("progressbar", { name: "Indexing files 72%" });
     expect(bar).toHaveAttribute("aria-valuemin", "0");
     expect(bar).toHaveAttribute("aria-valuemax", "100");
     expect(bar).toHaveAttribute("aria-valuenow", "72");
@@ -497,8 +497,13 @@ describe("AgentActivity measured progress", () => {
   it("renders a measured count without inventing a total", () => {
     render(<AgentActivity blocks={[{ ...tool("python-1", "python", "running"), startedAt: startedLongAgo(), progress: measuredProgress({ current: 18, totalKind: "unknown", unit: "files" }) }]} />);
 
-    expect(screen.getByText("Indexing files · 18 so far")).toBeInTheDocument();
+    expect(screen.getByText("Indexing files · 18 files · total unknown")).toBeInTheDocument();
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("renders a count without a unit or extra spaces", () => {
+    render(<AgentActivity blocks={[{ ...tool("python-1", "python", "running"), startedAt: startedLongAgo(), progress: measuredProgress({ current: 18, totalKind: "unknown" }) }]} />);
+    expect(screen.getByText("Indexing files · 18 · total unknown")).toBeInTheDocument();
   });
 
   it.each(["done", "error"] as const)("hides the progress layer when the tool is %s", (status) => {
@@ -539,8 +544,8 @@ describe("AgentActivity measured progress", () => {
     const block = thread.blocks.find((item) => item.kind === "tool");
 
     render(<AgentActivity blocks={block?.kind === "tool" ? [block] : []} />);
-    expect(screen.getByText("Writing rows · 5 of 10")).toBeInTheDocument();
-    expect(screen.getByRole("progressbar", { name: "Writing rows" })).toHaveAttribute("aria-valuenow", "50");
+    expect(screen.getByText("Writing rows · 5 / 10")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Writing rows 50%" })).toHaveAttribute("aria-valuenow", "50");
   });
 });
 

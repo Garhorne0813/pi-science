@@ -38,6 +38,10 @@ source, and so values we invent are clearly marked as our own proposals.
 | `packages/client/ui-primitives/src/markdown/CodeBlock.module.css` | Code block radius 12px, sticky banner |
 | `packages/client/ui-primitives/src/markdown/MarkdownText.module.css` | Markdown spacing (16px paragraph rhythm), link color = business blue |
 
+## Pi-Science proposal: tool progress layer
+
+The tool progress layer uses a 3 px rounded track, a 1.5 rem left inset under the tool row, 11 px text, and a 500 ms reveal delay. These values are a Pi-Science proposal, not an upstream citation.
+
 ## Confirmed values (have a file + selector source)
 
 ### Color — light theme

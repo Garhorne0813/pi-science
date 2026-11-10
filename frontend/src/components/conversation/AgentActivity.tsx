@@ -472,16 +472,17 @@ function ToolProgressLayer({ block }: { block: ToolCallBlock }) {
   }, [startedAt]);
   const display = selectToolProgressDisplay(block.status, block.progress);
   if (!visible || display.mode === "hidden" || display.mode === "indeterminate") return null;
+  const unitSuffix = display.unit ? ` ${display.unit}` : "";
   if (display.mode === "count") return <div className={styles.progressLayer}>
-    <span className={styles.progressLabel}>{t("conversation.activity.progressCount", { scope: display.scopeLabel, count: display.value })}</span>
+    <span className={styles.progressLabel}>{t("conversation.activity.progressCount", { scope: display.scopeLabel, count: display.value, unitSuffix })}</span>
   </div>;
   const percent = Math.floor(display.percent);
   return <div className={styles.progressLayer}>
     <div className={styles.progressText}>
-      <span className={styles.progressLabel}>{t("conversation.activity.progressDeterminate", { scope: display.scopeLabel, current: display.current, total: display.total, unit: display.unit ?? "" })}</span>
+      <span className={styles.progressLabel}>{t("conversation.activity.progressDeterminate", { scope: display.scopeLabel, current: display.current, total: display.total, unitSuffix })}</span>
       <span className={styles.progressPercent} aria-hidden="true">{percent}%</span>
     </div>
-    <div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label={display.scopeLabel} className={styles.progressTrack}>
+    <div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label={`${display.scopeLabel} ${percent}%`} className={styles.progressTrack}>
       <div className={styles.progressFill} style={{ width: `${display.percent}%` }} />
     </div>
   </div>;
