@@ -83,6 +83,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
   const editQueuedMessage = useRuntimeStore((state) => state.editQueuedMessage);
   const cancelQueuedMessage = useRuntimeStore((state) => state.cancelQueuedMessage);
   const dispatchQueuedMessage = useRuntimeStore((state) => state.dispatchQueuedMessage);
+  const retryQueuedMessage = useRuntimeStore((state) => state.retryQueuedMessage);
   const pendingQueueCount = queuedMessages.filter((entry) => entry.status === "queued" || entry.status === "dispatching").length;
 
   useEffect(() => {
@@ -128,6 +129,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
           onResume={resumeQueue}
           onEdit={editQueuedMessage}
           onCancel={cancelQueuedMessage}
+          onRetry={retryQueuedMessage}
           onDispatch={dispatchQueuedMessage}
         />
         {/* Fixed 36px fade band above the composer card (reference:
@@ -231,12 +233,13 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
               )}
             </div>
             <input ref={composer.fileInputRef} type="file" multiple className="hidden" onChange={composer.handleFilePick} />
-            {/* While running the trailing controls give up horizontal space before
-                they leave the card: the send/stop buttons hold their size, the model
-                menu truncates, and below the sm breakpoint the buttons wrap onto their
-                own line. The idle row stays on one line: the model menu truncates
-                rather than letting the approval chip squeeze into a narrow column. */}
-            <div className={cn("ml-auto flex min-w-0 items-center justify-end gap-1.5", working && "max-sm:flex-wrap")}>
+            {/* The trailing controls give up horizontal space before they leave the
+                card: the send/stop buttons hold their size, the model menu truncates
+                to a readable floor, and below the sm breakpoint the approval chip and
+                the thinking level give up their labels. The row breaks between the
+                two clusters, never inside the trailing one, so Stop shares a line
+                with the send control instead of dangling on a line of its own. */}
+            <div className="ml-auto flex min-w-0 items-center justify-end gap-1.5">
               {model.models.length > 0 && (
                 <ModelControlMenu
                   models={model.models}

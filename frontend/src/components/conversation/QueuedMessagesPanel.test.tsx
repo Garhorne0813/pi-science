@@ -18,14 +18,16 @@ function renderPanel(props: Partial<React.ComponentProps<typeof QueuedMessagesPa
     onResume: vi.fn(async () => undefined),
     onEdit: vi.fn(async () => undefined),
     onCancel: vi.fn(async () => undefined),
-    onDispatch: vi.fn(async () => undefined),
+    onRetry: vi.fn(async () => undefined),
+    onDispatch: vi.fn(async () => "accepted" as const),
   };
+  const toast = vi.fn();
   render(
-    <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
+    <FeedbackContext.Provider value={{ toast, confirm: async () => true }}>
       <QueuedMessagesPanel entries={[entry()]} paused={false} {...callbacks} {...props} />
     </FeedbackContext.Provider>,
   );
-  return callbacks;
+  return { ...callbacks, toast };
 }
 
 describe("QueuedMessagesPanel", () => {
@@ -63,6 +65,32 @@ describe("QueuedMessagesPanel", () => {
     const callbacks = renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
     await waitFor(() => expect(callbacks.onDispatch).toHaveBeenCalledWith(entry().id));
+  });
+
+  it("tells the user when a delivery could not be confirmed", async () => {
+    const callbacks = renderPanel({ onDispatch: vi.fn(async () => "indeterminate" as const) });
+    fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
+    await waitFor(() =>
+      expect(callbacks.toast).toHaveBeenCalledWith(
+        "The message may not have reached the task.",
+        "info",
+      ),
+    );
+  });
+
+  it("labels a dispatched message whose delivery was not confirmed", () => {
+    renderPanel({ entries: [entry({ status: "dispatched", error_code: "indeterminate" })] });
+    expect(screen.getByText("Sent")).toBeInTheDocument();
+    expect(screen.getByText("Sent, unconfirmed")).toBeInTheDocument();
+  });
+
+  it("retries a failed message and does not offer to edit it", async () => {
+    const callbacks = renderPanel({
+      entries: [entry({ status: "failed", error_code: "steer_failed" })],
+    });
+    expect(screen.queryByRole("button", { name: "Edit queued message" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry queued message" }));
+    await waitFor(() => expect(callbacks.onRetry).toHaveBeenCalledWith(entry().id));
   });
 
   it("collapses to a count and expands again", () => {

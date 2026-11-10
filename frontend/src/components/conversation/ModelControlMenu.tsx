@@ -112,8 +112,8 @@ export function ModelControlMenu({
           className="group flex h-7 min-h-0 min-w-0 max-w-[420px] items-center gap-2 rounded-input px-2.5 text-left text-xs text-text outline-none transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <span className="flex min-w-0 flex-1 items-center gap-1.5">
-            <span className="truncate">{modelLabel}</span>
-            <span className="shrink-0 text-muted">{thinkingLabel}</span>
+            <span className="min-w-[4rem] truncate">{modelLabel}</span>
+            <span className="shrink-0 text-muted max-sm:hidden">{thinkingLabel}</span>
             {contextPercent != null && (
               <span
                 role="img"

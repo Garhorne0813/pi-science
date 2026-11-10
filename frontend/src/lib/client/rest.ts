@@ -3,7 +3,7 @@
 
 import { request, responseError, RUNTIME_START_TIMEOUT_MS } from "./http";
 import { cacheMessages } from "./message-cache";
-import type { HistoryMessage, InteractionResponse, PromptRequestStatus, QueuedMessage, SessionInfo, SessionListPage, SessionMessagePage, SessionQueue, SessionState, SessionStats, SessionUserMessageIndex, SteerDeliveryStatus, TurnArtifactTurn } from "./types";
+import type { HistoryMessage, InteractionResponse, PromptRequestStatus, QueuedMessage, QueueDispatchReceipt, SessionInfo, SessionListPage, SessionMessagePage, SessionQueue, SessionState, SessionStats, SessionUserMessageIndex, SteerDeliveryStatus, TurnArtifactTurn } from "./types";
 import type { CreateSessionRequest } from "@pi-science/contracts";
 import { parseWirePayload } from "./wire-schema";
 
@@ -502,7 +502,7 @@ export async function dispatchQueuedMessage(
   sessionId: string,
   entryId: string,
   cwd?: string,
-): Promise<QueuedMessage> {
+): Promise<QueueDispatchReceipt> {
   const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
   const res = await request(
     `${baseUrl}/api/sessions/${sessionId}/queue/${encodeURIComponent(entryId)}/dispatch${params}`,
@@ -512,7 +512,30 @@ export async function dispatchQueuedMessage(
   if (!res.ok || data.ok === false)
     throw queueError(data, `Deliver queued message failed: ${res.statusText}`, res.status);
   const { queuedMessageSchema } = await import("@pi-science/contracts");
-  return parseWirePayload(data.entry, queuedMessageSchema, "Deliver queued message failed");
+  const entry = parseWirePayload(data.entry, queuedMessageSchema, "Deliver queued message failed");
+  return {
+    entry,
+    status: data.status === "indeterminate" ? "indeterminate" : "accepted",
+    ...(typeof data.error_code === "string" ? { error_code: data.error_code } : {}),
+  };
+}
+
+export async function retryQueuedMessage(
+  baseUrl: string,
+  sessionId: string,
+  entryId: string,
+  cwd?: string,
+): Promise<QueuedMessage> {
+  const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+  const res = await request(
+    `${baseUrl}/api/sessions/${sessionId}/queue/${encodeURIComponent(entryId)}/retry${params}`,
+    { method: "POST" },
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false)
+    throw queueError(data, `Retry queued message failed: ${res.statusText}`, res.status);
+  const { queuedMessageSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data.entry, queuedMessageSchema, "Retry queued message failed");
 }
 
 export async function resumeSessionQueue(

@@ -12,7 +12,7 @@ interface QueueSnapshot {
   paused_reason?: string;
 }
 
-export function createQueueActions(set: SetState, get: GetState): Pick<RuntimeState, "sendSteer" | "enqueueMessage" | "loadQueue" | "editQueuedMessage" | "cancelQueuedMessage" | "resumeQueue" | "dispatchQueuedMessage"> {
+export function createQueueActions(set: SetState, get: GetState): Pick<RuntimeState, "sendSteer" | "enqueueMessage" | "loadQueue" | "editQueuedMessage" | "cancelQueuedMessage" | "retryQueuedMessage" | "resumeQueue" | "dispatchQueuedMessage"> {
   const apply = (cwd: string, sessionId: string, snapshot: QueueSnapshot) => {
     const current = get();
     if (current.cwd !== cwd || current.activeSessionId !== sessionId) return;
@@ -63,7 +63,13 @@ export function createQueueActions(set: SetState, get: GetState): Pick<RuntimeSt
     },
     dispatchQueuedMessage: async (entryId: string) => {
       const { sessionId, cwd } = session();
-      await getClient().dispatchQueuedMessage(sessionId, entryId, cwd);
+      const receipt = await getClient().dispatchQueuedMessage(sessionId, entryId, cwd);
+      await get().loadQueue();
+      return receipt.status;
+    },
+    retryQueuedMessage: async (entryId: string) => {
+      const { sessionId, cwd } = session();
+      await getClient().retryQueuedMessage(sessionId, entryId, cwd);
       await get().loadQueue();
     },
     resumeQueue: async () => {

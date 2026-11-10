@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, ChevronDown, ChevronUp, Loader2, Pencil, Play, Send, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Loader2, Pencil, Play, RotateCcw, Send, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { QueuedMessage } from "../../lib/client/pi-science-client";
 import { cn } from "../../lib/ui";
@@ -11,7 +11,8 @@ export interface QueuedMessagesPanelProps {
   onResume: () => Promise<void>;
   onEdit: (entryId: string, text: string) => Promise<void>;
   onCancel: (entryId: string) => Promise<void>;
-  onDispatch: (entryId: string) => Promise<void>;
+  onRetry: (entryId: string) => Promise<void>;
+  onDispatch: (entryId: string) => Promise<"accepted" | "indeterminate">;
 }
 
 const STATUS_TONE: Record<QueuedMessage["status"], string> = {
@@ -24,7 +25,7 @@ const STATUS_TONE: Record<QueuedMessage["status"], string> = {
 
 /** The follow-up queue as the server reports it. Only a queued entry can be
  *  edited or removed; a dispatched one already belongs to a running turn. */
-export function QueuedMessagesPanel({ entries, paused, onResume, onEdit, onCancel, onDispatch }: QueuedMessagesPanelProps) {
+export function QueuedMessagesPanel({ entries, paused, onResume, onEdit, onCancel, onRetry, onDispatch }: QueuedMessagesPanelProps) {
   const { t } = useTranslation();
   const { toast } = useFeedback();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -70,12 +71,16 @@ export function QueuedMessagesPanel({ entries, paused, onResume, onEdit, onCance
       )}
       {expanded && <ul className="flex max-h-[6.9rem] flex-col gap-1 overflow-y-auto">
         {entries.map((entry) => {
-          const editable = entry.status === "queued" || entry.status === "failed";
+          const editable = entry.status === "queued";
+          const removable = entry.status === "queued" || entry.status === "failed";
           const editing = editingId === entry.id;
           return (
             <li key={entry.id} className="ui-card rounded-input px-3 py-2 text-xs">
               <div className="flex items-start gap-2">
                 <span className={cn("shrink-0 font-medium", STATUS_TONE[entry.status])}>{t(`conversation.queue.status.${entry.status}`)}</span>
+                {entry.status === "dispatched" && entry.error_code === "indeterminate" && (
+                  <span className="shrink-0 text-[10px] text-warn">{t("conversation.queue.unconfirmed")}</span>
+                )}
                 {editing ? (
                   <div className="flex min-w-0 flex-1 flex-col gap-1">
                     <textarea
@@ -109,7 +114,7 @@ export function QueuedMessagesPanel({ entries, paused, onResume, onEdit, onCance
                         <span className="ml-1 text-[10px] text-error-text">({entry.error_code})</span>
                       )}
                     </p>
-                    {editable && (
+                    {(editable || removable) && (
                       <div className="flex shrink-0 items-center gap-1">
                         {entry.status === "queued" && (
                           <button
@@ -117,31 +122,53 @@ export function QueuedMessagesPanel({ entries, paused, onResume, onEdit, onCance
                             aria-label={t("conversation.queue.dispatch")}
                             title={t("conversation.queue.dispatch")}
                             disabled={busyId === entry.id}
-                            onClick={() => { void run(entry.id, () => onDispatch(entry.id)); }}
+                            onClick={() => {
+                              void run(entry.id, async () => {
+                                const outcome = await onDispatch(entry.id);
+                                if (outcome === "indeterminate")
+                                  toast(t("conversation.queue.indeterminate"), "info");
+                              });
+                            }}
                             className="text-muted hover:text-accent disabled:opacity-50"
                           >
                             <Send size={11} />
                           </button>
                         )}
-                        <button
-                          type="button"
-                          aria-label={t("conversation.queue.edit")}
-                          title={t("conversation.queue.edit")}
-                          onClick={() => { setEditingId(entry.id); setDraft(entry.text); }}
-                          className="text-muted hover:text-text"
-                        >
-                          <Pencil size={11} />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={t("conversation.queue.remove")}
-                          title={t("conversation.queue.remove")}
-                          disabled={busyId === entry.id}
-                          onClick={() => { void run(entry.id, () => onCancel(entry.id)); }}
-                          className="text-muted hover:text-error-text disabled:opacity-50"
-                        >
-                          {busyId === entry.id ? <Loader2 size={11} className="animate-spin" /> : <X size={11} />}
-                        </button>
+                        {entry.status === "failed" && (
+                          <button
+                            type="button"
+                            aria-label={t("conversation.queue.retry")}
+                            title={t("conversation.queue.retry")}
+                            disabled={busyId === entry.id}
+                            onClick={() => { void run(entry.id, () => onRetry(entry.id)); }}
+                            className="text-muted hover:text-accent disabled:opacity-50"
+                          >
+                            <RotateCcw size={11} />
+                          </button>
+                        )}
+                        {editable && (
+                          <button
+                            type="button"
+                            aria-label={t("conversation.queue.edit")}
+                            title={t("conversation.queue.edit")}
+                            onClick={() => { setEditingId(entry.id); setDraft(entry.text); }}
+                            className="text-muted hover:text-text"
+                          >
+                            <Pencil size={11} />
+                          </button>
+                        )}
+                        {removable && (
+                          <button
+                            type="button"
+                            aria-label={t("conversation.queue.remove")}
+                            title={t("conversation.queue.remove")}
+                            disabled={busyId === entry.id}
+                            onClick={() => { void run(entry.id, () => onCancel(entry.id)); }}
+                            className="text-muted hover:text-error-text disabled:opacity-50"
+                          >
+                            {busyId === entry.id ? <Loader2 size={11} className="animate-spin" /> : <X size={11} />}
+                          </button>
+                        )}
                       </div>
                     )}
                   </>

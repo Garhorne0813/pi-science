@@ -82,12 +82,42 @@ describe("follow-up queue actions", () => {
       return jsonResponse({});
     }));
     ready();
-    await useRuntimeStore.getState().dispatchQueuedMessage(first);
+    await expect(useRuntimeStore.getState().dispatchQueuedMessage(first)).resolves.toBe("accepted");
     expect(calls).toEqual([
       `POST /api/sessions/session-1/queue/${first}/dispatch?cwd=%2Fworkspace`,
       `GET /api/sessions/session-1/queue?cwd=%2Fworkspace`,
     ]);
     expect(useRuntimeStore.getState().queuedMessages[0]).toMatchObject({ status: "dispatched" });
+  });
+
+  it("reports an unconfirmed delivery instead of a silent success", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes(`/queue/${first}/dispatch`))
+        return jsonResponse({ ok: true, status: "indeterminate", error_code: "steer_unconfirmed", entry: queued({ status: "dispatched", error_code: "indeterminate" }) });
+      if (url.includes("/queue?")) return queueResponse([queued({ status: "dispatched", error_code: "indeterminate" })]);
+      return jsonResponse({});
+    }));
+    ready();
+    await expect(useRuntimeStore.getState().dispatchQueuedMessage(first)).resolves.toBe("indeterminate");
+    expect(useRuntimeStore.getState().queuedMessages[0]).toMatchObject({ status: "dispatched", error_code: "indeterminate" });
+  });
+
+  it("retries a failed message and refreshes the queue", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url.includes(`/queue/${first}/retry`)) return jsonResponse({ ok: true, entry: queued() });
+      if (url.includes("/queue?")) return queueResponse([queued()]);
+      return jsonResponse({});
+    }));
+    ready();
+    await useRuntimeStore.getState().retryQueuedMessage(first);
+    expect(calls).toEqual([
+      `POST /api/sessions/session-1/queue/${first}/retry?cwd=%2Fworkspace`,
+      `GET /api/sessions/session-1/queue?cwd=%2Fworkspace`,
+    ]);
   });
 
   it("edits, cancels and resumes through the server and refreshes each time", async () => {

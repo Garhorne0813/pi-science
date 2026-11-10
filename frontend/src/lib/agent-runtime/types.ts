@@ -137,7 +137,8 @@ export interface RuntimeState {
   editQueuedMessage: (entryId: string, text: string) => Promise<void>;
   cancelQueuedMessage: (entryId: string) => Promise<void>;
   resumeQueue: () => Promise<void>;
-  dispatchQueuedMessage: (entryId: string) => Promise<void>;
+  dispatchQueuedMessage: (entryId: string) => Promise<"accepted" | "indeterminate">;
+  retryQueuedMessage: (entryId: string) => Promise<void>;
   abort: () => Promise<void>;
   setModel: (model: string, thinking?: string) => Promise<string | null>;
   respondToInteraction: (response: { value?: string; confirmed?: boolean; cancelled?: boolean; alwaysAllow?: boolean }) => Promise<void>;

@@ -11,7 +11,7 @@ import { clearCachedMessages, readCachedMessages } from "./message-cache";
 import * as rest from "./rest";
 import { clearAiTitle, clearAiTitleAttempted, clearSessionName } from "./session-names";
 import { SseTransport, type TransportReason } from "./sse-transport";
-import type { HistoryMessage, InteractionResponse, PiScienceEvent, PromptRequestStatus, QueuedMessage, SessionInfo, SessionListPage, SessionMessagePage, SessionQueue, SessionState, SessionStats, SessionUserMessageIndex, SteerDeliveryStatus, TurnArtifactTurn } from "./types";
+import type { HistoryMessage, InteractionResponse, PiScienceEvent, PromptRequestStatus, QueuedMessage, QueueDispatchReceipt, SessionInfo, SessionListPage, SessionMessagePage, SessionQueue, SessionState, SessionStats, SessionUserMessageIndex, SteerDeliveryStatus, TurnArtifactTurn } from "./types";
 
 export type { TransportReason } from "./sse-transport";
 
@@ -156,8 +156,12 @@ export class PiScienceClient {
     return rest.cancelQueuedMessage(this.baseUrl, sessionId, entryId, cwd);
   }
 
-  async dispatchQueuedMessage(sessionId: string, entryId: string, cwd?: string): Promise<QueuedMessage> {
+  async dispatchQueuedMessage(sessionId: string, entryId: string, cwd?: string): Promise<QueueDispatchReceipt> {
     return rest.dispatchQueuedMessage(this.baseUrl, sessionId, entryId, cwd);
+  }
+
+  async retryQueuedMessage(sessionId: string, entryId: string, cwd?: string): Promise<QueuedMessage> {
+    return rest.retryQueuedMessage(this.baseUrl, sessionId, entryId, cwd);
   }
 
   async resumeQueue(sessionId: string, cwd?: string): Promise<SessionQueue> {
