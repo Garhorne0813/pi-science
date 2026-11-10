@@ -1,5 +1,5 @@
 import { networkGrantsPath } from "./network-grants.js";
-import { mkdtemp, mkdir, rm, writeFile, stat, realpath, copyFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile, stat, realpath } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -35,11 +35,9 @@ export async function prepareSandbox(policy: SandboxPolicy, argv: string[], depe
     for (const path of dependencies) if ((await stat(path)).isDirectory()) bins.push(join(path, "bin"));
     if (dependencies.includes(process.execPath)) bins.unshift(dirname(process.execPath));
     const scoped = Object.fromEntries(Object.entries(scopedEnvironment).filter(([key]) => !/^(?:(?:https?|all|no)_proxy|PI_SCIENCE_SANDBOX_HTTP_PROXY)$/i.test(key)));
-    let certificate: string | undefined;
-    for (const source of process.platform === "darwin" ? ["/etc/ssl/cert.pem"] : ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"]) {
-      try { certificate = join(scratch, "system-ca.pem"); await copyFile(source, certificate); break; }
-      catch (error) { certificate = undefined; if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    }
+    const anchors = await trustAnchors();
+    const certificate = anchors === undefined ? undefined : join(scratch, "system-ca.pem");
+    if (certificate !== undefined && anchors !== undefined) await writeFile(certificate, anchors, { mode: 0o600 });
     const env = { ...scoped, PATH: [...bins, "/usr/bin", "/bin"].join(":"), HOME: scratch, TMPDIR: scratch, TMP: scratch, TEMP: scratch,
       XDG_CACHE_HOME: scratch, MPLCONFIGDIR: scratch, LANG: "C.UTF-8", OPENBLAS_NUM_THREADS: "1", OMP_NUM_THREADS: "1", PYTHONNOUSERSITE: "1", NODE_USE_ENV_PROXY: "1",
       ...(certificate ? { SSL_CERT_FILE: certificate, CURL_CA_BUNDLE: certificate, REQUESTS_CA_BUNDLE: certificate, NODE_EXTRA_CA_CERTS: certificate, ...(policy.profile === "install" ? { MAMBA_SSL_VERIFY: certificate, CONDA_SSL_VERIFY: certificate } : {}) } : {}) };
@@ -58,6 +56,44 @@ export function killSandboxGroup(pid: number | undefined, signal: NodeJS.Signals
 }
 
 const runFile = promisify(execFile);
+
+/** A sandboxed process inherits the host trust store or it cannot verify any
+ *  TLS peer, and it cannot reach the macOS keychain itself. The anchors are
+ *  therefore read once per process and copied into every scratch directory.
+ *  macOS keeps current anchors in the keychain, so the LibreSSL bundle alone is
+ *  not the host trust store there. */
+let cachedAnchors: Promise<string | undefined> | undefined;
+function trustAnchors(): Promise<string | undefined> {
+  cachedAnchors ??= readTrustAnchors();
+  return cachedAnchors;
+}
+
+async function readTrustAnchors(): Promise<string | undefined> {
+  const sources = process.platform === "darwin"
+    ? ["/etc/ssl/cert.pem", "/private/etc/ssl/cert.pem"]
+    : ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"];
+  const bundles: string[] = [];
+  for (const source of sources) {
+    try { bundles.push(await readFile(source, "utf8")); break; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  }
+  if (process.platform === "darwin") bundles.push(await keychainAnchors());
+  const anchors = uniqueCertificates(bundles.join("\n"));
+  return anchors || undefined;
+}
+
+async function keychainAnchors(): Promise<string> {
+  try {
+    const { stdout } = await runFile("/usr/bin/security", ["find-certificate", "-a", "-p",
+      "/System/Library/Keychains/SystemRootCertificates.keychain", "/Library/Keychains/System.keychain"], { timeout: 20_000, maxBuffer: 64 * 1024 * 1024 });
+    return stdout.includes("-----BEGIN CERTIFICATE-----") ? stdout : "";
+  } catch { return ""; }
+}
+
+function uniqueCertificates(pem: string): string {
+  const blocks = pem.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) ?? [];
+  return [...new Set(blocks)].map((block) => `${block}\n`).join("");
+}
 export async function retireSandboxGroup(pid: number | undefined): Promise<void> {
   if (pid === undefined) return; // A failed spawn never created a process group.
   killSandboxGroup(pid);
