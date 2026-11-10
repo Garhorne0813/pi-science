@@ -35,6 +35,7 @@ export function QueuedMessagesPanel({ entries, paused, onResume, onEdit, onCance
 
   if (entries.length === 0 && !paused) return null;
   const pending = entries.filter((entry) => entry.status === "queued" || entry.status === "dispatching").length;
+  const mixed = pending !== entries.length;
 
   const run = async (entryId: string, operation: () => Promise<void>) => {
     setBusyId(entryId);
@@ -52,7 +53,7 @@ export function QueuedMessagesPanel({ entries, paused, onResume, onEdit, onCance
         onClick={() => setExpanded((current) => !current)}
         className="mb-1 flex w-full items-center gap-1 px-1 text-xs text-muted hover:text-text"
       >
-        <span>{t("conversation.queue.summary", { count: pending })}</span>
+        <span>{mixed ? t("conversation.queue.summaryMixed", { count: entries.length }) : t("conversation.queue.summary", { count: pending })}</span>
         {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
       </button>
       {expanded && paused && (

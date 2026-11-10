@@ -1481,6 +1481,7 @@
   "conversation.runningSendFailed": "消息发送失败",
   "conversation.queue.title": "后续队列",
   "conversation.queue.summary": "{{count}} 条排队",
+  "conversation.queue.summaryMixed": "{{count}} 条消息",
   "conversation.queue.expand": "展开排队消息",
   "conversation.queue.collapse": "收起排队消息",
   "conversation.queue.paused": "队列已暂停。",

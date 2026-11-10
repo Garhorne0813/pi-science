@@ -102,6 +102,26 @@ describe("QueuedMessagesPanel", () => {
     expect(screen.getByText("then summarize the table")).toBeInTheDocument();
   });
 
+  it("counts every message in the header once receipts join the list", () => {
+    renderPanel({
+      entries: [
+        entry(),
+        entry({ id: "0f5f1c0a-2b0d-4c9e-8a52-4d3a0f5d9e21", status: "dispatched", error_code: "indeterminate" }),
+      ],
+    });
+    expect(screen.getByRole("button", { name: "Hide queued messages" })).toHaveTextContent("2 messages");
+  });
+
+  it("keeps the queued count while every message is still waiting", () => {
+    renderPanel({
+      entries: [
+        entry(),
+        entry({ id: "1a7d3e5b-6c84-4f92-b1d0-8e2c4a9f7b63", status: "dispatching" }),
+      ],
+    });
+    expect(screen.getByRole("button", { name: "Hide queued messages" })).toHaveTextContent("2 queued");
+  });
+
   it("continues a manually paused queue", async () => {
     const callbacks = renderPanel({ paused: true });
     expect(screen.getByRole("status")).toHaveTextContent("The queue is paused.");

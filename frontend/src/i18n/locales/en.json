@@ -1481,6 +1481,7 @@
   "conversation.runningSendFailed": "Could not deliver the message",
   "conversation.queue.title": "Follow-up queue",
   "conversation.queue.summary": "{{count}} queued",
+  "conversation.queue.summaryMixed": "{{count}} messages",
   "conversation.queue.expand": "Show queued messages",
   "conversation.queue.collapse": "Hide queued messages",
   "conversation.queue.paused": "The queue is paused.",
