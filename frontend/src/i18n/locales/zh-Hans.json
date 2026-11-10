@@ -182,6 +182,8 @@
   "conversation.activity.narrative.generate.document": "生成输出内容",
   "conversation.activity.narrative.recover": "恢复任务",
   "conversation.activity.trace": "执行记录",
+  "conversation.activity.progressDeterminate": "{{scope}} · 已完成 {{current}}/{{total}} {{unit}}",
+  "conversation.activity.progressCount": "{{scope}} · 已完成 {{count}} 项",
   "conversation.activity.toolLabel": "工具",
   "conversation.activity.input": "输入",
   "conversation.activity.output": "输出",
