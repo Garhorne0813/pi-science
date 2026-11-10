@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -169,14 +169,17 @@ export function ModelControlMenu({
           collisionPadding={8}
           className={MENU_ROOT_CLASS}
         >
+          {/* A row that unmounts under the pointer fires pointerleave, and Radix answers
+              that by focusing the menu content, which would steal the caret from the search
+              field. The narrow page swaps rows in place, so cancel the internal handler. */}
           {narrow ? panel === null ? (
             <>
-              <DropdownMenu.Item className={MENU_ITEM_CLASS} onSelect={(event) => { event.preventDefault(); setPanel("model"); }}>
+              <DropdownMenu.Item className={MENU_ITEM_CLASS} onPointerLeave={(event) => event.preventDefault()} onSelect={(event) => { event.preventDefault(); setPanel("model"); }}>
                 <span className="font-medium">{labels.model}</span>
                 <span className="ml-auto max-w-[120px] truncate text-muted">{modelLabel}</span>
                 <ChevronRight size={13} className="shrink-0 text-muted" />
               </DropdownMenu.Item>
-              <DropdownMenu.Item disabled={!selectedModel || thinkingLevels.length === 0} className={MENU_ITEM_CLASS} onSelect={(event) => { event.preventDefault(); setPanel("effort"); }}>
+              <DropdownMenu.Item disabled={!selectedModel || thinkingLevels.length === 0} className={MENU_ITEM_CLASS} onPointerLeave={(event) => event.preventDefault()} onSelect={(event) => { event.preventDefault(); setPanel("effort"); }}>
                 <span className="font-medium">{labels.effort}</span>
                 <span className="ml-auto text-muted">{thinkingLabel}</span>
                 <ChevronRight size={13} className="shrink-0 text-muted" />
@@ -184,7 +187,7 @@ export function ModelControlMenu({
             </>
           ) : (
             <>
-              <DropdownMenu.Item className={MENU_ITEM_CLASS} onSelect={(event) => { event.preventDefault(); setPanel(null); }}>
+              <DropdownMenu.Item className={MENU_ITEM_CLASS} onPointerLeave={(event) => event.preventDefault()} onSelect={(event) => { event.preventDefault(); setPanel(null); }}>
                 <ChevronLeft size={13} className="shrink-0 text-muted" />
                 <span className="font-medium">{labels.back}</span>
               </DropdownMenu.Item>
@@ -254,6 +257,7 @@ function ModelList({
   isChinese: boolean;
   autoFocusSearch?: boolean;
 }) {
+  const searchFocused = useRef(false);
   return (
     <>
       <div className="mb-1.5 border-b border-faint pb-1.5">
@@ -266,6 +270,8 @@ function ModelList({
             placeholder={labels.searchPlaceholder}
             aria-label={labels.searchPlaceholder}
             autoFocus={autoFocusSearch}
+            onFocus={() => { searchFocused.current = true; }}
+            onBlur={() => { searchFocused.current = false; }}
             className="min-w-0 flex-1 bg-transparent text-xs text-text outline-none placeholder:text-muted"
             onKeyDown={(event) => {
               if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) event.stopPropagation();
@@ -284,6 +290,7 @@ function ModelList({
                 key={model.id}
                 value={model.id}
                 onSelect={() => onModelChange(model.id)}
+                onPointerLeave={(event) => { if (searchFocused.current) event.preventDefault(); }}
                 className={MENU_ITEM_CLASS}
               >
                 <span className="min-w-0 flex-1 truncate">{model.model}</span>
