@@ -65,9 +65,18 @@ describe("QueuedMessagesPanel", () => {
     await waitFor(() => expect(callbacks.onDispatch).toHaveBeenCalledWith(entry().id));
   });
 
-  it("continues a queue that a stop paused", async () => {
+  it("collapses to a count and expands again", () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Hide queued messages" }));
+    expect(screen.queryByText("then summarize the table")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show queued messages" })).toHaveTextContent("1 queued");
+    fireEvent.click(screen.getByRole("button", { name: "Show queued messages" }));
+    expect(screen.getByText("then summarize the table")).toBeInTheDocument();
+  });
+
+  it("continues a manually paused queue", async () => {
     const callbacks = renderPanel({ paused: true });
-    expect(screen.getByRole("status")).toHaveTextContent("Queue paused after stopping the task.");
+    expect(screen.getByRole("status")).toHaveTextContent("The queue is paused.");
     fireEvent.click(screen.getByRole("button", { name: "Continue queue" }));
     await waitFor(() => expect(callbacks.onResume).toHaveBeenCalled());
   });

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Loader2, Pencil, Play, Send, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Loader2, Pencil, Play, Send, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { QueuedMessage } from "../../lib/client/pi-science-client";
 import { cn } from "../../lib/ui";
@@ -30,8 +30,10 @@ export function QueuedMessagesPanel({ entries, paused, onResume, onEdit, onCance
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(true);
 
   if (entries.length === 0 && !paused) return null;
+  const pending = entries.filter((entry) => entry.status === "queued" || entry.status === "dispatching").length;
 
   const run = async (entryId: string, operation: () => Promise<void>) => {
     setBusyId(entryId);
@@ -42,7 +44,17 @@ export function QueuedMessagesPanel({ entries, paused, onResume, onEdit, onCance
 
   return (
     <section className="mb-2" aria-label={t("conversation.queue.title")}>
-      {paused && (
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-label={expanded ? t("conversation.queue.collapse") : t("conversation.queue.expand")}
+        onClick={() => setExpanded((current) => !current)}
+        className="mb-1 flex w-full items-center gap-1 px-1 text-xs text-muted hover:text-text"
+      >
+        <span>{t("conversation.queue.summary", { count: pending })}</span>
+        {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+      </button>
+      {expanded && paused && (
         <div role="status" className="mb-2 flex items-center gap-2 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-muted">
           <span>{t("conversation.queue.paused")}</span>
           <button
@@ -56,7 +68,7 @@ export function QueuedMessagesPanel({ entries, paused, onResume, onEdit, onCance
           </button>
         </div>
       )}
-      <ul className="flex flex-col gap-1">
+      {expanded && <ul className="flex max-h-[6.9rem] flex-col gap-1 overflow-y-auto">
         {entries.map((entry) => {
           const editable = entry.status === "queued" || entry.status === "failed";
           const editing = editingId === entry.id;
@@ -138,7 +150,7 @@ export function QueuedMessagesPanel({ entries, paused, onResume, onEdit, onCance
             </li>
           );
         })}
-      </ul>
+      </ul>}
     </section>
   );
 }
