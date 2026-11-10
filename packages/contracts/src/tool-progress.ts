@@ -47,6 +47,16 @@ function boundedText(value: unknown, limit: number): string | undefined {
   return trimmed ? trimmed.slice(0, limit) : undefined;
 }
 
+/** A scope identity is compared with another identity, so it is never
+ *  shortened. Two different ids that share a prefix would become one scope and
+ *  merge two measurements into one. A visible label may be truncated; an
+ *  identity may only be accepted as written or rejected. */
+function identity(value: unknown, limit: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed && trimmed.length <= limit ? trimmed : undefined;
+}
+
 function count(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
@@ -59,6 +69,13 @@ function source(value: unknown): ToolProgressSource | undefined {
   return value === "builtin" || value === "mcp" || value === "kernel" ? value : undefined;
 }
 
+/** One rule decides whether a number is a measurement, for a parsed value and
+ *  for a merged one alike, so the two paths cannot disagree. */
+function determined(value: Omit<ToolProgressV1, "determinate">): ToolProgressV1 {
+  const { current, total } = value;
+  return { ...value, determinate: value.indeterminate !== true && value.totalKind === "fixed" && current !== undefined && total !== undefined && total > 0 && current <= total };
+}
+
 /** Parse progress arriving from a tool, an MCP server or a kernel. An
  *  out-of-range or missing number is dropped rather than repaired, and a
  *  missing scope identity rejects the whole payload because a bare number with
@@ -67,7 +84,7 @@ export function normalizeToolProgress(raw: unknown): ToolProgressV1 | undefined 
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const value = raw as Record<string, unknown>;
   if (value.version !== 1) return undefined;
-  const scopeId = boundedText(value.scopeId, TOOL_PROGRESS_LIMITS.scopeId);
+  const scopeId = identity(value.scopeId, TOOL_PROGRESS_LIMITS.scopeId);
   const scopeLabel = boundedText(value.scopeLabel, TOOL_PROGRESS_LIMITS.scopeLabel);
   if (!scopeId || !scopeLabel) return undefined;
   const current = count(value.current);
@@ -78,12 +95,11 @@ export function normalizeToolProgress(raw: unknown): ToolProgressV1 | undefined 
   const label = boundedText(value.label, TOOL_PROGRESS_LIMITS.label);
   const unit = boundedText(value.unit, TOOL_PROGRESS_LIMITS.unit);
   const origin = source(value.source);
-  return {
+  return determined({
     version: 1,
     scopeId,
     scopeLabel,
     totalKind: kind,
-    determinate: !indeterminate && kind === "fixed" && current !== undefined && total !== undefined && total > 0 && current <= total,
     ...(current === undefined ? {} : { current }),
     ...(total === undefined ? {} : { total }),
     ...(phase ? { phase } : {}),
@@ -91,18 +107,35 @@ export function normalizeToolProgress(raw: unknown): ToolProgressV1 | undefined 
     ...(unit ? { unit } : {}),
     ...(indeterminate ? { indeterminate } : {}),
     ...(origin ? { source: origin } : {}),
-  };
+  });
 }
 
 /** Fold one update into the value already on screen. A missing update keeps the
- *  current value, so an output-only message cannot clear the progress layer. A
- *  lower count inside one scope is a stale or replayed event: the measured
- *  value stays and only the newer wording is taken. */
+ *  current value, so an output-only message cannot clear the progress layer. An
+ *  update inside one scope that repeats no number is a wording change: the
+ *  measurement and the unit it counts stay, because a producer that reports only
+ *  a phase has not measured zero. A lower count inside one scope is a stale or
+ *  replayed event: the measured value stays and only the newer wording is taken.
+ *  A new scope is the only thing that resets the numbers. */
 export function mergeToolProgress(previous: ToolProgressV1 | undefined, next: ToolProgressV1 | undefined): ToolProgressV1 | undefined {
   if (!next) return previous;
   if (!previous || previous.scopeId !== next.scopeId) return next;
-  if (previous.current === undefined || next.current === undefined || next.current >= previous.current) return next;
-  return { ...previous, ...(next.phase ? { phase: next.phase } : {}), ...(next.label ? { label: next.label } : {}) };
+  if (next.current === undefined && next.total === undefined) return inheritMeasurement(previous, next);
+  if (previous.current !== undefined && next.current !== undefined && next.current < previous.current) {
+    return determined({ ...previous, ...(next.phase ? { phase: next.phase } : {}), ...(next.label ? { label: next.label } : {}) });
+  }
+  return next.current === undefined && previous.current !== undefined ? determined({ ...next, current: previous.current }) : next;
+}
+
+/** A wording-only update keeps the measurement it does not repeat. */
+function inheritMeasurement(previous: ToolProgressV1, next: ToolProgressV1): ToolProgressV1 {
+  return determined({
+    ...next,
+    totalKind: previous.totalKind,
+    ...(next.current === undefined && previous.current !== undefined ? { current: previous.current } : {}),
+    ...(next.total === undefined && previous.total !== undefined ? { total: previous.total } : {}),
+    ...(next.unit === undefined && previous.unit !== undefined ? { unit: previous.unit } : {}),
+  });
 }
 
 /** The four display tiers. A terminal, queued or waiting row never shows a

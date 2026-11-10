@@ -410,7 +410,9 @@ export class AgentMcpTools {
                               scopeLabel: `${name}: ${tool.name}`,
                               current: progress,
                               ...(total === undefined ? {} : { total }),
-                              totalKind: total === undefined ? "unknown" : "fixed",
+                              // An external server re-estimates its total freely, so its
+                              // total is never treated as a fixed measurement.
+                              totalKind: total === undefined ? "unknown" : "reestimated",
                               source: "mcp",
                             },
                           },
