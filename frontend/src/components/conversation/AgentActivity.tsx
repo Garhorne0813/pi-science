@@ -438,7 +438,12 @@ function ToolProgressLayer({ block }: { block: ToolCallBlock }) {
     return () => window.clearTimeout(timer);
   }, [startedAt]);
   const display = selectToolProgressDisplay(block.status, block.progress);
-  if (!visible || display.mode === "hidden" || display.mode === "indeterminate") return null;
+  if (!visible || display.mode === "hidden") return null;
+  if (display.mode === "indeterminate") return display.label
+    ? <div className={styles.progressLayer}>
+      <span className={styles.progressLabel}>{display.label}</span>
+    </div>
+    : null;
   const unitSuffix = display.unit ? ` ${display.unit}` : "";
   if (display.mode === "count") return <div className={styles.progressLayer}>
     <span className={styles.progressLabel}>{t("conversation.activity.progressCount", { scope: display.scopeLabel, count: display.value, unitSuffix })}</span>
