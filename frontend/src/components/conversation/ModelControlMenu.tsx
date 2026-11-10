@@ -113,7 +113,7 @@ export function ModelControlMenu({
         >
           <span className="flex min-w-0 flex-1 items-center gap-1.5">
             <span className="min-w-[4rem] truncate">{modelLabel}</span>
-            <span className="shrink-0 text-muted max-sm:hidden">{thinkingLabel}</span>
+            <span className="shrink-0 text-muted max-lg:hidden">{thinkingLabel}</span>
             {contextPercent != null && (
               <span
                 role="img"
