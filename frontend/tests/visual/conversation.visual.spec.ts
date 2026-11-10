@@ -44,22 +44,17 @@ test("conversation renders with the user message first and the artifact strip an
   await expect(strip).toBeVisible();
 });
 
-test("running composer keeps the send mode, send and stop inside the card", async ({ page }, testInfo) => {
+test("running composer keeps the queue send and stop controls inside the card", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile", "phone and tablet widths are checked once");
-  // The client started, and the thread renders, but the run never settles, so
-  // the composer stays in its running state for the geometry assertions.
-  await page.route("**/api/sessions/*/state*", async (route) => {
-    const response = await route.fetch();
-    const state = await response.json();
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...state, is_streaming: true }) });
-  });
-  await page.route("**/api/sessions/*/queue*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ session_id: VISUAL_SESSION, paused: false, entries: [], updated_at: new Date().toISOString() }) }));
+  // The run this test starts never settles on the mock stream, so the composer
+  // stays in its running layout: queue send and stop, no prompt send.
+  await page.route("**/api/sessions/*/queue*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ queue: { session_id: VISUAL_SESSION, paused: false, entries: [], updated_at: new Date().toISOString() } }) }));
   await openSettledConversation(page);
-  await page.getByPlaceholder(/Ask anything/).fill("Add the fold change for the control arm.");
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("combobox", { name: "Message", exact: true }).fill("Add the fold change for the control arm.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(page.getByRole("button", { name: "Stop generation" })).toBeVisible();
 
-  for (const width of [390, 768]) {
+  for (const width of [320, 390, 768]) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const layout = await page.evaluate(() => {
@@ -68,20 +63,25 @@ test("running composer keeps the send mode, send and stop inside the card", asyn
         const box = element.getBoundingClientRect();
         return { left: box.left, right: box.right, width: box.width };
       };
-      const stopButton = [...document.querySelectorAll("button")].find((button) => button.getAttribute("aria-label") === "Stop generation");
-      const row = document.querySelector('[role="group"][aria-label="Send while running as"]')?.parentElement?.parentElement;
-      if (!row) throw new Error("composer control row missing while running");
+      const byLabel = (label: string) => [...document.querySelectorAll("button")].find((button) => button.getAttribute("aria-label") === label);
+      const stopButton = byLabel("Stop generation");
+      const cluster = stopButton?.parentElement;
+      const card = document.querySelector('[role="combobox"][aria-label="Message"]')?.closest(".ui-card");
+      if (!cluster || !card) throw new Error("composer control row missing while running");
       return {
-        card: rect(document.querySelector(".ui-card")),
+        card: rect(card),
+        queueSend: rect(byLabel("Add to the follow-up queue")),
         stop: rect(stopButton),
-        rowClientWidth: row.clientWidth,
-        rowScrollWidth: row.scrollWidth,
+        clusterClientWidth: cluster.clientWidth,
+        clusterScrollWidth: cluster.scrollWidth,
         viewportWidth: window.innerWidth,
       };
     });
-    expect(layout.rowScrollWidth, `control row overflows the card at ${width}px`).toBeLessThanOrEqual(layout.rowClientWidth);
-    expect(layout.stop.left, `stop button starts inside the card at ${width}px`).toBeGreaterThanOrEqual(layout.card.left);
-    expect(layout.stop.right, `stop button ends inside the card at ${width}px`).toBeLessThanOrEqual(layout.card.right);
-    expect(layout.stop.right, `stop button ends inside the viewport at ${width}px`).toBeLessThanOrEqual(layout.viewportWidth);
+    expect(layout.clusterScrollWidth, `control row overflows the card at ${width}px`).toBeLessThanOrEqual(layout.clusterClientWidth);
+    for (const [name, box] of [["queue send", layout.queueSend], ["stop", layout.stop]] as const) {
+      expect(box.left, `${name} starts inside the card at ${width}px`).toBeGreaterThanOrEqual(layout.card.left);
+      expect(box.right, `${name} ends inside the card at ${width}px`).toBeLessThanOrEqual(layout.card.right);
+      expect(box.right, `${name} ends inside the viewport at ${width}px`).toBeLessThanOrEqual(layout.viewportWidth);
+    }
   }
 });
