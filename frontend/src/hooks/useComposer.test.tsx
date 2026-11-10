@@ -302,3 +302,53 @@ describe("useComposer onSend", () => {
     expect(navigateMock).not.toHaveBeenCalled();
   });
 });
+
+describe("useComposer running send", () => {
+  function renderRunningComposer() {
+    const sendSteer = vi.fn(async () => undefined);
+    const enqueueMessage = vi.fn(async () => undefined);
+    useRuntimeStore.setState({ working: true, draft: "keep going", sendSteer, enqueueMessage });
+    const hook = renderHook(() =>
+      useComposer({
+        cwd: "/w",
+        conversationKey: "s1",
+        selectedModel: "m",
+        reviewingProject: false,
+        setReviewNotice: () => undefined,
+        research: { mode: null, setMode: () => undefined },
+      }),
+    );
+    const key = (overrides: Partial<Record<"metaKey" | "ctrlKey" | "shiftKey", boolean>> = {}) =>
+      ({
+        key: "Enter",
+        shiftKey: false,
+        metaKey: false,
+        ctrlKey: false,
+        preventDefault: vi.fn(),
+        nativeEvent: {},
+        ...overrides,
+      }) as unknown as React.KeyboardEvent;
+    return { ...hook, sendSteer, enqueueMessage, key };
+  }
+
+  it("queues a plain Enter and delivers immediately only on Cmd/Ctrl+Enter", async () => {
+    const { result, sendSteer, enqueueMessage, key } = renderRunningComposer();
+    act(() => result.current.handleKeyDown(key()));
+    await vi.waitFor(() => expect(enqueueMessage).toHaveBeenCalledWith("keep going"));
+    expect(sendSteer).not.toHaveBeenCalled();
+    act(() => result.current.setInput("deliver this now"));
+    act(() => result.current.handleKeyDown(key({ metaKey: true })));
+    await vi.waitFor(() => expect(sendSteer).toHaveBeenCalledWith("deliver this now"));
+    expect(enqueueMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the draft when an immediate delivery loses the running turn", async () => {
+    const { result, sendSteer, enqueueMessage, key } = renderRunningComposer();
+    sendSteer.mockRejectedValueOnce(Object.assign(new Error("not running"), { code: "not_running" }));
+    act(() => result.current.setInput("too late"));
+    act(() => result.current.handleKeyDown(key({ ctrlKey: true })));
+    await vi.waitFor(() => expect(sendSteer).toHaveBeenCalledWith("too late"));
+    expect(enqueueMessage).not.toHaveBeenCalled();
+    expect(useRuntimeStore.getState().draft).toBe("too late");
+  });
+});

@@ -122,12 +122,6 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
         <McpDiagnosticsNotice diagnostics={mcpDiagnostics} />
         {promptDeliveryNotice === "indeterminate" && <div role="status" className="mb-2 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-muted">{t("conversation.promptDelivery.indeterminate")}</div>}
         {retryRequest && <button type="button" onClick={() => { void sendPrompt(composedDraft, retryRequest.clientMessageId).catch(() => undefined); }} className="mb-2 text-xs text-accent hover:underline">{t("conversation.promptDelivery.retrySameRequest")}</button>}
-        {composer.runningNotice === "not_running" && (
-          <div role="status" className="mb-2 flex flex-wrap items-center gap-2 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-muted">
-            <span>{t("conversation.steerNotRunning")}</span>
-            <button type="button" onClick={() => composer.setSendMode("queue")} className="text-accent hover:underline">{t("conversation.switchToQueue")}</button>
-          </div>
-        )}
         <QueuedMessagesPanel
           entries={queuedMessages}
           paused={queuePaused}
@@ -261,27 +255,10 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
               )}
               {working ? (
                 <>
-                  <div role="group" aria-label={t("conversation.sendMode.groupLabel")} className="flex shrink-0 items-center gap-0.5 rounded-full bg-surface-2 p-0.5">
-                    {(["steer", "queue"] as const).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        aria-pressed={composer.sendMode === mode}
-                        title={t(mode === "steer" ? "conversation.sendMode.steerHint" : "conversation.sendMode.queueHint")}
-                        onClick={() => composer.setSendMode(mode)}
-                        className={cn(
-                          "h-6 rounded-full px-2 text-[11px] transition-colors",
-                          composer.sendMode === mode ? "bg-surface text-text shadow-sm" : "text-muted hover:text-text",
-                        )}
-                      >
-                        {t(mode === "steer" ? "conversation.sendMode.steer" : "conversation.sendMode.queue")}
-                      </button>
-                    ))}
-                  </div>
                   <button
                     type="button"
-                    aria-label={composer.sendMode === "steer" ? t("conversation.sendSteer") : t("conversation.sendToQueue")}
-                    title={composer.sendMode === "steer" ? t("conversation.sendSteer") : t("conversation.sendToQueue")}
+                    aria-label={t("conversation.sendToQueue")}
+                    title={t("conversation.queueSendHint")}
                     onClick={() => { void composer.handleSend().catch(() => undefined); }}
                     disabled={model.configuringModel || interactionPending || reviewingProject || !model.selectedModel || !canSend}
                     className={cn(
@@ -299,7 +276,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
                 <button
                   type="button"
                   aria-label={t("conversation.sendMessage")}
-                  onClick={composer.handleSend}
+                  onClick={() => { void composer.handleSend().catch(() => undefined); }}
                   disabled={working || model.configuringModel || interactionPending || !model.selectedModel || reviewingProject || (!activeSessionId && status === "connecting") || !canSend}
                   className={cn(
                     "flex h-[var(--send-button-size)] w-[var(--send-button-size)] shrink-0 items-center justify-center rounded-full",
