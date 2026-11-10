@@ -20,3 +20,4 @@ export * from "./model-config.js";
 export * from "./memory.js";
 
 export * from "./jobs.js";
+export * from "./tool-progress.js";
