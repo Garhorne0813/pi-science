@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { artifactManifestSchema, conversationEventV3Schema, conversationSnapshotSchema, conversationToolUpdatedPayloadSchema, createSessionRequestSchema, defaultProgressAppearance, executionEventSchema, executionRecordSchema, gatewayHealthSchema, jobRecordSchema, progressAppearanceInputSchema, progressAppearanceSchema, sessionEventSchema, sessionMessagePageSchema, sessionStatsSchema, sessionUserMessageIndexSchema, skillContentSchema, textDeltaPayloadSchema } from "./index.js";
+import {
+  artifactManifestSchema,
+  conversationEventV3Schema,
+  conversationSnapshotSchema,
+  conversationToolUpdatedPayloadSchema,
+  createSessionRequestSchema,
+  defaultProgressAppearance,
+  executionEventSchema,
+  executionRecordSchema,
+  gatewayHealthSchema,
+  jobRecordSchema,
+  progressAppearanceInputSchema,
+  progressAppearanceSchema,
+  sessionEventSchema,
+  sessionMessagePageSchema,
+  sessionStatsSchema,
+  sessionUserMessageIndexSchema,
+  skillContentSchema,
+  textDeltaPayloadSchema,
+} from "./index.js";
 
 describe("gateway contracts", () => {
   it("accepts a healthy Node gateway response", () => {
@@ -15,36 +34,66 @@ describe("gateway contracts", () => {
   });
 
   it("validates durable execution events and reduced records", () => {
-    expect(executionEventSchema.parse({
-      schema_version: 1,
-      event_id: "event-1",
-      execution_id: "exec-1",
-      sequence: 1,
-      event_type: "execution.started",
-      kind: "job",
-      surface: "local",
-      workspace_id: "/tmp/project",
-      created_at: "now",
-      producer: "test",
-    })).toMatchObject({ payload: {}, sequence: 1 });
-    expect(executionRecordSchema.parse({
-      schema_version: 1,
-      execution_id: "exec-1",
-      kind: "job",
-      surface: "local",
-      status: "running",
-      workspace_id: "/tmp/project",
-      created_at: "now",
-      producer: "test",
-    })).toMatchObject({ correlation: {}, files: { read: [], written: [] }, artifacts: [] });
+    expect(
+      executionEventSchema.parse({
+        schema_version: 1,
+        event_id: "event-1",
+        execution_id: "exec-1",
+        sequence: 1,
+        event_type: "execution.started",
+        kind: "job",
+        surface: "local",
+        workspace_id: "/tmp/project",
+        created_at: "now",
+        producer: "test",
+      }),
+    ).toMatchObject({ payload: {}, sequence: 1 });
+    expect(
+      executionRecordSchema.parse({
+        schema_version: 1,
+        execution_id: "exec-1",
+        kind: "job",
+        surface: "local",
+        status: "running",
+        workspace_id: "/tmp/project",
+        created_at: "now",
+        producer: "test",
+      }),
+    ).toMatchObject({ correlation: {}, files: { read: [], written: [] }, artifacts: [] });
   });
 
   it("validates session requests and preserves event extensions", () => {
-    expect(createSessionRequestSchema.parse({ cwd: "/tmp/project" })).toMatchObject({ cwd: "/tmp/project" });
-    expect(sessionEventSchema.parse({ type: "operation.settled", sessionId: "s1", status: "completed", cursor: 4 })).toMatchObject({ cursor: 4 });
+    expect(createSessionRequestSchema.parse({ cwd: "/tmp/project" })).toMatchObject({
+      cwd: "/tmp/project",
+    });
+    expect(
+      sessionEventSchema.parse({
+        type: "operation.settled",
+        sessionId: "s1",
+        status: "completed",
+        cursor: 4,
+      }),
+    ).toMatchObject({ cursor: 4 });
     expect(() => createSessionRequestSchema.parse({ cwd: "" })).toThrow();
-    expect(jobRecordSchema.parse({ id: "j1", status: "queued", created_at: "now" })).toMatchObject({ status: "queued" });
-    expect(artifactManifestSchema.parse({ artifact_id: "a1", version: 1, path: "out.txt", kind: "text", mime: "text/plain", size: 1, sha256: "1234567890abcdef", published_at: "now" })).toMatchObject({ artifact_id: "a1" });
+    expect(
+      jobRecordSchema.parse({
+        job_id: "job_1234567890abcdef",
+        status: "pending",
+        created_at: "now",
+      }),
+    ).toMatchObject({ status: "pending" });
+    expect(
+      artifactManifestSchema.parse({
+        artifact_id: "a1",
+        version: 1,
+        path: "out.txt",
+        kind: "text",
+        mime: "text/plain",
+        size: 1,
+        sha256: "1234567890abcdef",
+        published_at: "now",
+      }),
+    ).toMatchObject({ artifact_id: "a1" });
   });
 
   it("validates session stats and the session.stats SSE event", () => {
@@ -67,38 +116,74 @@ describe("gateway contracts", () => {
     expect(sessionStatsSchema.parse({ ...stats, llmMs: undefined }).llmMs).toBeUndefined();
     expect(() => sessionStatsSchema.parse({ ...stats, tokens: { input: 1 } })).toThrow();
     expect(() => sessionStatsSchema.parse({ ...stats, userMessages: -1 })).toThrow();
-    expect(sessionEventSchema.parse({ type: "session.stats", sessionId: "s1", stats })).toMatchObject({ type: "session.stats" });
+    expect(
+      sessionEventSchema.parse({ type: "session.stats", sessionId: "s1", stats }),
+    ).toMatchObject({ type: "session.stats" });
   });
 
   it("normalizes legacy session history payloads while rejecting malformed fields", () => {
-    expect(sessionMessagePageSchema.parse({ messages: [] })).toMatchObject({ next_cursor: null, has_more: false, snapshot_version: "" });
-    expect(sessionUserMessageIndexSchema.parse({ messages: [{ id: "u1", text: "hello", before: "cursor" }] })).toMatchObject({ snapshot_version: "" });
+    expect(sessionMessagePageSchema.parse({ messages: [] })).toMatchObject({
+      next_cursor: null,
+      has_more: false,
+      snapshot_version: "",
+    });
+    expect(
+      sessionUserMessageIndexSchema.parse({
+        messages: [{ id: "u1", text: "hello", before: "cursor" }],
+      }),
+    ).toMatchObject({ snapshot_version: "" });
     expect(() => sessionMessagePageSchema.parse({ messages: [], has_more: "yes" })).toThrow();
   });
 
   it("validates skill content and rejects absolute locations", () => {
-    expect(skillContentSchema.parse({
-      skill_id: "s1", name: "alpha", digest: "0123456789abcdef",
-      source: "builtin", location: "alpha/SKILL.md", content: "---\nname: alpha\n---\n",
-    })).toMatchObject({ source: "builtin" });
-    expect(() => skillContentSchema.parse({
-      skill_id: "s1", name: "alpha", digest: "0123456789abcdef",
-      source: "builtin", location: "/etc/SKILL.md", content: "x",
-    })).toThrow();
-    expect(() => skillContentSchema.parse({
-      skill_id: "s1", name: "alpha", digest: "0123456789abcdef",
-      source: "root", location: "alpha/SKILL.md", content: "x",
-    })).toThrow();
-    expect(() => skillContentSchema.parse({
-      skill_id: "s1", name: "alpha", digest: "0123456789abcdef",
-      source: "builtin", location: "alpha/SKILL.md",
-    })).toThrow();
+    expect(
+      skillContentSchema.parse({
+        skill_id: "s1",
+        name: "alpha",
+        digest: "0123456789abcdef",
+        source: "builtin",
+        location: "alpha/SKILL.md",
+        content: "---\nname: alpha\n---\n",
+      }),
+    ).toMatchObject({ source: "builtin" });
+    expect(() =>
+      skillContentSchema.parse({
+        skill_id: "s1",
+        name: "alpha",
+        digest: "0123456789abcdef",
+        source: "builtin",
+        location: "/etc/SKILL.md",
+        content: "x",
+      }),
+    ).toThrow();
+    expect(() =>
+      skillContentSchema.parse({
+        skill_id: "s1",
+        name: "alpha",
+        digest: "0123456789abcdef",
+        source: "root",
+        location: "alpha/SKILL.md",
+        content: "x",
+      }),
+    ).toThrow();
+    expect(() =>
+      skillContentSchema.parse({
+        skill_id: "s1",
+        name: "alpha",
+        digest: "0123456789abcdef",
+        source: "builtin",
+        location: "alpha/SKILL.md",
+      }),
+    ).toThrow();
   });
 });
 
 describe("progress appearance schemas", () => {
   it("rejects a legal-in-another-slot pattern on the write path", () => {
-    const body = { preset: "quiet", patterns: { ...defaultProgressAppearance.patterns, thinking: "text-decode" } };
+    const body = {
+      preset: "quiet",
+      patterns: { ...defaultProgressAppearance.patterns, thinking: "text-decode" },
+    };
     expect(() => progressAppearanceInputSchema.parse(body)).toThrow();
   });
 
@@ -110,7 +195,11 @@ describe("progress appearance schemas", () => {
       speed: 9,
       colorMode: "custom",
       customColor: "not-a-color",
-      patterns: { ...defaultProgressAppearance.patterns, thinking: "text-decode", currentActivity: "inline-signal" },
+      patterns: {
+        ...defaultProgressAppearance.patterns,
+        thinking: "text-decode",
+        currentActivity: "inline-signal",
+      },
     };
     const parsed = progressAppearanceSchema.parse(stored);
     expect(parsed.speed).toBe(1);
@@ -152,8 +241,20 @@ describe("conversation presentation protocol v2", () => {
   });
 
   it("keeps tool status validation separate from the generic envelope", () => {
-    expect(conversationToolUpdatedPayloadSchema.parse({ callId: "call-1", tool: "bash", status: "error" })).toMatchObject({ callId: "call-1" });
-    expect(() => conversationToolUpdatedPayloadSchema.parse({ callId: "call-1", tool: "bash", status: "success" })).toThrow();
+    expect(
+      conversationToolUpdatedPayloadSchema.parse({
+        callId: "call-1",
+        tool: "bash",
+        status: "error",
+      }),
+    ).toMatchObject({ callId: "call-1" });
+    expect(() =>
+      conversationToolUpdatedPayloadSchema.parse({
+        callId: "call-1",
+        tool: "bash",
+        status: "success",
+      }),
+    ).toThrow();
   });
 
   it("requires one snapshot waterline for history reconciliation", () => {
@@ -170,12 +271,28 @@ describe("conversation presentation protocol v2", () => {
       page: { nextCursor: null, hasMore: false },
     });
     expect(snapshot).toMatchObject({ throughSeq: 12, runs: [{ state: "completed", issues: [] }] });
-    expect(() => conversationSnapshotSchema.parse({ ...snapshot, page: { nextCursor: "cursor", hasMore: "yes" } })).toThrow();
+    expect(() =>
+      conversationSnapshotSchema.parse({
+        ...snapshot,
+        page: { nextCursor: "cursor", hasMore: "yes" },
+      }),
+    ).toThrow();
   });
 });
 
 it("requires acknowledgement when a new session requests full access", () => {
-  expect(createSessionRequestSchema.safeParse({ cwd: "/workspace", initialApproval: { mode: "full" } }).success).toBe(false);
-  expect(createSessionRequestSchema.parse({ cwd: "/workspace", initialApproval: { mode: "full", acknowledgeFullAccess: true } }).initialApproval?.mode).toBe("full");
-  expect(createSessionRequestSchema.parse({ cwd: "/workspace", initialApproval: { mode: "auto" } }).initialApproval?.mode).toBe("auto");
+  expect(
+    createSessionRequestSchema.safeParse({ cwd: "/workspace", initialApproval: { mode: "full" } })
+      .success,
+  ).toBe(false);
+  expect(
+    createSessionRequestSchema.parse({
+      cwd: "/workspace",
+      initialApproval: { mode: "full", acknowledgeFullAccess: true },
+    }).initialApproval?.mode,
+  ).toBe("full");
+  expect(
+    createSessionRequestSchema.parse({ cwd: "/workspace", initialApproval: { mode: "auto" } })
+      .initialApproval?.mode,
+  ).toBe("auto");
 });

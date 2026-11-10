@@ -1,6 +1,8 @@
 import { isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { remarkCitations } from "@/lib/citations/remark-citations";
+import { CitationRef } from "./CitationRef";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
@@ -12,7 +14,8 @@ import { notebookRuntime, type CellResult } from "@/lib/notebook";
 import { RunnableCodeBlock } from "../conversation/RunnableCodeBlock";
 import { CodeViewer } from "../code-viewer/CodeViewer";
 import { CodeBlockFrame } from "./CodeBlockFrame";
-import { fileInspectorForPath } from "@/lib/artifacts";
+import { normalizeArtifactPath, pinnedFileInspector } from "@/lib/artifacts";
+import type { PublishedReference } from "@/lib/artifacts/artifact-versions";
 import { resolveMarkdownResource, type MarkdownResourceContext } from "@/lib/files/markdown-resources";
 import { useUiStore } from "@/lib/ui";
 import {
@@ -22,13 +25,13 @@ import {
   type MarkdownFencedCodeBlock,
   type MarkdownSourceRange,
 } from "./markdown-code-ranges";
-import { prepareStreamingMarkdown, type MarkdownRenderMode } from "./streaming-markdown";
+import { prepareStreamingMarkdown, exceedsStreamingMarkdownBudget, type MarkdownRenderMode } from "./streaming-markdown";
 
 export type { MarkdownRenderMode } from "./streaming-markdown";
 
 type Variant = "chat" | "document" | "inspector";
 
-const REMARK_PLUGINS: NonNullable<Options["remarkPlugins"]> = [remarkGfm, remarkMath];
+const REMARK_PLUGINS: NonNullable<Options["remarkPlugins"]> = [remarkGfm, remarkMath, remarkCitations];
 const REHYPE_PLUGINS: NonNullable<Options["rehypePlugins"]> = [[rehypeKatex, { throwOnError: false }]];
 
 type MarkdownRendererProps = {
@@ -419,6 +422,7 @@ export function MarkdownViewer({
   codeChrome,
   mode = "final",
   textScale = 1,
+  pinnedReferences,
 }: {
   children: string;
   className?: string;
@@ -428,6 +432,9 @@ export function MarkdownViewer({
   codeChrome?: boolean;
   mode?: MarkdownRenderMode;
   textScale?: number;
+  /** Published versions the surrounding message owns, keyed by workspace path.
+   *  A file link resolves to its own message's version, not the newest one. */
+  pinnedReferences?: ReadonlyMap<string, PublishedReference>;
 }) {
   const s = STYLES[variant];
   const cwd = codeRunner?.cwd;
@@ -435,12 +442,21 @@ export function MarkdownViewer({
   const openInspector = useUiStore((s) => s.openInspector);
   const { t } = useTranslation();
   const visibleValue = useFrameCoalescedValue(children, mode === "streaming");
+  // A long message keeps streaming line by line: re-parsing the whole buffer on
+  // every frame is what makes it stall, so past the budget the same characters
+  // render as plain text and the settled message renders Markdown once.
+  const plainStreaming = mode === "streaming" && exceedsStreamingMarkdownBudget(visibleValue);
   const prepared = useMemo(
-    () => (mode === "streaming" ? prepareStreamingMarkdown(visibleValue) : { text: visibleValue, codeRanges: undefined }),
-    [mode, visibleValue],
+    () => (plainStreaming || mode !== "streaming" ? { text: visibleValue, codeRanges: undefined } : prepareStreamingMarkdown(visibleValue)),
+    [mode, plainStreaming, visibleValue],
   );
-  const renderedValue = useMemo(() => normalizeMathInput(prepared.text, prepared.codeRanges), [prepared]);
-  const fenceIdentities = useStableFenceIdentities(renderedValue);
+  const renderedValue = useMemo(
+    () => (plainStreaming ? prepared.text : normalizeMathInput(prepared.text, prepared.codeRanges)),
+    [plainStreaming, prepared],
+  );
+  // Plain text exposes no fences, so keeping the old identities around would
+  // only cost a full scan of the buffer on every frame.
+  const fenceIdentities = useStableFenceIdentities(plainStreaming ? "" : renderedValue);
   const [codeExecutions, setCodeExecutions] = useState<Record<string, CodeExecution>>({});
   const inFlightExecutions = useRef(new Set<string>());
   const executionSerial = useRef(0);
@@ -513,8 +529,11 @@ export function MarkdownViewer({
     const resolved = resolveMarkdownResource(href, context);
     if (resolved.kind !== "workspace") return;
     const filename = resolved.path.split(/[\\/]/).at(-1) || resolved.path;
-    openInspector(fileInspectorForPath(resolved.path, filename, context.root, cwd));
-  }, [context, cwd, openInspector]);
+    // Chat file links pin to the version this message referenced so later edits
+    // cannot silently change what the sentence pointed at.
+    const reference = pinnedReferences?.get(normalizeArtifactPath(resolved.path));
+    void pinnedFileInspector(resolved.path, filename, context.root, cwd, reference).then((inspector) => openInspector(inspector));
+  }, [context, cwd, openInspector, pinnedReferences]);
   const components = useMemo<Components>(() => ({
     p: ({ children }) => <p className={s.p}>{children}</p>,
     img: ({ src, alt }) => {
@@ -537,8 +556,12 @@ export function MarkdownViewer({
       }
       return <ResourceImage src={resolved.url} alt={alt} />;
     },
-    a: ({ children, href: rawHref }) => {
+    a: ({ children, href: rawHref, node }) => {
       const href = rawHref ?? "";
+      // Citation links (bare DOIs/arXiv ids lifted by remarkCitations) keep
+      // their text and gain a verified-evidence hover from cached snapshots.
+      const citationKey = (node?.properties as { dataCitation?: string } | undefined)?.dataCitation;
+      if (citationKey) return <CitationRef href={href} citationKey={citationKey}>{children}</CitationRef>;
       if (context && FILE_HREF.test(href)) {
         return (
           <span
@@ -621,6 +644,15 @@ export function MarkdownViewer({
     th: ({ children, style }) => <th className={s.th} style={style}>{children}</th>,
     td: ({ children, style }) => <td className={s.td} style={style}>{children}</td>,
   }), [closeCodeResult, codeChrome, codeExecutions, context, cwd, fenceIdentities, handleFileLink, runCode, s, sessionId, t, textScale, variant]);
+  if (plainStreaming) {
+    // Same characters, no Markdown pipeline. The wrapper keeps the settled
+    // layout's font metrics so the switch does not resize the reading column.
+    return (
+      <div className={cn(s.root, className)} style={variant === "inspector" ? { fontSize: 15 * textScale } : undefined}>
+        <pre data-streaming="plain" className="whitespace-pre-wrap break-words font-mono text-[13px] leading-5">{visibleValue}</pre>
+      </div>
+    );
+  }
   return (
     <div className={cn(s.root, className)} style={variant === "inspector" ? { fontSize: 15 * textScale } : undefined}>
       <MemoizedMarkdownRenderer value={renderedValue} components={components} renderMode={mode} />

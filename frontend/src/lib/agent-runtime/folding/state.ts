@@ -9,7 +9,7 @@ export function emptyThread(): Thread {
  * now attached to each Thread, so a module-level reset would be incorrect. */
 export function resetTurnBuffer(): void { /* state is per Thread */ }
 
-function createFoldState(event?: PiScienceEvent): EventFoldState {
+export function createFoldState(event?: PiScienceEvent): EventFoldState {
   return {
     ...(typeof event?.sessionId === "string" ? { sessionId: event.sessionId } : {}),
     ...(typeof event?.streamEpoch === "string" ? { streamEpoch: event.streamEpoch } : {}),

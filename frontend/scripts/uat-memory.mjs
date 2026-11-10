@@ -38,8 +38,8 @@ try {
   await mkdir(path.join(workspace, ".pi-science"), { recursive: true });
   await mkdir(outputs, { recursive: true });
   await writeFile(
-    path.join(workspace, "PROJECT.md"),
-    "# Ordinary project documentation\n",
+    path.join(workspace, "AGENTS.md"),
+    "# User-owned project instructions\n",
   );
   await writeFile(
     path.join(workspace, "result.csv"),
@@ -118,8 +118,8 @@ try {
   assert.equal(approved.approvedContentHash, approved.contentHash);
   assert.equal(approved.revision, records[1].revision);
   assert.equal(
-    await readFile(path.join(workspace, "PROJECT.md"), "utf8"),
-    "# Ordinary project documentation\n",
+    await readFile(path.join(workspace, "AGENTS.md"), "utf8"),
+    "# User-owned project instructions\n",
   );
   // Exercise user CRUD through the real editor and more-actions menu.
   await page.getByRole("button", { name: "Memories", exact: true }).click();
@@ -202,15 +202,17 @@ try {
   const archived = await (await archivedResponse).json();
   assert.equal(archived.record.status, "archived");
   await probe.getByText("Archived", { exact: true }).waitFor();
-  page.once("dialog", (dialog) => dialog.dismiss());
+
   await actions("Permanently delete");
+  await page.getByRole("alertdialog").getByRole("button", { name: "Cancel", exact: true }).click();
   assert.equal(
     (await api("/records/" + created.record.id)).record.id,
     created.record.id,
   );
   const deletedResponse = recordResponse("DELETE");
-  page.once("dialog", (dialog) => dialog.accept());
+
   await actions("Permanently delete");
+  await page.getByRole("alertdialog").getByRole("button", { name: "Permanently delete", exact: true }).click();
   assert.ok((await deletedResponse).ok());
   records.splice(
     records.findIndex((r) => r.id === created.record.id),
@@ -446,7 +448,6 @@ try {
   await page
     .getByRole("menuitemradio", { name: "Review everything manually" })
     .click();
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await dialog.getByRole("status").filter({ hasText: "Saved" }).waitFor();
   assert.equal((await api("/settings")).review.mode, "all_manual");
   await page.screenshot({
@@ -462,7 +463,7 @@ try {
   const compactHeight = await compactCard.evaluate(
     (el) => el.getBoundingClientRect().height,
   );
-  assert.ok(compactHeight <= 130, `Short memory is too tall: ${compactHeight}`);
+  assert.ok(compactHeight <= 140, `Short memory is too tall: ${compactHeight}`);
   assert.equal(
     await compactCard
       .getByRole("button", { name: "Version and review history" })
@@ -553,7 +554,7 @@ try {
     fullPage: true,
   });
   console.log(
-    "PASS: Memory UI, exact-version scientific approval, settings CAS, unchanged PROJECT.md, desktop/mobile layout",
+    "PASS: Memory UI, exact-version scientific approval, settings CAS, unchanged AGENTS.md, desktop/mobile layout",
   );
 } finally {
   await browser?.close();

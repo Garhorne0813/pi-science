@@ -1,3 +1,5 @@
+import { ApplicationError } from "../modules/application-error.js";
+import { applicationErrorStatus } from "../http/application-error.js";
 import { registerMemoryRoutes } from "../http/routes/memory-routes.js";
 import { ModelConfigService } from "../model-config/model-config-service.js";
 import cors from "@fastify/cors";
@@ -19,20 +21,51 @@ import { registerModelResourceRoutes } from "../http/routes/model-resource-route
 import { registerExecutionRoutes } from "../http/routes/execution-routes.js";
 import { registerKernelExecutionRoutes } from "../http/routes/kernel-execution-routes.js";
 import { registerNotebookRoutes } from "../http/routes/notebook-routes.js";
-import { registerCatalogRoutes, rootDir } from "../http/routes/catalog-routes.js";
+import {
+  registerCatalogRoutes,
+  rootDir,
+  knownWorkspacePaths,
+} from "../http/routes/catalog-routes.js";
+import { registerCitationRoutes } from "../http/routes/citation-routes.js";
+
 import { registerProjectRoutes } from "../http/routes/project-routes.js";
 import { registerMcpRoutes } from "../http/routes/mcp-routes.js";
 import { createServerModules, type ServerModules } from "./server-modules.js";
 import { registerEnvironmentRoutes } from "../http/routes/environment-routes.js";
 import { serveFrontend } from "../http/frontend-static.js";
-import { validateWorkspaceCwd } from "../security/workspace-security.js";
 import { isArtifactSurfaceablePath } from "../runtime/artifacts/artifact-surface-policy.js";
 import { AiTitleService, CoreTitleRuntimeFactory } from "../runtime/title/ai-title-service.js";
 import { importLegacyState } from "../storage/sqlite/legacy-state.js";
-import { internalAuthCookie, requestInternalToken, tokensMatch } from "../security/internal-auth.js";
+import {
+  internalAuthCookie,
+  requestInternalToken,
+  tokensMatch,
+} from "../security/internal-auth.js";
 
-export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, runtimeCatalog, settings, modelResources, mcp, jobs, memory, memoryBackground, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
+export function buildApp(
+  config: ServerConfig,
+  modules: ServerModules = createServerModules(config),
+): FastifyInstance {
+  const {
+    sessions: nodeSessionService,
+    events,
+    sessionRepository,
+    runtimeCatalog,
+    settings,
+    modelResources,
+    mcp,
+    jobs,
+    memory,
+    memoryBackground,
+    environments,
+    kernels,
+    notebooks,
+    stateStore,
+    workspaces,
+    environmentRepository,
+    jobRepository,
+    sqliteEnabled,
+  } = modules;
   let stateReady = !sqliteEnabled;
   let stateError: unknown;
   const app = Fastify({
@@ -45,12 +78,20 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   app.addHook("onListen", async () => {
     const address = app.server.address();
     if (address && typeof address !== "string") {
-      const host = address.address === "0.0.0.0" ? "127.0.0.1" : address.address === "::" ? "::1" : address.address;
-      modules.configureBackendUrl?.(`http://${host.includes(":") ? `[${host}]` : host}:${address.port}`);
+      const host =
+        address.address === "0.0.0.0"
+          ? "127.0.0.1"
+          : address.address === "::"
+            ? "::1"
+            : address.address;
+      modules.configureBackendUrl?.(
+        `http://${host.includes(":") ? `[${host}]` : host}:${address.port}`,
+      );
     }
   });
 
   nodeSessionService.configureLogging((level, message) => app.log[level](message));
+  jobs.configureLogging((message, details) => app.log.error(details, message));
   events.configureLogging((level, message) => app.log[level](message));
 
   void app.register(cors, { credentials: true, origin: config.corsOrigins });
@@ -61,7 +102,11 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     const authEnabled = config.requireInternalToken !== false && Boolean(config.internalToken);
     // CORS preflight must be answered before the application-token check; the
     // actual request still has to carry the token or the HttpOnly cookie.
-    if (authEnabled && request.method !== "OPTIONS" && (pathname.startsWith("/api/") || pathname === "/internal/diagnostics")) {
+    if (
+      authEnabled &&
+      request.method !== "OPTIONS" &&
+      (pathname.startsWith("/api/") || pathname === "/internal/diagnostics")
+    ) {
       if (!tokensMatch(config.internalToken!, requestInternalToken(request.headers))) {
         return reply.code(401).send({ error: "control-plane authentication required" });
       }
@@ -76,25 +121,15 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     if (request.method === "GET" && pathname.startsWith("/api/files/probe/")) {
       const rawPath = pathname.slice("/api/files/probe/".length);
       let candidate = rawPath;
-      try { candidate = rawPath.split("/").map(decodeURIComponent).join("/"); } catch { /* route will reject malformed encoding */ }
-      if (!isArtifactSurfaceablePath(candidate)) {
-        return reply.code(404).send({ error: "File is not available for automatic artifact discovery" });
+      try {
+        candidate = rawPath.split("/").map(decodeURIComponent).join("/");
+      } catch {
+        /* route will reject malformed encoding */
       }
-    }
-    const needsWorkspaceEnvironment = request.method === "POST" && (
-      pathname === "/api/kernels/execute"
-      || pathname === "/api/kernels/execute-stream"
-      || pathname === "/api/notebooks/jupyter/start"
-    );
-    if (needsWorkspaceEnvironment) {
-      const cwdValue = new URL(request.url, "http://127.0.0.1").searchParams.get("cwd") ?? ".";
-      let cwd: string;
-      try { cwd = await validateWorkspaceCwd(cwdValue); }
-      catch (error) { return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) }); }
-      try { await environments.ensure(cwd); }
-      catch (error) {
-        app.log.error({ err: error, requestId: request.id, cwd }, "workspace environment provisioning failed");
-        return reply.code(500).send({ error: error instanceof Error ? error.message : String(error), request_id: request.id });
+      if (!isArtifactSurfaceablePath(candidate)) {
+        return reply
+          .code(404)
+          .send({ error: "File is not available for automatic artifact discovery" });
       }
     }
   });
@@ -110,10 +145,22 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   });
 
   app.setErrorHandler((error: FastifyError, request, reply) => {
-    const statusCode = error.code === "FST_ERR_CTP_BODY_TOO_LARGE" ? 413 : error.statusCode ?? 500;
+    const statusCode =
+      error instanceof ApplicationError
+        ? applicationErrorStatus(error)
+        : error.code === "FST_ERR_CTP_BODY_TOO_LARGE"
+          ? 413
+          : (error.statusCode ?? 500);
     app.log.error({ err: error, requestId: request.id, path: request.url }, "request failed");
     return reply.code(statusCode).send({
-      error: statusCode === 413 ? "request body too large" : statusCode === 429 ? "rate limit exceeded" : "internal server error",
+      error:
+        statusCode === 413
+          ? "request body too large"
+          : statusCode === 429
+            ? "rate limit exceeded"
+            : statusCode < 500
+              ? error.message
+              : "internal server error",
       request_id: request.id,
     });
   });
@@ -124,45 +171,83 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     control_plane: "node",
   }));
 
-  app.get("/api/health", async () => gatewayHealthSchema.parse({
-    status: "ok",
-    active_agent_workers: nodeSessionService.processCount,
-    active_kernels: kernels.activeCount,
-    service: "pi-science-server",
-    control_plane: "node",
-  }));
+  app.get("/api/health", async () =>
+    gatewayHealthSchema.parse({
+      status: "ok",
+      active_agent_workers: nodeSessionService.processCount,
+      active_kernels: kernels.activeCount,
+      service: "pi-science-server",
+      control_plane: "node",
+    }),
+  );
 
   app.get("/internal/ready", async (_request, reply) => {
     const diagnostics = stateStore.diagnostics();
     if (sqliteEnabled && (!stateReady || diagnostics.status !== "ready")) {
-      return reply.code(503).send({ status: "not_ready", service: "pi-science-server", control_plane: "node", sqlite: { ...diagnostics, error: diagnostics.error ?? (stateError instanceof Error ? stateError.message : String(stateError ?? "SQLite state store is not ready")) } });
+      return reply.code(503).send({
+        status: "not_ready",
+        service: "pi-science-server",
+        control_plane: "node",
+        sqlite: {
+          ...diagnostics,
+          error:
+            diagnostics.error ??
+            (stateError instanceof Error
+              ? stateError.message
+              : String(stateError ?? "SQLite state store is not ready")),
+        },
+      });
     }
-    return { status: "ready", service: "pi-science-server", control_plane: "node", sqlite: sqliteEnabled ? diagnostics : { status: "disabled", schema_version: null, journal_mode: null, pending_requests: 0 } };
+    return {
+      status: "ready",
+      service: "pi-science-server",
+      control_plane: "node",
+      sqlite: sqliteEnabled
+        ? diagnostics
+        : { status: "disabled", schema_version: null, journal_mode: null, pending_requests: 0 },
+    };
   });
 
   // Isolate filesystem-backed diagnostics from unthrottled health probes.
   void app.register(async (diagnosticsScope) => {
     await diagnosticsScope.register(rateLimit, { global: false });
-    diagnosticsScope.get("/internal/diagnostics", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async () => {
-      const modelState = new ModelConfigService().readSync();
-      return {
-        sqlite: sqliteEnabled ? stateStore.diagnostics() : { status: "disabled" },
-        model_resources: {
-          schema_version: modelState.schema_version,
-          revision: modelState.revision,
-          provider_count: Object.keys(modelState.config.providers).length,
-          model_count: Object.values(modelState.config.providers).reduce((count, provider) => count + (provider.models?.length ?? 0), 0),
-          credential_ref_count: Object.keys(modelState.credential_refs).length,
-        },
-      };
-    });
+    diagnosticsScope.get(
+      "/internal/diagnostics",
+      { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+      async () => {
+        const modelState = new ModelConfigService().readSync();
+        return {
+          sqlite: sqliteEnabled ? stateStore.diagnostics() : { status: "disabled" },
+          model_resources: {
+            schema_version: modelState.schema_version,
+            revision: modelState.revision,
+            provider_count: Object.keys(modelState.config.providers).length,
+            model_count: Object.values(modelState.config.providers).reduce(
+              (count, provider) => count + (provider.models?.length ?? 0),
+              0,
+            ),
+            credential_ref_count: Object.keys(modelState.credential_refs).length,
+          },
+        };
+      },
+    );
   });
 
-  if (config.nodeSessions || config.nodePiManager) registerSessionReadRoutes(app, sessionRepository, nodeSessionService);
+  if (config.nodeSessions || config.nodePiManager)
+    registerSessionReadRoutes(app, sessionRepository, nodeSessionService);
   if (config.nodeSse || config.nodePiManager) registerSseRoutes(app, nodeSessionService, events);
   if (config.nodeFiles) registerFileReadRoutes(app);
   const titleRuntimes = new CoreTitleRuntimeFactory(undefined, environments);
-  if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository, new AiTitleService(titleRuntimes), undefined, sqliteEnabled ? { mcp, events } : undefined);
+  if (config.nodePiManager)
+    registerNodeSessionRoutes(
+      app,
+      nodeSessionService,
+      sessionRepository,
+      new AiTitleService(titleRuntimes),
+      undefined,
+      sqliteEnabled ? { mcp, events } : undefined,
+      modules,
+    );
   if (config.nodeJobs !== false) {
     // Keep command execution rate-limited without throttling read-only control
     // plane routes. The child scope ensures the plugin's onRoute hook sees the
@@ -176,21 +261,49 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   registerEnvironmentRoutes(app, environments);
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);
   if (config.nodeArtifacts !== false) registerTurnArtifactRoutes(app);
-  if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings, modelResources, runtimeCatalog, sqliteEnabled ? mcp : undefined);
+  if (config.nodeSettings !== false)
+    registerSettingsRoutes(
+      app,
+      nodeSessionService,
+      settings,
+      modelResources,
+      runtimeCatalog,
+      sqliteEnabled ? mcp : undefined,
+    );
   if (sqliteEnabled) registerMcpRoutes(app, mcp, config.nodeSettings !== false);
   if (config.nodeSettings !== false) {
     registerModelResourceRoutes(app, modelResources, nodeSessionService);
   }
-  if (config.nodeExecutions !== false) registerExecutionRoutes(app, jobs);
-  if (config.nodeExecutions !== false) registerKernelExecutionRoutes(app, config, environments, kernels);
+  if (config.nodeExecutions !== false) registerExecutionRoutes(app, jobs, modules.executions);
+  if (config.nodeExecutions !== false)
+    registerKernelExecutionRoutes(app, config, environments, kernels, modules.executions);
   registerNotebookRoutes(app, notebooks, config.internalToken);
-  if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, sqliteEnabled ? workspaces : undefined, sqliteEnabled ? mcp : undefined, nodeSessionService);
-  if (config.nodeProject !== false) { registerProjectRoutes(app); registerMemoryRoutes(app, memory, memoryBackground, nodeSessionService, config.internalToken); };
+  if (config.nodeCatalog !== false) registerCitationRoutes(app);
+  if (config.nodeCatalog !== false)
+    registerCatalogRoutes(
+      app,
+      jobs,
+      sqliteEnabled ? workspaces : undefined,
+      sqliteEnabled ? mcp : undefined,
+      nodeSessionService,
+    );
+  if (config.nodeProject !== false) {
+    registerProjectRoutes(app, memory, memoryBackground);
+    registerMemoryRoutes(app, memory, memoryBackground, nodeSessionService, config.internalToken);
+  }
+
   app.addHook("onReady", async () => {
+    await stateStore.start();
     if (sqliteEnabled) {
       try {
-        await stateStore.start();
-        await importLegacyState({ store: stateStore, workspaces, environments: environmentRepository, jobs: jobRepository, managedRoot: rootDir(), logger: (message, details) => app.log.info({ ...details }, message) });
+        await importLegacyState({
+          store: stateStore,
+          workspaces,
+          environments: environmentRepository,
+          jobs: jobRepository,
+          managedRoot: rootDir(),
+          logger: (message, details) => app.log.info({ ...details }, message),
+        });
         await mcp.ensureBuiltins();
         stateReady = true;
       } catch (error) {
@@ -198,30 +311,61 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
         app.log.error({ err: error }, "SQLite state initialization failed");
       }
     }
-
+    if (!sqliteEnabled || stateReady) {
+      await jobs.startReconciliation(async () =>
+        sqliteEnabled
+          ? (await workspaces.listKnown()).map((workspace) => workspace.path)
+          : await knownWorkspacePaths(),
+      );
+      memoryBackground.start();
+    }
   });
-  app.addHook("onReady", async () => { await stateStore.start(); memoryBackground.start(); });
-  app.addHook("onClose", async () => nodeSessionService.shutdownAll());
-  app.addHook("onClose", async () => titleRuntimes.shutdownAll());
-  app.addHook("onClose", async () => memoryBackground.stop());
-  app.addHook("onClose", async () => kernels.shutdownAll());
-  app.addHook("onClose", async () => notebooks.shutdown());
-  app.addHook("onClose", async () => { await memoryBackground.stop(); await stateStore.close(); });
+  app.addHook("onClose", async () => {
+    // Stop producers before draining runtimes; storage is always closed last.
+    const failures: unknown[] = [];
+    for (const stop of [
+      () => memoryBackground.stop(),
+      () => nodeSessionService.shutdownAll(),
+      () => titleRuntimes.shutdownAll(),
+      () => jobs.shutdown(),
+      () => kernels.shutdownAll(),
+      () => notebooks.shutdown(),
+      () => stateStore.close(),
+    ]) {
+      try {
+        await stop();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length) throw new AggregateError(failures, "Server shutdown failed");
+  });
   if (config.nodePiManager) {
-    app.all("/api/sessions/*", async (request, reply) => reply.code(404).send({
-      ok: false,
-      code: "not_found",
-      error: `Unknown Node conversation route: ${request.method} ${request.url.split("?")[0]}`,
-    }));
+    app.all("/api/sessions/*", async (request, reply) =>
+      reply.code(404).send({
+        ok: false,
+        code: "not_found",
+        error: `Unknown Node conversation route: ${request.method} ${request.url.split("?")[0]}`,
+      }),
+    );
   }
 
   app.setNotFoundHandler(async (request, reply) => {
-    if (request.method !== "GET" || request.url.startsWith("/api/") || request.url.startsWith("/docs") || request.url.startsWith("/openapi.json")) {
+    if (
+      request.method !== "GET" ||
+      request.url.startsWith("/api/") ||
+      request.url.startsWith("/docs") ||
+      request.url.startsWith("/openapi.json")
+    ) {
       return reply.code(404).send({ error: `Route ${request.method} ${request.url} not found` });
     }
     const served = await serveFrontend(new URL(request.url, "http://localhost").pathname);
     if ("error" in served) return reply.code(404).send({ error: served.error });
-    if (config.requireInternalToken !== false && config.internalToken && served.type.startsWith("text/html")) {
+    if (
+      config.requireInternalToken !== false &&
+      config.internalToken &&
+      served.type.startsWith("text/html")
+    ) {
       reply.header("set-cookie", internalAuthCookie(config.internalToken));
     }
     return reply.type(served.type).header("cache-control", served.cacheControl).send(served.stream);

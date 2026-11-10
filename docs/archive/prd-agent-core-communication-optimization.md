@@ -1,6 +1,6 @@
 # Agent Core 通信与产品协议
 
-当前通信链路为浏览器 REST/SSE → Node 产品服务 → Worker IPC → Core Harness。实现记录见[通信实现](../agent-core-communication-implementation.md)。
+当前通信链路为浏览器 REST/SSE → Node 产品服务 → Worker IPC → Core Harness。实现记录见[通信实现](../implementation/agent-core-communication-implementation.md)。
 
 ## 协议边界
 

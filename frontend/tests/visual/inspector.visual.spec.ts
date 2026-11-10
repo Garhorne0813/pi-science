@@ -35,7 +35,7 @@ test("sidebar file opens the inspector with a markdown preview", async ({ page }
   // former separate file-preview / with-composer tests both captured. They
   // were fully redundant (identical layout and assertions on the settled
   // thread), so they are merged here instead of keeping fake coverage.
-  await expect(page.getByPlaceholder(/Ask anything/)).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Message", exact: true })).toBeVisible();
   await screenshot(page, "inspector-file-preview.png");
 });
 

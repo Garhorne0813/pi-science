@@ -41,8 +41,8 @@ test("desktop rail reveals labels above adjacent panes without shifting the layo
       letterSpacing: style.letterSpacing,
     };
   });
-  await expect(railSlot).toHaveCSS("width", "60px");
-  await expect(rail).toHaveCSS("width", "60px");
+  await expect(railSlot).toHaveCSS("width", "52px");
+  await expect(rail).toHaveCSS("width", "52px");
   const knowledge = rail.getByRole("link", { name: KNOWLEDGE });
   await knowledge.hover();
   await expect(rail).toHaveCSS("width", "220px");
@@ -62,18 +62,18 @@ test("desktop rail reveals labels above adjacent panes without shifting the layo
   expect((await main.boundingBox())!.x).toBe(mainX);
   expect((await panel.boundingBox())!.x).toBe(panelX);
   await page.mouse.move(700, 300);
-  await expect(rail).toHaveCSS("width", "60px");
+  await expect(rail).toHaveCSS("width", "52px");
   // A pointer click retains DOM focus, but must not pin the overlay open.
   await knowledge.click();
   await page.mouse.move(700, 300);
-  await expect(rail).toHaveCSS("width", "60px");
+  await expect(rail).toHaveCSS("width", "52px");
   await page.getByRole("link", { name: "Skip to content", exact: true }).focus();
   for (let i = 0; i < 3; i++) await page.keyboard.press("Tab");
   await expect(knowledge).toBeFocused();
   await expect(rail).toHaveCSS("width", "220px");
   await expect(knowledge.locator(".workspace-rail-label")).toHaveCSS("opacity", "1");
   await main.focus();
-  await expect(rail).toHaveCSS("width", "60px");
+  await expect(rail).toHaveCSS("width", "52px");
   await page.screenshot({ path: testInfo.outputPath("rail-collapsed.png") });
 });
 
@@ -85,7 +85,7 @@ test("mobile rail stays compact on hover and keyboard focus", async ({ page }, t
   const knowledge = rail.getByRole("link", { name: KNOWLEDGE });
   await knowledge.hover();
   await knowledge.focus();
-  await expect(rail).toHaveCSS("width", "58px");
+  await expect(rail).toHaveCSS("width", "52px");
   await expect(knowledge.locator(".workspace-rail-label")).toHaveCSS("opacity", "0");
   await page.screenshot({ path: testInfo.outputPath("rail-mobile.png") });
 });
@@ -106,8 +106,8 @@ test("collapsed workspace keeps a direct Projects link and names the sidebar act
   expect(projectsBox.y + projectsBox.height).toBeLessThanOrEqual(settingsBox.y);
   expect(await projects.evaluate(element => element.nextElementSibling?.getAttribute("aria-label"))).toBe("Settings");
   for (const svg of await rail.locator("svg").all()) {
-    await expect(svg).toHaveAttribute("width", "20");
-    await expect(svg).toHaveAttribute("height", "20");
+    await expect(svg).toHaveAttribute("width", "16");
+    await expect(svg).toHaveAttribute("height", "16");
     await expect(svg).toHaveAttribute("stroke-width", "1.75");
   }
   await expand.focus();
@@ -153,9 +153,11 @@ test("sidebar tabs preserve session lifecycle and collapsed New stays blank", as
   const trigger = page.getByRole("button", { name: "Manage conversation: Markdown rendering demo" });
   await trigger.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("menuitem", { name: "Fork conversation" })).toBeFocused();
-  await page.keyboard.press("ArrowDown");
-  await expect(page.getByRole("menuitem", { name: "Delete conversation" })).toBeFocused();
+  await expect(page.getByRole("menuitem", { name: "Rename conversation" })).toBeFocused();
+  for (const name of ["Regenerate title with AI", "Fork conversation", "Delete conversation"]) {
+    await page.keyboard.press("ArrowDown");
+    await expect(page.getByRole("menuitem", { name })).toBeFocused();
+  }
   await page.keyboard.press("Escape");
   await expect(trigger).toBeFocused();
   await page.getByRole("searchbox").fill("Data");
@@ -402,21 +404,21 @@ test("the panel overlays main below 768px and is an in-flow column at 768px", as
     // animation translates its box for the first 200ms.
     return { rail: rail.width, position: getComputedStyle(aside).position, left: getComputedStyle(aside).left };
   }, PANEL);
-  expect(narrow.rail).toBe(58);
+  expect(narrow.rail).toBe(52);
   expect(narrow.position).toBe("absolute");
-  expect(narrow.left).toBe("58px");
+  expect(narrow.left).toBe("52px");
   // 768px turns the same element into an in-flow column and keeps the user's
   // open choice; it does not close or reopen behind their back.
   await page.mouse.move(700, 300);
   await page.setViewportSize({ width: 768, height: 900 });
-  await expect(page.locator(RAIL)).toHaveCSS("width", "60px");
+  await expect(page.locator(RAIL)).toHaveCSS("width", "52px");
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   const wide = await page.evaluate((selector) => {
     const rail = document.querySelector('nav[aria-label="Primary navigation"]')!.getBoundingClientRect();
     const aside = document.querySelector(selector) as HTMLElement;
     return { rail: rail.width, position: getComputedStyle(aside).position, width: aside.getBoundingClientRect().width };
   }, PANEL);
-  expect(wide.rail).toBe(60);
+  expect(wide.rail).toBe(52);
   expect(wide.position).toBe("relative");
   expect(wide.width).toBeCloseTo(240, 3);
 });

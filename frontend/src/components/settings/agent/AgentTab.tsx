@@ -1,4 +1,7 @@
+import { SubagentSettings } from "../SubagentSettings";
 import { ApprovalPreferences } from "./ApprovalPreferences";
+import { CitationAutoVerifySettings } from "./CitationAutoVerifySettings";
+import { CitationInlineStyleSettings } from "./CitationInlineStyleSettings";
 import { useTranslation } from "react-i18next";
 import { ContextManagementSection } from "../ContextManagementSection";
 import type { SettingsConfig } from "../../../lib/settings";
@@ -9,11 +12,15 @@ export function AgentTab({ config, loading, error, scope, saving, onSave, onRefr
   return <div className="space-y-6">
     <p className="text-ui-caption leading-relaxed text-muted">{t("settings.agent.description")}</p>
     <ApprovalPreferences />
+    <CitationAutoVerifySettings enabled={config?.citation_auto_verify === true} onSaved={onRefreshContext} />
+    <CitationInlineStyleSettings style={config?.citation_inline_style === "identifier" ? "identifier" : "number"} onSaved={onRefreshContext} />
     <DefaultModelSelection scope={scope} onCommitted={onRefreshContext} onOpenModels={onOpenModels} />
     <section aria-label={t("settings.context.title")} className="space-y-3">
       {loading && <p role="status" className="text-ui-caption text-muted">{t("settings.selection.contextLoading")}</p>}
       {error && <p role="alert" className="text-ui-caption text-error-text">{t("settings.selection.contextError", { error })}<button type="button" onClick={() => void onRefreshContext().catch(() => undefined)} className="ml-2 min-h-9 px-2 text-link">{t("settings.redesign.retryLoad")}</button></p>}
       {config && <ContextManagementSection config={config} saving={saving} onSave={onSave} />}
     </section>
+    <details className="rounded-card border border-faint p-4"><summary className="cursor-pointer text-ui-label font-medium">{t("settings.capabilities.builtinTitle")}</summary><p className="mt-3 text-ui-caption text-muted">{t("settings.capabilities.builtinDescription")}</p></details>
+    <SubagentSettings workspaceCwd={scope} />
   </div>;
 }

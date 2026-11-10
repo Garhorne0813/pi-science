@@ -96,6 +96,10 @@ function sessionsRoot(cwd: string): string {
 
 const HISTORY_PAGE_SIZE = 50;
 const HISTORY_PAGE_MAX_SIZE = 100;
+/** Keep the newest page on a turn boundary: extend it back to the user message
+ * that opened its oldest turn. A turn longer than this keeps a mid-turn first
+ * page instead of paging back forever. */
+const HISTORY_FIRST_PAGE_TURN_MAX = 200;
 const HISTORY_SCAN_CHUNK_BYTES = 64 * 1024;
 const LAST_MESSAGE_SCAN_CHUNK_BYTES = 128 * 1024;
 const LAST_MESSAGE_SCAN_MAX_BYTES = 512 * 1024;
@@ -105,7 +109,13 @@ function snapshotVersion(size: number, mtimeMs: number): string {
 }
 
 function encodeMessageCursor(offset: number, boundaryHash?: string): string {
-  return Buffer.from(JSON.stringify({ v: boundaryHash ? 2 : 1, o: Math.max(0, Math.floor(offset)), ...(boundaryHash ? { p: boundaryHash } : {}) })).toString("base64url");
+  return Buffer.from(
+    JSON.stringify({
+      v: boundaryHash ? 2 : 1,
+      o: Math.max(0, Math.floor(offset)),
+      ...(boundaryHash ? { p: boundaryHash } : {}),
+    }),
+  ).toString("base64url");
 }
 
 function decodeMessageCursor(cursor: string): { offset: number; boundaryHash?: string } {
@@ -117,10 +127,16 @@ function decodeMessageCursor(cursor: string): { offset: number; boundaryHash?: s
   }
   if (!parsed || typeof parsed !== "object") throw new Error("invalid history cursor");
   const value = parsed as { v?: unknown; o?: unknown; p?: unknown };
-  if ((value.v !== 1 && value.v !== 2) || typeof value.o !== "number" || !Number.isSafeInteger(value.o) || value.o < 0) {
+  if (
+    (value.v !== 1 && value.v !== 2) ||
+    typeof value.o !== "number" ||
+    !Number.isSafeInteger(value.o) ||
+    value.o < 0
+  ) {
     throw new Error("invalid history cursor");
   }
-  if (value.v === 2 && (typeof value.p !== "string" || !value.p)) throw new Error("invalid history cursor");
+  if (value.v === 2 && (typeof value.p !== "string" || !value.p))
+    throw new Error("invalid history cursor");
   return { offset: value.o, ...(value.v === 2 ? { boundaryHash: value.p as string } : {}) };
 }
 
@@ -130,37 +146,62 @@ async function messageBoundaryHash(path: string, offset: number): Promise<string
     const start = Math.max(0, offset - 64);
     const buffer = Buffer.alloc(offset - start);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
-    return createHash("sha256").update(buffer.subarray(0, bytesRead)).digest("base64url").slice(0, 22);
+    return createHash("sha256")
+      .update(buffer.subarray(0, bytesRead))
+      .digest("base64url")
+      .slice(0, 22);
   } finally {
     await handle.close();
   }
 }
 
-
 function parseMessageLine(line: string): SessionMessageRecord | null {
   if (!line.trim()) return null;
   try {
     const entry = JSON.parse(line) as Record<string, unknown>;
-    if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") return null;
+    if (entry.type !== "message" || !entry.message || typeof entry.message !== "object")
+      return null;
     const message = entry.message as Record<string, unknown>;
     const record: SessionMessageRecord = {
       id: typeof entry.id === "string" ? entry.id : "",
       role: typeof message.role === "string" ? message.role : "",
-      ...(typeof message.client_message_id === "string" ? { client_message_id: message.client_message_id } : {}),
-      content: Array.isArray(message.content) ? message.content as Array<Record<string, unknown>> : [],
+      ...(typeof message.client_message_id === "string"
+        ? { client_message_id: message.client_message_id }
+        : {}),
+      content: Array.isArray(message.content)
+        ? (message.content as Array<Record<string, unknown>>)
+        : [],
       toolCallId: typeof message.toolCallId === "string" ? message.toolCallId : undefined,
       toolName: typeof message.toolName === "string" ? message.toolName : undefined,
       isError: typeof message.isError === "boolean" ? message.isError : false,
       timestamp: typeof entry.timestamp === "string" ? entry.timestamp : null,
-      ...(message.presentation && typeof message.presentation === "object" && !Array.isArray(message.presentation) ? { presentation: message.presentation as Record<string, unknown> } : {}),
-      ...(message.presentationRole === "intermediate" || message.presentationRole === "final" ? { presentationRole: message.presentationRole } : {}),
+      ...(message.presentation &&
+      typeof message.presentation === "object" &&
+      !Array.isArray(message.presentation)
+        ? { presentation: message.presentation as Record<string, unknown> }
+        : {}),
+      ...(message.presentationRole === "intermediate" || message.presentationRole === "final"
+        ? { presentationRole: message.presentationRole }
+        : {}),
       ...(typeof message.turnId === "string" ? { turnId: message.turnId } : {}),
       ...(typeof message.runId === "string" ? { runId: message.runId } : {}),
       ...(typeof message.itemId === "string" ? { itemId: message.itemId } : {}),
       ...(typeof message.parentItemId === "string" ? { parentItemId: message.parentItemId } : {}),
-      ...(typeof message.revision === "number" && Number.isInteger(message.revision) && message.revision >= 0 ? { revision: message.revision } : {}),
-      ...(typeof message.sequence === "number" && Number.isInteger(message.sequence) && message.sequence >= 0 ? { sequence: message.sequence } : {}),
-      ...(message.classificationSource === "explicit" || message.classificationSource === "legacy_inferred" || message.classificationSource === "unknown" ? { classificationSource: message.classificationSource } : {}),
+      ...(typeof message.revision === "number" &&
+      Number.isInteger(message.revision) &&
+      message.revision >= 0
+        ? { revision: message.revision }
+        : {}),
+      ...(typeof message.sequence === "number" &&
+      Number.isInteger(message.sequence) &&
+      message.sequence >= 0
+        ? { sequence: message.sequence }
+        : {}),
+      ...(message.classificationSource === "explicit" ||
+      message.classificationSource === "legacy_inferred" ||
+      message.classificationSource === "unknown"
+        ? { classificationSource: message.classificationSource }
+        : {}),
     };
     const details = boundedToolDetails(message.details);
     if (details !== undefined) record.details = details;
@@ -186,6 +227,7 @@ async function readMessagePage(
   path: string,
   endOffset: number,
   limit: number,
+  firstPage = false,
 ): Promise<{ messages: SessionMessageRecord[]; hasMore: boolean; nextOffset: number | null }> {
   const handle = await open(path, "r");
   try {
@@ -194,8 +236,18 @@ async function readMessagePage(
     let pending = Buffer.alloc(0);
     const selected: Array<{ message: SessionMessageRecord; offset: number }> = [];
     let hasMore = false;
+    // `selected` runs newest first, so its last entry is the oldest one seen.
+    const wantsMore = () =>
+      selected.length < limit ||
+      (firstPage &&
+        selected.length < HISTORY_FIRST_PAGE_TURN_MAX &&
+        selected[selected.length - 1]?.message.role !== "user");
 
-    while (scanPosition > 0 && selected.length <= limit) {
+    // Keep scanning until the older-history verdict is known. Stopping the
+    // moment the page fills loses `hasMore` whenever the next older message
+    // line still sits in a chunk that has not been read yet — which happens for
+    // any message whose serialized line is at least one scan chunk long.
+    while (scanPosition > 0) {
       const chunkStart = Math.max(0, scanPosition - HISTORY_SCAN_CHUNK_BYTES);
       const chunk = Buffer.alloc(scanPosition - chunkStart);
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, chunkStart);
@@ -212,7 +264,7 @@ async function readMessagePage(
         if (lineStart === 0 && chunkStart > 0) break;
         const message = parseMessageLine(pending.subarray(lineStart, cursor).toString("utf8"));
         if (message) {
-          if (selected.length < limit) {
+          if (wantsMore()) {
             selected.push({ message, offset: chunkStart + lineStart });
           } else {
             hasMore = true;
@@ -227,7 +279,8 @@ async function readMessagePage(
       scanPosition = chunkStart;
     }
 
-    const nextOffset = hasMore && selected.length > 0 ? selected[selected.length - 1]!.offset : null;
+    const nextOffset =
+      hasMore && selected.length > 0 ? selected[selected.length - 1]!.offset : null;
     const messages = selected.reverse().map(({ message }) => message);
     return {
       messages,
@@ -318,25 +371,35 @@ async function lastMessageTimestamp(path: string): Promise<string | null> {
   }
 }
 
-const lastMessageTimestampCache = new Map<string, { mtimeMs: number; size: number; timestamp: string | null }>();
+const lastMessageTimestampCache = new Map<
+  string,
+  { mtimeMs: number; size: number; timestamp: string | null }
+>();
 
 async function cachedLastMessageTimestamp(file: SessionFile): Promise<string | null> {
   const cached = lastMessageTimestampCache.get(file.path);
-  if (cached && cached.mtimeMs === file.mtimeMs && cached.size === file.size) return cached.timestamp;
+  if (cached && cached.mtimeMs === file.mtimeMs && cached.size === file.size)
+    return cached.timestamp;
   const timestamp = await lastMessageTimestamp(file.path);
   lastMessageTimestampCache.set(file.path, { mtimeMs: file.mtimeMs, size: file.size, timestamp });
   return timestamp;
 }
 
-async function mapWithConcurrency<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (next < items.length) {
-      const index = next++;
-      results[index] = await fn(items[index]!);
-    }
-  }));
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+      while (next < items.length) {
+        const index = next++;
+        results[index] = await fn(items[index]!);
+      }
+    }),
+  );
   return results;
 }
 
@@ -411,7 +474,10 @@ async function tryParseHeader(path: string): Promise<ParsedSessionHeader | null>
         const record = message as Record<string, unknown>;
         if (record.role !== "user" || !Array.isArray(record.content)) continue;
         const text = record.content
-          .filter((part): part is Record<string, unknown> => Boolean(part) && typeof part === "object" && !Array.isArray(part))
+          .filter(
+            (part): part is Record<string, unknown> =>
+              Boolean(part) && typeof part === "object" && !Array.isArray(part),
+          )
           .filter((part) => part.type === "text" && typeof part.text === "string")
           .map((part) => String(part.text))
           .join("\n");
@@ -462,7 +528,15 @@ async function scanSessionFiles(root: string): Promise<Record<string, DirCache>>
         continue;
       }
       const parsed = await tryParseHeader(path);
-      candidates.push({ path, mtimeMs: meta.mtimeMs, size: meta.size, header: parsed?.header ?? null, subagent: parsed?.subagent ?? false, sessionInfo: parsed?.sessionInfo ?? false, aiTitle: parsed?.aiTitle ?? false });
+      candidates.push({
+        path,
+        mtimeMs: meta.mtimeMs,
+        size: meta.size,
+        header: parsed?.header ?? null,
+        subagent: parsed?.subagent ?? false,
+        sessionInfo: parsed?.sessionInfo ?? false,
+        aiTitle: parsed?.aiTitle ?? false,
+      });
     }
     dirs[directory] = { mtimeMs: dirStat.mtimeMs, candidates };
   }
@@ -476,11 +550,19 @@ function filesFromDirs(dirs: Record<string, DirCache>): CachedFile[] {
   for (const dirCache of Object.values(dirs)) {
     for (const candidate of dirCache.candidates) {
       if (
-        candidate.header
-        && candidate.header.type === "session"
-        && typeof candidate.header.id === "string"
+        candidate.header &&
+        candidate.header.type === "session" &&
+        typeof candidate.header.id === "string"
       ) {
-        files.push({ path: candidate.path, header: candidate.header, subagent: candidate.subagent, sessionInfo: candidate.sessionInfo, aiTitle: candidate.aiTitle, mtimeMs: candidate.mtimeMs, size: candidate.size });
+        files.push({
+          path: candidate.path,
+          header: candidate.header,
+          subagent: candidate.subagent,
+          sessionInfo: candidate.sessionInfo,
+          aiTitle: candidate.aiTitle,
+          mtimeMs: candidate.mtimeMs,
+          size: candidate.size,
+        });
       }
     }
   }
@@ -520,7 +602,15 @@ async function revalidateCache(root: string, cached: CacheEntry): Promise<Cached
       if (meta.mtimeMs !== candidate.mtimeMs || meta.size !== candidate.size) {
         const parsed = await tryParseHeader(candidate.path);
         if (parsed !== null) {
-          candidates.push({ path: candidate.path, mtimeMs: meta.mtimeMs, size: meta.size, header: parsed.header, subagent: parsed.subagent, sessionInfo: parsed.sessionInfo, aiTitle: parsed.aiTitle });
+          candidates.push({
+            path: candidate.path,
+            mtimeMs: meta.mtimeMs,
+            size: meta.size,
+            header: parsed.header,
+            subagent: parsed.subagent,
+            sessionInfo: parsed.sessionInfo,
+            aiTitle: parsed.aiTitle,
+          });
           dirty = true;
         } else {
           // Header transiently unreadable (file is mid-write): keep the last
@@ -615,15 +705,20 @@ async function sessionFilesWithMtime(root: string): Promise<SessionFile[]> {
 }
 
 function isNestedSubagentSession(root: string, path: string): boolean {
-  const segments = relative(root, path).split(/[\\/]+/).filter(Boolean);
+  const segments = relative(root, path)
+    .split(/[\\/]+/)
+    .filter(Boolean);
   // pi-subagents stores child transcripts below a directory named after the
   // parent session file, e.g. <parent>/<run-id>/run-0/session.jsonl.
   // The explicit run directory checks also cover parallel/async layouts.
-  return segments.slice(0, -1).some((segment) => (
-    segment.endsWith(".jsonl")
-    || /^run-\d+$/.test(segment)
-    || /^(?:parallel|dynamic|async)-/.test(segment)
-  ));
+  return segments
+    .slice(0, -1)
+    .some(
+      (segment) =>
+        segment.endsWith(".jsonl") ||
+        /^run-\d+$/.test(segment) ||
+        /^(?:parallel|dynamic|async)-/.test(segment),
+    );
 }
 
 function isUserVisibleSession(root: string, file: SessionFile): boolean {
@@ -636,9 +731,13 @@ export class SessionRepository {
 
   async findPath(cwd: string, sessionId: string): Promise<string | null> {
     const registration = await this.agentRegistry.get(cwd, sessionId);
-    if (registration) return registration.state === "deleted" ? null : this.agentSessions.findPath(cwd, sessionId);
-    return await this.agentSessions.findPath(cwd, sessionId)
-      ?? (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId)?.path ?? null;
+    if (registration)
+      return registration.state === "deleted" ? null : this.agentSessions.findPath(cwd, sessionId);
+    return (
+      (await this.agentSessions.findPath(cwd, sessionId)) ??
+      (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId)?.path ??
+      null
+    );
   }
 
   /** Delete-path lookup that bypasses the scan cache entirely and re-reads the
@@ -649,11 +748,14 @@ export class SessionRepository {
    *  the fresh scan cannot be poisoned by an in-flight stale one. */
   async findPathOnDisk(cwd: string, sessionId: string): Promise<string | null> {
     const registration = await this.agentRegistry.get(cwd, sessionId);
-    if (registration) return registration.state === "deleted" ? null : this.agentSessions.findPath(cwd, sessionId);
+    if (registration)
+      return registration.state === "deleted" ? null : this.agentSessions.findPath(cwd, sessionId);
     const root = sessionsRoot(cwd);
     const scan = await performScan(root);
-    return filesFromDirs(scan?.dirs ?? {}).find(({ header }) => header.id === sessionId)?.path
-      ?? this.agentSessions.findPath(cwd, sessionId);
+    return (
+      filesFromDirs(scan?.dirs ?? {}).find(({ header }) => header.id === sessionId)?.path ??
+      this.agentSessions.findPath(cwd, sessionId)
+    );
   }
 
   async list(cwd: string): Promise<SessionInfoRecord[]> {
@@ -664,9 +766,11 @@ export class SessionRepository {
     ]);
     const root = sessionsRoot(cwd);
     const visibleFiles = files.filter((file) => {
-      if (typeof file.header.id === "string" && Object.hasOwn(registered, file.header.id)) return false;
+      if (typeof file.header.id === "string" && Object.hasOwn(registered, file.header.id))
+        return false;
       if (!isUserVisibleSession(root, file)) return false;
-      const parentSession = typeof file.header.parentSession === "string" ? file.header.parentSession : "";
+      const parentSession =
+        typeof file.header.parentSession === "string" ? file.header.parentSession : "";
       // A named top-level session is a user-created fork. An unnamed session
       // with a parentSession is Pi's internal fork context. Do not depend on
       // nested run artifacts for this classification: pi-subagents cleans up
@@ -675,20 +779,35 @@ export class SessionRepository {
       if (file.sessionInfo) return true;
       return !parentSession;
     });
-    const rows: SessionInfoRecord[] = await mapWithConcurrency(visibleFiles, 16, async ({ header, modified, path, mtimeMs, size, ...fileFlags }) => {
-      const headerTimestamp = typeof header.timestamp === "string" ? header.timestamp : null;
-      // updated_at = last real message time, else the session header timestamp
-      // (new sessions without messages), else the file mtime as a fallback.
-      const updatedAt = (await cachedLastMessageTimestamp({ header, modified, path, mtimeMs, size, ...fileFlags })) ?? headerTimestamp ?? modified.toISOString();
-      return {
-        id: String(header.id),
-        cwd: typeof header.cwd === "string" ? header.cwd : resolve(cwd),
-        project_id: project?.id ?? (typeof header.project_id === "string" ? header.project_id : null),
-        name: null,
-        created_at: headerTimestamp,
-        updated_at: updatedAt,
-      };
-    });
+    const rows: SessionInfoRecord[] = await mapWithConcurrency(
+      visibleFiles,
+      16,
+      async ({ header, modified, path, mtimeMs, size, ...fileFlags }) => {
+        const headerTimestamp = typeof header.timestamp === "string" ? header.timestamp : null;
+        // updated_at = last real message time, else the session header timestamp
+        // (new sessions without messages), else the file mtime as a fallback.
+        const updatedAt =
+          (await cachedLastMessageTimestamp({
+            header,
+            modified,
+            path,
+            mtimeMs,
+            size,
+            ...fileFlags,
+          })) ??
+          headerTimestamp ??
+          modified.toISOString();
+        return {
+          id: String(header.id),
+          cwd: typeof header.cwd === "string" ? header.cwd : resolve(cwd),
+          project_id:
+            project?.id ?? (typeof header.project_id === "string" ? header.project_id : null),
+          name: null,
+          created_at: headerTimestamp,
+          updated_at: updatedAt,
+        };
+      },
+    );
     // Sort by the effective updated_at (last message time when present) so the
     // list ordering matches the displayed timestamps.
     for (const agentSession of await this.agentSessions.list(cwd)) {
@@ -696,9 +815,11 @@ export class SessionRepository {
       if (legacy >= 0) rows.splice(legacy, 1);
       rows.push(agentSession);
     }
-    return rows.sort((left, right) => (
-      (right.updated_at ?? "").localeCompare(left.updated_at ?? "") || right.id.localeCompare(left.id)
-    ));
+    return rows.sort(
+      (left, right) =>
+        (right.updated_at ?? "").localeCompare(left.updated_at ?? "") ||
+        right.id.localeCompare(left.id),
+    );
   }
 
   async messagesPage(
@@ -706,9 +827,13 @@ export class SessionRepository {
     sessionId: string,
     options: { before?: string; limit?: number } = {},
   ): Promise<SessionMessagePage> {
-    if (await this.agentRegistry.get(cwd, sessionId)) return this.agentSessions.messagesPage(cwd, sessionId, options);
-    if (await this.agentSessions.findPath(cwd, sessionId)) return this.agentSessions.messagesPage(cwd, sessionId, options);
-    const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
+    if (await this.agentRegistry.get(cwd, sessionId))
+      return this.agentSessions.messagesPage(cwd, sessionId, options);
+    if (await this.agentSessions.findPath(cwd, sessionId))
+      return this.agentSessions.messagesPage(cwd, sessionId, options);
+    const file = (await sessionFiles(sessionsRoot(cwd))).find(
+      ({ header }) => header.id === sessionId,
+    );
     if (!file) {
       return this.agentSessions.messagesPage(cwd, sessionId, options);
     }
@@ -719,30 +844,46 @@ export class SessionRepository {
       return { messages: [], next_cursor: null, has_more: false, snapshot_version: "0:0" };
     }
     const requestedLimit = options.limit ?? HISTORY_PAGE_SIZE;
-    if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > HISTORY_PAGE_MAX_SIZE) {
+    if (
+      !Number.isSafeInteger(requestedLimit) ||
+      requestedLimit < 1 ||
+      requestedLimit > HISTORY_PAGE_MAX_SIZE
+    ) {
       throw new Error(`history limit must be an integer between 1 and ${HISTORY_PAGE_MAX_SIZE}`);
     }
     const decoded = options.before ? decodeMessageCursor(options.before) : null;
     const endOffset = decoded?.offset ?? metadata.size;
     if (decoded?.boundaryHash) {
-      if (endOffset > metadata.size || await messageBoundaryHash(file.path, endOffset) !== decoded.boundaryHash) {
+      if (
+        endOffset > metadata.size ||
+        (await messageBoundaryHash(file.path, endOffset)) !== decoded.boundaryHash
+      ) {
         throw new Error("stale history cursor");
       }
     }
-    const page = await readMessagePage(file.path, endOffset, requestedLimit);
-    const nextBoundaryHash = page.nextOffset === null ? undefined : await messageBoundaryHash(file.path, page.nextOffset);
+    const page = await readMessagePage(file.path, endOffset, requestedLimit, !decoded);
+    const nextBoundaryHash =
+      page.nextOffset === null ? undefined : await messageBoundaryHash(file.path, page.nextOffset);
     return {
       messages: page.messages,
-      next_cursor: page.nextOffset === null ? null : encodeMessageCursor(page.nextOffset, nextBoundaryHash),
+      next_cursor:
+        page.nextOffset === null ? null : encodeMessageCursor(page.nextOffset, nextBoundaryHash),
       has_more: page.hasMore,
       snapshot_version: snapshotVersion(metadata.size, metadata.mtimeMs),
     };
   }
 
-  async userMessageIndex(cwd: string, sessionId: string): Promise<{ messages: SessionUserMessageIndexEntry[]; snapshot_version: string }> {
-    if (await this.agentRegistry.get(cwd, sessionId)) return this.agentSessions.userMessageIndex(cwd, sessionId);
-    if (await this.agentSessions.findPath(cwd, sessionId)) return this.agentSessions.userMessageIndex(cwd, sessionId);
-    const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
+  async userMessageIndex(
+    cwd: string,
+    sessionId: string,
+  ): Promise<{ messages: SessionUserMessageIndexEntry[]; snapshot_version: string }> {
+    if (await this.agentRegistry.get(cwd, sessionId))
+      return this.agentSessions.userMessageIndex(cwd, sessionId);
+    if (await this.agentSessions.findPath(cwd, sessionId))
+      return this.agentSessions.userMessageIndex(cwd, sessionId);
+    const file = (await sessionFiles(sessionsRoot(cwd))).find(
+      ({ header }) => header.id === sessionId,
+    );
     if (!file) return this.agentSessions.userMessageIndex(cwd, sessionId);
     try {
       const metadata = await stat(file.path);
@@ -756,9 +897,13 @@ export class SessionRepository {
   }
 
   async messages(cwd: string, sessionId: string): Promise<SessionMessageRecord[]> {
-    if (await this.agentRegistry.get(cwd, sessionId)) return this.agentSessions.messages(cwd, sessionId);
-    if (await this.agentSessions.findPath(cwd, sessionId)) return this.agentSessions.messages(cwd, sessionId);
-    const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
+    if (await this.agentRegistry.get(cwd, sessionId))
+      return this.agentSessions.messages(cwd, sessionId);
+    if (await this.agentSessions.findPath(cwd, sessionId))
+      return this.agentSessions.messages(cwd, sessionId);
+    const file = (await sessionFiles(sessionsRoot(cwd))).find(
+      ({ header }) => header.id === sessionId,
+    );
     if (!file) return this.agentSessions.messages(cwd, sessionId);
     const rows: SessionMessageRecord[] = [];
     try {

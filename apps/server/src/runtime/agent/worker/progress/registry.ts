@@ -7,4 +7,7 @@ import type { ProgressAdapter } from "./types.js";
  *  measured its own work knows more than a reader of its terminal output, and
  *  the command-reading adapters follow in named-tool order. Each entry can be
  *  left out of a collector to switch that source off. */
-export const DEFAULT_PROGRESS_ADAPTERS: readonly ProgressAdapter[] = [emitterProgressAdapter, ...COMMAND_PROGRESS_ADAPTERS];
+export const DEFAULT_PROGRESS_ADAPTERS: readonly ProgressAdapter[] = [
+  emitterProgressAdapter,
+  ...COMMAND_PROGRESS_ADAPTERS,
+];

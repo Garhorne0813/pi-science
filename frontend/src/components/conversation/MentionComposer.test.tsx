@@ -521,6 +521,8 @@ describe("MentionComposer", () => {
   it("grows with its content, scrolls at the maximum height, and shrinks again", async () => {
     renderComposer();
     const composer = input();
+    expect(composer).toHaveAttribute("rows", "1");
+    expect(composer.style.height).toBe("48px");
 
     Object.defineProperty(composer, "scrollHeight", { configurable: true, value: 120 });
     await typeAt("one\ntwo\nthree");
@@ -534,7 +536,7 @@ describe("MentionComposer", () => {
 
     Object.defineProperty(composer, "scrollHeight", { configurable: true, value: 20 });
     await typeAt("");
-    expect(composer.style.height).toBe("64px");
+    expect(composer.style.height).toBe("48px");
     expect(composer.style.overflowY).toBe("hidden");
   });
 
@@ -569,7 +571,7 @@ describe("MentionComposer", () => {
     const mirror = container.querySelector("[aria-hidden='true']");
 
     expect(clippingFrame).toHaveClass("overflow-hidden", "rounded-t-composer");
-    expect(mirror).toHaveClass("[clip-path:inset(8px_12px)]");
+    expect(mirror).toHaveClass("p-3", "[clip-path:inset(12px)]");
   });
 });
 

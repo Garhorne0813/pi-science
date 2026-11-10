@@ -1,4 +1,7 @@
-import { authorizeKernelPolicy, SANDBOX_GRANT_HEADER } from "../../runtime/sandbox/kernel-authorization.js";
+import {
+  authorizeKernelPolicy,
+  SANDBOX_GRANT_HEADER,
+} from "../../runtime/sandbox/kernel-authorization.js";
 import type { SandboxPolicy } from "../../runtime/sandbox/policy.js";
 import { snapshotSandboxOutputs, sandboxArtifactCapture } from "../../runtime/sandbox/artifacts.js";
 import { SANDBOX_RUNTIME } from "../../runtime/sandbox/settings.js";
@@ -6,7 +9,10 @@ import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { ServerConfig } from "../../config/config.js";
-import { executionRepository } from "../../runtime/executions/execution-repository.js";
+import {
+  executionRepository,
+  type ExecutionRepository,
+} from "../../runtime/executions/execution-repository.js";
 import {
   diffWorkspaceSnapshots,
   type WorkspaceDiff,
@@ -17,7 +23,10 @@ import {
 } from "../../runtime/artifacts/workspace-artifact-publisher.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { WorkspaceEnvironmentService } from "../../runtime/workspace/workspace-environment.js";
-import type { KernelStreamEvent, NodeKernelManager } from "../../runtime/kernel/node-kernel-manager.js";
+import type {
+  KernelStreamEvent,
+  NodeKernelManager,
+} from "../../runtime/kernel/node-kernel-manager.js";
 
 const executeCellRequestSchema = z.object({
   language: z.enum(["python", "r"]),
@@ -40,7 +49,13 @@ const MAX_RESULT_PREVIEW_CHARS = 16 * 1024;
  * project's kernel bridge directly, records execution evidence, and detects
  * files created or modified in the workspace. No Python worker round trip.
  */
-export function registerKernelExecutionRoutes(app: FastifyInstance, config: ServerConfig, environments: WorkspaceEnvironmentService, kernels: NodeKernelManager): void {
+export function registerKernelExecutionRoutes(
+  app: FastifyInstance,
+  config: ServerConfig,
+  environments: WorkspaceEnvironmentService,
+  kernels: NodeKernelManager,
+  executions: ExecutionRepository = executionRepository,
+): void {
   app.get("/api/kernels/status", async () => kernels.status());
 
   app.post("/api/kernels/shutdown-all", async () => {
@@ -50,28 +65,48 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
 
   app.post("/api/kernels/:notebook_id/shutdown", async (request, reply) => {
     const notebookId = (request.params as { notebook_id?: unknown }).notebook_id;
-    if (typeof notebookId !== "string" || !notebookId) return reply.code(400).send({ error: "Missing notebook id" });
+    if (typeof notebookId !== "string" || !notebookId)
+      return reply.code(400).send({ error: "Missing notebook id" });
     const cwdValue = (request.query as { cwd?: unknown }).cwd;
     let cwd: string | undefined;
     if (cwdValue !== undefined) {
-      try { cwd = await validateWorkspaceCwd(String(cwdValue)); }
-      catch (error) { return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) }); }
+      try {
+        cwd = await validateWorkspaceCwd(String(cwdValue));
+      } catch (error) {
+        return reply
+          .code(403)
+          .send({ error: error instanceof Error ? error.message : String(error) });
+      }
     }
     const language = (request.query as { language?: unknown }).language;
-    await kernels.shutdownNotebook(notebookId, cwd, language === undefined ? undefined : String(language));
+    await kernels.shutdownNotebook(
+      notebookId,
+      cwd,
+      language === undefined ? undefined : String(language),
+    );
     return { ok: true };
   });
 
   app.post("/api/kernels/:notebook_id/interrupt", async (request, reply) => {
     const notebookId = (request.params as { notebook_id?: unknown }).notebook_id;
-    if (typeof notebookId !== "string" || !notebookId) return reply.code(400).send({ error: "Missing notebook id" });
+    if (typeof notebookId !== "string" || !notebookId)
+      return reply.code(400).send({ error: "Missing notebook id" });
     const cwdValue = (request.query as { cwd?: unknown }).cwd;
     if (cwdValue === undefined) return reply.code(400).send({ error: "Missing cwd" });
     let cwd: string;
-    try { cwd = await validateWorkspaceCwd(String(cwdValue)); }
-    catch (error) { return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) }); }
+    try {
+      cwd = await validateWorkspaceCwd(String(cwdValue));
+    } catch (error) {
+      return reply
+        .code(403)
+        .send({ error: error instanceof Error ? error.message : String(error) });
+    }
     const language = (request.query as { language?: unknown }).language;
-    const interrupted = await kernels.interruptNotebook(notebookId, cwd, language === undefined ? undefined : String(language));
+    const interrupted = await kernels.interruptNotebook(
+      notebookId,
+      cwd,
+      language === undefined ? undefined : String(language),
+    );
     return { ok: interrupted };
   });
 
@@ -84,27 +119,48 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
     try {
       cwd = await validateWorkspaceCwd(cwdValue);
     } catch (error) {
-      return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) });
+      return reply
+        .code(403)
+        .send({ error: error instanceof Error ? error.message : String(error) });
     }
 
     const body = parsed.data;
     const environment = await environments.ensure(cwd);
     if (body.environment_revision_id && environment.revision_id !== body.environment_revision_id) {
-      return reply.code(409).send({ error: "Requested environment revision is not bound to this workspace" });
+      return reply
+        .code(409)
+        .send({ error: "Requested environment revision is not bound to this workspace" });
     }
     let policy: SandboxPolicy;
-    try { policy = await authorizeKernelPolicy(cwd, environment.revision_id, request.headers[SANDBOX_GRANT_HEADER], config.internalToken, "notebook_run"); }
-    catch (error) { return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) }); }
+    try {
+      policy = await authorizeKernelPolicy(
+        cwd,
+        environment.revision_id,
+        request.headers[SANDBOX_GRANT_HEADER],
+        config.internalToken,
+        "notebook_run",
+      );
+    } catch (error) {
+      return reply
+        .code(403)
+        .send({ error: error instanceof Error ? error.message : String(error) });
+    }
     if (policy.owner) body.session_id = policy.owner;
     const controller = new AbortController();
-    const disconnect = () => { if (!reply.raw.writableEnded) controller.abort(new Error("Kernel client disconnected")); };
+    const disconnect = () => {
+      if (!reply.raw.writableEnded) controller.abort(new Error("Kernel client disconnected"));
+    };
     reply.raw.once("close", disconnect);
-    const kernelTimeoutMs = Math.max(config.upstreamTimeoutMs, (body.timeout_seconds ?? 120) * 1_000 + 5_000);
-    const code = body.code.length <= MAX_RECORDED_CODE_CHARS
-      ? body.code
-      : body.code.slice(0, MAX_RECORDED_CODE_CHARS);
+    const kernelTimeoutMs = Math.max(
+      config.upstreamTimeoutMs,
+      (body.timeout_seconds ?? 120) * 1_000 + 5_000,
+    );
+    const code =
+      body.code.length <= MAX_RECORDED_CODE_CHARS
+        ? body.code
+        : body.code.slice(0, MAX_RECORDED_CODE_CHARS);
     const before = await snapshotSandboxOutputs(cwd, policy);
-    const execution = await executionRepository.start(cwd, {
+    const execution = await executions.start(cwd, {
       kind: "kernel_cell",
       surface: body.language,
       producer: "node-kernel-gateway",
@@ -124,7 +180,10 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
         ...(body.cell_id ? { cell_id: body.cell_id } : {}),
       },
       runtime: {
-        ...(policy.executionGrant ? { execution_grant_id: policy.executionGrant.id } : {}), sandbox_policy_id: policy.id, execution_mode: policy.mode, sandbox: policy.mode === "required" ? SANDBOX_RUNTIME : "trusted-host",
+        ...(policy.executionGrant ? { execution_grant_id: policy.executionGrant.id } : {}),
+        sandbox_policy_id: policy.id,
+        execution_mode: policy.mode,
+        sandbox: policy.mode === "required" ? SANDBOX_RUNTIME : "trusted-host",
         cwd,
         gateway_timeout_ms: kernelTimeoutMs,
         environment_id: environment.environment_id ?? "legacy-venv",
@@ -137,7 +196,14 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
     try {
       const result = await kernels.execute({
         sandboxPolicy: policy,
-        authorize: () => authorizeKernelPolicy(cwd, environment.revision_id, request.headers[SANDBOX_GRANT_HEADER], config.internalToken, "notebook_run"),
+        authorize: () =>
+          authorizeKernelPolicy(
+            cwd,
+            environment.revision_id,
+            request.headers[SANDBOX_GRANT_HEADER],
+            config.internalToken,
+            "notebook_run",
+          ),
         abortSignal: controller.signal,
         language: body.language,
         code: body.code,
@@ -151,9 +217,16 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
       });
       const after = await snapshotSandboxOutputs(cwd, policy);
       const diff = after ? diffWorkspaceSnapshots(before, after) : { created: [], modified: [] };
-      const outputEvidence = await publishKernelOutputs(cwd, diff, execution.execution_id, body, app.log, policy);
+      const outputEvidence = await publishKernelOutputs(
+        cwd,
+        diff,
+        execution.execution_id,
+        body,
+        app.log,
+        policy,
+      );
       const error = result.error;
-      await executionRepository.finish(cwd, execution.execution_id, {
+      await executions.finish(cwd, execution.execution_id, {
         status: result.interrupted ? "interrupted" : result.ok ? "succeeded" : "failed",
         producer: "node-kernel-gateway",
         result: {
@@ -165,34 +238,60 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
           mime: result.mime,
           outputs: result.outputs ?? [],
           ...(error ? { error } : {}),
-          ...(outputEvidence.failures.length > 0 ? { artifact_publish_errors: outputEvidence.failures } : {}),
+          ...(outputEvidence.failures.length > 0
+            ? { artifact_publish_errors: outputEvidence.failures }
+            : {}),
         },
         files: { written: outputEvidence.written },
         artifacts: outputEvidence.artifacts,
       });
-      return reply.send(withExecutionId({
-        ...result,
-        ...(outputEvidence.failures.length > 0 ? { artifact_publish_errors: outputEvidence.failures } : {}),
-      }, execution.execution_id));
+      return reply.send(
+        withExecutionId(
+          {
+            ...result,
+            ...(outputEvidence.failures.length > 0
+              ? { artifact_publish_errors: outputEvidence.failures }
+              : {}),
+          },
+          execution.execution_id,
+        ),
+      );
     } catch (error) {
       const timedOut = error instanceof Error && error.name === "KernelTimeoutError";
-      const message = timedOut ? "kernel timed out" : error instanceof Error ? error.message : "kernel unavailable";
+      const message = timedOut
+        ? "kernel timed out"
+        : error instanceof Error
+          ? error.message
+          : "kernel unavailable";
       const after = await snapshotSandboxOutputs(cwd, policy);
       const diff = after ? diffWorkspaceSnapshots(before, after) : { created: [], modified: [] };
-      const outputEvidence = await publishKernelOutputs(cwd, diff, execution.execution_id, body, app.log, policy);
-      await executionRepository.finish(cwd, execution.execution_id, {
+      const outputEvidence = await publishKernelOutputs(
+        cwd,
+        diff,
+        execution.execution_id,
+        body,
+        app.log,
+        policy,
+      );
+      await executions.finish(cwd, execution.execution_id, {
         status: timedOut ? "timed_out" : "failed",
         producer: "node-kernel-gateway",
         result: {
           ok: false,
           error: message,
-          ...(outputEvidence.failures.length > 0 ? { artifact_publish_errors: outputEvidence.failures } : {}),
+          ...(outputEvidence.failures.length > 0
+            ? { artifact_publish_errors: outputEvidence.failures }
+            : {}),
         },
         files: { written: outputEvidence.written },
         artifacts: outputEvidence.artifacts,
       });
-      return reply.code(timedOut ? 504 : 500).send({ error: message, execution_id: execution.execution_id, request_id: request.id });
-    } finally { reply.raw.removeListener("close", disconnect); }
+      return reply
+        .code(timedOut ? 504 : 500)
+        .send({ error: message, execution_id: execution.execution_id, request_id: request.id });
+    } finally {
+      reply.raw.removeListener("close", disconnect);
+    }
   });
 
   app.post("/api/kernels/execute-stream", async (request, reply) => {
@@ -200,50 +299,102 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
     if (!parsed.success) return reply.code(400).send({ error: "Invalid kernel execution request" });
     const cwdValue = String((request.query as { cwd?: unknown }).cwd ?? ".");
     let cwd: string;
-    try { cwd = await validateWorkspaceCwd(cwdValue); }
-    catch (error) { return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) }); }
+    try {
+      cwd = await validateWorkspaceCwd(cwdValue);
+    } catch (error) {
+      return reply
+        .code(403)
+        .send({ error: error instanceof Error ? error.message : String(error) });
+    }
 
     const body = parsed.data;
     const environment = await environments.ensure(cwd);
     if (body.environment_revision_id && environment.revision_id !== body.environment_revision_id) {
-      return reply.code(409).send({ error: "Requested environment revision is not bound to this workspace" });
+      return reply
+        .code(409)
+        .send({ error: "Requested environment revision is not bound to this workspace" });
     }
     let policy: SandboxPolicy;
-    try { policy = await authorizeKernelPolicy(cwd, environment.revision_id, request.headers[SANDBOX_GRANT_HEADER], config.internalToken, "notebook_run"); }
-    catch (error) { return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) }); }
+    try {
+      policy = await authorizeKernelPolicy(
+        cwd,
+        environment.revision_id,
+        request.headers[SANDBOX_GRANT_HEADER],
+        config.internalToken,
+        "notebook_run",
+      );
+    } catch (error) {
+      return reply
+        .code(403)
+        .send({ error: error instanceof Error ? error.message : String(error) });
+    }
     if (policy.owner) body.session_id = policy.owner;
     const controller = new AbortController();
-    const disconnect = () => { if (!reply.raw.writableEnded) controller.abort(new Error("Kernel client disconnected")); };
+    const disconnect = () => {
+      if (!reply.raw.writableEnded) controller.abort(new Error("Kernel client disconnected"));
+    };
     reply.raw.once("close", disconnect);
-    const kernelTimeoutMs = Math.max(config.upstreamTimeoutMs, (body.timeout_seconds ?? 120) * 1_000 + 5_000);
+    const kernelTimeoutMs = Math.max(
+      config.upstreamTimeoutMs,
+      (body.timeout_seconds ?? 120) * 1_000 + 5_000,
+    );
     const code = body.code.slice(0, MAX_RECORDED_CODE_CHARS);
     const before = await snapshotSandboxOutputs(cwd, policy);
-    const execution = await executionRepository.start(cwd, {
+    const execution = await executions.start(cwd, {
       kind: "kernel_cell",
       surface: body.language,
       producer: "node-kernel-gateway",
-      correlation: { request_id: request.id, ...(body.session_id ? { session_id: body.session_id } : {}) },
+      correlation: {
+        request_id: request.id,
+        ...(body.session_id ? { session_id: body.session_id } : {}),
+      },
       request: {
-        language: body.language, notebook_id: body.notebook_id ?? "default", code,
-        code_sha256: createHash("sha256").update(body.code).digest("hex"), code_truncated: code.length !== body.code.length,
-        timeout_seconds: body.timeout_seconds ?? 120, source: body.source ?? "agent",
-        ...(body.notebook_path ? { notebook_path: body.notebook_path } : {}), ...(body.cell_id ? { cell_id: body.cell_id } : {}),
+        language: body.language,
+        notebook_id: body.notebook_id ?? "default",
+        code,
+        code_sha256: createHash("sha256").update(body.code).digest("hex"),
+        code_truncated: code.length !== body.code.length,
+        timeout_seconds: body.timeout_seconds ?? 120,
+        source: body.source ?? "agent",
+        ...(body.notebook_path ? { notebook_path: body.notebook_path } : {}),
+        ...(body.cell_id ? { cell_id: body.cell_id } : {}),
       },
       runtime: {
-        ...(policy.executionGrant ? { execution_grant_id: policy.executionGrant.id } : {}), sandbox_policy_id: policy.id, execution_mode: policy.mode, sandbox: policy.mode === "required" ? SANDBOX_RUNTIME : "trusted-host",
-        cwd, gateway_timeout_ms: kernelTimeoutMs, environment_id: environment.environment_id ?? "legacy-venv",
-        environment_revision_id: environment.revision_id ?? "legacy-venv", environment_prefix: environment.prefix,
+        ...(policy.executionGrant ? { execution_grant_id: policy.executionGrant.id } : {}),
+        sandbox_policy_id: policy.id,
+        execution_mode: policy.mode,
+        sandbox: policy.mode === "required" ? SANDBOX_RUNTIME : "trusted-host",
+        cwd,
+        gateway_timeout_ms: kernelTimeoutMs,
+        environment_id: environment.environment_id ?? "legacy-venv",
+        environment_revision_id: environment.revision_id ?? "legacy-venv",
+        environment_prefix: environment.prefix,
         ...(body.kernel_instance_id ? { kernel_instance_id: body.kernel_instance_id } : {}),
       },
     });
 
     reply.hijack();
     try {
-      reply.raw.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no", "x-pi-science-kernel": "node", "x-request-id": request.id });
-      reply.raw.write(JSON.stringify({ type: "started", execution_id: execution.execution_id }) + "\n");
+      reply.raw.writeHead(200, {
+        "content-type": "application/x-ndjson; charset=utf-8",
+        "cache-control": "no-cache",
+        "x-accel-buffering": "no",
+        "x-pi-science-kernel": "node",
+        "x-request-id": request.id,
+      });
+      reply.raw.write(
+        JSON.stringify({ type: "started", execution_id: execution.execution_id }) + "\n",
+      );
       const result = await kernels.execute({
         sandboxPolicy: policy,
-        authorize: () => authorizeKernelPolicy(cwd, environment.revision_id, request.headers[SANDBOX_GRANT_HEADER], config.internalToken, "notebook_run"),
+        authorize: () =>
+          authorizeKernelPolicy(
+            cwd,
+            environment.revision_id,
+            request.headers[SANDBOX_GRANT_HEADER],
+            config.internalToken,
+            "notebook_run",
+          ),
         abortSignal: controller.signal,
         language: body.language,
         code: body.code,
@@ -260,61 +411,98 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
       });
       const after = await snapshotSandboxOutputs(cwd, policy);
       const diff = after ? diffWorkspaceSnapshots(before, after) : { created: [], modified: [] };
-      const outputEvidence = await publishKernelOutputs(cwd, diff, execution.execution_id, body, app.log, policy);
+      const outputEvidence = await publishKernelOutputs(
+        cwd,
+        diff,
+        execution.execution_id,
+        body,
+        app.log,
+        policy,
+      );
       const error = result.error;
-      await executionRepository.finish(cwd, execution.execution_id, {
+      await executions.finish(cwd, execution.execution_id, {
         status: result.interrupted ? "interrupted" : result.ok ? "succeeded" : "failed",
         producer: "node-kernel-gateway",
         result: {
-          ok: result.ok, http_status: 200, stdout_preview: preview(result.stdout), stderr_preview: preview(result.stderr), output_preview: preview(result.result),
-          mime: result.mime, outputs: result.outputs ?? [], ...(error ? { error } : {}),
-          ...(outputEvidence.failures.length > 0 ? { artifact_publish_errors: outputEvidence.failures } : {}),
+          ok: result.ok,
+          http_status: 200,
+          stdout_preview: preview(result.stdout),
+          stderr_preview: preview(result.stderr),
+          output_preview: preview(result.result),
+          mime: result.mime,
+          outputs: result.outputs ?? [],
+          ...(error ? { error } : {}),
+          ...(outputEvidence.failures.length > 0
+            ? { artifact_publish_errors: outputEvidence.failures }
+            : {}),
         },
         files: { written: outputEvidence.written },
         artifacts: outputEvidence.artifacts,
       });
       if (!reply.raw.destroyed) {
-        reply.raw.write(JSON.stringify({
-          type: "result",
-          ...result,
-          ...(outputEvidence.failures.length > 0 ? { artifact_publish_errors: outputEvidence.failures } : {}),
-          execution_id: execution.execution_id,
-        }) + "\n");
+        reply.raw.write(
+          JSON.stringify({
+            type: "result",
+            ...result,
+            ...(outputEvidence.failures.length > 0
+              ? { artifact_publish_errors: outputEvidence.failures }
+              : {}),
+            execution_id: execution.execution_id,
+          }) + "\n",
+        );
         reply.raw.end();
       }
       return reply;
     } catch (error) {
       const timedOut = error instanceof Error && error.name === "KernelTimeoutError";
-      const message = timedOut ? "kernel timed out" : error instanceof Error ? error.message : "kernel unavailable";
+      const message = timedOut
+        ? "kernel timed out"
+        : error instanceof Error
+          ? error.message
+          : "kernel unavailable";
       const after = await snapshotSandboxOutputs(cwd, policy);
       const diff = after ? diffWorkspaceSnapshots(before, after) : { created: [], modified: [] };
-      const outputEvidence = await publishKernelOutputs(cwd, diff, execution.execution_id, body, app.log, policy);
-      await executionRepository.finish(cwd, execution.execution_id, {
+      const outputEvidence = await publishKernelOutputs(
+        cwd,
+        diff,
+        execution.execution_id,
+        body,
+        app.log,
+        policy,
+      );
+      await executions.finish(cwd, execution.execution_id, {
         status: timedOut ? "timed_out" : "failed",
         producer: "node-kernel-gateway",
         result: {
           ok: false,
           error: message,
-          ...(outputEvidence.failures.length > 0 ? { artifact_publish_errors: outputEvidence.failures } : {}),
+          ...(outputEvidence.failures.length > 0
+            ? { artifact_publish_errors: outputEvidence.failures }
+            : {}),
         },
         files: { written: outputEvidence.written },
         artifacts: outputEvidence.artifacts,
       });
       if (!reply.raw.destroyed) {
-        reply.raw.write(JSON.stringify({
-          type: "result",
-          ok: false,
-          error: message,
-          ...(outputEvidence.failures.length > 0 ? { artifact_publish_errors: outputEvidence.failures } : {}),
-          execution_id: execution.execution_id,
-        }) + "\n");
+        reply.raw.write(
+          JSON.stringify({
+            type: "result",
+            ok: false,
+            error: message,
+            ...(outputEvidence.failures.length > 0
+              ? { artifact_publish_errors: outputEvidence.failures }
+              : {}),
+            execution_id: execution.execution_id,
+          }) + "\n",
+        );
         reply.raw.end();
       }
       return reply;
-    } finally { reply.raw.removeListener("close", disconnect); }
+    } finally {
+      reply.raw.removeListener("close", disconnect);
+    }
   });
 }
-
 
 async function publishKernelOutputs(
   cwd: string,
@@ -335,21 +523,38 @@ async function publishKernelOutputs(
   failures: WorkspaceArtifactPublishFailure[];
 }> {
   const entries = [...diff.created, ...diff.modified];
-  const published = await publishWorkspaceArtifactsDetailed(cwd, entries.map((entry) => entry.path), {
-    tool: "node-kernel-gateway",
-    ...(policy?.mode === "required" ? { captureFile: sandboxArtifactCapture(cwd, policy) } : {}),
-    executionId,
-    sessionId: body.session_id,
-    source: body.source,
-    notebookPath: body.notebook_path,
-    cellId: body.cell_id,
-    onFailure: (failure) => logger?.warn({
-      execution_id: executionId,
-      artifact_path: failure.path,
-      artifact_error: failure.error,
-      ...(failure.code ? { error_code: failure.code } : {}),
-    }, "Kernel output artifact publication failed"),
-  });
+  const published = await publishWorkspaceArtifactsDetailed(
+    cwd,
+    entries.map((entry) => entry.path),
+    {
+      tool: "node-kernel-gateway",
+      ...(policy?.mode === "required" ? { captureFile: sandboxArtifactCapture(cwd, policy) } : {}),
+      executionId,
+      sessionId: body.session_id,
+      source: body.source,
+      notebookPath: body.notebook_path,
+      cellId: body.cell_id,
+      environment: {
+        language: body.language,
+        ...(body.environment_revision_id
+          ? { environment_revision_id: body.environment_revision_id }
+          : {}),
+        ...(body.notebook_path ? { notebook_path: body.notebook_path } : {}),
+        ...(body.cell_id ? { cell_id: body.cell_id } : {}),
+      },
+      onFailure: (failure) =>
+        logger?.warn(
+          {
+            execution_id: executionId,
+            artifact_path: failure.path,
+            artifact_error: failure.error,
+            ...(failure.code ? { error_code: failure.code } : {}),
+          },
+          "Kernel output artifact publication failed",
+        ),
+    },
+  );
+
   const byPath = new Map(published.artifacts.map((artifact) => [artifact.path, artifact]));
   return {
     written: entries.map((entry) => {
@@ -357,11 +562,13 @@ async function publishKernelOutputs(
       return {
         path: entry.path,
         detection: "snapshot" as const,
-        ...(artifact ? {
-          sha256: artifact.sha256,
-          artifact_id: artifact.artifact_id,
-          artifact_version: artifact.version,
-        } : {}),
+        ...(artifact
+          ? {
+              sha256: artifact.sha256,
+              artifact_id: artifact.artifact_id,
+              artifact_version: artifact.version,
+            }
+          : {}),
       };
     }),
     artifacts: published.artifacts.map((artifact) => ({
@@ -375,7 +582,7 @@ async function publishKernelOutputs(
 
 function objectValue(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : {};
 }
 

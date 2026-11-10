@@ -1,10 +1,18 @@
-import type { MemoryCommand } from "../../memory/repository.js";
+import { parseMemoryCommand } from "../../modules/memory/commands.js";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { errorFromWorker, classifySqliteError, SqliteStateError } from "./errors.js";
 import { loadMigrations, validateMigrations } from "./migrations.js";
-import type { Migration, SqlRunResult, SqlStatement, SqlValue, SqliteRequest, SqliteRequestInput, SqliteWorkerMessage } from "./protocol.js";
+import type {
+  Migration,
+  SqlRunResult,
+  SqlStatement,
+  SqlValue,
+  SqliteRequest,
+  SqliteRequestInput,
+  SqliteWorkerMessage,
+} from "./protocol.js";
 
 export interface SqliteStateStoreOptions {
   path: string;
@@ -12,7 +20,11 @@ export interface SqliteStateStoreOptions {
   queryTimeoutMs?: number;
   migrationTimeoutMs?: number;
   workerPath?: URL | string;
-  logger?: (level: "debug" | "warn" | "error", message: string, details?: Record<string, unknown>) => void;
+  logger?: (
+    level: "debug" | "warn" | "error",
+    message: string,
+    details?: Record<string, unknown>,
+  ) => void;
 }
 
 export interface SqliteDiagnostics {
@@ -53,7 +65,10 @@ export class SqliteStateStore {
 
   constructor(private readonly options: SqliteStateStoreOptions) {
     this.queryTimeoutMs = Math.max(1, options.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS);
-    this.migrationTimeoutMs = Math.max(1, options.migrationTimeoutMs ?? DEFAULT_MIGRATION_TIMEOUT_MS);
+    this.migrationTimeoutMs = Math.max(
+      1,
+      options.migrationTimeoutMs ?? DEFAULT_MIGRATION_TIMEOUT_MS,
+    );
     this.logger = options.logger;
     this.migrations = options.migrations;
     this.workerPath = options.workerPath;
@@ -63,7 +78,9 @@ export class SqliteStateStore {
     if (this.state === "ready") return;
     if (this.startPromise) return this.startPromise;
     if (this.state === "failed") throw this.failure;
-    this.startPromise = this.startWorker().finally(() => { this.startPromise = undefined; });
+    this.startPromise = this.startWorker().finally(() => {
+      this.startPromise = undefined;
+    });
     return this.startPromise;
   }
 
@@ -83,15 +100,15 @@ export class SqliteStateStore {
     return this.request<SqlRunResult[]>({ type: "batch", statements });
   }
 
-  async memory<T = unknown>(command: MemoryCommand): Promise<T> {
+  async memory<T = unknown>(command: unknown): Promise<T> {
     await this.start();
-    return this.request<T>({type: "memory", command});
+    return this.request<T>({ type: "memory", command: parseMemoryCommand(command) });
   }
 
   /** A consistent SQLite snapshot, including committed WAL content. Destination must not exist. */
   async backup(path: string): Promise<void> {
     await this.start();
-    return this.request<void>({type: "backup", path});
+    return this.request<void>({ type: "backup", path });
   }
 
   async close(): Promise<void> {
@@ -100,7 +117,9 @@ export class SqliteStateStore {
       return;
     }
     if (this.closePromise) return this.closePromise;
-    this.closePromise = this.closeWorker().finally(() => { this.closePromise = undefined; });
+    this.closePromise = this.closeWorker().finally(() => {
+      this.closePromise = undefined;
+    });
     return this.closePromise;
   }
 
@@ -120,7 +139,9 @@ export class SqliteStateStore {
   async serialized<T>(key: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.keyedOperations.get(key) ?? Promise.resolve();
     let release!: () => void;
-    const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+    const gate = new Promise<void>((resolveGate) => {
+      release = resolveGate;
+    });
     const pending = previous.catch(() => undefined).then(() => gate);
     this.keyedOperations.set(key, pending);
     await previous.catch(() => undefined);
@@ -150,7 +171,8 @@ export class SqliteStateStore {
     worker.on("error", (error) => this.handleWorkerFailure(error));
     worker.on("exit", (code) => {
       if (this.state === "closing" || this.state === "closed") return;
-      if (code !== 0 || this.state === "ready" || this.state === "starting") this.handleWorkerFailure(new Error(`SQLite worker exited with code ${code}`));
+      if (code !== 0 || this.state === "ready" || this.state === "starting")
+        this.handleWorkerFailure(new Error(`SQLite worker exited with code ${code}`));
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -160,21 +182,33 @@ export class SqliteStateStore {
         this.journalMode = message.journalMode;
         resolve();
       };
-      const onError = (error: Error) => { cleanup(); reject(error); };
-      const cleanup = () => { worker.off("message", onReady); worker.off("error", onError); };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const cleanup = () => {
+        worker.off("message", onReady);
+        worker.off("error", onError);
+      };
       worker.on("message", onReady);
       worker.on("error", onError);
     });
 
     try {
-      const migrations = this.migrations ?? await loadMigrations();
+      const migrations = this.migrations ?? (await loadMigrations());
       validateMigrations(migrations);
-      const result = await this.request<{ schemaVersion: number; journalMode: string }>({ type: "migrate", migrations }, this.migrationTimeoutMs);
+      const result = await this.request<{ schemaVersion: number; journalMode: string }>(
+        { type: "migrate", migrations },
+        this.migrationTimeoutMs,
+      );
       this.schemaVersion = result.schemaVersion;
       this.journalMode = result.journalMode;
       this.state = "ready";
     } catch (error) {
-      const wrapped = error instanceof SqliteStateError ? error : new SqliteStateError(String(error), "SQLITE_MIGRATION", error);
+      const wrapped =
+        error instanceof SqliteStateError
+          ? error
+          : new SqliteStateError(String(error), "SQLITE_MIGRATION", error);
       this.handleWorkerFailure(wrapped);
       throw wrapped;
     }
@@ -190,7 +224,10 @@ export class SqliteStateStore {
     } finally {
       const worker = this.worker;
       this.worker = undefined;
-      for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(new SqliteStateError("SQLite store closed", "SQLITE_CLOSED")); }
+      for (const pending of this.pending.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(new SqliteStateError("SQLite store closed", "SQLITE_CLOSED"));
+      }
       this.pending.clear();
       if (worker) await worker.terminate();
       this.state = "closed";
@@ -198,19 +235,41 @@ export class SqliteStateStore {
   }
 
   private request<T>(request: SqliteRequestInput, timeoutMs = this.queryTimeoutMs): Promise<T> {
-    if (!this.worker || (this.state !== "ready" && this.state !== "starting" && this.state !== "closing")) {
-      return Promise.reject(this.failure ?? new SqliteStateError("SQLite state store is not ready", this.state === "closed" ? "SQLITE_CLOSED" : "SQLITE_NOT_READY"));
+    if (
+      !this.worker ||
+      (this.state !== "ready" && this.state !== "starting" && this.state !== "closing")
+    ) {
+      return Promise.reject(
+        this.failure ??
+          new SqliteStateError(
+            "SQLite state store is not ready",
+            this.state === "closed" ? "SQLITE_CLOSED" : "SQLITE_NOT_READY",
+          ),
+      );
     }
     const id = this.nextRequestId++;
     const message = { ...request, id } as SqliteRequest;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
-        const error = new SqliteStateError(`SQLite ${request.type} request timed out after ${timeoutMs}ms`, "SQLITE_TIMEOUT");
+        const error = new SqliteStateError(
+          `SQLite ${request.type} request timed out after ${timeoutMs}ms`,
+          "SQLITE_TIMEOUT",
+        );
         this.handleWorkerFailure(error);
       }, timeoutMs);
-      this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer, type: request.type });
-      try { this.worker!.postMessage(message); }
-      catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
+      this.pending.set(id, {
+        resolve: resolve as (value: unknown) => void,
+        reject,
+        timer,
+        type: request.type,
+      });
+      try {
+        this.worker!.postMessage(message);
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
@@ -224,18 +283,27 @@ export class SqliteStateStore {
     this.pending.delete(message.id);
     clearTimeout(pending.timer);
     if (message.ok) pending.resolve(message.value);
-    else { const error = errorFromWorker(message.error); Object.assign(error, {statusCode: message.error.statusCode}); pending.reject(error); }
+    else pending.reject(errorFromWorker(message.error));
   }
 
   private handleWorkerFailure(error: unknown): void {
     if (this.state === "closed" || this.state === "closing") return;
-    const classified = error instanceof SqliteStateError ? error : new SqliteStateError(String(error), classifySqliteError(error), error);
+    const classified =
+      error instanceof SqliteStateError
+        ? error
+        : new SqliteStateError(String(error), classifySqliteError(error), error);
     this.failure = classified;
     this.state = "failed";
-    this.logger?.("error", "SQLite worker failed", { code: classified.code, error: classified.message });
+    this.logger?.("error", "SQLite worker failed", {
+      code: classified.code,
+      error: classified.message,
+    });
     const worker = this.worker;
     this.worker = undefined;
-    for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(classified); }
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(classified);
+    }
     this.pending.clear();
     void worker?.terminate();
   }
@@ -256,7 +324,10 @@ export class SqliteStateStore {
     const args: string[] = [];
     for (let index = 0; index < process.execArgv.length; index += 1) {
       const value = process.execArgv[index]!;
-      if (value === "--input-type") { index += 1; continue; }
+      if (value === "--input-type") {
+        index += 1;
+        continue;
+      }
       if (value.startsWith("--input-type=")) continue;
       args.push(value);
     }

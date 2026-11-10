@@ -92,6 +92,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # The real Linux sandbox needs a nested user namespace, and Ubuntu 26.04
+        # (ubuntu-latest since 2026-10-27) refuses the gid map write for it:
+        # "apply-seccomp: write /proc/self/setgroups ... Permission denied".
+        # Pin the image the sandbox is verified on until the runtime supports it.
         os: [ubuntu-24.04, windows-latest]
     # Native process tests remain serialized on Windows to avoid contention.
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 20 }}
@@ -145,6 +149,10 @@ jobs:
       - name: Check Windows worker startup before the full IPC suite
         if: runner.os == 'Windows'
         run: node scripts/check-worker-startup.mjs
+
+      - name: Check Windows MCP network approval before the full IPC suite
+        if: runner.os == 'Windows'
+        run: pnpm --filter @pi-science/server exec vitest run src/runtime/agent/worker/mcp-tools.test.ts -t "continues local MCP initialization" --fileParallelism=false
 
       # Native process integration tests launch Node, bash and taskkill trees.
       # Serializing server files on the two-core Windows runner prevents unrelated

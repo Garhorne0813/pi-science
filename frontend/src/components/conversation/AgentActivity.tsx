@@ -6,15 +6,17 @@ import type { AgentMessageBlock, ThinkingBlock, ToolCallBlock } from "../../type
 import { activityPolicy } from "../../lib/conversation/activity-policy";
 import { ACTIVITY_SWITCH_DEBOUNCE_MS, MIN_ACTIVITY_VISIBLE_MS, selectDisplayedActivity } from "../../lib/conversation/activity-display-policy";
 import type { PresentedActivity } from "../../lib/conversation/activity-narrative";
-import { groupActivityBlocks, type ActivityGroup } from "../../lib/conversation/activity-groups";
+import { groupActivityBlocks, type ActivityEntry } from "../../lib/conversation/activity-groups";
 import { isLiveLifecycle, type TurnLifecycle } from "../../lib/conversation/turn-presentation";
 import { projectToolActivity } from "../../lib/conversation/projection";
 import { ProgressVisual, useProgressAppearance } from "../progress/ProgressVisual";
 import type { ProgressActivityState } from "../progress/progress-activity-map";
 import { cn } from "../../lib/ui";
 import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
+import { DiffView } from "../code-viewer/DiffView";
 import { parseSuggestions } from "../../lib/conversation";
 import { activityRendererRegistry } from "./activity-renderers/registry";
+import { ActivityCategoryIcon } from "./activity-renderers/ActivityCategoryIcon";
 import styles from "./AgentActivity.module.css";
 
 export type ActivityBlock = AgentMessageBlock | ThinkingBlock | ToolCallBlock;
@@ -50,7 +52,9 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
     : block.kind === "thinking"
       ? block.parts.some((part) => part.text.trim())
       : activityPolicy(block).visibleInExecutionTrace), [blocks]);
-  const activityGroups = useMemo(() => groupActivityBlocks(blocks), [blocks]);
+  // groupActivityBlocks drops the entries the trace never shows; the flat list
+  // below keeps that filtering (and its ordering) and nothing else.
+  const activityEntries = useMemo(() => groupActivityBlocks(blocks).flatMap((group) => group.blocks), [blocks]);
   const traceId = useId();
   // Final answers are rendered by ConversationTurn. Everything else is
   // process history and collapses together once the turn is terminal.
@@ -78,24 +82,36 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
             : thinkingLive
               ? t("conversation.activity.thinking")
               : t("conversation.activity.processLive");
+    // The row names the phase, not just the fact that something runs: the
+    // narrative states already describe the trace groups, and reusing them
+    // keeps the status line and the steps above from disagreeing. Lifecycle
+    // titles such as recovering already are the narrative, so skip a repeat.
+    const narrative = shown
+      ? t(`conversation.activity.narrative.${shown.state}.${shown.domain}`, { defaultValue: "" })
+        || t(`conversation.activity.narrative.${shown.state}`, { defaultValue: "" })
+      : "";
+    const narrativeDetail = narrative && narrative !== title ? narrative : null;
     const visualSlot = shown ? "currentActivity" : "thinking";
     // The stream is always open while live: narration and tool lines render
     // chronologically, and the caller pins the status row after the answer.
     const content = activities.length === 0 ? null : (
       <div id={blocks.length === 1 && blocks[0].kind === "tool" ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
         <div role="region" className={cn(styles.trace, styles.traceLive)} aria-label={t("conversation.activity.trace")}>
-          <ActivityTrace groups={activityGroups} cwd={cwd} live />
+          <ActivityTrace blocks={activityEntries} cwd={cwd} live />
         </div>
       </div>
     );
     const status = (
       <div data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0")}>
         {/* Same compact marker slot as the tool lines above, so the phase
-            title aligns with the step labels. The turn clock sits right
-            after the phase word. */}
-        <div className="flex min-h-primary w-full items-center gap-2 py-1 text-left">
-          <span key={state} className="mx-1 flex w-3.5 shrink-0 justify-center"><ActivityIcon state={state} slot={visualSlot} config={progressAppearance} compact label={title} activityState={activityStateFor(lifecycle, shown)} /></span>
-          <ActivityLabel title={title} detail={null} error={false} elapsed={<LiveElapsed live turnStartedAt={turnStartedAt} />} />
+            title aligns with the step labels: 14px slot at the 24px gutter,
+            no side margin, 8px gap. Measured, that puts the title at x46, the
+            same edge as every step label; the clock sits after the phase word.
+            The 8px padding plus the 24px label line is exactly the 40px
+            min-height, so the row does not grow. */}
+        <div className="flex min-h-primary w-full items-center gap-2 py-2 text-left">
+          <span key={state} className="flex w-3.5 shrink-0 justify-center"><ActivityIcon state={state} slot={visualSlot} config={progressAppearance} compact label={title} activityState={activityStateFor(lifecycle, shown)} /></span>
+          <ActivityLabel title={title} detail={narrativeDetail} error={false} elapsed={<LiveElapsed live turnStartedAt={turnStartedAt} />} />
         </div>
       </div>
     );
@@ -156,35 +172,30 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
 
   return <div id={blocks.length === 1 && blocks[0].kind === "tool" ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
     {traceBlocks.length > 0 ? (
-      <button type="button" aria-label={durationDescription ? `${summaryLabel}. ${durationDescription}` : undefined} aria-expanded={traceExpanded} aria-controls={traceId} onClick={() => setTraceExpanded((value) => !value)} className={cn(styles.summary, "flex min-h-primary w-full items-center gap-2 rounded-input py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-control")}>
+      <button type="button" aria-label={durationDescription ? `${summaryLabel}. ${durationDescription}` : undefined} aria-expanded={traceExpanded} aria-controls={traceId} onClick={() => setTraceExpanded((value) => !value)} className={cn(styles.summary, styles.summaryButton, "flex min-h-primary w-full items-center gap-2 rounded-input py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-control")}>
         <span aria-live="polite" aria-atomic="true" className="min-w-0 flex-1 truncate text-sm font-medium text-text">{summaryLabel}</span>
-        <ChevronRight size={13} aria-hidden className={cn(styles.chevron, "shrink-0 text-muted", traceExpanded && "rotate-90")} />
+        <ChevronRight size={12} aria-hidden className={cn(styles.chevron, "shrink-0 text-muted", traceExpanded && "rotate-90")} />
       </button>
     ) : headline ? (
       <div aria-live="polite" aria-atomic="true" className={cn(styles.summary, "flex min-h-primary w-full items-center py-1 text-sm font-medium text-text")}>{headline}</div>
     ) : null}
-    {traceExpanded && traceBlocks.length > 0 && <div id={traceId} role="region" className={styles.trace} aria-label={t("conversation.activity.trace")}>
-      <ActivityTrace groups={groupActivityBlocks(traceBlocks)} cwd={cwd} />
+    {traceExpanded && traceBlocks.length > 0 && <div id={traceId} role="region" className={cn(styles.trace, styles.traceOpen)} aria-label={t("conversation.activity.trace")}>
+      <ActivityTrace blocks={groupActivityBlocks(traceBlocks).flatMap((group) => group.blocks)} cwd={cwd} />
     </div>}
   </div>;
 }
 
 /** Chronological narration and tool lines. Live turns show the running
- *  tool's pulsing dot; the exploration group carries its own running tally. */
-function ActivityTrace({ groups, cwd, live = false }: { groups: ActivityGroup[]; cwd?: string; live?: boolean }) {
+ *  tool's pulsing dot. The list stays flat: a caption above a run of reads
+ *  repeated what the status row already says, indented the steps under a
+ *  heading nobody needed, and cost a type-scale step of its own. */
+function ActivityTrace({ blocks, cwd, live = false }: { blocks: ActivityEntry[]; cwd?: string; live?: boolean }) {
   return <>
-    {groups.map((group) => {
-      const entries = group.blocks.map((block) => block.kind === "agent"
-        ? <div key={block.id} id={`thread-block-${block.id}`} className={cn(styles.entry, styles.narration, "min-w-0")}><MarkdownViewer variant="chat" mode={block.partial ? "streaming" : "final"} className="text-ui-body leading-relaxed text-muted [overflow-wrap:anywhere]" resourceContext={cwd ? { cwd } : undefined}>{parseSuggestions(block.parts.map((part) => part.text).join("")).clean}</MarkdownViewer></div>
-        : block.kind === "thinking"
-          ? <ThinkingRow key={block.id} block={block} />
-          : <TraceItem key={block.id} block={block} live={live} />);
-      if (group.kind !== "exploration" || group.blocks.length < 2) return entries;
-      return <div key={group.id} data-activity-group-id={group.id} className={cn(styles.entry, "min-w-0")}>
-        <GroupSummary group={group} live={live} />
-        {entries}
-      </div>;
-    })}
+    {blocks.map((block) => block.kind === "agent"
+      ? <div key={block.id} id={`thread-block-${block.id}`} className={cn(styles.entry, styles.narration, "min-w-0")}><MarkdownViewer variant="chat" mode={block.partial ? "streaming" : "final"} className="text-ui-body leading-relaxed text-muted [overflow-wrap:anywhere]" resourceContext={cwd ? { cwd } : undefined}>{parseSuggestions(block.parts.map((part) => part.text).join("")).clean}</MarkdownViewer></div>
+      : block.kind === "thinking"
+        ? <ThinkingRow key={block.id} block={block} />
+        : <TraceItem key={block.id} block={block} live={live} />)}
   </>;
 }
 
@@ -195,6 +206,7 @@ function ActivityTrace({ groups, cwd, live = false }: { groups: ActivityGroup[];
 function ThinkingRow({ block }: { block: ThinkingBlock }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const panelId = useId();
   const text = block.parts.map((part) => part.text).join("");
   const running = block.partial === true;
   const duration = running ? null : stepDuration(block);
@@ -202,15 +214,15 @@ function ThinkingRow({ block }: { block: ThinkingBlock }) {
   // fragment streams at the right edge of the row.
   const liveTail = running ? lastStreamLine(text) : null;
   return <div id={`thread-block-${block.id}`} data-running={running} className={cn(styles.entry, styles.thinking, "min-w-0")}>
-    <button type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)} className={cn(styles.toolButton, "flex min-h-primary max-w-full items-center gap-2 rounded-input py-1.5 text-left text-ui-label text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-control")}>
+    <button type="button" aria-expanded={expanded} aria-controls={panelId} onClick={() => setExpanded((value) => !value)} className={cn(styles.toolButton, "flex min-h-primary max-w-full items-center gap-2 rounded-input py-2 text-left text-ui-label text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-control")}>
       {running ? <span aria-hidden className="mx-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : <Check size={14} aria-hidden className="shrink-0 text-muted" />}
-      <span className="min-w-0 truncate">{t("conversation.activity.thinking")}</span>
-      {liveTail && <span aria-hidden className="hidden min-w-0 flex-1 truncate text-right font-mono text-[10px] text-muted sm:block">{liveTail}</span>}
-      {duration && <span aria-hidden="true" className="shrink-0 font-mono text-[10px] tabular-nums text-muted">{duration}</span>}
+      <span className="min-w-0 truncate">{t(running ? "conversation.activity.thinking" : "conversation.activity.reasoning")}</span>
+      {liveTail && <span aria-hidden className="hidden min-w-0 flex-1 truncate text-right font-mono text-ui-micro text-muted sm:block">{liveTail}</span>}
+      {duration && <span aria-hidden="true" className="shrink-0 font-mono text-ui-micro tabular-nums text-muted">{duration}</span>}
       {running && <LiveStepElapsed since={block.startedAt} />}
       <ChevronRight size={12} aria-hidden className={cn(styles.chevron, "shrink-0 transition-transform", expanded && "rotate-90")} />
     </button>
-    {expanded && <div className={cn(styles.details, "pb-2 pl-6")}>
+    {expanded && <div id={panelId} className={cn(styles.details, "pb-2 pl-6")}>
       <div className="whitespace-pre-wrap text-ui-caption italic leading-snug text-muted [overflow-wrap:anywhere]">{text}</div>
     </div>}
   </div>;
@@ -233,16 +245,7 @@ function LiveStepElapsed({ since }: { since?: string }) {
     return () => window.clearInterval(timer);
   }, [startedAt]);
   if (startedAt === null) return null;
-  return <span aria-hidden="true" className="shrink-0 font-mono text-[10px] tabular-nums text-muted">{formatSeconds(Math.max(0, (Date.now() - startedAt) / 1000))}</span>;
-}
-
-function GroupSummary({ group, live }: { group: ActivityGroup; live: boolean }) {
-  const { t } = useTranslation();
-  const done = group.blocks.filter((block) => block.kind === "tool" && block.status !== "running").length;
-  const label = live
-    ? t("conversation.activity.exploreSummaryLive", { done, count: group.blocks.length })
-    : t("conversation.activity.exploreSummary", { count: group.blocks.length });
-  return <div className="mb-0.5 text-ui-micro text-muted">{label}</div>;
+  return <span aria-hidden="true" className="shrink-0 font-mono text-ui-micro tabular-nums text-muted">{formatSeconds(Math.max(0, (Date.now() - startedAt) / 1000))}</span>;
 }
 
 function activityStyle(config: ProgressAppearance): CSSProperties {
@@ -289,8 +292,8 @@ function useDisplayedActivity(blocks: ToolCallBlock[], lifecycle: TurnLifecycle)
 function ActivityLabel({ title, detail, error = false, elapsed }: { title: string; detail: string | null; error?: boolean; elapsed?: ReactNode }) {
   return <span aria-live="polite" aria-atomic="true" className={styles.label}>
     <span className={cn(styles.title, "text-text", error && "text-error-text")}>{title}</span>
-    {elapsed}
     {detail && <span className={cn(styles.detail, "text-muted")}>{detail}</span>}
+    {elapsed}
   </span>;
 }
 
@@ -387,20 +390,21 @@ function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
   // While the operation streams, its freshest output line fills the right
   // edge of the row and the chevron sits at the far right; once the step
   // completes the tail makes way for the duration chip.
-  const liveTail = running && block.partialOutput ? lastStreamLine(block.partialOutput) : compact.detail ?? null;
+  const liveTail = running && block.partialOutput ? lastStreamLine(block.partialOutput) : null;
+  const secondary = liveTail ?? compact.detail;
   return <div className={cn(styles.entry, styles.tool)} data-running={running}>
-    <button type="button" disabled={!hasDetails} aria-expanded={hasDetails ? expanded : undefined} onClick={() => hasDetails && setExpanded((value) => !value)} className={cn(styles.toolButton, "flex min-h-primary max-w-full items-center gap-2 rounded-input py-1.5 text-left text-ui-label text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default sm:min-h-control")}>
-      {running ? <span aria-hidden className="mx-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : block.status === "error" ? <CircleX size={14} aria-hidden className="shrink-0 text-error-text" /> : <Check size={14} aria-hidden className="shrink-0 text-muted" />}
-      <span className="min-w-0 truncate">{compact.title}</span>
-      {liveTail && <span aria-hidden className="hidden min-w-0 flex-1 truncate text-right font-mono text-[10px] text-muted sm:block">{liveTail}</span>}
-      {duration && <span aria-hidden="true" className="shrink-0 font-mono text-[10px] tabular-nums text-muted">{duration}</span>}
+    <button type="button" disabled={!hasDetails} aria-expanded={hasDetails ? expanded : undefined} onClick={() => hasDetails && setExpanded((value) => !value)} className={cn(styles.toolButton, "flex min-h-primary max-w-full items-center gap-2 rounded-input py-2 text-left text-ui-label text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default sm:min-h-control")}>
+      {running ? <span aria-hidden className="mx-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : block.status === "error" ? <CircleX size={14} aria-hidden className="shrink-0 text-error-text" /> : <ActivityCategoryIcon block={block} className="text-muted" />}
+      <span className="min-w-0 flex-1"><span className="block max-w-[52ch] truncate" title={compact.title}>{compact.title}</span></span>
+      {secondary && <span className={cn("min-w-0 truncate text-right text-muted", liveTail ? "hidden flex-1 font-mono text-ui-micro sm:block" : "max-w-[40%] text-xs font-normal")}>{secondary}</span>}
+      {duration && <span aria-hidden="true" className="shrink-0 font-mono text-ui-micro tabular-nums text-muted">{duration}</span>}
       {hasDetails && <ChevronRight size={12} aria-hidden className={cn(styles.chevron, "shrink-0 transition-transform", expanded && "rotate-90")} />}
     </button>
     {running && <ToolProgressLayer block={block} />}
     {expanded && hasDetails && details && <div className={cn(styles.details, "space-y-2 pb-2 pl-6 text-xs")}>
       {details.map((detail, index) => detail.pre || detail.plain
         ? <Detail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} pre={detail.pre} />
-        : <OutputDetail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} fullValue={detail.fullValue} partial={detail.partial} t={t} />)}
+        : <OutputDetail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} fullValue={detail.fullValue} partial={detail.partial} diff={detail.diff} t={t} />)}
     </div>}
   </div>;
 }
@@ -467,12 +471,14 @@ function OutputDetail({
   value,
   fullValue,
   partial = false,
+  diff = false,
   t,
 }: {
   label: string;
   value: string;
   fullValue?: string;
   partial?: boolean;
+  diff?: boolean;
   t: (key: string, options?: Record<string, unknown>) => string;
 }) {
   const [showFull, setShowFull] = useState(false);
@@ -480,15 +486,17 @@ function OutputDetail({
   const canShowFull = Boolean(fullValue && fullValue.length > DETAIL_PREVIEW_LIMIT);
   const rendered = showFull && canShowFull ? fullValue! : value.slice(0, DETAIL_PREVIEW_LIMIT);
   return <div>
-    <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted">{label}</div>
-    <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-input bg-surface px-2 py-1.5 font-mono text-xs leading-5 text-text">{rendered}</pre>
-    {truncated && <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-muted">
+    <div className="mb-1 text-ui-micro font-medium uppercase tracking-wider text-muted">{label}</div>
+    {diff
+      ? <DiffView diff={rendered} className="max-h-48 overflow-auto break-all rounded-input bg-surface px-2 py-1.5 leading-5" />
+      : <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-input bg-surface px-2 py-1.5 font-mono text-xs leading-5 text-text">{rendered}</pre>}
+    {truncated && <div className="mt-1 flex flex-wrap items-center gap-2 text-ui-micro text-muted">
       <span>{t("conversation.activity.previewTruncated", { count: DETAIL_PREVIEW_LIMIT })}</span>
       {canShowFull
         ? <button type="button" onClick={() => setShowFull((current) => !current)} className="underline underline-offset-2 hover:text-text">{t("conversation.activity.fullOutput")}{showFull ? " ↑" : " ↓"}</button>
         : <span>{t("conversation.activity.fullOutputUnavailable")}</span>}
     </div>}
-    {partial && !truncated && <div className="mt-1 text-[10px] text-muted">{t("conversation.activity.fullOutputUnavailable")}</div>}
+    {partial && !truncated && <div className="mt-1 text-ui-micro text-muted">{t("conversation.activity.fullOutputUnavailable")}</div>}
   </div>;
 }
-function Detail({ label, value, pre = false }: { label: string; value: string; pre?: boolean }) { return <div><div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted">{label}</div>{pre ? <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-input bg-surface px-2 py-1.5 font-mono text-xs leading-5 text-text">{value}</pre> : <div className="font-mono text-xs text-text">{value}</div>}</div>; }
+function Detail({ label, value, pre = false }: { label: string; value: string; pre?: boolean }) { return <div><div className="mb-1 text-ui-micro font-medium uppercase tracking-wider text-muted">{label}</div>{pre ? <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-input bg-surface px-2 py-1.5 font-mono text-xs leading-5 text-text">{value}</pre> : <div className="break-all font-mono text-xs text-text">{value}</div>}</div>; }

@@ -1,4 +1,5 @@
-import { count, detailRecord, genericDetails, meaningfulActivityTitle, record, text } from "./shared";
+import { activityTaskTitle, activityTarget } from "../../../lib/conversation/activity-presenters";
+import { count, detailRecord, genericDetails, record, text } from "./shared";
 import type { ActivityRenderer } from "./types";
 
 function displaySource(value: string): string {
@@ -57,13 +58,14 @@ export const LiteratureActivityRenderer: ActivityRenderer = {
       ?? count(details.resultCount)
       ?? count(details.result_count);
     const retained = count(details.retained) ?? count(details.selected) ?? count(details.retainedCount);
-    const semanticTitle = meaningfulActivityTitle(activity.title, source.tool);
+    const semanticTitle = activityTaskTitle(source);
+    const target = activityTarget(source);
     const genericTitle = activity.state === "running"
       ? t("conversation.activity.literatureRunning", { database })
       : activity.state === "error"
         ? t("conversation.activity.literatureFailed", { database })
         : database;
-    const title = semanticTitle ?? genericTitle;
+    const title = semanticTitle ?? (target ? `${genericTitle} · ${target}` : genericTitle);
     const detail = results === undefined
       ? undefined
       : retained === undefined

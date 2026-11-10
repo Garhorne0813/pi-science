@@ -22,14 +22,28 @@ export const tqdmProgressAdapter: ProgressAdapter = {
       if (!RATE.test(suffix ?? "")) continue;
       const done = Number(current);
       const size = Number(total);
-      if (!Number.isSafeInteger(done) || !Number.isSafeInteger(size) || size <= 0 || done > size) continue;
-      observations.push({ scopeId: `bar:${size}`, scopeLabel: description(text, match.index) ?? "Progress", current: done, total: size, totalKind: "fixed", unit: "items" });
+      if (!Number.isSafeInteger(done) || !Number.isSafeInteger(size) || size <= 0 || done > size)
+        continue;
+      observations.push({
+        scopeId: `bar:${size}`,
+        scopeLabel: description(text, match.index) ?? "Progress",
+        current: done,
+        total: size,
+        totalKind: "fixed",
+        unit: "items",
+      });
     }
     if (observations.length > 0) return observations;
     for (const match of text.matchAll(COUNT_ONLY)) {
       const done = Number(match[1]);
       if (!RATE.test(match[2] ?? "") || !Number.isSafeInteger(done) || done < 0) continue;
-      observations.push({ scopeId: "count", scopeLabel: "Progress", current: done, totalKind: "unknown", unit: "items" });
+      observations.push({
+        scopeId: "count",
+        scopeLabel: "Progress",
+        current: done,
+        totalKind: "unknown",
+        unit: "items",
+      });
     }
     return observations;
   },
@@ -41,5 +55,7 @@ export const tqdmProgressAdapter: ProgressAdapter = {
 function description(text: string, index: number): string | undefined {
   const start = Math.max(text.lastIndexOf("]", index), text.lastIndexOf("\n", index)) + 1;
   const prefix = text.slice(start, index).trim().replace(/:\s*$/, "");
-  return prefix && !/\d/.test(prefix) && !prefix.includes("|") && prefix.length <= 100 ? prefix : undefined;
+  return prefix && !/\d/.test(prefix) && !prefix.includes("|") && prefix.length <= 100
+    ? prefix
+    : undefined;
 }

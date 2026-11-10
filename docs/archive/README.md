@@ -3,6 +3,8 @@
 These proposals, handoffs and validation notes preserve development history.
 They may describe earlier behavior or incomplete plans. Use the
 [current documentation index](../README.md) for supported behavior.
+Feature implementation records are indexed separately in
+[Implementation documents](../implementation/README.md).
 
 - [pr112-stage-a-integration](pr112-stage-a-integration.md)
 - [prd-pr114-main-adaptation](prd-pr114-main-adaptation.md)

@@ -26,7 +26,7 @@ interface Props {
   placeholder: string;
 }
 
-const COMPOSER_MIN_HEIGHT = 64;
+const COMPOSER_MIN_HEIGHT = 48;
 const COMPOSER_MAX_HEIGHT = 160;
 
 interface ComposerSnapshot {
@@ -368,11 +368,11 @@ export function MentionComposer({ cwd, value, mentions = [], entities, onChange,
           navigate={completion.menu.navigate}
         />
       )}
-      <div className="relative min-h-[64px] max-h-[160px] overflow-hidden rounded-t-composer">
+      <div className="relative max-h-[160px] overflow-hidden rounded-t-composer">
         <div
           ref={mirrorRef}
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2 text-sm leading-6 text-text [clip-path:inset(8px_12px)]"
+          className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words p-3 text-sm leading-6 text-text [clip-path:inset(12px)]"
         >
           {renderHighlighted(value, activeEntities)}
           {value.endsWith("\n") ? "\n" : null}
@@ -396,8 +396,8 @@ export function MentionComposer({ cwd, value, mentions = [], entities, onChange,
           onCompositionEnd={onCompositionEnd}
           onScroll={(event) => syncScroll(event.currentTarget)}
           placeholder={placeholder}
-          rows={2}
-          className="relative z-10 min-h-[64px] max-h-[160px] w-full resize-none bg-transparent px-3 py-2 text-sm leading-6 text-transparent caret-text outline-none placeholder:text-muted selection:bg-accent/25"
+          rows={1}
+          className="relative z-10 block max-h-[160px] w-full resize-none bg-transparent p-3 text-sm leading-6 text-transparent caret-text outline-none placeholder:text-muted selection:bg-accent/25 focus-visible:outline-none"
         />
       </div>
     </>

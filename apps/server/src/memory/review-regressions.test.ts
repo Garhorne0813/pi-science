@@ -1,3 +1,5 @@
+import { SessionRepository } from "../runtime/node/session-repository.js";
+import { ExecutionRepository } from "../runtime/executions/execution-repository.js";
 import { afterEach, beforeEach, it, expect, vi } from "vitest";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -6,21 +8,14 @@ import { SqliteStateStore } from "../storage/sqlite/state-store.js";
 import { WorkspaceRepository } from "../storage/sqlite/repositories/workspace-repository.js";
 import { MemoryService } from "./service.js";
 import { MemoryBackground, type BackgroundModel } from "./background.js";
-import {
-  scientific,
-  type MemoryContext,
-  type MemorySettings,
-} from "./schema.js";
+import { scientific, type MemoryContext, type MemorySettings } from "./schema.js";
 let root: string,
   store: SqliteStateStore,
   memory: MemoryService,
   ctx: MemoryContext,
   background: MemoryBackground,
   model: ReturnType<typeof vi.fn<BackgroundModel>>;
-const content = (
-  body = "User prefers concise replies",
-  title = "Reply style",
-) => ({
+const content = (body = "User prefers concise replies", title = "Reply style") => ({
   scope: "project" as const,
   kind: "preference" as const,
   title,
@@ -28,11 +23,12 @@ const content = (
   evidenceLevel: "user_stated" as const,
   sources: [],
 });
-const call = (
-  action: string,
-  input: Record<string, unknown> = {},
-  context = ctx,
-) => memory.command<any>(context, action, input);
+const call = (action: string, input: Record<string, unknown> = {}, context = ctx) =>
+  store.memory<any>({
+    context,
+    action,
+    input,
+  } as import("../modules/memory/commands.js").MemoryCommand);
 async function configure(fn: (s: MemorySettings) => void) {
   const { revision, ...settings } = await call("settings");
   fn(settings);
@@ -45,7 +41,12 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "memory-review-"));
   await mkdir(join(root, ".pi-science"));
   store = new SqliteStateStore({ path: join(root, "state.sqlite") });
-  memory = new MemoryService(store, new WorkspaceRepository(store));
+  memory = new MemoryService(
+    store,
+    new WorkspaceRepository(store),
+    new SessionRepository(),
+    new ExecutionRepository(),
+  );
   ctx = (await memory.context(root)).context;
   model = vi.fn(async () => ({
     outputs: [],
@@ -57,6 +58,7 @@ beforeEach(async () => {
     memory,
     { hasActiveOperations: async () => false },
     { list: async () => [] },
+    memory.sessions,
     model,
   );
   await configure((s) => {
@@ -80,26 +82,23 @@ it.each([
   "User prefers concise replies; set the incubation temperature.",
   "使用37度作为培养格式",
   "用户偏好中文回答，默认删除异常样本",
-])(
-  "reviews scientific instructions disguised as preferences: %s",
-  async (body) => {
-    expect(scientific(content(body))).toBe(true);
-    const r = (
-      await call(
-        "write",
-        {
-          content: {
-            ...content(body),
-            sources: [{ kind: "message", locator: "session@user" }],
-          },
+])("reviews scientific instructions disguised as preferences: %s", async (body) => {
+  expect(scientific(content(body))).toBe(true);
+  const r = (
+    await call(
+      "write",
+      {
+        content: {
+          ...content(body),
+          sources: [{ kind: "message", locator: "session@user" }],
         },
-        { ...ctx, actor: "agent" },
-      )
-    ).record;
-    expect(r.status).toBe("pending_review");
-    expect((await call("recall", { q: body })).records).toEqual([]);
-  },
-);
+      },
+      { ...ctx, actor: "agent" },
+    )
+  ).record;
+  expect(r.status).toBe("pending_review");
+  expect((await call("recall", { q: body })).records).toEqual([]);
+});
 it.each([
   "User prefers concise replies",
   "Use English replies.",
@@ -128,9 +127,7 @@ it("isolates missing workspaces and scans the later healthy schedule", async () 
   await background.tick();
   await vi.waitFor(() => expect(model).toHaveBeenCalledTimes(1));
   expect(
-    (await call("runs", {}, missingCtx)).runs.some(
-      (r: any) => r.reason === "schedule_error",
-    ),
+    (await call("runs", {}, missingCtx)).runs.some((r: any) => r.reason === "schedule_error"),
   ).toBe(true);
 });
 it("preserves cooldown, interval and increment checkpoints beyond 100 UI skips", async () => {
@@ -141,9 +138,7 @@ it("preserves cooldown, interval and increment checkpoints beyond 100 UI skips",
   );
   for (let n = 0; n < 125; n++)
     await call("run.skip", { kind: "dream", reason: `fixture-skip-${n}` });
-  expect((await call("runs")).runs.some((r: any) => r.id === first.id)).toBe(
-    false,
-  );
+  expect((await call("runs")).runs.some((r: any) => r.id === first.id)).toBe(false);
   await configure((s) => {
     s.dream.minIntervalHours = 24;
     s.dream.oncePerWindow = false;
@@ -187,14 +182,11 @@ it("accounts for yesterday's failure and today's retry by individual UTC admissi
   });
   const yesterday = Date.now() - 86400000,
     day = yesterday - (yesterday % 86400000);
-  await store.run("UPDATE memory_run_usage SET day=? WHERE run_id=?", [
-    day,
+  await store.run("UPDATE memory_run_usage SET day=? WHERE run_id=?", [day, r.id]);
+  await store.run("UPDATE memory_dream_runs SET data=json_set(data,'$.startedAt',?) WHERE id=?", [
+    yesterday,
     r.id,
   ]);
-  await store.run(
-    "UPDATE memory_dream_runs SET data=json_set(data,'$.startedAt',?) WHERE id=?",
-    [yesterday, r.id],
-  );
   await call("run.retry", { id: r.id, deadline });
   const second = await call("run.claim", { id: r.id });
   expect(second).not.toBeNull();
@@ -242,7 +234,7 @@ it("preserves terminal run states and makes cancellation idempotent", async () =
       [status, status, r.id],
     );
     await expect(call("run.cancel", { id: r.id })).rejects.toMatchObject({
-      statusCode: 409,
+      kind: "conflict",
     });
     expect(await call("run.get", { id: r.id })).toMatchObject({
       status,
@@ -268,9 +260,9 @@ it("bounds Agent search previews while keeping full read and human pagination", 
   expect(result.truncated).toBe(true);
   expect(result.records[0].body).toBeUndefined();
   expect(result.records[0].sources).toBeUndefined();
-  expect(
-    (await call("read", { id: result.records[0].id }, agent)).record.body,
-  ).toBe(content().body);
+  expect((await call("read", { id: result.records[0].id }, agent)).record.body).toBe(
+    content().body,
+  );
   expect((await call("browse")).total).toBe(30);
 });
 it("pins accepted memory sources and invalidates transitive dependents on change", async () => {
@@ -308,14 +300,14 @@ it("pins accepted memory sources and invalidates transitive dependents on change
     });
   await expect(
     memory.validateContent(root, ctx, pinned, { requirePinnedMemory: true }),
-  ).rejects.toMatchObject({ statusCode: 409 });
+  ).rejects.toMatchObject({ kind: "conflict" });
   await expect(
     call("approve", {
       id: dependent.id,
       expectedRevision: dependent.revision,
       contentHash: dependent.contentHash,
     }),
-  ).rejects.toMatchObject({ statusCode: 409 });
+  ).rejects.toMatchObject({ kind: "conflict" });
 });
 it("rejects pending, archived and unpinned stored memory evidence", async () => {
   const original = (await call("write", { content: content() })).record;
@@ -325,7 +317,7 @@ it("rejects pending, archived and unpinned stored memory evidence", async () => 
   };
   await expect(
     memory.validateContent(root, ctx, raw, { requirePinnedMemory: true }),
-  ).rejects.toMatchObject({ statusCode: 409 });
+  ).rejects.toMatchObject({ kind: "conflict" });
   await call("write", {
     id: original.id,
     operation: "remove",
@@ -333,7 +325,7 @@ it("rejects pending, archived and unpinned stored memory evidence", async () => 
     contentHash: original.contentHash,
   });
   await expect(memory.validateContent(root, ctx, raw)).rejects.toMatchObject({
-    statusCode: 409,
+    kind: "conflict",
   });
   const pending = (
     await call("write", {
@@ -345,7 +337,7 @@ it("rejects pending, archived and unpinned stored memory evidence", async () => 
       ...raw,
       sources: [{ kind: "memory", locator: pending.id }],
     }),
-  ).rejects.toMatchObject({ statusCode: 409 });
+  ).rejects.toMatchObject({ kind: "conflict" });
 });
 
 it("reconciles unsafe legacy auto-accepted records into review before recall", async () => {
@@ -384,7 +376,7 @@ it("rejects new memory cycles and invalidates dependents after upstream deletion
       contentHash: a.contentHash,
       content: cycle,
     }),
-  ).rejects.toMatchObject({ statusCode: 400 });
+  ).rejects.toMatchObject({ kind: "invalid_input" });
   await call("delete", {
     id: a.id,
     expectedRevision: a.revision,
@@ -468,9 +460,7 @@ async function budgetRun(key: string) {
   return call("run.claim", { id: r.id });
 }
 async function journal(leaseToken: string) {
-  return store.get<any>("SELECT * FROM memory_run_usage WHERE lease_token=?", [
-    leaseToken,
-  ]);
+  return store.get<any>("SELECT * FROM memory_run_usage WHERE lease_token=?", [leaseToken]);
 }
 it.each(["cancel", "fail", "interrupted"] as const)(
   "releases an unused claim after %s without consuming the daily budget",
@@ -500,38 +490,39 @@ it.each(["cancel", "fail", "interrupted"] as const)(
     expect(await budgetRun(terminal + "-next")).not.toBeNull();
   },
 );
-it.each([false, true])(
-  "recovers a crash across restart; dispatched=%s",
-  async (dispatched) => {
-    const r = await budgetRun("crash");
-    if (dispatched)
-      await call("run.dispatch", { id: r.id, leaseToken: r.leaseToken });
-    await store.close();
-    store = new SqliteStateStore({ path: join(root, "state.sqlite") });
-    memory = new MemoryService(store, new WorkspaceRepository(store));
-    await store.start();
-    await store.run(
-      "UPDATE memory_dream_runs SET lease_until=0,data=json_set(data,'$.leaseUntil',0) WHERE id=?",
-      [r.id],
-    );
-    await call("run.reconcile");
-    expect(await journal(r.leaseToken)).toMatchObject({
-      state: dispatched ? "estimated" : "released",
-      reserved_tokens: 0,
-      reserved_cost_usd: 0,
-      tokens: dispatched ? 1000 : 0,
-      cost_usd: dispatched ? 0.1 : 0,
-    });
-    const reclaimed = await call("run.claim", { id: r.id });
-    if (dispatched) expect(reclaimed).toBeNull();
-    else {
-      expect(reclaimed.leaseToken).not.toBe(r.leaseToken);
-      await expect(
-        call("run.dispatch", { id: r.id, leaseToken: r.leaseToken }),
-      ).rejects.toMatchObject({ statusCode: 409 });
-    }
-  },
-);
+it.each([false, true])("recovers a crash across restart; dispatched=%s", async (dispatched) => {
+  const r = await budgetRun("crash");
+  if (dispatched) await call("run.dispatch", { id: r.id, leaseToken: r.leaseToken });
+  await store.close();
+  store = new SqliteStateStore({ path: join(root, "state.sqlite") });
+  memory = new MemoryService(
+    store,
+    new WorkspaceRepository(store),
+    new SessionRepository(),
+    new ExecutionRepository(),
+  );
+  await store.start();
+  await store.run(
+    "UPDATE memory_dream_runs SET lease_until=0,data=json_set(data,'$.leaseUntil',0) WHERE id=?",
+    [r.id],
+  );
+  await call("run.reconcile");
+  expect(await journal(r.leaseToken)).toMatchObject({
+    state: dispatched ? "estimated" : "released",
+    reserved_tokens: 0,
+    reserved_cost_usd: 0,
+    tokens: dispatched ? 1000 : 0,
+    cost_usd: dispatched ? 0.1 : 0,
+  });
+  const reclaimed = await call("run.claim", { id: r.id });
+  if (dispatched) expect(reclaimed).toBeNull();
+  else {
+    expect(reclaimed.leaseToken).not.toBe(r.leaseToken);
+    await expect(
+      call("run.dispatch", { id: r.id, leaseToken: r.leaseToken }),
+    ).rejects.toMatchObject({ kind: "conflict" });
+  }
+});
 it("settles late measured usage after cancellation without reviving the run", async () => {
   const r = await budgetRun("late");
   await call("run.dispatch", { id: r.id, leaseToken: r.leaseToken });
@@ -579,7 +570,7 @@ it("settles late measured usage after cancellation without reviving the run", as
       tokens: 10,
       costUsd: 0.001,
     }),
-  ).rejects.toMatchObject({ statusCode: 409 });
+  ).rejects.toMatchObject({ kind: "conflict" });
   await call("run.usage", {
     id: r.id,
     leaseToken: r.leaseToken,
@@ -593,7 +584,7 @@ it("settles late measured usage after cancellation without reviving the run", as
       tokens: -1,
       costUsd: 0,
     }),
-  ).rejects.toMatchObject({ statusCode: 409 });
+  ).rejects.toMatchObject({ kind: "conflict" });
 });
 it("settles a superseded attempt without touching the replacement lease", async () => {
   const a = await budgetRun("superseded");
@@ -668,9 +659,7 @@ it("reconciles old v6 reservations as unknown spend, never as unused claims", as
     ]);
     await old.close();
     await upgraded.memory({ context: ctx, action: "run.reconcile", input: {} });
-    expect(
-      await upgraded.get<any>("SELECT * FROM memory_run_usage"),
-    ).toMatchObject({
+    expect(await upgraded.get<any>("SELECT * FROM memory_run_usage")).toMatchObject({
       state: "estimated",
       tokens: 1000,
       cost_usd: 0.1,
@@ -698,67 +687,48 @@ it("records safe workspace diagnostics, backs off persistently and resumes after
     failureCount: 1,
   });
   expect(JSON.stringify(event)).not.toContain(gone);
-  const first = (await call("schedules")).find(
-    (r: any) => r.project_id === goneCtx.projectId,
-  );
+  const first = (await call("schedules")).find((r: any) => r.project_id === goneCtx.projectId);
   await background.tick();
   expect(
-    (await call("schedules")).find(
-      (r: any) => r.project_id === goneCtx.projectId,
-    ).failure_count,
+    (await call("schedules")).find((r: any) => r.project_id === goneCtx.projectId).failure_count,
   ).toBe(1);
-  await store.run(
-    "UPDATE memory_dream_schedules SET next_scan_at=0 WHERE project_id=?",
-    [goneCtx.projectId],
-  );
+  await store.run("UPDATE memory_dream_schedules SET next_scan_at=0 WHERE project_id=?", [
+    goneCtx.projectId,
+  ]);
   await background.tick();
-  const second = (await call("schedules")).find(
-    (r: any) => r.project_id === goneCtx.projectId,
-  );
+  const second = (await call("schedules")).find((r: any) => r.project_id === goneCtx.projectId);
   expect(second.failure_count).toBe(2);
   expect(second.next_scan_at).toBeGreaterThan(first.next_scan_at);
   await mkdir(join(gone, ".pi-science"), { recursive: true });
   await call("touch", { cwd: gone }, goneCtx);
   await background.tick();
   expect(
-    (await call("schedules")).find(
-      (r: any) => r.project_id === goneCtx.projectId,
-    ),
+    (await call("schedules")).find((r: any) => r.project_id === goneCtx.projectId),
   ).toMatchObject({ failure_count: 0, next_scan_at: 0, diagnostic: null });
 });
 it.each([
   ["EACCES", "EACCES"],
   ["SQLITE_BUSY", "SQLITE_BUSY"],
   ["SECRET_NOT_A_CODE", "SCHEDULER_ERROR"],
-])(
-  "retains a safe scheduler code for %s without raw messages",
-  async (code, expected) => {
-    const actual = memory.command.bind(memory);
-    vi.spyOn(memory, "command").mockImplementation(
-      async (context, action, input) => {
-        if (action === "frames")
-          throw Object.assign(
-            new Error("private path /secret and sk-private-credential"),
-            { code },
-          );
-        return actual(context, action, input);
-      },
-    );
-    try {
-      await background.tick();
-      const event = (await call("runs")).runs.find(
-        (r: any) => r.reason === "schedule_error",
-      );
-      expect(event.diagnostic).toMatchObject({
-        code: expected,
-        stage: "frame_reconciliation",
-      });
-      expect(JSON.stringify(event)).not.toMatch(/secret|credential/);
-    } finally {
-      vi.restoreAllMocks();
-    }
-  },
-);
+])("retains a safe scheduler code for %s without raw messages", async (code, expected) => {
+  const actual = memory.command.bind(memory);
+  vi.spyOn(memory, "command").mockImplementation(async (context, action, input) => {
+    if (action === "frames")
+      throw Object.assign(new Error("private path /secret and sk-private-credential"), { code });
+    return actual(context, action, input);
+  });
+  try {
+    await background.tick();
+    const event = (await call("runs")).runs.find((r: any) => r.reason === "schedule_error");
+    expect(event.diagnostic).toMatchObject({
+      code: expected,
+      stage: "frame_reconciliation",
+    });
+    expect(JSON.stringify(event)).not.toMatch(/secret|credential/);
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
 it("records measured usage from a provider that returns after cancellation", async () => {
   await seed();
   let release!: () => void;
@@ -788,14 +758,13 @@ it("records measured usage from a provider that returns after cancellation", asy
 });
 it("releases quota on a known preflight failure before the provider is invoked", async () => {
   const models = await import("../runtime/agent/worker/agent-models.js");
-  const spy = vi
-    .spyOn(models, "agentModels")
-    .mockReturnValue({ getModel: () => undefined } as any);
+  const spy = vi.spyOn(models, "agentModels").mockReturnValue({ getModel: () => undefined } as any);
   await background.stop();
   background = new MemoryBackground(
     memory,
     { hasActiveOperations: async () => false },
     { list: async () => [] },
+    memory.sessions,
   );
   try {
     const r = await call("run.enqueue", {
@@ -840,6 +809,7 @@ it("does not treat a zero-filled provider abort as measured zero spend", async (
     memory,
     { hasActiveOperations: async () => false },
     { list: async () => [] },
+    memory.sessions,
   );
   try {
     const r = await call("run.enqueue", {
@@ -880,8 +850,7 @@ it("allows admitted manual runs and explicit retries to recover immediately from
     expect((await call("run.get", { id: run.id })).status).toBe("failed"),
   );
   expect(
-    (await call("schedules")).find((s: any) => s.project_id === ctx.projectId)
-      .next_scan_at,
+    (await call("schedules")).find((s: any) => s.project_id === ctx.projectId).next_scan_at,
   ).toBe(0);
   await error();
   await background.retry(ctx, root, run.id);
@@ -889,7 +858,8 @@ it("allows admitted manual runs and explicit retries to recover immediately from
     expect((await call("run.get", { id: run.id })).status).toBe("completed"),
   );
   expect(model).toHaveBeenCalledTimes(2);
-  expect(
-    (await call("schedules")).find((s: any) => s.project_id === ctx.projectId),
-  ).toMatchObject({ failure_count: 0, next_scan_at: 0 });
+  expect((await call("schedules")).find((s: any) => s.project_id === ctx.projectId)).toMatchObject({
+    failure_count: 0,
+    next_scan_at: 0,
+  });
 });

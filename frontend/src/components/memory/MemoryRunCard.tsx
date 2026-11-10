@@ -3,6 +3,7 @@ import { memoryButton } from "./memory-ui";
 export type MemoryRun = {
   id: string;
   kind: string;
+  purpose?: string;
   status: string;
   createdAt: number;
   startedAt?: number;
@@ -83,7 +84,7 @@ export function MemoryRunCard({
           <span className="space-y-1">
             <span className="block text-ui-label font-medium">
               {t(
-                r.kind === "extraction" ? "memory.extraction" : "memory.dream",
+                r.purpose === "science_review" ? "memory.scienceReview" : r.kind === "extraction" ? "memory.extraction" : "memory.dream",
               )}
             </span>
             <span

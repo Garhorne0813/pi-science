@@ -36,23 +36,42 @@ function cacheControlFor(relative: string): string {
   return relative.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache";
 }
 
-export async function serveFrontend(pathname: string): Promise<{ type: string; stream: NodeJS.ReadableStream; cacheControl: string } | { error: string }> {
+export async function serveFrontend(
+  pathname: string,
+): Promise<
+  { type: string; stream: NodeJS.ReadableStream; cacheControl: string } | { error: string }
+> {
   const dist = resolve(frontendDist());
   const relative = pathname === "/" ? "index.html" : pathname.replace(/^[/\\]+/, "").split("?")[0]!;
   const file = resolve(dist, relative);
   if (file !== dist && !file.startsWith(`${dist}${sep}`)) return { error: "Forbidden" };
   try {
     const info = await stat(file);
-    if (info.isFile()) return { type: mimeType(file), stream: createReadStream(file), cacheControl: cacheControlFor(relative) };
+    if (info.isFile())
+      return {
+        type: mimeType(file),
+        stream: createReadStream(file),
+        cacheControl: cacheControlFor(relative),
+      };
   } catch {
     // Fall through to the SPA entry when the file is absent.
   }
+  if (relative.startsWith("assets/")) return { error: "Frontend asset not found" };
   const index = resolve(dist, "index.html");
   try {
     const info = await stat(index);
-    if (info.isFile()) return { type: "text/html; charset=utf-8", stream: createReadStream(index), cacheControl: "no-store" };
+    if (info.isFile())
+      return {
+        type: "text/html; charset=utf-8",
+        stream: createReadStream(index),
+        cacheControl: "no-store",
+      };
   } catch {
-    return { error: "Frontend build not found; run pnpm build first or set PI_SCIENCE_FRONTEND_DIST" };
+    return {
+      error: "Frontend build not found; run pnpm build first or set PI_SCIENCE_FRONTEND_DIST",
+    };
   }
-  return { error: "Frontend build not found; run pnpm build first or set PI_SCIENCE_FRONTEND_DIST" };
+  return {
+    error: "Frontend build not found; run pnpm build first or set PI_SCIENCE_FRONTEND_DIST",
+  };
 }

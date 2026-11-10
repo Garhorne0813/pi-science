@@ -20,6 +20,7 @@ export interface ActivityDetailView {
   value: string;
   plain?: boolean;
   pre?: boolean;
+  diff?: boolean;
   fullValue?: string;
   partial?: boolean;
 }

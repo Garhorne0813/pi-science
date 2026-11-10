@@ -1,3 +1,15 @@
+import { AgentCoreSessionService } from "../runtime/agent/agent-core-session-service.js";
+import { AgentRuntimeManager } from "../runtime/agent/agent-runtime-manager.js";
+import { AgentSessionRepository } from "../runtime/agent/agent-session-repository.js";
+import { AgentSessionRegistry } from "../runtime/agent/agent-session-registry.js";
+import { DurableTurnLifecycle } from "../runtime/artifacts/turn-lifecycle.js";
+import { DurableEventStore } from "../runtime/events/event-store.js";
+import {
+  PromptSubmissionService,
+  ApprovalInteractionService,
+} from "../runtime/node/session-use-cases.js";
+import { ExecutionRepository } from "../runtime/executions/execution-repository.js";
+import type { SessionServerOptions } from "../runtime/agent/session/types.js";
 import { MemoryService } from "../memory/service.js";
 import { MemoryBackground } from "../memory/background.js";
 import { ConversationEventHub } from "../runtime/events/conversation-event-hub.js";
@@ -22,6 +34,9 @@ import { McpConnectorService } from "../mcp/connector-service.js";
 import { McpRuntimeProjection } from "../mcp/runtime-projection.js";
 
 export interface ServerModules {
+  readonly promptSubmissions: PromptSubmissionService;
+  readonly approvalInteractions: ApprovalInteractionService;
+  readonly executions: ExecutionRepository;
   readonly sessions: NodeSessionService;
   readonly events: ConversationEventHub;
   readonly sessionRepository: SessionRepository;
@@ -49,18 +64,30 @@ export interface ServerModuleOptions {
 }
 
 /** Creates an app-owned module graph. No mutable runtime state is shared across apps. */
-export function createServerModules(config?: ServerConfig, options: ServerModuleOptions = {}): ServerModules {
+export function createServerModules(
+  config?: ServerConfig,
+  options: ServerModuleOptions = {},
+): ServerModules {
   const configuredSqlite = process.env.PI_SCIENCE_SQLITE_STATE;
-  const sqliteEnabled = options.sqliteEnabled
-    ?? (configuredSqlite === "1" || (configuredSqlite !== "0" && process.env.NODE_ENV !== "test"));
-  const stateStore = options.stateStore ?? new SqliteStateStore({ path: sqliteEnabled ? configPath("state.sqlite") : ":memory:" });
+  const sqliteEnabled =
+    options.sqliteEnabled ??
+    (configuredSqlite === "1" || (configuredSqlite !== "0" && process.env.NODE_ENV !== "test"));
+  const stateStore =
+    options.stateStore ??
+    new SqliteStateStore({ path: sqliteEnabled ? configPath("state.sqlite") : ":memory:" });
   const workspaces = new WorkspaceRepository(stateStore);
   const environmentRepository = new EnvironmentRepository(stateStore);
   const jobRepository = new JobRepository(stateStore, workspaces);
-  const events = new ConversationEventHub();
+  const eventStore = new DurableEventStore();
+  const events = new ConversationEventHub(eventStore);
+  const executions = new ExecutionRepository();
   const sessionRepository = new SessionRepository();
   const runtimeCatalog = new AgentCoreCatalogService();
-  const environments = new WorkspaceEnvironmentService(undefined, config?.micromambaExecutable, sqliteEnabled ? environmentRepository : undefined);
+  const environments = new WorkspaceEnvironmentService(
+    undefined,
+    config?.micromambaExecutable,
+    sqliteEnabled ? environmentRepository : undefined,
+  );
   const kernels = new NodeKernelManager();
   const notebooks = new NotebookService({
     micromambaExecutable: config?.micromambaExecutable,
@@ -69,19 +96,96 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
   });
   const settings = new SettingsStore();
   const modelResources = new ModelResourceService({ settings, runtimeCatalog });
-  const coreServer = { backendUrl: config ? `http://127.0.0.1:${config.port}` : undefined, internalToken: config?.internalToken, onWorkerExit: (cwd: string, owner: string) => kernels.shutdownOwner(cwd, owner), hasApprovalResources: (cwd: string, owner: string) => kernels.hasOwner(cwd, owner), revokeApprovalResources: (cwd: string, owner: string) => kernels.revokeOwner(cwd, owner) };
-  const memory = new MemoryService(stateStore, workspaces, sqliteEnabled || process.env.NODE_ENV === "test");
-  const sessionServer = {
+  const sessionServer: SessionServerOptions &
+    Required<
+      Pick<
+        SessionServerOptions,
+        "onWorkerExit" | "hasApprovalResources" | "revokeApprovalResources"
+      >
+    > = {
     backendUrl: config ? `http://127.0.0.1:${config.port}` : undefined,
     internalToken: config?.internalToken,
-    onWorkerExit: coreServer.onWorkerExit,
+    onWorkerExit: (cwd: string, owner: string) => kernels.shutdownOwner(cwd, owner),
+    hasApprovalResources: (cwd: string, owner: string) => kernels.hasOwner(cwd, owner),
+    revokeApprovalResources: (cwd: string, owner: string) => kernels.revokeOwner(cwd, owner),
   };
-  const sessions = new NodeSessionService(events, sessionRepository, environments, null, undefined, modelResources, sessionServer);
+  const memory = new MemoryService(
+    stateStore,
+    workspaces,
+    sessionRepository,
+    executions,
+    sqliteEnabled || process.env.NODE_ENV === "test",
+  );
+  const agentCore = new AgentCoreSessionService(events, environments, sessionServer, {
+    manager: new AgentRuntimeManager(sessionServer.onWorkerExit),
+    repository: new AgentSessionRepository(),
+    registry: new AgentSessionRegistry(),
+    turns: new DurableTurnLifecycle(events),
+  });
+  const sessions = new NodeSessionService(
+    events,
+    sessionRepository,
+    environments,
+    null,
+    eventStore,
+    modelResources,
+    sessionServer,
+    agentCore,
+  );
   const mcpRepository = new McpRepository(stateStore);
-  const mcp = new McpConnectorService(mcpRepository, workspaces, settings, sessions, new McpRuntimeProjection(mcpRepository));
+  const mcp = new McpConnectorService(
+    mcpRepository,
+    workspaces,
+    settings,
+    sessions,
+    new McpRuntimeProjection(mcpRepository),
+  );
   if (sqliteEnabled) sessions.configureBeforeRuntimeStart((cwd) => mcp.materializeWorkspace(cwd));
-  const jobs = new JobCoordinator(environments, {}, undefined, sqliteEnabled ? jobRepository : undefined);
-  const memoryBackground = new MemoryBackground(memory, sessions, jobs);
-  sessions.configureMemory({ settled: (cwd, sessionId) => memoryBackground.turnCompleted(cwd, sessionId), deleted: async (cwd, sessionId) => { const {context} = await memory.context(cwd); await memory.command(context, "frame.delete", {sessionId}); } });
-  return { sessions, events, sessionRepository, runtimeCatalog, settings, modelResources, jobs, memory, memoryBackground, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled, mcp, configureBackendUrl: (url: string) => { coreServer.backendUrl = url; sessionServer.backendUrl = url; } };
+  const promptSubmissions = new PromptSubmissionService(sessions, sessionRepository);
+  const approvalInteractions = new ApprovalInteractionService(
+    sessions,
+    sqliteEnabled ? { mcp, events } : undefined,
+    (message, code) => console.warn(message, code),
+  );
+  const jobs = new JobCoordinator(
+    environments,
+    {},
+    executions,
+    sqliteEnabled ? jobRepository : undefined,
+  );
+  const memoryBackground = new MemoryBackground(memory, sessions, jobs, sessionRepository);
+  sessions.configureMemory({
+    settled: (cwd, sessionId, turnId, status) =>
+      memoryBackground.turnCompleted(cwd, sessionId, turnId, status),
+    deleted: async (cwd, sessionId) => {
+      const { context } = await memory.context(cwd);
+      await memory.command(context, "frame.delete", { sessionId });
+    },
+  });
+  return {
+    promptSubmissions,
+    approvalInteractions,
+    executions,
+    sessions,
+    events,
+    sessionRepository,
+    runtimeCatalog,
+    settings,
+    modelResources,
+    jobs,
+    memory,
+    memoryBackground,
+    environments,
+    kernels,
+    notebooks,
+    stateStore,
+    workspaces,
+    environmentRepository,
+    jobRepository,
+    sqliteEnabled,
+    mcp,
+    configureBackendUrl: (url: string) => {
+      sessionServer.backendUrl = url;
+    },
+  };
 }

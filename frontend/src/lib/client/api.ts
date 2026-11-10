@@ -19,6 +19,7 @@ export class ApiError extends Error {
  *  as `detail` (Python), `error` (Node) or `message` depending on the handler. */
 export function apiErrorMessage(payload: unknown, fallback?: string): string {
   const data = typeof payload === "object" && payload ? payload as Record<string, unknown> : undefined;
+  if (data?.error && typeof data.error === "object" && "message" in data.error && typeof data.error.message === "string") return data.error.message;
   const message = data?.detail ?? data?.error ?? data?.message ?? fallback ?? "Request failed";
   return String(message || "Request failed");
 }

@@ -72,9 +72,32 @@ export const workspaceFiles = {
     return sortFileEntries([...directories, ...uploaded, ...rest].slice(0, SIDEBAR_FILE_LIMIT));
   },
 
-  async remove(cwd: string, path: string): Promise<void> {
-    await apiRequest(`/api/files/${encodeURIComponent(path)}?cwd=${encodeURIComponent(cwd)}`, { method: "DELETE" });
+  async remove(cwd: string, path: string, options: { recursive?: boolean } = {}): Promise<void> {
+    const params = new URLSearchParams({ cwd });
+    if (options.recursive) params.set("recursive", "true");
+    await apiRequest(`/api/files/${encodeURIComponent(path)}?${params}`, { method: "DELETE" });
     this.invalidate();
+  },
+
+  async mkdir(cwd: string, path: string, options: { exclusive?: boolean } = {}): Promise<void> {
+    await apiRequest(`/api/files/mkdir?${new URLSearchParams({ cwd })}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, ...(options.exclusive ? { exclusive: true } : {}) }) });
+    this.invalidate();
+  },
+
+  /** Create an empty file. A duplicate name answers 409 rather than truncating. */
+  async createFile(cwd: string, path: string): Promise<void> {
+    await apiRequest(`/api/files/create?${new URLSearchParams({ cwd })}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
+    this.invalidate();
+  },
+
+  async rename(cwd: string, source: string, target: string): Promise<void> {
+    await apiRequest(`/api/files/rename?${new URLSearchParams({ cwd })}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source, target }) });
+    this.invalidate();
+  },
+
+  /** Reveal a workspace path in the OS file manager (Finder/Explorer/xdg). */
+  async reveal(cwd: string, path: string): Promise<void> {
+    await apiRequest(`/api/files/reveal?${new URLSearchParams({ cwd })}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
   },
 
   formatSize(bytes: number): string {

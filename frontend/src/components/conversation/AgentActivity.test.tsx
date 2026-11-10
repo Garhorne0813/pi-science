@@ -113,7 +113,7 @@ describe("AgentActivity live stream", () => {
     ]} />);
     expect(screen.getByText("Python")).toBeInTheDocument();
     expect(screen.getByText("2 outputs")).toBeInTheDocument();
-    expect(screen.getByText("PubMed")).toBeInTheDocument();
+    expect(screen.getByText("PubMed · kinetics")).toBeInTheDocument();
     expect(screen.getByText("3 results · 1 retained")).toBeInTheDocument();
   });
 
@@ -133,6 +133,8 @@ describe("AgentActivity live stream", () => {
   it("updates the running tool line immediately when consecutive tools share the same phase", () => {
     const read = tool("read", "read", "running", { path: "a.ts", description: "Find why the second reply stops following" });
     const { rerender } = render(<AgentActivity blocks={[read]} />);
+    // The step row names the slice; the purpose the model wrote stays on the
+    // phase row, where a new purpose can replace it on the next event.
     expect(screen.getByText("Reading a.ts")).toBeInTheDocument();
     rerender(<AgentActivity blocks={[{ ...read, status: "done" }, tool("next", "read", "running", { path: "b.ts", description: "Check how virtual list measurements update" })]} />);
     expect(screen.getByText("Working")).toBeInTheDocument();
@@ -147,9 +149,10 @@ describe("AgentActivity live stream", () => {
     expect(screen.queryByText("Understanding your request and deciding what to do next")).not.toBeInTheDocument();
   });
 
-  it("renders one exploration group summary for consecutive reads", () => {
+  it("keeps consecutive reads flat instead of captioning them as a group", () => {
     render(<AgentActivity blocks={[tool("r1", "read", "done", { path: "one.ts" }), tool("r2", "read", "done", { path: "two.ts" })]} />);
-    expect(screen.getByText(/Exploring/)).toBeInTheDocument();
+    expect(screen.queryByText(/Exploring/)).not.toBeInTheDocument();
+    expect(document.querySelector("[data-activity-group-id]")).toBeNull();
     expect(screen.getByText("Reading one.ts")).toBeInTheDocument();
     expect(screen.getByText("Reading two.ts")).toBeInTheDocument();
   });
@@ -259,10 +262,19 @@ describe("AgentActivity live stream", () => {
     expect(document.querySelector('[data-orb-variant="B3"]')).toBeInTheDocument();
   });
 
-  it("uses the thinking pattern when a tool has no semantics", () => {
+  it("shows the shell action without replacing the turn's working indicator", () => {
     render(<AgentActivity blocks={[tool("bash", "bash", "running", { command: "git status" })]} />);
-    expect(screen.getByText("Running bash")).toBeInTheDocument();
+    // The row names the program, never the arguments.
+    expect(screen.getByText("Running git")).toBeInTheDocument();
+    expect(screen.queryByText(/status/)).not.toBeInTheDocument();
     expect(screen.getByText("Working")).toBeInTheDocument();
+  });
+
+  it("names the phase on the live status row", () => {
+    render(<AgentActivity blocks={[tool("read-1", "read", "running", { path: "a.ts" })]} />);
+    expect(screen.getByText("Working")).toBeInTheDocument();
+    // The title stays the phase word; the narrative detail names the phase.
+    expect(screen.getByText(/^Reviewing /)).toBeInTheDocument();
   });
 
   it("holds implementation through test and corrective reads", () => {
@@ -400,6 +412,53 @@ describe("AgentActivity live stream", () => {
     rerender(<AgentActivity blocks={[{ ...bash, status: "done", output: "Installed", startedAt: "2026-09-09T00:00:00.000Z", endedAt: "2026-09-09T00:00:01.900Z" }]} />);
     expect(screen.queryByText("Downloading numpy-1.26.4.whl (56 MB)")).not.toBeInTheDocument();
     expect(screen.getByText("1.9s")).toBeInTheDocument();
+  });
+
+  it("shows compact terminal summaries and keeps full commands in expanded details", () => {
+    render(<AgentActivity blocks={[
+      tool("first", "bash", "done", { command: 'echo "第 1 次调用"; date; hostname' }),
+      { ...tool("second", "bash", "done", { description: "Check Python", command: "python3 -V" }), title: "Running bash" },
+    ]} />);
+    // The row names the program, and quotes, separators and arguments make the
+    // command unverifiable, so it falls back to the neutral tool name.
+    expect(screen.getByText("Running bash")).toBeInTheDocument();
+    expect(screen.queryByText(/hostname/)).not.toBeInTheDocument();
+    expect(screen.getByText("Check Python")).toBeInTheDocument();
+    expect(screen.queryByText("python3 -V")).not.toBeInTheDocument();
+    expect(screen.queryByText("Terminal")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Check Python/ }));
+    expect(screen.getByText("Command").parentElement).toHaveTextContent("python3 -V");
+    fireEvent.click(screen.getByRole("button", { name: "Check Python", expanded: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Running bash" }));
+    expect(screen.getByText("Command").parentElement).toHaveTextContent('echo "第 1 次调用"; date; hostname');
+  });
+
+  it("renders a shell command, exit code and output in the expanded tool row", () => {
+    render(<AgentActivity blocks={[{
+      ...tool("bash", "bash", "done", { command: "pnpm test --filter ui" }),
+      details: { exit_code: 0 },
+      output: "7 passed",
+    }]} />);
+    expect(screen.getByText("Running pnpm")).toBeInTheDocument();
+    expect(screen.queryByText("pnpm test --filter ui")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Running pnpm" }));
+    expect(screen.getByText("Command").parentElement).toHaveTextContent("pnpm test --filter ui");
+    expect(screen.getByText("Exit code").parentElement).toHaveTextContent("0");
+    expect(screen.getByText("Output").parentElement).toHaveTextContent("7 passed");
+  });
+
+  it("shows the read path and contents and highlights a structured edit diff", () => {
+    render(<AgentActivity blocks={[
+      { ...tool("read", "read", "done", { path: "src/main.ts", offset: 2 }), output: "const value = 1;" },
+      { ...tool("edit", "edit", "done", { path: "src/main.ts" }), details: { diff: "-2 const value = 1;\n+2 const value = 2;" } },
+    ]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Reading main.ts:2" }));
+    expect(screen.getByText("File path").parentElement).toHaveTextContent("src/main.ts");
+    expect(screen.getByText("File contents").parentElement).toHaveTextContent("const value = 1;");
+    fireEvent.click(screen.getByRole("button", { name: "Updating main.ts" }));
+    const diff = within(screen.getByText("Diff").parentElement!);
+    expect(diff.getByText("-2 const value = 1;")).toHaveClass("text-error-text");
+    expect(diff.getByText("+2 const value = 2;")).toHaveClass("text-ok-text");
   });
 
   it("shows interaction, failure, and abort lifecycle copy", () => {
@@ -550,7 +609,7 @@ describe("AgentActivity settled display", () => {
   it("exposes structured tool details even when there is no text output", () => {
     render(<AgentActivity lifecycle="settled" blocks={[{ ...tool("structured", "compute"), output: undefined, details: { rows: 3 } }]} />);
     fireEvent.click(screen.getByText(/Complete|Encountered a problem|Stopped|Working/));
-    fireEvent.click(screen.getByText("Running compute"));
+    fireEvent.click(screen.getByText("compute"));
     expect(screen.getByText("Details")).toBeInTheDocument();
     expect(screen.getByText(/"rows": 3/)).toBeInTheDocument();
   });
@@ -579,4 +638,78 @@ it("renders discovery matches as escaped plain text with truncation status", () 
   expect(container.textContent).toContain("truncated");
   expect(container.textContent).toContain("<img src=x");
   expect(container.querySelector("strong")).toBeNull();
+});
+
+describe("truncated tool output", () => {
+  it("renders a tail-only tool row without a truncation badge", () => {
+    render(<AgentActivity blocks={[{ ...tool("bash", "bash"), output: "tail only", outputTruncated: true, originalOutputBytes: 123_456 }]} />);
+    // The row still renders normally, with its own tool name and output.
+    expect(screen.getByText("Running bash")).toBeInTheDocument();
+    // The badge is gone: neither the literal nor the translated key may appear.
+    expect(screen.queryByText("Truncated (tail shown)")).toBeNull();
+    expect(screen.queryByText(i18n.t("conversation.activity.outputTruncated"))).toBeNull();
+  });
+
+  it("leaves a complete output unmarked", () => {
+    const { rerender } = render(<AgentActivity blocks={[tool("bash", "bash")]} />);
+    expect(screen.queryByText("Truncated (tail shown)")).toBeNull();
+    // A tool block rebuilt from old data has no flag at all: it must render.
+    rerender(<AgentActivity blocks={[{ kind: "tool", id: "legacy", callId: "legacy-call", tool: "bash", status: "done", output: "complete" }]} />);
+    expect(screen.queryByText("Truncated (tail shown)")).toBeNull();
+  });
+});
+
+describe("Activity step glyphs and disclosure", () => {
+  it("gives each kind of step its own glyph", () => {
+    render(<AgentActivity blocks={[tool("r", "read"), tool("s", "grep"), tool("l", "glob"), tool("w", "edit"), tool("x", "bash"), tool("n", "web_search")]} />);
+    const glyphs = [...document.querySelectorAll("[data-activity-category]")];
+    expect(glyphs.map((node) => node.getAttribute("data-activity-category"))).toEqual(["read", "search", "browse", "edit", "execute", "web"]);
+    // The marker itself has to differ per category, not only carry the attribute.
+    expect(new Set(glyphs.map((node) => node.innerHTML)).size).toBe(glyphs.length);
+  });
+
+  it("keeps the error marker instead of a category glyph", () => {
+    render(<AgentActivity blocks={[tool("e", "read", "error")]} />);
+    expect(document.querySelector("[data-activity-category]")).toBeNull();
+  });
+
+
+  it("names the panel a folded summary opens", () => {
+    const { container } = render(<AgentActivity blocks={[tool("t1", "read")]} lifecycle="aborted" turnStartedAt="2026-10-03T00:00:00.000Z" turnEndedAt="2026-10-03T00:00:04.000Z" />);
+    const summary = screen.getByRole("button", { name: /Stopped · 4\.0s/ });
+    expect(summary).toHaveAttribute("aria-expanded", "false");
+    const panelId = summary.getAttribute("aria-controls");
+    expect(panelId).toBeTruthy();
+    fireEvent.click(summary);
+    expect(summary).toHaveAttribute("aria-expanded", "true");
+    expect(container.querySelector(`[id="${panelId}"]`)).toBe(screen.getByLabelText("Execution trace"));
+  });
+
+  it("names the reasoning panel it opens", () => {
+    render(<AgentActivity blocks={[{ kind: "thinking", id: "reasoning", parts: [{ id: "reasoning-part", text: "Plan the edit" }] }]} />);
+    const row = screen.getByRole("button", { name: "Thinking" });
+    expect(row).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(row);
+    expect(row).toHaveAttribute("aria-expanded", "true");
+    expect(document.getElementById(row.getAttribute("aria-controls") ?? "")).toHaveTextContent("Plan the edit");
+  });
+
+  it("keeps a long step name on one line and offers it in full", () => {
+    const name = "conversation-activity-presenters-with-a-fairly-long-file-name.ts";
+    render(<AgentActivity blocks={[tool("long", "read", "done", { path: name })]} />);
+    const label = screen.getByText(`Reading ${name}`);
+    expect(label).toHaveClass("truncate");
+    expect(label).toHaveAttribute("title", `Reading ${name}`);
+  });
+});
+describe("activity category and read range", () => {
+  it.each([true, false])("renders the read range with server title present: %s", (withTitle) => {
+    const read = tool("read-range", "read", "done", { path: "a.ts", offset: 120, limit: 40 });
+    render(<AgentActivity blocks={[withTitle ? { ...read, presentation: { version: 1, kind: "read", title: "Reading a.ts:120-159", importance: "micro", domain: "code" } } : read]} />);
+    expect(screen.getByText("Reading a.ts:120-159")).toBeInTheDocument();
+  });
+  it.each([["read", "read"], ["grep", "search"], ["bash", "execute"], ["notebook_run", "compute"]])("marks %s as %s", (name, category) => {
+    const { container } = render(<AgentActivity blocks={[tool(name, name)]} />);
+    expect(container.querySelector(`[data-activity-category="${category}"]`)).toBeInTheDocument();
+  });
 });

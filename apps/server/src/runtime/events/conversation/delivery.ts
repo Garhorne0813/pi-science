@@ -7,9 +7,19 @@ export class ConversationDelivery {
   private readonly subscribers = new Map<string, Set<Subscriber>>();
   private readonly pendingInteractions = new Map<string, SseEventRecord[]>();
   constructor(private readonly eventStore: EventStore) {}
-  pendingInteraction(cwd: string, sessionId: string, requestId: string): Record<string, unknown> | undefined {
-    return this.pendingInteractions.get(streamKey(cwd, sessionId))?.map(recordPayload)
-      .find((payload) => payload?.type === "interaction.requested" && payload.requestId === requestId) ?? undefined;
+  pendingInteraction(
+    cwd: string,
+    sessionId: string,
+    requestId: string,
+  ): Record<string, unknown> | undefined {
+    return (
+      this.pendingInteractions
+        .get(streamKey(cwd, sessionId))
+        ?.map(recordPayload)
+        .find(
+          (payload) => payload?.type === "interaction.requested" && payload.requestId === requestId,
+        ) ?? undefined
+    );
   }
   hasSubscribers(cwd: string, sessionId: string): boolean {
     return (this.subscribers.get(streamKey(cwd, sessionId))?.size ?? 0) > 0;
@@ -24,21 +34,23 @@ export class ConversationDelivery {
 
     const request = pending
       .map((record) => recordPayload(record))
-      .find((payload) => (
-        (payload?.type === "interaction.requested")
-        && payload.requestId === requestId
-      ));
-    const toolCallId = request?.questionnaire === true && typeof request.toolCallId === "string"
-      ? request.toolCallId
-      : null;
+      .find(
+        (payload) => payload?.type === "interaction.requested" && payload.requestId === requestId,
+      );
+    const toolCallId =
+      request?.questionnaire === true && typeof request.toolCallId === "string"
+        ? request.toolCallId
+        : null;
     const remaining = pending.filter((record) => {
       const payload = recordPayload(record);
       if (!payload) return true;
+      if (payload.type === "interaction.requested" && payload.requestId === requestId) return false;
       if (
-        (payload.type === "interaction.requested")
-        && payload.requestId === requestId
-      ) return false;
-      if (toolCallId !== null && payload.type === "questionnaire.asked" && payload.toolCallId === toolCallId) return false;
+        toolCallId !== null &&
+        payload.type === "questionnaire.asked" &&
+        payload.toolCallId === toolCallId
+      )
+        return false;
       return true;
     });
     if (remaining.length > 0) this.pendingInteractions.set(key, remaining);
@@ -52,7 +64,13 @@ export class ConversationDelivery {
     replay = true,
   ): Promise<() => void> {
     const key = streamKey(cwd, sessionId);
-    const subscriber: Subscriber = { ready: false, pending: [], delivered: new Set(), cancelled: false, deliver };
+    const subscriber: Subscriber = {
+      ready: false,
+      pending: [],
+      delivered: new Set(),
+      cancelled: false,
+      deliver,
+    };
     const set = this.subscribers.get(key) ?? new Set<Subscriber>();
     set.add(subscriber);
     this.subscribers.set(key, set);
@@ -75,8 +93,17 @@ export class ConversationDelivery {
       return true;
     };
     const records = replay ? await this.eventStore.readAfter(cwd, sessionId, lastEventId) : [];
+    let replayBytes = 0;
     for (const record of records) {
       if (!send(record)) return unsubscribe;
+      replayBytes += Buffer.byteLength(record.data);
+      if (replayBytes >= 64 * 1024) {
+        // Replay is synchronous delivery into a bounded transport. Give socket
+        // consumers a chance to drain between batches without letting live
+        // events overtake history (subscriber.ready remains false).
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        replayBytes = 0;
+      }
     }
     // A page refresh has no in-memory SSE cursor. Re-deliver interactions that
     // are still waiting for a browser response so the UI can reconstruct the
@@ -95,7 +122,12 @@ export class ConversationDelivery {
     subscriber.delivered.clear();
     return unsubscribe;
   }
-  deliver(key: string, payload: Record<string, unknown>, record: SseEventRecord, canPublish: () => boolean): boolean {
+  deliver(
+    key: string,
+    payload: Record<string, unknown>,
+    record: SseEventRecord,
+    canPublish: () => boolean,
+  ): boolean {
     const type = String(payload.type ?? "");
     if (type === "questionnaire.asked" || type === "interaction.requested") {
       const pending = this.pendingInteractions.get(key) ?? [];

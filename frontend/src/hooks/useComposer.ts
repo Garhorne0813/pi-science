@@ -9,6 +9,8 @@ import { useFeedback } from "../components/feedback/feedback-context";
 import type { ResearchStarter } from "../components/conversation/ResearchModePicker";
 import { injectSubagentMentions } from "../lib/conversation";
 import { inlineWorkspaceReferences, validComposerEntities, type ComposerEntity } from "../lib/conversation/composer-document";
+import { useActiveMessageQuote, useMessageQuoteStore } from "../lib/conversation/message-quote";
+import { composeQuotedPrompt } from "../lib/conversation/quoted-message";
 
 /**
  * Composer state and send pipeline: attachments, drag-and-drop, IME guards,
@@ -38,6 +40,7 @@ export function useComposer(params: {
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
   const input = useRuntimeStore((s) => s.draft);
   const setDraft = useRuntimeStore((s) => s.setDraft);
+  const quote = useActiveMessageQuote();
   const composerRevisionRef = useRef(0);
   const setInput = useCallback((value: string) => { composerRevisionRef.current += 1; setDraft(value); }, [setDraft]);
   const [files, updateFiles] = useState<File[]>([]);
@@ -146,8 +149,10 @@ export function useComposer(params: {
     const text = input.trim();
     const references = [...inlineReferences, ...workspaceReferences].filter((reference, index, all) =>
       all.findIndex((other) => other.cwd === reference.cwd && other.path === reference.path) === index);
-    if (!selectedModel || (!text && files.length === 0 && references.length === 0) || working || reviewingProject || configuringModel) return;
-    if (text.startsWith("/") && mentions.length === 0 && files.length === 0 && references.length === 0) {
+    if (!selectedModel || (!text && files.length === 0 && references.length === 0 && !quote) || working || reviewingProject || configuringModel) return;
+    // A quote turns the message into a real prompt, so a slash command cannot
+    // swallow it. The quote would otherwise be dropped without a trace.
+    if (!quote && text.startsWith("/") && mentions.length === 0 && files.length === 0 && references.length === 0) {
       const slashResult = await runSlashCommand(text);
       if (slashResult === "requires-session") return;
       if (slashResult === "handled") {
@@ -166,6 +171,9 @@ export function useComposer(params: {
 
     message = injectSubagentMentions(message, mentions);
     message = injectWorkspaceReferences(message, references);
+    // The quote goes in before the research header, so the skill line stays the
+    // first thing the server reads.
+    if (quote) message = composeQuotedPrompt(quote, message);
 
     const sentResearchMode = research.mode;
     if (sentResearchMode) message = `/skill:auto-research [Workflow: ${sentResearchMode}]\n${message}`;
@@ -173,11 +181,13 @@ export function useComposer(params: {
     const sentFiles = files;
     const sentReferences = workspaceReferences;
     const sentEntities = entities;
+    const sentQuote = quote;
     setInput("");
     research.setMode(null);
     setEntities([]);
     setFiles([]);
     clearWorkspaceReferences(cwd);
+    if (sentQuote) useMessageQuoteStore.getState().clearQuote(sentQuote.source);
     const sentRevision = composerRevisionRef.current;
     onSend?.();
     // A late result belongs to the conversation that sent the prompt. The composer records
@@ -204,6 +214,9 @@ export function useComposer(params: {
         setEntities(sentEntities);
         setFiles(sentFiles);
         sentReferences.forEach((reference) => useUiStore.getState().addWorkspaceReference(reference));
+        // The quote is restored with the draft it was sent with, and only then:
+        // a user who already typed something new owns the composer again.
+        if (sentQuote) useMessageQuoteStore.getState().setQuote(sentQuote);
       });
   };
 
@@ -235,7 +248,7 @@ export function useComposer(params: {
 
   return {
     input, setInput, entities, setEntities, mentions, files, setFiles, dragOver, setDragOver,
-    fileInputRef, inputRef, composingRef, workspaceReferences,
+    fileInputRef, inputRef, composingRef, workspaceReferences, quote,
     handleSend, handleKeyDown, handleDrop, handleFilePick,
   };
 }

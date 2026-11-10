@@ -30,8 +30,8 @@ Retain the original files/export until the reviewed transfer is verified.
 
 ## Enabling and reviewing
 
-Memory, Extraction and Dream start disabled. Enable Memory in application
-Settings → Memory, then independently opt into Extraction or Dream.
+Memory starts enabled with automatic recall and smart review. Extraction and
+Dream can be enabled independently in Settings → Memory.
 Persistent SQLite state is required outside tests; disabling it with
 `PI_SCIENCE_SQLITE_STATE=0` prevents enabling Memory.
 
@@ -264,8 +264,11 @@ content consistently into a new destination. Restore only while the service is
 stopped. Memory's UI JSON export is an interchange/audit export, not a replacement
 for a whole-StateStore backup.
 
-`PROJECT.md` stays an ordinary project document, exposed through
-`/api/project/document`. It is never rewritten when memory is approved. Run,
+Optional workspace `AGENTS.md` is user-owned and never rewritten when Memory
+is approved. Its current content is supplied as project guidance only to
+authorized interactive requests; users may edit, empty or delete it. The old
+`/api/project/document` endpoint is removed. Existing `PROJECT.md` files remain
+ordinary user files, without automatic loading or migration. Run,
 Artifact, Provenance, notebook execution, Skills and execution/file approvals
 remain independent. Historical research archives remain under Run history and
 `/api/project/archives`; the old Memory/Knowledge APIs return 404.
@@ -287,7 +290,7 @@ Against an isolated running backend and its built frontend, run
 archiving, deletion cancellation, hard deletion and the resulting 404/empty search.
 It also verifies combined filters, complete-match totals, pagination, sorting,
 empty results, the mobile filter sheet, human scientific approval, settings persistence, unchanged
-`PROJECT.md`, and desktop/mobile layout.
+user-owned `AGENTS.md`, and desktop/mobile layout.
 It temporarily changes the isolated server's global Memory settings, restores
 them in cleanup, and does not call a paid model.
 

@@ -40,11 +40,8 @@ test("Settings defaults and Composer session selection remain independent", asyn
   await expect(model).toContainText("DeepSeek Chat");
   await model.click();
   await page.getByRole("menuitemradio", { name: "DeepSeek Reasoner", exact: true }).click();
-  await expect(dialog.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
-  expect(defaultWrites).toBe(0);
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(dialog.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
   await expect.poll(() => defaultWrites).toBe(1);
+  await expect(dialog.getByText("Default model saved", { exact: true })).toBeVisible();
   expect(session).toEqual({ model: "deepseek/deepseek-chat", thinking: "off" });
   await dialog.screenshot({ path: testInfo.outputPath("model-selection-default.png"), animations: "disabled" });
   await page.goto(workspaceRoute(VISUAL_CWD, `/session/${VISUAL_SESSION}`));

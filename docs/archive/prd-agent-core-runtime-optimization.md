@@ -1,6 +1,6 @@
 # Agent Core 运行时目标与边界
 
-Pi Science 使用 `@earendil-works/pi-agent-core` 与 `pi-ai` 0.99.2，依赖精确固定。对话、子代理、研究、复查和标题生成通过独立 Worker 执行。本文替代早期阶段性迁移计划，当前实现见[运行时记录](../agent-core-runtime-implementation.md)。
+Pi Science 使用 `@earendil-works/pi-agent-core` 与 `pi-ai` 0.99.2，依赖精确固定。对话、子代理、研究、复查和标题生成通过独立 Worker 执行。本文替代早期阶段性迁移计划，当前实现见[运行时记录](../implementation/agent-core-runtime-implementation.md)。
 
 ## 运行职责
 

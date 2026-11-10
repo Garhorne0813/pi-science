@@ -1,16 +1,49 @@
-import { hasActiveWorkspaceRuntimes, closeIdleWorkspaceRuntimes } from "../../runtime/agent/agent-runtime-manager.js";
-import { withWorkspaceMutation, WorkspaceLifecycleBusyError } from "../../runtime/workspace/workspace-lifecycle.js";
-import { access, cp, lstat, mkdir, readdir, readFile, realpath, rename, stat, rm, writeFile } from "node:fs/promises";
+import {
+  hasActiveWorkspaceRuntimes,
+  closeIdleWorkspaceRuntimes,
+} from "../../runtime/agent/agent-runtime-manager.js";
+import {
+  withWorkspaceMutation,
+  WorkspaceLifecycleBusyError,
+} from "../../runtime/workspace/workspace-lifecycle.js";
+import {
+  access,
+  cp,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  stat,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
-import { configPath, legacyMetadataRoot, metadataRoot, moveWorkspaceMetadata, readJson, removeWorkspaceMetadata, withFileWriteLock, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
+import {
+  configPath,
+  legacyMetadataRoot,
+  metadataRoot,
+  moveWorkspaceMetadata,
+  readJson,
+  removeWorkspaceMetadata,
+  withFileWriteLock,
+  workspaceFile,
+  writeJsonAtomic,
+} from "../../storage/persistence.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { probeMcpHealth, type McpDefinition } from "../../security/mcp-health.js";
 import { egressAuditEnabled, recordEgress } from "../../security/egress-audit.js";
 import { sessionRepository } from "../../runtime/node/session-repository.js";
-import { catalog as skillCatalog, getSkillContent, getSkillInfo, validateDirectory as validateSkillDir } from "../../catalog/skill-catalog.js";
+import {
+  catalog as skillCatalog,
+  getSkillContent,
+  getSkillInfo,
+  validateDirectory as validateSkillDir,
+} from "../../catalog/skill-catalog.js";
 import { probeRequirements } from "../../catalog/skill-requirements.js";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import type { JobCoordinator } from "../../runtime/jobs/job-coordinator.js";
@@ -22,12 +55,30 @@ import { defaultPythonExecutable } from "../../runtime/workspace/workspace-envir
 import { WorkspaceActivityCache } from "../../storage/workspace-activity.js";
 import { ensureProject, readProject, updateProject } from "../../project/project-registry.js";
 
-function q(request: { query: unknown }, key: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[key]; return typeof value === "string" && value ? value : fallback; }
-async function ws(request: { query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): Promise<string | null> { try { return await validateWorkspaceCwd(q(request, "cwd")); } catch (error) { reply.code(403).send({ error: String(error) }); return null; } }
-export function rootDir(): string { return resolve(process.env.PI_SCIENCE_WORKSPACES ?? join(userHome(), "pi-science-workspaces")); }
+function q(request: { query: unknown }, key: string, fallback = "."): string {
+  const value = (request.query as Record<string, unknown>)[key];
+  return typeof value === "string" && value ? value : fallback;
+}
+async function ws(
+  request: { query: unknown },
+  reply: { code: (status: number) => { send: (body: unknown) => unknown } },
+): Promise<string | null> {
+  try {
+    return await validateWorkspaceCwd(q(request, "cwd"));
+  } catch (error) {
+    reply.code(403).send({ error: String(error) });
+    return null;
+  }
+}
+export function rootDir(): string {
+  return resolve(process.env.PI_SCIENCE_WORKSPACES ?? join(userHome(), "pi-science-workspaces"));
+}
 const REGISTERED_WORKSPACES_FILE = "registered-workspaces.json";
 
-async function rememberExternalWorkspace(path: string, workspaceRepository?: WorkspaceRepository): Promise<void> {
+async function rememberExternalWorkspace(
+  path: string,
+  workspaceRepository?: WorkspaceRepository,
+): Promise<void> {
   const canonicalPath = await realpath(path);
   const managedRoot = await realpath(rootDir()).catch(() => rootDir());
   if (pathIsInside(managedRoot, canonicalPath, true)) return;
@@ -36,8 +87,11 @@ async function rememberExternalWorkspace(path: string, workspaceRepository?: Wor
     // Keep a one-time compatibility snapshot for pre-SQLite installations.
     // SQLite remains the canonical writer after this bootstrap snapshot.
     const registryPath = configPath(REGISTERED_WORKSPACES_FILE);
-    try { await access(registryPath); }
-    catch { await writeJsonAtomic(registryPath, [canonicalPath]); }
+    try {
+      await access(registryPath);
+    } catch {
+      await writeJsonAtomic(registryPath, [canonicalPath]);
+    }
     return;
   }
   const registryPath = configPath(REGISTERED_WORKSPACES_FILE);
@@ -48,14 +102,18 @@ async function rememberExternalWorkspace(path: string, workspaceRepository?: Wor
   });
 }
 
-export async function knownWorkspacePaths(workspaceRepository?: WorkspaceRepository): Promise<string[]> {
+export async function knownWorkspacePaths(
+  workspaceRepository?: WorkspaceRepository,
+): Promise<string[]> {
   const paths = new Set<string>();
   if (workspaceRepository) {
     for (const location of await workspaceRepository.listKnown()) {
       try {
         if ((await stat(location.path)).isDirectory()) paths.add(location.path);
         else await workspaceRepository.markMissing(location.path);
-      } catch { await workspaceRepository.markMissing(location.path); }
+      } catch {
+        await workspaceRepository.markMissing(location.path);
+      }
     }
     return [...paths];
   }
@@ -66,28 +124,49 @@ export async function knownWorkspacePaths(workspaceRepository?: WorkspaceReposit
         if (!(await stat(path)).isDirectory()) continue;
         const [project, legacy] = await Promise.all([
           readProject(path),
-          stat(legacyMetadataRoot(path)).then((value) => value.isDirectory()).catch(() => false),
+          stat(legacyMetadataRoot(path))
+            .then((value) => value.isDirectory())
+            .catch(() => false),
         ]);
         if (project || legacy) paths.add(path);
-      } catch { /* skip */ }
+      } catch {
+        /* skip */
+      }
     }
-  } catch { /* workspace root absent */ }
+  } catch {
+    /* workspace root absent */
+  }
   const [registered, pinned] = await Promise.all([
     readJson<string[]>(configPath(REGISTERED_WORKSPACES_FILE), []),
     readJson<string[]>(configPath("pinned.json"), []),
   ]);
   for (const value of [...registered, ...pinned]) {
     const path = resolve(value);
-    try { if ((await stat(path)).isDirectory()) paths.add(path); } catch { /* stale pin */ }
+    try {
+      if ((await stat(path)).isDirectory()) paths.add(path);
+    } catch {
+      /* stale pin */
+    }
   }
   return [...paths];
 }
-async function workspaceInfo(path: string, workspaceRepository: WorkspaceRepository | undefined, activity: WorkspaceActivityCache): Promise<Record<string, unknown>> {
+async function workspaceInfo(
+  path: string,
+  workspaceRepository: WorkspaceRepository | undefined,
+  activity: WorkspaceActivityCache,
+): Promise<Record<string, unknown>> {
   const project = await ensureProject(path);
-  await workspaceRepository?.rememberWorkspace(path, { managed: pathIsInside(rootDir(), path, true), preservePath: pathIsInside(rootDir(), path, true) });
+  await workspaceRepository?.rememberWorkspace(path, {
+    managed: pathIsInside(rootDir(), path, true),
+    preservePath: pathIsInside(rootDir(), path, true),
+  });
   const [sessions, metadata] = await Promise.all([sessionRepository.list(path), stat(path)]);
   const fileActivity = activity.get(path, metadata.mtime.getTime());
-  const lastActivity = sessions.reduce((latest, session) => Math.max(latest, Date.parse(session.updated_at ?? session.created_at ?? "") || 0), fileActivity);
+  const lastActivity = sessions.reduce(
+    (latest, session) =>
+      Math.max(latest, Date.parse(session.updated_at ?? session.created_at ?? "") || 0),
+    fileActivity,
+  );
   return {
     name: project.name,
     path,
@@ -97,51 +176,92 @@ async function workspaceInfo(path: string, workspaceRepository: WorkspaceReposit
     last_activity_at: new Date(lastActivity).toISOString(),
   };
 }
-export function expandUserPath(path: string): string { if (path === "~") return resolve(userHome()); return path.startsWith("~/") || path.startsWith("~\\") ? resolve(userHome(), path.slice(2)) : resolve(path); }
-async function managedWorkspacePath(pathValue: string, action: "delete" | "rename"): Promise<string> {
+export function expandUserPath(path: string): string {
+  if (path === "~") return resolve(userHome());
+  return path.startsWith("~/") || path.startsWith("~\\")
+    ? resolve(userHome(), path.slice(2))
+    : resolve(path);
+}
+async function managedWorkspacePath(
+  pathValue: string,
+  action: "delete" | "rename",
+): Promise<string> {
   const configuredRoot = rootDir();
   const requested = resolve(pathValue);
-  if (!pathIsInside(configuredRoot, requested)) throw new Error(`Cannot ${action} outside workspaces directory`);
+  if (!pathIsInside(configuredRoot, requested))
+    throw new Error(`Cannot ${action} outside workspaces directory`);
   const canonicalRoot = await realpath(configuredRoot);
   let current = configuredRoot;
   for (const part of relative(configuredRoot, requested).split(sep).filter(Boolean)) {
     current = join(current, part);
-    if ((await lstat(current)).isSymbolicLink()) throw new Error(`Cannot ${action} a workspace through a symlink or junction`);
+    if ((await lstat(current)).isSymbolicLink())
+      throw new Error(`Cannot ${action} a workspace through a symlink or junction`);
   }
   const canonicalRequested = await realpath(requested);
-  if (!pathIsInside(canonicalRoot, canonicalRequested)) throw new Error(`Cannot ${action} outside workspaces directory`);
+  if (!pathIsInside(canonicalRoot, canonicalRequested))
+    throw new Error(`Cannot ${action} outside workspaces directory`);
   const workspaceParts = relative(canonicalRoot, canonicalRequested).split(sep).filter(Boolean);
   if (workspaceParts.length !== 1) throw new Error(`Cannot ${action} a nested workspace path`);
   const project = await readProject(canonicalRequested);
-  const legacy = await stat(legacyMetadataRoot(canonicalRequested)).then((value) => value.isDirectory()).catch(() => false);
+  const legacy = await stat(legacyMetadataRoot(canonicalRequested))
+    .then((value) => value.isDirectory())
+    .catch(() => false);
   if (!project && !legacy) throw new Error(`Cannot ${action} a directory that is not a workspace`);
   return canonicalRequested;
 }
 
-async function updateWorkspaceLocation(source: string, destination: string, workspaceRepository?: WorkspaceRepository, projectId?: string): Promise<void> {
+async function updateWorkspaceLocation(
+  source: string,
+  destination: string,
+  workspaceRepository?: WorkspaceRepository,
+  projectId?: string,
+): Promise<void> {
   if (workspaceRepository && projectId) {
     const locations = await workspaceRepository.getByProject(projectId);
     let matching: (typeof locations)[number] | undefined;
     for (const location of locations) {
-      const canonical = await realpath(location.path).catch(async () => join(await realpath(dirname(location.path)).catch(() => dirname(location.path)), basename(location.path)));
-      if (canonical === source) { matching = location; break; }
+      const canonical = await realpath(location.path).catch(async () =>
+        join(
+          await realpath(dirname(location.path)).catch(() => dirname(location.path)),
+          basename(location.path),
+        ),
+      );
+      if (canonical === source) {
+        matching = location;
+        break;
+      }
     }
-    if (matching) await workspaceRepository.moveLocation(projectId, matching.path, destination, true);
+    if (matching)
+      await workspaceRepository.moveLocation(projectId, matching.path, destination, true);
     return;
   }
   const pinned = await readJson<string[]>(configPath("pinned.json"), []);
   let changed = false;
-  const updated = await Promise.all(pinned.map(async (path) => {
-    const requested = resolve(path);
-    const canonical = await realpath(requested).catch(async () => join(await realpath(dirname(requested)).catch(() => dirname(requested)), basename(requested)));
-    if (canonical !== source) return path;
-    changed = true;
-    return destination;
-  }));
+  const updated = await Promise.all(
+    pinned.map(async (path) => {
+      const requested = resolve(path);
+      const canonical = await realpath(requested).catch(async () =>
+        join(
+          await realpath(dirname(requested)).catch(() => dirname(requested)),
+          basename(requested),
+        ),
+      );
+      if (canonical !== source) return path;
+      changed = true;
+      return destination;
+    }),
+  );
   if (changed) await writeJsonAtomic(configPath("pinned.json"), updated);
 }
-export function catalogToolCommands(environment: NodeJS.ProcessEnv = process.env, platform = process.platform): ReadonlyArray<readonly [string, string]> {
-  return [["python", defaultPythonExecutable(environment, platform)], ["Node.js", "node"], ["Git", "git"]];
+export function catalogToolCommands(
+  environment: NodeJS.ProcessEnv = process.env,
+  platform = process.platform,
+): ReadonlyArray<readonly [string, string]> {
+  return [
+    ["python", defaultPythonExecutable(environment, platform)],
+    ["Node.js", "node"],
+    ["Git", "git"],
+  ];
 }
 
 type ComputeProbeInput = {
@@ -157,7 +277,7 @@ const REMOTE_PROBE_COMMAND = [
   'printf "hostname="; hostname',
   'printf "os="; uname -srm',
   'printf "cores="; (getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 0)',
-  'printf "memory_bytes="; (awk \'/MemTotal/ { print $2 * 1024 }\' /proc/meminfo 2>/dev/null || sysctl -n hw.memsize 2>/dev/null || echo 0)',
+  "printf \"memory_bytes=\"; (awk '/MemTotal/ { print $2 * 1024 }' /proc/meminfo 2>/dev/null || sysctl -n hw.memsize 2>/dev/null || echo 0)",
   'printf "gpus="; (command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l | tr -d " " || echo 0)',
   'printf "has_slurm="; (command -v sbatch >/dev/null 2>&1 && echo yes || echo no)',
 ].join("; ");
@@ -167,7 +287,10 @@ function formatBytes(value: number): string {
   const units = ["B", "KB", "MB", "GB", "TB"];
   let amount = value;
   let unit = 0;
-  while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; }
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024;
+    unit += 1;
+  }
   return `${amount >= 10 || unit === 0 ? Math.round(amount) : amount.toFixed(1)} ${units[unit]}`;
 }
 
@@ -175,19 +298,28 @@ async function probeComputeMachine(input: ComputeProbeInput): Promise<Record<str
   const host = String(input.host ?? "").trim();
   const user = String(input.user ?? "").trim();
   const port = Number(input.port ?? 22);
-  if (!host || host.startsWith("-") || !/^[a-zA-Z0-9._:[\]-]+$/.test(host)) return { reachable: false, error: "Invalid SSH hostname" };
-  if (user && !/^[a-zA-Z0-9._-]+$/.test(user)) return { reachable: false, error: "Invalid SSH username" };
-  if (!Number.isInteger(port) || port < 1 || port > 65535) return { reachable: false, error: "SSH port must be between 1 and 65535" };
+  if (!host || host.startsWith("-") || !/^[a-zA-Z0-9._:[\]-]+$/.test(host))
+    return { reachable: false, error: "Invalid SSH hostname" };
+  if (user && !/^[a-zA-Z0-9._-]+$/.test(user))
+    return { reachable: false, error: "Invalid SSH username" };
+  if (!Number.isInteger(port) || port < 1 || port > 65535)
+    return { reachable: false, error: "SSH port must be between 1 and 65535" };
 
   const authMethod = input.auth_method === "password" ? "password" : "key";
   const identityFile = String(input.identity_file ?? "~/.ssh/id_rsa").trim();
   const sshArgs = [
-    "-o", "ConnectTimeout=8",
-    "-o", "ConnectionAttempts=1",
-    "-o", "ServerAliveInterval=5",
-    "-o", "ServerAliveCountMax=1",
-    "-o", "StrictHostKeyChecking=accept-new",
-    "-p", String(port),
+    "-o",
+    "ConnectTimeout=8",
+    "-o",
+    "ConnectionAttempts=1",
+    "-o",
+    "ServerAliveInterval=5",
+    "-o",
+    "ServerAliveCountMax=1",
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+    "-p",
+    String(port),
   ];
   let command = "ssh";
   let args = sshArgs;
@@ -196,11 +328,22 @@ async function probeComputeMachine(input: ComputeProbeInput): Promise<Record<str
     if (!input.password) return { reachable: false, error: "Password is required for this probe" };
     command = "sshpass";
     environment.SSHPASS = String(input.password);
-    args = ["-e", "ssh", ...sshArgs, "-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no"];
+    args = [
+      "-e",
+      "ssh",
+      ...sshArgs,
+      "-o",
+      "PreferredAuthentications=password",
+      "-o",
+      "PubkeyAuthentication=no",
+    ];
   } else {
     const keyPath = expandUserPath(identityFile || "~/.ssh/id_rsa");
-    try { await access(keyPath); }
-    catch { return { reachable: false, error: `SSH key not found: ${identityFile || "~/.ssh/id_rsa"}` }; }
+    try {
+      await access(keyPath);
+    } catch {
+      return { reachable: false, error: `SSH key not found: ${identityFile || "~/.ssh/id_rsa"}` };
+    }
     args = [...sshArgs, "-o", "BatchMode=yes", "-i", keyPath];
   }
   args.push(user ? `${user}@${host}` : host, REMOTE_PROBE_COMMAND);
@@ -217,12 +360,31 @@ async function probeComputeMachine(input: ComputeProbeInput): Promise<Record<str
       clearTimeout(timer);
       resolveProbe(result);
     };
-    child.stdout.on("data", (chunk) => { if (stdout.length < 65_536) stdout += String(chunk); });
-    child.stderr.on("data", (chunk) => { if (stderr.length < 16_384) stderr += String(chunk); });
-    child.on("error", (error) => finish({ reachable: false, error: command === "sshpass" && (error as NodeJS.ErrnoException).code === "ENOENT" ? "Password authentication requires sshpass to be installed" : String(error.message) }));
+    child.stdout.on("data", (chunk) => {
+      if (stdout.length < 65_536) stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      if (stderr.length < 16_384) stderr += String(chunk);
+    });
+    child.on("error", (error) =>
+      finish({
+        reachable: false,
+        error:
+          command === "sshpass" && (error as NodeJS.ErrnoException).code === "ENOENT"
+            ? "Password authentication requires sshpass to be installed"
+            : String(error.message),
+      }),
+    );
     child.on("close", (code) => {
-      if (code !== 0) return finish({ reachable: false, error: stderr.trim() || `SSH exited with code ${code}` });
-      const values = Object.fromEntries(stdout.split(/\r?\n/).map((line) => line.split("=")).filter((parts) => parts.length >= 2).map(([key, ...rest]) => [key, rest.join("=").trim()]));
+      if (code !== 0)
+        return finish({ reachable: false, error: stderr.trim() || `SSH exited with code ${code}` });
+      const values = Object.fromEntries(
+        stdout
+          .split(/\r?\n/)
+          .map((line) => line.split("="))
+          .filter((parts) => parts.length >= 2)
+          .map(([key, ...rest]) => [key, rest.join("=").trim()]),
+      );
       finish({
         reachable: true,
         hostname: values.hostname || host,
@@ -248,14 +410,33 @@ const DEMOS: Record<string, { source: string; workspace: string }> = {
   climate: { source: "demos/climate-trends", workspace: "Climate Trends" },
 };
 
-async function mutateWorkspace<T>(paths: string[], reply: { code: (status: number) => { send: (body: unknown) => unknown } }, operation: () => Promise<T>): Promise<T | unknown> {
-  try { return await withWorkspaceMutation(paths, operation); }
-  catch (error) { if (error instanceof WorkspaceLifecycleBusyError) return reply.code(409).send({ error: error.message }); throw error; }
+async function mutateWorkspace<T>(
+  paths: string[],
+  reply: { code: (status: number) => { send: (body: unknown) => unknown } },
+  operation: () => Promise<T>,
+): Promise<T | unknown> {
+  try {
+    return await withWorkspaceMutation(paths, operation);
+  } catch (error) {
+    if (error instanceof WorkspaceLifecycleBusyError)
+      return reply.code(409).send({ error: error.message });
+    throw error;
+  }
 }
 
-export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinator, workspaceRepository?: WorkspaceRepository, mcp?: McpConnectorService, sessions?: Pick<NodeSessionService, "hasActiveOperations" | "closeIdleWorkspace">): void {
-  const activity = new WorkspaceActivityCache((workspace, err) => app.log.warn({ err, workspace }, "Workspace file activity refresh failed or was limited"));
-  app.addHook("onClose", async () => { activity.close(); });
+export function registerCatalogRoutes(
+  app: FastifyInstance,
+  jobs?: JobCoordinator,
+  workspaceRepository?: WorkspaceRepository,
+  mcp?: McpConnectorService,
+  sessions?: Pick<NodeSessionService, "hasActiveOperations" | "closeIdleWorkspace">,
+): void {
+  const activity = new WorkspaceActivityCache((workspace, err) =>
+    app.log.warn({ err, workspace }, "Workspace file activity refresh failed or was limited"),
+  );
+  app.addHook("onClose", async () => {
+    activity.close();
+  });
   // ── Skills (delegated to skill-catalog service) ──
   app.get("/api/skills", async (request, reply) => {
     const root = await ws(request, reply);
@@ -268,38 +449,49 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
     const item = await getSkillInfo(request.params.skill_id, root);
     return item ?? reply.code(404).send({ error: "Skill not found" });
   });
-  app.get<{ Params: { skill_id: string } }>("/api/skills/:skill_id/readiness", async (request, reply) => {
-    const root = await ws(request, reply);
-    if (!root) return;
-    const item = await getSkillInfo(request.params.skill_id, root);
-    if (!item) return reply.code(404).send({ error: "Skill not found" });
-    return probeRequirements(item.skill_id, item.requirements);
-  });
+  app.get<{ Params: { skill_id: string } }>(
+    "/api/skills/:skill_id/readiness",
+    async (request, reply) => {
+      const root = await ws(request, reply);
+      if (!root) return;
+      const item = await getSkillInfo(request.params.skill_id, root);
+      if (!item) return reply.code(404).send({ error: "Skill not found" });
+      return probeRequirements(item.skill_id, item.requirements);
+    },
+  );
   // Read-only preview of the effective SKILL.md (project > user > builtin).
   // The path is never client-supplied: the winning discovery record is
   // resolved with realpath containment inside its source root.
-  app.get<{ Params: { skill_id: string } }>("/api/skills/:skill_id/content", async (request, reply) => {
-    const root = await ws(request, reply);
-    if (!root) return;
-    const result = await getSkillContent(request.params.skill_id, root);
-    if (!result.ok) {
-      if (result.error === "not-found") return reply.code(404).send({ error: "Skill not found" });
-      if (result.error === "unavailable") return reply.code(403).send({ error: "Skill content unavailable" });
-      return reply.code(413).send({ error: "Skill content exceeds the size limit" });
-    }
-    return result.content;
-  });
+  app.get<{ Params: { skill_id: string } }>(
+    "/api/skills/:skill_id/content",
+    async (request, reply) => {
+      const root = await ws(request, reply);
+      if (!root) return;
+      const result = await getSkillContent(request.params.skill_id, root);
+      if (!result.ok) {
+        if (result.error === "not-found") return reply.code(404).send({ error: "Skill not found" });
+        if (result.error === "unavailable")
+          return reply.code(403).send({ error: "Skill content unavailable" });
+        return reply.code(413).send({ error: "Skill content exceeds the size limit" });
+      }
+      return result.content;
+    },
+  );
   app.get("/api/skills/tools", async () => {
-    return Promise.all(catalogToolCommands().map(async ([name, command]) => {
-      return { name, found: Boolean(await findExecutable(command)) };
-    }));
+    return Promise.all(
+      catalogToolCommands().map(async ([name, command]) => {
+        return { name, found: Boolean(await findExecutable(command)) };
+      }),
+    );
   });
   app.post("/api/skills/validate", async (request, reply) => {
     const root = await ws(request, reply);
     if (!root) return;
     const pathValue = (request.query as { path?: string }).path;
     let target = pathValue
-      ? (isAbsolute(pathValue) || pathValue.startsWith("~/") || pathValue.startsWith("~\\") ? expandUserPath(pathValue) : resolve(root, pathValue))
+      ? isAbsolute(pathValue) || pathValue.startsWith("~/") || pathValue.startsWith("~\\")
+        ? expandUserPath(pathValue)
+        : resolve(root, pathValue)
       : join(root, ".pi", "skills");
     try {
       const info = await stat(target);
@@ -307,7 +499,10 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
     } catch {
       /* let scanner return no skills */
     }
-    if (!pathIsInside(root, target, true) || target.split(/[\\/]/).some((part) => part.toLowerCase() === ".pi-science")) {
+    if (
+      !pathIsInside(root, target, true) ||
+      target.split(/[\\/]/).some((part) => part.toLowerCase() === ".pi-science")
+    ) {
       return reply.code(403).send({ error: "Skill path must remain inside the workspace" });
     }
     const validations = await validateSkillDir(target);
@@ -317,80 +512,210 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
     };
   });
 
-async function loadMcpDefinitions(root: string): Promise<{ definitions: Record<string, unknown>; source: string | null }> {
-  const config = await readJson<{ mcp_config_path?: unknown }>(configPath("config.json"), {});
-  return resolveMcpConfig({ workspaceRoot: root, explicitPath: typeof config.mcp_config_path === "string" ? config.mcp_config_path : undefined });
-}
+  async function loadMcpDefinitions(
+    root: string,
+  ): Promise<{ definitions: Record<string, unknown>; source: string | null }> {
+    const config = await readJson<{ mcp_config_path?: unknown }>(configPath("config.json"), {});
+    return resolveMcpConfig({
+      workspaceRoot: root,
+      explicitPath: typeof config.mcp_config_path === "string" ? config.mcp_config_path : undefined,
+    });
+  }
 
-function summarizeMcpServers(definitions: Record<string, unknown>, enabled: ReadonlySet<string>): Array<Record<string, unknown>> {
-  return Object.keys(definitions).sort().map((id) => {
-    const definition = (definitions[id] as Record<string, unknown> | undefined) ?? {};
-    const remote = Boolean(definition.url);
-    return {
-      id,
-      name: String(definition.name ?? id),
-      description: String(definition.description ?? ""),
-      transport: remote ? String(definition.transport ?? "http") : definition.command ? "stdio" : "unknown",
-      enabled: enabled.has(id),
-      auth: definition.required_env ? "missing" : "unknown",
-      data_egress: remote ? "remote" : "local",
-      terms_url: definition.terms_url ?? null,
-      privacy_url: definition.privacy_url ?? null,
-      license: definition.license ?? null,
-      tags: Array.isArray(definition.tags) ? definition.tags : [],
-      tools: Array.isArray(definition.tools) ? definition.tools : [],
-    };
-  });
-}
+  function summarizeMcpServers(
+    definitions: Record<string, unknown>,
+    enabled: ReadonlySet<string>,
+  ): Array<Record<string, unknown>> {
+    return Object.keys(definitions)
+      .sort()
+      .map((id) => {
+        const definition = (definitions[id] as Record<string, unknown> | undefined) ?? {};
+        const remote = Boolean(definition.url);
+        return {
+          id,
+          name: String(definition.name ?? id),
+          description: String(definition.description ?? ""),
+          transport: remote
+            ? String(definition.transport ?? "http")
+            : definition.command
+              ? "stdio"
+              : "unknown",
+          enabled: enabled.has(id),
+          auth: definition.required_env ? "missing" : "unknown",
+          data_egress: remote ? "remote" : "local",
+          terms_url: definition.terms_url ?? null,
+          privacy_url: definition.privacy_url ?? null,
+          license: definition.license ?? null,
+          tags: Array.isArray(definition.tags) ? definition.tags : [],
+          tools: Array.isArray(definition.tools) ? definition.tools : [],
+        };
+      });
+  }
 
-async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<string>> {
-  const config = await readJson<{ mcp_servers?: string[] }>(configPath("config.json"), {});
-  return Array.isArray(config.mcp_servers) ? new Set(config.mcp_servers) : new Set(Object.keys(definitions));
-}
+  async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<string>> {
+    const config = await readJson<{ mcp_servers?: string[] }>(configPath("config.json"), {});
+    return Array.isArray(config.mcp_servers)
+      ? new Set(config.mcp_servers)
+      : new Set(Object.keys(definitions));
+  }
 
-// ── MCP catalog ──
-  app.get("/api/mcp/catalog", async (request, reply) => { const root = await ws(request, reply); if (!root) return; if (mcp) { const result = await mcp.list(); return { servers: result.connectors.map((item) => ({ id: item.connector_id, name: item.display_name, description: item.description, transport: item.transport, enabled: item.settings.enabled, health: item.runtime_state, auth: item.auth_state, data_egress: item.endpoint_url ? "remote" : "local", terms_url: item.runtime_config.terms_url ?? null, privacy_url: item.runtime_config.privacy_url ?? null, tools: [] })), config_path: null, deprecated: true }; } const { definitions, source } = await loadMcpDefinitions(root); const servers = summarizeMcpServers(definitions, await mcpEnabledSet(definitions)); return { servers, config_path: source }; });
-  app.get<{ Params: { server_id: string } }>("/api/mcp/health/:server_id", async (request, reply) => {
+  // ── MCP catalog ──
+  app.get("/api/mcp/catalog", async (request, reply) => {
     const root = await ws(request, reply);
     if (!root) return;
-    if (mcp) return mcp.probe(request.params.server_id);
-    const { definitions } = await loadMcpDefinitions(root);
-    const definition = definitions[request.params.server_id];
-    if (!definition) return reply.code(404).send({ error: "MCP server not found" });
-    const enabled = await mcpEnabledSet(definitions);
-    const server = summarizeMcpServers(definitions, enabled).find((item) => item.id === request.params.server_id);
-    if (!server) return reply.code(404).send({ error: "MCP server not found" });
-    if (!server.enabled) return { ...server, health: "blocked", error: "server disabled", checked_at: Date.now() / 1000 };
-    const result = await probeMcpHealth(definition as McpDefinition);
-    return { ...server, health: result.health, error: result.error, checked_at: Date.now() / 1000 };
-  });
-  app.get<{ Params: { server_id: string } }>("/api/mcp/egress/:server_id", async (request, reply) => {
-    const root = await ws(request, reply);
-    if (!root) return;
-    const { definitions } = await loadMcpDefinitions(root);
-    const server = summarizeMcpServers(definitions, new Set(Object.keys(definitions))).find((item) => item.id === request.params.server_id);
-    if (!server) return reply.code(404).send({ error: "MCP server not found" });
-    const auditEnabled = await egressAuditEnabled();
-    if (server.data_egress === "remote" && auditEnabled) {
-      const url = typeof (definitions[request.params.server_id] as Record<string, unknown> | undefined)?.url === "string" ? String((definitions[request.params.server_id] as Record<string, unknown>).url) : "";
-      await recordEgress({ connector_type: "mcp", connector_id: request.params.server_id, target_domain: url, approved: false, note: "egress_review" });
+    if (mcp) {
+      const result = await mcp.list();
+      return {
+        servers: result.connectors.map((item) => ({
+          id: item.connector_id,
+          name: item.display_name,
+          description: item.description,
+          transport: item.transport,
+          enabled: item.settings.enabled,
+          health: item.runtime_state,
+          auth: item.auth_state,
+          data_egress: item.endpoint_url ? "remote" : "local",
+          terms_url: item.runtime_config.terms_url ?? null,
+          privacy_url: item.runtime_config.privacy_url ?? null,
+          tools: [],
+        })),
+        config_path: null,
+        deprecated: true,
+      };
     }
-    return { server: request.params.server_id, data_egress: server.data_egress, transport: server.transport, terms_url: server.terms_url, privacy_url: server.privacy_url, tools: server.tools, warning: server.data_egress === "remote" ? "Review the destination and data class before sending user files or sequences." : null, audit_enabled: auditEnabled };
+    const { definitions, source } = await loadMcpDefinitions(root);
+    const servers = summarizeMcpServers(definitions, await mcpEnabledSet(definitions));
+    return { servers, config_path: source };
   });
+  app.get<{ Params: { server_id: string } }>(
+    "/api/mcp/health/:server_id",
+    async (request, reply) => {
+      const root = await ws(request, reply);
+      if (!root) return;
+      if (mcp) return mcp.probe(request.params.server_id);
+      const { definitions } = await loadMcpDefinitions(root);
+      const definition = definitions[request.params.server_id];
+      if (!definition) return reply.code(404).send({ error: "MCP server not found" });
+      const enabled = await mcpEnabledSet(definitions);
+      const server = summarizeMcpServers(definitions, enabled).find(
+        (item) => item.id === request.params.server_id,
+      );
+      if (!server) return reply.code(404).send({ error: "MCP server not found" });
+      if (!server.enabled)
+        return {
+          ...server,
+          health: "blocked",
+          error: "server disabled",
+          checked_at: Date.now() / 1000,
+        };
+      const result = await probeMcpHealth(definition as McpDefinition);
+      return {
+        ...server,
+        health: result.health,
+        error: result.error,
+        checked_at: Date.now() / 1000,
+      };
+    },
+  );
+  app.get<{ Params: { server_id: string } }>(
+    "/api/mcp/egress/:server_id",
+    async (request, reply) => {
+      const root = await ws(request, reply);
+      if (!root) return;
+      const { definitions } = await loadMcpDefinitions(root);
+      const server = summarizeMcpServers(definitions, new Set(Object.keys(definitions))).find(
+        (item) => item.id === request.params.server_id,
+      );
+      if (!server) return reply.code(404).send({ error: "MCP server not found" });
+      const auditEnabled = await egressAuditEnabled();
+      if (server.data_egress === "remote" && auditEnabled) {
+        const url =
+          typeof (definitions[request.params.server_id] as Record<string, unknown> | undefined)
+            ?.url === "string"
+            ? String((definitions[request.params.server_id] as Record<string, unknown>).url)
+            : "";
+        await recordEgress({
+          connector_type: "mcp",
+          connector_id: request.params.server_id,
+          target_domain: url,
+          approved: false,
+          note: "egress_review",
+        });
+      }
+      return {
+        server: request.params.server_id,
+        data_egress: server.data_egress,
+        transport: server.transport,
+        terms_url: server.terms_url,
+        privacy_url: server.privacy_url,
+        tools: server.tools,
+        warning:
+          server.data_egress === "remote"
+            ? "Review the destination and data class before sending user files or sequences."
+            : null,
+        audit_enabled: auditEnabled,
+      };
+    },
+  );
 
   // ── Workspaces ──
-  app.get("/api/workspaces", async () => { const result = await Promise.all((await knownWorkspacePaths(workspaceRepository)).map((path) => workspaceInfo(path, workspaceRepository, activity))); return result.sort((left, right) => String(right.last_activity_at).localeCompare(String(left.last_activity_at))); });
-  app.post("/api/workspaces", async (request, reply) => { const body = (request.body ?? {}) as { name?: unknown }; const name = String(body.name ?? "").trim().replace(/[\\/]/g, "-").slice(0, 100); if (!name) return reply.code(400).send({ error: "Invalid workspace name" }); const path = join(rootDir(), name); try { await stat(path); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* create */ } await mkdir(path, { recursive: true }); return await workspaceInfo(path, workspaceRepository, activity); });
-  app.post("/api/workspaces/open", async (request, reply) => { const requestedPath = expandUserPath(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); let path: string; try { if (!(await stat(requestedPath)).isDirectory()) return reply.code(400).send({ error: "Not a directory" }); path = await realpath(requestedPath); } catch { return reply.code(404).send({ error: "Folder not found" }); } await rememberExternalWorkspace(path, workspaceRepository); return await workspaceInfo(path, workspaceRepository, activity); });
+  app.get("/api/workspaces", async () => {
+    const result = await Promise.all(
+      (await knownWorkspacePaths(workspaceRepository)).map((path) =>
+        workspaceInfo(path, workspaceRepository, activity),
+      ),
+    );
+    return result.sort((left, right) =>
+      String(right.last_activity_at).localeCompare(String(left.last_activity_at)),
+    );
+  });
+  app.post("/api/workspaces", async (request, reply) => {
+    const body = (request.body ?? {}) as { name?: unknown };
+    const name = String(body.name ?? "")
+      .trim()
+      .replace(/[\\/]/g, "-")
+      .slice(0, 100);
+    if (!name) return reply.code(400).send({ error: "Invalid workspace name" });
+    const path = join(rootDir(), name);
+    try {
+      await stat(path);
+      return reply.code(409).send({ error: "Workspace already exists" });
+    } catch {
+      /* create */
+    }
+    await mkdir(path, { recursive: true });
+    return await workspaceInfo(path, workspaceRepository, activity);
+  });
+  app.post("/api/workspaces/open", async (request, reply) => {
+    const requestedPath = expandUserPath(
+      String(((request.body ?? {}) as { path?: unknown }).path ?? ""),
+    );
+    let path: string;
+    try {
+      if (!(await stat(requestedPath)).isDirectory())
+        return reply.code(400).send({ error: "Not a directory" });
+      path = await realpath(requestedPath);
+    } catch {
+      return reply.code(404).send({ error: "Folder not found" });
+    }
+    await rememberExternalWorkspace(path, workspaceRepository);
+    return await workspaceInfo(path, workspaceRepository, activity);
+  });
   app.post("/api/workspaces/demo", async (request, reply) => {
     const demo = DEMOS[String((request.query as { name?: unknown }).name ?? "")];
     if (!demo) return reply.code(400).send({ error: "Unknown demo" });
     const root = rootDir();
     const target = resolve(root, demo.workspace);
-    if (!pathIsInside(root, target)) return reply.code(403).send({ error: "Demo target escapes the workspaces directory" });
+    if (!pathIsInside(root, target))
+      return reply.code(403).send({ error: "Demo target escapes the workspaces directory" });
     const source = join(PROJECT_ROOT, demo.source);
-    try { if (!(await stat(source)).isDirectory()) throw new Error("not a directory"); }
-    catch { return reply.code(500).send({ error: `Demo content is missing from this installation (${demo.source})` }); }
+    try {
+      if (!(await stat(source)).isDirectory()) throw new Error("not a directory");
+    } catch {
+      return reply
+        .code(500)
+        .send({ error: `Demo content is missing from this installation (${demo.source})` });
+    }
     // Preserve edits only when this workspace was installed from the same
     // source. A changed or missing sentinel means the bundled demo has been
     // upgraded and the stale generated workspace must be rebuilt.
@@ -398,9 +723,15 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
     let installed = false;
     try {
       installed = (await readFile(sentinel, "utf8")).trim() === demo.source;
-    } catch { /* first install or legacy workspace */ }
+    } catch {
+      /* first install or legacy workspace */
+    }
     if (!installed) {
-      try { await rm(target, { recursive: true, force: true }); } catch { /* create below */ }
+      try {
+        await rm(target, { recursive: true, force: true });
+      } catch {
+        /* create below */
+      }
       await removeWorkspaceMetadata(target);
       await cp(source, target, { recursive: true });
     }
@@ -412,51 +743,91 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
   app.post("/api/workspaces/rename", async (request, reply) => {
     const body = (request.body ?? {}) as { path?: unknown; name?: unknown };
     const root = rootDir();
-    const name = String(body.name ?? "").trim().replace(/[\\/]/g, "-").slice(0, 100);
+    const name = String(body.name ?? "")
+      .trim()
+      .replace(/[\\/]/g, "-")
+      .slice(0, 100);
     if (!name) return reply.code(400).send({ error: "Invalid workspace name" });
     const destination = join(root, name);
     return mutateWorkspace([String(body.path ?? ""), destination], reply, async () => {
-    let source: string;
-    try { source = await managedWorkspacePath(String(body.path ?? ""), "rename"); }
-    catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ENOENT" || code === "ENOTDIR") return reply.code(404).send({ error: "Workspace not found" });
-      return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) });
-    }
-    if (await jobs?.hasActive(source)) return reply.code(409).send({ error: "Pause or cancel active jobs before renaming this workspace" });
-    if (await sessions?.hasActiveOperations(source) || await hasActiveWorkspaceRuntimes(source)) return reply.code(409).send({ error: "Stop active conversations before renaming this workspace" });
-    try { await stat(destination); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* available */ }
-    const sourceProject = await ensureProject(source);
-    await sessions?.closeIdleWorkspace(source);
-    await closeIdleWorkspaceRuntimes(source);
-    let workspaceMoved = false;
-    let stateMoved = false;
-    let registryMoved = false;
-    try {
-      await rename(source, destination);
-      workspaceMoved = true;
-      await moveWorkspaceMetadata(source, destination);
-      stateMoved = true;
-      await updateProject(destination, { name });
-      await updateWorkspaceLocation(source, destination, workspaceRepository, sourceProject.id);
-      registryMoved = true;
-      return await workspaceInfo(destination, workspaceRepository, activity);
-    } catch (error) {
-      if (registryMoved) await updateWorkspaceLocation(destination, source, workspaceRepository, sourceProject.id).catch(() => undefined);
-      if (stateMoved) await moveWorkspaceMetadata(destination, source).catch(() => undefined);
-      if (workspaceMoved) await rename(destination, source).catch(() => undefined);
-      if (stateMoved && workspaceMoved) await updateProject(source, { name: sourceProject.name }).catch(() => undefined);
-      return reply.code(500).send({ error: error instanceof Error ? error.message : "Workspace rename failed" });
-    }
+      let source: string;
+      try {
+        source = await managedWorkspacePath(String(body.path ?? ""), "rename");
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR")
+          return reply.code(404).send({ error: "Workspace not found" });
+        return reply
+          .code(403)
+          .send({ error: error instanceof Error ? error.message : String(error) });
+      }
+      if (await jobs?.hasActive(source))
+        return reply
+          .code(409)
+          .send({ error: "Pause or cancel active jobs before renaming this workspace" });
+      if (
+        (await sessions?.hasActiveOperations(source)) ||
+        (await hasActiveWorkspaceRuntimes(source))
+      )
+        return reply
+          .code(409)
+          .send({ error: "Stop active conversations before renaming this workspace" });
+      try {
+        await stat(destination);
+        return reply.code(409).send({ error: "Workspace already exists" });
+      } catch {
+        /* available */
+      }
+      const sourceProject = await ensureProject(source);
+      await sessions?.closeIdleWorkspace(source);
+      await closeIdleWorkspaceRuntimes(source);
+      let workspaceMoved = false;
+      let stateMoved = false;
+      let registryMoved = false;
+      try {
+        await rename(source, destination);
+        workspaceMoved = true;
+        await moveWorkspaceMetadata(source, destination);
+        stateMoved = true;
+        await updateProject(destination, { name });
+        await updateWorkspaceLocation(source, destination, workspaceRepository, sourceProject.id);
+        registryMoved = true;
+        return await workspaceInfo(destination, workspaceRepository, activity);
+      } catch (error) {
+        if (registryMoved)
+          await updateWorkspaceLocation(
+            destination,
+            source,
+            workspaceRepository,
+            sourceProject.id,
+          ).catch(() => undefined);
+        if (stateMoved) await moveWorkspaceMetadata(destination, source).catch(() => undefined);
+        if (workspaceMoved) await rename(destination, source).catch(() => undefined);
+        if (stateMoved && workspaceMoved)
+          await updateProject(source, { name: sourceProject.name }).catch(() => undefined);
+        return reply
+          .code(500)
+          .send({ error: error instanceof Error ? error.message : "Workspace rename failed" });
+      }
     });
   });
-  app.get("/api/workspaces/pinned", async () => ({ paths: workspaceRepository ? (await workspaceRepository.listPinned()).map((location) => location.path) : await readJson<string[]>(configPath("pinned.json"), []) }));
+  app.get("/api/workspaces/pinned", async () => ({
+    paths: workspaceRepository
+      ? (await workspaceRepository.listPinned()).map((location) => location.path)
+      : await readJson<string[]>(configPath("pinned.json"), []),
+  }));
   app.post("/api/workspaces/pin", async (request) => {
     const path = String(((request.body ?? {}) as { path?: unknown }).path ?? "");
     if (workspaceRepository) {
       const requested = resolve(path);
-      try { await workspaceRepository.rememberWorkspace(requested, { pinned: true, preservePath: true }); }
-      catch { await workspaceRepository.rememberMissing(requested, { pinned: true, preservePath: true }); }
+      try {
+        await workspaceRepository.rememberWorkspace(requested, {
+          pinned: true,
+          preservePath: true,
+        });
+      } catch {
+        await workspaceRepository.rememberMissing(requested, { pinned: true, preservePath: true });
+      }
     } else {
       const paths = await readJson<string[]>(configPath("pinned.json"), []);
       if (!paths.includes(path)) paths.push(path);
@@ -466,48 +837,238 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
   });
   app.post("/api/workspaces/unpin", async (request) => {
     const path = String(((request.body ?? {}) as { path?: unknown }).path ?? "");
-    if (workspaceRepository) await workspaceRepository.setPinnedPath(path, false, true).catch(() => undefined);
+    if (workspaceRepository)
+      await workspaceRepository.setPinnedPath(path, false, true).catch(() => undefined);
     else {
-      const paths = (await readJson<string[]>(configPath("pinned.json"), [])).filter((item) => item !== path);
+      const paths = (await readJson<string[]>(configPath("pinned.json"), [])).filter(
+        (item) => item !== path,
+      );
       await writeJsonAtomic(configPath("pinned.json"), paths);
     }
     return { ok: true, pinned: false };
   });
   app.delete("/api/workspaces/delete", async (request, reply) => {
-    return mutateWorkspace([String(((request.body ?? {}) as { path?: unknown }).path ?? "")], reply, async () => {
-    let path: string;
-    try { path = await managedWorkspacePath(String(((request.body ?? {}) as { path?: unknown }).path ?? ""), "delete"); }
-    catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ENOENT" || code === "ENOTDIR") return reply.code(404).send({ error: "Workspace not found" });
-      return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) });
-    }
-    if (await jobs?.hasActive(path)) return reply.code(409).send({ error: "Cancel active jobs before deleting this workspace" });
-    if (await sessions?.hasActiveOperations(path) || await hasActiveWorkspaceRuntimes(path)) return reply.code(409).send({ error: "Stop active conversations before deleting this workspace" });
-    await sessions?.closeIdleWorkspace(path);
-    await closeIdleWorkspaceRuntimes(path);
-    try { await rm(path, { recursive: true }); await removeWorkspaceMetadata(path); return { ok: true }; } catch { return reply.code(404).send({ error: "Workspace not found" }); }
-    });
+    return mutateWorkspace(
+      [String(((request.body ?? {}) as { path?: unknown }).path ?? "")],
+      reply,
+      async () => {
+        let path: string;
+        try {
+          path = await managedWorkspacePath(
+            String(((request.body ?? {}) as { path?: unknown }).path ?? ""),
+            "delete",
+          );
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === "ENOENT" || code === "ENOTDIR")
+            return reply.code(404).send({ error: "Workspace not found" });
+          return reply
+            .code(403)
+            .send({ error: error instanceof Error ? error.message : String(error) });
+        }
+        if (await jobs?.hasActive(path))
+          return reply
+            .code(409)
+            .send({ error: "Cancel active jobs before deleting this workspace" });
+        if ((await sessions?.hasActiveOperations(path)) || (await hasActiveWorkspaceRuntimes(path)))
+          return reply
+            .code(409)
+            .send({ error: "Stop active conversations before deleting this workspace" });
+        await sessions?.closeIdleWorkspace(path);
+        await closeIdleWorkspaceRuntimes(path);
+        try {
+          await rm(path, { recursive: true });
+          await removeWorkspaceMetadata(path);
+          return { ok: true };
+        } catch {
+          return reply.code(404).send({ error: "Workspace not found" });
+        }
+      },
+    );
   });
 
   // ── Compute machine registry ──
-  app.get("/api/compute/machines", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const value = await readJson<{ machines?: unknown[] }>(workspaceFile(root, "compute.json"), {}); return { machines: Array.isArray(value.machines) ? value.machines : [] }; });
-  app.post("/api/compute/machines", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const machine = (request.body ?? {}) as Record<string, unknown>; if (!machine.host) return reply.code(400).send({ error: "host is required" }); const port = Number(machine.port ?? 22); if (!Number.isInteger(port) || port < 1 || port > 65535) return reply.code(400).send({ error: "port must be between 1 and 65535" }); const path = workspaceFile(root, "compute.json"); const current = await readJson<{ machines?: Record<string, unknown>[] }>(path, {}); const machines = Array.isArray(current.machines) ? current.machines : []; const { password: _password, ...safeMachine } = machine; const item = { ...safeMachine, port, identity_file: String(machine.identity_file ?? "~/.ssh/id_rsa"), auth_method: machine.auth_method === "password" ? "password" : "key", label: String(machine.label ?? machine.host) }; const next = [...machines.filter((row) => row.label !== item.label), item]; await writeJsonAtomic(path, { machines: next }); return { ok: true, machines: next }; });
-  app.delete<{ Params: { label: string } }>("/api/compute/machines/:label", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const path = workspaceFile(root, "compute.json"); const current = await readJson<{ machines?: Record<string, unknown>[] }>(path, {}); await writeJsonAtomic(path, { machines: (current.machines ?? []).filter((row) => row.label !== request.params.label) }); return { ok: true }; });
-  app.post("/api/compute/probe", async (request, reply) => { const root = await ws(request, reply); if (!root) return; return probeComputeMachine((request.body ?? {}) as ComputeProbeInput); });
-  app.post("/api/compute/run", async () => ({ ok: false, error: "Remote dispatch requires a configured executor" }));
+  app.get("/api/compute/machines", async (request, reply) => {
+    const root = await ws(request, reply);
+    if (!root) return;
+    const value = await readJson<{ machines?: unknown[] }>(workspaceFile(root, "compute.json"), {});
+    return { machines: Array.isArray(value.machines) ? value.machines : [] };
+  });
+  app.post("/api/compute/machines", async (request, reply) => {
+    const root = await ws(request, reply);
+    if (!root) return;
+    const machine = (request.body ?? {}) as Record<string, unknown>;
+    if (!machine.host) return reply.code(400).send({ error: "host is required" });
+    const port = Number(machine.port ?? 22);
+    if (!Number.isInteger(port) || port < 1 || port > 65535)
+      return reply.code(400).send({ error: "port must be between 1 and 65535" });
+    const path = workspaceFile(root, "compute.json");
+    const current = await readJson<{ machines?: Record<string, unknown>[] }>(path, {});
+    const machines = Array.isArray(current.machines) ? current.machines : [];
+    const { password: _password, ...safeMachine } = machine;
+    const item = {
+      ...safeMachine,
+      port,
+      identity_file: String(machine.identity_file ?? "~/.ssh/id_rsa"),
+      auth_method: machine.auth_method === "password" ? "password" : "key",
+      label: String(machine.label ?? machine.host),
+    };
+    const next = [...machines.filter((row) => row.label !== item.label), item];
+    await writeJsonAtomic(path, { machines: next });
+    return { ok: true, machines: next };
+  });
+  app.delete<{ Params: { label: string } }>(
+    "/api/compute/machines/:label",
+    async (request, reply) => {
+      const root = await ws(request, reply);
+      if (!root) return;
+      const path = workspaceFile(root, "compute.json");
+      const current = await readJson<{ machines?: Record<string, unknown>[] }>(path, {});
+      await writeJsonAtomic(path, {
+        machines: (current.machines ?? []).filter((row) => row.label !== request.params.label),
+      });
+      return { ok: true };
+    },
+  );
+  app.post("/api/compute/probe", async (request, reply) => {
+    const root = await ws(request, reply);
+    if (!root) return;
+    return probeComputeMachine((request.body ?? {}) as ComputeProbeInput);
+  });
+  app.post("/api/compute/run", async () => ({
+    ok: false,
+    error: "Remote dispatch requires a configured executor",
+  }));
 
   // ── Citations ──
-  app.post("/api/citations/normalize", async (request) => { const identifiers = Array.isArray(((request.body ?? {}) as { identifiers?: unknown }).identifiers) ? ((request.body as { identifiers: unknown[] }).identifiers) : []; const citations = identifiers.map((value) => { const text = String(value).trim(); const doi = text.replace(/^https?:\/\/doi\.org\//i, ""); return { identifier: text, doi: doi.toLowerCase().startsWith("10.") ? doi : null, title: null, authors: [], year: null, source: text.includes("10.") ? "doi" : "unknown" }; }); return { citations, errors: [] }; });
-  app.post("/api/citations/verify", async (request) => { const citation = ((request.body ?? {}) as { citation?: unknown }).citation; return { citation, status: "unverified", verified: false, message: "Verification is delegated to the literature runtime" }; });
+  app.post("/api/citations/normalize", async (request) => {
+    const identifiers = Array.isArray(
+      ((request.body ?? {}) as { identifiers?: unknown }).identifiers,
+    )
+      ? (request.body as { identifiers: unknown[] }).identifiers
+      : [];
+    const citations = identifiers.map((value) => {
+      const text = String(value).trim();
+      const doi = text.replace(/^https?:\/\/doi\.org\//i, "");
+      return {
+        identifier: text,
+        doi: doi.toLowerCase().startsWith("10.") ? doi : null,
+        title: null,
+        authors: [],
+        year: null,
+        source: text.includes("10.") ? "doi" : "unknown",
+      };
+    });
+    return { citations, errors: [] };
+  });
 
   // ── Agent profiles & reviews ──
-  app.get("/api/agent-profiles", async () => ({ profiles: [
-    { name: "SCIENCE", display_name: "Science Agent", description: "General scientific workbench agent", unrestricted: true, source: "builtin" },
-    { name: "RESULT_REVIEWER", display_name: "Result Reviewer", description: "Read-only transcript and artifact consistency reviewer", skills: ["literature-review"], read_scope: ["workspace", "transcript", "artifacts"], write_scope: [], source: "builtin" },
-    { name: "BOOKMARKER", display_name: "Transcript Bookmarker", description: "Selects durable navigation breadcrumbs", skills: [], read_scope: ["transcript"], write_scope: ["bookmarks"], source: "builtin" },
-  ] }));
-  app.get("/api/result-reviews", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const { readJsonLines, workspaceFile } = await import("../../storage/persistence.js"); return { reviews: await readJsonLines<Record<string, unknown>>(workspaceFile(root, "result-reviews.jsonl")) }; });
-  app.post("/api/result-reviews", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const sessionId = String((request.query as { session_id?: unknown }).session_id ?? ""); if (!sessionId) return reply.code(400).send({ error: "session_id is required" }); const messages = await sessionRepository.messages(root, sessionId); const text = messages.flatMap((message) => message.content).map((part) => typeof part.text === "string" ? part.text : "").join("\n"); const findings = /\b(ran|executed|tested|verified|measured|computed)\b/i.test(text) && !messages.some((message) => message.content.some((part) => part.type === "toolCall" || part.type === "toolResult")) ? [{ severity: "fail", kind: "unsupported_execution_claim", message: "Transcript claims an execution or verification action but contains no corresponding tool record." }] : []; const result = { review_id: `review_${Date.now()}`, session_id: sessionId, status: findings.length ? "fail" : "pass", findings, checked_messages: messages.length, created_at: Date.now() / 1000 }; const { appendJsonLine, workspaceFile } = await import("../../storage/persistence.js"); await appendJsonLine(workspaceFile(root, "result-reviews.jsonl"), result); return result; });
-  app.post("/api/bookmarks", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const sessionId = String((request.query as { session_id?: unknown }).session_id ?? ""); if (!sessionId) return reply.code(400).send({ error: "session_id is required" }); const messages = await sessionRepository.messages(root, sessionId); const bookmarks = messages.filter((message) => message.content.some((part) => typeof part.text === "string" && /\b(result|conclusion|finding|decision|saved|created|verified|completed|结果|结论|决定|已保存|已生成)\b/i.test(part.text))).slice(-2).map((message) => ({ session_id: sessionId, message_id: message.id, quote: message.content.map((part) => typeof part.text === "string" ? part.text : "").join("").slice(0, 500) })); const { appendJsonLine, workspaceFile } = await import("../../storage/persistence.js"); await appendJsonLine(workspaceFile(root, "bookmarks.jsonl"), { session_id: sessionId, created_at: Date.now() / 1000, bookmarks }); return { session_id: sessionId, bookmarks }; });
+  app.get("/api/agent-profiles", async () => ({
+    profiles: [
+      {
+        name: "SCIENCE",
+        display_name: "Science Agent",
+        description: "General scientific workbench agent",
+        unrestricted: true,
+        source: "builtin",
+      },
+      {
+        name: "RESULT_REVIEWER",
+        display_name: "Result Reviewer",
+        description: "Read-only transcript and artifact consistency reviewer",
+        skills: ["literature-review"],
+        read_scope: ["workspace", "transcript", "artifacts"],
+        write_scope: [],
+        source: "builtin",
+      },
+      {
+        name: "BOOKMARKER",
+        display_name: "Transcript Bookmarker",
+        description: "Selects durable navigation breadcrumbs",
+        skills: [],
+        read_scope: ["transcript"],
+        write_scope: ["bookmarks"],
+        source: "builtin",
+      },
+    ],
+  }));
+  app.get("/api/result-reviews", async (request, reply) => {
+    const root = await ws(request, reply);
+    if (!root) return;
+    const { readJsonLines, workspaceFile } = await import("../../storage/persistence.js");
+    return {
+      reviews: await readJsonLines<Record<string, unknown>>(
+        workspaceFile(root, "result-reviews.jsonl"),
+      ),
+    };
+  });
+  app.post("/api/result-reviews", async (request, reply) => {
+    const root = await ws(request, reply);
+    if (!root) return;
+    const sessionId = String((request.query as { session_id?: unknown }).session_id ?? "");
+    if (!sessionId) return reply.code(400).send({ error: "session_id is required" });
+    const messages = await sessionRepository.messages(root, sessionId);
+    const text = messages
+      .flatMap((message) => message.content)
+      .map((part) => (typeof part.text === "string" ? part.text : ""))
+      .join("\n");
+    const findings =
+      /\b(ran|executed|tested|verified|measured|computed)\b/i.test(text) &&
+      !messages.some((message) =>
+        message.content.some((part) => part.type === "toolCall" || part.type === "toolResult"),
+      )
+        ? [
+            {
+              severity: "fail",
+              kind: "unsupported_execution_claim",
+              message:
+                "Transcript claims an execution or verification action but contains no corresponding tool record.",
+            },
+          ]
+        : [];
+    const result = {
+      review_id: `review_${Date.now()}`,
+      session_id: sessionId,
+      status: findings.length ? "fail" : "pass",
+      findings,
+      checked_messages: messages.length,
+      created_at: Date.now() / 1000,
+    };
+    const { appendJsonLine, workspaceFile } = await import("../../storage/persistence.js");
+    await appendJsonLine(workspaceFile(root, "result-reviews.jsonl"), result);
+    return result;
+  });
+  app.post("/api/bookmarks", async (request, reply) => {
+    const root = await ws(request, reply);
+    if (!root) return;
+    const sessionId = String((request.query as { session_id?: unknown }).session_id ?? "");
+    if (!sessionId) return reply.code(400).send({ error: "session_id is required" });
+    const messages = await sessionRepository.messages(root, sessionId);
+    const bookmarks = messages
+      .filter((message) =>
+        message.content.some(
+          (part) =>
+            typeof part.text === "string" &&
+            /\b(result|conclusion|finding|decision|saved|created|verified|completed|结果|结论|决定|已保存|已生成)\b/i.test(
+              part.text,
+            ),
+        ),
+      )
+      .slice(-2)
+      .map((message) => ({
+        session_id: sessionId,
+        message_id: message.id,
+        quote: message.content
+          .map((part) => (typeof part.text === "string" ? part.text : ""))
+          .join("")
+          .slice(0, 500),
+      }));
+    const { appendJsonLine, workspaceFile } = await import("../../storage/persistence.js");
+    await appendJsonLine(workspaceFile(root, "bookmarks.jsonl"), {
+      session_id: sessionId,
+      created_at: Date.now() / 1000,
+      bookmarks,
+    });
+    return { session_id: sessionId, bookmarks };
+  });
 }

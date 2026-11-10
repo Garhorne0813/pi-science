@@ -1,6 +1,8 @@
+import { ACTIVITY_LITERATURE_TOOLS } from "@pi-science/contracts";
 import type { Thread } from "../../agent-runtime/event-fold";
 import { selectToolProgressDisplay } from "@pi-science/contracts";
 import type { AgentMessageBlock, ConversationBlockIdentity, ThreadBlock, ToolCallBlock, TurnArtifactItem } from "../../../types/thread";
+import { activityToolName, isMcpTool } from "../activity-presenters";
 import { activityPolicy } from "../activity-policy";
 import { buildTurnPresentations, type TurnLifecycle, type TurnPresentation } from "../turn-presentation";
 import type {
@@ -19,20 +21,9 @@ import type {
   UserMessageProjection,
 } from "./types";
 
-const LITERATURE_TOOLS = new Set([
-  "search_pubmed",
-  "search_arxiv",
-  "search_crossref",
-  "search_biorxiv_preprints",
-  "get_europe_pmc_full_text",
-  // Keep the legacy aliases explicit rather than treating the broad research
-  // domain as a renderer selector.
-  "pubmed",
-  "crossref",
-  "semantic_scholar",
-  "search_semantic_scholar",
-  "literature",
-]);
+// The legacy aliases stay in the name list rather than widening the renderer
+// selector to the whole research domain; the list itself is the shared one.
+const LITERATURE_TOOLS = new Set(ACTIVITY_LITERATURE_TOOLS);
 
 export const LEGACY_STREAM_EPOCH = "legacy";
 
@@ -213,7 +204,8 @@ function projectArtifact(turn: TurnPresentation, summaryId: string, artifact: Tu
 }
 
 export function activityKind(block: ToolCallBlock): ActivityKind {
-  const tool = block.tool.trim().toLowerCase();
+  if (isMcpTool(block.tool)) return "tool";
+  const tool = activityToolName(block.tool);
   if (block.childSessionId || tool.includes("subagent") || tool.includes("agent")) return "subagent";
   // File-backed notebook reads/edits do not execute a kernel. Keep them on the
   // generic file path; only execution-oriented notebook tools use the kernel

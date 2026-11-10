@@ -26,11 +26,11 @@ const MENU_ITEM_CLASS =
 const TRIGGER_BASE =
   "group flex min-w-0 items-center gap-1.5 rounded-input text-text outline-none transition-colors disabled:cursor-not-allowed disabled:text-muted disabled:opacity-70";
 const TRIGGER_ROW =
-  "h-9 max-w-[62%] shrink-0 px-2.5 text-sm hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent/25 data-[state=open]:bg-surface-2";
+  "h-10 max-w-[62%] shrink-0 px-2.5 text-sm hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent/25 data-[state=open]:bg-surface-2";
 const TRIGGER_FIELD =
-  "h-10 w-full border border-border bg-surface-2 px-3 text-left text-xs hover:border-accent focus-visible:border-accent focus-visible:ring-1 focus-visible:ring-accent/25 data-[state=open]:border-accent";
+  "h-10 w-full border border-border bg-surface-2 px-3 text-left text-ui-label hover:border-accent focus-visible:border-accent focus-visible:ring-1 focus-visible:ring-accent/25 data-[state=open]:border-accent";
 const TRIGGER_COMPACT =
-  "h-8 w-auto min-w-[7rem] border border-border bg-surface-2 px-2 text-xs hover:border-accent focus-visible:border-accent focus-visible:ring-1 focus-visible:ring-accent/25 data-[state=open]:border-accent";
+  "h-10 w-auto min-w-[7rem] border border-border bg-surface-2 px-2 text-ui-label hover:border-accent focus-visible:border-accent focus-visible:ring-1 focus-visible:ring-accent/25 data-[state=open]:border-accent";
 const TRIGGER_CLASSES: Record<SettingsSelectVariant, string> = {
   row: TRIGGER_ROW,
   field: TRIGGER_FIELD,

@@ -31,12 +31,7 @@ const request = async (
 ) =>
   app.inject({
     method,
-    url:
-      "/api/memory" +
-      path +
-      (path.includes("?") ? "&" : "?") +
-      "cwd=" +
-      encodeURIComponent(cwd),
+    url: "/api/memory" + path + (path.includes("?") ? "&" : "?") + "cwd=" + encodeURIComponent(cwd),
     ...(payload === undefined ? {} : { payload: payload as any }),
   });
 const content = (body = "用户偏好中文", kind = "preference") => ({
@@ -73,16 +68,26 @@ afterEach(async () => {
 });
 it("reports disabled Memory before validating model-supplied evidence", async () => {
   const { revision, ...settings } = (await request("GET", "/settings")).json();
-  expect((await request("PATCH", "/settings", {
-    expectedRevision: revision, settings: { ...settings, enabled: false },
-  })).statusCode).toBe(200);
+  expect(
+    (
+      await request("PATCH", "/settings", {
+        expectedRevision: revision,
+        settings: { ...settings, enabled: false },
+      })
+    ).statusCode,
+  ).toBe(200);
   vi.spyOn(modules.sessions, "exists").mockResolvedValue(true);
-  vi.spyOn(AgentSessionRepository.prototype, "findPath").mockResolvedValue(join(cwd, "session.jsonl"));
+  vi.spyOn(AgentSessionRepository.prototype, "findPath").mockResolvedValue(
+    join(cwd, "session.jsonl"),
+  );
   const response = await app.inject({
-    method: "POST", url: "/api/memory/agent/write",
+    method: "POST",
+    url: "/api/memory/agent/write",
     headers: { "x-memory-grant": memoryGrant(cwd, "session", "memory-route-test") },
-    payload: { operation: "append", content: { ...content(),
-      sources: [{ kind: "message", locator: "invented" }] } },
+    payload: {
+      operation: "append",
+      content: { ...content(), sources: [{ kind: "message", locator: "invented" }] },
+    },
   });
   expect(response.statusCode).toBe(409);
   expect(response.json().error).toContain("Enable Settings → Memory");
@@ -187,8 +192,7 @@ it("scope ownership and review cannot be supplied by the model", async () => {
     sessionId: "session",
   });
   expect(() => verifyMemoryGrant(token, "wrong")).toThrow();
-  const r = (await request("POST", "/records", { content: content() })).json()
-    .record;
+  const r = (await request("POST", "/records", { content: content() })).json().record;
   expect(
     (
       await request("PATCH", `/records/${r.id}`, {
@@ -199,25 +203,26 @@ it("scope ownership and review cannot be supplied by the model", async () => {
     ).statusCode,
   ).toBe(409);
 });
-it("keeps project documents independent of Memory and exports history", async () => {
-  await app.inject({
-    method: "PUT",
-    url: "/api/project/document?cwd=" + encodeURIComponent(cwd),
-    payload: { content: "# Project goal" },
-  });
-  expect(
-    (
-      await app.inject({
-        method: "GET",
-        url: "/api/project/document?cwd=" + encodeURIComponent(cwd),
-      })
-    ).json().content,
-  ).toBe("# Project goal");
-  const r = (await request("POST", "/records", { content: content() })).json()
-    .record;
+it("keeps user-owned AGENTS.md independent of Memory and exports history", async () => {
+  await writeFile(join(cwd, "AGENTS.md"), "# Project instructions\n");
+  await writeFile(join(cwd, "PROJECT.md"), "# Legacy user document\n");
+  for (const method of ["GET", "PUT"] as const) {
+    expect(
+      (
+        await app.inject({
+          method,
+          url: "/api/project/document?cwd=" + encodeURIComponent(cwd),
+          ...(method === "PUT" ? { payload: { content: "Must not overwrite user files" } } : {}),
+        })
+      ).statusCode,
+    ).toBe(404);
+  }
+  const r = (await request("POST", "/records", { content: content() })).json().record;
   const data = (await request("GET", "/export")).json();
   expect(data.records).toHaveLength(1);
   expect(data.history[0].revisions[0].id).toBe(r.id);
+  expect(await readFile(join(cwd, "AGENTS.md"), "utf8")).toBe("# Project instructions\n");
+  expect(await readFile(join(cwd, "PROJECT.md"), "utf8")).toBe("# Legacy user document\n");
 });
 
 it("loads and saves owner-wide Memory settings without a project or a phantom schedule", async () => {
@@ -246,21 +251,15 @@ it("loads and saves owner-wide Memory settings without a project or a phantom sc
 });
 it("registers project scheduling without extending idle time on repeated reads", async () => {
   await request("GET", "/records");
-  await modules.stateStore.run(
-    "UPDATE memory_dream_schedules SET last_interaction=1",
-  );
+  await modules.stateStore.run("UPDATE memory_dream_schedules SET last_interaction=1");
   await request("GET", "/records");
   expect(
-    await modules.stateStore.get(
-      "SELECT last_interaction FROM memory_dream_schedules",
-    ),
+    await modules.stateStore.get("SELECT last_interaction FROM memory_dream_schedules"),
   ).toEqual({ last_interaction: 1 });
 });
 
 it("returns validated browse metadata and current proposal content independently of the page", async () => {
-  const first = (
-    await request("POST", "/records", { content: content() })
-  ).json().record;
+  const first = (await request("POST", "/records", { content: content() })).json().record;
   await writeFile(join(cwd, "evidence.txt"), "measurement");
   const scientificContent = (body: string) => ({
     ...content(body, "finding"),
@@ -271,16 +270,11 @@ it("returns validated browse metadata and current proposal content independently
       content: scientificContent("Measured result requires replication"),
     })
   ).json().record;
-  const list = (
-    await request("GET", "/records?pageSize=1&sort=created_desc")
-  ).json();
+  const list = (await request("GET", "/records?pageSize=1&sort=created_desc")).json();
   expect(list).toMatchObject({ total: 2, page: 1, pageSize: 1, totalPages: 2 });
   expect(list.records).toHaveLength(1);
   const filtered = (
-    await request(
-      "GET",
-      "/records?status=pending_review&kind=finding&scope=project",
-    )
+    await request("GET", "/records?status=pending_review&kind=finding&scope=project")
   ).json();
   expect(filtered.total).toBe(1);
   expect(filtered.records[0].id).toBe(science.id);
@@ -298,12 +292,7 @@ it("returns validated browse metadata and current proposal content independently
   const reviews = (await request("GET", "/reviews")).json();
   expect(reviews.proposals[0].current.body).toBe(science.body);
   expect((await request("GET", "/summary")).json().count).toBe(2);
-  for (const query of [
-    "page=0",
-    "pageSize=101",
-    "sort=unknown",
-    "status=unknown",
-  ])
+  for (const query of ["page=0", "pageSize=101", "sort=unknown", "status=unknown"])
     expect((await request("GET", "/records?" + query)).statusCode).toBe(400);
   expect((await request("GET", `/records/${first.id}`)).statusCode).toBe(200);
 });

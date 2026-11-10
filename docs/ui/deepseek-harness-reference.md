@@ -181,6 +181,12 @@ Every future frontend UI change must follow this reference:
   keep `scrollbar-gutter: stable` so revealing the bar never reflows rows.
 - Type: reuse the `ui-micro/meta/caption/label/body/title` tokens instead of
   fresh font sizes; upstream equivalents are in the type-scale row above.
+  `text-ui-*` may be paired with a `text-<colour>` utility inside `cn()`:
+  `frontend/src/lib/ui/cn.ts:14-22` registers `ui-micro…ui-title` in
+  tailwind-merge's font-size group (#234), so size and colour fall into
+  different groups instead of one silently replacing the other. Before that
+  registration (measured 2026-11-01) the step rows lost `text-ui-label` and
+  inherited 15px; keep the registration when adding a new `ui-*` step.
 - Any visual value not listed here must be added to this document with an
   upstream file + selector citation before it ships, or recorded under
   "Provisional values" as an explicit Pi-Science proposal.
@@ -342,6 +348,20 @@ keeps that treatment and uses a stacked hierarchy for the requested live status:
 - 6px between title and task, 8px vertical padding, no enclosing border or fill;
 - completed/stopped/error status contracts to a 14px title.
 
+Pi-Science implementation note (2026-11-01; measured against the real component
+in Chromium at DPR 2, viewports 320/375/1024, both themes): inside the
+conversation thread the status row is one compact line, so it keeps a 15px/1.6
+500 phase title rather than the 20px
+stacked-stage title above — 20px would out-weigh the 14px/15px conversation text
+the row sits in, which the "quiet, borderless" treatment argues against. The row
+uses the same 14px marker slot and 8px gap as the step rows, so the phase title
+and every step label start on the shared x46 edge (24px gutter + 14px slot + 8px
+gap). Step rows carry the 13px/18px task line (`text-ui-label`); with 8px vertical padding their
+line box still clears the row minimum, which is a viewport switch rather than a
+pointer/touch split: 40px below the `sm` breakpoint (`min-h-primary`) and 36px
+from `sm` up (`sm:min-h-control`), both static `--density-*` values
+(`frontend/src/index.css:210-211`). A touch screen 640px or wider is still 36px.
+
 The title holds a stable phase while the subtitle updates with each tool or
 plan event. Purpose comes from an explicit task description, current model
 narration, or the latest in-progress plan. File names and raw tool labels stay
@@ -501,3 +521,65 @@ enters the checked radio (or first), then visits each available detail button in
 option order, then the custom entry; Shift+Tab reverses that order. Details stay
 visually beside their options and retain Enter/Space activation and Escape focus
 return. Checkbox rows keep their existing interleaved checkbox/detail DOM order.
+
+## Desktop usability consolidation (Pi-Science proposal)
+
+Reuse WorkspacePage geometry (1120px, 24/28px title), 12/16px spacing,
+36/40px semantic controls, 13px labels and 14px readable content. Memory
+uses underline navigation and a primary create action; organization is a
+separate dialog. Settings keep the existing rail width with wrapping labels.
+Long forms use a sticky surface-colored save row with visible draft state.
+Projects prioritize recent work and a compact inline summary over decoration.
+Files use full-height row buttons, persistent actions, and explicit error states.
+Confirmation dialogs share the application modal, above other dialogs (z 140/141),
+with keyboard focus containment. No new palette or motion is introduced.
+
+### Pi-Science implementation note: activity categories
+
+Pi-Science proposal (`packages/contracts/src/tool-activity.ts`,
+`frontend/src/components/conversation/activity-renderers/ActivityCategoryIcon.tsx`).
+The step glyph describes the tool category, not its status, so a row cannot
+claim a category through colour and a finished step cannot claim a state through
+a checkmark. Every category shares one monochrome Lucide look at the existing
+14px marker slot: `text-muted`, Lucide's default 2px stroke, no per-category
+colour. Status keeps its own markers — the accent dot while running, `CircleX`
+on failure, no marker that pretends success for an unknown status. The glyph is
+`aria-hidden`; the row's text still carries the accessible name.
+
+| Category | Lucide glyph |
+|---|---|
+| read | FileText |
+| search | Search |
+| browse | FolderOpen |
+| edit | Pencil |
+| execute | Terminal |
+| compute | Sigma |
+| web | Globe |
+| literature | BookOpen |
+| generate | Sparkles |
+| delegate | Bot |
+| other | Wrench |
+
+Classification priority is child session, exact lowercased tool name,
+`presentation.kind` for tools the table does not name, then `other`. The kind
+fallback is how an unknown MCP or extension tool still gets a sensible category,
+and an exact name always wins over it so a precise mapping can refine the
+server's coarser semantic. This table is the single source: the presentation
+adapter reads its literature names from it instead of keeping a second copy.
+
+Row titles follow one safety rule, owned by the same module. A title the server
+stored is a fallback for events without structured data, never a replacement
+for it: the client rebuilds the row from the call's own kind and the active
+locale, so a search row reads 搜索 … in Chinese rather than the server's
+English `Searching for …`. A shell row names, in order, the purpose the model
+wrote, a stored `Running …` title, then the program it starts; a stored title
+is trusted only when it already matches the `Running …` shape, because older
+events can carry a whole command preview as the title. The program basename appears only when `command` is a single line of
+plain text: any assignment, quoting, escape, glob, redirection, pipe,
+substitution, shell keyword or wrapper (`env`, `export`, `sudo`, `xargs`, …)
+falls back to the tool's own neutral name, so `Running bash` is the floor, not
+`Running TOKEN=secret`. Arguments never reach the row, and `code` or `script`
+bodies are never read for a program name. A read row adds the 1-based `offset` and the
+requested window (`a.ts:120-159`). `limit` is what the call asked for; the tool
+clamps it to the file, so the row describes the request and not a promise about
+bytes returned.

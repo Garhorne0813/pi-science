@@ -60,7 +60,7 @@ const EMPTY_FORM: ComputeForm = {
   password: "",
 };
 
-const fieldClass = "min-h-10 w-full rounded-input border border-border bg-surface-2 px-3 text-xs text-text outline-none transition-colors placeholder:text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent/25";
+const fieldClass = "min-h-10 w-full rounded-input border border-border bg-surface-2 px-3 text-ui-label text-text outline-none transition-colors placeholder:text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent/25";
 
 function ProbeDetails({ result }: { result: ProbeResult }) {
   const { t } = useTranslation();
@@ -254,7 +254,7 @@ export function ComputeSettings({ workspaceCwd }: ComputeSettingsProps) {
             <span className="shrink-0 text-[13px] font-medium text-text">{t("settings.computePage.authMethod")}</span>
             <div className="flex w-56 max-w-[62%] shrink-0 gap-1.5">
               {(["key", "password"] as const).map((method) => (
-                <button key={method} type="button" onClick={() => setForm({ ...form, auth_method: method })} aria-pressed={form.auth_method === method} className={cn("flex min-h-9 min-w-0 flex-1 items-center justify-center gap-1 rounded-input border px-2 text-[11px] transition-colors", form.auth_method === method ? "border-accent bg-accent/10 text-text" : "border-border bg-surface-2 text-muted hover:text-text")}>
+                <button key={method} type="button" onClick={() => setForm({ ...form, auth_method: method })} aria-pressed={form.auth_method === method} className={cn("flex min-h-10 min-w-0 flex-1 items-center justify-center gap-1 rounded-input border px-2 text-ui-caption transition-colors", form.auth_method === method ? "border-accent bg-accent/10 text-text" : "border-border bg-surface-2 text-muted hover:text-text")}>
                   {method === "key" ? <KeyRound size={13} /> : <LockKeyhole size={13} />}
                   {t(`settings.computePage.${method === "key" ? "sshKey" : "password"}`)}
                 </button>

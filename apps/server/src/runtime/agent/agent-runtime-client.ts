@@ -1,5 +1,9 @@
 import { modelConfigSnapshotSchema } from "@pi-science/contracts";
-import { ModelConfigService, modelConfigBackend, isAllowedModelEnvRef } from "../../model-config/model-config-service.js";
+import {
+  ModelConfigService,
+  modelConfigBackend,
+  isAllowedModelEnvRef,
+} from "../../model-config/model-config-service.js";
 import { fork, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -8,8 +12,22 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { AgentRuntimeExitedError, AgentRuntimeTimeoutError } from "./agent-runtime-errors.js";
 import type { AgentRuntime, RuntimeResult, RuntimeSkillPolicy } from "./agent-runtime-types.js";
-import { workerEventSchema, type AgentRuntimeStartOptions, type WorkerCommand } from "./worker/protocol.js";
-import { decodeCommand, decodeNotification, validResultData, type RuntimeCommand, type RuntimeNotification, type RuntimeCommandName, type CommandParams, type CommandResult } from "./worker/command-contract.js";
+import {
+  workerEventSchema,
+  type AgentRuntimeStartOptions,
+  type WorkerCommand,
+} from "./worker/protocol.js";
+import { devWorkerEntry } from "./worker/dev-build.js";
+import {
+  decodeCommand,
+  decodeNotification,
+  validResultData,
+  type RuntimeCommand,
+  type RuntimeNotification,
+  type RuntimeCommandName,
+  type CommandParams,
+  type CommandResult,
+} from "./worker/command-contract.js";
 
 type Pending = {
   command: string;
@@ -24,38 +42,125 @@ type WorkerRequest =
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 // Preserve PowerShell module lookup in the minimal Windows worker environment.
-const WINDOWS_DIRECTORY_KEYS = ["USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)", "SystemDrive", "PSModulePath"] as const;
+const WINDOWS_DIRECTORY_KEYS = [
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "ProgramFiles",
+  "ProgramFiles(x86)",
+  "SystemDrive",
+  "PSModulePath",
+] as const;
 const windowsDirectoryKeys = new Set(WINDOWS_DIRECTORY_KEYS.map((name) => name.toLowerCase()));
-const SYSTEM_ENV_KEYS = ["PATH", "HOME", "USER", ...WINDOWS_DIRECTORY_KEYS, "TMPDIR", "TEMP", "TMP", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "PI_SCIENCE_HOME", "PI_SCIENCE_STATE_ROOT",
+const SYSTEM_ENV_KEYS = [
+  "PATH",
+  "HOME",
+  "USER",
+  ...WINDOWS_DIRECTORY_KEYS,
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "SystemRoot",
+  "WINDIR",
+  "COMSPEC",
+  "PATHEXT",
+  "PI_SCIENCE_HOME",
+  "PI_SCIENCE_STATE_ROOT",
   // Trusted launch configuration; never accept workspace overrides.
-  "PI_SCIENCE_EXECUTION_MODE", "PI_SCIENCE_SANDBOX_PROFILES", "PI_SCIENCE_SANDBOX_READ_POLICY", "PI_SCIENCE_SANDBOX_RUNTIME_PATHS", "PI_SCIENCE_SANDBOX_PYTHON", "PI_SCIENCE_SANDBOX_PYTHON_ROOT", "PI_SCIENCE_SANDBOX_SOCAT", "PI_SCIENCE_SANDBOX_RIPGREP", "PI_SCIENCE_SANDBOX_BWRAP",
-  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy",
-  "NODE_USE_ENV_PROXY", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR",
+  "PI_SCIENCE_EXECUTION_MODE",
+  "PI_SCIENCE_SANDBOX_PROFILES",
+  "PI_SCIENCE_SANDBOX_READ_POLICY",
+  "PI_SCIENCE_SANDBOX_RUNTIME_PATHS",
+  "PI_SCIENCE_SANDBOX_PYTHON",
+  "PI_SCIENCE_SANDBOX_PYTHON_ROOT",
+  "PI_SCIENCE_SANDBOX_SOCAT",
+  "PI_SCIENCE_SANDBOX_RIPGREP",
+  "PI_SCIENCE_SANDBOX_BWRAP",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy",
+  "NODE_USE_ENV_PROXY",
+  "NODE_EXTRA_CA_CERTS",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
 ] as const;
 const WORKSPACE_ENV_KEYS = new Set([
-  "PATH", "CONDA_PREFIX", "PI_SCIENCE_ENVIRONMENT_ID", "PI_SCIENCE_ENVIRONMENT_REVISION_ID",
-  "PI_SCIENCE_ENVIRONMENT_PREFIX", "PYTHONNOUSERSITE", "PIP_USER", "npm_config_prefix",
-  "NPM_CONFIG_PREFIX", "npm_config_cache", "NPM_CONFIG_CACHE", "npm_config_update_notifier",
-  "PNPM_HOME", "COREPACK_HOME", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
-  "OPENROUTER_API_KEY", "AZURE_OPENAI_API_KEY", "DEEPSEEK_API_KEY", "GROQ_API_KEY",
-  "MISTRAL_API_KEY", "XAI_API_KEY", "CEREBRAS_API_KEY", "ZAI_API_KEY",
-  "PI_SCIENCE_BACKEND_URL", "PI_SCIENCE_INTERNAL_TOKEN",
+  "PATH",
+  "CONDA_PREFIX",
+  "PI_SCIENCE_ENVIRONMENT_ID",
+  "PI_SCIENCE_ENVIRONMENT_REVISION_ID",
+  "PI_SCIENCE_ENVIRONMENT_PREFIX",
+  "PYTHONNOUSERSITE",
+  "PIP_USER",
+  "npm_config_prefix",
+  "NPM_CONFIG_PREFIX",
+  "npm_config_cache",
+  "NPM_CONFIG_CACHE",
+  "npm_config_update_notifier",
+  "PNPM_HOME",
+  "COREPACK_HOME",
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "GOOGLE_API_KEY",
+  "OPENROUTER_API_KEY",
+  "AZURE_OPENAI_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "GROQ_API_KEY",
+  "MISTRAL_API_KEY",
+  "XAI_API_KEY",
+  "CEREBRAS_API_KEY",
+  "ZAI_API_KEY",
+  "PI_SCIENCE_BACKEND_URL",
+  "PI_SCIENCE_INTERNAL_TOKEN",
 ]);
 
 function workerEntry(): { path: string; execArgv: string[] } {
   const compiled = fileURLToPath(new URL("./worker/main.js", import.meta.url));
   if (existsSync(compiled)) return { path: compiled, execArgv: [] };
-  return { path: fileURLToPath(new URL("./worker/main.ts", import.meta.url)), execArgv: ["--import", import.meta.resolve("tsx")] };
+  // Development runs the control plane through tsx; fork a precompiled mirror
+  // when available so each session start does not transpile the worker graph.
+  const dev = devWorkerEntry({
+    serverRoot: fileURLToPath(new URL("../../../", import.meta.url)),
+    contractsRoot: fileURLToPath(new URL("../../../../../packages/contracts/", import.meta.url)),
+  });
+  if (dev) return { path: dev, execArgv: [] };
+  return {
+    path: fileURLToPath(new URL("./worker/main.ts", import.meta.url)),
+    execArgv: ["--import", import.meta.resolve("tsx")],
+  };
 }
 
-export function workerEnvironment(overrides: Record<string, string> = {}, credentialEnvNames: string[] = []): NodeJS.ProcessEnv {
-  const system = Object.fromEntries(SYSTEM_ENV_KEYS.flatMap((name) => {
-    const value = process.env[name];
-    return value === undefined ? [] : [[name, value]];
-  }));
+export function workerEnvironment(
+  overrides: Record<string, string> = {},
+  credentialEnvNames: string[] = [],
+): NodeJS.ProcessEnv {
+  const system = Object.fromEntries(
+    SYSTEM_ENV_KEYS.flatMap((name) => {
+      const value = process.env[name];
+      return value === undefined ? [] : [[name, value]];
+    }),
+  );
   const allowed = new Set([...WORKSPACE_ENV_KEYS, ...credentialEnvNames]);
-  const workspace = Object.fromEntries(Object.entries(overrides).filter(([name]) => allowed.has(name) && !windowsDirectoryKeys.has(name.toLowerCase()) && name !== "PI_SCIENCE_EXECUTION_MODE" && !name.startsWith("PI_SCIENCE_SANDBOX_")));
-  return { ...system, ...workspace, PI_SCIENCE_MCP_EXECUTABLE_PATH: process.env.PI_SCIENCE_MCP_EXECUTABLE_PATH ?? process.env.PATH ?? "" };
+  const workspace = Object.fromEntries(
+    Object.entries(overrides).filter(
+      ([name]) =>
+        allowed.has(name) &&
+        !windowsDirectoryKeys.has(name.toLowerCase()) &&
+        name !== "PI_SCIENCE_EXECUTION_MODE" &&
+        !name.startsWith("PI_SCIENCE_SANDBOX_"),
+    ),
+  );
+  return {
+    ...system,
+    ...workspace,
+    PI_SCIENCE_MCP_EXECUTABLE_PATH:
+      process.env.PI_SCIENCE_MCP_EXECUTABLE_PATH ?? process.env.PATH ?? "",
+  };
 }
 
 /** One IPC connection and one OS child for an AgentHarness session. */
@@ -65,7 +170,11 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
   private closed = false;
   private currentSessionId = "";
   private stderrTail = "";
-  private readonly approvalLeases = new Map<string, { controller: AbortController; release?: () => void }>();
+  private readonly approvalLeases = new Map<
+    string,
+    { controller: AbortController; release?: () => void }
+  >();
+  private startupMsValue: number | null = null;
 
   private constructor(
     readonly child: ChildProcess,
@@ -84,23 +193,41 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
     child.once("exit", (code, signal) => this.handleExit(code, signal));
   }
 
-  static async start(options: AgentRuntimeStartOptions, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<AgentCoreRuntimeClient> {
+  static async start(
+    options: AgentRuntimeStartOptions,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+  ): Promise<AgentCoreRuntimeClient> {
     // Bind all Worker callers (sessions, titles, research and subagents) at one
     // trusted boundary. Parent tasks may retain their already validated revision.
     const backend = modelConfigBackend();
     const service = new ModelConfigService();
     const snapshot = options.settings?.modelConfigSnapshot
-      ? modelConfigSnapshotSchema.parse(options.settings.modelConfigSnapshot) : service.readSync();
+      ? modelConfigSnapshotSchema.parse(options.settings.modelConfigSnapshot)
+      : service.readSync();
     const modelEnvironment: Record<string, string> = {};
     for (const ref of Object.values(snapshot?.credential_refs ?? {})) {
       const metadata = await service.credentials.metadata(ref);
       const name = metadata?.backend === "environment" ? metadata.environment_variable : undefined;
-      if (isAllowedModelEnvRef(name) && process.env[name] !== undefined) modelEnvironment[name] = process.env[name]!;
+      if (isAllowedModelEnvRef(name) && process.env[name] !== undefined)
+        modelEnvironment[name] = process.env[name]!;
     }
-    const launch = { ...options, settings: { ...options.settings, modelConfigBackend: backend, modelConfigSnapshot: snapshot,
-      modelConfigAllowPrivate: options.settings?.modelConfigAllowPrivate !== false && process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0" } };
+    const launch = {
+      ...options,
+      settings: {
+        ...options.settings,
+        modelConfigBackend: backend,
+        modelConfigSnapshot: snapshot,
+        modelConfigAllowPrivate:
+          options.settings?.modelConfigAllowPrivate !== false &&
+          process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0",
+      },
+    };
     const entry = workerEntry();
-    const env = workerEnvironment({ ...options.env, ...modelEnvironment }, [...(options.credentialEnvNames ?? []), ...Object.keys(modelEnvironment)]);
+    const env = workerEnvironment({ ...options.env, ...modelEnvironment }, [
+      ...(options.credentialEnvNames ?? []),
+      ...Object.keys(modelEnvironment),
+    ]);
+    const forkedAt = Date.now();
     const child = fork(entry.path, [], {
       cwd: options.cwd,
       env,
@@ -109,14 +236,23 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
     });
     const client = new AgentCoreRuntimeClient(child, options.cwd, timeoutMs);
     try {
-      const result = await client.request({ type: "initialize", options: { ...launch, env: env as Record<string, string> } }, "initialize");
+      const result = await client.request(
+        { type: "initialize", options: { ...launch, env: env as Record<string, string> } },
+        "initialize",
+      );
       if (!result.success) throw new Error(result.error ?? "agent runtime initialization failed");
-      const sessionId = result.data && typeof result.data === "object" ? (result.data as { sessionId?: unknown }).sessionId : undefined;
-      if (typeof sessionId !== "string" || !sessionId) throw new Error("agent runtime returned no session ID");
+      const sessionId =
+        result.data && typeof result.data === "object"
+          ? (result.data as { sessionId?: unknown }).sessionId
+          : undefined;
+      if (typeof sessionId !== "string" || !sessionId)
+        throw new Error("agent runtime returned no session ID");
       client.currentSessionId = sessionId;
+      client.startupMsValue = Date.now() - forkedAt;
       if (!options.deferActivation) {
         const activated = await client.sendCommand("activate");
-        if (!activated.success) throw new Error(activated.error ?? "agent runtime activation failed");
+        if (!activated.success)
+          throw new Error(activated.error ?? "agent runtime activation failed");
       }
       return client;
     } catch (error) {
@@ -125,14 +261,36 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
     }
   }
 
-  get sessionId(): string { return this.currentSessionId; }
-  get isClosed(): boolean { return this.closed; }
+  get sessionId(): string {
+    return this.currentSessionId;
+  }
+  /** Time from fork to the worker's `ready` handshake; null when it never completed. */
+  get startupMs(): number | null {
+    return this.startupMsValue;
+  }
+  get isClosed(): boolean {
+    return this.closed;
+  }
 
-  sendCommand<K extends RuntimeCommandName>(type: K, params?: CommandParams<K>, timeoutMs?: number): Promise<CommandResult<K>>;
-  sendCommand(type: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<RuntimeResult>;
-  sendCommand(type: string, params: Record<string, unknown> = {}, timeoutMs = this.timeoutMs): Promise<RuntimeResult> {
+  sendCommand<K extends RuntimeCommandName>(
+    type: K,
+    params?: CommandParams<K>,
+    timeoutMs?: number,
+  ): Promise<CommandResult<K>>;
+  sendCommand(
+    type: string,
+    params?: Record<string, unknown>,
+    timeoutMs?: number,
+  ): Promise<RuntimeResult>;
+  sendCommand(
+    type: string,
+    params: Record<string, unknown> = {},
+    timeoutMs = this.timeoutMs,
+  ): Promise<RuntimeResult> {
     const decoded = decodeCommand(type, params);
-    return decoded.ok ? this.request({ type: "command", ...decoded.value }, type, timeoutMs) : Promise.resolve(decoded.result);
+    return decoded.ok
+      ? this.request({ type: "command", ...decoded.value }, type, timeoutMs)
+      : Promise.resolve(decoded.result);
   }
 
   async sendNotification(type: string, params: Record<string, unknown> = {}): Promise<void> {
@@ -142,9 +300,15 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
     if (!result.success) throw new Error(result.error ?? `agent notification ${type} failed`);
   }
 
-  getSkills(): Promise<RuntimeResult> { return this.sendCommand("get_skills"); }
-  setSkillPolicy(policy: RuntimeSkillPolicy): Promise<RuntimeResult> { return this.sendCommand("set_skill_policy", { policy }); }
-  refreshSkills(): Promise<RuntimeResult> { return this.sendCommand("refresh_skills"); }
+  getSkills(): Promise<RuntimeResult> {
+    return this.sendCommand("get_skills");
+  }
+  setSkillPolicy(policy: RuntimeSkillPolicy): Promise<RuntimeResult> {
+    return this.sendCommand("set_skill_policy", { policy });
+  }
+  refreshSkills(): Promise<RuntimeResult> {
+    return this.sendCommand("refresh_skills");
+  }
 
   async shutdown(): Promise<void> {
     if (this.closed) return;
@@ -152,11 +316,18 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
     const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
     this.send({ type: "shutdown" }).catch(() => child.kill("SIGTERM"));
     const timer = setTimeout(() => child.kill("SIGKILL"), 2_000);
-    try { await exited; }
-    finally { clearTimeout(timer); }
+    try {
+      await exited;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
-  private request(command: WorkerRequest, label: string, timeoutMs = this.timeoutMs): Promise<RuntimeResult> {
+  private request(
+    command: WorkerRequest,
+    label: string,
+    timeoutMs = this.timeoutMs,
+  ): Promise<RuntimeResult> {
     if (this.closed) return Promise.reject(new AgentRuntimeExitedError("agent worker is closed"));
     const requestId = randomUUID();
     return new Promise<RuntimeResult>((resolve, reject) => {
@@ -176,18 +347,28 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
   }
 
   private send(message: WorkerCommand): Promise<void> {
-    if (!this.child.connected) return Promise.reject(new AgentRuntimeExitedError("agent worker IPC is disconnected"));
+    if (!this.child.connected)
+      return Promise.reject(new AgentRuntimeExitedError("agent worker IPC is disconnected"));
     return new Promise((resolve, reject) => {
-      this.child.send(message, (error) => error ? reject(error) : resolve());
+      this.child.send(message, (error) => (error ? reject(error) : resolve()));
     });
   }
 
   private handleMessage(message: unknown): void {
     const decoded = workerEventSchema.safeParse(message);
     if (!decoded.success) {
-      if (message && typeof message === "object" && "requestId" in message && typeof message.requestId === "string") {
+      if (
+        message &&
+        typeof message === "object" &&
+        "requestId" in message &&
+        typeof message.requestId === "string"
+      ) {
         const pending = this.pending.get(message.requestId);
-        if (pending) { this.pending.delete(message.requestId); clearTimeout(pending.timer); pending.reject(new Error("invalid agent worker response")); }
+        if (pending) {
+          this.pending.delete(message.requestId);
+          clearTimeout(pending.timer);
+          pending.reject(new Error("invalid agent worker response"));
+        }
       }
       this.emit("malformed", "invalid agent worker event");
       return;
@@ -195,17 +376,31 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
     const value = decoded.data;
     if (value.type === "approval_acquire") {
       if (this.approvalLeases.has(value.id) || this.closed) return;
-      const lease: { controller: AbortController; release?: () => void } = { controller: new AbortController() };
+      const lease: { controller: AbortController; release?: () => void } = {
+        controller: new AbortController(),
+      };
       this.approvalLeases.set(value.id, lease);
-      void runtimeApprovalQueue.acquire(value.key, lease.controller.signal).then(async (release) => {
-        if (lease.controller.signal.aborted) { release(); return; }
-        lease.release = release;
-        try { await this.send({ type: "approval_granted", id: value.id }); }
-        catch { this.releaseApproval(value.id); }
-      }).catch(() => this.releaseApproval(value.id));
+      void runtimeApprovalQueue
+        .acquire(value.key, lease.controller.signal)
+        .then(async (release) => {
+          if (lease.controller.signal.aborted) {
+            release();
+            return;
+          }
+          lease.release = release;
+          try {
+            await this.send({ type: "approval_granted", id: value.id });
+          } catch {
+            this.releaseApproval(value.id);
+          }
+        })
+        .catch(() => this.releaseApproval(value.id));
       return;
     }
-    if (value.type === "approval_release") { this.releaseApproval(value.id); return; }
+    if (value.type === "approval_release") {
+      this.releaseApproval(value.id);
+      return;
+    }
     if (value.type === "runtime_event") this.emit("event", value.event);
     if (value.type === "fatal") this.emit("stderr", value.error);
     if (value.type === "ready") this.currentSessionId = value.sessionId;
@@ -224,7 +419,10 @@ export class AgentCoreRuntimeClient extends EventEmitter implements AgentRuntime
     if (this.closed) return;
     this.closed = true;
     for (const id of this.approvalLeases.keys()) this.releaseApproval(id);
-    const error = new AgentRuntimeExitedError(cause?.message ?? `agent worker exited with code ${code ?? "null"}${signal ? ` (${signal})` : ""}${this.stderrTail ? `: ${this.stderrTail.trim()}` : ""}`);
+    const error = new AgentRuntimeExitedError(
+      cause?.message ??
+        `agent worker exited with code ${code ?? "null"}${signal ? ` (${signal})` : ""}${this.stderrTail ? `: ${this.stderrTail.trim()}` : ""}`,
+    );
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(error);

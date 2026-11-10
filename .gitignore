@@ -69,6 +69,7 @@ _tmp_*
 
 # Orchestration intermediates
 .pi-subagents/
-
 # Opt-in live-model test reports (synthetic data; never source)
 /work/live-tests/
+
+.dev-dist/

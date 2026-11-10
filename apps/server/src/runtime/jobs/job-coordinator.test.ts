@@ -1,20 +1,37 @@
+import { knownWorkspacePaths } from "../../http/routes/catalog-routes.js";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { availableParallelism, tmpdir, totalmem } from "node:os";
 import { join } from "node:path";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { JobCoordinator, parseCommand, type JobOwnership, type JobRecord, type JobStatus, restrictLocalJobEnvironment, restrictResearchEnvironment, windowsTaskkillArgs } from "./job-coordinator.js";
+import {
+  JobCoordinator,
+  parseCommand,
+  type JobOwnership,
+  type JobRecord,
+  type JobStatus,
+  restrictLocalJobEnvironment,
+  restrictResearchEnvironment,
+  windowsTaskkillArgs,
+} from "./job-coordinator.js";
 
 const cleanup: string[] = [];
 const jobs: JobCoordinator[] = [];
 const TERMINAL: JobStatus[] = ["succeeded", "failed", "cancelled", "timed_out"];
 // Lifecycle fixtures exercise the host backend. Required-mode jobs have real
 // isolation acceptance in platform-acceptance.test.ts.
-beforeEach(() => vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "trusted-host"));
+beforeEach(async () => {
+  vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "trusted-host");
+  vi.stubEnv("PI_SCIENCE_HOME", await workspace());
+});
 
 afterEach(async () => {
   await Promise.allSettled(jobs.splice(0).map((coordinator) => coordinator.shutdown()));
-  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
+  await Promise.all(
+    cleanup
+      .splice(0)
+      .map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })),
+  );
   vi.unstubAllEnvs();
 });
 
@@ -24,28 +41,60 @@ async function workspace(): Promise<string> {
   return cwd;
 }
 
-function jobCoordinator(environment: NodeJS.ProcessEnv = { ...process.env }, hooks: ConstructorParameters<typeof JobCoordinator>[1] = {}): JobCoordinator {
+function jobCoordinator(
+  environment: NodeJS.ProcessEnv = { ...process.env },
+  hooks: ConstructorParameters<typeof JobCoordinator>[1] = {},
+): JobCoordinator {
   const coordinator = new JobCoordinator({ environment: async () => ({ ...environment }) }, hooks);
   jobs.push(coordinator);
   return coordinator;
 }
 
-async function writeStoredJob(cwd: string, jobId: string, status: JobStatus, createdAt: string, stderr = "", ownership?: JobOwnership): Promise<void> {
-  const record: JobRecord = { job_id: jobId, command: ["/bin/true"], cwd, surface: "local", status, created_at: createdAt, stdout: "", stderr, artifact_ids: [], environment: {}, requirement: {}, ...(ownership ? { ownership } : {}) };
+async function writeStoredJob(
+  cwd: string,
+  jobId: string,
+  status: JobStatus,
+  createdAt: string,
+  stderr = "",
+  ownership?: JobOwnership,
+): Promise<void> {
+  const record: JobRecord = {
+    job_id: jobId,
+    command: ["/bin/true"],
+    cwd,
+    surface: "local",
+    status,
+    created_at: createdAt,
+    stdout: "",
+    stderr,
+    artifact_ids: [],
+    environment: {},
+    requirement: {},
+    ...(ownership ? { ownership } : {}),
+  };
   await mkdir(join(cwd, ".pi-science", "jobs"), { recursive: true });
-  await writeFile(join(cwd, ".pi-science", "jobs", `${jobId}.json`), `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  await writeFile(
+    join(cwd, ".pi-science", "jobs", `${jobId}.json`),
+    `${JSON.stringify(record, null, 2)}\n`,
+    "utf8",
+  );
 }
 
 const terminal = (record: JobRecord | null) => Boolean(record && TERMINAL.includes(record.status));
 
-async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean, timeoutMs = 8_000): Promise<T> {
+async function waitFor<T>(
+  read: () => Promise<T>,
+  accept: (value: T) => boolean,
+  timeoutMs = 8_000,
+): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   let last: T;
   for (;;) {
     const value = await read();
     last = value;
     if (accept(value)) return value;
-    if (Date.now() >= deadline) throw new Error(`timed out waiting for job state: ${JSON.stringify(last)}`);
+    if (Date.now() >= deadline)
+      throw new Error(`timed out waiting for job state: ${JSON.stringify(last)}`);
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
@@ -53,61 +102,144 @@ async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean,
 async function linuxStartTicks(pid: number): Promise<string | null> {
   try {
     const value = (await readFile(`/proc/${pid}/stat`, "utf8")).trim();
-    const commandStart = value.indexOf("("); const commandEnd = value.lastIndexOf(")");
-    const fields = commandStart >= 1 && commandEnd > commandStart && /^\d+\s$/.test(value.slice(0, commandStart)) ? value.slice(commandEnd + 1).trim().split(/\s+/) : [];
+    const commandStart = value.indexOf("(");
+    const commandEnd = value.lastIndexOf(")");
+    const fields =
+      commandStart >= 1 && commandEnd > commandStart && /^\d+\s$/.test(value.slice(0, commandStart))
+        ? value
+            .slice(commandEnd + 1)
+            .trim()
+            .split(/\s+/)
+        : [];
     return fields[19] && /^\d+$/.test(fields[19]!) ? fields[19]! : null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
-async function processExists(pid: number): Promise<boolean> { try { process.kill(pid, 0); return true; } catch { return false; } }
+async function processExists(pid: number): Promise<boolean> {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 describe("job coordinator", () => {
   it("keeps a task cancelled during job preparation from spawning", async () => {
     const { ExecutionBudgetLedger } = await import("../executions/execution-budget.js");
-    const cwd = await workspace(); const ledger = new ExecutionBudgetLedger(cwd, "cancel-before-launch");
+    const cwd = await workspace();
+    const ledger = new ExecutionBudgetLedger(cwd, "cancel-before-launch");
     await ledger.configure({ max_seconds: 30 });
     const child = await ledger.createChild("child");
-    const coordinator = jobCoordinator({ PATH: process.env.PATH }, { beforeSpawn: () => child.cancel() });
-    const job = await coordinator.submit(cwd, { command: [process.execPath, "-e", "require('node:fs').writeFileSync('late.txt','escaped')"] }, { owner: "cancel-before-launch", nodeId: "child" });
-    expect(await waitFor(() => coordinator.get(cwd, job.job_id), terminal)).toMatchObject({ status: "cancelled", stderr: expect.stringContaining("task cancelled") });
-    await expect(readFile(join(cwd, "late.txt"))).rejects.toThrow();
-  });
-
-  it.each(["cancel", "deadline"] as const)("terminates a real background process on task-tree %s", async (mode) => {
-    const { ExecutionBudgetLedger } = await import("../executions/execution-budget.js");
-    const cwd = await workspace(); const ledger = new ExecutionBudgetLedger(cwd, "job-tree");
-    await ledger.configure({ max_seconds: 30, by_kind: { job: 1 } });
-    const child = await ledger.createChild("child", { max_seconds: mode === "deadline" ? 3 : 30 });
-    const coordinator = jobCoordinator({ PATH: process.env.PATH });
-    const job = await coordinator.submit(cwd, { command: [process.execPath, "-e", "console.log('ready');setTimeout(()=>require('node:fs').writeFileSync('late.txt','escaped'),15000)"] }, { owner: "job-tree", nodeId: "child" });
-    await waitFor(() => coordinator.get(cwd, job.job_id), (record) => !!record?.ownership?.child);
-    await expect(coordinator.submit(cwd, { command: [process.execPath, "-e", "console.log('over quota')"] }, { owner: "job-tree", nodeId: "child" })).rejects.toThrow("job budget exhausted");
-    if (mode === "cancel") await child.cancel();
-    const record = await waitFor(() => coordinator.get(cwd, job.job_id), terminal);
-    expect(record?.status).toBe(mode === "cancel" ? "cancelled" : "timed_out");
-    await expect(readFile(join(cwd, "late.txt"))).rejects.toThrow();
-    expect(await ledger.status()).toMatchObject({ used: 1, usage: { job: 1 } });
-  });
-
-  it.each(["beforeSpawn", "testBeforeAuthorizedSpawn"] as const)("refuses a persisted host-mode job when required mode is enabled at %s", async (barrier) => {
-    const cwd = await workspace();
-    const coordinator = jobCoordinator({ PATH: process.env.PATH }, {
-      [barrier]: async () => { vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "required"); },
+    const coordinator = jobCoordinator(
+      { PATH: process.env.PATH },
+      { beforeSpawn: () => child.cancel() },
+    );
+    const job = await coordinator.submit(
+      cwd,
+      {
+        command: [process.execPath, "-e", "require('node:fs').writeFileSync('late.txt','escaped')"],
+      },
+      { owner: "cancel-before-launch", nodeId: "child" },
+    );
+    expect(await waitFor(() => coordinator.get(cwd, job.job_id), terminal)).toMatchObject({
+      status: "cancelled",
+      stderr: expect.stringContaining("task cancelled"),
     });
-    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "require('node:fs').writeFileSync('unsafe.txt','escaped')"] });
-    const record = await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal);
-    expect(record).toMatchObject({ status: "failed", stderr: expect.stringContaining("execution mode changed after admission") });
-    await expect(readFile(join(cwd, "unsafe.txt"))).rejects.toThrow();
+    await expect(readFile(join(cwd, "late.txt"))).rejects.toThrow();
   });
+
+  it.each(["cancel", "deadline"] as const)(
+    "terminates a real background process on task-tree %s",
+    async (mode) => {
+      const { ExecutionBudgetLedger } = await import("../executions/execution-budget.js");
+      const cwd = await workspace();
+      const ledger = new ExecutionBudgetLedger(cwd, "job-tree");
+      await ledger.configure({ max_seconds: 30, by_kind: { job: 1 } });
+      const child = await ledger.createChild("child", {
+        max_seconds: mode === "deadline" ? 3 : 30,
+      });
+      const coordinator = jobCoordinator({ PATH: process.env.PATH });
+      const job = await coordinator.submit(
+        cwd,
+        {
+          command: [
+            process.execPath,
+            "-e",
+            "console.log('ready');setTimeout(()=>require('node:fs').writeFileSync('late.txt','escaped'),15000)",
+          ],
+        },
+        { owner: "job-tree", nodeId: "child" },
+      );
+      await waitFor(
+        () => coordinator.get(cwd, job.job_id),
+        (record) => !!record?.ownership?.child,
+      );
+      await expect(
+        coordinator.submit(
+          cwd,
+          { command: [process.execPath, "-e", "console.log('over quota')"] },
+          { owner: "job-tree", nodeId: "child" },
+        ),
+      ).rejects.toThrow("job budget exhausted");
+      if (mode === "cancel") await child.cancel();
+      const record = await waitFor(() => coordinator.get(cwd, job.job_id), terminal);
+      expect(record?.status).toBe(mode === "cancel" ? "cancelled" : "timed_out");
+      await expect(readFile(join(cwd, "late.txt"))).rejects.toThrow();
+      expect(await ledger.status()).toMatchObject({ used: 1, usage: { job: 1 } });
+    },
+  );
+
+  it.each(["beforeSpawn", "testBeforeAuthorizedSpawn"] as const)(
+    "refuses a persisted host-mode job when required mode is enabled at %s",
+    async (barrier) => {
+      const cwd = await workspace();
+      const coordinator = jobCoordinator(
+        { PATH: process.env.PATH },
+        {
+          [barrier]: async () => {
+            vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "required");
+          },
+        },
+      );
+      const submitted = await coordinator.submit(cwd, {
+        command: [
+          process.execPath,
+          "-e",
+          "require('node:fs').writeFileSync('unsafe.txt','escaped')",
+        ],
+      });
+      const record = await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal);
+      expect(record).toMatchObject({
+        status: "failed",
+        stderr: expect.stringContaining("execution mode changed after admission"),
+      });
+      await expect(readFile(join(cwd, "unsafe.txt"))).rejects.toThrow();
+    },
+  );
 
   it("parses command strings without a backtracking regular expression", () => {
-    expect(parseCommand(`python -c "print('hello world')" --label='quoted value'`)).toEqual(["python", "-c", "print('hello world')", "--label=quoted value"]);
-    expect(parseCommand("node -e 'process.stdout.write(\\\"ok\\\")'" )).toEqual(["node", "-e", "process.stdout.write(\\\"ok\\\")"]);
+    expect(parseCommand(`python -c "print('hello world')" --label='quoted value'`)).toEqual([
+      "python",
+      "-c",
+      "print('hello world')",
+      "--label=quoted value",
+    ]);
+    expect(parseCommand("node -e 'process.stdout.write(\\\"ok\\\")'")).toEqual([
+      "node",
+      "-e",
+      'process.stdout.write(\\"ok\\")',
+    ]);
   });
 
   it("reports host CPU and memory capacity instead of a hard-coded single CPU", () => {
     const coordinator = jobCoordinator();
-    const result = coordinator.capabilities({ cpu: availableParallelism(), memory_mb: Math.floor(totalmem() / (1024 * 1024)) });
+    const result = coordinator.capabilities({
+      cpu: availableParallelism(),
+      memory_mb: Math.floor(totalmem() / (1024 * 1024)),
+    });
     expect(result.status).toBe("ready");
     expect(result.checks.cpu).toBe(availableParallelism());
     expect(result.checks.memory_mb).toBe(Math.floor(totalmem() / (1024 * 1024)));
@@ -126,7 +258,11 @@ describe("job coordinator", () => {
         environment_id: "env_science",
         packages: ["python=3.12", "numpy"],
         manager: "micromamba",
-        npm: { local_prefix: "/tmp/pi-science-capabilities", global_prefix: "/tmp/pi-science-capabilities/.npm", cache: "/tmp/pi-science-capabilities/.cache" },
+        npm: {
+          local_prefix: "/tmp/pi-science-capabilities",
+          global_prefix: "/tmp/pi-science-capabilities/.npm",
+          cache: "/tmp/pi-science-capabilities/.cache",
+        },
       }),
     });
     jobs.push(coordinator);
@@ -143,7 +279,13 @@ describe("job coordinator", () => {
 
   it("heals orphaned pending/running records after a restart and unblocks hasActive", async () => {
     const cwd = await workspace();
-    await writeStoredJob(cwd, "job_orphan0000000000", "running", new Date(Date.now() - 60_000).toISOString(), "earlier stderr");
+    await writeStoredJob(
+      cwd,
+      "job_orphan0000000000",
+      "running",
+      new Date(Date.now() - 60_000).toISOString(),
+      "earlier stderr",
+    );
     const coordinator = jobCoordinator();
     const healed = await coordinator.get(cwd, "job_orphan0000000000");
     expect(healed?.status).toBe("failed");
@@ -151,7 +293,9 @@ describe("job coordinator", () => {
     expect(healed?.ended_at).toBeTruthy();
     expect(healed?.stderr).toContain("earlier stderr");
     expect(healed?.stderr).toContain("orphaned by a server restart");
-    const persisted = JSON.parse(await readFile(join(cwd, ".pi-science", "jobs", "job_orphan0000000000.json"), "utf8")) as JobRecord;
+    const persisted = JSON.parse(
+      await readFile(join(cwd, ".pi-science", "jobs", "job_orphan0000000000.json"), "utf8"),
+    ) as JobRecord;
     expect(persisted.status).toBe("failed");
     expect(await coordinator.hasActive(cwd)).toBe(false);
   });
@@ -163,7 +307,10 @@ describe("job coordinator", () => {
     await writeStoredJob(cwd, "job_fresh11111111111", "running", now);
     const coordinator = jobCoordinator();
     expect((await coordinator.get(cwd, "job_fresh00000000000"))?.status).toBe("pending");
-    expect((await coordinator.list(cwd, 10)).map((record) => record.status).sort()).toEqual(["pending", "running"]);
+    expect((await coordinator.list(cwd, 10)).map((record) => record.status).sort()).toEqual([
+      "pending",
+      "running",
+    ]);
     expect(await coordinator.hasActive(cwd)).toBe(true);
   });
 
@@ -174,20 +321,36 @@ describe("job coordinator", () => {
     let enteredSpawn!: () => void;
     let releaseTerminal!: () => void;
     let enteredTerminal!: () => void;
-    const spawnGate = new Promise<void>((resolve) => { releaseSpawn = resolve; });
-    const gateEntered = new Promise<void>((resolve) => { enteredSpawn = resolve; });
-    const terminalGate = new Promise<void>((resolve) => { releaseTerminal = resolve; });
-    const terminalEntered = new Promise<void>((resolve) => { enteredTerminal = resolve; });
+    const spawnGate = new Promise<void>((resolve) => {
+      releaseSpawn = resolve;
+    });
+    const gateEntered = new Promise<void>((resolve) => {
+      enteredSpawn = resolve;
+    });
+    const terminalGate = new Promise<void>((resolve) => {
+      releaseTerminal = resolve;
+    });
+    const terminalEntered = new Promise<void>((resolve) => {
+      enteredTerminal = resolve;
+    });
     const owner = jobCoordinator(undefined, {
       now: () => now,
       leaseMs: 200,
       heartbeatMs: 25,
-      beforeSpawn: async () => { enteredSpawn(); await spawnGate; },
-      beforeTerminalSave: async () => { enteredTerminal(); await terminalGate; },
+      beforeSpawn: async () => {
+        enteredSpawn();
+        await spawnGate;
+      },
+      beforeTerminalSave: async () => {
+        enteredTerminal();
+        await terminalGate;
+      },
     });
     const observer = jobCoordinator(undefined, { now: () => now, leaseMs: 200, heartbeatMs: 25 });
     try {
-      const submitted = await owner.submit(cwd, { command: [process.execPath, "-e", "process.exit(0)"] });
+      const submitted = await owner.submit(cwd, {
+        command: [process.execPath, "-e", "process.exit(0)"],
+      });
       await gateEntered;
       now += 60_000;
       expect((await observer.get(cwd, submitted.job_id))?.status).toBe("running");
@@ -196,7 +359,9 @@ describe("job coordinator", () => {
       await terminalEntered;
       expect((await observer.get(cwd, submitted.job_id))?.status).toBe("running");
       releaseTerminal();
-      expect((await waitFor(() => observer.get(cwd, submitted.job_id), terminal))?.status).toBe("succeeded");
+      expect((await waitFor(() => observer.get(cwd, submitted.job_id), terminal))?.status).toBe(
+        "succeeded",
+      );
     } finally {
       releaseSpawn();
       releaseTerminal();
@@ -205,9 +370,27 @@ describe("job coordinator", () => {
 
   it("heals only an expired lease whose owner is no longer credibly active", async () => {
     const cwd = await workspace();
-    const ownership: JobOwnership = { instance_id: "dead-owner", pid: 999_999, process_started_at: new Date(0).toISOString(), generation: 7, token: "dead-token", heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString() };
-    await writeStoredJob(cwd, "job_aaaaaaaaaaaaaaaa", "running", new Date(1_000).toISOString(), "", ownership);
-    const observer = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => false });
+    const ownership: JobOwnership = {
+      instance_id: "dead-owner",
+      pid: 999_999,
+      process_started_at: new Date(0).toISOString(),
+      generation: 7,
+      token: "dead-token",
+      heartbeat_at: new Date(1_000).toISOString(),
+      lease_expires_at: new Date(2_000).toISOString(),
+    };
+    await writeStoredJob(
+      cwd,
+      "job_aaaaaaaaaaaaaaaa",
+      "running",
+      new Date(1_000).toISOString(),
+      "",
+      ownership,
+    );
+    const observer = jobCoordinator(undefined, {
+      now: () => 3_000,
+      ownerProcessAlive: () => false,
+    });
     const healed = await observer.get(cwd, "job_aaaaaaaaaaaaaaaa");
     expect(healed?.status).toBe("failed");
     expect(healed?.stderr).toContain("owner lease expired");
@@ -216,39 +399,155 @@ describe("job coordinator", () => {
 
   it("does not heal a valid lease or an expired lease with an unverifiably reused live PID", async () => {
     const cwd = await workspace();
-    const valid: JobOwnership = { instance_id: "remote-owner", pid: 42, process_started_at: new Date(0).toISOString(), generation: 1, token: "valid-token", heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(5_000).toISOString() };
-    await writeStoredJob(cwd, "job_bbbbbbbbbbbbbbbb", "running", new Date(1_000).toISOString(), "", valid);
-    const observer = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => false });
+    const valid: JobOwnership = {
+      instance_id: "remote-owner",
+      pid: 42,
+      process_started_at: new Date(0).toISOString(),
+      generation: 1,
+      token: "valid-token",
+      heartbeat_at: new Date(1_000).toISOString(),
+      lease_expires_at: new Date(5_000).toISOString(),
+    };
+    await writeStoredJob(
+      cwd,
+      "job_bbbbbbbbbbbbbbbb",
+      "running",
+      new Date(1_000).toISOString(),
+      "",
+      valid,
+    );
+    const observer = jobCoordinator(undefined, {
+      now: () => 3_000,
+      ownerProcessAlive: () => false,
+    });
     expect((await observer.get(cwd, "job_bbbbbbbbbbbbbbbb"))?.status).toBe("running");
-    const expired = { ...valid, token: "reused-token", lease_expires_at: new Date(2_000).toISOString() };
-    await writeStoredJob(cwd, "job_cccccccccccccccc", "running", new Date(1_000).toISOString(), "", expired);
-    const conservative = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => true });
+    const expired = {
+      ...valid,
+      token: "reused-token",
+      lease_expires_at: new Date(2_000).toISOString(),
+    };
+    await writeStoredJob(
+      cwd,
+      "job_cccccccccccccccc",
+      "running",
+      new Date(1_000).toISOString(),
+      "",
+      expired,
+    );
+    const conservative = jobCoordinator(undefined, {
+      now: () => 3_000,
+      ownerProcessAlive: () => true,
+    });
     expect((await conservative.get(cwd, "job_cccccccccccccccc"))?.status).toBe("running");
   });
 
   it("compares stable owner identity kinds exactly and treats unavailable or cross-platform evidence conservatively", async () => {
     const cwd = await workspace();
-    const owner = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" });
+    const owner = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
+      stdio: "ignore",
+    });
     const pid = owner.pid!;
     try {
-      const base: JobOwnership = { instance_id: "remote-owner", pid, process_started_at: "legacy", process_identity: { kind: "ps-lstart-utc", platform: "darwin", value: "stable UTC identity" }, generation: 1, token: "stable-token", heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString() };
-      await writeStoredJob(cwd, "job_owneridentity000", "running", new Date(1_000).toISOString(), "", base);
-      const priorLocale = process.env.LC_ALL; const priorTimezone = process.env.TZ;
-      process.env.LC_ALL = "fr_FR.UTF-8"; process.env.TZ = "Pacific/Auckland";
+      const base: JobOwnership = {
+        instance_id: "remote-owner",
+        pid,
+        process_started_at: "legacy",
+        process_identity: {
+          kind: "ps-lstart-utc",
+          platform: "darwin",
+          value: "stable UTC identity",
+        },
+        generation: 1,
+        token: "stable-token",
+        heartbeat_at: new Date(1_000).toISOString(),
+        lease_expires_at: new Date(2_000).toISOString(),
+      };
+      await writeStoredJob(
+        cwd,
+        "job_owneridentity000",
+        "running",
+        new Date(1_000).toISOString(),
+        "",
+        base,
+      );
+      const priorLocale = process.env.LC_ALL;
+      const priorTimezone = process.env.TZ;
+      process.env.LC_ALL = "fr_FR.UTF-8";
+      process.env.TZ = "Pacific/Auckland";
       try {
-        const matching = jobCoordinator(undefined, { now: () => 3_000, platform: "darwin", ownerProcessIdentity: () => ({ kind: "ps-lstart-utc", platform: "darwin", value: "stable UTC identity" }) });
+        const matching = jobCoordinator(undefined, {
+          now: () => 3_000,
+          platform: "darwin",
+          ownerProcessIdentity: () => ({
+            kind: "ps-lstart-utc",
+            platform: "darwin",
+            value: "stable UTC identity",
+          }),
+        });
         expect((await matching.get(cwd, "job_owneridentity000"))?.status).toBe("running");
-      } finally { if (priorLocale === undefined) delete process.env.LC_ALL; else process.env.LC_ALL = priorLocale; if (priorTimezone === undefined) delete process.env.TZ; else process.env.TZ = priorTimezone; }
-      await writeStoredJob(cwd, "job_owneridentity111", "running", new Date(1_000).toISOString(), "", { ...base, token: "mismatch-token" });
-      const mismatch = jobCoordinator(undefined, { now: () => 3_000, platform: "darwin", ownerProcessIdentity: () => ({ kind: "ps-lstart-utc", platform: "darwin", value: "different identity" }) });
+      } finally {
+        if (priorLocale === undefined) delete process.env.LC_ALL;
+        else process.env.LC_ALL = priorLocale;
+        if (priorTimezone === undefined) delete process.env.TZ;
+        else process.env.TZ = priorTimezone;
+      }
+      await writeStoredJob(
+        cwd,
+        "job_owneridentity111",
+        "running",
+        new Date(1_000).toISOString(),
+        "",
+        { ...base, token: "mismatch-token" },
+      );
+      const mismatch = jobCoordinator(undefined, {
+        now: () => 3_000,
+        platform: "darwin",
+        ownerProcessIdentity: () => ({
+          kind: "ps-lstart-utc",
+          platform: "darwin",
+          value: "different identity",
+        }),
+      });
       expect((await mismatch.get(cwd, "job_owneridentity111"))?.status).toBe("failed");
-      await writeStoredJob(cwd, "job_owneridentity222", "running", new Date(1_000).toISOString(), "", { ...base, token: "platform-token" });
-      const crossPlatform = jobCoordinator(undefined, { now: () => 3_000, platform: "linux", ownerProcessIdentity: () => ({ kind: "linux-proc-start-ticks", platform: "linux", value: "123" }) });
+      await writeStoredJob(
+        cwd,
+        "job_owneridentity222",
+        "running",
+        new Date(1_000).toISOString(),
+        "",
+        { ...base, token: "platform-token" },
+      );
+      const crossPlatform = jobCoordinator(undefined, {
+        now: () => 3_000,
+        platform: "linux",
+        ownerProcessIdentity: () => ({
+          kind: "linux-proc-start-ticks",
+          platform: "linux",
+          value: "123",
+        }),
+      });
       expect((await crossPlatform.get(cwd, "job_owneridentity222"))?.status).toBe("running");
-      await writeStoredJob(cwd, "job_owneridentity333", "running", new Date(1_000).toISOString(), "", { ...base, token: "unavailable-token" });
-      const unavailable = jobCoordinator(undefined, { now: () => 3_000, platform: "darwin", ownerProcessIdentity: () => null });
+      await writeStoredJob(
+        cwd,
+        "job_owneridentity333",
+        "running",
+        new Date(1_000).toISOString(),
+        "",
+        { ...base, token: "unavailable-token" },
+      );
+      const unavailable = jobCoordinator(undefined, {
+        now: () => 3_000,
+        platform: "darwin",
+        ownerProcessIdentity: () => null,
+      });
       expect((await unavailable.get(cwd, "job_owneridentity333"))?.status).toBe("running");
-    } finally { owner.kill("SIGKILL"); await waitFor(() => processExists(pid), (alive) => !alive).catch(() => undefined); }
+    } finally {
+      owner.kill("SIGKILL");
+      await waitFor(
+        () => processExists(pid),
+        (alive) => !alive,
+      ).catch(() => undefined);
+    }
   });
 
   it("fences a stale owner terminal write after another coordinator heals the job", async () => {
@@ -256,10 +555,24 @@ describe("job coordinator", () => {
     let now = 1_000;
     let releaseTerminal!: () => void;
     let enteredTerminal!: () => void;
-    const terminalGate = new Promise<void>((resolve) => { releaseTerminal = resolve; });
-    const gateEntered = new Promise<void>((resolve) => { enteredTerminal = resolve; });
-    const owner = jobCoordinator(undefined, { now: () => now, leaseMs: 10_000, heartbeatMs: 5_000, beforeTerminalSave: async () => { enteredTerminal(); await terminalGate; } });
-    const submitted = await owner.submit(cwd, { command: [process.execPath, "-e", "process.stdout.write('stale-success')"] });
+    const terminalGate = new Promise<void>((resolve) => {
+      releaseTerminal = resolve;
+    });
+    const gateEntered = new Promise<void>((resolve) => {
+      enteredTerminal = resolve;
+    });
+    const owner = jobCoordinator(undefined, {
+      now: () => now,
+      leaseMs: 10_000,
+      heartbeatMs: 5_000,
+      beforeTerminalSave: async () => {
+        enteredTerminal();
+        await terminalGate;
+      },
+    });
+    const submitted = await owner.submit(cwd, {
+      command: [process.execPath, "-e", "process.stdout.write('stale-success')"],
+    });
     await gateEntered;
     now += 20_000;
     const observer = jobCoordinator(undefined, { now: () => now, ownerProcessAlive: () => false });
@@ -272,23 +585,38 @@ describe("job coordinator", () => {
     const stored = JSON.parse(await readFile(path, "utf8")) as JobRecord;
     if (stored.ownership) stored.ownership.token = "lost-owner-token";
     await writeFile(path, `${JSON.stringify(stored, null, 2)}\n`, "utf8");
-    try { expect((await observer.get(cwd, submitted.job_id))?.status).toBe("failed"); }
-    finally { releaseTerminal(); }
+    try {
+      expect((await observer.get(cwd, submitted.job_id))?.status).toBe("failed");
+    } finally {
+      releaseTerminal();
+    }
     await owner.shutdown();
     expect((await observer.get(cwd, submitted.job_id))?.status).toBe("failed");
   });
 
   it("starts one bounded heartbeat, extends the durable lease, and stops on completion", async () => {
     const cwd = await workspace();
-    const started: string[] = []; const stopped: string[] = [];
-    const coordinator = jobCoordinator(undefined, { leaseMs: 300, heartbeatMs: 25, onHeartbeatStarted: (id) => started.push(id), onHeartbeatStopped: (id) => stopped.push(id) });
-    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "setTimeout(() => {}, 180)"] });
+    const started: string[] = [];
+    const stopped: string[] = [];
+    const coordinator = jobCoordinator(undefined, {
+      leaseMs: 300,
+      heartbeatMs: 25,
+      onHeartbeatStarted: (id) => started.push(id),
+      onHeartbeatStopped: (id) => stopped.push(id),
+    });
+    const submitted = await coordinator.submit(cwd, {
+      command: [process.execPath, "-e", "setTimeout(() => {}, 180)"],
+    });
     const initialLease = Date.parse(submitted.ownership!.lease_expires_at);
     await waitFor(async () => {
-      const stored = JSON.parse(await readFile(join(cwd, ".pi-science", "jobs", `${submitted.job_id}.json`), "utf8")) as JobRecord;
+      const stored = JSON.parse(
+        await readFile(join(cwd, ".pi-science", "jobs", `${submitted.job_id}.json`), "utf8"),
+      ) as JobRecord;
       return Date.parse(stored.ownership?.lease_expires_at ?? "") > initialLease;
     }, Boolean);
-    expect((await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal))?.status).toBe("succeeded");
+    expect((await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal))?.status).toBe(
+      "succeeded",
+    );
     expect(started).toEqual([submitted.job_id]);
     expect(stopped).toEqual([submitted.job_id]);
   });
@@ -296,10 +624,22 @@ describe("job coordinator", () => {
   it("stops ownership heartbeats after cancel, timeout, and shutdown", async () => {
     const cwd = await workspace();
     for (const mode of ["cancel", "timeout", "shutdown"] as const) {
-      const started: string[] = []; const stopped: string[] = [];
-      const coordinator = jobCoordinator(undefined, { leaseMs: 200, heartbeatMs: 25, onHeartbeatStarted: (id) => started.push(id), onHeartbeatStopped: (id) => stopped.push(id) });
-      const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "setTimeout(() => {}, 30000)"], ...(mode === "timeout" ? { requirement: { timeout_seconds: 1 } } : {}) });
-      await waitFor(() => coordinator.get(cwd, submitted.job_id), (record) => record?.status === "running");
+      const started: string[] = [];
+      const stopped: string[] = [];
+      const coordinator = jobCoordinator(undefined, {
+        leaseMs: 200,
+        heartbeatMs: 25,
+        onHeartbeatStarted: (id) => started.push(id),
+        onHeartbeatStopped: (id) => stopped.push(id),
+      });
+      const submitted = await coordinator.submit(cwd, {
+        command: [process.execPath, "-e", "setTimeout(() => {}, 30000)"],
+        ...(mode === "timeout" ? { requirement: { timeout_seconds: 1 } } : {}),
+      });
+      await waitFor(
+        () => coordinator.get(cwd, submitted.job_id),
+        (record) => record?.status === "running",
+      );
       if (mode === "cancel") await coordinator.cancel(cwd, submitted.job_id);
       if (mode === "shutdown") await coordinator.shutdown();
       else await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal, 10_000);
@@ -312,10 +652,16 @@ describe("job coordinator", () => {
   it("leaves live submitted jobs alone until they finish on their own", async () => {
     const cwd = await workspace();
     const coordinator = jobCoordinator();
-    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "setTimeout(() => {}, 200)"] });
+    const submitted = await coordinator.submit(cwd, {
+      command: [process.execPath, "-e", "setTimeout(() => {}, 200)"],
+    });
     expect((await coordinator.get(cwd, submitted.job_id))?.status).not.toBe("failed");
     expect((await coordinator.list(cwd, 10))[0]?.status).not.toBe("failed");
-    const finished = await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal, process.platform === "win32" ? 20_000 : 8_000);
+    const finished = await waitFor(
+      () => coordinator.get(cwd, submitted.job_id),
+      terminal,
+      process.platform === "win32" ? 20_000 : 8_000,
+    );
     expect(finished?.status).toBe("succeeded");
     expect(finished?.return_code).toBe(0);
     expect((await coordinator.cancel(cwd, submitted.job_id))?.status).toBe("succeeded");
@@ -328,8 +674,17 @@ describe("job coordinator", () => {
     const ready = join(cwd, "grandchild-ready");
     const childScript = `require("node:fs").writeFileSync(${JSON.stringify(ready)}, "ready"); setTimeout(() => {}, 30000);`;
     const parentScript = `const { spawn } = require("node:child_process"); spawn(process.execPath, ["-e", ${JSON.stringify(childScript)}], { stdio: ["ignore", "inherit", "inherit"] }); setTimeout(() => {}, 30000);`;
-    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", parentScript] });
-    await waitFor(async () => stat(ready).then(() => true, () => false), Boolean);
+    const submitted = await coordinator.submit(cwd, {
+      command: [process.execPath, "-e", parentScript],
+    });
+    await waitFor(
+      async () =>
+        stat(ready).then(
+          () => true,
+          () => false,
+        ),
+      Boolean,
+    );
 
     const started = Date.now();
     await coordinator.cancel(cwd, submitted.job_id);
@@ -343,10 +698,25 @@ describe("job coordinator", () => {
     const marker = join(cwd, "must-not-start");
     let releaseSpawn!: () => void;
     let enteredSpawnGate!: () => void;
-    const spawnGate = new Promise<void>((resolve) => { releaseSpawn = resolve; });
-    const gateEntered = new Promise<void>((resolve) => { enteredSpawnGate = resolve; });
-    const coordinator = jobCoordinator(undefined, { beforeSpawn: async () => { enteredSpawnGate(); await spawnGate; } });
-    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "started")`] });
+    const spawnGate = new Promise<void>((resolve) => {
+      releaseSpawn = resolve;
+    });
+    const gateEntered = new Promise<void>((resolve) => {
+      enteredSpawnGate = resolve;
+    });
+    const coordinator = jobCoordinator(undefined, {
+      beforeSpawn: async () => {
+        enteredSpawnGate();
+        await spawnGate;
+      },
+    });
+    const submitted = await coordinator.submit(cwd, {
+      command: [
+        process.execPath,
+        "-e",
+        `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "started")`,
+      ],
+    });
     await gateEntered;
 
     const cancelled = await coordinator.cancel(cwd, submitted.job_id);
@@ -363,11 +733,26 @@ describe("job coordinator", () => {
     const marker = join(cwd, "cross-coordinator-must-not-start");
     let releaseSpawn!: () => void;
     let enteredSpawnGate!: () => void;
-    const spawnGate = new Promise<void>((resolve) => { releaseSpawn = resolve; });
-    const gateEntered = new Promise<void>((resolve) => { enteredSpawnGate = resolve; });
-    const runner = jobCoordinator(undefined, { beforeSpawn: async () => { enteredSpawnGate(); await spawnGate; } });
+    const spawnGate = new Promise<void>((resolve) => {
+      releaseSpawn = resolve;
+    });
+    const gateEntered = new Promise<void>((resolve) => {
+      enteredSpawnGate = resolve;
+    });
+    const runner = jobCoordinator(undefined, {
+      beforeSpawn: async () => {
+        enteredSpawnGate();
+        await spawnGate;
+      },
+    });
     const canceller = jobCoordinator();
-    const submitted = await runner.submit(cwd, { command: [process.execPath, "-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "started")`] });
+    const submitted = await runner.submit(cwd, {
+      command: [
+        process.execPath,
+        "-e",
+        `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "started")`,
+      ],
+    });
     await gateEntered;
 
     expect((await canceller.cancel(cwd, submitted.job_id))?.status).toBe("cancelled");
@@ -380,15 +765,27 @@ describe("job coordinator", () => {
 
   it("terminates a locally owned child when another coordinator cancels after readiness", async () => {
     const cwd = await workspace();
-    const ready = join(cwd, "cross-ready"); const delayed = join(cwd, "cross-delayed");
+    const ready = join(cwd, "cross-ready");
+    const delayed = join(cwd, "cross-delayed");
     const runner = jobCoordinator(undefined, { leaseMs: 300, heartbeatMs: 25 });
     const canceller = jobCoordinator();
     const script = `const fs=require("node:fs"); fs.writeFileSync(process.argv[1],"ready"); setTimeout(()=>fs.writeFileSync(process.argv[2],"bad"),1000); setTimeout(()=>{},30000)`;
-    const submitted = await runner.submit(cwd, { command: [process.execPath, "-e", script, ready, delayed] });
-    await waitFor(async () => stat(ready).then(() => true, () => false), Boolean);
+    const submitted = await runner.submit(cwd, {
+      command: [process.execPath, "-e", script, ready, delayed],
+    });
+    await waitFor(
+      async () =>
+        stat(ready).then(
+          () => true,
+          () => false,
+        ),
+      Boolean,
+    );
     const started = Date.now();
     expect((await canceller.cancel(cwd, submitted.job_id))?.status).toBe("cancelled");
-    expect((await waitFor(() => runner.get(cwd, submitted.job_id), terminal, 5_000))?.status).toBe("cancelled");
+    expect((await waitFor(() => runner.get(cwd, submitted.job_id), terminal, 5_000))?.status).toBe(
+      "cancelled",
+    );
     expect(Date.now() - started).toBeLessThan(5_000);
     await new Promise((resolve) => setTimeout(resolve, 1100));
     await expect(stat(delayed)).rejects.toThrow();
@@ -401,7 +798,14 @@ describe("job coordinator", () => {
     const canceller = jobCoordinator(undefined, { reapChild: () => "unverifiable" });
     const script = `const fs=require("node:fs"); process.stderr.write("runner diagnostic\\n"); fs.writeFileSync(${JSON.stringify(ready)},"ready"); setTimeout(()=>{},30000)`;
     const submitted = await runner.submit(cwd, { command: [process.execPath, "-e", script] });
-    await waitFor(async () => stat(ready).then(() => true, () => false), Boolean);
+    await waitFor(
+      async () =>
+        stat(ready).then(
+          () => true,
+          () => false,
+        ),
+      Boolean,
+    );
 
     const cancelled = await canceller.cancel(cwd, submitted.job_id);
     expect(cancelled?.stderr).toContain("cancellation cleanup");
@@ -415,123 +819,454 @@ describe("job coordinator", () => {
   }, 10_000);
 
   it("serializes final authorization, spawn registration, and cross-coordinator cancellation", async () => {
-    const cwd = await workspace(); const delayed = join(cwd, "authorization-delayed");
-    let entered!: () => void; let release!: () => void;
-    const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
-    const releasePromise = new Promise<void>((resolve) => { release = resolve; });
-    const runner = jobCoordinator(undefined, { leaseMs: 300, heartbeatMs: 25, testBeforeAuthorizedSpawn: async () => { entered(); await releasePromise; } });
+    const cwd = await workspace();
+    const delayed = join(cwd, "authorization-delayed");
+    let entered!: () => void;
+    let release!: () => void;
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const releasePromise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runner = jobCoordinator(undefined, {
+      leaseMs: 300,
+      heartbeatMs: 25,
+      testBeforeAuthorizedSpawn: async () => {
+        entered();
+        await releasePromise;
+      },
+    });
     const canceller = jobCoordinator();
-    const submitted = await runner.submit(cwd, { command: [process.execPath, "-e", 'setTimeout(()=>require("node:fs").writeFileSync(process.argv[1],"bad"),1000); setTimeout(()=>{},30000)', delayed] });
+    const submitted = await runner.submit(cwd, {
+      command: [
+        process.execPath,
+        "-e",
+        'setTimeout(()=>require("node:fs").writeFileSync(process.argv[1],"bad"),1000); setTimeout(()=>{},30000)',
+        delayed,
+      ],
+    });
     await enteredPromise;
     const cancellation = canceller.cancel(cwd, submitted.job_id);
     release();
     expect((await cancellation)?.status).toBe("cancelled");
-    expect((await waitFor(() => runner.get(cwd, submitted.job_id), terminal, 5_000))?.status).toBe("cancelled");
+    expect((await waitFor(() => runner.get(cwd, submitted.job_id), terminal, 5_000))?.status).toBe(
+      "cancelled",
+    );
     await new Promise((resolve) => setTimeout(resolve, 1100));
     await expect(stat(delayed)).rejects.toThrow();
   }, 10_000);
 
   it("attempts fenced persisted-child cleanup before cross-coordinator cancellation and never reaps twice", async () => {
     const cwd = await workspace();
-    const ownership: JobOwnership = { instance_id: "remote-owner", pid: 999_999, process_started_at: "legacy", generation: 4, token: "cancel-token", heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(9_000).toISOString(), child: { pid: 4567, process_identity: { kind: "linux-proc-start-ticks", value: "123" }, process_group: true, platform: "linux", ownership_generation: 4, ownership_token: "cancel-token" } };
-    await writeStoredJob(cwd, "job_cancelreap000000", "running", new Date(1_000).toISOString(), "", ownership);
+    const ownership: JobOwnership = {
+      instance_id: "remote-owner",
+      pid: 999_999,
+      process_started_at: "legacy",
+      generation: 4,
+      token: "cancel-token",
+      heartbeat_at: new Date(1_000).toISOString(),
+      lease_expires_at: new Date(9_000).toISOString(),
+      child: {
+        pid: 4567,
+        process_identity: { kind: "linux-proc-start-ticks", value: "123" },
+        process_group: true,
+        platform: "linux",
+        ownership_generation: 4,
+        ownership_token: "cancel-token",
+      },
+    };
+    await writeStoredJob(
+      cwd,
+      "job_cancelreap000000",
+      "running",
+      new Date(1_000).toISOString(),
+      "",
+      ownership,
+    );
     const reaped: number[] = [];
-    const canceller = jobCoordinator(undefined, { now: () => 3_000, reapChild: (identity) => { reaped.push(identity.pid); return "reaped"; } });
+    const canceller = jobCoordinator(undefined, {
+      now: () => 3_000,
+      reapChild: (identity) => {
+        reaped.push(identity.pid);
+        return "reaped";
+      },
+    });
     const cancelled = await canceller.cancel(cwd, "job_cancelreap000000");
-    expect(cancelled?.status).toBe("cancelled"); expect(cancelled?.stderr).toContain("cancellation cleanup"); expect(cancelled?.stderr).toContain("was reaped"); expect(reaped).toEqual([4567]);
-    expect((await canceller.cancel(cwd, "job_cancelreap000000"))?.status).toBe("cancelled"); expect(reaped).toEqual([4567]);
+    expect(cancelled?.status).toBe("cancelled");
+    expect(cancelled?.stderr).toContain("cancellation cleanup");
+    expect(cancelled?.stderr).toContain("was reaped");
+    expect(reaped).toEqual([4567]);
+    expect((await canceller.cancel(cwd, "job_cancelreap000000"))?.status).toBe("cancelled");
+    expect(reaped).toEqual([4567]);
   });
 
-  it.skipIf(process.platform !== "linux")("reaps a verified persisted Linux process group during cross-coordinator cancellation", async () => {
-    const cwd = await workspace();
-    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 30000)"], { detached: true, stdio: "ignore" });
-    const pid = child.pid!;
-    try {
-      const ticks = await waitFor(() => linuxStartTicks(pid), Boolean);
-      const token = "cancel-real-token";
-      const ownership: JobOwnership = { instance_id: "remote-owner", pid: 999_999, process_started_at: "legacy", generation: 6, token, heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(99_000).toISOString(), child: { pid, process_identity: { kind: "linux-proc-start-ticks", value: ticks! }, process_group: true, platform: "linux", ownership_generation: 6, ownership_token: token } };
-      await writeStoredJob(cwd, "job_cancelreal000000", "running", new Date(1_000).toISOString(), "", ownership);
-      const canceller = jobCoordinator();
-      const cancelled = await canceller.cancel(cwd, "job_cancelreal000000");
-      expect(cancelled?.status).toBe("cancelled"); expect(cancelled?.stderr).toContain("was reaped");
-      await waitFor(() => processExists(pid), (alive) => !alive);
-    } finally { try { process.kill(-pid, "SIGKILL"); } catch { /* already gone */ } await waitFor(() => processExists(pid), (alive) => !alive).catch(() => undefined); }
-  });
+  it.skipIf(process.platform !== "linux")(
+    "reaps a verified persisted Linux process group during cross-coordinator cancellation",
+    async () => {
+      const cwd = await workspace();
+      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 30000)"], {
+        detached: true,
+        stdio: "ignore",
+      });
+      const pid = child.pid!;
+      try {
+        const ticks = await waitFor(() => linuxStartTicks(pid), Boolean);
+        const token = "cancel-real-token";
+        const ownership: JobOwnership = {
+          instance_id: "remote-owner",
+          pid: 999_999,
+          process_started_at: "legacy",
+          generation: 6,
+          token,
+          heartbeat_at: new Date(1_000).toISOString(),
+          lease_expires_at: new Date(99_000).toISOString(),
+          child: {
+            pid,
+            process_identity: { kind: "linux-proc-start-ticks", value: ticks! },
+            process_group: true,
+            platform: "linux",
+            ownership_generation: 6,
+            ownership_token: token,
+          },
+        };
+        await writeStoredJob(
+          cwd,
+          "job_cancelreal000000",
+          "running",
+          new Date(1_000).toISOString(),
+          "",
+          ownership,
+        );
+        const canceller = jobCoordinator();
+        const cancelled = await canceller.cancel(cwd, "job_cancelreal000000");
+        expect(cancelled?.status).toBe("cancelled");
+        expect(cancelled?.stderr).toContain("was reaped");
+        await waitFor(
+          () => processExists(pid),
+          (alive) => !alive,
+        );
+      } finally {
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+        await waitFor(
+          () => processExists(pid),
+          (alive) => !alive,
+        ).catch(() => undefined);
+      }
+    },
+  );
 
-  it.skipIf(process.platform !== "linux")("does not signal a mismatched persisted child during cancellation", async () => {
-    const cwd = await workspace();
-    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 30000)"], { detached: true, stdio: "ignore" });
-    const pid = child.pid!;
-    try {
-      const ticks = await waitFor(() => linuxStartTicks(pid), Boolean);
-      const token = "cancel-mismatch-token";
-      const ownership: JobOwnership = { instance_id: "remote-owner", pid: 999_999, process_started_at: "legacy", generation: 7, token, heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(99_000).toISOString(), child: { pid, process_identity: { kind: "linux-proc-start-ticks", value: `${ticks!}0` }, process_group: true, platform: "linux", ownership_generation: 7, ownership_token: token } };
-      await writeStoredJob(cwd, "job_cancelmismatch00", "running", new Date(1_000).toISOString(), "", ownership);
-      const cancelled = await jobCoordinator().cancel(cwd, "job_cancelmismatch00");
-      expect(cancelled?.status).toBe("cancelled"); expect(cancelled?.stderr).toContain("was reused"); expect(await processExists(pid)).toBe(true);
-    } finally { try { process.kill(-pid, "SIGKILL"); } catch { /* cleanup */ } await waitFor(() => processExists(pid), (alive) => !alive).catch(() => undefined); }
-  });
+  it.skipIf(process.platform !== "linux")(
+    "does not signal a mismatched persisted child during cancellation",
+    async () => {
+      const cwd = await workspace();
+      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 30000)"], {
+        detached: true,
+        stdio: "ignore",
+      });
+      const pid = child.pid!;
+      try {
+        const ticks = await waitFor(() => linuxStartTicks(pid), Boolean);
+        const token = "cancel-mismatch-token";
+        const ownership: JobOwnership = {
+          instance_id: "remote-owner",
+          pid: 999_999,
+          process_started_at: "legacy",
+          generation: 7,
+          token,
+          heartbeat_at: new Date(1_000).toISOString(),
+          lease_expires_at: new Date(99_000).toISOString(),
+          child: {
+            pid,
+            process_identity: { kind: "linux-proc-start-ticks", value: `${ticks!}0` },
+            process_group: true,
+            platform: "linux",
+            ownership_generation: 7,
+            ownership_token: token,
+          },
+        };
+        await writeStoredJob(
+          cwd,
+          "job_cancelmismatch00",
+          "running",
+          new Date(1_000).toISOString(),
+          "",
+          ownership,
+        );
+        const cancelled = await jobCoordinator().cancel(cwd, "job_cancelmismatch00");
+        expect(cancelled?.status).toBe("cancelled");
+        expect(cancelled?.stderr).toContain("was reused");
+        expect(await processExists(pid)).toBe(true);
+      } finally {
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          /* cleanup */
+        }
+        await waitFor(
+          () => processExists(pid),
+          (alive) => !alive,
+        ).catch(() => undefined);
+      }
+    },
+  );
 
   it("reaps only a verified fenced orphan child identity", async () => {
     const cwd = await workspace();
-    const ownership: JobOwnership = { instance_id: "dead-owner", pid: 999_999, process_started_at: new Date(0).toISOString(), generation: 4, token: "owner-token", heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString(), child: { pid: 4567, process_identity: { kind: "linux-proc-start-ticks", value: "123" }, process_group: true, platform: "linux", ownership_generation: 4, ownership_token: "owner-token" } };
-    await writeStoredJob(cwd, "job_dddddddddddddddd", "running", new Date(1_000).toISOString(), "", ownership);
+    const ownership: JobOwnership = {
+      instance_id: "dead-owner",
+      pid: 999_999,
+      process_started_at: new Date(0).toISOString(),
+      generation: 4,
+      token: "owner-token",
+      heartbeat_at: new Date(1_000).toISOString(),
+      lease_expires_at: new Date(2_000).toISOString(),
+      child: {
+        pid: 4567,
+        process_identity: { kind: "linux-proc-start-ticks", value: "123" },
+        process_group: true,
+        platform: "linux",
+        ownership_generation: 4,
+        ownership_token: "owner-token",
+      },
+    };
+    await writeStoredJob(
+      cwd,
+      "job_dddddddddddddddd",
+      "running",
+      new Date(1_000).toISOString(),
+      "",
+      ownership,
+    );
     const reaped: number[] = [];
-    const observer = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => false, reapChild: (identity) => { reaped.push(identity.pid); return "reaped"; } });
+    const observer = jobCoordinator(undefined, {
+      now: () => 3_000,
+      ownerProcessAlive: () => false,
+      reapChild: (identity) => {
+        reaped.push(identity.pid);
+        return "reaped";
+      },
+    });
     const healed = await observer.get(cwd, "job_dddddddddddddddd");
-    expect(healed?.status).toBe("failed"); expect(reaped).toEqual([4567]); expect(healed?.stderr).toContain("was reaped");
+    expect(healed?.status).toBe("failed");
+    expect(reaped).toEqual([4567]);
+    expect(healed?.stderr).toContain("was reaped");
   });
 
   it("does not signal a reused or unverifiable orphan child identity", async () => {
     const cwd = await workspace();
-    for (const [suffix, result] of [["eeeeeeeeeeeeeeee", "identity-mismatch"], ["ffffffffffffffff", "unverifiable"]] as const) {
+    for (const [suffix, result] of [
+      ["eeeeeeeeeeeeeeee", "identity-mismatch"],
+      ["ffffffffffffffff", "unverifiable"],
+    ] as const) {
       const token = `token-${suffix}`;
-      const ownership: JobOwnership = { instance_id: "dead-owner", pid: 999_999, process_started_at: new Date(0).toISOString(), generation: 2, token, heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString(), child: { pid: 7654, process_identity: { kind: "linux-proc-start-ticks", value: "123" }, process_group: true, platform: "linux", ownership_generation: 2, ownership_token: token } };
-      await writeStoredJob(cwd, `job_${suffix}`, "running", new Date(1_000).toISOString(), "", ownership);
-      const observer = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => false, reapChild: () => result });
+      const ownership: JobOwnership = {
+        instance_id: "dead-owner",
+        pid: 999_999,
+        process_started_at: new Date(0).toISOString(),
+        generation: 2,
+        token,
+        heartbeat_at: new Date(1_000).toISOString(),
+        lease_expires_at: new Date(2_000).toISOString(),
+        child: {
+          pid: 7654,
+          process_identity: { kind: "linux-proc-start-ticks", value: "123" },
+          process_group: true,
+          platform: "linux",
+          ownership_generation: 2,
+          ownership_token: token,
+        },
+      };
+      await writeStoredJob(
+        cwd,
+        `job_${suffix}`,
+        "running",
+        new Date(1_000).toISOString(),
+        "",
+        ownership,
+      );
+      const observer = jobCoordinator(undefined, {
+        now: () => 3_000,
+        ownerProcessAlive: () => false,
+        reapChild: () => result,
+      });
       const healed = await observer.get(cwd, `job_${suffix}`);
-      expect(healed?.status).toBe("failed"); expect(healed?.stderr).toMatch(result === "identity-mismatch" ? /was reused/ : /manual cleanup may be required/);
+      expect(healed?.status).toBe("failed");
+      expect(healed?.stderr).toMatch(
+        result === "identity-mismatch" ? /was reused/ : /manual cleanup may be required/,
+      );
     }
   });
 
-  it.skipIf(process.platform !== "linux")("reaps a real Linux process group only when proc start ticks and platform match", async () => {
-    const cwd = await workspace();
-    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 30000)"], { detached: true, stdio: "ignore" });
-    const pid = child.pid!;
-    try {
-      const ticks = await waitFor(() => linuxStartTicks(pid), Boolean);
-      const token = "real-linux-token";
-      const ownership: JobOwnership = { instance_id: "dead-owner", pid: 999_999, process_started_at: new Date(0).toISOString(), generation: 8, token, heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString(), child: { pid, process_identity: { kind: "linux-proc-start-ticks", value: ticks! }, process_group: true, platform: "linux", ownership_generation: 8, ownership_token: token } };
-      await writeStoredJob(cwd, "job_realreap00000000", "running", new Date(1_000).toISOString(), "", ownership);
-      const observer = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => false });
-      const healed = await observer.get(cwd, "job_realreap00000000");
-      expect(healed?.status).toBe("failed"); expect(healed?.stderr).toContain("was reaped");
-      await waitFor(() => processExists(pid), (alive) => !alive);
-    } finally { try { process.kill(-pid, "SIGKILL"); } catch { /* already reaped */ } await waitFor(() => processExists(pid), (alive) => !alive).catch(() => undefined); }
-  });
-
-  it.skipIf(process.platform !== "linux")("leaves a real process alive for identity or platform mismatch and skips unfenced reaping", async () => {
-    const cwd = await workspace();
-    for (const [suffix, platform, identityValue] of [["realmismatch0000", "linux", "0"], ["platformmismatch", "darwin", "0"]] as const) {
-      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 30000)"], { detached: true, stdio: "ignore" });
+  it.skipIf(process.platform !== "linux")(
+    "reaps a real Linux process group only when proc start ticks and platform match",
+    async () => {
+      const cwd = await workspace();
+      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 30000)"], {
+        detached: true,
+        stdio: "ignore",
+      });
       const pid = child.pid!;
       try {
         const ticks = await waitFor(() => linuxStartTicks(pid), Boolean);
-        const token = `token-${suffix}`;
-        const ownership: JobOwnership = { instance_id: "dead-owner", pid: 999_999, process_started_at: new Date(0).toISOString(), generation: 9, token, heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString(), child: { pid, process_identity: { kind: "linux-proc-start-ticks", value: identityValue === "0" && platform === "linux" ? `${ticks!}0` : ticks! }, process_group: true, platform, ownership_generation: 9, ownership_token: token } };
-        await writeStoredJob(cwd, `job_${suffix}`, "running", new Date(1_000).toISOString(), "", ownership);
-        const observer = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => false });
-        const healed = await observer.get(cwd, `job_${suffix}`);
-        expect(healed?.status).toBe("failed"); expect(await processExists(pid)).toBe(true);
-      } finally { try { process.kill(-pid, "SIGKILL"); } catch { /* cleanup */ } await waitFor(() => processExists(pid), (alive) => !alive).catch(() => undefined); }
-    }
+        const token = "real-linux-token";
+        const ownership: JobOwnership = {
+          instance_id: "dead-owner",
+          pid: 999_999,
+          process_started_at: new Date(0).toISOString(),
+          generation: 8,
+          token,
+          heartbeat_at: new Date(1_000).toISOString(),
+          lease_expires_at: new Date(2_000).toISOString(),
+          child: {
+            pid,
+            process_identity: { kind: "linux-proc-start-ticks", value: ticks! },
+            process_group: true,
+            platform: "linux",
+            ownership_generation: 8,
+            ownership_token: token,
+          },
+        };
+        await writeStoredJob(
+          cwd,
+          "job_realreap00000000",
+          "running",
+          new Date(1_000).toISOString(),
+          "",
+          ownership,
+        );
+        const observer = jobCoordinator(undefined, {
+          now: () => 3_000,
+          ownerProcessAlive: () => false,
+        });
+        const healed = await observer.get(cwd, "job_realreap00000000");
+        expect(healed?.status).toBe("failed");
+        expect(healed?.stderr).toContain("was reaped");
+        await waitFor(
+          () => processExists(pid),
+          (alive) => !alive,
+        );
+      } finally {
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          /* already reaped */
+        }
+        await waitFor(
+          () => processExists(pid),
+          (alive) => !alive,
+        ).catch(() => undefined);
+      }
+    },
+  );
 
-    const token = "fence-token"; const reaped: number[] = [];
-    const ownership: JobOwnership = { instance_id: "dead-owner", pid: 999_999, process_started_at: new Date(0).toISOString(), generation: 10, token, heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString(), child: { pid: 4321, process_identity: { kind: "linux-proc-start-ticks", value: "123" }, process_group: true, platform: "linux", ownership_generation: 9, ownership_token: token } };
-    await writeStoredJob(cwd, "job_fencemismatch000", "running", new Date(1_000).toISOString(), "", ownership);
-    const observer = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => false, reapChild: (identity) => { reaped.push(identity.pid); return "reaped"; } });
-    expect((await observer.get(cwd, "job_fencemismatch000"))?.status).toBe("failed"); expect(reaped).toEqual([]);
-  });
+  it.skipIf(process.platform !== "linux")(
+    "leaves a real process alive for identity or platform mismatch and skips unfenced reaping",
+    async () => {
+      const cwd = await workspace();
+      for (const [suffix, platform, identityValue] of [
+        ["realmismatch0000", "linux", "0"],
+        ["platformmismatch", "darwin", "0"],
+      ] as const) {
+        const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 30000)"], {
+          detached: true,
+          stdio: "ignore",
+        });
+        const pid = child.pid!;
+        try {
+          const ticks = await waitFor(() => linuxStartTicks(pid), Boolean);
+          const token = `token-${suffix}`;
+          const ownership: JobOwnership = {
+            instance_id: "dead-owner",
+            pid: 999_999,
+            process_started_at: new Date(0).toISOString(),
+            generation: 9,
+            token,
+            heartbeat_at: new Date(1_000).toISOString(),
+            lease_expires_at: new Date(2_000).toISOString(),
+            child: {
+              pid,
+              process_identity: {
+                kind: "linux-proc-start-ticks",
+                value: identityValue === "0" && platform === "linux" ? `${ticks!}0` : ticks!,
+              },
+              process_group: true,
+              platform,
+              ownership_generation: 9,
+              ownership_token: token,
+            },
+          };
+          await writeStoredJob(
+            cwd,
+            `job_${suffix}`,
+            "running",
+            new Date(1_000).toISOString(),
+            "",
+            ownership,
+          );
+          const observer = jobCoordinator(undefined, {
+            now: () => 3_000,
+            ownerProcessAlive: () => false,
+          });
+          const healed = await observer.get(cwd, `job_${suffix}`);
+          expect(healed?.status).toBe("failed");
+          expect(await processExists(pid)).toBe(true);
+        } finally {
+          try {
+            process.kill(-pid, "SIGKILL");
+          } catch {
+            /* cleanup */
+          }
+          await waitFor(
+            () => processExists(pid),
+            (alive) => !alive,
+          ).catch(() => undefined);
+        }
+      }
+
+      const token = "fence-token";
+      const reaped: number[] = [];
+      const ownership: JobOwnership = {
+        instance_id: "dead-owner",
+        pid: 999_999,
+        process_started_at: new Date(0).toISOString(),
+        generation: 10,
+        token,
+        heartbeat_at: new Date(1_000).toISOString(),
+        lease_expires_at: new Date(2_000).toISOString(),
+        child: {
+          pid: 4321,
+          process_identity: { kind: "linux-proc-start-ticks", value: "123" },
+          process_group: true,
+          platform: "linux",
+          ownership_generation: 9,
+          ownership_token: token,
+        },
+      };
+      await writeStoredJob(
+        cwd,
+        "job_fencemismatch000",
+        "running",
+        new Date(1_000).toISOString(),
+        "",
+        ownership,
+      );
+      const observer = jobCoordinator(undefined, {
+        now: () => 3_000,
+        ownerProcessAlive: () => false,
+        reapChild: (identity) => {
+          reaped.push(identity.pid);
+          return "reaped";
+        },
+      });
+      expect((await observer.get(cwd, "job_fencemismatch000"))?.status).toBe("failed");
+      expect(reaped).toEqual([]);
+    },
+  );
 
   it("waits for a timed-out process tree to close before settling", async () => {
     const cwd = await workspace();
@@ -540,10 +1275,24 @@ describe("job coordinator", () => {
     const childScript = `require("node:fs").writeFileSync(${JSON.stringify(ready)}, "ready"); setTimeout(() => {}, 30000);`;
     const parentScript = `const { spawn } = require("node:child_process"); spawn(process.execPath, ["-e", ${JSON.stringify(childScript)}], { stdio: ["ignore", "inherit", "inherit"] }); setTimeout(() => {}, 30000);`;
     const started = Date.now();
-    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", parentScript], requirement: { timeout_seconds: 1 } });
-    await waitFor(async () => stat(ready).then(() => true, () => false), Boolean);
+    const submitted = await coordinator.submit(cwd, {
+      command: [process.execPath, "-e", parentScript],
+      requirement: { timeout_seconds: 1 },
+    });
+    await waitFor(
+      async () =>
+        stat(ready).then(
+          () => true,
+          () => false,
+        ),
+      Boolean,
+    );
 
-    const finished = await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal, process.platform === "win32" ? 20_000 : 10_000);
+    const finished = await waitFor(
+      () => coordinator.get(cwd, submitted.job_id),
+      terminal,
+      process.platform === "win32" ? 20_000 : 10_000,
+    );
     expect(finished?.status).toBe("timed_out");
     expect(Date.now() - started).toBeGreaterThanOrEqual(800);
     const shutdownStarted = Date.now();
@@ -555,10 +1304,23 @@ describe("job coordinator", () => {
     const cwd = await workspace();
     let releaseTerminalSave!: () => void;
     let enteredTerminalSave!: () => void;
-    const terminalSaveGate = new Promise<void>((resolve) => { releaseTerminalSave = resolve; });
-    const gateEntered = new Promise<void>((resolve) => { enteredTerminalSave = resolve; });
-    const coordinator = jobCoordinator(undefined, { beforeTerminalSave: async (record) => { if (record.status === "succeeded") { enteredTerminalSave(); await terminalSaveGate; } } });
-    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "process.stdout.write('completed-output')"] });
+    const terminalSaveGate = new Promise<void>((resolve) => {
+      releaseTerminalSave = resolve;
+    });
+    const gateEntered = new Promise<void>((resolve) => {
+      enteredTerminalSave = resolve;
+    });
+    const coordinator = jobCoordinator(undefined, {
+      beforeTerminalSave: async (record) => {
+        if (record.status === "succeeded") {
+          enteredTerminalSave();
+          await terminalSaveGate;
+        }
+      },
+    });
+    const submitted = await coordinator.submit(cwd, {
+      command: [process.execPath, "-e", "process.stdout.write('completed-output')"],
+    });
     await gateEntered;
 
     const cancelled = await coordinator.cancel(cwd, submitted.job_id);
@@ -567,7 +1329,11 @@ describe("job coordinator", () => {
     await coordinator.shutdown();
 
     const finished = await coordinator.get(cwd, submitted.job_id);
-    expect(finished).toMatchObject({ status: "cancelled", stdout: "completed-output", return_code: 0 });
+    expect(finished).toMatchObject({
+      status: "cancelled",
+      stdout: "completed-output",
+      return_code: 0,
+    });
     expect((await coordinator.cancel(cwd, submitted.job_id))?.status).toBe("cancelled");
   });
 
@@ -576,19 +1342,53 @@ describe("job coordinator", () => {
   });
 
   it("uses exact allowlist keys on POSIX without promoting mixed-case host variables", () => {
-    const filtered = restrictResearchEnvironment({ PATH: "/canonical/bin", PaTh: "/untrusted/bin", HOME: "/canonical/home", hOmE: "/untrusted/home", sEcReT_tOkEn: "leak-me", SECRET_TOKEN: "also-leak-me" }, "linux");
+    const filtered = restrictResearchEnvironment(
+      {
+        PATH: "/canonical/bin",
+        PaTh: "/untrusted/bin",
+        HOME: "/canonical/home",
+        hOmE: "/untrusted/home",
+        sEcReT_tOkEn: "leak-me",
+        SECRET_TOKEN: "also-leak-me",
+      },
+      "linux",
+    );
     expect(filtered).toEqual({ PATH: "/canonical/bin", HOME: "/canonical/home" });
   });
 
   it("matches Windows research environment keys case-insensitively and emits canonical non-duplicated keys", () => {
-    const filtered = restrictResearchEnvironment({ PATH: "C:\\canonical", PaTh: "C:\\duplicate", hOmE: "C:\\Users\\scientist", sYsTeMrOoT: "C:\\Windows", cOmSpEc: "C:\\Windows\\System32\\cmd.exe", pAtHeXt: ".COM;.EXE;.BAT;.CMD", sEcReT_tOkEn: "leak-me" }, "win32");
-    expect(filtered).toEqual({ PATH: "C:\\canonical", HOME: "C:\\Users\\scientist", SystemRoot: "C:\\Windows", ComSpec: "C:\\Windows\\System32\\cmd.exe", PATHEXT: ".COM;.EXE;.BAT;.CMD" });
+    const filtered = restrictResearchEnvironment(
+      {
+        PATH: "C:\\canonical",
+        PaTh: "C:\\duplicate",
+        hOmE: "C:\\Users\\scientist",
+        sYsTeMrOoT: "C:\\Windows",
+        cOmSpEc: "C:\\Windows\\System32\\cmd.exe",
+        pAtHeXt: ".COM;.EXE;.BAT;.CMD",
+        sEcReT_tOkEn: "leak-me",
+      },
+      "win32",
+    );
+    expect(filtered).toEqual({
+      PATH: "C:\\canonical",
+      HOME: "C:\\Users\\scientist",
+      SystemRoot: "C:\\Windows",
+      ComSpec: "C:\\Windows\\System32\\cmd.exe",
+      PATHEXT: ".COM;.EXE;.BAT;.CMD",
+    });
   });
 
   it("passes only canonical research variables and requested PI_SCIENCE values to a POSIX child", async () => {
     const cwd = await workspace();
-    const coordinator = jobCoordinator({ PATH: process.env.PATH, HOME: "/tmp", hOmE: "/untrusted", sEcReT_tOkEn: "leak-me" }, { platform: "linux" });
-    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "console.log(JSON.stringify(process.env))"], surface: "research-loop", env: { PI_SCIENCE_OUTPUT_DIR: "/tmp/x" } });
+    const coordinator = jobCoordinator(
+      { PATH: process.env.PATH, HOME: "/tmp", hOmE: "/untrusted", sEcReT_tOkEn: "leak-me" },
+      { platform: "linux" },
+    );
+    const submitted = await coordinator.submit(cwd, {
+      command: [process.execPath, "-e", "console.log(JSON.stringify(process.env))"],
+      surface: "research-loop",
+      env: { PI_SCIENCE_OUTPUT_DIR: "/tmp/x" },
+    });
     const finished = await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal);
     expect(finished?.status).toBe("succeeded");
     const childEnv = JSON.parse(finished?.stdout ?? "{}") as Record<string, string | undefined>;
@@ -601,8 +1401,17 @@ describe("job coordinator", () => {
 
   it("sanitizes local job environments: host secrets stripped, system and workspace identity keys kept", async () => {
     const cwd = await workspace();
-    const coordinator = jobCoordinator({ ...process.env, OPENAI_API_KEY: "leak-me", AWS_SECRET_ACCESS_KEY: "leak-too", PI_SCIENCE_ENVIRONMENT_ID: "env_123", PI_SCIENCE_ENVIRONMENT_REVISION_ID: "rev_456" });
-    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "console.log(JSON.stringify(process.env))"], surface: "local" });
+    const coordinator = jobCoordinator({
+      ...process.env,
+      OPENAI_API_KEY: "leak-me",
+      AWS_SECRET_ACCESS_KEY: "leak-too",
+      PI_SCIENCE_ENVIRONMENT_ID: "env_123",
+      PI_SCIENCE_ENVIRONMENT_REVISION_ID: "rev_456",
+    });
+    const submitted = await coordinator.submit(cwd, {
+      command: [process.execPath, "-e", "console.log(JSON.stringify(process.env))"],
+      surface: "local",
+    });
     const finished = await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal);
     expect(finished?.status).toBe("succeeded");
     const childEnv = JSON.parse(finished?.stdout ?? "{}") as Record<string, string | undefined>;
@@ -616,8 +1425,19 @@ describe("job coordinator", () => {
 
   it("keeps research surfaces on their narrower allowlist unchanged", async () => {
     const cwd = await workspace();
-    const coordinator = jobCoordinator({ PATH: process.env.PATH, HOME: "/tmp", PI_SCIENCE_ENVIRONMENT_ID: "env_123", sEcReT_tOkEn: "leak-me" }, { platform: "linux" });
-    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "console.log(JSON.stringify(process.env))"], surface: "research-loop" });
+    const coordinator = jobCoordinator(
+      {
+        PATH: process.env.PATH,
+        HOME: "/tmp",
+        PI_SCIENCE_ENVIRONMENT_ID: "env_123",
+        sEcReT_tOkEn: "leak-me",
+      },
+      { platform: "linux" },
+    );
+    const submitted = await coordinator.submit(cwd, {
+      command: [process.execPath, "-e", "console.log(JSON.stringify(process.env))"],
+      surface: "research-loop",
+    });
     const finished = await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal);
     expect(finished?.status).toBe("succeeded");
     const childEnv = JSON.parse(finished?.stdout ?? "{}") as Record<string, string | undefined>;
@@ -627,24 +1447,58 @@ describe("job coordinator", () => {
   });
 
   it("restricts local job keys with the extended allowlist including windows toolchain locations", () => {
-    const filtered = restrictLocalJobEnvironment({ PATH: "/bin", HOME: "/home/scientist", PI_SCIENCE_ENVIRONMENT_ID: "env_1", npm_config_prefix: "/npm", NPM_CONFIG_CACHE: "/cache", ProgramFiles: "C:\\Program Files", sEcReT_tOkEn: "leak-me" }, "linux");
-    expect(filtered).toEqual({ PATH: "/bin", HOME: "/home/scientist", PI_SCIENCE_ENVIRONMENT_ID: "env_1", npm_config_prefix: "/npm", NPM_CONFIG_CACHE: "/cache", ProgramFiles: "C:\\Program Files" });
+    const filtered = restrictLocalJobEnvironment(
+      {
+        PATH: "/bin",
+        HOME: "/home/scientist",
+        PI_SCIENCE_ENVIRONMENT_ID: "env_1",
+        npm_config_prefix: "/npm",
+        NPM_CONFIG_CACHE: "/cache",
+        ProgramFiles: "C:\\Program Files",
+        sEcReT_tOkEn: "leak-me",
+      },
+      "linux",
+    );
+    expect(filtered).toEqual({
+      PATH: "/bin",
+      HOME: "/home/scientist",
+      PI_SCIENCE_ENVIRONMENT_ID: "env_1",
+      npm_config_prefix: "/npm",
+      NPM_CONFIG_CACHE: "/cache",
+      ProgramFiles: "C:\\Program Files",
+    });
   });
 
   it("matches windows local job keys case-insensitively without duplicating canonical entries", () => {
-    const filtered = restrictLocalJobEnvironment({ PaTh: "C:\\tools", pRoGrAmFiLeS: "C:\\Apps", pi_science_environment_revision_id: "rev_9", sEcReT_tOkEn: "leak-me" }, "win32");
-    expect(filtered).toEqual({ PATH: "C:\\tools", ProgramFiles: "C:\\Apps", PI_SCIENCE_ENVIRONMENT_REVISION_ID: "rev_9" });
+    const filtered = restrictLocalJobEnvironment(
+      {
+        PaTh: "C:\\tools",
+        pRoGrAmFiLeS: "C:\\Apps",
+        pi_science_environment_revision_id: "rev_9",
+        sEcReT_tOkEn: "leak-me",
+      },
+      "win32",
+    );
+    expect(filtered).toEqual({
+      PATH: "C:\\tools",
+      ProgramFiles: "C:\\Apps",
+      PI_SCIENCE_ENVIRONMENT_REVISION_ID: "rev_9",
+    });
   });
 
   it("passes local GPU and package-network settings without embedded URL credentials", () => {
-    const filtered = restrictLocalJobEnvironment({
-      CUDA_VISIBLE_DEVICES: "0",
-      NVIDIA_VISIBLE_DEVICES: "all",
-      HTTP_PROXY: "http://proxy-user:proxy-secret@proxy.example:8080",
-      PIP_INDEX_URL: "https://mirror-user:mirror-secret@packages.example/simple?token=also-secret",
-      NO_PROXY: "127.0.0.1,localhost",
-      SECRET_TOKEN: "leak-me",
-    }, "linux");
+    const filtered = restrictLocalJobEnvironment(
+      {
+        CUDA_VISIBLE_DEVICES: "0",
+        NVIDIA_VISIBLE_DEVICES: "all",
+        HTTP_PROXY: "http://proxy-user:proxy-secret@proxy.example:8080",
+        PIP_INDEX_URL:
+          "https://mirror-user:mirror-secret@packages.example/simple?token=also-secret",
+        NO_PROXY: "127.0.0.1,localhost",
+        SECRET_TOKEN: "leak-me",
+      },
+      "linux",
+    );
     expect(filtered).toMatchObject({
       CUDA_VISIBLE_DEVICES: "0",
       NVIDIA_VISIBLE_DEVICES: "all",
@@ -655,3 +1509,140 @@ describe("job coordinator", () => {
     expect(filtered.SECRET_TOKEN).toBeUndefined();
   });
 });
+
+describe("job projection recovery and admission", () => {
+  it("repairs a durable terminal job after projection failure and coordinator restart", async () => {
+    vi.stubEnv("PI_SCIENCE_HOME", await workspace());
+    vi.stubEnv("PI_SCIENCE_SQLITE_STATE", "0");
+    const cwd = await workspace();
+    const { ExecutionRepository } = await import("../executions/execution-repository.js");
+    const executions = new ExecutionRepository();
+    const failure = vi
+      .spyOn(executions, "finish")
+      .mockRejectedValue(new Error("injected storage failure"));
+    const owner = new JobCoordinator(
+      { environment: async () => ({ ...process.env }) },
+      {},
+      executions,
+    );
+    jobs.push(owner);
+    const log = vi.fn();
+    owner.configureLogging(log);
+    const submitted = await owner.submit(cwd, {
+      command: [process.execPath, "-e", "process.stdout.write('done')"],
+    });
+    await owner.shutdown();
+    const stored = JSON.parse(
+      await readFile(join(cwd, ".pi-science", "jobs", `${submitted.job_id}.json`), "utf8"),
+    ) as JobRecord;
+    expect(terminal(stored)).toBe(true);
+    expect(log).toHaveBeenCalled();
+    expect((await executions.get(cwd, submitted.execution_id!))?.status).toBe("running");
+    failure.mockRestore();
+    const reopened = new JobCoordinator(
+      { environment: async () => ({ ...process.env }) },
+      {},
+      new ExecutionRepository(),
+    );
+    jobs.push(reopened);
+    await reopened.startReconciliation(async () => []);
+    expect((await executions.get(cwd, submitted.execution_id!))?.status).toBe(stored.status);
+  });
+
+  it("deduplicates concurrent submissions durably and rejects changed content", async () => {
+    const cwd = await workspace();
+    const first = jobCoordinator();
+    const second = jobCoordinator();
+    const body = { command: [process.execPath, "-e", ""], idempotency_key: "client-request-1" };
+    const [a, b] = await Promise.all([first.submit(cwd, body), second.submit(cwd, body)]);
+    expect(a.job_id).toBe(b.job_id);
+    expect(
+      await second.submit(cwd, { idempotency_key: body.idempotency_key, command: body.command }),
+    ).toMatchObject({ job_id: a.job_id });
+    await expect(
+      second.submit(cwd, { ...body, command: [process.execPath, "-e", "42"] }),
+    ).rejects.toMatchObject({ kind: "conflict" });
+    expect(await second.list(cwd, 100)).toHaveLength(1);
+  });
+
+  it("drains jobs admitted before shutdown and rejects subsequent submissions", async () => {
+    const cwd = await workspace();
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const coordinator = jobCoordinator(
+      { ...process.env },
+      {
+        beforeSpawn: async () => {
+          entered();
+          await gate;
+        },
+      },
+    );
+    const job = await coordinator.submit(cwd, {
+      command: [process.execPath, "-e", "process.exit(99)"],
+    });
+    await started;
+    const stopping = coordinator.shutdown();
+    release();
+    await stopping;
+    expect(await coordinator.get(cwd, job.job_id)).toMatchObject({ status: "cancelled" });
+    await expect(coordinator.submit(cwd, { command: ["true"] })).rejects.toMatchObject({
+      kind: "unavailable",
+    });
+  });
+});
+
+it.each(["managed", "registered", "pinned"])(
+  "backfills legacy %s workspace jobs without a new submission",
+  async (source) => {
+    vi.stubEnv("PI_SCIENCE_SQLITE_STATE", "0");
+    const managed = await workspace();
+    vi.stubEnv("PI_SCIENCE_WORKSPACES", managed);
+    const cwd = source === "managed" ? join(managed, "old-project") : await workspace();
+    const { configPath, writeJsonAtomic } = await import("../../storage/persistence.js");
+    const { ExecutionRepository, executionIdFor } = await import(
+      "../executions/execution-repository.js"
+    );
+    const executions = new ExecutionRepository();
+    const id = "job_1234567890abcdef";
+    await writeStoredJob(cwd, id, "succeeded", new Date(0).toISOString());
+    if (source !== "managed")
+      await writeJsonAtomic(
+        configPath(source === "registered" ? "registered-workspaces.json" : "pinned.json"),
+        [cwd],
+      );
+    const executionId = executionIdFor("job", cwd, id);
+    await executions.start(cwd, {
+      execution_id: executionId,
+      kind: "job",
+      surface: "local",
+      producer: "test",
+      correlation: { job_id: id },
+    });
+    const coordinator = new JobCoordinator(undefined, {}, executions);
+    jobs.push(coordinator);
+    await coordinator.startReconciliation(() => knownWorkspacePaths());
+    expect((await executions.get(cwd, executionId))?.status).toBe("succeeded");
+    await coordinator.shutdown();
+    // Remove discovery sources: a second restart must use the backfilled index.
+    await rm(configPath(source === "registered" ? "registered-workspaces.json" : "pinned.json"), {
+      force: true,
+    });
+    const nextExecutions = new ExecutionRepository();
+    const finish = vi.spyOn(nextExecutions, "finish");
+    const reopened = new JobCoordinator(undefined, {}, nextExecutions);
+    jobs.push(reopened);
+    await reopened.startReconciliation(async () => []);
+    expect(finish).toHaveBeenCalledWith(
+      cwd,
+      executionId,
+      expect.objectContaining({ status: "succeeded" }),
+    );
+  },
+);

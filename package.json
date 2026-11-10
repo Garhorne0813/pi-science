@@ -15,8 +15,15 @@
     "smoke:native-readonly": "bash scripts/smoke-control-plane.sh --native-readonly",
     "smoke:agent-core": "bash scripts/smoke-control-plane.sh --agent-core",
     "uat:conversation": "pnpm --filter frontend test:uat:conversation",
+    "verify:ui": "node frontend/scripts/ui-verify.mjs",
     "migrate:sessions": "pnpm --filter @pi-science/server exec tsx src/cli/migrate-sessions.ts",
     "export:legacy-memory": "pnpm --filter @pi-science/server exec tsx src/cli/export-legacy-memory.ts",
-    "lint": "pnpm --parallel --filter @pi-science/server --filter frontend run lint"
+    "lint": "pnpm format:check && pnpm check:boundaries && pnpm --parallel --filter @pi-science/server --filter frontend run lint",
+    "format": "node scripts/architecture/check-format.mjs --write",
+    "format:check": "node scripts/architecture/check-format.mjs",
+    "check:boundaries": "node --test scripts/architecture/checks.test.mjs && node scripts/architecture/check-boundaries.mjs"
+  },
+  "devDependencies": {
+    "prettier": "3.6.2"
   }
 }

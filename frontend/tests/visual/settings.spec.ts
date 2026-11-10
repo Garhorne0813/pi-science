@@ -1,7 +1,26 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "./fixtures/app.fixture";
-import { providerViewsFixture } from "../fixtures/provider-views";
 import { FIXTURES } from "./fixtures/data.mjs";
+
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/settings/approval", route => route.fulfill({ json: { defaultMode: "ask" } }));
+});
+
+test("the General scroll hint follows the bottom of the panel", async ({ page }) => {
+  await page.setViewportSize({ width: Math.min(page.viewportSize()?.width ?? 1024, 1024), height: 620 });
+  await page.goto("/settings");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const panel = dialog.getByRole("tabpanel");
+  const hint = dialog.getByText(/scroll for more settings/i);
+  await expect(dialog.locator("..")).toHaveCSS("backdrop-filter", "none");
+  await expect(hint).toBeVisible();
+  await panel.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await expect(hint).toBeHidden();
+  await panel.evaluate((element) => { element.scrollTop = 0; });
+  await expect(hint).toBeVisible();
+  await dialog.getByRole("tab", { name: "Memory", exact: true }).click();
+  await expect(hint).toBeHidden();
+});
 
 test("settings navigation, model facts and saved compaction across viewports", async ({ page }, testInfo) => {
   let threshold = 70;
@@ -10,7 +29,6 @@ test("settings navigation, model facts and saved compaction across viewports", a
     ...FIXTURES.config, compaction_threshold_percent: threshold, compaction_enabled: enabled,
     providers: [...FIXTURES.config.providers, { id: "subscription", name: "Subscription service", models: [], has_key: true, credential_status: "connected" as const, auth: { kind: "oauth" as const, api_key_supported: false, oauth_supported: true, login_supported: false } }],
   } }));
-  await page.route("**/api/provider-views*", (route) => route.fulfill({ json: providerViewsFixture({ ...FIXTURES.config, providers: [...FIXTURES.config.providers, { id: "subscription", name: "Subscription service", models: [], has_key: true, credential_status: "connected" as const, auth: { kind: "oauth" as const, api_key_supported: false, oauth_supported: true, login_supported: false } }] }) }));
   await page.route("**/api/settings/compaction*", async (route) => {
     const body = route.request().postDataJSON();
     threshold = body.threshold_percent;
@@ -21,9 +39,9 @@ test("settings navigation, model facts and saved compaction across viewports", a
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog.getByRole("button", { name: "Light", exact: true })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
-  for (const tab of ["General", "AI Models", "Agent"]) {
+  for (const tab of ["General", "Models", "Agent"]) {
     await dialog.getByRole("tab", { name: tab, exact: true }).click();
-    await expect(dialog.getByRole("heading", { name: tab, exact: true })).toBeVisible();
+    await expect(dialog.getByRole("heading", { name: tab === "General" ? "General & appearance" : tab, exact: true })).toBeVisible();
     // Default selection is fetched independently from the Settings shell.
     // Audit the ready control, rather than racing its disabled loading state.
     if (tab === "Agent") {
@@ -35,141 +53,49 @@ test("settings navigation, model facts and saved compaction across viewports", a
     expect(violations, `${tab} accessibility`).toEqual([]);
     expect(await dialog.getByRole("tabpanel").evaluate((element) => element.scrollWidth <= element.clientWidth + 1), `${tab} must fit the viewport`).toBe(true);
     await dialog.screenshot({ path: testInfo.outputPath(`${tab.replaceAll(" ", "-").toLowerCase()}.png`), animations: "disabled" });
-    if (tab === "AI Models") {
-      await expect(dialog.getByText("Login required", { exact: true })).toBeVisible();
-      const search = dialog.getByRole("searchbox");
+    if (tab === "Models") {
+      await expect(dialog.getByRole("button", { name: "DeepSeek", exact: true })).toBeVisible();
+      const search = dialog.getByRole("textbox", { name: /Search/ });
       await search.fill("nonexistent-model");
       await expect(dialog.getByText("No services or models match your search.")).toBeVisible();
-      await dialog.getByRole("button", { name: "Clear", exact: true }).click();
+      await dialog.getByRole("button", { name: "Clear search", exact: true }).click();
+      await dialog.getByRole("button", { name: "DeepSeek", exact: true }).click();
       await expect(dialog.getByText("DeepSeek Reasoner", { exact: false })).toBeVisible();
     }
   }
   await dialog.getByRole("slider").fill("80");
   await expect(dialog.getByText("51,200 tokens", { exact: true })).toBeVisible();
-  await dialog.getByRole("button", { name: "Save context settings", exact: true }).click();
   await expect(dialog.getByText("Settings saved", { exact: true })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Save context settings", exact: true })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "Save context settings", exact: true })).toHaveCount(0);
   await dialog.getByRole("button", { name: "Manage models", exact: true }).click();
-  await expect(dialog.getByRole("tab", { name: "AI Models", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(dialog.getByRole("tab", { name: "Models", exact: true })).toHaveAttribute("aria-selected", "true");
 });
 
-test("repairs a provider with a lost binding without replacing its credential", async ({ page }) => {
-  const inventory = providerViewsFixture(FIXTURES.config);
-  const lab = structuredClone(inventory.providers.find((provider) => provider.credential.configured && provider.auth.api_key_supported)!);
-  lab.id = "user-lab";
-  lab.name = "Lab";
-  lab.source = "user";
-  lab.status = "unavailable";
-  lab.allowed_actions = ["edit", "disable", "delete", "discover", "replace_credential"];
-  lab.models = lab.models.slice(0, 1).map((model) => ({ ...model, id: `user-lab/${model.model_id}`, provider_id: "user-lab", available: false, availability_reason: "no_binding" }));
-  lab.routing = { configured_model_count: 1, selectable_model_count: 0, issues: [{ code: "no_binding" }] };
-  inventory.providers.push(lab);
-  let repaired = false;
-  await page.route("**/api/provider-views*", (route) => route.fulfill({ json: inventory }));
-  await page.route("**/api/endpoints", (route) => route.fulfill({ json: { endpoints: [{ id: "endpoint-lab", owner_provider_id: "user-lab", name: "Lab endpoint", base_url: "https://lab.example/v1", credential_ref: "cred-lab", protocol: "openai" }] } }));
-  await page.route("**/api/provider-endpoint-bindings", (route) => route.fulfill({ json: { bindings: repaired ? [{ id: "repaired-binding", provider_id: "user-lab", endpoint_id: "endpoint-lab" }] : [] } }));
-  await page.route("**/api/custom-providers/user-lab", async (route) => {
-    expect(route.request().method()).toBe("PUT");
-    expect(route.request().postDataJSON()).toEqual({ name: "Lab", base_url: "https://lab.example/v1" });
-    repaired = true;
-    lab.status = "ready";
-    lab.routing = { configured_model_count: 1, selectable_model_count: 1, issues: [] };
-    lab.models[0].available = true;
-    delete lab.models[0].availability_reason;
-    await route.fulfill({ json: { ok: true } });
+test("native model catalog failures recover without showing an empty inventory", async ({ page }) => {
+  let failed = true;
+  await page.route("**/api/model-config/catalog", async route => {
+    if (failed) await route.fulfill({ status: 503, json: { error: "Catalog unavailable" } });
+    else await route.continue();
   });
   await page.goto("/settings");
-  const settings = page.getByRole("dialog", { name: "Settings" });
-  await settings.getByRole("tab", { name: "AI Models", exact: true }).click();
-  await expect(settings.getByRole("heading", { name: "Model services", exact: true })).toBeVisible();
-  await settings.getByRole("button", { name: /^Lab 1 models/ }).click();
-  await expect(settings.getByRole("region", { name: "Lab models", exact: true }).getByText("No enabled binding.", { exact: true })).toBeVisible();
-  await settings.getByRole("button", { name: "Configure connection", exact: true }).click();
-  const editor = page.getByRole("dialog", { name: "Edit connection" });
-  await expect(editor.getByLabel("Base URL", { exact: true })).toHaveValue("https://lab.example/v1");
-  await editor.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(editor).not.toBeVisible();
-  expect(repaired).toBe(true);
-  await expect(settings.getByText("No enabled binding.", { exact: true })).toHaveCount(0);
-  await settings.getByRole("button", { name: "Available", exact: true }).click();
-  await expect(settings.getByText("Lab", { exact: true })).toBeVisible();
-  await settings.getByRole("button", { name: "+ Connect", exact: true }).click();
-  const connect = page.getByRole("dialog", { name: "Connect a model service" });
-  for (const provider of inventory.providers.filter((provider) => provider.source === "builtin" && provider.credential.configured)) {
-    await expect(connect.getByRole("button", { name: provider.name, exact: true })).toHaveCount(0);
-  }
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await dialog.getByRole("tab", { name: "Models", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("Catalog unavailable");
+  failed = false;
+  await dialog.getByRole("button", { name: "Retry loading", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "DeepSeek", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
 });
 
-
-test("maintains a configured builtin key through its card while excluding it from Connect", async ({ page }) => {
-  const inventory = providerViewsFixture(FIXTURES.config);
-  const provider = inventory.providers.find((item) => item.source === "builtin" && item.credential.configured && item.allowed_actions.includes("replace_credential"))!;
-  let saved = false;
-  await page.route("**/api/provider-views*", (route) => route.fulfill({ json: { providers: [provider] } }));
-  await page.route("**/api/settings/api-key", async (route) => {
-    expect(route.request().method()).toBe("PUT");
-    expect(route.request().postDataJSON()).toEqual({ provider: provider.id, api_key: "synthetic-replacement-key" });
-    saved = true;
-    await route.fulfill({ json: { ok: true } });
-  });
-  await page.goto("/settings");
-  const settings = page.getByRole("dialog", { name: "Settings" });
-  await settings.getByRole("tab", { name: "AI Models", exact: true }).click();
-  await settings.getByRole("button", { name: "Connection settings", exact: true }).click();
-  await expect(settings.getByRole("menuitem", { name: "Disconnect", exact: true })).toHaveCount(0);
-  await settings.getByRole("menuitem", { name: "Replace", exact: true }).click();
-  const editor = page.getByRole("dialog", { name: "Replace API key" });
-  await editor.getByLabel(`${provider.name} API key`, { exact: false }).fill("synthetic-replacement-key");
-  await editor.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(editor).not.toBeVisible();
-  expect(saved).toBe(true);
-  await settings.getByRole("button", { name: "+ Connect", exact: true }).click();
-  const connect = page.getByRole("dialog", { name: "Connect a model service" });
-  await expect(connect.getByRole("button", { name: provider.name, exact: true })).toHaveCount(0);
-});
-
-
-test("explicitly enables a disabled endpoint without committing connection drafts", async ({ page }) => {
-  const inventory = providerViewsFixture(FIXTURES.config);
-  const lab = structuredClone(inventory.providers.find((provider) => provider.credential.configured && provider.auth.api_key_supported)!);
-  lab.id = "user-lab"; lab.name = "Lab"; lab.source = "user"; lab.status = "unavailable";
-  lab.allowed_actions = ["edit", "disable", "delete", "discover", "replace_credential"];
-  lab.models = lab.models.slice(0, 1).map((model) => ({ ...model, id: `user-lab/${model.model_id}`, provider_id: "user-lab", available: false, availability_reason: "disabled_endpoint" }));
-  lab.routing = { configured_model_count: 1, selectable_model_count: 0, issues: [{ code: "disabled_endpoint" }] };
-  let enabled = false;
-  await page.route("**/api/provider-views*", (route) => route.fulfill({ json: { providers: [lab] } }));
-  await page.route("**/api/endpoints", (route) => route.fulfill({ json: { endpoints: [{ id: "endpoint-lab", owner_provider_id: "user-lab", name: "Lab endpoint", base_url: "https://lab.example/v1", credential_ref: "cred-lab", protocol: "openai", enabled }] } }));
-  await page.route("**/api/provider-endpoint-bindings", (route) => route.fulfill({ json: { bindings: [{ id: "binding-lab", provider_id: "user-lab", endpoint_id: "endpoint-lab" }] } }));
-  await page.route("**/api/endpoints/endpoint-lab/enabled?enabled=true", async (route) => {
-    expect(route.request().method()).toBe("PUT");
-    enabled = true; lab.status = "ready"; lab.routing.selectable_model_count = 1; lab.routing.issues = [];
-    lab.models[0].available = true; delete lab.models[0].availability_reason;
-    await route.fulfill({ json: { ok: true } });
-  });
-  await page.goto("/settings");
-  const settings = page.getByRole("dialog", { name: "Settings" });
-  await settings.getByRole("tab", { name: "AI Models", exact: true }).click();
-  await settings.getByRole("button", { name: "Configure connection", exact: true }).click();
-  const editor = page.getByRole("dialog", { name: "Edit connection" });
-  await editor.getByLabel("Provider name", { exact: true }).fill("Unsaved lab name");
-  await editor.getByRole("button", { name: "Enable endpoint", exact: true }).click();
-  await expect(editor.getByRole("button", { name: "Enable endpoint", exact: true })).toHaveCount(0);
-  await expect(editor.getByLabel("Provider name", { exact: true })).toHaveValue("Unsaved lab name");
-  expect(enabled).toBe(true);
-  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
-  await settings.getByRole("button", { name: "Available", exact: true }).click();
-  await expect(settings.getByText("Lab", { exact: true })).toBeVisible();
-});
-
-test("Core capabilities replace extension installation controls", async ({ page }, testInfo) => {
+test("Agent owns built-in capability guidance", async ({ page }, testInfo) => {
   const obsoleteRequests: string[] = [];
   page.on("request", (request) => {
     if (/\/api\/(settings\/(extensions)|agent-profiles)/.test(request.url())) obsoleteRequests.push(request.url());
   });
   await page.goto("/settings");
   const dialog = page.getByRole("dialog", { name: "Settings" });
-  await dialog.getByRole("tab", { name: "Agent Capabilities", exact: true }).click();
-  await expect(dialog.getByRole("heading", { name: "Built-in tools", exact: true })).toBeVisible();
+  await dialog.getByRole("tab", { name: "Agent", exact: true }).click();
+  await dialog.locator("summary").filter({ hasText: "Built-in tools" }).click();
   await expect(dialog.getByText(/no Pi extension installation is required/)).toBeVisible();
   await expect(dialog.getByRole("tab", { name: "Extensions", exact: true })).toHaveCount(0);
   await expect(dialog.getByText("Installed Extensions", { exact: true })).toHaveCount(0);
@@ -177,7 +103,7 @@ test("Core capabilities replace extension installation controls", async ({ page 
   const violations = (await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations.filter((item) => item.impact === "critical" || item.impact === "serious");
   expect(violations).toEqual([]);
   await dialog.screenshot({ path: testInfo.outputPath("agent-capabilities.png"), animations: "disabled" });
-  await dialog.getByRole("button", { name: "Manage MCP connectors", exact: true }).click();
+  await dialog.getByRole("tab", { name: "MCP", exact: true }).click();
   await expect(dialog.getByRole("tab", { name: "MCP", exact: true })).toHaveAttribute("aria-selected", "true");
   expect(obsoleteRequests).toEqual([]);
 });
@@ -194,17 +120,64 @@ test("native web search settings save provider credentials and switches @accessi
   });
   await page.goto("/settings");
   const dialog = page.getByRole("dialog", { name: "Settings" });
-  await dialog.getByRole("tab", { name: "Web search", exact: true }).click();
+  await dialog.getByRole("tab", { name: "Web access", exact: true }).click();
   await expect(dialog.getByRole("checkbox", { name: "Enable web search" })).toBeChecked();
-  await dialog.getByRole("combobox", { name: "Search provider" }).selectOption("brave");
-  await dialog.getByLabel("API key", { exact: true }).fill("fixture-key");
+  await dialog.getByRole("button", { name: /^Search provider:/ }).click();
+  await page.getByRole("menuitemradio", { name: "Brave", exact: true }).click();
+  await expect.poll(() => writes.length).toBe(1);
   await dialog.getByRole("checkbox", { name: "Enable web search" }).uncheck();
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(dialog.getByRole("status")).toHaveText("Settings saved");
-  expect(writes).toEqual([{ search_enabled: false, fetch_enabled: true, provider: "brave", api_keys: { brave: "fixture-key" } }]);
+  await expect.poll(() => writes.length).toBe(2);
+  await dialog.getByLabel("API key", { exact: true }).fill("fixture-key");
+  expect(writes).toHaveLength(2);
+  await dialog.getByRole("button", { name: "Update API key", exact: true }).click();
+  await expect(dialog.getByText("Settings saved", { exact: true })).toBeVisible();
+  expect(writes).toEqual([
+    { search_enabled: true, fetch_enabled: true, provider: "brave" },
+    { search_enabled: false, fetch_enabled: true, provider: "brave" },
+    { api_keys: { brave: "fixture-key" } },
+  ]);
   await expect(dialog.getByLabel("API key", { exact: true })).toHaveValue("");
   expect(await dialog.getByRole("tabpanel").evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   const violations = (await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations.filter(item => item.impact === "critical" || item.impact === "serious");
   expect(violations).toEqual([]);
   await dialog.screenshot({ path: testInfo.outputPath("web-search-settings.png"), animations: "disabled" });
+});
+
+
+test("settings switches autosave and expose only applicable controls", async ({ page }) => {
+  let web = { search_enabled: true, fetch_enabled: true, provider: "brave", api_keys: {} };
+  let compaction = true;
+  await page.route("**/api/settings/config*", route => route.fulfill({
+    json: { ...FIXTURES.config, compaction_enabled: compaction },
+  }));
+  await page.route("**/api/settings/compaction*", route => {
+    compaction = route.request().postDataJSON().enabled;
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.route("**/api/settings/web-access", route => {
+    if (route.request().method() === "PUT") web = { ...web, ...route.request().postDataJSON() };
+    return route.fulfill({ json: { ok: true, web_access: web, session_replacements: [] } });
+  });
+  await page.goto("/settings");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog.getByRole("tab", { name: "Agent Capabilities", exact: true })).toHaveCount(0);
+  const webTab = dialog.getByRole("tab", { name: "Web access", exact: true });
+  await webTab.click();
+  await dialog.getByRole("checkbox", { name: "Enable web search", exact: true }).uncheck();
+  await expect(dialog.getByLabel("API key", { exact: true })).toBeVisible();
+  await dialog.getByRole("checkbox", { name: "Enable webpage and PDF reading", exact: true }).uncheck();
+  await expect(dialog.getByLabel("API key", { exact: true })).toHaveCount(0);
+  const agentTab = dialog.getByRole("tab", { name: "Agent", exact: true });
+  await agentTab.click();
+  const compact = dialog.getByRole("checkbox", { name: "Automatic compaction", exact: true });
+  await compact.uncheck();
+  await expect(dialog.getByRole("slider")).toHaveCount(0);
+  await expect(dialog.getByRole("status").filter({ hasText: /^Settings saved$/ })).toBeVisible();
+  await webTab.click();
+  await expect(dialog.getByRole("checkbox", { name: "Enable web search", exact: true })).not.toBeChecked();
+  await expect(dialog.getByRole("checkbox", { name: "Enable webpage and PDF reading", exact: true })).not.toBeChecked();
+  await expect(webTab.locator('[title="Unsaved changes"]')).toHaveCount(0);
+  expect(web).toMatchObject({ search_enabled: false, fetch_enabled: false });
+  await agentTab.click();
+  await expect(compact).not.toBeChecked();
 });

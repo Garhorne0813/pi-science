@@ -1,8 +1,11 @@
-import { count, detailRecord, genericDetails, meaningfulActivityTitle, record, text } from "./shared";
+import { activityTaskTitle, activityToolName, presentToolActivity } from "../../../lib/conversation/activity-presenters";
+import { count, detailRecord, genericDetails, record, text } from "./shared";
 import type { ActivityRenderer } from "./types";
 
-function kernelName(tool: string): string {
-  const normalized = tool.trim().toLowerCase();
+function kernelName(tool: string, language?: unknown): string {
+  const normalized = activityToolName(tool);
+  if (language === "r" || language === "R") return "R";
+  if (language === "python") return "Python";
   if (normalized === "r" || normalized.includes("r_kernel")) return "R";
   if (normalized.includes("python") || normalized.includes("jupyter") || normalized.includes("notebook")) return "Python";
   return "Kernel";
@@ -10,10 +13,10 @@ function kernelName(tool: string): string {
 
 export const KernelActivityRenderer: ActivityRenderer = {
   compact: ({ activity, source, t }) => {
-    const kernel = kernelName(source.tool);
     const details = detailRecord(source);
+    const kernel = kernelName(source.tool, source.input?.language ?? details.language);
     const outputCount = count(details.outputs) ?? count(record(details.result)?.outputs);
-    const semanticTitle = meaningfulActivityTitle(activity.title, source.tool);
+    const semanticTitle = activityTaskTitle(source) ?? (activityToolName(source.tool) === "notebook_run" ? presentToolActivity(source, t) : undefined);
     const genericTitle = activity.state === "running"
       ? t("conversation.activity.kernelRunning", { kernel })
       : activity.state === "error"

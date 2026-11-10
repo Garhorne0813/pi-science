@@ -21,17 +21,39 @@ afterEach(async () => {
 function response(stream: ServerResponse, tools = false): void {
   stream.writeHead(200, { "content-type": "text/event-stream" });
   const base = { id: "local-response", object: "chat.completion.chunk", created: 1, model: "lab" };
-  const delta = tools ? { role: "assistant", tool_calls: [{ index: 0, id: "write-result", type: "function",
-    function: { name: "write", arguments: JSON.stringify({ path: "result.txt", content: "instant result\n" }) } }] }
+  const delta = tools
+    ? {
+        role: "assistant",
+        tool_calls: [
+          {
+            index: 0,
+            id: "write-result",
+            type: "function",
+            function: {
+              name: "write",
+              arguments: JSON.stringify({ path: "result.txt", content: "instant result\n" }),
+            },
+          },
+        ],
+      }
     : { role: "assistant", content: "Done" };
-  stream.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
-  stream.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: tools ? "tool_calls" : "stop" }],
-    usage: { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110 } })}\n\n`);
+  stream.write(
+    `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`,
+  );
+  stream.write(
+    `data: ${JSON.stringify({
+      ...base,
+      choices: [{ index: 0, delta: {}, finish_reason: tools ? "tool_calls" : "stop" }],
+      usage: { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110 },
+    })}\n\n`,
+  );
   stream.end("data: [DONE]\n\n");
 }
 
-async function fixture(mode: "reply" | "write" | "hold-first" | "stall-stream" | "stall-until-released" = "write",
-  files: { skills?: Record<string, string>; prompts?: Record<string, string> } = {}) {
+async function fixture(
+  mode: "reply" | "write" | "hold-first" | "stall-stream" | "stall-until-released" = "write",
+  files: { skills?: Record<string, string>; prompts?: Record<string, string> } = {},
+) {
   const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-turns-"));
   cleanup.push(() => rm(cwd, { recursive: true, force: true }));
   await mkdir(join(cwd, ".pi-science"));
@@ -41,7 +63,8 @@ async function fixture(mode: "reply" | "write" | "hold-first" | "stall-stream" |
     await writeFile(join(cwd, ".pi", "skills", name, "SKILL.md"), content);
   }
   if (files.prompts) await mkdir(join(cwd, ".pi", "prompts"), { recursive: true });
-  for (const [name, content] of Object.entries(files.prompts ?? {})) await writeFile(join(cwd, ".pi", "prompts", `${name}.md`), content);
+  for (const [name, content] of Object.entries(files.prompts ?? {}))
+    await writeFile(join(cwd, ".pi", "prompts", `${name}.md`), content);
   vi.stubEnv("PI_SCIENCE_HOME", join(cwd, ".test-settings"));
   vi.stubEnv("PI_SCIENCE_AGENT_RUNTIME", "agent-core");
   vi.stubEnv("PI_SCIENCE_EVENT_WATCHDOG_MS", "100");
@@ -51,41 +74,96 @@ async function fixture(mode: "reply" | "write" | "hold-first" | "stall-stream" |
   const server = createServer(async (request, stream) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
-    const body = JSON.parse(Buffer.concat(chunks).toString()) as typeof requests[number];
+    const body = JSON.parse(Buffer.concat(chunks).toString()) as (typeof requests)[number];
     requests.push(body);
-    if (mode === "hold-first" && requests.length === 1) { releaseFirstResponse = () => response(stream); return; }
-    if ((mode === "stall-stream" && requests.length === 1) || (mode === "stall-until-released" && !streamStallReleased)) {
+    if (mode === "hold-first" && requests.length === 1) {
+      releaseFirstResponse = () => response(stream);
+      return;
+    }
+    if (
+      (mode === "stall-stream" && requests.length === 1) ||
+      (mode === "stall-until-released" && !streamStallReleased)
+    ) {
       stream.writeHead(200, { "content-type": "text/event-stream" });
-      stream.write(`data: ${JSON.stringify({ id: "stalled-response", object: "chat.completion.chunk", created: 1, model: "lab",
-        choices: [{ index: 0, delta: { role: "assistant", content: "Partial" }, finish_reason: null }] })}\n\n`);
+      stream.write(
+        `data: ${JSON.stringify({
+          id: "stalled-response",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "lab",
+          choices: [
+            { index: 0, delta: { role: "assistant", content: "Partial" }, finish_reason: null },
+          ],
+        })}\n\n`,
+      );
       return; // The provider iterator never produces another frame or finishes.
     }
     response(stream, mode === "write" && !body.messages.some((message) => message.role === "tool"));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  cleanup.push(() => new Promise<void>((resolve, reject) => {
-    server.closeAllConnections();
-    server.close((error) => error ? reject(error) : resolve());
-  }));
+  cleanup.push(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        server.closeAllConnections();
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  );
   const provider = { id: "native-lab" };
-  await new ModelConfigService().createProvider(0, provider.id, { api: "openai-completions", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, models: [{ id: "lab", reasoning: false, contextWindow: 128000 }] }, { source: "managed", secret: "local-test-key" });
+  await new ModelConfigService().createProvider(
+    0,
+    provider.id,
+    {
+      api: "openai-completions",
+      baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`,
+      models: [{ id: "lab", reasoning: false, contextWindow: 128000 }],
+    },
+    { source: "managed", secret: "local-test-key" },
+  );
   const events: Record<string, unknown>[] = [];
-  const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
+  const hub = new ConversationEventHub({
+    append: async () => undefined,
+    readAfter: async () => [],
+  });
   const publish = hub.publish.bind(hub);
-  vi.spyOn(hub, "publish").mockImplementation(async (...args) => { events.push(args[2]); await publish(...args); });
+  vi.spyOn(hub, "publish").mockImplementation(async (...args) => {
+    events.push(args[2]);
+    await publish(...args);
+  });
   const review = { run: vi.fn().mockResolvedValue({}) };
-  const service = new NodeSessionService(hub, new SessionRepository(), { environment: async () => ({}) }, null);
-  service.configureMemory({settled:review.run,deleted:async()=>undefined});
+  const service = new NodeSessionService(
+    hub,
+    new SessionRepository(),
+    { environment: async () => ({}) },
+    null,
+  );
+  service.configureMemory({ settled: review.run, deleted: async () => undefined });
   cleanup.push(() => service.shutdownAll());
-  const created = await service.create({ cwd, config: { model: `${provider.id}/lab`, thinking: "off", skills: [], extensions: [] } });
+  const created = await service.create({
+    cwd,
+    config: { model: `${provider.id}/lab`, thinking: "off", skills: [], extensions: [] },
+  });
   if (!("id" in created)) throw new Error(created.error);
   const core = (service as unknown as { agentCore: AgentCoreSessionService }).agentCore;
-  return { cwd, id: created.id, service, core, events, review, requests, releaseFirstResponse: () => releaseFirstResponse(), releaseStreamStall: () => { streamStallReleased = true; } };
+  return {
+    cwd,
+    id: created.id,
+    service,
+    core,
+    events,
+    review,
+    requests,
+    releaseFirstResponse: () => releaseFirstResponse(),
+    releaseStreamStall: () => {
+      streamStallReleased = true;
+    },
+  };
 }
 
 describe("agent-core product turns", () => {
   it("allows research continuation after aborting one operation", async () => {
     const { cwd, id, service, requests, events } = await fixture("hold-first");
+    const log = vi.fn();
+    (service as unknown as { log: typeof log }).log = log;
     const admitted = await service.command(id, cwd, "prompt", { message: "begin research" });
     expect(admitted.success).toBe(true);
     await vi.waitFor(() => expect(requests).toHaveLength(1), { timeout: 15000 });
@@ -93,32 +171,73 @@ describe("agent-core product turns", () => {
     await first.configure({ max_executions: 3 }, "research-abort");
     await first.reserve("bash", String(admitted.operationId), "spent");
     await service.command(id, cwd, "abort", {});
-    await vi.waitFor(() => expect(events).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "operation.settled", runId: admitted.operationId }),
-    ])), { timeout: 15000 });
+    await vi.waitFor(
+      () =>
+        expect(events).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ type: "operation.settled", runId: admitted.operationId }),
+          ]),
+        ),
+      { timeout: 15000 },
+    );
     expect(await first.status()).toMatchObject({ cancelled: true, global_used: 1 });
+    // A user-requested abort must stay invisible: no fake provider failure in history, no error log.
+    const history = await new SessionRepository().messages(cwd, id);
+    const aborted = [...history].reverse().find((message) => message.role === "assistant");
+    const transcript = (aborted?.content ?? [])
+      .map((part) =>
+        part && typeof part === "object" && typeof part.text === "string" ? part.text : "",
+      )
+      .join("");
+    expect(transcript).not.toContain("Model request failed");
+    expect(log.mock.calls.filter(([level]) => level === "error")).toEqual([]);
     const next = await service.command(id, cwd, "prompt", { message: "continue research" });
     expect(next.success).toBe(true);
     const continuation = new ExecutionBudgetLedger(cwd, String(next.operationId));
     await continuation.configure({}, "research-abort");
     await continuation.reserve("bash", String(next.operationId), "continue");
-    expect(await continuation.status()).toMatchObject({ cancelled: false, global_used: 2, remaining_executions: 1 });
-    await vi.waitFor(() => expect(events).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "operation.settled", runId: next.operationId, status: "completed" }),
-    ])), { timeout: 15000 });
+    expect(await continuation.status()).toMatchObject({
+      cancelled: false,
+      global_used: 2,
+      remaining_executions: 1,
+    });
+    await vi.waitFor(
+      () =>
+        expect(events).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              type: "operation.settled",
+              runId: next.operationId,
+              status: "completed",
+            }),
+          ]),
+        ),
+      { timeout: 15000 },
+    );
   }, 45000);
 
   it("does not cancel a settled research operation on a later idle abort", async () => {
-    const { cwd, id, service, requests, events, releaseFirstResponse } = await fixture("hold-first");
+    const { cwd, id, service, requests, events, releaseFirstResponse } =
+      await fixture("hold-first");
     const admitted = await service.command(id, cwd, "prompt", { message: "complete research" });
     expect(admitted.success).toBe(true);
     await vi.waitFor(() => expect(requests).toHaveLength(1), { timeout: 15000 });
     const budget = new ExecutionBudgetLedger(cwd, String(admitted.operationId));
     await budget.configure({ max_executions: 3 }, "research-settled");
     releaseFirstResponse();
-    await vi.waitFor(() => expect(events).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "operation.settled", runId: admitted.operationId, status: "completed" }),
-    ])), { timeout: 15000 });
+    await vi.waitFor(
+      () =>
+        expect(events).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              type: "operation.settled",
+              runId: admitted.operationId,
+              status: "completed",
+            }),
+          ]),
+        ),
+      { timeout: 15000 },
+    );
     await service.command(id, cwd, "abort", {});
     expect(await budget.status()).toMatchObject({ cancelled: false, remaining_executions: 3 });
   }, 45000);
@@ -129,32 +248,55 @@ describe("agent-core product turns", () => {
     const original = core.liveRuntime(cwd)!;
     const runtimeEvents: Array<{ type: string }> = [];
     original.on("event", (event) => runtimeEvents.push(event));
-    expect(await service.command(id, cwd, "prompt", { message: "resume a stalled stream", client_message_id: "stall-once" }))
-      .toMatchObject({ success: true });
-    await vi.waitFor(() => expect(runtimeEvents.some((event) => event.type === "message.updated")).toBe(true), { timeout: 15000 });
+    expect(
+      await service.command(id, cwd, "prompt", {
+        message: "resume a stalled stream",
+        client_message_id: "stall-once",
+      }),
+    ).toMatchObject({ success: true });
+    await vi.waitFor(
+      () => expect(runtimeEvents.some((event) => event.type === "message.updated")).toBe(true),
+      { timeout: 15000 },
+    );
     const snapshot = await original.sendCommand("get_state");
     expect(snapshot).toMatchObject({ success: true, data: { busy: true, faulted: false } });
     expect(original.isClosed).toBe(false);
     const operationId = snapshot.data!.operation!.id;
     await vi.waitFor(() => expect(original.isClosed).toBe(true), { timeout: 15000 });
     await vi.waitFor(() => expect(requests).toHaveLength(2), { timeout: 15000 });
-    await vi.waitFor(async () => expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }), { timeout: 15000 });
+    await vi.waitFor(
+      async () => expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }),
+      { timeout: 15000 },
+    );
     expect(core.liveRuntime(cwd)).not.toBe(original);
     expect(requests).toHaveLength(2);
     expect(events.some((event) => event.code === "worker_recovering")).toBe(true);
     const history = await new SessionRepository().messages(cwd, id);
     expect(history.filter((message) => message.client_message_id === "stall-once")).toHaveLength(1);
-    expect(await core.liveRuntime(cwd)!.sendCommand("get_operation_result", { operationId }))
-      .toMatchObject({ success: true, data: { operationId, status: "completed" } });
+    expect(
+      await core.liveRuntime(cwd)!.sendCommand("get_operation_result", { operationId }),
+    ).toMatchObject({ success: true, data: { operationId, status: "completed" } });
   }, 45000);
 
   it("stops the worker and reports a terminal error after repeated stalls, leaving the checkpoint available for explicit resume", async () => {
-    const { cwd, id, service, core, events, requests, releaseStreamStall } = await fixture("stall-until-released");
+    const { cwd, id, service, core, events, requests, releaseStreamStall } =
+      await fixture("stall-until-released");
     vi.stubEnv("PI_SCIENCE_OPERATION_NO_PROGRESS_MS", "1000");
-    expect(await service.command(id, cwd, "prompt", { message: "repeated stall", client_message_id: "repeated-stall" }))
-      .toMatchObject({ success: true });
-    await vi.waitFor(() => expect(events.some((event) => event.code === "worker_recovery_failed" && event.terminal === true)).toBe(true),
-      { timeout: 25000 });
+    expect(
+      await service.command(id, cwd, "prompt", {
+        message: "repeated stall",
+        client_message_id: "repeated-stall",
+      }),
+    ).toMatchObject({ success: true });
+    await vi.waitFor(
+      () =>
+        expect(
+          events.some(
+            (event) => event.code === "worker_recovery_failed" && event.terminal === true,
+          ),
+        ).toBe(true),
+      { timeout: 25000 },
+    );
     expect(requests.length).toBeGreaterThan(0);
     expect(events.some((event) => event.type === "runtime.paused")).toBe(true);
     expect(events.filter((event) => event.type === "operation.settled")).toHaveLength(0);
@@ -166,58 +308,127 @@ describe("agent-core product turns", () => {
     // Give the SDK's durable retry backoff time to elapse on explicit reopen.
     vi.stubEnv("PI_SCIENCE_OPERATION_NO_PROGRESS_MS", "15000");
     expect(await service.resume(id, cwd)).toMatchObject({ success: true });
-    await vi.waitFor(async () => expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }), { timeout: 15000 });
-    expect((await new SessionRepository().messages(cwd, id)).filter((message) => message.client_message_id === "repeated-stall"))
-      .toHaveLength(1);
+    await vi.waitFor(
+      async () => expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }),
+      { timeout: 15000 },
+    );
+    expect(
+      (await new SessionRepository().messages(cwd, id)).filter(
+        (message) => message.client_message_id === "repeated-stall",
+      ),
+    ).toHaveLength(1);
   }, 45000);
 
   it("expands a prompt template invocation into the template message it sends", async () => {
     const { cwd, id, service, requests } = await fixture("reply", {
-      prompts: { summarize: "---\ndescription: Summarize text\n---\nSummarize the following text: $ARGUMENTS" },
+      prompts: {
+        summarize:
+          "---\ndescription: Summarize text\n---\nSummarize the following text: $ARGUMENTS",
+      },
     });
-    expect(await service.command(id, cwd, "prompt", { message: "/summarize protein folding", client_message_id: "template-once" }))
-      .toMatchObject({ success: true });
+    expect(
+      await service.command(id, cwd, "prompt", {
+        message: "/summarize protein folding",
+        client_message_id: "template-once",
+      }),
+    ).toMatchObject({ success: true });
     await vi.waitFor(() => expect(requests).toHaveLength(1), { timeout: 15000 });
-    expect(JSON.stringify(requests[0]!.messages)).toContain("Summarize the following text: protein folding");
-    await vi.waitFor(async () => expect(String((await new SessionRepository().messages(cwd, id))[0]?.content[0]?.text))
-      .toBe("Summarize the following text: protein folding"), { timeout: 15000 });
+    expect(JSON.stringify(requests[0]!.messages)).toContain(
+      "Summarize the following text: protein folding",
+    );
+    await vi.waitFor(
+      async () =>
+        expect(String((await new SessionRepository().messages(cwd, id))[0]?.content[0]?.text)).toBe(
+          "Summarize the following text: protein folding",
+        ),
+      { timeout: 15000 },
+    );
   }, 45000);
 
   it("expands a skill invocation and sends unknown slash text down the normal path", async () => {
     const { cwd, id, service, requests } = await fixture("reply", {
-      skills: { review: "---\nname: review\ndescription: Review evidence\n---\nFollow the evidence protocol." },
+      skills: {
+        review:
+          "---\nname: review\ndescription: Review evidence\n---\nFollow the evidence protocol.",
+      },
     });
-    expect(await service.command(id, cwd, "prompt", { message: "/skill:review check the statistics", client_message_id: "skill-once" }))
-      .toMatchObject({ success: true });
+    expect(
+      await service.command(id, cwd, "prompt", {
+        message: "/skill:review check the statistics",
+        client_message_id: "skill-once",
+      }),
+    ).toMatchObject({ success: true });
     await vi.waitFor(() => expect(requests).toHaveLength(1), { timeout: 15000 });
     expect(JSON.stringify(requests[0]!.messages)).toContain("Follow the evidence protocol.");
     const repository = new SessionRepository();
-    await vi.waitFor(async () => expect(String((await repository.messages(cwd, id))[0]?.content[0]?.text))
-      .toContain('<skill name="review"'), { timeout: 15000 });
-    await vi.waitFor(async () => expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }), { timeout: 15000 });
+    await vi.waitFor(
+      async () =>
+        expect(String((await repository.messages(cwd, id))[0]?.content[0]?.text)).toContain(
+          '<skill name="review"',
+        ),
+      { timeout: 15000 },
+    );
+    await vi.waitFor(
+      async () => expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }),
+      { timeout: 15000 },
+    );
     // A slash word that matches no skill and no template keeps its own text.
-    expect(await service.command(id, cwd, "prompt", { message: "/notacommand keep this text", client_message_id: "plain-slash" }))
-      .toMatchObject({ success: true });
+    expect(
+      await service.command(id, cwd, "prompt", {
+        message: "/notacommand keep this text",
+        client_message_id: "plain-slash",
+      }),
+    ).toMatchObject({ success: true });
     await vi.waitFor(() => expect(requests).toHaveLength(2), { timeout: 15000 });
     expect(JSON.stringify(requests[1]!.messages)).toContain("/notacommand keep this text");
-    await vi.waitFor(async () => expect(String((await repository.messages(cwd, id)).find((message) => message.client_message_id === "plain-slash")?.content[0]?.text))
-      .toBe("/notacommand keep this text"), { timeout: 15000 });
+    await vi.waitFor(
+      async () =>
+        expect(
+          String(
+            (await repository.messages(cwd, id)).find(
+              (message) => message.client_message_id === "plain-slash",
+            )?.content[0]?.text,
+          ),
+        ).toBe("/notacommand keep this text"),
+      { timeout: 15000 },
+    );
   }, 45000);
 
   it("captures a fast tool write and publishes final stats and one Memory extraction check", async () => {
     const { cwd, id, service, core, events, review } = await fixture();
-    expect(await service.command(id, cwd, "prompt", { message: "write a result", client_message_id: "write-once" })).toMatchObject({ success: true });
-    await vi.waitFor(() => expect(events.some((event) => event.type === "turn.artifacts")).toBe(true), { timeout: 15000 });
+    expect(
+      await service.command(id, cwd, "prompt", {
+        message: "write a result",
+        client_message_id: "write-once",
+      }),
+    ).toMatchObject({ success: true });
+    await vi.waitFor(
+      () => expect(events.some((event) => event.type === "turn.artifacts")).toBe(true),
+      { timeout: 15000 },
+    );
     expect(await readFile(join(cwd, "result.txt"), "utf8")).toBe("instant result\n");
     const records = await turnArtifactRepository.forSession(cwd, id);
     expect(records).toHaveLength(1);
     expect(records[0]?.artifacts).toEqual([expect.objectContaining({ path: "result.txt" })]);
     await vi.waitFor(() => expect(review.run).toHaveBeenCalledOnce(), { timeout: 15000 });
-    expect(await service.stats(id, cwd)).toMatchObject({ stats: { userMessages: 1, toolCalls: 1, toolResults: 1, tokens: { total: 220 } } });
+    expect(await service.stats(id, cwd)).toMatchObject({
+      stats: { userMessages: 1, toolCalls: 1, toolResults: 1, tokens: { total: 220 } },
+    });
     const runtime = core.liveRuntime(cwd)!;
-    runtime.emit("event", { type: "operation.started", runId: records[0]!.turn_id, turnId: records[0]!.turn_id, recovery: true });
-    runtime.emit("event", { type: "operation.settled", runId: records[0]!.turn_id, status: "completed" });
-    await vi.waitFor(() => expect(events.filter((event) => event.type === "session.stats").length).toBeGreaterThan(4));
+    runtime.emit("event", {
+      type: "operation.started",
+      runId: records[0]!.turn_id,
+      turnId: records[0]!.turn_id,
+      recovery: true,
+    });
+    runtime.emit("event", {
+      type: "operation.settled",
+      runId: records[0]!.turn_id,
+      status: "completed",
+    });
+    await vi.waitFor(() =>
+      expect(events.filter((event) => event.type === "session.stats").length).toBeGreaterThan(4),
+    );
     expect(await turnArtifactRepository.forSession(cwd, id)).toHaveLength(1);
     expect(events.filter((event) => event.type === "turn.artifacts")).toHaveLength(1);
     await vi.waitFor(() => expect(review.run).toHaveBeenCalledOnce(), { timeout: 15000 });
@@ -226,16 +437,29 @@ describe("agent-core product turns", () => {
   it("automatically reopens a killed worker and resumes one durable prompt", async () => {
     const { cwd, id, service, core, events, requests } = await fixture("hold-first");
     const original = core.liveRuntime(cwd)!;
-    expect(await service.command(id, cwd, "prompt", { message: "continue after failure", client_message_id: "recover-once" })).toMatchObject({ success: true });
+    expect(
+      await service.command(id, cwd, "prompt", {
+        message: "continue after failure",
+        client_message_id: "recover-once",
+      }),
+    ).toMatchObject({ success: true });
     await vi.waitFor(() => expect(requests).toHaveLength(1), { timeout: 15000 });
     original.child.kill("SIGKILL");
     await vi.waitFor(() => expect(requests).toHaveLength(2), { timeout: 15000 });
-    await vi.waitFor(() => expect(events.some((event) => event.type === "session.stats")).toBe(true), { timeout: 15000 });
+    await vi.waitFor(
+      () => expect(events.some((event) => event.type === "session.stats")).toBe(true),
+      { timeout: 15000 },
+    );
     expect(core.liveRuntime(cwd)).not.toBe(original);
     expect(events.some((event) => event.code === "worker_recovering")).toBe(true);
     const history = await new SessionRepository().messages(cwd, id);
-    expect(history.filter((message) => message.client_message_id === "recover-once")).toHaveLength(1);
-    await vi.waitFor(async () => expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }), { timeout: 15000 });
+    expect(history.filter((message) => message.client_message_id === "recover-once")).toHaveLength(
+      1,
+    );
+    await vi.waitFor(
+      async () => expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }),
+      { timeout: 15000 },
+    );
   }, 45000);
 
   it("reconciles a lost settled event and completes the persisted product lifecycle once", async () => {
@@ -244,14 +468,21 @@ describe("agent-core product turns", () => {
     const emit = original.emit.bind(original);
     let droppedSettled = false;
     let eventDropped!: () => void;
-    const dropped = new Promise<void>((resolve) => { eventDropped = resolve; });
+    const dropped = new Promise<void>((resolve) => {
+      eventDropped = resolve;
+    });
     // Inject the loss before allowing the watchdog to repair it. On slower
     // hosts, its snapshot can otherwise overtake terminal IPC delivery and
     // replace the worker before this test has actually dropped any event.
     const supervisor = core as unknown as { probe: (...args: unknown[]) => Promise<void> };
     const probe = supervisor.probe.bind(supervisor);
-    vi.spyOn(supervisor, "probe").mockImplementation(async (...args) => { await dropped; await probe(...args); });
-    cleanup.push(async () => { eventDropped(); });
+    vi.spyOn(supervisor, "probe").mockImplementation(async (...args) => {
+      await dropped;
+      await probe(...args);
+    });
+    cleanup.push(async () => {
+      eventDropped();
+    });
     vi.spyOn(original, "emit").mockImplementation((type, ...args) => {
       // Lose the worker's terminal event, not a supervisor's synthetic repair.
       // Depending on the last observed sequence, the watchdog can reconcile a
@@ -263,25 +494,51 @@ describe("agent-core product turns", () => {
       }
       return emit(type, ...args);
     });
-    expect(await service.command(id, cwd, "prompt", { message: "write and recover", client_message_id: "lost-settle" })).toMatchObject({ success: true });
-    await vi.waitFor(() => expect(events.some((event) => event.type === "turn.artifacts")).toBe(true), { timeout: 15000 });
+    expect(
+      await service.command(id, cwd, "prompt", {
+        message: "write and recover",
+        client_message_id: "lost-settle",
+      }),
+    ).toMatchObject({ success: true });
+    await vi.waitFor(
+      () => expect(events.some((event) => event.type === "turn.artifacts")).toBe(true),
+      { timeout: 15000 },
+    );
     expect(droppedSettled).toBe(true);
     expect(events.filter((event) => event.type === "turn.artifacts")).toHaveLength(1);
     expect(await turnArtifactRepository.forSession(cwd, id)).toHaveLength(1);
     await vi.waitFor(() => expect(review.run).toHaveBeenCalledOnce(), { timeout: 15000 });
-    expect((await new SessionRepository().messages(cwd, id)).filter((message) => message.client_message_id === "lost-settle")).toHaveLength(1);
+    expect(
+      (await new SessionRepository().messages(cwd, id)).filter(
+        (message) => message.client_message_id === "lost-settle",
+      ),
+    ).toHaveLength(1);
   }, 45000);
   it("keeps cancellation and timing in cold history when stopping before the model replies", async () => {
     const { cwd, id, service, core, requests } = await fixture("hold-first");
-    expect(await service.command(id, cwd, "prompt", { message: "stop before reply", client_message_id: "stop-pending" })).toMatchObject({ success: true });
+    expect(
+      await service.command(id, cwd, "prompt", {
+        message: "stop before reply",
+        client_message_id: "stop-pending",
+      }),
+    ).toMatchObject({ success: true });
     await vi.waitFor(() => expect(requests).toHaveLength(1), { timeout: 15000 });
     expect(await service.command(id, cwd, "abort", {})).toMatchObject({ success: true });
     const repository = new SessionRepository();
-    await vi.waitFor(async () => expect((await repository.messages(cwd, id))[0]).toMatchObject({ turnStatus: "aborted" }), { timeout: 15000 });
+    await vi.waitFor(
+      async () =>
+        expect((await repository.messages(cwd, id))[0]).toMatchObject({ turnStatus: "aborted" }),
+      { timeout: 15000 },
+    );
     await core.shutdownAll();
     const page = await repository.messagesPage(cwd, id, { limit: 1 });
-    expect(page.messages[0]).toMatchObject({ turnStatus: "aborted", turnStartedAt: expect.any(String), turnEndedAt: expect.any(String) });
-    expect(Date.parse(page.messages[0]!.turnEndedAt!) - Date.parse(page.messages[0]!.turnStartedAt!)).toBeGreaterThanOrEqual(0);
+    expect(page.messages[0]).toMatchObject({
+      turnStatus: "aborted",
+      turnStartedAt: expect.any(String),
+      turnEndedAt: expect.any(String),
+    });
+    expect(
+      Date.parse(page.messages[0]!.turnEndedAt!) - Date.parse(page.messages[0]!.turnStartedAt!),
+    ).toBeGreaterThanOrEqual(0);
   }, 45000);
-
 });

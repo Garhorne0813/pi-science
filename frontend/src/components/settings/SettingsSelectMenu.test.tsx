@@ -66,8 +66,8 @@ describe("SettingsSelectMenu", () => {
       />,
     );
     const trigger = screen.getByRole("button", { name: "Compact: A" });
-    expect(trigger).toHaveClass("h-8", "w-auto");
-    expect(trigger).not.toHaveClass("h-10", "w-full");
+    expect(trigger).toHaveClass("h-10", "w-auto");
+    expect(trigger).not.toHaveClass("w-full");
   });
 
   it("caps the menu height to the viewport and scrolls long lists", async () => {

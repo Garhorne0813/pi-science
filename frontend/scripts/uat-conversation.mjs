@@ -75,7 +75,7 @@ async function run() {
     if (/\/session\//.test(page.url())) {
       throw new Error("A fresh workspace landing must not open a session route");
     }
-    const composer = page.getByPlaceholder(/Ask anything/);
+    const composer = page.getByRole("combobox", { name: "Message", exact: true });
     await composer.waitFor({ timeout: 20_000 });
 
     // The composer model control is a Radix dropdown, not a native <select>.

@@ -23,7 +23,10 @@ export function registerEventListener(client: PiScienceClient): void {
     if (event.sessionId && state.activeSessionId && event.sessionId !== state.activeSessionId) return;
     if (event.type === "approval.mode.changed") {
       window.dispatchEvent(new CustomEvent("pi-science-approval-mode-changed", { detail: { ...event, cwd: state.cwd } }));
-      return;
+      // The record still carries a stream position: skipping it here would
+      // leave the fold waterline one short and turn the next record into a
+      // sequence hole (and a full rebase). The fold is a no-op for this type.
+      return applyEventProjection(event);
     }
     // Transport chatter must not reset the watchdog's silence clock.
     if (!event.type.startsWith("connection.")) noteTurnEvent();

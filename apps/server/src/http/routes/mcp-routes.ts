@@ -1,3 +1,4 @@
+import { applicationErrorStatus } from "../application-error.js";
 import { mcpRuntimeConnectorSchema, mcpRuntimePolicySchema } from "../../mcp/runtime-policy.js";
 import { mcpToolGrantUpdateSchema } from "@pi-science/contracts";
 import type { FastifyInstance, FastifyReply } from "fastify";
@@ -18,104 +19,210 @@ function optionalCwd(request: { query: unknown }): string | null {
 
 function failure(reply: FastifyReply, error: unknown): unknown {
   if (error instanceof McpServiceError) {
-    return reply.code(error.status).send({ error: error.message, code: error.code, details: error.details });
+    return reply
+      .code(applicationErrorStatus(error))
+      .send({ error: error.message, code: error.code, details: error.details });
   }
   if (error instanceof z.ZodError) {
-    return reply.code(400).send({ error: "Invalid MCP request", code: "invalid_request", issues: error.issues });
+    return reply
+      .code(400)
+      .send({ error: "Invalid MCP request", code: "invalid_request", issues: error.issues });
   }
   throw error;
 }
 
-export function registerMcpRoutes(app: FastifyInstance, service: McpConnectorService, managementEnabled = true): void {
+export function registerMcpRoutes(
+  app: FastifyInstance,
+  service: McpConnectorService,
+  managementEnabled = true,
+): void {
   app.post("/api/mcp/runtime/authorize", async (request, reply) => {
-    try { return await service.authorizeRuntimeTool(cwd(request), mcpRuntimePolicySchema.parse(request.body)); }
-    catch (error) { return failure(reply, error); }
+    try {
+      return await service.authorizeRuntimeTool(
+        cwd(request),
+        mcpRuntimePolicySchema.parse(request.body),
+      );
+    } catch (error) {
+      return failure(reply, error);
+    }
   });
 
   app.post("/api/mcp/runtime/connect", async (request, reply) => {
-    try { return await service.authorizeRuntimeConnector(cwd(request), mcpRuntimeConnectorSchema.parse(request.body)); }
-    catch (error) { return failure(reply, error); }
+    try {
+      return await service.authorizeRuntimeConnector(
+        cwd(request),
+        mcpRuntimeConnectorSchema.parse(request.body),
+      );
+    } catch (error) {
+      return failure(reply, error);
+    }
   });
 
   if (!managementEnabled) return;
 
   app.get("/api/mcp/connectors", async (request, reply) => {
-    try { return await service.list(optionalCwd(request)); }
-    catch (error) { return failure(reply, error); }
+    try {
+      return await service.list(optionalCwd(request));
+    } catch (error) {
+      return failure(reply, error);
+    }
   });
 
   app.post("/api/mcp/connectors", async (request, reply) => {
-    try { return reply.code(201).send(await service.create(request.body)); }
-    catch (error) { return failure(reply, error); }
-  });
-
-  app.get<{ Params: { connector_id: string } }>("/api/mcp/connectors/:connector_id", async (request, reply) => {
-    try { return await service.get(request.params.connector_id); }
-    catch (error) { return failure(reply, error); }
-  });
-
-  app.patch<{ Params: { connector_id: string } }>("/api/mcp/connectors/:connector_id", async (request, reply) => {
-    try { return await service.update(request.params.connector_id, request.body); }
-    catch (error) { return failure(reply, error); }
-  });
-
-  app.get<{ Params: { connector_id: string } }>("/api/mcp/connectors/:connector_id/credential", async (request, reply) => {
-    try { return await service.credential(request.params.connector_id); }
-    catch (error) { return failure(reply, error); }
-  });
-
-  app.put<{ Params: { connector_id: string } }>("/api/mcp/connectors/:connector_id/credential", async (request, reply) => {
-    try { return await service.setCredential(request.params.connector_id, request.body); }
-    catch (error) { return failure(reply, error); }
-  });
-
-  app.delete<{ Params: { connector_id: string } }>("/api/mcp/connectors/:connector_id/credential", async (request, reply) => {
-    try { return await service.removeCredential(request.params.connector_id); }
-    catch (error) { return failure(reply, error); }
-  });
-
-  app.delete<{ Params: { connector_id: string } }>("/api/mcp/connectors/:connector_id", async (request, reply) => {
-    try { await service.remove(request.params.connector_id); return reply.code(204).send(); }
-    catch (error) { return failure(reply, error); }
-  });
-
-  app.put<{ Params: { connector_id: string } }>("/api/mcp/connectors/:connector_id/settings", async (request, reply) => {
-    try { return await service.setSettings(request.params.connector_id, request.body); }
-    catch (error) { return failure(reply, error); }
-  });
-
-  app.post<{ Params: { connector_id: string } }>("/api/mcp/connectors/:connector_id/probe", async (request, reply) => {
-    try { return await service.probe(request.params.connector_id); }
-    catch (error) { return failure(reply, error); }
-  });
-
-  app.get<{ Params: { connector_id: string } }>("/api/mcp/connectors/:connector_id/tools", async (request, reply) => {
-    try { return await service.tools(request.params.connector_id, optionalCwd(request)); }
-    catch (error) { return failure(reply, error); }
-  });
-
-  app.put<{ Params: { connector_id: string; tool_name: string } }>("/api/mcp/connectors/:connector_id/tools/:tool_name", async (request, reply) => {
     try {
-      const { decision } = mcpToolGrantUpdateSchema.parse(request.body);
-      await service.setToolGrant(request.params.connector_id, request.params.tool_name, decision, optionalCwd(request));
-      return { ok: true };
-    } catch (error) { return failure(reply, error); }
+      return reply.code(201).send(await service.create(request.body));
+    } catch (error) {
+      return failure(reply, error);
+    }
   });
 
-  app.delete<{ Params: { connector_id: string; tool_name: string } }>("/api/mcp/connectors/:connector_id/tools/:tool_name", async (request, reply) => {
-    try {
-      await service.clearToolGrant(request.params.connector_id, request.params.tool_name, optionalCwd(request));
-      return reply.code(204).send();
-    } catch (error) { return failure(reply, error); }
-  });
+  app.get<{ Params: { connector_id: string } }>(
+    "/api/mcp/connectors/:connector_id",
+    async (request, reply) => {
+      try {
+        return await service.get(request.params.connector_id);
+      } catch (error) {
+        return failure(reply, error);
+      }
+    },
+  );
+
+  app.patch<{ Params: { connector_id: string } }>(
+    "/api/mcp/connectors/:connector_id",
+    async (request, reply) => {
+      try {
+        return await service.update(request.params.connector_id, request.body);
+      } catch (error) {
+        return failure(reply, error);
+      }
+    },
+  );
+
+  app.get<{ Params: { connector_id: string } }>(
+    "/api/mcp/connectors/:connector_id/credential",
+    async (request, reply) => {
+      try {
+        return await service.credential(request.params.connector_id);
+      } catch (error) {
+        return failure(reply, error);
+      }
+    },
+  );
+
+  app.put<{ Params: { connector_id: string } }>(
+    "/api/mcp/connectors/:connector_id/credential",
+    async (request, reply) => {
+      try {
+        return await service.setCredential(request.params.connector_id, request.body);
+      } catch (error) {
+        return failure(reply, error);
+      }
+    },
+  );
+
+  app.delete<{ Params: { connector_id: string } }>(
+    "/api/mcp/connectors/:connector_id/credential",
+    async (request, reply) => {
+      try {
+        return await service.removeCredential(request.params.connector_id);
+      } catch (error) {
+        return failure(reply, error);
+      }
+    },
+  );
+
+  app.delete<{ Params: { connector_id: string } }>(
+    "/api/mcp/connectors/:connector_id",
+    async (request, reply) => {
+      try {
+        await service.remove(request.params.connector_id);
+        return reply.code(204).send();
+      } catch (error) {
+        return failure(reply, error);
+      }
+    },
+  );
+
+  app.put<{ Params: { connector_id: string } }>(
+    "/api/mcp/connectors/:connector_id/settings",
+    async (request, reply) => {
+      try {
+        return await service.setSettings(request.params.connector_id, request.body);
+      } catch (error) {
+        return failure(reply, error);
+      }
+    },
+  );
+
+  app.post<{ Params: { connector_id: string } }>(
+    "/api/mcp/connectors/:connector_id/probe",
+    async (request, reply) => {
+      try {
+        return await service.probe(request.params.connector_id);
+      } catch (error) {
+        return failure(reply, error);
+      }
+    },
+  );
+
+  app.get<{ Params: { connector_id: string } }>(
+    "/api/mcp/connectors/:connector_id/tools",
+    async (request, reply) => {
+      try {
+        return await service.tools(request.params.connector_id, optionalCwd(request));
+      } catch (error) {
+        return failure(reply, error);
+      }
+    },
+  );
+
+  app.put<{ Params: { connector_id: string; tool_name: string } }>(
+    "/api/mcp/connectors/:connector_id/tools/:tool_name",
+    async (request, reply) => {
+      try {
+        const { decision } = mcpToolGrantUpdateSchema.parse(request.body);
+        await service.setToolGrant(
+          request.params.connector_id,
+          request.params.tool_name,
+          decision,
+          optionalCwd(request),
+        );
+        return { ok: true };
+      } catch (error) {
+        return failure(reply, error);
+      }
+    },
+  );
+
+  app.delete<{ Params: { connector_id: string; tool_name: string } }>(
+    "/api/mcp/connectors/:connector_id/tools/:tool_name",
+    async (request, reply) => {
+      try {
+        await service.clearToolGrant(
+          request.params.connector_id,
+          request.params.tool_name,
+          optionalCwd(request),
+        );
+        return reply.code(204).send();
+      } catch (error) {
+        return failure(reply, error);
+      }
+    },
+  );
 
   app.post("/api/mcp/import/preview", async (request, reply) => {
-    try { return await service.importPreview(cwd(request)); }
-    catch (error) { return failure(reply, error); }
+    try {
+      return await service.importPreview(cwd(request));
+    } catch (error) {
+      return failure(reply, error);
+    }
   });
 
   app.post("/api/mcp/import/commit", async (request, reply) => {
-    try { return await service.importCommit(importCommitSchema.parse(request.body).names, cwd(request)); }
-    catch (error) { return failure(reply, error); }
+    try {
+      return await service.importCommit(importCommitSchema.parse(request.body).names, cwd(request));
+    } catch (error) {
+      return failure(reply, error);
+    }
   });
 }

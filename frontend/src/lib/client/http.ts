@@ -26,6 +26,7 @@ export async function request(input: RequestInfo | URL, init?: RequestOptions): 
 export function responseError(data: unknown, fallback: string): string {
   if (data && typeof data === "object") {
     const payload = data as { error?: unknown; detail?: unknown };
+    if (payload.error && typeof payload.error === "object" && "message" in payload.error && typeof payload.error.message === "string") return payload.error.message;
     if (typeof payload.error === "string" && payload.error) return payload.error;
     if (typeof payload.detail === "string" && payload.detail) return payload.detail;
   }

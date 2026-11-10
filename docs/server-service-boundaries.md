@@ -1,7 +1,6 @@
 # Server service boundaries
 
-The public classes and route registration functions retain their existing
-imports and signatures. Their implementation modules depend on typed ports or
+The public facade imports remain compatible. See [server code conventions](server-code-conventions.md) for dependency ownership, typed Memory commands, domain errors and the automated boundary/format checks. Their implementation modules depend on typed ports or
 lower-level protocols, rather than importing the facade that composes them.
 This refactor preserves persistence formats, route behavior, admission order,
 credential ownership and recovery budgets.
@@ -94,15 +93,16 @@ values must not be copied into a stale context snapshot.
 | `queries.ts`, `identity.ts`, `types.ts` | Ownership/liveness queries, canonical identities and shared state types |
 
 The facade keeps workspace admission and the single per-session mutation lock.
-Operation callbacks dynamically dispatch through its methods, preserving the
-same lock/recovery state across modules. Runtime binding must apply its first
+Same-capability implementations call their functions directly. Named capability contexts expose only cross-capability ports and the shared state they need, preserving the same lock/recovery state across modules. Runtime binding must apply its first
 snapshot before activation. Approval changes retain their verified shutdown
 fallback. A watchdog probe must still validate live identity and operation
 progress before initiating recovery; successful IPC alone is not progress.
 
-`resource-policy.ts` resolves `harness/AGENTS.md` relative to its deeper source
-or compiled directory. The additional path level is intentional; source
-worker tests and a compiled policy-load check validate asset resolution after relocation.
+`prompts/compose.ts` resolves `harness/SYSTEM.md` and the main role relative to
+its source or compiled directory. Interactive children share the core and add
+their role; isolated background tasks use their own prompts. Workspace-root
+`AGENTS.md` is optional, user-owned and refreshed as ephemeral context subject
+to read capabilities and execution scope. See [Agent prompts](agent-prompts.md).
 
 ## Settings HTTP adapters
 

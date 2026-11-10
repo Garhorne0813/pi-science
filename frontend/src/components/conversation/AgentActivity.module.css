@@ -17,6 +17,16 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/* The folded summary is the reopen affordance for the whole trace, so it tints
+   across its full row on hover/focus instead of carrying a permanent fill. */
+.summaryButton {
+  transition: background-color var(--motion-fast) var(--ease-standard);
+}
+
+.summaryButton:hover {
+  background-color: var(--surface-hover);
+}
+
 .glyph {
   display: inline-flex;
   width: 2rem;
@@ -44,11 +54,15 @@
   flex-shrink: 0;
 }
 
+/* Basis auto, not a full-width grow: the detail sizes to its own text so the
+   elapsed clock follows the sentence instead of being pushed to the row edge;
+   the leftover width stays after the clock. Shrink stays on for long
+   narratives, which still truncate before the timer. */
 .detail {
   font-size: 0.8125rem;
   line-height: 1.6;
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -77,7 +91,7 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 0.375rem;
+  gap: 0.125rem;
   padding: 0.25rem 0;
 }
 
@@ -85,6 +99,12 @@
    records behind the settled summary row. */
 .traceLive {
   gap: 0.125rem;
+}
+
+/* The disclosure opens with the same quiet 3px lift its entries use; closing
+   stays immediate, so the row never leaves an empty box behind. */
+.traceOpen {
+  animation: reveal var(--motion-normal) var(--ease-standard) both;
 }
 
 .entry, .details {
@@ -99,6 +119,12 @@
   padding-block: 0.125rem;
 }
 
+/* The step scale comes from `text-ui-label` on the row buttons: `cn()` registers
+   the `ui-micro…ui-title` steps in tailwind-merge's font-size group (#234), so the
+   token survives next to `text-muted` and supplies the line box the row cites —
+   "Step rows carry the 13px/18px task line"
+   (docs/ui/deepseek-harness-reference.md:354). Only the colour transition belongs
+   here. */
 .toolButton {
   transition: color var(--motion-normal) var(--ease-standard);
 }
@@ -160,8 +186,11 @@
   color: var(--activity-color);
 }
 
+/* Full opacity: the muted ink is 5.8:1 on white and 12.1:1 on the dark
+   surface, while the old 0.6 blend measured 2.6:1 — under the 3:1 floor for a
+   non-text control. Step rows still hide their own chevron at rest. */
 .chevron {
-  opacity: 0.6;
+  opacity: 1;
   transition: transform var(--motion-normal) var(--ease-standard), opacity var(--motion-normal) var(--ease-standard);
 }
 
@@ -180,6 +209,16 @@
 .thinking > button:focus-visible > .chevron,
 .thinking > button[aria-expanded="true"] > .chevron {
   opacity: 1;
+}
+
+/* A touch device never hovers, so the hover-only chevron never appeared there
+   and the row gave no hint that it opens. Reveal it at rest on those devices
+   only; the muted ink measures 5.8:1 on either theme. */
+@media (hover: none) {
+  .tool > button > .chevron,
+  .thinking > button > .chevron {
+    opacity: 1;
+  }
 }
 
 button:hover > .chevron, button:focus-visible > .chevron {

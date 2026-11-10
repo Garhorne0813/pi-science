@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
 
 import { getSessionName, setSessionName } from "../client/pi-science-client";
+import { buildMessageQuote, useActiveMessageQuote, useMessageQuoteStore } from "../conversation/message-quote";
 import { applySessionReplacements, useRuntimeStore } from "./index";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
@@ -58,5 +60,36 @@ describe("session replacement", () => {
     expect(getSessionName("/workspace", "replacement")).toBe("My experiment");
     expect(getSessionName("/workspace", "original")).toBe("");
     expect(FakeEventSource.instances.at(-1)?.url).toContain("/api/sessions/replacement/events");
+  });
+
+  it("carries a pending quote into the re-issued session id", () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.startsWith("/api/sessions?")) return jsonResponse([{ id: "replacement", cwd: "/workspace" }]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const quote = buildMessageQuote({
+      source: { workspaceCwd: "/workspace", sessionId: "original", blockId: "a1", role: "agent" },
+      messageText: "Read the log twice",
+      selection: "the log",
+    });
+    if (!quote) throw new Error("expected a selection quote");
+    useMessageQuoteStore.setState({ quotes: {} });
+    useMessageQuoteStore.getState().setQuote(quote);
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: "original",
+      sessions: [{ id: "original", cwd: "/workspace" }],
+      thread: { blocks: [], index: {}, loaded: true },
+      status: "ready",
+    });
+
+    applySessionReplacements([{ cwd: "/workspace", oldId: "original", newId: "replacement" }]);
+
+    const { result } = renderHook(() => useActiveMessageQuote());
+    expect(result.current?.text).toBe("the log");
+    expect(result.current?.source.sessionId).toBe("replacement");
+    useMessageQuoteStore.setState({ quotes: {} });
   });
 });

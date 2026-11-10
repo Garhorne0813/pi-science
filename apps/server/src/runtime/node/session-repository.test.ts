@@ -19,10 +19,20 @@ function sessionHeader(id: string, cwd: string, timestamp = "2026-07-25T00:00:00
   return `${JSON.stringify({ type: "session", id, cwd, timestamp })}\n`;
 }
 
-function messageLine(id: string, role: string, text: string, timestamp = "2026-07-25T00:00:01.000Z") {
+function messageLine(
+  id: string,
+  role: string,
+  text: string,
+  timestamp = "2026-07-25T00:00:01.000Z",
+) {
   return `${JSON.stringify({ type: "message", id, timestamp, message: { role, content: [{ type: "text", text }] } })}\n`;
-}afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
+}
+afterEach(async () => {
+  await Promise.all(
+    tempDirs
+      .splice(0)
+      .map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })),
+  );
 });
 
 describe("SessionRepository cache", () => {
@@ -30,7 +40,11 @@ describe("SessionRepository cache", () => {
     const cwd = await makeWorkspace();
     const project = await ensureProject(cwd);
     const repo = new SessionRepository();
-    await writeFile(join(cwd, ".pi-science", "sessions", "project-session.jsonl"), sessionHeader("project-session", cwd), "utf8");
+    await writeFile(
+      join(cwd, ".pi-science", "sessions", "project-session.jsonl"),
+      sessionHeader("project-session", cwd),
+      "utf8",
+    );
 
     await expect(repo.list(cwd)).resolves.toEqual([
       expect.objectContaining({ id: "project-session", project_id: project.id }),
@@ -40,7 +54,11 @@ describe("SessionRepository cache", () => {
   it("returns fresh results after explicit cache invalidation", async () => {
     const cwd = await makeWorkspace();
     const repo = new SessionRepository();
-    await writeFile(join(cwd, ".pi-science", "sessions", "a.jsonl"), sessionHeader("a", cwd), "utf8");
+    await writeFile(
+      join(cwd, ".pi-science", "sessions", "a.jsonl"),
+      sessionHeader("a", cwd),
+      "utf8",
+    );
 
     const first = await repo.list(cwd);
     expect(first).toHaveLength(1);
@@ -48,7 +66,11 @@ describe("SessionRepository cache", () => {
 
     // Explicitly invalidate the cache, then add a new session.
     invalidateSessionFileCache(cwd);
-    await writeFile(join(cwd, ".pi-science", "sessions", "b.jsonl"), sessionHeader("b", cwd), "utf8");
+    await writeFile(
+      join(cwd, ".pi-science", "sessions", "b.jsonl"),
+      sessionHeader("b", cwd),
+      "utf8",
+    );
 
     const second = await repo.list(cwd);
     expect(second.map((s) => s.id)).toEqual(expect.arrayContaining(["a", "b"]));
@@ -58,7 +80,11 @@ describe("SessionRepository cache", () => {
   it("refreshes updated_at when a session file is appended to (mtime changes)", async () => {
     const cwd = await makeWorkspace();
     const repo = new SessionRepository();
-    await writeFile(join(cwd, ".pi-science", "sessions", "x.jsonl"), sessionHeader("x", cwd), "utf8");
+    await writeFile(
+      join(cwd, ".pi-science", "sessions", "x.jsonl"),
+      sessionHeader("x", cwd),
+      "utf8",
+    );
 
     const before = await repo.list(cwd);
     expect(before).toHaveLength(1);
@@ -68,7 +94,11 @@ describe("SessionRepository cache", () => {
     // Append a message to the existing session file. This updates the file's
     // mtime but does NOT change the directory mtime. The cache should still
     // return the correct (fresh) updated_at because list() re-stats each file.
-    await appendFile(join(cwd, ".pi-science", "sessions", "x.jsonl"), messageLine("m1", "user", "new"), "utf8");
+    await appendFile(
+      join(cwd, ".pi-science", "sessions", "x.jsonl"),
+      messageLine("m1", "user", "new"),
+      "utf8",
+    );
 
     const after = await repo.list(cwd);
     expect(after).toHaveLength(1);
@@ -79,7 +109,11 @@ describe("SessionRepository cache", () => {
   it("invalidates cache when a file is added (directory mtime changes)", async () => {
     const cwd = await makeWorkspace();
     const repo = new SessionRepository();
-    await writeFile(join(cwd, ".pi-science", "sessions", "first.jsonl"), sessionHeader("first", cwd), "utf8");
+    await writeFile(
+      join(cwd, ".pi-science", "sessions", "first.jsonl"),
+      sessionHeader("first", cwd),
+      "utf8",
+    );
 
     const before = await repo.list(cwd);
     expect(before).toHaveLength(1);
@@ -87,7 +121,11 @@ describe("SessionRepository cache", () => {
     // Adding a new file changes the directory mtime, which invalidates the cache.
     // Wait past the filesystem's mtime resolution so the directory mtime advances.
     await new Promise((resolve) => setTimeout(resolve, 50));
-    await writeFile(join(cwd, ".pi-science", "sessions", "second.jsonl"), sessionHeader("second", cwd), "utf8");
+    await writeFile(
+      join(cwd, ".pi-science", "sessions", "second.jsonl"),
+      sessionHeader("second", cwd),
+      "utf8",
+    );
 
     const after = await repo.list(cwd);
     expect(after).toHaveLength(2);
@@ -103,7 +141,11 @@ describe("SessionRepository cache", () => {
     await mkdir(join(cwd, ".pi-science", "sessions", "encoded"), { recursive: true });
 
     const repo = new SessionRepository();
-    await writeFile(join(cwd, ".pi-science", "sessions", "top.jsonl"), sessionHeader("top", cwd), "utf8");
+    await writeFile(
+      join(cwd, ".pi-science", "sessions", "top.jsonl"),
+      sessionHeader("top", cwd),
+      "utf8",
+    );
     const first = await repo.list(cwd);
     expect(first.map((s) => s.id)).toEqual(["top"]);
 
@@ -153,10 +195,12 @@ describe("SessionRepository cache", () => {
 
     await rm(join(sessions, "parent"), { recursive: true });
 
-    await expect(repo.list(cwd)).resolves.toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "user-fork" }),
-      expect.objectContaining({ id: "parent" }),
-    ]));
+    await expect(repo.list(cwd)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "user-fork" }),
+        expect.objectContaining({ id: "parent" }),
+      ]),
+    );
     await expect(repo.list(cwd)).resolves.toHaveLength(2);
   });
 
@@ -175,9 +219,7 @@ describe("SessionRepository cache", () => {
       "utf8",
     );
 
-    await expect(repo.list(cwd)).resolves.toEqual([
-      expect.objectContaining({ id: "normal" }),
-    ]);
+    await expect(repo.list(cwd)).resolves.toEqual([expect.objectContaining({ id: "normal" })]);
   });
 
   it("re-discovers a session file that was completed in place after being corrupt", async () => {
@@ -211,7 +253,11 @@ describe("SessionRepository cache", () => {
   it("re-scans after explicit invalidation even if the directory mtime is unchanged", async () => {
     const cwd = await makeWorkspace();
     const repo = new SessionRepository();
-    await writeFile(join(cwd, ".pi-science", "sessions", "a.jsonl"), sessionHeader("a", cwd), "utf8");
+    await writeFile(
+      join(cwd, ".pi-science", "sessions", "a.jsonl"),
+      sessionHeader("a", cwd),
+      "utf8",
+    );
 
     const first = await repo.list(cwd);
     expect(first.map((s) => s.id)).toEqual(["a"]);
@@ -222,7 +268,11 @@ describe("SessionRepository cache", () => {
     // when an in-flight scan from before the invalidation would otherwise have
     // re-published a stale index.
     invalidateSessionFileCache(cwd);
-    await writeFile(join(cwd, ".pi-science", "sessions", "b.jsonl"), sessionHeader("b", cwd), "utf8");
+    await writeFile(
+      join(cwd, ".pi-science", "sessions", "b.jsonl"),
+      sessionHeader("b", cwd),
+      "utf8",
+    );
 
     const second = await repo.list(cwd);
     expect(second.map((s) => s.id)).toEqual(expect.arrayContaining(["a", "b"]));
@@ -248,16 +298,12 @@ describe("SessionRepository cache", () => {
 
     // The session must stay listed while the header is unreadable: the cache
     // keeps the last valid candidate instead of caching a null header.
-    await expect(repo.list(cwd)).resolves.toEqual([
-      expect.objectContaining({ id: "w" }),
-    ]);
+    await expect(repo.list(cwd)).resolves.toEqual([expect.objectContaining({ id: "w" })]);
 
     // Once the write completes the file is valid again and re-validates.
     await new Promise((resolve) => setTimeout(resolve, 50));
     await writeFile(path, valid, "utf8");
-    await expect(repo.list(cwd)).resolves.toEqual([
-      expect.objectContaining({ id: "w" }),
-    ]);
+    await expect(repo.list(cwd)).resolves.toEqual([expect.objectContaining({ id: "w" })]);
   });
 
   it("keeps updated_at on the last real message when bookkeeping entries are appended", async () => {
@@ -315,6 +361,100 @@ describe("SessionRepository messages streaming", () => {
     expect(older.next_cursor).toBeNull();
   });
 
+  it("starts the newest page at the user message that opened its oldest turn", async () => {
+    const cwd = await makeWorkspace();
+    const repo = new SessionRepository();
+    const lines = [
+      sessionHeader("boundary", cwd),
+      messageLine("m1", "user", "question"),
+      messageLine("m2", "assistant", "step"),
+      messageLine("m3", "assistant", "step"),
+      messageLine("m4", "user", "follow-up"),
+      messageLine("m5", "assistant", "step"),
+      messageLine("m6", "assistant", "step"),
+      messageLine("m7", "assistant", "answer"),
+    ];
+    await writeFile(join(cwd, ".pi-science", "sessions", "boundary.jsonl"), lines.join(""), "utf8");
+
+    const latest = await repo.messagesPage(cwd, "boundary", { limit: 3 });
+    expect(latest.messages.map((message) => message.id)).toEqual(["m4", "m5", "m6", "m7"]);
+    expect(latest.has_more).toBe(true);
+
+    const older = await repo.messagesPage(cwd, "boundary", {
+      limit: 3,
+      before: latest.next_cursor!,
+    });
+    expect(older.messages.map((message) => message.id)).toEqual(["m1", "m2", "m3"]);
+    expect(older.has_more).toBe(false);
+    expect(older.next_cursor).toBeNull();
+  });
+
+  it("caps the newest page at 200 messages inside one oversized turn", async () => {
+    const cwd = await makeWorkspace();
+    const repo = new SessionRepository();
+    const lines = [sessionHeader("cap", cwd), messageLine("m1", "user", "question")];
+    for (let index = 2; index <= 251; index += 1)
+      lines.push(messageLine(`m${index}`, "assistant", `step ${index}`));
+    await writeFile(join(cwd, ".pi-science", "sessions", "cap.jsonl"), lines.join(""), "utf8");
+
+    const latest = await repo.messagesPage(cwd, "cap", { limit: 50 });
+    expect(latest.messages).toHaveLength(200);
+    expect(latest.messages[0]).toMatchObject({ id: "m52", role: "assistant" });
+    expect(latest.has_more).toBe(true);
+
+    const older = await repo.messagesPage(cwd, "cap", { limit: 100, before: latest.next_cursor! });
+    expect(older.messages).toHaveLength(51);
+    expect(older.messages[0]).toMatchObject({ id: "m1", role: "user" });
+    expect(older.has_more).toBe(false);
+  });
+
+  it("keeps has_more when the message before the page fills a whole scan chunk", async () => {
+    const cwd = await makeWorkspace();
+    const repo = new SessionRepository();
+    // A message whose serialized line is at least one 64 KiB scan chunk long sits
+    // between the newest page and the older history. Reading must continue past
+    // that chunk boundary, otherwise the page reports `has_more: false` and the
+    // older messages become unreachable from the UI.
+    const padded = (id: string, role: string, bytes: number) =>
+      messageLine(id, role, "x".repeat(bytes - Buffer.byteLength(messageLine(id, role, ""))));
+    for (const [session, bytes] of [
+      ["chunk-exact", 64 * 1024],
+      ["chunk-short", 64 * 1024 - 1],
+    ] as const) {
+      const lines = [
+        sessionHeader(session, cwd),
+        messageLine("m1", "user", "question"),
+        padded("m2", "assistant", bytes),
+        messageLine("m3", "user", "follow up"),
+        messageLine("m4", "assistant", "answer"),
+      ];
+      await writeFile(
+        join(cwd, ".pi-science", "sessions", `${session}.jsonl`),
+        lines.join(""),
+        "utf8",
+      );
+
+      const latest = await repo.messagesPage(cwd, session, { limit: 2 });
+      expect(
+        latest.messages.map((message) => message.id),
+        session,
+      ).toEqual(["m3", "m4"]);
+      expect(latest.has_more, session).toBe(true);
+      expect(latest.next_cursor, session).toEqual(expect.any(String));
+
+      const older = await repo.messagesPage(cwd, session, {
+        limit: 10,
+        before: latest.next_cursor!,
+      });
+      expect(
+        older.messages.map((message) => message.id),
+        session,
+      ).toEqual(["m1", "m2"]);
+      expect(older.has_more, session).toBe(false);
+      expect(older.next_cursor, session).toBeNull();
+    }
+  });
+
   it("rejects a cursor when bytes before its boundary were rewritten", async () => {
     const cwd = await makeWorkspace();
     const repo = new SessionRepository();
@@ -332,14 +472,20 @@ describe("SessionRepository messages streaming", () => {
     lines[2] = messageLine("m2", "assistant", "TWO");
     await writeFile(path, lines.join(""), "utf8");
 
-    await expect(repo.messagesPage(cwd, "rewritten", { limit: 2, before: latest.next_cursor! }))
-      .rejects.toThrow("stale history cursor");
+    await expect(
+      repo.messagesPage(cwd, "rewritten", { limit: 2, before: latest.next_cursor! }),
+    ).rejects.toThrow("stale history cursor");
   });
 
   it("forwards toolResult details and drops oversized ones", async () => {
     const cwd = await makeWorkspace();
     const repo = new SessionRepository();
-    const details = { action: "create", params: {}, nextId: 2, tasks: [{ id: 1, subject: "x", status: "pending" }] };
+    const details = {
+      action: "create",
+      params: {},
+      nextId: 2,
+      tasks: [{ id: 1, subject: "x", status: "pending" }],
+    };
     const oversized = { tasks: [{ id: 1, subject: "y".repeat(150_000) }] };
     const lines = [
       sessionHeader("tooled", cwd),
@@ -379,10 +525,16 @@ describe("SessionRepository messages streaming", () => {
   it("rejects malformed history cursors and oversized pages", async () => {
     const cwd = await makeWorkspace();
     const repo = new SessionRepository();
-    await writeFile(join(cwd, ".pi-science", "sessions", "limits.jsonl"), sessionHeader("limits", cwd), "utf8");
+    await writeFile(
+      join(cwd, ".pi-science", "sessions", "limits.jsonl"),
+      sessionHeader("limits", cwd),
+      "utf8",
+    );
 
     await expect(repo.messagesPage(cwd, "limits", { limit: 101 })).rejects.toThrow("history limit");
-    await expect(repo.messagesPage(cwd, "limits", { before: "not-a-cursor" })).rejects.toThrow("invalid history cursor");
+    await expect(repo.messagesPage(cwd, "limits", { before: "not-a-cursor" })).rejects.toThrow(
+      "invalid history cursor",
+    );
   });
 
   it("reads messages from a multi-line JSONL file", async () => {

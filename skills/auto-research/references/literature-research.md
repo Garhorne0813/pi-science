@@ -1,6 +1,6 @@
 # Literature research
 
-Use this workflow for source-based questions without code execution or numerical experiments. No execution_budget tool, research_id binding, Candidate directory, evaluation.yaml, manifest.json or state.json is required. Do not read the experimental modules merely to summarize evidence. If the scope changes to computation or experiments, load those modules and establish their budget before executing; never try to rebind an already spent operation.
+Use this workflow for source-based questions without code execution or numerical experiments. No budget tool call, runtime research binding, Candidate directory, evaluation.yaml, manifest.json or state.json is required. Do not read the experimental modules merely to summarize evidence. If the scope changes to computation or experiments, load only the experimental modules needed for the task before executing.
 
 1. State the question, source/date boundaries, evidence criteria and stopping rule in the report or conversation. Ask only about material missing assumptions. For a short answer, the conversation itself can hold the entire record.
 2. Search and read with available authorized retrieval tools, or use supplied excerpts/files. MCP names are host-specific capabilities, not mandatory dependencies. Never replace missing retrieval permission with Bash/curl or invent unavailable sources. Delegation is optional and remains subject to normal runtime tool ceilings and limits; no research-specific budget binding is needed for retrieval-only work.

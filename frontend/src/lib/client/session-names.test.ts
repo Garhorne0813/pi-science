@@ -122,7 +122,9 @@ describe("setSessionName server persistence", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       const put = calls.find((c) => c.url.includes("/api/sessions/persist-me/title") && c.method === "PUT");
       expect(put).toBeTruthy();
-      expect(JSON.parse(put!.body ?? "").title).toBe("持久标题");
+      // A derived name may only fill an empty slot: a title typed in another
+      // browser must survive this one naming the session.
+      expect(JSON.parse(put!.body ?? "")).toEqual({ title: "持久标题", mode: "initialize" });
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -8,4 +8,4 @@ Historical Session/Execution/Artifact records remain readable with their origina
 
 Bash/Notebook follow their own timeout, output capture and recovery contracts. They do not inherit the removed executor's automatic invalid-work reset or its invocation replay behavior. An isolation failure still fails closed and never authorizes a host fallback. The separate read-only Candidate directory adapter remains for old Candidate-ID-only dispatch requests; it creates generic grants and does not execute sandbox_run.
 
-Historical implementation and CI evidence remain in [implementation history](auto-research-history.md). Its old enable commands and sandbox_run examples are archival and cannot be used with the current server.
+Historical implementation and CI evidence remain in [implementation history](implementation/auto-research-history.md). Its old enable commands and sandbox_run examples are archival and cannot be used with the current server.

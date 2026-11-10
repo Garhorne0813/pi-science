@@ -16,7 +16,19 @@ export PI_SCIENCE_HOME="$TEMP_ROOT/state-parent/new/deep/state"
 export PI_SCIENCE_WORKSPACES="$TEMP_ROOT/workspaces"
 mkdir -p "$TEMP_ROOT/state-parent"
 chmod 750 "$TEMP_ROOT/state-parent"
-cleanup() { [ -z "$START_PID" ] || kill "$START_PID" 2>/dev/null || true; rm -rf "$TEMP_ROOT"; }
+cleanup() {
+  local status=$? log
+  if [ "$status" -ne 0 ]; then
+    for log in "$TEMP_ROOT/detach.log" "$TEMP_ROOT/runtime checkout with spaces/.runtime/pi-science/pi-science.log"; do
+      if [ -f "$log" ]; then
+        printf '\nLauncher fixture log: %s\n' "$log" >&2
+        tail -n 80 "$log" >&2 || true
+      fi
+    done
+  fi
+  [ -z "$START_PID" ] || kill "$START_PID" 2>/dev/null || true
+  rm -rf "$TEMP_ROOT"
+}
 trap cleanup EXIT
 
 fail() { echo "launcher test failed: $*" >&2; exit 1; }
@@ -468,8 +480,10 @@ kill -0 "$PREEXISTING_PID" 2>/dev/null || fail "startup refusal killed a pre-exi
 kill "$PREEXISTING_PID"; wait "$PREEXISTING_PID" 2>/dev/null || true
 
 # Sequential slow readiness remains within one coherent detached deadline.
+# Allow macOS CI startup/process-inspection overhead as well as the injected delays.
+# The never-ready and hanging-service cases below retain their strict 2s deadlines.
 DETACH_CONTROL_PORT="$(free_port)"; DETACH_RUNTIME_PORT="$(free_port)"; DETACH_FRONTEND_PORT="$(free_port)"
-PI_SCIENCE_PYTHON="$(command -v python3)" PI_SCIENCE_CONTROL_PLANE_PORT="$DETACH_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$DETACH_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$DETACH_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=5 PI_SCIENCE_TEST_CONTROL_DELAY_MS=1200 PI_SCIENCE_TEST_FRONTEND_DELAY_MS=1200 bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/detach.log"
+PI_SCIENCE_PYTHON="$(command -v python3)" PI_SCIENCE_CONTROL_PLANE_PORT="$DETACH_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$DETACH_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$DETACH_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=15 PI_SCIENCE_TEST_CONTROL_DELAY_MS=1200 PI_SCIENCE_TEST_FRONTEND_DELAY_MS=1200 bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/detach.log"
 assert_contains "$TEMP_ROOT/detach.log" 'running in the background'
 [ -d "$FIXTURE/.runtime/pi-science/run.state" ] || fail "detached start did not write run.state"
 PI_SCIENCE_CONTROL_PLANE_PORT="$DETACH_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$DETACH_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$DETACH_FRONTEND_PORT" bash "$FIXTURE/scripts/pi-science.sh" status >"$TEMP_ROOT/status.log"

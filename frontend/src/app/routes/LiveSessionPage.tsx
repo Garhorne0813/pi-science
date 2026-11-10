@@ -252,21 +252,17 @@ export function LiveSessionPage() {
         </Suspense>
       ) : (
       <>
-      {/* Welcome layout: this top region and the spacer below the composer both
-          grow equally, so the composer card lands on the vertical centre while
-          the welcome copy hangs off its bottom edge. */}
+      {/* In an empty conversation the regions above and below the composer
+          grow equally. The greeting sits at the bottom of the upper region. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         {/* Thread */}
-        <div className={cn("min-h-0 flex-1 overflow-hidden [overflow-anchor:none]", showWelcome && "flex flex-col justify-end")}>
-          {/* 824 = 760 composer column + the px-8 gutters, so thread content lines up with the composer's edges.
-              w-full is required: an auto horizontal margin on a flex item suppresses the stretch,
-              which would shrink this column to its widest child and centre it. */}
+        <div className={cn("flex-1 overflow-hidden [overflow-anchor:none]", showWelcome ? "flex min-h-min flex-col justify-end" : "min-h-0")}>
           <div className={cn(
             thread.blocks.length > 0
               ? "h-full w-full"
               : cn(
                 "mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col px-8",
-                showWelcome ? "gap-3 pb-3 pt-6" : "gap-4 py-6",
+                showWelcome ? "pb-5" : "gap-4 py-6",
               ),
           )}>
             {thread.blocks.length === 0 && !working && status === "connecting" && activeSessionId && (

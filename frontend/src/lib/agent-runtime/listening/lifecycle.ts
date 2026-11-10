@@ -2,10 +2,12 @@
 import type { PiScienceEvent, SessionStats } from "../../client/pi-science-client";
 import { markWorkspaceFilesChanged } from "../file-revision";
 import { resetTurnBuffer } from "../folding/state";
-import { bumpConversationGeneration, bumpPresentationMetadataGeneration, turnState } from "../generations";
+import { bumpConversationGeneration, bumpPresentationMetadataGeneration, generations, turnState } from "../generations";
 import { resyncCompletedHistory } from "../recovery/settled-history";
 import { loadSessionsInternal } from "../sessions";
 import { runtimeStore } from "../store-access";
+import type { ThreadBlock } from "../../../types/thread";
+import { createFoldState } from "../folding/state";
 import type { RuntimeState } from "../types";
 import { disarmTurnWatchdog, ensureTurnWatchdog } from "./watchdog";
 import { maybeGenerateAiTitle } from "./titles";
@@ -94,7 +96,78 @@ export function applyLifecycleEvent(event: PiScienceEvent, state: RuntimeState):
       turnState.errored = true;
       runtimeStore.setState({ working: false, turnLifecycle: "failed", status: "error", pendingInteraction: null, pendingInteractionQueue: [], pendingQuestionnaire: null });
       disarmTurnWatchdog();
+      // Only a terminal error stands in for operation.settled: recovery is
+      // exhausted, so no settle event will ever follow and the part of the
+      // turn the worker already persisted would stay off screen. Keep the turn
+      // failed, but re-read once through the guarded path. Non-terminal
+      // failures (model error, runtime error, idle empty reply, settings
+      // reload) keep the worker alive and their settled event already runs
+      // this re-read on success; re-reading here would replace the thread —
+      // dropping this error row and any in-flight partial — while the turn is
+      // still going.
+      if (event.terminal === true && state.activeSessionId) {
+        const sessionId = state.activeSessionId;
+        const { cwd } = state;
+        const conversationGeneration = generations.conversation;
+        const line = {
+          text: typeof event.message === "string" && event.message ? event.message : "Unknown error",
+          turnId: typeof event.turnId === "string" ? event.turnId : state.thread.foldState?.activeTurnId,
+          runId: typeof event.runId === "string" ? event.runId : state.thread.foldState?.activeRunId,
+        };
+        void resyncCompletedHistory(sessionId, cwd)
+          .then(() => restoreErrorRow(sessionId, cwd, conversationGeneration, line));
+      }
     }
   }
 
+}
+
+/** A history re-read replaces the thread wholesale, so the error row the fold
+ *  produced for this event would vanish and the user would see a failed turn
+ *  with an answer but no reason. Put it back once the re-read settles, unless
+ *  the tape has moved on: a newer conversation event owns the thread by then,
+ *  and the row belongs to the turn this error closed. */
+function restoreErrorRow(
+  sessionId: string,
+  cwd: string,
+  conversationGeneration: number,
+  line: { text: string; turnId?: string; runId?: string },
+): void {
+  const state = runtimeStore.getState();
+  if (state.activeSessionId !== sessionId || state.cwd !== cwd) return;
+  if (conversationGeneration !== generations.conversation) return;
+  const sameRow = (block: ThreadBlock) => block.kind === "status-line" && block.level === "error" && (
+    line.turnId !== undefined
+      ? block.turnId === line.turnId
+      : line.runId !== undefined
+        ? block.runId === line.runId
+        : block.text === line.text
+  );
+  if (state.thread.blocks.some(sameRow)) return;
+  const foldState = state.thread.foldState;
+  // The re-read drops the fold state, so its counter cannot be trusted to
+  // resume: take the serial from the ids that survived. A row still carrying
+  // the same id would make the React key and the block index ambiguous.
+  const serial = state.thread.blocks.reduce((max, block) => {
+    const match = /^error-(\d+)$/.exec(block.id);
+    return match ? Math.max(max, Number(match[1]) + 1) : max;
+  }, foldState?.errorSerial ?? 0);
+  const id = `error-${serial}`;
+  const block: ThreadBlock = {
+    kind: "status-line",
+    id,
+    turnId: line.turnId,
+    runId: line.runId,
+    text: line.text,
+    level: "error",
+  };
+  const blocks = [...state.thread.blocks, block];
+  runtimeStore.setState({
+    thread: {
+      ...state.thread,
+      blocks,
+      index: { ...state.thread.index, [id]: blocks.length - 1 },
+      foldState: { ...(foldState ?? createFoldState()), errorSerial: serial + 1 },
+    },
+  });
 }
