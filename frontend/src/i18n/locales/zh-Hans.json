@@ -249,6 +249,7 @@
   "conversation.modelSetError": "无法切换模型",
   "conversation.unavailableModel": "模型 {{model}} 已不可用，请切换模型。",
   "conversation.switchModel": "切换模型",
+  "conversation.modelMenu.back": "返回",
   "conversation.sessionUnavailable": "当前会话不可用，请刷新页面后重试",
   "conversation.clickToInsert": "点击将路径插入对话框：",
   "conversation.scrollToLatest": "回到最新",

@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import i18n from "@/i18n";
 import { ModelControlMenu } from "./ModelControlMenu";
@@ -20,6 +20,23 @@ const multiModels = [
 beforeAll(async () => {
   await i18n.changeLanguage("en");
 });
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+function stubNarrowMatchMedia(matches: boolean) {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query.includes("639") ? matches : false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  }));
+}
 
 describe("ModelControlMenu", () => {
   it("does not rebuild its 10,000-model indexes on context-only rerenders", () => {
@@ -216,5 +233,73 @@ describe("ModelControlMenu", () => {
     const scroller = submenu.querySelector('[class*="max-h-[min(320px"]');
     expect(scroller).not.toBeNull();
     expect(scroller?.className).toContain("overflow-y-auto");
+  });
+
+  it("switches to an in-menu model list on narrow screens", async () => {
+    stubNarrowMatchMedia(true);
+    render(
+      <ModelControlMenu
+        models={multiModels as typeof model[]}
+        selectedModel="prov1/beta"
+        thinking="high"
+        thinkingLevels={["high"]}
+        onModelChange={vi.fn()}
+        onThinkingChange={vi.fn()}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Select model and thinking level and view context" });
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Model/ }));
+    // The narrow menu swaps its content instead of opening a submenu.
+    expect(await screen.findByLabelText("Search models")).toBeInTheDocument();
+    expect(screen.getAllByRole("menuitemradio")).toHaveLength(3);
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+    expect(screen.getByRole("menuitem", { name: "Back" })).toBeInTheDocument();
+  });
+
+  it("returns to the two rows on narrow screens without closing the menu", async () => {
+    stubNarrowMatchMedia(true);
+    render(
+      <ModelControlMenu
+        models={[model]}
+        selectedModel={model.id}
+        thinking="high"
+        thinkingLevels={["high"]}
+        onModelChange={vi.fn()}
+        onThinkingChange={vi.fn()}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Select model and thinking level and view context" });
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Model/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Back" }));
+    expect(screen.queryByLabelText("Search models")).toBeNull();
+    expect(screen.getByRole("menuitem", { name: /Model/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Effort/ })).toBeInTheDocument();
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+  });
+
+  it("selects a model from the narrow list and closes the menu", async () => {
+    stubNarrowMatchMedia(true);
+    const onModelChange = vi.fn();
+    render(
+      <ModelControlMenu
+        models={multiModels as typeof model[]}
+        selectedModel="prov1/beta"
+        thinking="high"
+        thinkingLevels={["high"]}
+        onModelChange={onModelChange}
+        onThinkingChange={vi.fn()}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Select model and thinking level and view context" });
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Model/ }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "gamma" }));
+    expect(onModelChange).toHaveBeenCalledWith("prov2/gamma");
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
   });
 });

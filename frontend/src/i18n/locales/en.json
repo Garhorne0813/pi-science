@@ -249,6 +249,7 @@
   "conversation.modelSetError": "Unable to set model",
   "conversation.unavailableModel": "Model {{model}} is unavailable. Switch models to continue.",
   "conversation.switchModel": "Switch model",
+  "conversation.modelMenu.back": "Back",
   "conversation.sessionUnavailable": "The current conversation is not available; refresh the page and try again",
   "conversation.clickToInsert": "Click to insert path:",
   "conversation.scrollToLatest": "Back to latest",
