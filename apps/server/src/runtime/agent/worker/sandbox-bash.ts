@@ -12,12 +12,13 @@ import { toolEnvironment } from "../agent-runtime-environment.js";
 import { snapshotSandboxOutputs, sandboxArtifactCapture } from "../../sandbox/artifacts.js";
 import { diffWorkspaceSnapshots } from "../../artifacts/workspace-artifact-snapshot.js";
 import { publishWorkspaceArtifactsDetailed } from "../../artifacts/workspace-artifact-publisher.js";
+import { readToolProgressStream } from "./tool-progress-stream.js";
 
 type Tool = AgentHarnessTool<{ env: NodeExecutionEnv }>;
 /** Keep upstream schema, output capture/checkpoints and result contract. Only replace its OS backend. */
 export function sandboxBashTool(identity: SandboxIdentity, hostEnvironment: Record<string, string> = toolEnvironment(process.env), skillDirectories: () => Promise<string[]> = async () => []): Tool {
   const original = createBashTool();
-  return { ...original, description: `Use for running programs, scripts, tests, builds, scientific computations and operations that require a shell. When available, prefer the dedicated ls tool for directory browsing, glob for finding files by name, grep for searching file contents, and read for inspecting a known file. Keep routine file inspection in those tools rather than combining ls/find/rg/grep/cat into a Bash command for convenience. Use Bash when the task requires program execution or shell processing beyond those tools' supported operations. A dedicated tool's access_denied result is not a reason to retry the same access through Bash.\n${original.description}\nSandbox paths: use "$TMPDIR" or Python tempfile for temporary files within this call; they are removed afterwards. For cross-call intermediates use a normal workspace directory such as data/work/. Do not hard-code /tmp or hidden .tmp/. Skill resource directories, when granted, are read-only; place helper outputs in the workspace or "$TMPDIR". HTTP downloads must check failure status and use timeouts.`, async execute(id, params, update, ctx, invocation, context) {
+  return { ...original, description: `Use for running programs, scripts, tests, builds, scientific computations and operations that require a shell. When available, prefer the dedicated ls tool for directory browsing, glob for finding files by name, grep for searching file contents, and read for inspecting a known file. Keep routine file inspection in those tools rather than combining ls/find/rg/grep/cat into a Bash command for convenience. Use Bash when the task requires program execution or shell processing beyond those tools' supported operations. A dedicated tool's access_denied result is not a reason to retry the same access through Bash.\n${original.description}\nSandbox paths: use "$TMPDIR" or Python tempfile for temporary files within this call; they are removed afterwards. For cross-call intermediates use a normal workspace directory such as data/work/. Do not hard-code /tmp or hidden .tmp/. Skill resource directories, when granted, are read-only; place helper outputs in the workspace or "$TMPDIR". HTTP downloads must check failure status and use timeouts. Scripts can report progress by writing a line starting with <<pi-progress>> followed by a space and a JSON object such as {"version":1,"scopeId":"process-files:1","scopeLabel":"Processing files","current":72,"total":100,"unit":"files","totalKind":"fixed"}.`, async execute(id, params, update, ctx, invocation, context) {
     const confined = !!identity.executionGrantId || !!identity.candidateId || identity.executionScope === "candidate" || identity.executionScope === "confined";
     if (confined && !identity.executionGrantId) throw new Error("Candidate execution requires a server-bound candidate or generic execution grant");
     const revision = hostEnvironment.PI_SCIENCE_ENVIRONMENT_REVISION_ID;
@@ -64,7 +65,13 @@ export function sandboxBashTool(identity: SandboxIdentity, hostEnvironment: Reco
         };
         before = await snapshotSandboxOutputs(identity.cwd, policy);
         const safeOriginal = createBashTool({ prepare(execution) { execution.env = prepared?.env ?? toolEnvironment(hostEnvironment); execution.inheritEnv = false; } });
-        const result = await safeOriginal.execute(id, { ...values, timeout: Math.min(timeout, 600) }, update, { ...ctx, env }, invocation, context);
+        const rawResult = await safeOriginal.execute(id, { ...values, timeout: Math.min(timeout, 600) }, (snapshot, options) => {
+          const content = snapshot.content.map((part) => part.type === "text" ? readToolProgressStream(part.text) : undefined);
+          const progress = content.map((part) => part?.progress).filter((value) => value !== undefined).at(-1);
+          if (!progress && !snapshot.content.some((part) => part.type === "text" && part.text)) return update(snapshot, options);
+          return update({ ...snapshot, content: snapshot.content.map((part, index) => part.type === "text" ? { ...part, text: content[index]!.text } : part), details: { ...snapshot.details, ...(progress ? { progress } : {}) } }, options);
+        }, { ...ctx, env }, invocation, context);
+        const result = { ...rawResult, content: rawResult.content.map((part) => part.type === "text" ? { ...part, text: readToolProgressStream(part.text).text } : part) };
         const evidence = await outputs();
         await executionRepository.finish(identity.cwd, executionId, { status: "succeeded", producer: "bash", result: { sandbox_policy_id: policy.id, exit_code: outcome.exitCode,
           output_preview: result.content.filter((part) => part.type === "text").map((part) => part.type === "text" ? part.text : "").join("\n").slice(0, 16 * 1024),
@@ -72,14 +79,16 @@ export function sandboxBashTool(identity: SandboxIdentity, hostEnvironment: Reco
         const references = { execution_id: executionId, artifact_refs: evidence.artifacts };
         return binding || evidence.artifacts.length ? { ...result, content: [...result.content, { type: "text" as const, text: JSON.stringify(references) }], details: { ...result.details, ...references } } : result;
       } catch (error) {
+        const message = readToolProgressStream(error instanceof Error ? error.message : String(error)).text;
         const timedOut = outcome.errorCode === "timeout" || context.abortSignal?.reason instanceof Error && context.abortSignal.reason.message === "Execution time budget exhausted";
         if (started) {
           const evidence = await outputs();
-          await executionRepository.finish(identity.cwd, executionId, { status: timedOut ? "timed_out" : outcome.errorCode === "aborted" || context.abortSignal?.aborted ? "cancelled" : "failed", producer: "bash", result: { error: String(error), sandbox_policy_id: policy.id, ...(outcome.exitCode !== undefined ? { exit_code: outcome.exitCode } : {}), ...(outcome.errorCode ? { execution_error_code: outcome.errorCode } : {}),
+          await executionRepository.finish(identity.cwd, executionId, { status: timedOut ? "timed_out" : outcome.errorCode === "aborted" || context.abortSignal?.aborted ? "cancelled" : "failed", producer: "bash", result: { error: message, sandbox_policy_id: policy.id, ...(outcome.exitCode !== undefined ? { exit_code: outcome.exitCode } : {}), ...(outcome.errorCode ? { execution_error_code: outcome.errorCode } : {}),
             ...(evidence.failures.length ? { artifact_publish_errors: evidence.failures } : {}) }, files: evidence.files, artifacts: evidence.artifacts });
-          throw new Error(`${error instanceof Error ? error.message : String(error)}\n${JSON.stringify({ execution_id: executionId, artifact_refs: evidence.artifacts })}`, { cause: error });
+          throw new Error(`${message}\n${JSON.stringify({ execution_id: executionId, artifact_refs: evidence.artifacts })}`, { cause: error });
         }
-        throw error;
+        if (error instanceof Error && message === error.message) throw error;
+        throw new Error(message, { cause: error });
       } finally { await env?.cleanup(context); await prepared?.cleanup(); }
     };
     // Retain the legacy lock filename so old/new producers cannot race on one root.
