@@ -1,4 +1,5 @@
 import type { ThreadBlock, ToolCallBlock } from "../../../types/thread";
+import { mergeToolProgress, normalizeToolProgress } from "@pi-science/contracts";
 import type { PiScienceEvent } from "../../client/pi-science-client";
 import { closeOpenThinking } from "./narration";
 import { eventHasIdentity, numberValue, stringValue } from "./identity";
@@ -33,6 +34,7 @@ export function reduceToolEvent(event: PiScienceEvent, { foldState, blocks, inde
       // fallback: first sight starts the clock, a terminal status ends it.
       const nowIso = new Date().toISOString();
       const revision = numberValue(event.revision) ?? ((previous?.revision ?? -1) + 1);
+      const progress = mergeToolProgress(previous?.progress, normalizeToolProgress(event.progress));
       const block: ThreadBlock = {
         kind: "tool",
         id: blockId,
@@ -53,6 +55,7 @@ export function reduceToolEvent(event: PiScienceEvent, { foldState, blocks, inde
         output: (event.output as string | undefined) ?? previous?.output,
         details: event.details ?? previous?.details,
         presentation: (event.presentation as ToolCallBlock["presentation"] | undefined) ?? previous?.presentation,
+        ...(progress ? { progress } : {}),
         partialOutput: (event.partialOutput as string | undefined) ?? previous?.partialOutput,
         diff: (event.diff as string | undefined) ?? previous?.diff,
         startedAt: (event.startedAt as string | undefined) ?? previous?.startedAt ?? nowIso,
