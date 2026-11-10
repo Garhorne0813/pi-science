@@ -115,8 +115,8 @@ export function ApprovalModeMenu({ cwd, sessionId, disabled }: { cwd: string; se
   return <>
     <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild><button type="button" aria-label={zh ? "审批模式" : "Approval mode"} disabled={disabled || loading || saving}
-        className={`flex min-h-7 items-center gap-1 rounded-input px-2 py-1 text-xs hover:bg-surface-2 disabled:opacity-50 ${approval.mode === "full" ? "text-orange-500" : "text-muted"}`}>
-        <Icon size={14} /><span>{saving ? (zh ? "切换中…" : "Switching…") : loading ? (zh ? "加载模式…" : "Loading policy…") : defaultUnavailable ? (zh ? "选择审批模式" : "Choose approval mode") : labels[approval.mode]}</span>
+        className={`flex min-h-7 min-w-0 items-center gap-1 rounded-input px-2 py-1 text-xs hover:bg-surface-2 disabled:opacity-50 max-sm:max-w-[9rem] ${approval.mode === "full" ? "text-orange-500" : "text-muted"}`}>
+        <Icon size={14} className="shrink-0" /><span className="truncate">{saving ? (zh ? "切换中…" : "Switching…") : loading ? (zh ? "加载模式…" : "Loading policy…") : defaultUnavailable ? (zh ? "选择审批模式" : "Choose approval mode") : labels[approval.mode]}</span>
       </button></DropdownMenu.Trigger>
       <DropdownMenu.Portal><DropdownMenu.Content onCloseAutoFocus={(event) => { if (confirmFull) event.preventDefault(); }} side="top" align="start" sideOffset={8} className="ui-popover z-[90] w-80 max-w-[calc(100vw-24px)] rounded-card p-1.5 text-text">
         <DropdownMenu.Label className="px-2 py-1 text-xs text-muted">{zh ? "当前会话的审批方式" : "Approval policy for this conversation"}</DropdownMenu.Label>

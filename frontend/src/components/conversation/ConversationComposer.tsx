@@ -195,7 +195,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
             placeholder={composer.dragOver ? t("conversation.dropFiles") : research.prompt}
           />
           <div className={cn("flex items-center justify-between gap-2 px-3 pb-2", working && "flex-wrap")}>
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2">
               <button
                 type="button"
                 onClick={() => composer.fileInputRef.current?.click()}
@@ -232,10 +232,11 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
             </div>
             <input ref={composer.fileInputRef} type="file" multiple className="hidden" onChange={composer.handleFilePick} />
             {/* While running the trailing controls give up horizontal space before
-                they leave the card: the segment and the send/stop buttons hold their
-                size, the model menu truncates, and below the sm breakpoint the buttons
-                wrap onto their own line. The idle row keeps its single-line geometry. */}
-            <div className={cn("ml-auto flex min-w-0 items-center justify-end gap-1.5", working ? "max-sm:flex-wrap" : "shrink-0")}>
+                they leave the card: the send/stop buttons hold their size, the model
+                menu truncates, and below the sm breakpoint the buttons wrap onto their
+                own line. The idle row stays on one line: the model menu truncates
+                rather than letting the approval chip squeeze into a narrow column. */}
+            <div className={cn("ml-auto flex min-w-0 items-center justify-end gap-1.5", working && "max-sm:flex-wrap")}>
               {model.models.length > 0 && (
                 <ModelControlMenu
                   models={model.models}
