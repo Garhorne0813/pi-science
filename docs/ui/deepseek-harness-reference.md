@@ -589,3 +589,9 @@ bodies are never read for a program name. A read row adds the 1-based `offset` a
 requested window (`a.ts:120-159`). `limit` is what the call asked for; the tool
 clamps it to the file, so the row describes the request and not a promise about
 bytes returned.
+
+Continuation content — the progress line and expanded details — shares the row
+label's left baseline through `--activity-text-inset`, which is the existing
+14px marker slot plus the 8px `gap-2` spacing step combined, not a new token.
+Do not write a 24px padding: that measures the marker slot's edge, not the
+label's.
