@@ -3,7 +3,7 @@
 // Source-compatibility re-export for older UI imports. Wire/domain contracts
 // live in @pi-science/contracts and are parsed at the client boundary.
 export type { ExecutionRecord, ProvenanceEnvironment, ProvenanceRecord, ToolPresentation } from "@pi-science/contracts";
-import type { ToolPresentation } from "@pi-science/contracts";
+import type { ToolPresentation, ToolProgressV1 } from "@pi-science/contracts";
 
 /** Identity assigned by the conversation protocol. Legacy history may omit
  * these fields; the presentation adapter keeps that path explicit rather than
@@ -99,6 +99,7 @@ export interface ToolCallBlock extends ConversationBlockIdentity {
   attemptId?: string;
   title?: string;
   presentation?: ToolPresentation;
+  progress?: ToolProgressV1;
   input?: Record<string, unknown>;
   output?: string;
   /** Tool-specific metadata from the persisted toolResult message (e.g.

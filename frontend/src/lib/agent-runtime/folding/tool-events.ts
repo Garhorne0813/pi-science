@@ -1,4 +1,5 @@
 import type { ThreadBlock, ToolCallBlock } from "../../../types/thread";
+import { mergeToolProgress, normalizeToolProgress } from "@pi-science/contracts";
 import type { PiScienceEvent } from "../../client/pi-science-client";
 import { closeOpenThinking } from "./narration";
 import { eventHasIdentity, numberValue, stringValue } from "./identity";
@@ -43,6 +44,7 @@ export function reduceToolEvent(event: PiScienceEvent, { foldState, blocks, inde
       const originalOutputBytes = outputTruncated
         ? numberValue(event.originalOutputBytes) ?? previous?.originalOutputBytes
         : undefined;
+      const progress = mergeToolProgress(previous?.progress, normalizeToolProgress(event.progress));
       const block: ThreadBlock = {
         kind: "tool",
         id: blockId,
@@ -63,6 +65,7 @@ export function reduceToolEvent(event: PiScienceEvent, { foldState, blocks, inde
         output: (event.output as string | undefined) ?? previous?.output,
         details: event.details ?? previous?.details,
         presentation: (event.presentation as ToolCallBlock["presentation"] | undefined) ?? previous?.presentation,
+        ...(progress ? { progress } : {}),
         partialOutput: (event.partialOutput as string | undefined) ?? previous?.partialOutput,
         ...(outputTruncated ? { outputTruncated: true, ...(originalOutputBytes === undefined ? {} : { originalOutputBytes }) } : {}),
         diff: (event.diff as string | undefined) ?? previous?.diff,

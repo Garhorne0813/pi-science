@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { convertHistoryToBlocks, mergeHistoryWindow, replaceHistoryTail, useRuntimeStore } from "./index";
 import { emptyThread, foldEvent, mergeHistoryWithLive, prependHistoryMessages, threadFromMessages, type Thread } from "./event-fold";
 import type { HistoryMessage, PiScienceEvent } from "../client/types";
-import type { ThreadBlock } from "../../types/thread";
+import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 import { buildTurnPresentations } from "../conversation/turn-presentation";
 
@@ -257,6 +257,31 @@ describe("transport event folding", () => {
     const settled = idle.blocks.find((block) => block.kind === "thinking");
     expect(settled?.kind === "thinking" && settled.partial).toBe(false);
     expect(settled?.kind === "thinking" && typeof settled.endedAt).toBe("string");
+  });
+
+  it("keeps the measured tool progress across updates that omit it", () => {
+    let thread = foldEvent(emptyThread(), { sessionId: "s", type: "tool.started", turnId: "t1", runId: "r1", callId: "c1", tool: "python", status: "running", progress: { version: 1, scopeId: "cells", scopeLabel: "Cells", current: 3, total: 10, totalKind: "fixed", unit: "cells" } });
+    thread = foldEvent(thread, { sessionId: "s", type: "tool.updated", turnId: "t1", runId: "r1", callId: "c1", tool: "python", status: "running", partialOutput: "running cell 4" });
+    thread = foldEvent(thread, { sessionId: "s", type: "tool.completed", turnId: "t1", runId: "r1", callId: "c1", tool: "python", status: "done" });
+
+    const tool = thread.blocks.find((block) => block.kind === "tool") as ToolCallBlock;
+    expect(tool).toMatchObject({ status: "done", progress: { scopeId: "cells", current: 3, total: 10, determinate: true } });
+  });
+
+  it("keeps the highest count inside one progress scope", () => {
+    let thread = foldEvent(emptyThread(), { sessionId: "s", type: "tool.started", turnId: "t1", runId: "r1", callId: "c1", tool: "python", status: "running", progress: { version: 1, scopeId: "cells", scopeLabel: "Cells", current: 8, total: 20, totalKind: "fixed" } });
+    thread = foldEvent(thread, { sessionId: "s", type: "tool.updated", turnId: "t1", runId: "r1", callId: "c1", tool: "python", status: "running", progress: { version: 1, scopeId: "cells", scopeLabel: "Cells", current: 5, total: 20, totalKind: "fixed", phase: "Retrying" } });
+
+    const tool = thread.blocks.find((block) => block.kind === "tool") as ToolCallBlock;
+    expect(tool.progress).toMatchObject({ current: 8, total: 20, phase: "Retrying" });
+  });
+
+  it("never shares progress between two call ids", () => {
+    let thread = foldEvent(emptyThread(), { sessionId: "s", type: "tool.started", turnId: "t1", runId: "r1", callId: "c1", tool: "python", status: "running", progress: { version: 1, scopeId: "cells", scopeLabel: "Cells", current: 9, total: 10, totalKind: "fixed" } });
+    thread = foldEvent(thread, { sessionId: "s", type: "tool.started", turnId: "t1", runId: "r1", callId: "c2", tool: "python", status: "running", progress: { version: 1, scopeId: "cells", scopeLabel: "Cells", current: 1, total: 10, totalKind: "fixed" } });
+
+    const tools = thread.blocks.filter((block) => block.kind === "tool") as ToolCallBlock[];
+    expect(tools.map((tool) => [tool.callId, tool.progress?.current])).toEqual([["c1", 9], ["c2", 1]]);
   });
 
   it("rebuilds thinking rows from persisted assistant thinking parts", () => {
