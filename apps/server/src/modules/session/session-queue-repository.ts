@@ -43,6 +43,17 @@ function emptyQueue(sessionId: string): SessionQueue {
   };
 }
 
+/** A queue paused by the old Stop behaviour must not stay stuck now that a
+ *  stop keeps the queue running. Reading such a document clears the pause once
+ *  and writes the normalised state back; a manual pause has no reason and is
+ *  left alone. */
+function clearLegacyStopPause(doc: SessionQueue): { doc: SessionQueue; migrated: boolean } {
+  if (!(doc.paused === true && doc.paused_reason === "stop")) return { doc, migrated: false };
+  const next: SessionQueue = { ...doc, paused: false, updated_at: new Date().toISOString() };
+  delete next.paused_reason;
+  return { doc: next, migrated: true };
+}
+
 function trim(doc: SessionQueue): SessionQueue {
   const terminal = doc.entries.filter((entry) => TERMINAL_STATUSES.has(entry.status));
   if (terminal.length <= TERMINAL_ENTRY_LIMIT) return doc;
@@ -64,7 +75,9 @@ export class SessionQueueRepository {
     const stored = await readJson<SessionQueue | null>(this.file(cwd, sessionId), null);
     if (!stored || stored.session_id !== sessionId || !Array.isArray(stored.entries))
       return emptyQueue(sessionId);
-    return trim({ ...stored, paused: stored.paused === true });
+    const normalised = clearLegacyStopPause(trim({ ...stored, paused: stored.paused === true }));
+    if (normalised.migrated) await this.persistStopPauseMigration(cwd, sessionId);
+    return normalised.doc;
   }
 
   async enqueue(
@@ -207,24 +220,6 @@ export class SessionQueueRepository {
     });
   }
 
-  /** Stop pauses the queue only when there is something left to protect. */
-  async pauseAfterStop(cwd: string, sessionId: string): Promise<SessionQueue | null> {
-    const file = this.file(cwd, sessionId);
-    return withFileWriteLock(file, async () => {
-      const doc = await this.readLocked(file, sessionId);
-      if (!doc.entries.some((entry) => entry.status === "queued")) return null;
-      if (doc.paused) return doc;
-      const paused: SessionQueue = {
-        ...doc,
-        paused: true,
-        paused_reason: "stop",
-        updated_at: new Date().toISOString(),
-      };
-      await writeJsonAtomic(file, paused);
-      return paused;
-    });
-  }
-
   async resume(cwd: string, sessionId: string): Promise<SessionQueue> {
     const file = this.file(cwd, sessionId);
     return withFileWriteLock(file, async () => {
@@ -245,7 +240,21 @@ export class SessionQueueRepository {
     const stored = await readJson<SessionQueue | null>(file, null);
     if (!stored || stored.session_id !== sessionId || !Array.isArray(stored.entries))
       return emptyQueue(sessionId);
-    return trim({ ...stored, paused: stored.paused === true });
+    return clearLegacyStopPause(trim({ ...stored, paused: stored.paused === true })).doc;
+  }
+
+  private async persistStopPauseMigration(cwd: string, sessionId: string): Promise<void> {
+    const file = this.file(cwd, sessionId);
+    try {
+      await withFileWriteLock(file, async () => {
+        const stored = await readJson<SessionQueue | null>(file, null);
+        if (!stored || stored.session_id !== sessionId || !Array.isArray(stored.entries)) return;
+        const current = clearLegacyStopPause(trim({ ...stored, paused: stored.paused === true }));
+        if (current.migrated) await writeJsonAtomic(file, current.doc);
+      });
+    } catch {
+      // The queue is advisory for rendering; a later read retries the migration.
+    }
   }
 
   private async replace(file: string, doc: SessionQueue, entry: QueuedMessage): Promise<void> {

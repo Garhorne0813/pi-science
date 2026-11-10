@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SessionQueueRepository } from "./session-queue-repository.js";
 
@@ -110,13 +110,35 @@ describe("SessionQueueRepository", () => {
     expect(snapshot.entries[0]).toMatchObject({ status: "queued", error_code: "session_busy" });
   });
 
-  it("stops dispatching after a stop until the user resumes", async () => {
+  it("clears a queue paused by the old stop behaviour on the next read", async () => {
+    const queue = new SessionQueueRepository();
+    const file = queue.file(cwd, sessionId);
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      JSON.stringify({
+        session_id: sessionId,
+        paused: true,
+        paused_reason: "stop",
+        entries: [{ id: first, text: "first", status: "queued", created_at: "t", updated_at: "t" }],
+        updated_at: "t",
+      }),
+    );
+    const snapshot = await queue.read(cwd, sessionId);
+    expect(snapshot).toMatchObject({ paused: false });
+    expect(snapshot.paused_reason).toBeUndefined();
+    // The migration is persisted, so a later read does not see the old pause.
+    expect(await new SessionQueueRepository().read(cwd, sessionId)).toMatchObject({
+      paused: false,
+    });
+    expect(await queue.claimNext(cwd, sessionId)).toMatchObject({ id: first });
+  });
+
+  it("still honours a manual pause and resumes on request", async () => {
     const queue = new SessionQueueRepository();
     await queue.enqueue(cwd, sessionId, { id: first, text: "first" });
-    expect(await queue.pauseAfterStop(cwd, sessionId)).toMatchObject({
-      paused: true,
-      paused_reason: "stop",
-    });
+    const file = queue.file(cwd, sessionId);
+    await writeFile(file, JSON.stringify({ ...(await queue.read(cwd, sessionId)), paused: true }));
     expect(await queue.claimNext(cwd, sessionId)).toBeNull();
     expect(await queue.resume(cwd, sessionId)).toMatchObject({ paused: false });
     expect(await queue.claimNext(cwd, sessionId)).toMatchObject({

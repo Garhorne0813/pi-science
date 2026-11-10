@@ -1,9 +1,10 @@
 import Fastify from "fastify";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSessionMessageRoutes } from "./session-message-routes.js";
+import { registerNodeSessionRoutes } from "./node-session-routes.js";
 import { SessionQueueRepository } from "../../modules/session/session-queue-repository.js";
 import { SessionQueueDispatcher } from "../../runtime/node/session-queue-dispatcher.js";
 import { SteerRequestLedger } from "../../runtime/node/steer-request-ledger.js";
@@ -40,6 +41,7 @@ function harness(
     streaming?: boolean;
     pending?: number;
     command?: { success: boolean; code?: string };
+    nodeRoutes?: boolean;
   } = {},
 ) {
   const queue = new SessionQueueRepository();
@@ -49,8 +51,13 @@ function harness(
     is_compacting: false,
     pending_message_count: options.pending ?? 0,
   };
-  const command = vi.fn(async () => options.command ?? { success: true });
+  const command = vi.fn(async (_sessionId: string, _cwd: string, type: string) => {
+    // A real stop ends the running turn; the session reports idle right after.
+    if (type === "abort") facts.is_streaming = false;
+    return options.command ?? { success: true };
+  });
   const dispatcher = new SessionQueueDispatcher({ state: async () => facts, command }, queue, 1000);
+  dispatchers.push(dispatcher);
   const sessions = {
     state: async () => facts,
     command,
@@ -59,6 +66,7 @@ function harness(
   const repository = { findPath: async () => "/tmp/session.jsonl" } as unknown as SessionRepository;
   const app = Fastify({ logger: false });
   registerSessionMessageRoutes(app, sessions, repository, { queue, steers, dispatcher });
+  if (options.nodeRoutes) registerNodeSessionRoutes(app, sessions, repository);
   return { app, queue, command, dispatcher };
 }
 
@@ -182,27 +190,53 @@ describe("follow-up queue routes", () => {
     expect(refused.statusCode).toBe(409);
   });
 
-  it("reports the queue without dispatching it while stopped", async () => {
+  it("keeps draining the queue after a stop instead of pausing it", async () => {
     const { app, queue, command } = harness({ streaming: false });
     await queue.enqueue(cwd, sessionId, { id: first, text: "after the stop" });
-    await queue.pauseAfterStop(cwd, sessionId);
     const response = await app.inject({
       method: "GET",
       url: `/api/sessions/${sessionId}/queue?cwd=${encodeURIComponent(cwd)}`,
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(response.json()).toMatchObject({
-      ok: true,
-      queue: { paused: true, paused_reason: "stop", entries: [{ id: first, status: "queued" }] },
+    expect(response.json()).toMatchObject({ ok: true, queue: { paused: false } });
+    expect(command).toHaveBeenCalledWith(sessionId, cwd, "prompt", {
+      message: "after the stop",
+      client_message_id: first,
     });
-    expect(command).not.toHaveBeenCalled();
   });
 
-  it("continues the queue only after an explicit resume", async () => {
+  it("hands the queue head to the agent after the abort route stops a turn", async () => {
+    const { app, queue, command, dispatcher } = harness({ streaming: true, nodeRoutes: true });
+    await queue.enqueue(cwd, sessionId, { id: first, text: "carry on after the stop" });
+    const params = `?cwd=${encodeURIComponent(cwd)}`;
+    const abort = await app.inject({
+      method: "POST",
+      url: `/api/sessions/${sessionId}/abort${params}`,
+    });
+    expect(abort.statusCode).toBe(200);
+    expect(abort.json()).toMatchObject({ ok: true });
+    // Stop no longer pauses the queue, so the next tick dispatches the head.
+    expect((await queue.read(cwd, sessionId)).paused).toBe(false);
+    expect(await dispatcher.tick(cwd, sessionId)).toBe("dispatched");
+    expect(command).toHaveBeenCalledWith(sessionId, cwd, "prompt", {
+      message: "carry on after the stop",
+      client_message_id: first,
+    });
+    expect((await queue.read(cwd, sessionId)).entries[0]).toMatchObject({
+      id: first,
+      status: "dispatched",
+    });
+  });
+
+  it("continues a manually paused queue only after an explicit resume", async () => {
     const { app, queue, command } = harness({ streaming: false });
     await queue.enqueue(cwd, sessionId, { id: first, text: "after the stop" });
-    await queue.pauseAfterStop(cwd, sessionId);
+    const snapshot = await queue.read(cwd, sessionId);
+    await writeFile(queue.file(cwd, sessionId), JSON.stringify({ ...snapshot, paused: true }));
     const params = `?cwd=${encodeURIComponent(cwd)}`;
+    await app.inject({ method: "GET", url: `/api/sessions/${sessionId}/queue${params}` });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(command).not.toHaveBeenCalled();
     const resumed = await app.inject({
       method: "POST",
       url: `/api/sessions/${sessionId}/queue/resume${params}`,
