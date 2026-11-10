@@ -199,7 +199,10 @@ export class AgentMcpTools {
             if (approvalRevision !== undefined && sessionId && (await readSessionApproval(cwd, sessionId)).revision !== approvalRevision) throw new Error("MCP approval revision changed while queued; request fresh authorization");
             if (await checkAuthority() === "ask" && !approvedByUser) throw new Error("MCP authorization revoked before dispatch");
             const response = await client.callTool({ name: tool.name, arguments: params as Record<string, unknown> }, undefined,
-              { signal: context.abortSignal, timeout: server.requestTimeoutMs ?? 60_000 });
+              { signal: context.abortSignal, timeout: server.requestTimeoutMs ?? 60_000, onprogress: ({ progress, total }) => {
+                if (typeof progress !== "number" || !Number.isFinite(progress) || progress < 0) return;
+                _onUpdate({ content: [], details: { progress: { version: 1, scopeId: `mcp:${name}/${tool.name}`, scopeLabel: `${name}: ${tool.name}`, current: progress, ...(total === undefined ? {} : { total }), totalKind: total === undefined ? "unknown" : "fixed", source: "mcp" } } });
+              } });
             const parts = Array.isArray(response.content) ? response.content as Array<Record<string, unknown>> : [];
             const content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
             for (const part of parts) {

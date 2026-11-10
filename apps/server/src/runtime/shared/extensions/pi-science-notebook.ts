@@ -487,6 +487,7 @@ export default function registerPiScienceNotebook(pi: any) {
           });
           if (outputPersistenceError) break;
           if (executionFailed(combined) && params.continue_on_error !== true) break;
+          if (typeof _onUpdate === "function") _onUpdate({ content: [], details: { progress: { version: 1, scopeId: "notebook-cells:1", scopeLabel: "Running notebook cells", current: index + 1, total: cells.length, unit: "cells", totalKind: "fixed" } } });
         }
         const persistenceWarning = results.find((result) => typeof result.notebook_output_persistence_error === "string");
         const message = [
