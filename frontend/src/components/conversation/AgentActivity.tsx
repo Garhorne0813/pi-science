@@ -222,7 +222,7 @@ function ThinkingRow({ block }: { block: ThinkingBlock }) {
       {running && <LiveStepElapsed since={block.startedAt} />}
       <ChevronRight size={12} aria-hidden className={cn(styles.chevron, "shrink-0 transition-transform", expanded && "rotate-90")} />
     </button>
-    {expanded && <div id={panelId} className={cn(styles.details, "pb-2 pl-6")}>
+    {expanded && <div id={panelId} className={cn(styles.details, "pb-2")}>
       <div className="whitespace-pre-wrap text-ui-caption italic leading-snug text-muted [overflow-wrap:anywhere]">{text}</div>
     </div>}
   </div>;
@@ -401,7 +401,7 @@ function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
       {hasDetails && <ChevronRight size={12} aria-hidden className={cn(styles.chevron, "shrink-0 transition-transform", expanded && "rotate-90")} />}
     </button>
     {running && <ToolProgressLayer block={block} />}
-    {expanded && hasDetails && details && <div className={cn(styles.details, "space-y-2 pb-2 pl-6 text-xs")}>
+    {expanded && hasDetails && details && <div className={cn(styles.details, "space-y-2 pb-2 text-xs")}>
       {details.map((detail, index) => detail.pre || detail.plain
         ? <Detail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} pre={detail.pre} />
         : <OutputDetail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} fullValue={detail.fullValue} partial={detail.partial} diff={detail.diff} t={t} />)}

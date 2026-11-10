@@ -1,5 +1,10 @@
 .root {
   --activity-color: var(--accent);
+  /* Continuation content (progress line, expanded details) shares the row
+     label's left baseline: 14px marker slot + 8px gap-2. */
+  --activity-marker-size: 14px;
+  --activity-row-gap: 0.5rem;
+  --activity-text-inset: calc(var(--activity-marker-size) + var(--activity-row-gap));
 }
 
 /* Terminal activity is the process boundary before the user-facing answer.
@@ -111,6 +116,12 @@
   animation: reveal var(--motion-normal) var(--ease-standard) both;
 }
 
+/* Continuation content starts where the row label starts, not at the marker
+   slot's own edge. */
+.details {
+  padding-left: var(--activity-text-inset);
+}
+
 .narration {
   padding-block: 0.25rem;
 }
@@ -138,7 +149,7 @@
   min-width: 0;
   flex-direction: column;
   gap: 0.25rem;
-  padding: 0 0 0.375rem 1.5rem;
+  padding: 0 0 var(--space-compact) var(--activity-text-inset);
   animation: reveal var(--motion-normal) var(--ease-standard) both;
 }
 
