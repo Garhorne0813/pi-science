@@ -59,6 +59,7 @@ describe("agent-core managed MCP tools", () => {
           `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
           `const server = new McpServer({ name: "scoped", version: "1" });`,
           `for (const name of ["bar", "other", "forbidden"]) server.registerTool(name, { description: name }, async () => ({ content: [{ type: "text", text: name }] }));`,
+          `server.registerTool("progress", { description: "progress" }, async (extra) => { for (const params of [{ progress: 1, total: 2 }, { progress: 3 }]) await extra.sendNotification({ method: "notifications/progress", params: { progressToken: extra._meta.progressToken, ...params } }); await new Promise(resolve => setTimeout(resolve, 50)); return { content: [{ type: "text", text: "done" }] }; });`,
           `await server.connect(new StdioServerTransport());`,
         ].join("\n"),
       );
@@ -99,22 +100,63 @@ describe("agent-core managed MCP tools", () => {
         new InteractionBridge(() => undefined),
         { PATH: process.env.PATH ?? "" },
         undefined,
-        ["read", "mcp__foo__bar", "mcp__foo__forbidden"],
+        ["read", "mcp__foo__bar", "mcp__foo__progress", "mcp__foo__forbidden"],
       );
       expect(mcp.diagnostics).toEqual([]);
       expect(credentials).not.toHaveBeenCalled();
       expect(await readFile(marker, "utf8").catch(() => null)).toBeNull();
-      expect(mcp.tools.map((tool) => tool.name)).toEqual(["mcp__foo__bar"]);
+      expect(mcp.tools.map((tool) => tool.name)).toEqual(["mcp__foo__bar", "mcp__foo__progress"]);
+      const updates = vi.fn();
       expect(
         await mcp.tools[0]!.execute(
           "scoped-call",
           {},
-          () => undefined,
+          updates,
           {} as never,
           {} as never,
           {} as never,
         ),
       ).toMatchObject({ content: [{ type: "text", text: "bar" }] });
+      expect(updates).not.toHaveBeenCalled();
+      expect(
+        await mcp.tools[1]!.execute(
+          "progress-call",
+          {},
+          updates,
+          {} as never,
+          {} as never,
+          {} as never,
+        ),
+      ).toMatchObject({ content: [{ type: "text", text: "done" }] });
+      expect(updates.mock.calls.map(([update]) => update)).toEqual([
+        {
+          content: [],
+          details: {
+            progress: {
+              version: 1,
+              scopeId: "mcp:foo/progress",
+              scopeLabel: "foo: progress",
+              current: 1,
+              total: 2,
+              totalKind: "fixed",
+              source: "mcp",
+            },
+          },
+        },
+        {
+          content: [],
+          details: {
+            progress: {
+              version: 1,
+              scopeId: "mcp:foo/progress",
+              scopeLabel: "foo: progress",
+              current: 3,
+              totalKind: "unknown",
+              source: "mcp",
+            },
+          },
+        },
+      ]);
     } finally {
       credentials.mockRestore();
       await mcp?.close();

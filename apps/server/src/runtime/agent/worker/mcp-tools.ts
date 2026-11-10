@@ -391,7 +391,32 @@ export class AgentMcpTools {
                   client.callTool(
                     { name: tool.name, arguments: params as Record<string, unknown> },
                     undefined,
-                    { signal: activeSignal, timeout: 2_147_483_647 },
+                    {
+                      signal: activeSignal,
+                      timeout: 2_147_483_647,
+                      onprogress: ({ progress, total }) => {
+                        if (
+                          typeof progress !== "number" ||
+                          !Number.isFinite(progress) ||
+                          progress < 0
+                        )
+                          return;
+                        _onUpdate({
+                          content: [],
+                          details: {
+                            progress: {
+                              version: 1,
+                              scopeId: `mcp:${name}/${tool.name}`,
+                              scopeLabel: `${name}: ${tool.name}`,
+                              current: progress,
+                              ...(total === undefined ? {} : { total }),
+                              totalKind: total === undefined ? "unknown" : "fixed",
+                              source: "mcp",
+                            },
+                          },
+                        });
+                      },
+                    },
                   ),
                 context.abortSignal,
               );
