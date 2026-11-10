@@ -14,6 +14,10 @@ export interface ProgressObservation {
   readonly scopeLabel: string;
   readonly current?: number;
   readonly total?: number;
+  /** A share the producer printed next to a denominator it did not print, such
+   *  as `pv`'s own `45%`. Reported as published; the contract decides whether it
+   *  can be shown. */
+  readonly percent?: number;
   /** `fixed` only when the producer published a real denominator. A total it
    *  may revise is `reestimated`, and a total it never published is `unknown`. */
   readonly totalKind?: "fixed" | "reestimated" | "unknown";

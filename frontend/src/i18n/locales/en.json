@@ -164,6 +164,7 @@
   "conversation.activity.narrative.recover": "Resuming the task",
   "conversation.activity.trace": "Execution trace",
   "conversation.activity.progressDeterminate": "{{scope}} · {{current}} / {{total}}{{unitSuffix}}",
+  "conversation.activity.progressEstimated": "{{scope}} · {{current}} / {{total}}{{unitSuffix}} (estimated)",
   "conversation.activity.progressCount": "{{scope}} · {{count}}{{unitSuffix}} · total unknown",
   "conversation.activity.toolLabel": "Tool",
   "conversation.activity.input": "Input",

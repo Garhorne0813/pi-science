@@ -149,6 +149,7 @@ function projectProgress(block: ToolCallBlock): StructuredProgress | undefined {
   if (display.mode === "hidden") return undefined;
   if (display.mode === "indeterminate") return { indeterminate: true, ...(display.label ? { label: display.label } : {}) };
   if (display.mode === "count") return { scopeLabel: display.scopeLabel, current: display.value, ...(display.unit ? { unit: display.unit } : {}), ...(display.phase ? { phase: display.phase } : {}) };
+  if (display.mode === "percent") return { scopeLabel: display.scopeLabel, percent: display.value, ...(display.phase ? { phase: display.phase } : {}) };
   return { scopeLabel: display.scopeLabel, current: display.current, total: display.total, percent: display.percent, ...(display.unit ? { unit: display.unit } : {}), ...(display.phase ? { phase: display.phase } : {}) };
 }
 

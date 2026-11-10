@@ -7,6 +7,7 @@ import { activityPolicy } from "../../lib/conversation/activity-policy";
 import { ACTIVITY_SWITCH_DEBOUNCE_MS, MIN_ACTIVITY_VISIBLE_MS, selectDisplayedActivity } from "../../lib/conversation/activity-display-policy";
 import type { PresentedActivity } from "../../lib/conversation/activity-narrative";
 import { groupActivityBlocks, type ActivityEntry } from "../../lib/conversation/activity-groups";
+import { formatBytes } from "../../lib/conversation/tool-progress-format";
 import { isLiveLifecycle, type TurnLifecycle } from "../../lib/conversation/turn-presentation";
 import { projectToolActivity } from "../../lib/conversation/projection";
 import { ProgressVisual, useProgressAppearance } from "../progress/ProgressVisual";
@@ -458,25 +459,45 @@ function useProgressLayerVisible(block: ToolCallBlock, enabled: boolean): boolea
 /** Measured progress sits under the tool row; it renders only after the row's
  *  visibility timer says the step is long enough to deserve a bar. */
 function ToolProgressLayer({ display }: { display: ReturnType<typeof selectToolProgressDisplay> }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   if (display.mode === "hidden") return null;
   if (display.mode === "indeterminate") return display.label
     ? <div className={styles.progressLayer}>
       <span className={styles.progressLabel}>{display.label}</span>
     </div>
     : null;
-  const unitSuffix = display.unit ? ` ${display.unit}` : "";
+  if (display.mode === "percent") {
+    const percent = Math.min(100, Math.floor(display.value));
+    return <div className={styles.progressLayer}>
+      <div className={styles.progressText}>
+        <span className={styles.progressLabel}>{display.scopeLabel}</span>
+        <span className={styles.progressPercent} aria-hidden="true">{percent}%</span>
+      </div>
+      <div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label={`${display.scopeLabel} ${percent}%`} className={styles.progressTrack}>
+        <div className={styles.progressFill} style={{ width: `${percent}%` }} />
+      </div>
+    </div>;
+  }
+  // A byte count is formatted here rather than in the adapter, so the contract
+  // keeps the producer's number and every renderer derives the same unit.
+  const bytes = display.unit === "bytes";
+  const unitSuffix = display.unit && !bytes ? ` ${display.unit}` : "";
+  const size = (value: number) => (bytes ? formatBytes(value, i18n.language) : String(value));
   if (display.mode === "count") return <div className={styles.progressLayer}>
-    <span className={styles.progressLabel}>{t("conversation.activity.progressCount", { scope: display.scopeLabel, count: display.value, unitSuffix })}</span>
+    <span className={styles.progressLabel}>{t("conversation.activity.progressCount", { scope: display.scopeLabel, count: size(display.value), unitSuffix })}</span>
   </div>;
-  const percent = Math.floor(display.percent);
+  const percent = Math.min(100, Math.floor(display.percent));
+  // An estimate is a text property: the bar shows the share, and only the
+  // sentence says the total may still move.
+  const estimated = display.mode === "estimated";
+  const label = t(estimated ? "conversation.activity.progressEstimated" : "conversation.activity.progressDeterminate", { scope: display.scopeLabel, current: size(display.current), total: size(display.total), unitSuffix });
   return <div className={styles.progressLayer}>
     <div className={styles.progressText}>
-      <span className={styles.progressLabel}>{t("conversation.activity.progressDeterminate", { scope: display.scopeLabel, current: display.current, total: display.total, unitSuffix })}</span>
-      <span className={styles.progressPercent} aria-hidden="true">{percent}%</span>
+      <span className={styles.progressLabel}>{label}</span>
+      {!estimated && <span className={styles.progressPercent} aria-hidden="true">{percent}%</span>}
     </div>
-    <div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label={`${display.scopeLabel} ${percent}%`} className={styles.progressTrack}>
-      <div className={styles.progressFill} style={{ width: `${display.percent}%` }} />
+    <div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-valuetext={estimated ? label : undefined} aria-label={estimated ? display.scopeLabel : `${display.scopeLabel} ${percent}%`} className={styles.progressTrack}>
+      <div className={styles.progressFill} style={{ width: `${percent}%` }} />
     </div>
   </div>;
 }
