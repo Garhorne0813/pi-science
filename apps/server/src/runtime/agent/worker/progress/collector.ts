@@ -65,7 +65,6 @@ export class ToolProgressCollector {
   observe(raw: string): ToolProgressReading {
     if (this.#closed) return { text: controlLines(raw).visible };
     const { visible } = controlLines(raw);
-    this.#flushIfDue();
     const next = this.#read(raw, visible);
     if (next) this.#adopt(next);
     const due = this.#flushIfDue();
