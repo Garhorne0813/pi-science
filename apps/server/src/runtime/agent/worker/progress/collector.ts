@@ -147,6 +147,7 @@ function toProgress(adapterId: string, observation: ProgressObservation): ToolPr
     source: "builtin",
     ...(observation.current === undefined ? {} : { current: observation.current }),
     ...(observation.total === undefined ? {} : { total: observation.total }),
+    ...(observation.percent === undefined ? {} : { percent: observation.percent }),
     ...(observation.unit === undefined ? {} : { unit: observation.unit }),
     ...(observation.phase === undefined ? {} : { phase: observation.phase }),
     ...(observation.label === undefined ? {} : { label: observation.label }),
@@ -161,5 +162,16 @@ function sameValue(left: ToolProgressV1 | undefined, right: ToolProgressV1 | und
 }
 
 function key(value: ToolProgressV1): string {
-  return [value.scopeId, value.scopeLabel, value.current ?? "", value.total ?? "", value.totalKind, value.unit ?? "", value.phase ?? "", value.label ?? "", value.indeterminate === true ? "1" : ""].join("\u001f");
+  return [
+    value.scopeId,
+    value.scopeLabel,
+    value.current ?? "",
+    value.total ?? "",
+    value.percent ?? "",
+    value.totalKind,
+    value.unit ?? "",
+    value.phase ?? "",
+    value.label ?? "",
+    value.indeterminate === true ? "1" : "",
+  ].join("\u001f");
 }

@@ -183,6 +183,7 @@
   "conversation.activity.narrative.recover": "恢复任务",
   "conversation.activity.trace": "执行记录",
   "conversation.activity.progressDeterminate": "{{scope}} · {{current}} / {{total}}{{unitSuffix}}",
+  "conversation.activity.progressEstimated": "{{scope}} · {{current}} / {{total}}{{unitSuffix}}（估算）",
   "conversation.activity.progressCount": "{{scope}} · 已处理 {{count}}{{unitSuffix}} · 总量未知",
   "conversation.activity.toolLabel": "工具",
   "conversation.activity.input": "输入",

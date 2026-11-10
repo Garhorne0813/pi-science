@@ -28,9 +28,22 @@ describe("normalizeToolProgress", () => {
     expect(progress({ current: 120 }).current).toBe(120);
   });
 
-  it("never trusts a producer's determinate or percent claim", () => {
-    expect(normalizeToolProgress({ version: 1, scopeId: "a", scopeLabel: "A", determinate: true, percent: 50 })).toMatchObject({ determinate: false });
-    expect(normalizeToolProgress({ version: 1, scopeId: "a", scopeLabel: "A", determinate: true, percent: 50 })).not.toHaveProperty("percent");
+  it("keeps a producer's share inside its own range and rejects the whole payload outside it", () => {
+    expect(
+      normalizeToolProgress({
+        version: 1,
+        scopeId: "a",
+        scopeLabel: "A",
+        determinate: true,
+        percent: 50,
+      }),
+    ).toMatchObject({ determinate: false, percent: 50 });
+    expect(
+      normalizeToolProgress({ version: 1, scopeId: "a", scopeLabel: "A", percent: 140 }),
+    ).toBeUndefined();
+    expect(
+      normalizeToolProgress({ version: 1, scopeId: "a", scopeLabel: "A", percent: -1 }),
+    ).toBeUndefined();
   });
 
   it("suppresses the bar when the producer marks the work indeterminate", () => {
@@ -65,6 +78,36 @@ describe("selectToolProgressDisplay", () => {
 
   it("shows a count when there is no denominator", () => {
     expect(selectToolProgressDisplay("running", progress({ total: undefined }))).toEqual({ mode: "count", value: 72, scopeLabel: "Processing files" });
+  });
+
+  it("draws a revisable total as an estimate and names it so in the text", () => {
+    expect(
+      selectToolProgressDisplay("running", progress({ current: 45, totalKind: "reestimated" })),
+    ).toEqual({
+      mode: "estimated",
+      current: 45,
+      total: 100,
+      percent: 45,
+      scopeLabel: "Processing files",
+    });
+    expect(
+      selectToolProgressDisplay("running", progress({ current: 120, totalKind: "reestimated" })),
+    ).toMatchObject({ mode: "count", value: 120 });
+  });
+
+  it("keeps a producer's own share without inventing a denominator", () => {
+    expect(
+      selectToolProgressDisplay(
+        "running",
+        normalizeToolProgress({
+          version: 1,
+          scopeId: "pv:percent",
+          scopeLabel: "Transfer",
+          percent: 45,
+          totalKind: "unknown",
+        }),
+      ),
+    ).toEqual({ mode: "percent", value: 45, scopeLabel: "Transfer" });
   });
 
   it("shows nothing numeric without progress", () => {
@@ -125,10 +168,42 @@ describe("mergeToolProgress", () => {
     expect(mergeToolProgress(first, progress({ scopeId: "b".repeat(64), current: 1 }))).toMatchObject({ scopeId: "b".repeat(64), current: 1 });
   });
 
-  it("keeps a count as the only honest display when a producer may re-estimate its total", () => {
+  it("draws a revisable total as an estimate and follows it to the newer total", () => {
     const first = progress({ current: 80, total: 100, totalKind: "reestimated" });
     const second = progress({ current: 90, total: 200, totalKind: "reestimated" });
-    expect(selectToolProgressDisplay("running", first)).toEqual({ mode: "count", value: 80, scopeLabel: "Processing files" });
-    expect(selectToolProgressDisplay("running", mergeToolProgress(first, second))).toEqual({ mode: "count", value: 90, scopeLabel: "Processing files" });
+    expect(selectToolProgressDisplay("running", first)).toEqual({
+      mode: "estimated",
+      current: 80,
+      total: 100,
+      percent: 80,
+      scopeLabel: "Processing files",
+    });
+    expect(selectToolProgressDisplay("running", mergeToolProgress(first, second))).toEqual({
+      mode: "estimated",
+      current: 90,
+      total: 200,
+      percent: 45,
+      scopeLabel: "Processing files",
+    });
+  });
+
+  it("keeps a producer's share across a wording-only update", () => {
+    const share = normalizeToolProgress({
+      version: 1,
+      scopeId: "pv:percent",
+      scopeLabel: "Transfer",
+      percent: 45,
+      totalKind: "unknown",
+    });
+    const wording = normalizeToolProgress({
+      version: 1,
+      scopeId: "pv:percent",
+      scopeLabel: "Transferring",
+      totalKind: "unknown",
+    });
+    expect(mergeToolProgress(share, wording)).toMatchObject({
+      scopeLabel: "Transferring",
+      percent: 45,
+    });
   });
 });

@@ -40,7 +40,17 @@ source, and so values we invent are clearly marked as our own proposals.
 
 ## Pi-Science proposal: tool progress layer
 
-The tool progress layer uses a 3 px rounded track, a 1.5 rem left inset under the tool row, 11 px text, and a 500 ms reveal delay. These values are a Pi-Science proposal, not an upstream citation.
+The tool progress layer uses a 3 px rounded track, a `14px marker + 8px gap = 22px` left inset under the tool row, 11 px text, and a 500 ms reveal delay. The inset is derived from the activity row's marker slot and spacing step, not a new token. These values are a Pi-Science proposal, not an upstream citation.
+
+| Tier | Bar | Right `%` readout | Text |
+|---|---|---|---|
+| determinate | yes, solid | yes | `{{scope}} · {{current}} / {{total}}{{unitSuffix}}` |
+| estimated | yes, solid | no | `{{scope}} · {{current}} / {{total}}{{unitSuffix}} (estimated)` |
+| percent | yes, solid | yes | `{{scope}}`, share as the producer published it |
+| count | no | no | `{{scope}} · {{count}}{{unitSuffix}} · total unknown` |
+| indeterminate | no | no | the producer's label, when it published one |
+
+Two decisions belong to this proposal: an estimate is a text property, not a bar property, because at 3 px a stripe is indistinguishable from a solid line and a 60% accent fill mixed with white measures 2.25:1 on the light surface, below the 3:1 graphical minimum; and byte counts are formatted in powers of 1000 with at most one decimal below ten.
 
 ## Confirmed values (have a file + selector source)
 

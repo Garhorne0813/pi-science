@@ -25,6 +25,11 @@ export interface ToolProgressV1 {
   current?: number;
   /** Size of the scope. Absent when the producer does not know it. */
   total?: number;
+  /** A share the producer published in its own output together with a
+   *  denominator it did not print, such as a transfer reading `45%`. Accepted
+   *  only inside 0-100: an out-of-range share rejects the whole payload rather
+   *  than being clamped, because a clamped number is a number nobody made. */
+  percent?: number;
   unit?: string;
   totalKind: ToolProgressTotalKind;
   indeterminate?: boolean;
@@ -39,7 +44,25 @@ export type ToolProgressDisplay =
   | { mode: "hidden" }
   | { mode: "indeterminate"; label?: string }
   | { mode: "count"; value: number; scopeLabel: string; unit?: string; phase?: string }
-  | { mode: "determinate"; current: number; total: number; percent: number; scopeLabel: string; unit?: string; phase?: string };
+  | { mode: "percent"; value: number; scopeLabel: string; phase?: string }
+  | {
+      mode: "estimated";
+      current: number;
+      total: number;
+      percent: number;
+      scopeLabel: string;
+      unit?: string;
+      phase?: string;
+    }
+  | {
+      mode: "determinate";
+      current: number;
+      total: number;
+      percent: number;
+      scopeLabel: string;
+      unit?: string;
+      phase?: string;
+    };
 
 function boundedText(value: unknown, limit: number): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -89,6 +112,8 @@ export function normalizeToolProgress(raw: unknown): ToolProgressV1 | undefined 
   if (!scopeId || !scopeLabel) return undefined;
   const current = count(value.current);
   const total = count(value.total);
+  const percent = count(value.percent);
+  if (value.percent !== undefined && (percent === undefined || percent > 100)) return undefined;
   const kind = totalKind(value.totalKind);
   const indeterminate = value.indeterminate === true;
   const phase = boundedText(value.phase, TOOL_PROGRESS_LIMITS.phase);
@@ -102,6 +127,7 @@ export function normalizeToolProgress(raw: unknown): ToolProgressV1 | undefined 
     totalKind: kind,
     ...(current === undefined ? {} : { current }),
     ...(total === undefined ? {} : { total }),
+    ...(percent === undefined ? {} : { percent }),
     ...(phase ? { phase } : {}),
     ...(label ? { label } : {}),
     ...(unit ? { unit } : {}),
@@ -134,13 +160,22 @@ function inheritMeasurement(previous: ToolProgressV1, next: ToolProgressV1): Too
     totalKind: previous.totalKind,
     ...(next.current === undefined && previous.current !== undefined ? { current: previous.current } : {}),
     ...(next.total === undefined && previous.total !== undefined ? { total: previous.total } : {}),
+    ...(next.percent === undefined && previous.percent !== undefined
+      ? { percent: previous.percent }
+      : {}),
     ...(next.unit === undefined && previous.unit !== undefined ? { unit: previous.unit } : {}),
   });
 }
 
-/** The four display tiers. A terminal, queued or waiting row never shows a
- *  percentage, because the tool is not doing the measured work. */
-export function selectToolProgressDisplay(status: ToolProgressStatus, progress: ToolProgressV1 | undefined): ToolProgressDisplay {
+/** The display tiers. A terminal, queued or waiting row never shows a
+ *  percentage, because the tool is not doing the measured work. A fixed total
+ *  is a measurement, a revisable total is still drawn but only the text calls it
+ *  an estimate, and a producer's own percentage has no denominator to divide, so
+ *  it keeps the producer's number instead of inventing a total. */
+export function selectToolProgressDisplay(
+  status: ToolProgressStatus,
+  progress: ToolProgressV1 | undefined,
+): ToolProgressDisplay {
   if (status !== "running") return { mode: "hidden" };
   if (!progress) return { mode: "indeterminate" };
   const phase = progress.phase;
@@ -153,6 +188,31 @@ export function selectToolProgressDisplay(status: ToolProgressStatus, progress: 
       percent: Math.min(100, (progress.current / progress.total) * 100),
       scopeLabel: progress.scopeLabel,
       ...(unit ? { unit } : {}),
+      ...(phase ? { phase } : {}),
+    };
+  }
+  if (
+    progress.totalKind === "reestimated" &&
+    progress.current !== undefined &&
+    progress.total !== undefined &&
+    progress.total > 0 &&
+    progress.current <= progress.total
+  ) {
+    return {
+      mode: "estimated",
+      current: progress.current,
+      total: progress.total,
+      percent: Math.min(100, (progress.current / progress.total) * 100),
+      scopeLabel: progress.scopeLabel,
+      ...(unit ? { unit } : {}),
+      ...(phase ? { phase } : {}),
+    };
+  }
+  if (progress.percent !== undefined && progress.total === undefined) {
+    return {
+      mode: "percent",
+      value: progress.percent,
+      scopeLabel: progress.scopeLabel,
       ...(phase ? { phase } : {}),
     };
   }

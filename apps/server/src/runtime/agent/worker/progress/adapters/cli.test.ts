@@ -25,13 +25,38 @@ describe("pvProgressAdapter", () => {
     expect(pvProgressAdapter.read("524288/1048576 1048576/1048576")).toEqual([{ scopeId: "bytes:1048576", scopeLabel: "Transfer", current: 1048576, total: 1048576, totalKind: "fixed", unit: "bytes" }]);
   });
 
-  it("reports nothing for the default percentage-only output", () => {
-    expect(pvProgressAdapter.read("  45%")).toEqual([]);
+  it("reports the default share as the producer's own measurement", () => {
+    expect(pvProgressAdapter.read("  45%")).toEqual([
+      { scopeId: "percent", scopeLabel: "Transfer", percent: 45, totalKind: "unknown" },
+    ]);
+    expect(pvProgressAdapter.read("  140%")).toEqual([]);
   });
 
-  it("does not read a copy that asked for no machine format", () => {
-    expect(pvProgressAdapter.matches?.("pv file.bin > out.bin")).toBe(false);
+  it("reads the last share of a default transfer line", () => {
+    expect(
+      pvProgressAdapter.read(
+        "1.5GiB 0:00:03 [ 512MiB/s] [====>  ] 45%\r1.6GiB 0:00:02 [ 600MiB/s] [=====> ] 62%",
+      ),
+    ).toEqual([{ scopeId: "percent", scopeLabel: "Transfer", percent: 62, totalKind: "unknown" }]);
+  });
+
+  it("prefers a machine format's byte pair over any share on the line", () => {
+    expect(pvProgressAdapter.read("524288/1048576 45%")).toEqual([
+      {
+        scopeId: "bytes:1048576",
+        scopeLabel: "Transfer",
+        current: 524288,
+        total: 1048576,
+        totalKind: "fixed",
+        unit: "bytes",
+      },
+    ]);
+  });
+
+  it("matches a plain copy as well as a formatted one", () => {
+    expect(pvProgressAdapter.matches?.("pv file.bin > out.bin")).toBe(true);
     expect(pvProgressAdapter.matches?.("pv --format '%b/%s ' file.bin > out.bin")).toBe(true);
+    expect(pvProgressAdapter.matches?.("pvzip file.bin")).toBe(false);
   });
 });
 

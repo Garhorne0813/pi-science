@@ -501,6 +501,34 @@ describe("AgentActivity measured progress", () => {
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
+  it("draws a revisable total as an estimate with no percentage readout", () => {
+    render(<AgentActivity blocks={[{ ...tool("python-1", "python", "running"), startedAt: startedLongAgo(), progress: measuredProgress({ current: 45, total: 100, totalKind: "reestimated", unit: "files" }) }]} />);
+
+    expect(screen.getByText("Indexing files · 45 / 100 files (estimated)")).toBeInTheDocument();
+    expect(screen.queryByText("45%")).not.toBeInTheDocument();
+    const bar = screen.getByRole("progressbar", { name: "Indexing files" });
+    expect(bar).toHaveAttribute("aria-valuenow", "45");
+    expect(bar).toHaveAttribute("aria-valuetext", "Indexing files · 45 / 100 files (estimated)");
+    expect(bar.firstElementChild).toHaveStyle({ width: "45%" });
+  });
+
+  it("draws a producer's own share with its percentage and no invented counts", () => {
+    render(<AgentActivity blocks={[{ ...tool("bash-1", "bash", "running"), startedAt: startedLongAgo(), progress: measuredProgress({ current: undefined, total: undefined, percent: 45, totalKind: "unknown" }) }]} />);
+
+    expect(screen.getByText("45%")).toBeInTheDocument();
+    expect(screen.getByText("Indexing files")).toBeInTheDocument();
+    expect(screen.queryByText(/total unknown/)).not.toBeInTheDocument();
+    const bar = screen.getByRole("progressbar", { name: "Indexing files 45%" });
+    expect(bar).toHaveAttribute("aria-valuenow", "45");
+    expect(bar.firstElementChild).toHaveStyle({ width: "45%" });
+  });
+
+  it("formats a byte count into a human unit", () => {
+    render(<AgentActivity blocks={[{ ...tool("bash-1", "bash", "running"), startedAt: startedLongAgo(), progress: measuredProgress({ current: 2956984320, totalKind: "unknown", unit: "bytes" }) }]} />);
+
+    expect(screen.getByText("Indexing files · 3 GB · total unknown")).toBeInTheDocument();
+  });
+
   it("shows the phase wording when the producer has a label but no number", () => {
     render(<AgentActivity blocks={[{ ...tool("python-1", "python", "running"), startedAt: startedLongAgo(), progress: measuredProgress({ current: undefined, total: undefined, label: "Screening records" }) }]} />);
 
