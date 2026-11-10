@@ -12,6 +12,7 @@ import { AgentMcpTools } from "./mcp-tools.js";
 import { InteractionBridge } from "./interaction-bridge.js";
 import { acquireMcpCall } from "../../../mcp/call-scheduler.js";
 import { CredentialStore } from "../../../model-resources/credential-store.js";
+import { normalizeToolProgress, selectToolProgressDisplay } from "@pi-science/contracts";
 
 // These SDK fixtures model policy in their synthetic snapshot. Database-backed
 // authority and publication failures are exercised by mcp-approval.test.ts.
@@ -52,6 +53,7 @@ describe("agent-core managed MCP tools", () => {
       await mkdir(join(cwd, ".pi-science"));
       const marker = join(cwd, "unrelated-started");
       const server = join(cwd, "scoped.mjs");
+<<<<<<< HEAD
       await writeFile(
         server,
         [
@@ -102,6 +104,26 @@ describe("agent-core managed MCP tools", () => {
         undefined,
         ["read", "mcp__foo__bar", "mcp__foo__progress", "mcp__foo__forbidden"],
       );
+=======
+      await writeFile(server, [
+        `import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};`,
+        `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
+        `const server = new McpServer({ name: "scoped", version: "1" });`,
+        `for (const name of ["bar", "other", "forbidden"]) server.registerTool(name, { description: name }, async () => ({ content: [{ type: "text", text: name }] }));`,
+        `server.registerTool("progress", { description: "progress" }, async (extra) => { for (const params of [{ progress: 80, total: 100 }, { progress: 90, total: 200 }, { progress: 91 }]) await extra.sendNotification({ method: "notifications/progress", params: { progressToken: extra._meta.progressToken, ...params } }); await new Promise(resolve => setTimeout(resolve, 50)); return { content: [{ type: "text", text: "done" }] }; });`,
+        `await server.connect(new StdioServerTransport());`,
+      ].join("\n"));
+      await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test",
+        mcpServers: {
+          foo: { command: process.execPath, args: [server], approveTools: false, excludeTools: ["forbidden"], __piScienceConnectorId: "connector_foo" },
+          unrelated: { command: process.execPath, args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`],
+            __piScienceConnectorId: "connector_unrelated" },
+          protected: { transport: "streamable_http", url: "https://unused.example/mcp", __piScienceConnectorId: "connector_protected",
+            __piScienceHeaders: { Authorization: { kind: "credential", credential_ref: "unrelated-secret" } } },
+        } }));
+      mcp = await AgentMcpTools.open(cwd, new InteractionBridge(() => undefined), { PATH: process.env.PATH ?? "" }, undefined,
+        ["read", "mcp__foo__bar", "mcp__foo__progress", "mcp__foo__forbidden"]);
+>>>>>>> 442d7996 (test(agent-ui): pin the tool progress review findings)
       expect(mcp.diagnostics).toEqual([]);
       expect(credentials).not.toHaveBeenCalled();
       expect(await readFile(marker, "utf8").catch(() => null)).toBeNull();
@@ -118,6 +140,7 @@ describe("agent-core managed MCP tools", () => {
         ),
       ).toMatchObject({ content: [{ type: "text", text: "bar" }] });
       expect(updates).not.toHaveBeenCalled();
+<<<<<<< HEAD
       expect(
         await mcp.tools[1]!.execute(
           "progress-call",
@@ -156,7 +179,19 @@ describe("agent-core managed MCP tools", () => {
             },
           },
         },
+=======
+      expect(await mcp.tools[1]!.execute("progress-call", {}, updates, {} as never, {} as never, {} as never))
+        .toMatchObject({ content: [{ type: "text", text: "done" }] });
+      const emitted = updates.mock.calls.map(([update]) => update);
+      expect(emitted).toEqual([
+        { content: [], details: { progress: { version: 1, scopeId: "mcp:foo/progress", scopeLabel: "foo: progress", current: 80, total: 100, totalKind: "reestimated", source: "mcp" } } },
+        { content: [], details: { progress: { version: 1, scopeId: "mcp:foo/progress", scopeLabel: "foo: progress", current: 90, total: 200, totalKind: "reestimated", source: "mcp" } } },
+        { content: [], details: { progress: { version: 1, scopeId: "mcp:foo/progress", scopeLabel: "foo: progress", current: 91, totalKind: "unknown", source: "mcp" } } },
+>>>>>>> 442d7996 (test(agent-ui): pin the tool progress review findings)
       ]);
+      // An external server may re-estimate its total, so a rising then falling
+      // percentage must never be shown as a fixed measurement.
+      expect(emitted.map((update) => selectToolProgressDisplay("running", normalizeToolProgress(update.details.progress)).mode)).toEqual(["count", "count", "count"]);
     } finally {
       credentials.mockRestore();
       await mcp?.close();

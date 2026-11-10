@@ -501,6 +501,14 @@ describe("AgentActivity measured progress", () => {
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
+  it("shows the phase wording when the producer has a label but no number", () => {
+    render(<AgentActivity blocks={[{ ...tool("python-1", "python", "running"), startedAt: startedLongAgo(), progress: measuredProgress({ current: undefined, total: undefined, label: "Screening records" }) }]} />);
+
+    expect(screen.getByText("Screening records")).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(screen.queryByText(/%/)).not.toBeInTheDocument();
+  });
+
   it("renders a count without a unit or extra spaces", () => {
     render(<AgentActivity blocks={[{ ...tool("python-1", "python", "running"), startedAt: startedLongAgo(), progress: measuredProgress({ current: 18, totalKind: "unknown" }) }]} />);
     expect(screen.getByText("Indexing files · 18 · total unknown")).toBeInTheDocument();

@@ -42,12 +42,19 @@ describe("normalizeToolProgress", () => {
     expect(progress({ totalKind: undefined })).toMatchObject({ determinate: false });
   });
 
-  it("bounds text so an external label cannot flood the UI", () => {
-    const long = normalizeToolProgress({ version: 1, scopeId: "s".repeat(200), scopeLabel: "l".repeat(500), unit: "u".repeat(80), phase: "p".repeat(200), totalKind: "unknown" })!;
-    expect(long.scopeId).toHaveLength(64);
+  it("bounds the visible text so an external label cannot flood the UI", () => {
+    const long = normalizeToolProgress({ version: 1, scopeId: "scope", scopeLabel: "l".repeat(500), unit: "u".repeat(80), phase: "p".repeat(200), totalKind: "unknown" })!;
+    expect(long.scopeId).toBe("scope");
     expect(long.scopeLabel).toHaveLength(100);
     expect(long.unit).toHaveLength(24);
     expect(long.phase).toHaveLength(64);
+  });
+
+  it("rejects an over-long scope identity instead of truncating it into another scope", () => {
+    const shared = "s".repeat(64);
+    expect(normalizeToolProgress({ version: 1, scopeId: shared, scopeLabel: "Reach" })?.scopeId).toBe(shared);
+    expect(normalizeToolProgress({ version: 1, scopeId: `${shared}-a`, scopeLabel: "A", current: 5 })).toBeUndefined();
+    expect(normalizeToolProgress({ version: 1, scopeId: `${shared}-b`, scopeLabel: "B", current: 1 })).toBeUndefined();
   });
 });
 
@@ -99,5 +106,29 @@ describe("mergeToolProgress", () => {
   it("restarts on a new scope and takes its label", () => {
     expect(mergeToolProgress(progress({ current: 80 }), progress({ scopeId: "verify-files:1", scopeLabel: "Verifying files", current: 10, total: 100 })))
       .toMatchObject({ scopeId: "verify-files:1", scopeLabel: "Verifying files", current: 10 });
+  });
+
+  it("keeps the measurement when an update inside the scope carries only wording", () => {
+    const wording = normalizeToolProgress({ version: 1, scopeId: "process-files:1", scopeLabel: "Processing files", phase: "validating" });
+    expect(mergeToolProgress(progress({ current: 60, unit: "files" }), wording!)).toMatchObject({ current: 60, total: 100, unit: "files", totalKind: "fixed", determinate: true, phase: "validating" });
+  });
+
+  it("never loses or rewinds the count across numeric, wording-only and numeric updates", () => {
+    const first = mergeToolProgress(undefined, progress({ current: 60 }));
+    const wording = mergeToolProgress(first, progress({ current: undefined, total: undefined, phase: "validating" }));
+    expect(wording).toMatchObject({ current: 60, determinate: true });
+    expect(mergeToolProgress(wording, progress({ current: 70 }))).toMatchObject({ current: 70, determinate: true });
+  });
+
+  it("keeps two distinct full-length identities apart", () => {
+    const first = progress({ scopeId: "a".repeat(64), current: 5 });
+    expect(mergeToolProgress(first, progress({ scopeId: "b".repeat(64), current: 1 }))).toMatchObject({ scopeId: "b".repeat(64), current: 1 });
+  });
+
+  it("keeps a count as the only honest display when a producer may re-estimate its total", () => {
+    const first = progress({ current: 80, total: 100, totalKind: "reestimated" });
+    const second = progress({ current: 90, total: 200, totalKind: "reestimated" });
+    expect(selectToolProgressDisplay("running", first)).toEqual({ mode: "count", value: 80, scopeLabel: "Processing files" });
+    expect(selectToolProgressDisplay("running", mergeToolProgress(first, second))).toEqual({ mode: "count", value: 90, scopeLabel: "Processing files" });
   });
 });
