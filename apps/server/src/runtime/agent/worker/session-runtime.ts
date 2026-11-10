@@ -761,6 +761,33 @@ export class SessionRuntime {
     }
   }
 
+  /** Resolve a /skill: or prompt-template invocation the same way for a new
+   *  prompt and for a steer. follow_up stays literal: it runs after the turn. */
+  private prepareMessage(
+    message: string,
+  ): { ok: true; message: string } | { ok: false; code: string; error: string } {
+    const invocation = message.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
+    const name = invocation?.[1];
+    const argument = invocation?.[2];
+    if (!name) return { ok: true, message };
+    if (name.startsWith("skill:")) {
+      const skill = this.enabledSkills().find((item) => item.name === name.slice(6));
+      if (!skill)
+        return {
+          ok: false,
+          code: "unknown_skill",
+          error: "Skill is unavailable under the current policy",
+        };
+      return { ok: true, message: formatSkillInvocation(skill, argument) };
+    }
+    const template = this.promptTemplates.find((item) => item.name === name);
+    if (!template) return { ok: true, message };
+    return {
+      ok: true,
+      message: formatPromptTemplateInvocation(template, parseCommandArgs(argument ?? "")),
+    };
+  }
+
   async command(type: string, params: Record<string, unknown>): Promise<RuntimeResult> {
     const decoded = decodeCommand(type, params);
     if (!decoded.ok) return decoded.result;
@@ -881,27 +908,9 @@ export class SessionRuntime {
           const rawMessage = params.message;
           if (typeof rawMessage !== "string" || !rawMessage.trim())
             return { success: false, code: "invalid_message", error: "prompt message is required" };
-          let message: string = rawMessage;
-          const invocation = message.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
-          if (invocation?.[1]?.startsWith("skill:")) {
-            const skill = this.enabledSkills().find(
-              (item) => item.name === invocation[1]!.slice(6),
-            );
-            if (!skill)
-              return {
-                success: false,
-                code: "unknown_skill",
-                error: "Skill is unavailable under the current policy",
-              };
-            message = formatSkillInvocation(skill, invocation[2]);
-          } else if (invocation) {
-            const template = this.promptTemplates.find((item) => item.name === invocation[1]);
-            if (template)
-              message = formatPromptTemplateInvocation(
-                template,
-                parseCommandArgs(invocation[2] ?? ""),
-              );
-          }
+          const prepared = this.prepareMessage(rawMessage);
+          if (!prepared.ok) return { success: false, code: prepared.code, error: prepared.error };
+          const message = prepared.message;
           const clientMessageId =
             typeof params.client_message_id === "string" ? params.client_message_id : undefined;
           const operationId = clientMessageId
@@ -949,11 +958,11 @@ export class SessionRuntime {
           const message = params.message;
           if (typeof message !== "string" || !message.trim())
             return { success: false, code: "invalid_message", error: "message is required" };
-          return resultValue(
-            type === "steer"
-              ? await this.lane.steer(message, undefined, context)
-              : await this.lane.followUp(message, undefined, context),
-          );
+          if (type === "follow_up")
+            return resultValue(await this.lane.followUp(message, undefined, context));
+          const prepared = this.prepareMessage(message);
+          if (!prepared.ok) return { success: false, code: prepared.code, error: prepared.error };
+          return resultValue(await this.lane.steer(prepared.message, undefined, context));
         }
         case "abort": {
           this.aborting = true;

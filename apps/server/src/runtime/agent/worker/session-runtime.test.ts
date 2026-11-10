@@ -970,6 +970,29 @@ describe("agent-core worker mutations", () => {
     ).toMatchObject({ success: false, code: "unknown_skill" });
   });
 
+  it("expands a skill invocation in a steer and rejects an unavailable one", async () => {
+    const { instance, parts } = await runtime(async (cwd) => {
+      await mkdir(join(cwd, ".pi", "skills", "review"), { recursive: true });
+      await writeFile(
+        join(cwd, ".pi", "skills", "review", "SKILL.md"),
+        "---\nname: review\ndescription: Review evidence\n---\nFollow the evidence protocol.",
+      );
+    });
+    const steer = vi
+      .spyOn(parts.lane, "steer")
+      .mockResolvedValue({ ok: true, value: { entryId: "entry-1" } });
+    expect(
+      await instance.command("steer", { message: "/skill:review check the statistics" }),
+    ).toMatchObject({ success: true, data: { entryId: "entry-1" } });
+    expect(steer.mock.calls[0]?.[0]).toContain("Follow the evidence protocol.");
+    expect(steer.mock.calls[0]?.[0]).toContain("check the statistics");
+    expect(await instance.command("steer", { message: "/skill:missing do it" })).toMatchObject({
+      success: false,
+      code: "unknown_skill",
+    });
+    expect(steer).toHaveBeenCalledTimes(1);
+  });
+
   it.each([undefined, "Custom scientific instructions."])(
     "sends current skill metadata to the model with interactive role %j",
     async (role) => {
