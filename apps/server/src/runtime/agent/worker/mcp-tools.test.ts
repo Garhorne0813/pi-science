@@ -12,6 +12,7 @@ import { AgentMcpTools } from "./mcp-tools.js";
 import { InteractionBridge } from "./interaction-bridge.js";
 import { acquireMcpCall } from "../../../mcp/call-scheduler.js";
 import { CredentialStore } from "../../../model-resources/credential-store.js";
+import { normalizeToolProgress, selectToolProgressDisplay } from "@pi-science/contracts";
 
 // These SDK fixtures model policy in their synthetic snapshot. Database-backed
 // authority and publication failures are exercised by mcp-approval.test.ts.
@@ -44,7 +45,7 @@ describe("agent-core managed MCP tools", () => {
         `import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};`,
         `const server = new McpServer({ name: "scoped", version: "1" });`,
         `for (const name of ["bar", "other", "forbidden"]) server.registerTool(name, { description: name }, async () => ({ content: [{ type: "text", text: name }] }));`,
-        `server.registerTool("progress", { description: "progress" }, async (extra) => { for (const params of [{ progress: 1, total: 2 }, { progress: 3 }]) await extra.sendNotification({ method: "notifications/progress", params: { progressToken: extra._meta.progressToken, ...params } }); await new Promise(resolve => setTimeout(resolve, 50)); return { content: [{ type: "text", text: "done" }] }; });`,
+        `server.registerTool("progress", { description: "progress" }, async (extra) => { for (const params of [{ progress: 80, total: 100 }, { progress: 90, total: 200 }, { progress: 91 }]) await extra.sendNotification({ method: "notifications/progress", params: { progressToken: extra._meta.progressToken, ...params } }); await new Promise(resolve => setTimeout(resolve, 50)); return { content: [{ type: "text", text: "done" }] }; });`,
         `await server.connect(new StdioServerTransport());`,
       ].join("\n"));
       await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test",
@@ -67,10 +68,15 @@ describe("agent-core managed MCP tools", () => {
       expect(updates).not.toHaveBeenCalled();
       expect(await mcp.tools[1]!.execute("progress-call", {}, updates, {} as never, {} as never, {} as never))
         .toMatchObject({ content: [{ type: "text", text: "done" }] });
-      expect(updates.mock.calls.map(([update]) => update)).toEqual([
-        { content: [], details: { progress: { version: 1, scopeId: "mcp:foo/progress", scopeLabel: "foo: progress", current: 1, total: 2, totalKind: "fixed", source: "mcp" } } },
-        { content: [], details: { progress: { version: 1, scopeId: "mcp:foo/progress", scopeLabel: "foo: progress", current: 3, totalKind: "unknown", source: "mcp" } } },
+      const emitted = updates.mock.calls.map(([update]) => update);
+      expect(emitted).toEqual([
+        { content: [], details: { progress: { version: 1, scopeId: "mcp:foo/progress", scopeLabel: "foo: progress", current: 80, total: 100, totalKind: "reestimated", source: "mcp" } } },
+        { content: [], details: { progress: { version: 1, scopeId: "mcp:foo/progress", scopeLabel: "foo: progress", current: 90, total: 200, totalKind: "reestimated", source: "mcp" } } },
+        { content: [], details: { progress: { version: 1, scopeId: "mcp:foo/progress", scopeLabel: "foo: progress", current: 91, totalKind: "unknown", source: "mcp" } } },
       ]);
+      // An external server may re-estimate its total, so a rising then falling
+      // percentage must never be shown as a fixed measurement.
+      expect(emitted.map((update) => selectToolProgressDisplay("running", normalizeToolProgress(update.details.progress)).mode)).toEqual(["count", "count", "count"]);
     } finally {
       credentials.mockRestore();
       await mcp?.close();
