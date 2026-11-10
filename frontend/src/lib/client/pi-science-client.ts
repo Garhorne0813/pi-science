@@ -11,7 +11,7 @@ import { clearCachedMessages, readCachedMessages } from "./message-cache";
 import * as rest from "./rest";
 import { clearAiTitle, clearAiTitleAttempted, clearSessionName } from "./session-names";
 import { SseTransport, type TransportReason } from "./sse-transport";
-import type { HistoryMessage, InteractionResponse, PiScienceEvent, PromptRequestStatus, SessionInfo, SessionListPage, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
+import type { HistoryMessage, InteractionResponse, PiScienceEvent, PromptRequestStatus, QueuedMessage, SessionInfo, SessionListPage, SessionMessagePage, SessionQueue, SessionState, SessionStats, SessionUserMessageIndex, SteerDeliveryStatus, TurnArtifactTurn } from "./types";
 
 export type { TransportReason } from "./sse-transport";
 
@@ -20,17 +20,20 @@ export type {
   HistoryMessage,
   InteractionResponse,
   PiScienceEvent,
+  QueuedMessage,
   SessionInfo,
   SessionListPage,
   SessionMessagePage,
   PromptRequestStatus,
+  SessionQueue,
   SessionState,
   SessionStats,
   SessionUserMessageIndex,
+  SteerDeliveryStatus,
   TurnArtifactTurn,
 } from "./types";
 export { clampThinkingLevel, conversationModelOptions } from "./models";
-export { aiTitleAttemptedAt, cacheSessionName, clearAiTitle, clearAiTitleAttempted, clearSessionName, deriveSessionName, getSessionName, hasAiTitle, markAiTitle, markAiTitleAttempted, moveSessionName, normalizeSessionTitle, noteManualTitleWrite, SESSION_TITLE_MAX_LENGTH, setSessionName, titleWriteEpoch } from "./session-names";
+export { aiTitleAttemptedAt, clearAiTitle, clearAiTitleAttempted, clearSessionName, deriveSessionName, getSessionName, hasAiTitle, markAiTitle, markAiTitleAttempted, moveSessionName, setSessionName } from "./session-names";
 export { clearCachedMessages } from "./message-cache";
 
 // ── Client ──
@@ -133,6 +136,30 @@ export class PiScienceClient {
     return rest.getPromptRequestStatus(this.baseUrl, sessionId, clientMessageId, cwd);
   }
 
+  async sendSteer(sessionId: string, message: string, clientMessageId: string, cwd?: string): Promise<SteerDeliveryStatus> {
+    return rest.sendSteer(this.baseUrl, sessionId, message, clientMessageId, cwd);
+  }
+
+  async getSessionQueue(sessionId: string, cwd?: string): Promise<SessionQueue> {
+    return rest.getSessionQueue(this.baseUrl, sessionId, cwd);
+  }
+
+  async enqueueMessage(sessionId: string, message: string, clientMessageId: string, cwd?: string): Promise<QueuedMessage> {
+    return rest.enqueueSessionMessage(this.baseUrl, sessionId, message, clientMessageId, cwd);
+  }
+
+  async editQueuedMessage(sessionId: string, entryId: string, message: string, cwd?: string): Promise<QueuedMessage> {
+    return rest.editQueuedMessage(this.baseUrl, sessionId, entryId, message, cwd);
+  }
+
+  async cancelQueuedMessage(sessionId: string, entryId: string, cwd?: string): Promise<QueuedMessage> {
+    return rest.cancelQueuedMessage(this.baseUrl, sessionId, entryId, cwd);
+  }
+
+  async resumeQueue(sessionId: string, cwd?: string): Promise<SessionQueue> {
+    return rest.resumeSessionQueue(this.baseUrl, sessionId, cwd);
+  }
+
   async setModel(
     sessionId: string,
     model: string,
@@ -148,8 +175,8 @@ export class PiScienceClient {
 
   /** Persist a session display title on the server (best-effort; the
    *  localStorage registry remains the immediate/fallback source). */
-  async setSessionTitle(sessionId: string, title: string, cwd?: string, mode: rest.SessionTitleWriteMode = "override"): Promise<rest.SessionTitleWrite> {
-    return rest.setSessionTitle(this.baseUrl, sessionId, title, cwd, mode);
+  async setSessionTitle(sessionId: string, title: string, cwd?: string): Promise<void> {
+    await rest.setSessionTitle(this.baseUrl, sessionId, title, cwd);
   }
 
   async deleteSession(sessionId: string, cwd?: string): Promise<void> {
@@ -184,13 +211,8 @@ export class PiScienceClient {
   }
 
   /** Ask the control plane to generate an AI title via an isolated Pi runtime. */
-  async generateSessionTitle(sessionId: string, cwd: string, manual: boolean): Promise<rest.TitleGenerationResult> {
-    return rest.generateSessionTitle(this.baseUrl, sessionId, cwd, manual);
-  }
-
-  /** Request science review; skipped responses include a reason. */
-  async requestScienceReview(sessionId: string, cwd: string, trigger: "manual" | "auto" = "manual", turnId?: string): Promise<{ id: string; status: string; reason?: string }> {
-    return rest.requestScienceReview(this.baseUrl, sessionId, cwd, trigger, turnId);
+  async generateSessionTitle(sessionId: string, cwd: string): Promise<string | null> {
+    return rest.generateSessionTitle(this.baseUrl, sessionId, cwd);
   }
 
   // ── SSE ──

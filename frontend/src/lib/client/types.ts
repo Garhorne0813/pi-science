@@ -1,5 +1,9 @@
 import type { ToolPresentation } from "@pi-science/contracts";
 
+/** Queue and steer wire types come straight from the shared contract so the
+ *  server and the composer cannot drift apart. */
+export type { QueuedMessage, QueuedMessageStatus, SessionQueue, SteerDeliveryStatus } from "@pi-science/contracts";
+
 /** Wire types shared by the REST calls, the SSE transport and the runtime store. */
 export interface PiScienceEvent {
   type: string;

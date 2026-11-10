@@ -3,7 +3,7 @@
 
 import { request, responseError, RUNTIME_START_TIMEOUT_MS } from "./http";
 import { cacheMessages } from "./message-cache";
-import type { HistoryMessage, InteractionResponse, PromptRequestStatus, SessionInfo, SessionListPage, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
+import type { HistoryMessage, InteractionResponse, PromptRequestStatus, QueuedMessage, SessionInfo, SessionListPage, SessionMessagePage, SessionQueue, SessionState, SessionStats, SessionUserMessageIndex, SteerDeliveryStatus, TurnArtifactTurn } from "./types";
 import type { CreateSessionRequest } from "@pi-science/contracts";
 import { parseWirePayload } from "./wire-schema";
 
@@ -190,7 +190,7 @@ export async function forkSession(baseUrl: string, sessionId: string, cwd: strin
 
 export async function sendPrompt(baseUrl: string, sessionId: string, message: string, clientMessageId: string, cwd?: string): Promise<PromptRequestStatus> {
   const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
-  const res = await request(`${baseUrl}/api/sessions/${sessionId}/prompts${params}`, {
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/prompt${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, client_message_id: clientMessageId }),
@@ -290,39 +290,17 @@ export async function deleteSession(baseUrl: string, sessionId: string, cwd?: st
   }
 }
 
-/** How a title write treats a title that is already stored. `initialize` is the
- *  client's first name for a session, derived from its first message, and fills
- *  an empty slot only. `override` is the user typing a name and always wins. */
-export type SessionTitleWriteMode = "initialize" | "override";
-
-/** The title stored after the write, which is the caller's own unless
- *  `initialize` found the session already named. */
-export interface SessionTitleWrite {
-  applied: boolean;
-  title: string;
-}
-
-export async function setSessionTitle(
-  baseUrl: string,
-  sessionId: string,
-  title: string,
-  cwd?: string,
-  mode: SessionTitleWriteMode = "override",
-): Promise<SessionTitleWrite> {
+export async function setSessionTitle(baseUrl: string, sessionId: string, title: string, cwd?: string): Promise<void> {
   const params = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
   const res = await request(`${baseUrl}/api/sessions/${sessionId}/title${params}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title, mode }),
+    body: JSON.stringify({ title }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.ok === false) {
     throw new Error(responseError(data, `Set session title failed: ${res.statusText}`));
   }
-  return {
-    applied: data.applied !== false,
-    title: typeof data.title === "string" && data.title ? data.title : title,
-  };
 }
 
 export async function respondToInteraction(
@@ -349,41 +327,90 @@ export async function respondToInteraction(
   return { persistentGrant: data.persistentGrant, warning: data.warning };
 }
 
-/** What the control plane did with a title request. A request the server
- *  cancelled (`superseded` by a newer request, `deleted` with its session) is
- *  not a model failure and must not surface as one. */
-export type TitleGenerationResult =
-  | { status: "applied"; title: string }
-  | { status: "superseded" }
-  | { status: "deleted" }
-  | { status: "failed" };
 
-/** Ask the control plane to generate an AI title for a session (Pi runtime).
- *  `manual` records who asked: the server only guards a running session for a
- *  user-requested regenerate, because the settled-turn trigger fires while the
- *  live table may still report busy. */
-export async function generateSessionTitle(baseUrl: string, sessionId: string, cwd: string, manual: boolean): Promise<TitleGenerationResult> {
+function queueError(data: Record<string, unknown>, fallback: string, statusCode: number): Error & { code?: string; status?: number } {
+  const error = new Error(responseError(data, fallback)) as Error & { code?: string; status?: number };
+  error.code = typeof data.code === "string" ? data.code : undefined;
+  error.status = statusCode;
+  return error;
+}
+
+export async function sendSteer(baseUrl: string, sessionId: string, message: string, clientMessageId: string, cwd?: string): Promise<SteerDeliveryStatus> {
+  const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/steer${params}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, client_message_id: clientMessageId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw queueError(data, `Steer failed: ${res.statusText}`, res.status);
+  const { steerResponseSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data, steerResponseSchema, "Steer failed").status;
+}
+
+export async function getSessionQueue(baseUrl: string, sessionId: string, cwd?: string): Promise<SessionQueue> {
+  const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/queue${params}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw queueError(data, `Read queue failed: ${res.statusText}`, res.status);
+  const { sessionQueueSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data.queue, sessionQueueSchema, "Read queue failed");
+}
+
+export async function enqueueSessionMessage(baseUrl: string, sessionId: string, message: string, clientMessageId: string, cwd?: string): Promise<QueuedMessage> {
+  const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/queue${params}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, client_message_id: clientMessageId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw queueError(data, `Add to queue failed: ${res.statusText}`, res.status);
+  const { queuedMessageSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data.entry, queuedMessageSchema, "Add to queue failed");
+}
+
+export async function editQueuedMessage(baseUrl: string, sessionId: string, entryId: string, message: string, cwd?: string): Promise<QueuedMessage> {
+  const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/queue/${encodeURIComponent(entryId)}${params}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw queueError(data, `Edit queued message failed: ${res.statusText}`, res.status);
+  const { queuedMessageSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data.entry, queuedMessageSchema, "Edit queued message failed");
+}
+
+export async function cancelQueuedMessage(baseUrl: string, sessionId: string, entryId: string, cwd?: string): Promise<QueuedMessage> {
+  const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/queue/${encodeURIComponent(entryId)}${params}`, { method: "DELETE" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw queueError(data, `Remove queued message failed: ${res.statusText}`, res.status);
+  const { queuedMessageSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data.entry, queuedMessageSchema, "Remove queued message failed");
+}
+
+export async function resumeSessionQueue(baseUrl: string, sessionId: string, cwd?: string): Promise<SessionQueue> {
+  const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/queue/resume${params}`, { method: "POST" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw queueError(data, `Continue queue failed: ${res.statusText}`, res.status);
+  const { sessionQueueSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data.queue, sessionQueueSchema, "Continue queue failed");
+}
+
+/** Ask the control plane to generate an AI title for a session (Pi runtime). */
+export async function generateSessionTitle(baseUrl: string, sessionId: string, cwd: string): Promise<string | null> {
   const res = await request(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/title?cwd=${encodeURIComponent(cwd)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ manual }),
+    body: "{}",
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.ok === false) return { status: "failed" };
-  if (typeof data.title === "string" && data.title) return { status: "applied", title: data.title };
-  if (data.deleted === true) return { status: "deleted" };
-  if (data.superseded === true) return { status: "superseded" };
-  return { status: "failed" };
-}
-
-/** Request a review and return its queue status or skip reason. */
-export async function requestScienceReview(baseUrl: string, sessionId: string, cwd: string, trigger: "manual" | "auto", turnId?: string): Promise<{ id: string; status: string; reason?: string }> {
-    const response = await request(`${baseUrl}/api/project-knowledge/science-review`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cwd, session_id: sessionId, trigger, ...(turnId ? { turn_id: turnId } : {}) }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(responseError(data, `Science review failed: ${response.statusText}`));
-    return data;
+  if (!res.ok || data.ok === false) {
+    return null;
+  }
+  return typeof data.title === "string" && data.title ? data.title : null;
 }
