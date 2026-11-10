@@ -811,3 +811,5 @@ export { resolveAgentCompaction } from "./agent-context.js";
 export * from "./model-config.js";
 
 export * from "./memory.js";
+
+export * from "./tool-progress.js";
