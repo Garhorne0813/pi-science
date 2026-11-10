@@ -53,6 +53,7 @@ export type ActivityState = "input_streaming" | "queued" | "waiting_approval" | 
 export interface StructuredProgress {
   phase?: string;
   label?: string;
+  scopeLabel?: string;
   current?: number;
   total?: number;
   unit?: string;

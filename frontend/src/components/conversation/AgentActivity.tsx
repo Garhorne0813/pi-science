@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Check, CircleX, ChevronRight } from "lucide-react";
-import type { ProgressAppearance } from "@pi-science/contracts";
+import { selectToolProgressDisplay, type ProgressAppearance } from "@pi-science/contracts";
 import { useTranslation } from "react-i18next";
 import type { AgentMessageBlock, ThinkingBlock, ToolCallBlock } from "../../types/thread";
 import { activityPolicy } from "../../lib/conversation/activity-policy";
@@ -396,6 +396,7 @@ function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
       {duration && <span aria-hidden="true" className="shrink-0 font-mono text-[10px] tabular-nums text-muted">{duration}</span>}
       {hasDetails && <ChevronRight size={12} aria-hidden className={cn(styles.chevron, "shrink-0 transition-transform", expanded && "rotate-90")} />}
     </button>
+    {running && <ToolProgressLayer block={block} />}
     {expanded && hasDetails && details && <div className={cn(styles.details, "space-y-2 pb-2 pl-6 text-xs")}>
       {details.map((detail, index) => detail.pre || detail.plain
         ? <Detail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} pre={detail.pre} />
@@ -412,6 +413,45 @@ function lastStreamLine(value: string): string | null {
   const tail = lines.at(-1);
   if (!tail) return null;
   return tail.length > 120 ? `…${tail.slice(-120)}` : tail;
+}
+
+const TOOL_PROGRESS_DELAY_MS = 500;
+
+/** Measured progress sits under the tool row. The layer waits half a second
+ *  from the step's start so a fast step never flashes a bar, and owns its own
+ *  timer so the wait does not re-render the trace. */
+function ToolProgressLayer({ block }: { block: ToolCallBlock }) {
+  const { t } = useTranslation();
+  const [mountedAt] = useState(() => Date.now());
+  const [visible, setVisible] = useState(false);
+  const startedAt = useMemo(() => {
+    const parsed = block.startedAt ? Date.parse(block.startedAt) : Number.NaN;
+    return Number.isFinite(parsed) ? parsed : mountedAt;
+  }, [block.startedAt, mountedAt]);
+  useEffect(() => {
+    const elapsed = Math.max(0, Date.now() - startedAt);
+    if (elapsed >= TOOL_PROGRESS_DELAY_MS) {
+      setVisible(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setVisible(true), TOOL_PROGRESS_DELAY_MS - elapsed);
+    return () => window.clearTimeout(timer);
+  }, [startedAt]);
+  const display = selectToolProgressDisplay(block.status, block.progress);
+  if (!visible || display.mode === "hidden" || display.mode === "indeterminate") return null;
+  if (display.mode === "count") return <div className={styles.progressLayer}>
+    <span className={styles.progressLabel}>{t("conversation.activity.progressCount", { scope: display.scopeLabel, count: display.value })}</span>
+  </div>;
+  const percent = Math.floor(display.percent);
+  return <div className={styles.progressLayer}>
+    <div className={styles.progressText}>
+      <span className={styles.progressLabel}>{t("conversation.activity.progressDeterminate", { scope: display.scopeLabel, current: display.current, total: display.total, unit: display.unit ?? "" })}</span>
+      <span className={styles.progressPercent} aria-hidden="true">{percent}%</span>
+    </div>
+    <div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label={display.scopeLabel} className={styles.progressTrack}>
+      <div className={styles.progressFill} style={{ width: `${display.percent}%` }} />
+    </div>
+  </div>;
 }
 
 const DETAIL_PREVIEW_LIMIT = 8_000;
