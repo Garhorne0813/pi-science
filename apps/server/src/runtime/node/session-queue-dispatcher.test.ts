@@ -31,7 +31,7 @@ afterEach(async () => {
 
 function sessions(
   facts: QueueSessionFacts,
-  commandResult: { success: boolean; code?: string } = { success: true },
+  commandResult: { success: boolean; code?: string; data?: unknown } = { success: true },
 ) {
   const command = vi.fn(async () => commandResult);
   const state = vi.fn(async () => facts);
@@ -101,6 +101,38 @@ describe("SessionQueueDispatcher", () => {
     const dispatcher = new SessionQueueDispatcher(fake.sessions, queue, 5);
     expect(await dispatcher.tick(cwd, sessionId)).toBe("dispatched");
     expect(fake.command).toHaveBeenCalledTimes(1);
+    dispatcher.stop();
+  });
+
+  it("links a dispatched entry to the worker durable message id", async () => {
+    const queue = new SessionQueueRepository();
+    await queue.enqueue(cwd, sessionId, { id: first, text: "next" });
+    const fake = sessions(
+      { is_streaming: false },
+      { success: true, data: { durableMessageId: "durable-1" } },
+    );
+    const dispatcher = new SessionQueueDispatcher(fake.sessions, queue, 5);
+    expect(await dispatcher.tick(cwd, sessionId)).toBe("dispatched");
+    expect((await queue.read(cwd, sessionId)).entries[0]).toMatchObject({
+      status: "dispatched",
+      delivered_message_id: "durable-1",
+    });
+    dispatcher.stop();
+  });
+
+  it("falls back to the legacy durable_message_id field", async () => {
+    const queue = new SessionQueueRepository();
+    await queue.enqueue(cwd, sessionId, { id: first, text: "next" });
+    const fake = sessions(
+      { is_streaming: false },
+      { success: true, data: { durable_message_id: "legacy-1" } },
+    );
+    const dispatcher = new SessionQueueDispatcher(fake.sessions, queue, 5);
+    expect(await dispatcher.tick(cwd, sessionId)).toBe("dispatched");
+    expect((await queue.read(cwd, sessionId)).entries[0]).toMatchObject({
+      status: "dispatched",
+      delivered_message_id: "legacy-1",
+    });
     dispatcher.stop();
   });
 });
