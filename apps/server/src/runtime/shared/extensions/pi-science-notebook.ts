@@ -640,6 +640,10 @@ export default function registerPiScienceNotebook(pi: any) {
           );
         }
         const results: Record<string, unknown>[] = [];
+        // The last cell counted is the value the settled row keeps, so the
+        // returned details carry it for history and for a client that missed
+        // the update.
+        let lastProgress: Record<string, unknown> | undefined;
         let notebookRevision: string | undefined = notebook.sha256;
         let nextExecutionCount =
           params.clean_kernel === true
@@ -753,21 +757,17 @@ export default function registerPiScienceNotebook(pi: any) {
               ? { notebook_output_persistence_error: outputPersistenceError }
               : {}),
           });
-          if (typeof _onUpdate === "function")
-            _onUpdate({
-              content: [],
-              details: {
-                progress: {
-                  version: 1,
-                  scopeId: "notebook-cells:1",
-                  scopeLabel: "Running notebook cells",
-                  current: index + 1,
-                  total: cells.length,
-                  unit: "cells",
-                  totalKind: "fixed",
-                },
-              },
-            });
+          const progress: Record<string, unknown> = {
+            version: 1,
+            scopeId: "notebook-cells:1",
+            scopeLabel: "Running notebook cells",
+            current: index + 1,
+            total: cells.length,
+            unit: "cells",
+            totalKind: "fixed",
+          };
+          lastProgress = progress;
+          if (typeof _onUpdate === "function") _onUpdate({ content: [], details: { progress } });
           if (outputPersistenceError) break;
           if (executionFailed(combined) && params.continue_on_error !== true) break;
         }
@@ -788,6 +788,7 @@ export default function registerPiScienceNotebook(pi: any) {
           notebook_id: notebookId,
           language,
           ...(notebookRevision ? { notebook_revision: notebookRevision } : {}),
+          ...(lastProgress ? { progress: lastProgress } : {}),
           results,
         });
       } catch (error) {

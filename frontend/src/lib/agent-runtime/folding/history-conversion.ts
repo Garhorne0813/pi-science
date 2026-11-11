@@ -1,4 +1,5 @@
 /** Convert durable history messages into presentation blocks without runtime side effects. */
+import { normalizeToolProgress } from "@pi-science/contracts";
 import type { ThreadBlock, ToolCallBlock } from "../../../types/thread";
 import type { HistoryMessage } from "../../client/pi-science-client";
 import { type NarrationSubsumption, narrationSubsumption } from "./narration";
@@ -156,6 +157,9 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
           : { details: msg.details, content: nonTextContent };
       const previousIndex = toolBlockIndexes.get(callId);
       const previous = previousIndex === undefined ? undefined : blocks[previousIndex];
+      // The tool result details persist the last measured progress, so the
+      // rebuilt thread settles on the same value the live row did.
+      const progress = normalizeToolProgress(recordValue(msg.details)?.progress);
       const block: ToolCallBlock = {
         kind: "tool",
         id: `tool-${callId}`,
@@ -171,6 +175,7 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
         output: text || undefined,
         details,
         presentation: msg.presentation ?? toolPresentations.get(callId),
+        ...(progress ? { progress } : {}),
         ...(toolCallStarts.get(callId) ? { startedAt: toolCallStarts.get(callId) } : {}),
         ...(msg.timestamp ? { endedAt: msg.timestamp } : {}),
       };

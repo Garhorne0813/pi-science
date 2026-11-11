@@ -284,6 +284,29 @@ describe("transport event folding", () => {
     expect(tools.map((tool) => [tool.callId, tool.progress?.current])).toEqual([["c1", 9], ["c2", 1]]);
   });
 
+  it("does not reopen a settled row when a late update arrives", () => {
+    let thread = foldEvent(emptyThread(), { sessionId: "s", type: "tool.started", turnId: "t1", runId: "r1", callId: "c1", tool: "bash", status: "running", progress: { version: 1, scopeId: "scan:1", scopeLabel: "Scanning files", current: 3, total: 5, totalKind: "fixed" } });
+    thread = foldEvent(thread, { sessionId: "s", type: "tool.completed", turnId: "t1", runId: "r1", callId: "c1", tool: "bash", status: "done", endedAt: "2026-09-08T00:00:05.000Z" });
+    const settledAt = (thread.blocks.find((block) => block.kind === "tool") as ToolCallBlock).endedAt;
+    // A final progress notification can trail the completion on the wire; it
+    // may update the measured value, but never resurrect the running row.
+    thread = foldEvent(thread, { sessionId: "s", type: "tool.updated", turnId: "t1", runId: "r1", callId: "c1", tool: "bash", status: "running", progress: { version: 1, scopeId: "scan:1", scopeLabel: "Scanning files", current: 5, total: 5, totalKind: "fixed" } });
+
+    const tool = thread.blocks.find((block) => block.kind === "tool") as ToolCallBlock;
+    expect(tool).toMatchObject({ status: "done", endedAt: settledAt, progress: { current: 5, total: 5 } });
+    expect(tool.statusHistory).toEqual(["running", "done"]);
+  });
+
+  it("restores a settled tool's progress from the persisted result details", () => {
+    const thread = threadFromMessages([
+      { id: "u1", role: "user", content: [{ type: "text", text: "scan" }], timestamp: "2026-09-08T00:00:00.000Z" },
+      { id: "a1", role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "bash" }], timestamp: "2026-09-08T00:00:01.000Z" },
+      { id: "r1", role: "toolResult", toolCallId: "call-1", toolName: "bash", content: [{ type: "text", text: "scanned" }], details: { progress: { version: 1, scopeId: "scan:1", scopeLabel: "Scanning files", current: 3, total: 5, unit: "files", totalKind: "fixed" } }, timestamp: "2026-09-08T00:00:03.000Z" },
+    ]);
+    const tool = thread.blocks.find((block) => block.kind === "tool") as ToolCallBlock;
+    expect(tool).toMatchObject({ status: "done", progress: { scopeId: "scan:1", current: 3, total: 5, determinate: true } });
+  });
+
   it("rebuilds thinking rows from persisted assistant thinking parts", () => {
     const thread = threadFromMessages([
       { id: "u1", role: "user", content: [{ type: "text", text: "q" }], timestamp: "2026-09-08T00:00:00.000Z" },

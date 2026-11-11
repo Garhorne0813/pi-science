@@ -144,6 +144,19 @@ describe("Pi-Science notebook extension", () => {
         },
       })),
     );
+    // The settled result keeps the last cell counted, so a restored thread
+    // still knows how far the run got.
+    expect(run.details).toMatchObject({
+      progress: {
+        version: 1,
+        scopeId: "notebook-cells:1",
+        scopeLabel: "Running notebook cells",
+        current: 2,
+        total: 2,
+        unit: "cells",
+        totalKind: "fixed",
+      },
+    });
     expect(
       calls
         .filter((call) => call.url.includes("/api/kernels/execute"))

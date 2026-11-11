@@ -217,6 +217,10 @@ export function sandboxBashTool(
           // The refresh limit can hold the newest value back. The call is not
           // allowed to end showing a count the tool has already passed.
           const finalProgress = collector.finish().progress;
+          // finish() only hands out a value it has not published yet, so a
+          // value the live row already shows is absent there. The collector's
+          // current value is the settled truth in both cases.
+          const settledProgress = finalProgress ?? collector.current;
           if (finalProgress && latestUpdate) {
             const [snapshot, options] = latestUpdate;
             const details =
@@ -253,6 +257,9 @@ export function sandboxBashTool(
           const references = { execution_id: executionId, artifact_refs: evidence.artifacts };
           const details = {
             ...result.details,
+            // The settled row keeps its measured progress, and history restores
+            // it from the persisted tool result details.
+            ...(settledProgress ? { progress: settledProgress } : {}),
             ...(typeof outcome.exitCode === "number" ? { exit_code: outcome.exitCode } : {}),
           };
           return binding || evidence.artifacts.length

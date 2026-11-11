@@ -76,6 +76,28 @@ it.skipIf(!["linux", "darwin"].includes(process.platform))(
       scopeLabel: "Scanning files",
       unit: "files",
     });
+
+    // The settled result keeps the last measured value, so the row does not
+    // blank out the moment the call ends, and history can restore it.
+    const settled = (result as { details?: { progress?: unknown } }).details?.progress;
+    expect(settled).toMatchObject({
+      scopeId: "emitter:scan:1",
+      current: 3,
+      total: 5,
+      unit: "files",
+    });
+    const completed = projection.normalize(cwd, "session", {
+      type: "tool.completed",
+      toolCallId: "call",
+      toolName: "bash",
+      result: "scanned",
+      details: (result as { details?: unknown }).details,
+      isError: false,
+    } as never);
+    expect(completed[0]).toMatchObject({
+      type: "tool.completed",
+      progress: { scopeId: "emitter:scan:1", current: 3, total: 5, determinate: true },
+    });
   },
   30_000,
 );

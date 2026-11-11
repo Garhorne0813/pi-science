@@ -263,6 +263,14 @@ export class ConversationProjection {
         turn.hadActivity = true;
         const callId = String(event.toolCallId ?? "");
         const tool = String(event.toolName ?? "");
+        // The tool reports its last measured value in the result details. A
+        // completed record carries it too, so a client that joins late (or
+        // replays the turn) still knows what the row settled on.
+        const completedProgress = normalizeToolProgress(
+          event.details && typeof event.details === "object"
+            ? (event.details as { progress?: unknown }).progress
+            : undefined,
+        );
         const records: Record<string, unknown>[] = [];
         if (tool === "ask_user_question")
           records.push({
@@ -289,6 +297,7 @@ export class ConversationProjection {
             ? { outputTruncated: true, originalOutputBytes: output.originalBytes }
             : {}),
           ...(presentation ? { presentation: safeValue(presentation) } : {}),
+          ...(completedProgress ? { progress: completedProgress } : {}),
           ...(event.details === undefined
             ? {}
             : {
