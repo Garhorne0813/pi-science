@@ -41,6 +41,16 @@ const keyboardQuestionnaire: PendingQuestionnaire = { ...questionnaire, question
   options: [{ label: "Fast", description: "" }, { label: "Safe", description: "" }, { label: "Balanced", description: "" }],
 }] };
 
+const longQuestionnaire: PendingQuestionnaire = { ...questionnaire, questions: Array.from({ length: 20 }, (_, index) => ({
+  question: `Long question ${index + 1}?`,
+  header: `Q${index + 1}`,
+  multiSelect: index === 2,
+  options: [
+    { label: `First ${index + 1}`, description: `First description ${index + 1}`, ...(index === 0 ? { preview: "**first preview**" } : {}) },
+    { label: `Second ${index + 1}`, description: `Second description ${index + 1}` },
+  ],
+})) };
+
 describe("compact QuestionnairePrompt", () => {
   it("shows one question and quiet options; selection never opens details or advances", () => {
     render(<QuestionnairePrompt questionnaire={questionnaire} interaction={interaction} onRespond={vi.fn()} />);
@@ -343,6 +353,44 @@ describe("compact QuestionnairePrompt", () => {
       expect(screen.getByRole("alert")).toHaveTextContent("Please answer question 1");
     }
     expect(onRespond).not.toHaveBeenCalled();
+  });
+
+  it("answers, reviews, and submits all twenty questions in one payload", () => {
+    const onRespond = vi.fn();
+    render(<QuestionnairePrompt questionnaire={longQuestionnaire} interaction={interaction} onRespond={onRespond} />);
+    expect(screen.getByLabelText("Question 1 of 20")).toHaveTextContent("1 / 20");
+    fireEvent.click(screen.getByRole("radio", { name: "First 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Notes for this question" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Notes for this question" }), { target: { value: " Keep this note. " } });
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: /Type something/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Your answer" }), { target: { value: "Typed answer 2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save answer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "First 3" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Second 3" }));
+    for (let index = 3; index < 20; index += 1) {
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      fireEvent.click(screen.getByRole("radio", { name: `First ${index + 1}` }));
+    }
+    expect(screen.getByLabelText("Question 20 of 20")).toHaveTextContent("20 / 20");
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    expect(screen.getByRole("heading", { name: "Review" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Long question 1\?.*First 1/ }));
+    expect(screen.getByRole("radio", { name: "First 1" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("textbox", { name: "Notes for this question" })).toHaveValue(" Keep this note. ");
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit answers" }));
+    expect(onRespond).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse(onRespond.mock.calls[0]![0].value);
+    expect(payload.cancelled).toBe(false);
+    expect(payload.answers).toHaveLength(20);
+    expect(payload.answers.map((answer: { questionIndex: number }) => answer.questionIndex)).toEqual(longQuestionnaire.questions.map((_question, index) => index));
+    expect(payload.answers.map((answer: { question: string }) => answer.question)).toEqual(longQuestionnaire.questions.map((item) => item.question));
+    expect(payload.answers[0]).toMatchObject({ kind: "option", answer: "First 1", preview: "**first preview**", notes: "Keep this note." });
+    expect(payload.answers[1]).toMatchObject({ kind: "custom", answer: "Typed answer 2" });
+    expect(payload.answers[2]).toMatchObject({ kind: "multi", selected: ["First 3", "Second 3"] });
+    expect(payload.answers.slice(3).map((answer: { kind: string; answer: string }) => [answer.kind, answer.answer])).toEqual(longQuestionnaire.questions.slice(3).map((_item, index) => ["option", `First ${index + 4}`]));
   });
 
   it("does not allow an empty custom answer and keeps cancellation explicit", () => {
