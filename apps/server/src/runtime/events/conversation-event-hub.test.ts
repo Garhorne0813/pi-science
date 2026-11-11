@@ -12,18 +12,34 @@ const workspaces: string[] = [];
 
 it("flush waits for durable observer work before shutdown completes", async () => {
   const cwd = await workspace();
-  const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
+  const hub = new ConversationEventHub({
+    append: async () => undefined,
+    readAfter: async () => [],
+  });
   const runtime = new EventEmitter();
   let release!: () => void;
   let entered!: () => void;
-  const started = new Promise<void>((resolve) => { entered = resolve; });
-  const persistence = new Promise<void>((resolve) => { release = resolve; });
-  hub.bind(cwd, runtime as RuntimeEventSource, { activeSessionId: () => "shutdown-session", onBusy: () => undefined, onExit: () => undefined,
-    observe: async () => { entered(); await persistence; } });
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const persistence = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  hub.bind(cwd, runtime as RuntimeEventSource, {
+    activeSessionId: () => "shutdown-session",
+    onBusy: () => undefined,
+    onExit: () => undefined,
+    observe: async () => {
+      entered();
+      await persistence;
+    },
+  });
   runtime.emit("event", { type: "operation.settled", status: "completed" });
   await started;
   let completed = false;
-  const flushed = hub.flush().then(() => { completed = true; });
+  const flushed = hub.flush().then(() => {
+    completed = true;
+  });
   await new Promise<void>((resolve) => setImmediate(resolve));
   expect(completed).toBe(false);
   release();
@@ -32,25 +48,59 @@ it("flush waits for durable observer work before shutdown completes", async () =
 });
 
 it("workspace drain ignores unrelated durable observers and publications", async () => {
-  const cwd = await workspace(); const other = await workspace();
-  let release!: () => void; const hold = new Promise<void>((resolve) => { release = resolve; });
-  let entered!: () => void; const started = new Promise<void>((resolve) => { entered = resolve; });
-  const hub = new ConversationEventHub({ append: async (workspace) => { if (workspace === other) { entered(); await hold; } }, readAfter: async () => [] });
+  const cwd = await workspace();
+  const other = await workspace();
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const hub = new ConversationEventHub({
+    append: async (workspace) => {
+      if (workspace === other) {
+        entered();
+        await hold;
+      }
+    },
+    readAfter: async () => [],
+  });
   const runtime = new EventEmitter();
-  hub.bind(other, runtime, { activeSessionId: () => "other", onBusy: () => undefined, onExit: () => undefined });
+  hub.bind(other, runtime, {
+    activeSessionId: () => "other",
+    onBusy: () => undefined,
+    onExit: () => undefined,
+  });
   runtime.emit("event", { type: "operation.settled", status: "completed" });
   await started;
-  let allFlushed = false; const globalFlush = hub.flush().then(() => { allFlushed = true; });
-  try { await hub.flush(cwd); expect(allFlushed).toBe(false); }
-  finally { release(); await globalFlush; }
+  let allFlushed = false;
+  const globalFlush = hub.flush().then(() => {
+    allFlushed = true;
+  });
+  try {
+    await hub.flush(cwd);
+    expect(allFlushed).toBe(false);
+  } finally {
+    release();
+    await globalFlush;
+  }
 });
 
 afterEach(async () => {
-  await Promise.all(workspaces.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
+  await Promise.all(
+    workspaces
+      .splice(0)
+      .map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })),
+  );
 });
 
 async function workspace(): Promise<string> {
-  const path = join(tmpdir(), `pi-science-event-hub-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const path = join(
+    tmpdir(),
+    `pi-science-event-hub-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
   workspaces.push(path);
   await mkdir(join(path, ".pi-science"), { recursive: true });
   return path;
@@ -69,7 +119,9 @@ describe("central conversation event hub", () => {
     const cwd = await workspace();
     const records: SseEventRecord[] = [];
     const store = {
-      append: async (_cwd: string, _sessionId: string, event: SseEventRecord) => { records.push(event); },
+      append: async (_cwd: string, _sessionId: string, event: SseEventRecord) => {
+        records.push(event);
+      },
       readAfter: async () => records,
     };
     const observed: Array<{ type: string; turnId: string; turnOrdinal: number }> = [];
@@ -78,7 +130,8 @@ describe("central conversation event hub", () => {
       const process = new EventEmitter();
       hub.bind(cwd, process as RuntimeEventSource, {
         activeSessionId: () => "identity-test",
-        onBusy: () => {}, onExit: () => {},
+        onBusy: () => {},
+        onExit: () => {},
         observe: (event, _sessionId, identity) => {
           if (identity) observed.push({ type: event.type, ...identity });
         },
@@ -97,10 +150,13 @@ describe("central conversation event hub", () => {
     expect(new Set(starts.map((item) => item.turnId)).size).toBe(4);
     const published = records.map((record) => JSON.parse(record.data));
     for (const item of observed) {
-      expect(published).toContainEqual(expect.objectContaining({
-        type: item.type === "operation.started" ? "operation.started" : "operation.settled",
-        turnId: item.turnId, turnOrdinal: item.turnOrdinal,
-      }));
+      expect(published).toContainEqual(
+        expect.objectContaining({
+          type: item.type === "operation.started" ? "operation.started" : "operation.settled",
+          turnId: item.turnId,
+          turnOrdinal: item.turnOrdinal,
+        }),
+      );
     }
   });
 
@@ -109,10 +165,16 @@ describe("central conversation event hub", () => {
     const records: SseEventRecord[] = [];
     let releaseRead!: () => void;
     let readStarted!: () => void;
-    const started = new Promise<void>((resolve) => { readStarted = resolve; });
-    const release = new Promise<void>((resolve) => { releaseRead = resolve; });
+    const started = new Promise<void>((resolve) => {
+      readStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
     const store = {
-      append: async (_cwd: string, _sessionId: string, event: SseEventRecord) => { records.push(event); },
+      append: async (_cwd: string, _sessionId: string, event: SseEventRecord) => {
+        records.push(event);
+      },
       readAfter: async () => {
         readStarted();
         await release;
@@ -121,9 +183,15 @@ describe("central conversation event hub", () => {
     };
     const hub = new ConversationEventHub(store, { createStreamEpoch: () => "epoch-window" });
     const received: SseEventRecord[] = [];
-    const subscribing = hub.subscribe(cwd, "session-race", undefined, (event) => received.push(event));
+    const subscribing = hub.subscribe(cwd, "session-race", undefined, (event) =>
+      received.push(event),
+    );
     await started;
-    await hub.publish(cwd, "session-race", { type: "message.delta", sessionId: "session-race", text: "once" });
+    await hub.publish(cwd, "session-race", {
+      type: "message.delta",
+      sessionId: "session-race",
+      text: "once",
+    });
     releaseRead();
     await subscribing;
 
@@ -136,17 +204,34 @@ describe("central conversation event hub", () => {
     let readCalled = false;
     const store = {
       append: async () => undefined,
-      readAfter: async () => { readCalled = true; return []; },
+      readAfter: async () => {
+        readCalled = true;
+        return [];
+      },
     };
     const hub = new ConversationEventHub(store);
     const received: SseEventRecord[] = [];
-    const unsubscribe = await hub.subscribe(cwd, "session-live", undefined, (record) => received.push(record), false);
+    const unsubscribe = await hub.subscribe(
+      cwd,
+      "session-live",
+      undefined,
+      (record) => received.push(record),
+      false,
+    );
     expect(hub.hasSubscribers(cwd, "session-live")).toBe(true);
-    await hub.publish(cwd, "session-live", { type: "operation.settled", status: "completed", sessionId: "session-live" });
+    await hub.publish(cwd, "session-live", {
+      type: "operation.settled",
+      status: "completed",
+      sessionId: "session-live",
+    });
 
     expect(readCalled).toBe(false);
     expect(received).toHaveLength(1);
-    expect(JSON.parse(received[0]!.data)).toMatchObject({ type: "operation.settled", status: "completed", sessionId: "session-live" });
+    expect(JSON.parse(received[0]!.data)).toMatchObject({
+      type: "operation.settled",
+      status: "completed",
+      sessionId: "session-live",
+    });
     unsubscribe();
     expect(hub.hasSubscribers(cwd, "session-live")).toBe(false);
   });
@@ -182,7 +267,11 @@ describe("central conversation event hub", () => {
       runId: "run-1",
       type: "message.delta",
       text: "answer",
-      payload: expect.objectContaining({ type: "message.delta", partId: "answer-1", text: "answer" }),
+      payload: expect.objectContaining({
+        type: "message.delta",
+        partId: "answer-1",
+        text: "answer",
+      }),
     });
     expect(typeof event.occurredAt).toBe("string");
   });
@@ -199,7 +288,11 @@ describe("central conversation event hub", () => {
     const received: SseEventRecord[] = [];
     await hub.subscribe(cwd, "session-stats", undefined, (record) => received.push(record), false);
 
-    await hub.publish(cwd, "session-stats", { type: "session.stats", sessionId: "session-stats", stats: { turns: 1 } });
+    await hub.publish(cwd, "session-stats", {
+      type: "session.stats",
+      sessionId: "session-stats",
+      stats: { turns: 1 },
+    });
 
     const event = JSON.parse(received[0]!.data) as Record<string, unknown>;
     expect(event).toMatchObject({
@@ -218,10 +311,15 @@ describe("central conversation event hub", () => {
   it("chunks large UTF-8 text records before the durable record limit", async () => {
     const cwd = await workspace();
     const records: SseEventRecord[] = [];
-    const hub = new ConversationEventHub({
-      append: async (_cwd, _sessionId, record) => { records.push(record); },
-      readAfter: async () => [],
-    }, { createStreamEpoch: () => "epoch-text" });
+    const hub = new ConversationEventHub(
+      {
+        append: async (_cwd, _sessionId, record) => {
+          records.push(record);
+        },
+        readAfter: async () => [],
+      },
+      { createStreamEpoch: () => "epoch-text" },
+    );
     const text = "科研".repeat(40_000);
 
     await hub.publish(cwd, "session-large-text", {
@@ -236,10 +334,15 @@ describe("central conversation event hub", () => {
     });
 
     expect(records.length).toBeGreaterThan(1);
-    expect(records.every((record) => Buffer.byteLength(JSON.stringify(record), "utf8") <= 256 * 1024)).toBe(true);
-    expect(records.map((record) => (JSON.parse(record.data) as Record<string, unknown>).text).join(""))
-      .toBe(text);
-    expect(records.map((record) => record.id)).toEqual(records.map((_record, index) => `epoch-text:${index + 1}`));
+    expect(
+      records.every((record) => Buffer.byteLength(JSON.stringify(record), "utf8") <= 256 * 1024),
+    ).toBe(true);
+    expect(
+      records.map((record) => (JSON.parse(record.data) as Record<string, unknown>).text).join(""),
+    ).toBe(text);
+    expect(records.map((record) => record.id)).toEqual(
+      records.map((_record, index) => `epoch-text:${index + 1}`),
+    );
   });
 
   it("rotates the stream epoch after an append failure while preserving live delivery", async () => {
@@ -247,21 +350,38 @@ describe("central conversation event hub", () => {
     const persisted: SseEventRecord[] = [];
     let fail = true;
     const epochs = ["epoch-failed", "epoch-recovered"];
-    const hub = new ConversationEventHub({
-      append: async (_cwd, _sessionId, record) => {
-        if (fail) {
-          fail = false;
-          throw new Error("disk unavailable");
-        }
-        persisted.push(record);
+    const hub = new ConversationEventHub(
+      {
+        append: async (_cwd, _sessionId, record) => {
+          if (fail) {
+            fail = false;
+            throw new Error("disk unavailable");
+          }
+          persisted.push(record);
+        },
+        readAfter: async () => persisted,
       },
-      readAfter: async () => persisted,
-    }, { createStreamEpoch: () => epochs.shift() ?? "epoch-fallback" });
+      { createStreamEpoch: () => epochs.shift() ?? "epoch-fallback" },
+    );
     const received: SseEventRecord[] = [];
-    await hub.subscribe(cwd, "session-persistence", undefined, (record) => received.push(record), false);
+    await hub.subscribe(
+      cwd,
+      "session-persistence",
+      undefined,
+      (record) => received.push(record),
+      false,
+    );
 
-    await hub.publish(cwd, "session-persistence", { type: "status.updated", sessionId: "session-persistence", status: "live-only" });
-    await hub.publish(cwd, "session-persistence", { type: "status.updated", sessionId: "session-persistence", status: "recovered" });
+    await hub.publish(cwd, "session-persistence", {
+      type: "status.updated",
+      sessionId: "session-persistence",
+      status: "live-only",
+    });
+    await hub.publish(cwd, "session-persistence", {
+      type: "status.updated",
+      sessionId: "session-persistence",
+      status: "recovered",
+    });
 
     expect(received.map((record) => record.id)).toEqual(["epoch-failed:1", "epoch-recovered:1"]);
     expect(persisted.map((record) => record.id)).toEqual(["epoch-recovered:1"]);
@@ -272,16 +392,19 @@ describe("central conversation event hub", () => {
     const persisted: SseEventRecord[] = [];
     let fail = true;
     const epochs = ["epoch-chunk-failed", "epoch-chunk-recovered"];
-    const hub = new ConversationEventHub({
-      append: async (_cwd, _sessionId, record) => {
-        if (fail) {
-          fail = false;
-          throw new Error("disk unavailable");
-        }
-        persisted.push(record);
+    const hub = new ConversationEventHub(
+      {
+        append: async (_cwd, _sessionId, record) => {
+          if (fail) {
+            fail = false;
+            throw new Error("disk unavailable");
+          }
+          persisted.push(record);
+        },
+        readAfter: async () => persisted,
       },
-      readAfter: async () => persisted,
-    }, { createStreamEpoch: () => epochs.shift() ?? "epoch-chunk-fallback" });
+      { createStreamEpoch: () => epochs.shift() ?? "epoch-chunk-fallback" },
+    );
 
     await hub.publish(cwd, "session-chunk-failure", {
       type: "message.delta",
@@ -293,7 +416,11 @@ describe("central conversation event hub", () => {
       baseRevision: 0,
       text: "大文本".repeat(40_000),
     });
-    await hub.publish(cwd, "session-chunk-failure", { type: "status.updated", sessionId: "session-chunk-failure", status: "next" });
+    await hub.publish(cwd, "session-chunk-failure", {
+      type: "status.updated",
+      sessionId: "session-chunk-failure",
+      status: "next",
+    });
 
     expect(persisted.map((record) => record.id)).toEqual(["epoch-chunk-recovered:1"]);
     expect(persisted.every((record) => !record.id?.startsWith("epoch-chunk-failed:"))).toBe(true);
@@ -304,14 +431,27 @@ describe("central conversation event hub", () => {
     let allowed = false;
     const appended: SseEventRecord[] = [];
     const store = {
-      append: async (_cwd: string, _sessionId: string, record: SseEventRecord) => { appended.push(record); },
+      append: async (_cwd: string, _sessionId: string, record: SseEventRecord) => {
+        appended.push(record);
+      },
       readAfter: async () => [],
     };
     const hub = new ConversationEventHub(store, { createStreamEpoch: () => "epoch-window" });
     const received: SseEventRecord[] = [];
-    await hub.subscribe(cwd, "session-guarded", undefined, (record) => received.push(record), false);
+    await hub.subscribe(
+      cwd,
+      "session-guarded",
+      undefined,
+      (record) => received.push(record),
+      false,
+    );
 
-    await hub.publish(cwd, "session-guarded", { type: "operation.settled", status: "completed", sessionId: "session-guarded" }, () => allowed);
+    await hub.publish(
+      cwd,
+      "session-guarded",
+      { type: "operation.settled", status: "completed", sessionId: "session-guarded" },
+      () => allowed,
+    );
 
     expect(appended).toHaveLength(0);
     expect(received).toHaveLength(0);
@@ -322,12 +462,23 @@ describe("central conversation event hub", () => {
     let allowed = true;
     let releaseAppend!: () => void;
     let appendStarted!: () => void;
-    const appendReady = new Promise<void>((resolve) => { appendStarted = resolve; });
-    const appendRelease = new Promise<void>((resolve) => { releaseAppend = resolve; });
+    const appendReady = new Promise<void>((resolve) => {
+      appendStarted = resolve;
+    });
+    const appendRelease = new Promise<void>((resolve) => {
+      releaseAppend = resolve;
+    });
     const appended: SseEventRecord[] = [];
     const store = {
-      append: async () => { throw new Error("conditional append was not used"); },
-      appendConditional: async (_cwd: string, _sessionId: string, record: SseEventRecord, guard: () => boolean) => {
+      append: async () => {
+        throw new Error("conditional append was not used");
+      },
+      appendConditional: async (
+        _cwd: string,
+        _sessionId: string,
+        record: SseEventRecord,
+        guard: () => boolean,
+      ) => {
         appendStarted();
         await appendRelease;
         if (!guard()) return false;
@@ -340,7 +491,12 @@ describe("central conversation event hub", () => {
     const received: SseEventRecord[] = [];
     await hub.subscribe(cwd, "session-window", undefined, (record) => received.push(record), false);
 
-    const publishing = hub.publish(cwd, "session-window", { type: "operation.settled", status: "completed", sessionId: "session-window" }, () => allowed);
+    const publishing = hub.publish(
+      cwd,
+      "session-window",
+      { type: "operation.settled", status: "completed", sessionId: "session-window" },
+      () => allowed,
+    );
     await appendReady;
     allowed = false;
     releaseAppend();
@@ -349,7 +505,10 @@ describe("central conversation event hub", () => {
     expect(appended).toHaveLength(0);
     expect(received).toHaveLength(0);
 
-    await hub.publish(cwd, "session-window", { type: "operation.started", sessionId: "session-window" });
+    await hub.publish(cwd, "session-window", {
+      type: "operation.started",
+      sessionId: "session-window",
+    });
     expect(received.map((record) => JSON.parse(record.data).type)).toEqual(["operation.started"]);
     expect(received[0]?.id).toBe("epoch-window:1");
   });
@@ -360,27 +519,61 @@ describe("central conversation event hub", () => {
       append: async () => undefined,
       readAfter: async () => [],
     });
-    await hub.publish(cwd, "session-pending", { type: "questionnaire.asked", sessionId: "session-pending", toolCallId: "call-q1", questions: [] });
-    await hub.publish(cwd, "session-pending", { type: "interaction.requested", sessionId: "session-pending", requestId: "request-q1", questionnaire: true, toolCallId: "call-q1" });
+    await hub.publish(cwd, "session-pending", {
+      type: "questionnaire.asked",
+      sessionId: "session-pending",
+      toolCallId: "call-q1",
+      questions: [],
+    });
+    await hub.publish(cwd, "session-pending", {
+      type: "interaction.requested",
+      sessionId: "session-pending",
+      requestId: "request-q1",
+      questionnaire: true,
+      toolCallId: "call-q1",
+    });
 
     const received: string[] = [];
-    await hub.subscribe(cwd, "session-pending", undefined, (record) => {
-      received.push(JSON.parse(record.data).type as string);
-    }, false);
+    await hub.subscribe(
+      cwd,
+      "session-pending",
+      undefined,
+      (record) => {
+        received.push(JSON.parse(record.data).type as string);
+      },
+      false,
+    );
 
     expect(received).toEqual(["questionnaire.asked", "interaction.requested"]);
   });
 
   it("restores every unresolved parallel interaction on refresh", async () => {
     const cwd = await workspace();
-    const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
-    await hub.publish(cwd, "session-generic", { type: "interaction.requested", sessionId: "session-generic", requestId: "request-1" });
-    await hub.publish(cwd, "session-generic", { type: "interaction.requested", sessionId: "session-generic", requestId: "request-2" });
+    const hub = new ConversationEventHub({
+      append: async () => undefined,
+      readAfter: async () => [],
+    });
+    await hub.publish(cwd, "session-generic", {
+      type: "interaction.requested",
+      sessionId: "session-generic",
+      requestId: "request-1",
+    });
+    await hub.publish(cwd, "session-generic", {
+      type: "interaction.requested",
+      sessionId: "session-generic",
+      requestId: "request-2",
+    });
 
     const received: Record<string, unknown>[] = [];
-    await hub.subscribe(cwd, "session-generic", undefined, (record) => {
-      received.push(JSON.parse(record.data));
-    }, false);
+    await hub.subscribe(
+      cwd,
+      "session-generic",
+      undefined,
+      (record) => {
+        received.push(JSON.parse(record.data));
+      },
+      false,
+    );
 
     expect(received).toEqual([
       expect.objectContaining({ type: "interaction.requested", requestId: "request-1" }),
@@ -388,83 +581,208 @@ describe("central conversation event hub", () => {
     ]);
     hub.resolvePendingInteraction(cwd, "session-generic", "request-1");
     const restored: Record<string, unknown>[] = [];
-    await hub.subscribe(cwd, "session-generic", undefined, (record) => { restored.push(JSON.parse(record.data)); }, false);
+    await hub.subscribe(
+      cwd,
+      "session-generic",
+      undefined,
+      (record) => {
+        restored.push(JSON.parse(record.data));
+      },
+      false,
+    );
     expect(restored).toEqual([expect.objectContaining({ requestId: "request-2" })]);
   });
 
   it("withdraws cancelled worker interactions from subscribers and refresh replay", async () => {
     const cwd = await workspace();
-    const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
+    const hub = new ConversationEventHub({
+      append: async () => undefined,
+      readAfter: async () => [],
+    });
     const received: Record<string, unknown>[] = [];
-    await hub.subscribe(cwd, "cancelled-approval", undefined, record => { received.push(JSON.parse(record.data)); }, false);
+    await hub.subscribe(
+      cwd,
+      "cancelled-approval",
+      undefined,
+      (record) => {
+        received.push(JSON.parse(record.data));
+      },
+      false,
+    );
     const runtime = new EventEmitter();
-    hub.bind(cwd, runtime, { activeSessionId: () => "cancelled-approval", onBusy: () => undefined, onExit: () => undefined });
-    runtime.emit("event", { type: "interaction.requested", id: "cancelled", method: "confirm", title: "Approve?" });
+    hub.bind(cwd, runtime, {
+      activeSessionId: () => "cancelled-approval",
+      onBusy: () => undefined,
+      onExit: () => undefined,
+    });
+    runtime.emit("event", {
+      type: "interaction.requested",
+      id: "cancelled",
+      method: "confirm",
+      title: "Approve?",
+    });
     runtime.emit("event", { type: "interaction.resolved", id: "cancelled" });
     await hub.flush();
-    expect(received.map(event => event.type)).toEqual(["interaction.requested", "interaction.resolved"]);
+    expect(received.map((event) => event.type)).toEqual([
+      "interaction.requested",
+      "interaction.resolved",
+    ]);
     expect(received[1]).toMatchObject({ requestId: "cancelled" });
     expect(hub.pendingInteraction(cwd, "cancelled-approval", "cancelled")).toBeUndefined();
     const restored: unknown[] = [];
-    await hub.subscribe(cwd, "cancelled-approval", undefined, record => { restored.push(JSON.parse(record.data)); }, false);
+    await hub.subscribe(
+      cwd,
+      "cancelled-approval",
+      undefined,
+      (record) => {
+        restored.push(JSON.parse(record.data));
+      },
+      false,
+    );
     expect(restored).toEqual([]);
   });
 
-  it.each(["close", "expected-exit", "unexpected-exit"])("does not replay interrupted approvals after %s without operation.settled", async (mode) => {
-    const cwd = await workspace();
-    const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
-    const runtime = new EventEmitter();
-    let connected = true;
-    const bridge = new InteractionBridge(event => { if (connected) runtime.emit("event", event); });
-    hub.bind(cwd, runtime, { activeSessionId: () => "interrupted", onBusy: () => undefined, onExit: () => undefined });
-    const received: Record<string, unknown>[] = [];
-    await hub.subscribe(cwd, "interrupted", undefined, record => { received.push(JSON.parse(record.data)); }, false);
-    const pending = Promise.allSettled([bridge.confirmPermission("Approve command", "args")]);
-    try {
-      await hub.flush();
-      expect(received).toHaveLength(1);
-      const requestId = String(received[0]!.requestId);
-      expect(hub.pendingInteraction(cwd, "interrupted", requestId)).toBeDefined();
-      if (mode === "close") bridge.close();
-      else {
-        if (mode === "expected-exit") hub.expectExit(runtime);
+  it.each(["close", "expected-exit", "unexpected-exit"])(
+    "does not replay interrupted approvals after %s without operation.settled",
+    async (mode) => {
+      const cwd = await workspace();
+      const hub = new ConversationEventHub({
+        append: async () => undefined,
+        readAfter: async () => [],
+      });
+      const runtime = new EventEmitter();
+      let connected = true;
+      const bridge = new InteractionBridge((event) => {
+        if (connected) runtime.emit("event", event);
+      });
+      hub.bind(cwd, runtime, {
+        activeSessionId: () => "interrupted",
+        onBusy: () => undefined,
+        onExit: () => undefined,
+      });
+      const received: Record<string, unknown>[] = [];
+      await hub.subscribe(
+        cwd,
+        "interrupted",
+        undefined,
+        (record) => {
+          received.push(JSON.parse(record.data));
+        },
+        false,
+      );
+      const pending = Promise.allSettled([bridge.confirmPermission("Approve command", "args")]);
+      try {
+        await hub.flush();
+        expect(received).toHaveLength(1);
+        const requestId = String(received[0]!.requestId);
+        expect(hub.pendingInteraction(cwd, "interrupted", requestId)).toBeDefined();
+        if (mode === "close") bridge.close();
+        else {
+          if (mode === "expected-exit") hub.expectExit(runtime);
+          connected = false;
+          runtime.emit("exit", { code: mode === "expected-exit" ? 0 : 1, signal: null });
+        }
+        await hub.flush();
+        expect(received.filter((event) => event.type === "interaction.resolved")).toEqual([
+          expect.objectContaining({ requestId }),
+        ]);
+        expect(hub.pendingInteraction(cwd, "interrupted", requestId)).toBeUndefined();
+        const restored: unknown[] = [];
+        await hub.subscribe(
+          cwd,
+          "interrupted",
+          undefined,
+          (record) => {
+            restored.push(JSON.parse(record.data));
+          },
+          false,
+        );
+        expect(restored).toEqual([]);
+      } finally {
         connected = false;
-        runtime.emit("exit", { code: mode === "expected-exit" ? 0 : 1, signal: null });
+        bridge.close();
+        await pending;
       }
-      await hub.flush();
-      expect(received.filter(event => event.type === "interaction.resolved")).toEqual([expect.objectContaining({ requestId })]);
-      expect(hub.pendingInteraction(cwd, "interrupted", requestId)).toBeUndefined();
-      const restored: unknown[] = [];
-      await hub.subscribe(cwd, "interrupted", undefined, record => { restored.push(JSON.parse(record.data)); }, false);
-      expect(restored).toEqual([]);
-    } finally { connected = false; bridge.close(); await pending; }
-  });
+    },
+  );
 
   it("preserves replacement workers' approvals when an old worker exits", async () => {
     const cwd = await workspace();
-    const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
-    const old = new EventEmitter(), replacement = new EventEmitter();
-    for (const runtime of [old, replacement]) hub.bind(cwd, runtime, { activeSessionId: () => "replaced", onBusy: () => undefined, onExit: () => undefined });
-    old.emit("event", { type: "interaction.requested", id: "old", method: "confirm", title: "Old approval" });
-    replacement.emit("event", { type: "interaction.requested", id: "new", method: "confirm", title: "New approval" });
+    const hub = new ConversationEventHub({
+      append: async () => undefined,
+      readAfter: async () => [],
+    });
+    const old = new EventEmitter(),
+      replacement = new EventEmitter();
+    for (const runtime of [old, replacement])
+      hub.bind(cwd, runtime, {
+        activeSessionId: () => "replaced",
+        onBusy: () => undefined,
+        onExit: () => undefined,
+      });
+    old.emit("event", {
+      type: "interaction.requested",
+      id: "old",
+      method: "confirm",
+      title: "Old approval",
+    });
+    replacement.emit("event", {
+      type: "interaction.requested",
+      id: "new",
+      method: "confirm",
+      title: "New approval",
+    });
     hub.expectExit(old);
     old.emit("exit", { code: 0, signal: null });
     await hub.flush();
     const restored: Record<string, unknown>[] = [];
-    await hub.subscribe(cwd, "replaced", undefined, record => { restored.push(JSON.parse(record.data)); }, false);
-    expect(restored).toEqual([expect.objectContaining({ type: "interaction.requested", requestId: "new" })]);
+    await hub.subscribe(
+      cwd,
+      "replaced",
+      undefined,
+      (record) => {
+        restored.push(JSON.parse(record.data));
+      },
+      false,
+    );
+    expect(restored).toEqual([
+      expect.objectContaining({ type: "interaction.requested", requestId: "new" }),
+    ]);
   });
 
   it("keeps parallel permissions when a questionnaire finishes", async () => {
     const cwd = await workspace();
-    const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
+    const hub = new ConversationEventHub({
+      append: async () => undefined,
+      readAfter: async () => [],
+    });
     await hub.publish(cwd, "mixed", { type: "interaction.requested", requestId: "permission-1" });
-    await hub.publish(cwd, "mixed", { type: "questionnaire.asked", toolCallId: "question-tool", questions: [] });
-    await hub.publish(cwd, "mixed", { type: "interaction.requested", requestId: "question-1", questionnaire: true, toolCallId: "question-tool" });
+    await hub.publish(cwd, "mixed", {
+      type: "questionnaire.asked",
+      toolCallId: "question-tool",
+      questions: [],
+    });
+    await hub.publish(cwd, "mixed", {
+      type: "interaction.requested",
+      requestId: "question-1",
+      questionnaire: true,
+      toolCallId: "question-tool",
+    });
     await hub.publish(cwd, "mixed", { type: "interaction.requested", requestId: "permission-2" });
-    await hub.publish(cwd, "mixed", { type: "questionnaire.finished", toolCallId: "question-tool" });
+    await hub.publish(cwd, "mixed", {
+      type: "questionnaire.finished",
+      toolCallId: "question-tool",
+    });
     const received: Record<string, unknown>[] = [];
-    await hub.subscribe(cwd, "mixed", undefined, (record) => { received.push(JSON.parse(record.data)); }, false);
+    await hub.subscribe(
+      cwd,
+      "mixed",
+      undefined,
+      (record) => {
+        received.push(JSON.parse(record.data));
+      },
+      false,
+    );
     expect(received.map((event) => event.requestId)).toEqual(["permission-1", "permission-2"]);
     await hub.publish(cwd, "mixed", { type: "operation.settled", status: "aborted" });
     const afterAbort: SseEventRecord[] = [];
@@ -474,13 +792,33 @@ describe("central conversation event hub", () => {
 
   it("removes the questionnaire pair when its interaction is resolved", async () => {
     const cwd = await workspace();
-    const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
-    await hub.publish(cwd, "session-resolved", { type: "questionnaire.asked", sessionId: "session-resolved", toolCallId: "call-q1", questions: [] });
-    await hub.publish(cwd, "session-resolved", { type: "interaction.requested", sessionId: "session-resolved", requestId: "request-q1", questionnaire: true, toolCallId: "call-q1" });
+    const hub = new ConversationEventHub({
+      append: async () => undefined,
+      readAfter: async () => [],
+    });
+    await hub.publish(cwd, "session-resolved", {
+      type: "questionnaire.asked",
+      sessionId: "session-resolved",
+      toolCallId: "call-q1",
+      questions: [],
+    });
+    await hub.publish(cwd, "session-resolved", {
+      type: "interaction.requested",
+      sessionId: "session-resolved",
+      requestId: "request-q1",
+      questionnaire: true,
+      toolCallId: "call-q1",
+    });
     hub.resolvePendingInteraction(cwd, "session-resolved", "request-q1");
 
     const received: SseEventRecord[] = [];
-    await hub.subscribe(cwd, "session-resolved", undefined, (record) => received.push(record), false);
+    await hub.subscribe(
+      cwd,
+      "session-resolved",
+      undefined,
+      (record) => received.push(record),
+      false,
+    );
 
     expect(received).toHaveLength(0);
   });
@@ -491,37 +829,74 @@ describe("central conversation event hub", () => {
       append: async () => undefined,
       readAfter: async () => [],
     });
-    await hub.publish(cwd, "session-resolved", { type: "interaction.requested", sessionId: "session-resolved", requestId: "request-q1", questionnaire: true, toolCallId: "call-q1" });
-    await hub.publish(cwd, "session-resolved", { type: "questionnaire.finished", sessionId: "session-resolved", toolCallId: "call-q1" });
+    await hub.publish(cwd, "session-resolved", {
+      type: "interaction.requested",
+      sessionId: "session-resolved",
+      requestId: "request-q1",
+      questionnaire: true,
+      toolCallId: "call-q1",
+    });
+    await hub.publish(cwd, "session-resolved", {
+      type: "questionnaire.finished",
+      sessionId: "session-resolved",
+      toolCallId: "call-q1",
+    });
 
     const received: SseEventRecord[] = [];
-    await hub.subscribe(cwd, "session-resolved", undefined, (record) => received.push(record), false);
+    await hub.subscribe(
+      cwd,
+      "session-resolved",
+      undefined,
+      (record) => received.push(record),
+      false,
+    );
 
     expect(received).toHaveLength(0);
   });
 
-  it("preserves exact message.completed errors and emits one durable event per Pi event", async () => {
+  it("does not paint a retried message error as a live card and emits one durable event per Pi event", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
     const process = new EventEmitter() as RuntimeEventSource;
     const first: Array<{ id: string | null; data: Record<string, unknown> }> = [];
     const second: Array<{ id: string | null; data: Record<string, unknown> }> = [];
-    hub.bind(cwd, process, { activeSessionId: () => "session-1", onBusy: () => undefined, onExit: () => undefined });
-    await hub.subscribe(cwd, "session-1", undefined, (record) => first.push({ id: record.id, data: JSON.parse(record.data) }));
-    await hub.subscribe(cwd, "session-1", undefined, (record) => second.push({ id: record.id, data: JSON.parse(record.data) }));
+    hub.bind(cwd, process, {
+      activeSessionId: () => "session-1",
+      onBusy: () => undefined,
+      onExit: () => undefined,
+    });
+    await hub.subscribe(cwd, "session-1", undefined, (record) =>
+      first.push({ id: record.id, data: JSON.parse(record.data) }),
+    );
+    await hub.subscribe(cwd, "session-1", undefined, (record) =>
+      second.push({ id: record.id, data: JSON.parse(record.data) }),
+    );
 
     process.emit("event", { type: "operation.started" });
-    process.emit("event", { type: "message.completed", message: { role: "assistant", stopReason: "error", errorMessage: "OpenAI API error (401): Invalid API key" } });
+    process.emit("event", {
+      type: "message.completed",
+      message: {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "OpenAI API error (401): Invalid API key",
+      },
+    });
     process.emit("event", { type: "operation.settled", status: "completed" });
     await eventually(() => first.length === 3 && second.length === 3);
 
-    expect(first.map((item) => item.data.type)).toEqual(["operation.started", "error", "operation.settled"]);
-    expect(first[1]?.data.message).toContain("Invalid API key");
+    expect(first.map((item) => item.data.type)).toEqual([
+      "operation.started",
+      "message.completed",
+      "operation.settled",
+    ]);
+    expect(first[1]?.data.stopReason).toBe("error");
     expect(first.map((item) => item.id)).toEqual(second.map((item) => item.id));
 
     const replay: Array<Record<string, unknown>> = [];
-    await hub.subscribe(cwd, "session-1", first[0]?.id ?? undefined, (record) => replay.push(JSON.parse(record.data)));
-    expect(replay.map((item) => item.type)).toEqual(["error", "operation.settled"]);
+    await hub.subscribe(cwd, "session-1", first[0]?.id ?? undefined, (record) =>
+      replay.push(JSON.parse(record.data)),
+    );
+    expect(replay.map((item) => item.type)).toEqual(["message.completed", "operation.settled"]);
   });
 
   it("deduplicates final text after deltas and surfaces process exits", async () => {
@@ -529,17 +904,35 @@ describe("central conversation event hub", () => {
     const hub = new ConversationEventHub();
     const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
-    hub.bind(cwd, process, { activeSessionId: () => "session-2", onBusy: () => undefined, onExit: () => undefined });
-    await hub.subscribe(cwd, "session-2", undefined, (record) => received.push(JSON.parse(record.data)));
+    hub.bind(cwd, process, {
+      activeSessionId: () => "session-2",
+      onBusy: () => undefined,
+      onExit: () => undefined,
+    });
+    await hub.subscribe(cwd, "session-2", undefined, (record) =>
+      received.push(JSON.parse(record.data)),
+    );
     process.emit("event", { type: "operation.started" });
-    process.emit("event", { type: "message.updated", message: { id: "m1" }, content: { kind: "text", type: "text_delta", text: "OK", messageId: "m1", contentIndex: "0" } });
-    process.emit("event", { type: "message.updated", message: { id: "m1" }, content: { kind: "text", type: "text_end", text: "OK", messageId: "m1", contentIndex: "0" } });
+    process.emit("event", {
+      type: "message.updated",
+      message: { id: "m1" },
+      content: { kind: "text", type: "text_delta", text: "OK", messageId: "m1", contentIndex: "0" },
+    });
+    process.emit("event", {
+      type: "message.updated",
+      message: { id: "m1" },
+      content: { kind: "text", type: "text_end", text: "OK", messageId: "m1", contentIndex: "0" },
+    });
     process.emit("event", { type: "operation.settled", status: "completed" });
     process.emit("stderr", "fatal adapter error");
     process.emit("exit", { code: 1, signal: null });
     await eventually(() => received.some((event) => event.terminal === true));
-    expect(received.filter((event) => event.type === "message.delta").map((event) => event.text)).toEqual(["OK"]);
-    expect(received.find((event) => event.terminal === true)?.message).toContain("fatal adapter error");
+    expect(
+      received.filter((event) => event.type === "message.delta").map((event) => event.text),
+    ).toEqual(["OK"]);
+    expect(received.find((event) => event.terminal === true)?.message).toContain(
+      "fatal adapter error",
+    );
   });
 
   it("emits only the missing final-text suffix and isolates anonymous messages", async () => {
@@ -547,16 +940,68 @@ describe("central conversation event hub", () => {
     const hub = new ConversationEventHub();
     const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
-    hub.bind(cwd, process, { activeSessionId: () => "session-text", onBusy: () => undefined, onExit: () => undefined });
-    await hub.subscribe(cwd, "session-text", undefined, (record) => received.push(JSON.parse(record.data)));
+    hub.bind(cwd, process, {
+      activeSessionId: () => "session-text",
+      onBusy: () => undefined,
+      onExit: () => undefined,
+    });
+    await hub.subscribe(cwd, "session-text", undefined, (record) =>
+      received.push(JSON.parse(record.data)),
+    );
 
     process.emit("event", { type: "operation.started" });
-    process.emit("event", { type: "message.updated", message: { id: "m1" }, content: { kind: "text", type: "text_delta", text: "Hel", messageId: "m1", contentIndex: "0" } });
-    process.emit("event", { type: "message.updated", message: { id: "m1" }, content: { kind: "text", type: "text_end", text: "Hello", messageId: "m1", contentIndex: "0" } });
-    process.emit("event", { type: "message.updated", content: { kind: "text", type: "text_end", text: "First", messageId: "", contentIndex: "0" } });
-    process.emit("event", { type: "message.updated", content: { kind: "text", type: "text_end", text: "Second", messageId: "", contentIndex: "0" } });
-    process.emit("event", { type: "message.updated", message: { id: "m2" }, content: { kind: "text", type: "text_delta", text: "old", messageId: "m2", contentIndex: "0" } });
-    process.emit("event", { type: "message.updated", message: { id: "m2" }, content: { kind: "text", type: "text_end", text: "replacement", messageId: "m2", contentIndex: "0" } });
+    process.emit("event", {
+      type: "message.updated",
+      message: { id: "m1" },
+      content: {
+        kind: "text",
+        type: "text_delta",
+        text: "Hel",
+        messageId: "m1",
+        contentIndex: "0",
+      },
+    });
+    process.emit("event", {
+      type: "message.updated",
+      message: { id: "m1" },
+      content: {
+        kind: "text",
+        type: "text_end",
+        text: "Hello",
+        messageId: "m1",
+        contentIndex: "0",
+      },
+    });
+    process.emit("event", {
+      type: "message.updated",
+      content: { kind: "text", type: "text_end", text: "First", messageId: "", contentIndex: "0" },
+    });
+    process.emit("event", {
+      type: "message.updated",
+      content: { kind: "text", type: "text_end", text: "Second", messageId: "", contentIndex: "0" },
+    });
+    process.emit("event", {
+      type: "message.updated",
+      message: { id: "m2" },
+      content: {
+        kind: "text",
+        type: "text_delta",
+        text: "old",
+        messageId: "m2",
+        contentIndex: "0",
+      },
+    });
+    process.emit("event", {
+      type: "message.updated",
+      message: { id: "m2" },
+      content: {
+        kind: "text",
+        type: "text_end",
+        text: "replacement",
+        messageId: "m2",
+        contentIndex: "0",
+      },
+    });
     process.emit("event", { type: "operation.settled", status: "completed" });
     await eventually(() => received.some((event) => event.type === "operation.settled"));
 
@@ -564,7 +1009,12 @@ describe("central conversation event hub", () => {
     expect(text).toHaveLength(4);
     expect(text[0]).toMatchObject({ text: "Hello", partId: "m1:0", itemId: "m1" });
     expect(text[1]?.partId).not.toBe(text[2]?.partId);
-    expect(text.at(-1)).toMatchObject({ text: "replacement", replace: true, partId: "m2:0", itemId: "m2" });
+    expect(text.at(-1)).toMatchObject({
+      text: "replacement",
+      replace: true,
+      partId: "m2:0",
+      itemId: "m2",
+    });
   });
 
   it("streams thinking deltas as message.reasoning.delta without touching the text stream", async () => {
@@ -572,14 +1022,60 @@ describe("central conversation event hub", () => {
     const hub = new ConversationEventHub();
     const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
-    hub.bind(cwd, process, { activeSessionId: () => "session-thinking", onBusy: () => undefined, onExit: () => undefined });
-    await hub.subscribe(cwd, "session-thinking", undefined, (record) => received.push(JSON.parse(record.data)));
+    hub.bind(cwd, process, {
+      activeSessionId: () => "session-thinking",
+      onBusy: () => undefined,
+      onExit: () => undefined,
+    });
+    await hub.subscribe(cwd, "session-thinking", undefined, (record) =>
+      received.push(JSON.parse(record.data)),
+    );
 
     process.emit("event", { type: "operation.started" });
-    process.emit("event", { type: "message.updated", message: { id: "m1" }, content: { kind: "thinking", type: "thinking_delta", text: "Let me ", messageId: "m1", contentIndex: "0" } });
-    process.emit("event", { type: "message.updated", message: { id: "m1" }, content: { kind: "thinking", type: "thinking_delta", text: "think.", messageId: "m1", contentIndex: "0" } });
-    process.emit("event", { type: "message.updated", message: { id: "m1" }, content: { kind: "thinking", type: "thinking_end", text: "Let me think.", messageId: "m1", contentIndex: "0" } });
-    process.emit("event", { type: "message.updated", message: { id: "m1" }, content: { kind: "text", type: "text_delta", text: "Answer", messageId: "m1", contentIndex: "1" } });
+    process.emit("event", {
+      type: "message.updated",
+      message: { id: "m1" },
+      content: {
+        kind: "thinking",
+        type: "thinking_delta",
+        text: "Let me ",
+        messageId: "m1",
+        contentIndex: "0",
+      },
+    });
+    process.emit("event", {
+      type: "message.updated",
+      message: { id: "m1" },
+      content: {
+        kind: "thinking",
+        type: "thinking_delta",
+        text: "think.",
+        messageId: "m1",
+        contentIndex: "0",
+      },
+    });
+    process.emit("event", {
+      type: "message.updated",
+      message: { id: "m1" },
+      content: {
+        kind: "thinking",
+        type: "thinking_end",
+        text: "Let me think.",
+        messageId: "m1",
+        contentIndex: "0",
+      },
+    });
+    process.emit("event", {
+      type: "message.updated",
+      message: { id: "m1" },
+      content: {
+        kind: "text",
+        type: "text_delta",
+        text: "Answer",
+        messageId: "m1",
+        contentIndex: "1",
+      },
+    });
     process.emit("event", { type: "operation.settled", status: "completed" });
     await eventually(() => received.some((event) => event.type === "operation.settled"));
 
@@ -598,60 +1094,169 @@ describe("central conversation event hub", () => {
     const hub = new ConversationEventHub();
     const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
-    hub.bind(cwd, process, { activeSessionId: () => "session-parts", onBusy: () => undefined, onExit: () => undefined });
-    await hub.subscribe(cwd, "session-parts", undefined, (record) => received.push(JSON.parse(record.data)));
+    hub.bind(cwd, process, {
+      activeSessionId: () => "session-parts",
+      onBusy: () => undefined,
+      onExit: () => undefined,
+    });
+    await hub.subscribe(cwd, "session-parts", undefined, (record) =>
+      received.push(JSON.parse(record.data)),
+    );
 
     process.emit("event", { type: "operation.started" });
-    process.emit("event", { type: "message.updated", message: { id: "m1" }, content: { kind: "text", type: "text_delta", text: "first", messageId: "m1", contentIndex: "0" } });
-    process.emit("event", { type: "message.updated", message: { id: "m1" }, content: { kind: "text", type: "text_delta", text: "second", messageId: "m1", contentIndex: "2" } });
+    process.emit("event", {
+      type: "message.updated",
+      message: { id: "m1" },
+      content: {
+        kind: "text",
+        type: "text_delta",
+        text: "first",
+        messageId: "m1",
+        contentIndex: "0",
+      },
+    });
+    process.emit("event", {
+      type: "message.updated",
+      message: { id: "m1" },
+      content: {
+        kind: "text",
+        type: "text_delta",
+        text: "second",
+        messageId: "m1",
+        contentIndex: "2",
+      },
+    });
     process.emit("event", { type: "operation.settled", status: "completed" });
     await eventually(() => received.some((event) => event.type === "operation.settled"));
 
     expect(received.filter((event) => event.type === "message.delta")).toEqual([
-      expect.objectContaining({ itemId: "m1", partId: "m1:0", baseRevision: 0, revision: 1, text: "first" }),
-      expect.objectContaining({ itemId: "m1", partId: "m1:2", baseRevision: 0, revision: 1, text: "second" }),
+      expect.objectContaining({
+        itemId: "m1",
+        partId: "m1:0",
+        baseRevision: 0,
+        revision: 1,
+        text: "first",
+      }),
+      expect.objectContaining({
+        itemId: "m1",
+        partId: "m1:2",
+        baseRevision: 0,
+        revision: 1,
+        text: "second",
+      }),
     ]);
   });
 
-  it.each([false, true])("projects approval waiting and dispatch separately (serialized=%s)", async (serialized) => {
-    const cwd = await workspace();
-    const hub = new ConversationEventHub();
-    const runtime = new EventEmitter() as RuntimeEventSource;
-    const received: Array<Record<string, unknown>> = [];
-    hub.bind(cwd, runtime, { activeSessionId: () => "approval-state", onBusy: () => undefined, onExit: () => undefined });
-    await hub.subscribe(cwd, "approval-state", undefined, (record) => received.push(JSON.parse(record.data)));
-    runtime.emit("event", { type: "tool.started", toolCallId: "mcp-1", toolName: "mcp__test__fetch", args: {} });
-    for (const approval of ["waiting", "resolved"]) {
-      const result = { content: [], details: { approval } };
-      runtime.emit("event", { type: "tool.updated", toolCallId: "mcp-1", toolName: "mcp__test__fetch", partialResult: serialized ? JSON.stringify(result) : result });
-      await hub.flush();
-    }
-    expect(received.filter((event) => event.type === "tool.updated").map((event) => event.status))
-      .toEqual(["waiting-approval", "running"]);
-  });
+  it.each([false, true])(
+    "projects approval waiting and dispatch separately (serialized=%s)",
+    async (serialized) => {
+      const cwd = await workspace();
+      const hub = new ConversationEventHub();
+      const runtime = new EventEmitter() as RuntimeEventSource;
+      const received: Array<Record<string, unknown>> = [];
+      hub.bind(cwd, runtime, {
+        activeSessionId: () => "approval-state",
+        onBusy: () => undefined,
+        onExit: () => undefined,
+      });
+      await hub.subscribe(cwd, "approval-state", undefined, (record) =>
+        received.push(JSON.parse(record.data)),
+      );
+      runtime.emit("event", {
+        type: "tool.started",
+        toolCallId: "mcp-1",
+        toolName: "mcp__test__fetch",
+        args: {},
+      });
+      for (const approval of ["waiting", "resolved"]) {
+        const result = { content: [], details: { approval } };
+        runtime.emit("event", {
+          type: "tool.updated",
+          toolCallId: "mcp-1",
+          toolName: "mcp__test__fetch",
+          partialResult: serialized ? JSON.stringify(result) : result,
+        });
+        await hub.flush();
+      }
+      expect(
+        received.filter((event) => event.type === "tool.updated").map((event) => event.status),
+      ).toEqual(["waiting-approval", "running"]);
+    },
+  );
 
   it("streams Core bash partial results as tool updates", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
     const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
-    hub.bind(cwd, process, { activeSessionId: () => "session-bash-tail", onBusy: () => undefined, onExit: () => undefined });
-    await hub.subscribe(cwd, "session-bash-tail", undefined, (record) => received.push(JSON.parse(record.data)));
+    hub.bind(cwd, process, {
+      activeSessionId: () => "session-bash-tail",
+      onBusy: () => undefined,
+      onExit: () => undefined,
+    });
+    await hub.subscribe(cwd, "session-bash-tail", undefined, (record) =>
+      received.push(JSON.parse(record.data)),
+    );
 
-    const snapshot = (text: string) => JSON.stringify({ content: text ? [{ type: "text", text }] : [] });
+    const snapshot = (text: string) =>
+      JSON.stringify({ content: text ? [{ type: "text", text }] : [] });
     process.emit("event", { type: "operation.started" });
-    process.emit("event", { type: "tool.started", toolCallId: "b1", toolName: "bash", args: { command: "pip install -U scikit-learn" } });
-    process.emit("event", { type: "tool.updated", toolCallId: "b1", toolName: "bash", partialResult: snapshot("Collecting scikit-learn\n") });
-    await eventually(() => received.some((event) => event.type === "tool.updated" && String(event.partialOutput ?? "").includes("Collecting scikit-learn")));
+    process.emit("event", {
+      type: "tool.started",
+      toolCallId: "b1",
+      toolName: "bash",
+      args: { command: "pip install -U scikit-learn" },
+    });
+    process.emit("event", {
+      type: "tool.updated",
+      toolCallId: "b1",
+      toolName: "bash",
+      partialResult: snapshot("Collecting scikit-learn\n"),
+    });
+    await eventually(() =>
+      received.some(
+        (event) =>
+          event.type === "tool.updated" &&
+          String(event.partialOutput ?? "").includes("Collecting scikit-learn"),
+      ),
+    );
     // An empty shell inside the throttle window must not clobber the tail.
-    process.emit("event", { type: "tool.updated", toolCallId: "b1", toolName: "bash", partialResult: snapshot("") });
+    process.emit("event", {
+      type: "tool.updated",
+      toolCallId: "b1",
+      toolName: "bash",
+      partialResult: snapshot(""),
+    });
     await new Promise((resolve) => setTimeout(resolve, 300));
     // The next snapshot beyond the throttle window replaces the tail.
-    process.emit("event", { type: "tool.updated", toolCallId: "b1", toolName: "bash", partialResult: snapshot("Downloading wheel\n") });
-    await eventually(() => received.some((event) => event.type === "tool.updated" && String(event.partialOutput ?? "").includes("Downloading wheel")));
-    process.emit("event", { type: "tool.completed", toolCallId: "b1", toolName: "bash", result: "installed" });
-    await eventually(() => received.some((event) => event.type === "tool.completed" && event.status === "done"));
-    const tails = received.filter((event) => event.type === "tool.updated" && typeof event.partialOutput === "string" && String(event.partialOutput).length > 0);
+    process.emit("event", {
+      type: "tool.updated",
+      toolCallId: "b1",
+      toolName: "bash",
+      partialResult: snapshot("Downloading wheel\n"),
+    });
+    await eventually(() =>
+      received.some(
+        (event) =>
+          event.type === "tool.updated" &&
+          String(event.partialOutput ?? "").includes("Downloading wheel"),
+      ),
+    );
+    process.emit("event", {
+      type: "tool.completed",
+      toolCallId: "b1",
+      toolName: "bash",
+      result: "installed",
+    });
+    await eventually(() =>
+      received.some((event) => event.type === "tool.completed" && event.status === "done"),
+    );
+    const tails = received.filter(
+      (event) =>
+        event.type === "tool.updated" &&
+        typeof event.partialOutput === "string" &&
+        String(event.partialOutput).length > 0,
+    );
     expect(tails.length).toBeGreaterThanOrEqual(2);
     expect(tails.every((event) => event.callId === "b1")).toBe(true);
   });
@@ -661,13 +1266,28 @@ describe("central conversation event hub", () => {
     const hub = new ConversationEventHub();
     const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
-    hub.bind(cwd, process, { activeSessionId: () => "session-tool-output", onBusy: () => undefined, onExit: () => undefined });
-    await hub.subscribe(cwd, "session-tool-output", undefined, (record) => received.push(JSON.parse(record.data)));
+    hub.bind(cwd, process, {
+      activeSessionId: () => "session-tool-output",
+      onBusy: () => undefined,
+      onExit: () => undefined,
+    });
+    await hub.subscribe(cwd, "session-tool-output", undefined, (record) =>
+      received.push(JSON.parse(record.data)),
+    );
 
-    process.emit("event", { type: "tool.completed", toolCallId: "large", toolName: "read", result: "结果".repeat(100_000) });
-    await eventually(() => received.some((event) => event.type === "tool.completed" && event.status === "done"));
+    process.emit("event", {
+      type: "tool.completed",
+      toolCallId: "large",
+      toolName: "read",
+      result: "结果".repeat(100_000),
+    });
+    await eventually(() =>
+      received.some((event) => event.type === "tool.completed" && event.status === "done"),
+    );
 
-    const output = received.find((event) => event.type === "tool.completed" && event.status === "done")!;
+    const output = received.find(
+      (event) => event.type === "tool.completed" && event.status === "done",
+    )!;
     expect(output.outputTruncated).toBe(true);
     expect(output.originalOutputBytes).toBeGreaterThan(64 * 1024);
     expect(Buffer.byteLength(String(output.output), "utf8")).toBeLessThanOrEqual(64 * 1024);
@@ -678,14 +1298,28 @@ describe("central conversation event hub", () => {
     const hub = new ConversationEventHub();
     const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
-    hub.bind(cwd, process, { activeSessionId: () => "session-overlap", onBusy: () => undefined, onExit: () => undefined });
-    await hub.subscribe(cwd, "session-overlap", undefined, (record) => received.push(JSON.parse(record.data)));
-
-    const emitDelta = (delta: string, snapshot: string) => process.emit("event", {
-      type: "message.updated",
-      message: { id: "m-overlap" },
-      content: { kind: "text", type: "text_delta", text: delta, messageId: "m-overlap", contentIndex: "0", snapshot },
+    hub.bind(cwd, process, {
+      activeSessionId: () => "session-overlap",
+      onBusy: () => undefined,
+      onExit: () => undefined,
     });
+    await hub.subscribe(cwd, "session-overlap", undefined, (record) =>
+      received.push(JSON.parse(record.data)),
+    );
+
+    const emitDelta = (delta: string, snapshot: string) =>
+      process.emit("event", {
+        type: "message.updated",
+        message: { id: "m-overlap" },
+        content: {
+          kind: "text",
+          type: "text_delta",
+          text: delta,
+          messageId: "m-overlap",
+          contentIndex: "0",
+          snapshot,
+        },
+      });
 
     process.emit("event", { type: "operation.started" });
     emitDelta("生成出版级图表(matplotlib，带单位", "生成出版级图表(matplotlib，带单位");
@@ -693,32 +1327,53 @@ describe("central conversation event hub", () => {
     emitDelta("生成出版级图表(matplotlib，带单位", "生成出版级图表(matplotlib，带单位");
     // Provider chunk overlaps the previous chunk, but the snapshot advances
     // by only the non-overlapping suffix.
-    emitDelta("图表(matplotlib，带单位标注、色盲友好配色", "生成出版级图表(matplotlib，带单位标注、色盲友好配色");
+    emitDelta(
+      "图表(matplotlib，带单位标注、色盲友好配色",
+      "生成出版级图表(matplotlib，带单位标注、色盲友好配色",
+    );
     process.emit("event", { type: "operation.settled", status: "completed" });
     await eventually(() => received.some((event) => event.type === "operation.settled"));
 
-    expect(received.filter((event) => event.type === "message.delta").map((event) => event.text).join(""))
-      .toBe("生成出版级图表(matplotlib，带单位标注、色盲友好配色");
+    expect(
+      received
+        .filter((event) => event.type === "message.delta")
+        .map((event) => event.text)
+        .join(""),
+    ).toBe("生成出版级图表(matplotlib，带单位标注、色盲友好配色");
   });
 
   it("continues the durable cursor sequence after the hub is recreated", async () => {
     const cwd = await workspace();
     const store = new DurableEventStore();
     const firstHub = new ConversationEventHub(store);
-    await firstHub.publish(cwd, "session-restart", { type: "status.updated", sessionId: "session-restart", status: "first" });
+    await firstHub.publish(cwd, "session-restart", {
+      type: "status.updated",
+      sessionId: "session-restart",
+      status: "first",
+    });
     const first = await store.readAfter(cwd, "session-restart");
 
     const secondHub = new ConversationEventHub(store);
-    await secondHub.publish(cwd, "session-restart", { type: "status.updated", sessionId: "session-restart", status: "second" });
+    await secondHub.publish(cwd, "session-restart", {
+      type: "status.updated",
+      sessionId: "session-restart",
+      status: "second",
+    });
     const all = await store.readAfter(cwd, "session-restart");
 
     expect(first[0]?.id).toMatch(/^[0-9a-f-]+:1$/);
-    expect(all.map((record) => record.id)).toEqual([first[0]?.id, expect.stringMatching(/^[0-9a-f-]+:1$/)]);
+    expect(all.map((record) => record.id)).toEqual([
+      first[0]?.id,
+      expect.stringMatching(/^[0-9a-f-]+:1$/),
+    ]);
     expect(all[1]?.id).not.toBe(first[0]?.id);
     const replay = await store.readAfter(cwd, "session-restart", first[0]?.id);
     expect(replay).toHaveLength(1);
     expect(replay[0]?.event).toBe("stream.gap");
-    expect(JSON.parse(replay[0]!.data)).toMatchObject({ type: "stream.gap", reason: "epoch_changed" });
+    expect(JSON.parse(replay[0]!.data)).toMatchObject({
+      type: "stream.gap",
+      reason: "epoch_changed",
+    });
   });
 
   it("does not classify tool, interaction, or artifact-only turns as empty", async () => {
@@ -726,8 +1381,14 @@ describe("central conversation event hub", () => {
     const hub = new ConversationEventHub();
     const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
-    hub.bind(cwd, process, { activeSessionId: () => "session-activity", onBusy: () => undefined, onExit: () => undefined });
-    await hub.subscribe(cwd, "session-activity", undefined, (record) => received.push(JSON.parse(record.data)));
+    hub.bind(cwd, process, {
+      activeSessionId: () => "session-activity",
+      onBusy: () => undefined,
+      onExit: () => undefined,
+    });
+    await hub.subscribe(cwd, "session-activity", undefined, (record) =>
+      received.push(JSON.parse(record.data)),
+    );
 
     for (const event of [
       { type: "tool.completed", toolCallId: "t1", toolName: "read", result: "ok" },
@@ -738,7 +1399,9 @@ describe("central conversation event hub", () => {
       process.emit("event", event);
       process.emit("event", { type: "operation.settled", status: "completed" });
     }
-    await eventually(() => received.filter((event) => event.type === "operation.settled").length === 3);
+    await eventually(
+      () => received.filter((event) => event.type === "operation.settled").length === 3,
+    );
     expect(received.filter((event) => event.type === "error")).toEqual([]);
   });
 
@@ -747,8 +1410,14 @@ describe("central conversation event hub", () => {
     const hub = new ConversationEventHub();
     const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
-    hub.bind(cwd, process, { activeSessionId: () => "session-interactions", onBusy: () => undefined, onExit: () => undefined });
-    await hub.subscribe(cwd, "session-interactions", undefined, (record) => received.push(JSON.parse(record.data)));
+    hub.bind(cwd, process, {
+      activeSessionId: () => "session-interactions",
+      onBusy: () => undefined,
+      onExit: () => undefined,
+    });
+    await hub.subscribe(cwd, "session-interactions", undefined, (record) =>
+      received.push(JSON.parse(record.data)),
+    );
 
     process.emit("event", { type: "operation.started" });
     process.emit("event", {
@@ -783,12 +1452,11 @@ describe("central conversation event hub", () => {
       options: ["Allow once", "Allow for session", "Deny"],
     });
 
-    await eventually(() => [
-      "confirm-1",
-      "permission-1",
-      "select-1",
-      "mcp-permission-1",
-    ].every((requestId) => received.some((event) => event.requestId === requestId)));
+    await eventually(() =>
+      ["confirm-1", "permission-1", "select-1", "mcp-permission-1"].every((requestId) =>
+        received.some((event) => event.requestId === requestId),
+      ),
+    );
     expect(received.find((event) => event.requestId === "confirm-1")).toMatchObject({
       type: "interaction.requested",
       kind: "confirmation",
@@ -824,8 +1492,14 @@ describe("central conversation event hub", () => {
     const hub = new ConversationEventHub();
     const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
-    hub.bind(cwd, process, { activeSessionId: () => "session-metadata", onBusy: () => undefined, onExit: () => undefined });
-    await hub.subscribe(cwd, "session-metadata", undefined, (record) => received.push(JSON.parse(record.data)));
+    hub.bind(cwd, process, {
+      activeSessionId: () => "session-metadata",
+      onBusy: () => undefined,
+      onExit: () => undefined,
+    });
+    await hub.subscribe(cwd, "session-metadata", undefined, (record) =>
+      received.push(JSON.parse(record.data)),
+    );
 
     process.emit("event", { type: "operation.started" });
     // The managed MCP approval producer sends only a title and options. Every
@@ -860,15 +1534,40 @@ describe("central conversation event hub", () => {
     const hub = new ConversationEventHub();
     const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
-    hub.bind(cwd, process, { activeSessionId: () => "session-presentation", onBusy: () => undefined, onExit: () => undefined });
-    await hub.subscribe(cwd, "session-presentation", undefined, (record) => received.push(JSON.parse(record.data)));
+    hub.bind(cwd, process, {
+      activeSessionId: () => "session-presentation",
+      onBusy: () => undefined,
+      onExit: () => undefined,
+    });
+    await hub.subscribe(cwd, "session-presentation", undefined, (record) =>
+      received.push(JSON.parse(record.data)),
+    );
 
-    process.emit("event", { type: "tool.started", toolCallId: "read-1", toolName: "read", args: { path: "frontend/src/ConversationBlocks.tsx" } });
-    process.emit("event", { type: "tool.completed", toolCallId: "read-1", toolName: "read", result: "done", details: { source: "workspace" } });
-    await eventually(() => received.filter((event) => event.type === "tool.started" || event.type === "tool.completed").length === 2);
+    process.emit("event", {
+      type: "tool.started",
+      toolCallId: "read-1",
+      toolName: "read",
+      args: { path: "frontend/src/ConversationBlocks.tsx" },
+    });
+    process.emit("event", {
+      type: "tool.completed",
+      toolCallId: "read-1",
+      toolName: "read",
+      result: "done",
+      details: { source: "workspace" },
+    });
+    await eventually(
+      () =>
+        received.filter((event) => event.type === "tool.started" || event.type === "tool.completed")
+          .length === 2,
+    );
 
-    expect(received.find((event) => event.type === "tool.started" && event.status === "running")).toMatchObject({ title: "Reading ConversationBlocks.tsx" });
-    expect(received.find((event) => event.type === "tool.completed" && event.status === "done")).toMatchObject({ details: { source: "workspace" } });
+    expect(
+      received.find((event) => event.type === "tool.started" && event.status === "running"),
+    ).toMatchObject({ title: "Reading ConversationBlocks.tsx" });
+    expect(
+      received.find((event) => event.type === "tool.completed" && event.status === "done"),
+    ).toMatchObject({ details: { source: "workspace" } });
   });
 
   it("does not generate an activity title for todo", async () => {
@@ -876,10 +1575,21 @@ describe("central conversation event hub", () => {
     const hub = new ConversationEventHub();
     const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
-    hub.bind(cwd, process, { activeSessionId: () => "session-todo-title", onBusy: () => undefined, onExit: () => undefined });
-    await hub.subscribe(cwd, "session-todo-title", undefined, (record) => received.push(JSON.parse(record.data)));
+    hub.bind(cwd, process, {
+      activeSessionId: () => "session-todo-title",
+      onBusy: () => undefined,
+      onExit: () => undefined,
+    });
+    await hub.subscribe(cwd, "session-todo-title", undefined, (record) =>
+      received.push(JSON.parse(record.data)),
+    );
 
-    process.emit("event", { type: "tool.started", toolCallId: "todo-1", toolName: "todo", args: { action: "update" } });
+    process.emit("event", {
+      type: "tool.started",
+      toolCallId: "todo-1",
+      toolName: "todo",
+      args: { action: "update" },
+    });
     await eventually(() => received.some((event) => event.type === "tool.started"));
     expect(received.find((event) => event.type === "tool.started")).not.toHaveProperty("title");
   });
@@ -889,8 +1599,14 @@ describe("central conversation event hub", () => {
     const hub = new ConversationEventHub();
     const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
-    hub.bind(cwd, process, { activeSessionId: () => "session-questionnaire", onBusy: () => undefined, onExit: () => undefined });
-    await hub.subscribe(cwd, "session-questionnaire", undefined, (record) => received.push(JSON.parse(record.data)));
+    hub.bind(cwd, process, {
+      activeSessionId: () => "session-questionnaire",
+      onBusy: () => undefined,
+      onExit: () => undefined,
+    });
+    await hub.subscribe(cwd, "session-questionnaire", undefined, (record) =>
+      received.push(JSON.parse(record.data)),
+    );
 
     process.emit("event", { type: "operation.started" });
     process.emit("event", {
@@ -898,14 +1614,16 @@ describe("central conversation event hub", () => {
       toolCallId: "call-q1",
       toolName: "ask_user_question",
       args: {
-        questions: [{
-          question: "Which mode?",
-          header: "Mode",
-          options: [
-            { label: "Fast", description: "Low latency", preview: "**fast**" },
-            { label: "Safe", description: "Conservative" },
-          ],
-        }],
+        questions: [
+          {
+            question: "Which mode?",
+            header: "Mode",
+            options: [
+              { label: "Fast", description: "Low latency", preview: "**fast**" },
+              { label: "Safe", description: "Conservative" },
+            ],
+          },
+        ],
       },
     });
     process.emit("event", {
@@ -915,12 +1633,20 @@ describe("central conversation event hub", () => {
       title: "pi-science-questionnaire-v1:call-q1",
       placeholder: "pi-science-questionnaire-response",
     });
-    process.emit("event", { type: "tool.completed", toolCallId: "call-q1", toolName: "ask_user_question", result: "done", isError: false });
+    process.emit("event", {
+      type: "tool.completed",
+      toolCallId: "call-q1",
+      toolName: "ask_user_question",
+      result: "done",
+      isError: false,
+    });
     await eventually(() => received.some((event) => event.type === "questionnaire.finished"));
 
     const questionnaireAsked = received.find((event) => event.type === "questionnaire.asked");
     expect(questionnaireAsked).toMatchObject({ toolCallId: "call-q1" });
-    const askedQuestions = questionnaireAsked?.questions as Array<{ options?: Array<Record<string, unknown>> }> | undefined;
+    const askedQuestions = questionnaireAsked?.questions as
+      | Array<{ options?: Array<Record<string, unknown>> }>
+      | undefined;
     expect(askedQuestions?.[0]?.options?.[0]).toMatchObject({
       label: "Fast",
       preview: "**fast**",
@@ -940,7 +1666,9 @@ describe("central conversation event hub", () => {
     const process = new EventEmitter() as RuntimeEventSource;
     const received: string[] = [];
     let releaseArtifact!: () => void;
-    const artifactReady = new Promise<void>((resolve) => { releaseArtifact = resolve; });
+    const artifactReady = new Promise<void>((resolve) => {
+      releaseArtifact = resolve;
+    });
     hub.bind(cwd, process, {
       activeSessionId: () => "session-artifact",
       onBusy: () => undefined,
@@ -948,18 +1676,32 @@ describe("central conversation event hub", () => {
       observe: async (event, sessionId) => {
         if (event.type !== "tool.completed") return;
         await artifactReady;
-        await hub.publish(cwd, sessionId, { type: "artifact.published", sessionId, artifactId: "a1", path: "result.txt" });
+        await hub.publish(cwd, sessionId, {
+          type: "artifact.published",
+          sessionId,
+          artifactId: "a1",
+          path: "result.txt",
+        });
       },
     });
-    await hub.subscribe(cwd, "session-artifact", undefined, (record) => received.push(JSON.parse(record.data).type));
+    await hub.subscribe(cwd, "session-artifact", undefined, (record) =>
+      received.push(JSON.parse(record.data).type),
+    );
     process.emit("event", { type: "operation.started" });
-    process.emit("event", { type: "tool.completed", toolCallId: "t1", toolName: "write", result: "ok" });
+    process.emit("event", {
+      type: "tool.completed",
+      toolCallId: "t1",
+      toolName: "write",
+      result: "ok",
+    });
     process.emit("event", { type: "operation.settled", status: "completed" });
     await eventually(() => received.includes("tool.completed"));
     expect(received).not.toContain("operation.settled");
     releaseArtifact();
     await eventually(() => received.includes("operation.settled"));
-    expect(received.indexOf("artifact.published")).toBeLessThan(received.indexOf("operation.settled"));
+    expect(received.indexOf("artifact.published")).toBeLessThan(
+      received.indexOf("operation.settled"),
+    );
   });
 
   it("does not attach startup stderr from before the active turn to a later crash", async () => {
@@ -967,25 +1709,45 @@ describe("central conversation event hub", () => {
     const hub = new ConversationEventHub();
     const process = new EventEmitter() as RuntimeEventSource;
     const received: Array<Record<string, unknown>> = [];
-    hub.bind(cwd, process, { activeSessionId: () => "session-stderr", onBusy: () => undefined, onExit: () => undefined });
-    await hub.subscribe(cwd, "session-stderr", undefined, (record) => received.push(JSON.parse(record.data)));
+    hub.bind(cwd, process, {
+      activeSessionId: () => "session-stderr",
+      onBusy: () => undefined,
+      onExit: () => undefined,
+    });
+    await hub.subscribe(cwd, "session-stderr", undefined, (record) =>
+      received.push(JSON.parse(record.data)),
+    );
     process.emit("stderr", "stale startup warning");
     process.emit("event", { type: "operation.started" });
     process.emit("exit", { code: 1, signal: null });
     await eventually(() => received.some((event) => event.terminal === true));
-    expect(String(received.find((event) => event.terminal === true)?.message)).not.toContain("stale startup warning");
+    expect(String(received.find((event) => event.terminal === true)?.message)).not.toContain(
+      "stale startup warning",
+    );
   });
 
   it("persists events before subscription and does not duplicate them across subscribers", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
-    await hub.publish(cwd, "session-late", { type: "message.delta", sessionId: "session-late", text: "early" });
+    await hub.publish(cwd, "session-late", {
+      type: "message.delta",
+      sessionId: "session-late",
+      text: "early",
+    });
 
     const first: Array<{ id: string | null; text?: unknown }> = [];
     const second: Array<{ id: string | null; text?: unknown }> = [];
-    await hub.subscribe(cwd, "session-late", undefined, (record) => first.push({ id: record.id, ...JSON.parse(record.data) }));
-    await hub.subscribe(cwd, "session-late", undefined, (record) => second.push({ id: record.id, ...JSON.parse(record.data) }));
-    await hub.publish(cwd, "session-late", { type: "message.delta", sessionId: "session-late", text: "live" });
+    await hub.subscribe(cwd, "session-late", undefined, (record) =>
+      first.push({ id: record.id, ...JSON.parse(record.data) }),
+    );
+    await hub.subscribe(cwd, "session-late", undefined, (record) =>
+      second.push({ id: record.id, ...JSON.parse(record.data) }),
+    );
+    await hub.publish(cwd, "session-late", {
+      type: "message.delta",
+      sessionId: "session-late",
+      text: "live",
+    });
     await eventually(() => first.length === 2 && second.length === 2);
 
     expect(first.map((item) => item.text)).toEqual(["early", "live"]);
@@ -998,21 +1760,58 @@ it("projects Harness facts directly into the v3 product lifecycle", async () => 
   const { AgentCoreEventAdapter } = await import("../agent/agent-event-adapter.js");
   const cwd = await workspace();
   const records: SseEventRecord[] = [];
-  const hub = new ConversationEventHub({ append: async (_cwd, _id, record) => { records.push(record); }, readAfter: async () => [] });
+  const hub = new ConversationEventHub({
+    append: async (_cwd, _id, record) => {
+      records.push(record);
+    },
+    readAfter: async () => [],
+  });
   const runtime = new EventEmitter();
   hub.bind(cwd, runtime, { activeSessionId: () => "s", onBusy: () => {}, onExit: () => {} });
   const adapter = new AgentCoreEventAdapter();
   const facts = [
-    { type: "run_start", runId: "r" }, { type: "turn_start", runId: "r", turnId: "t" },
-    { type: "message_update", runId: "r", message: { role: "assistant", id: "m", content: [{ type: "text", text: "hello" }] }, frame: { type: "text_delta", contentIndex: 0, delta: "hello" } },
-    { type: "tool_start", runId: "r", turnId: "t", toolCallId: "c", toolName: "read", args: { path: "a.txt" } },
-    { type: "tool_end", runId: "r", turnId: "t", toolCallId: "c", toolName: "read", result: { content: [{ type: "text", text: "ok" }] }, isError: false },
+    { type: "run_start", runId: "r" },
+    { type: "turn_start", runId: "r", turnId: "t" },
+    {
+      type: "message_update",
+      runId: "r",
+      message: { role: "assistant", id: "m", content: [{ type: "text", text: "hello" }] },
+      frame: { type: "text_delta", contentIndex: 0, delta: "hello" },
+    },
+    {
+      type: "tool_start",
+      runId: "r",
+      turnId: "t",
+      toolCallId: "c",
+      toolName: "read",
+      args: { path: "a.txt" },
+    },
+    {
+      type: "tool_end",
+      runId: "r",
+      turnId: "t",
+      toolCallId: "c",
+      toolName: "read",
+      result: { content: [{ type: "text", text: "ok" }] },
+      isError: false,
+    },
     { type: "run_end", runId: "r", status: "completed" },
   ];
-  for (const fact of facts) for (const input of adapter.adapt({ lane: "main", ...fact } as unknown as import("@earendil-works/pi-agent-core").HarnessEvent)) runtime.emit("event", input);
+  for (const fact of facts)
+    for (const input of adapter.adapt({
+      lane: "main",
+      ...fact,
+    } as unknown as import("@earendil-works/pi-agent-core").HarnessEvent))
+      runtime.emit("event", input);
   await hub.flush();
   const values = records.map((record) => JSON.parse(record.data));
-  expect(values.map((value) => value.type)).toEqual(["operation.started", "message.delta", "tool.started", "tool.completed", "operation.settled"]);
+  expect(values.map((value) => value.type)).toEqual([
+    "operation.started",
+    "message.delta",
+    "tool.started",
+    "tool.completed",
+    "operation.settled",
+  ]);
   expect(values.every((value) => value.schemaVersion === 3 && value.runId === "r")).toBe(true);
   expect(values.at(-1)).toMatchObject({ status: "completed" });
 });
@@ -1020,15 +1819,30 @@ it("projects Harness facts directly into the v3 product lifecycle", async () => 
 it("publishes one error card when core message and run terminal facts describe the same fault", async () => {
   const cwd = await workspace();
   const records: SseEventRecord[] = [];
-  const hub = new ConversationEventHub({ append: async (_cwd, _id, record) => { records.push(record); }, readAfter: async () => [] });
+  const hub = new ConversationEventHub({
+    append: async (_cwd, _id, record) => {
+      records.push(record);
+    },
+    readAfter: async () => [],
+  });
   const process = new EventEmitter();
-  hub.bind(cwd, process as RuntimeEventSource, { activeSessionId: () => "s", onBusy: () => {}, onExit: () => {} });
+  hub.bind(cwd, process as RuntimeEventSource, {
+    activeSessionId: () => "s",
+    onBusy: () => {},
+    onExit: () => {},
+  });
   process.emit("event", { type: "operation.started", runId: "r", turnId: "r" });
-  process.emit("event", { type: "message.completed", runId: "r", message: { role: "assistant", stopReason: "error", errorMessage: "provider failed" } });
+  process.emit("event", {
+    type: "message.completed",
+    runId: "r",
+    message: { role: "assistant", stopReason: "error", errorMessage: "provider failed" },
+  });
   process.emit("event", { type: "runtime.error", runId: "r", message: "provider failed" });
   process.emit("event", { type: "operation.settled", runId: "r", status: "failed" });
   await hub.flush();
   const values = records.map((record) => JSON.parse(record.data));
   expect(values.filter((value) => value.type === "error")).toHaveLength(1);
-  expect(values).toContainEqual(expect.objectContaining({ type: "operation.settled", outcome: "with_issues" }));
+  expect(values).toContainEqual(
+    expect.objectContaining({ type: "operation.settled", outcome: "with_issues" }),
+  );
 });

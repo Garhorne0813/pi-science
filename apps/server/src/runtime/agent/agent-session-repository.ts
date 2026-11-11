@@ -15,7 +15,7 @@ import {
   type LaneConfiguration,
 } from "@earendil-works/pi-agent-core/node";
 import { AgentSessionRegistry } from "./agent-session-registry.js";
-import { modelFailureFrom, modelFailureText } from "./model-failure.js";
+import { modelFailureFrom, modelFailureText, type ModelFailure } from "./model-failure.js";
 import { readProject } from "../../project/project-registry.js";
 import { metadataRoot } from "../../storage/persistence.js";
 import type { SessionStats } from "@pi-science/contracts";
@@ -52,14 +52,26 @@ function firstPageWindow(entries: Entry[], limit: number): Entry[] {
   return entries.slice(0, count);
 }
 
-function asMessage(entry: Entry): SessionMessageRecord | null {
-  if (entry.type !== "message") return null;
-  const message = entry.message as unknown as Record<string, unknown>;
-  const content = Array.isArray(message.content)
+/** Message content normalized to the part array the browser protocol expects. */
+function messageContent(message: Record<string, unknown>): Array<Record<string, unknown>> {
+  return Array.isArray(message.content)
     ? (message.content as Array<Record<string, unknown>>)
     : typeof message.content === "string"
       ? [{ type: "text", text: message.content }]
       : [];
+}
+
+/** A provider failure persisted as an assistant message with no content at all. */
+function modelFailureOf(entry: Entry): ModelFailure | null {
+  if (entry.type !== "message") return null;
+  const message = entry.message as unknown as Record<string, unknown>;
+  return messageContent(message).length === 0 ? modelFailureFrom(message) : null;
+}
+
+function asMessage(entry: Entry): SessionMessageRecord | null {
+  if (entry.type !== "message") return null;
+  const message = entry.message as unknown as Record<string, unknown>;
+  const content = messageContent(message);
   // A provider failure is persisted as an assistant message with no content at all; keep the reason
   // visible in history instead of returning an empty array.
   const failure = content.length === 0 ? modelFailureFrom(message) : null;
@@ -127,9 +139,13 @@ async function projectMessages(
     }
   }
   return entries.flatMap((entry) => {
+    const result = byEntry.get(entry.id);
+    // A failed attempt stays on the branch so the next attempt can descend from it, but it never
+    // entered the model context. Only the entry a run ended on is a failure the user has to see;
+    // the durable tip decides, not the loaded page, so paging cannot flip the answer.
+    if (result && entry.id !== result.tipId && modelFailureOf(entry)) return [];
     const message = asMessage(entry);
     if (!message) return [];
-    const result = byEntry.get(entry.id);
     return [
       {
         ...message,

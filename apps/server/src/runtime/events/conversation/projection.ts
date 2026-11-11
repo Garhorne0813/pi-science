@@ -16,7 +16,7 @@ import {
   interactionPresentation,
   eventField,
 } from "./interactions.js";
-import { streamKey, newConversationId, turnFields, eventPhase, modelError } from "./records.js";
+import { streamKey, newConversationId, turnFields, eventPhase } from "./records.js";
 import { ConversationStreams } from "./streams.js";
 
 /** Own per-conversation turn/content normalization, independently of delivery. */
@@ -35,6 +35,7 @@ export class ConversationProjection {
       turn = {
         hadText: false,
         hadError: false,
+        sawModelError: false,
         hadActivity: false,
         contentByKey: new Map(),
         revisionByKey: new Map(),
@@ -59,6 +60,7 @@ export class ConversationProjection {
           : newConversationId("run", sessionId, turn.turnOrdinal);
       turn.hadText = false;
       turn.hadError = false;
+      turn.sawModelError = false;
       turn.lastRuntimeError = undefined;
       turn.hadActivity = false;
       turn.contentByKey.clear();
@@ -135,14 +137,6 @@ export class ConversationProjection {
       ];
     }
 
-    const exactError = modelError(event);
-    if (exactError) {
-      turn.hadError = true;
-      if (turn.lastRuntimeError === exactError) return [];
-      turn.lastRuntimeError = exactError;
-      return [{ type: "error", sessionId, ...turnFields(turn), message: cap(exactError) }];
-    }
-
     switch (event.type) {
       case "message.started": {
         const message = event.message as Record<string, unknown> | undefined;
@@ -174,6 +168,10 @@ export class ConversationProjection {
       case "message.completed": {
         const message = event.message;
         if (message.role !== "assistant") return [];
+        // A failed attempt is not the run's outcome: the harness may retry it, and the run's
+        // terminal event reports the result. Remember it only so a later settlement does not
+        // mistake the turn for an empty response.
+        if (message.stopReason === "error") turn.sawModelError = true;
         return [
           {
             type: "message.completed",
@@ -442,6 +440,7 @@ export class ConversationProjection {
           event.status === "completed" &&
           !turn.hadText &&
           !turn.hadError &&
+          !turn.sawModelError &&
           !turn.hadActivity &&
           !event.handledWithoutTurn
         ) {
@@ -463,6 +462,7 @@ export class ConversationProjection {
         });
         turn.hadText = false;
         turn.hadError = false;
+        turn.sawModelError = false;
         turn.lastRuntimeError = undefined;
         turn.hadActivity = false;
         turn.contentByKey.clear();

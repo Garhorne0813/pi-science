@@ -404,3 +404,89 @@ it("projects a failed model call as readable assistant content instead of an emp
     await rm(cwd, { recursive: true, force: true });
   }
 });
+
+it("omits an attempt that the same run retried before it completed", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "core-history-retried-model-failure-"));
+  const env = new NodeExecutionEnv({ cwd });
+  const ctx = BACKGROUND_CONTEXT;
+  const repo = new JsonlSessionRepo({
+    fileSystem: env,
+    sessionsRoot: join(cwd, ".pi-science", "agent-sessions"),
+  });
+  try {
+    const session = await repo.create({ cwd }, ctx);
+    const branch = await session.createBranch("main", null, ctx);
+    const user = await branch.appendMessage(
+      { role: "user", content: "Reply with exactly: OK", timestamp: 1000 },
+      ctx,
+    );
+    const failed = await branch.appendMessage(
+      {
+        role: "assistant",
+        content: [],
+        api: "openai-completions",
+        provider: "opencode-go",
+        model: "deepseek-v4.1-flash",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 2000,
+      },
+      ctx,
+    );
+    const ok = await branch.appendMessage(
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "OK" }],
+        api: "openai-completions",
+        provider: "opencode-go",
+        model: "deepseek-v4.1-flash",
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 3000,
+      },
+      ctx,
+    );
+    await session.setValue(
+      operationResult("retry-run"),
+      {
+        operationId: "retry-run",
+        kind: "run",
+        status: "completed",
+        fromTipId: user,
+        tipId: ok,
+        startedAt: 1000,
+        endedAt: 3000,
+      },
+      ctx,
+    );
+    const id = session.metadata.id;
+    await session.close(ctx);
+    await repo.close(ctx);
+    const history = new AgentSessionRepository();
+    const messages = await history.messages(cwd, id);
+    expect(messages.map((message) => message.id)).toEqual([user, ok]);
+    expect(messages.find((message) => message.id === failed)).toBeUndefined();
+    expect(messages.find((message) => message.id === ok)).toMatchObject({
+      turnStatus: "completed",
+    });
+  } finally {
+    await repo.close(ctx);
+    await env.cleanup(ctx);
+    await rm(cwd, { recursive: true, force: true });
+  }
+});

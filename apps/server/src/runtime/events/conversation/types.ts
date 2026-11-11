@@ -55,6 +55,8 @@ export type BindingOptions = {
 export type TurnState = {
   hadText: boolean;
   hadError: boolean;
+  /** A model attempt failed on its own; a retry may still complete the run. */
+  sawModelError: boolean;
   lastRuntimeError?: string;
   hadActivity: boolean;
   /** Accumulated assistant content deltas keyed by `${messageKey}:${contentIndex}`.

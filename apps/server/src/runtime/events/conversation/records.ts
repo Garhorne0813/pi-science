@@ -1,5 +1,4 @@
 import { pathIsInside } from "../../../support/platform-utils.js";
-import type { ProductInput } from "../product-input.js";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import type { SseEventRecord } from "../event-store.js";
@@ -19,14 +18,18 @@ export function recordPayload(record: SseEventRecord): Record<string, unknown> |
   try {
     const payload = JSON.parse(record.data) as unknown;
     return payload && typeof payload === "object" && !Array.isArray(payload)
-      ? payload as Record<string, unknown>
+      ? (payload as Record<string, unknown>)
       : null;
   } catch {
     return null;
   }
 }
 
-export function newConversationId(kind: "turn" | "run", sessionId: string, ordinal: number): string {
+export function newConversationId(
+  kind: "turn" | "run",
+  sessionId: string,
+  ordinal: number,
+): string {
   // The ordinal is useful for diagnostics, but it is only in-memory and resets
   // when the control plane restarts. A UUID prevents a resumed session from
   // reusing an identity that the browser has already marked terminal.
@@ -42,7 +45,9 @@ export function turnFields(turn: TurnState): Record<string, unknown> {
   };
 }
 
-export function eventPhase(role: "intermediate" | "final" | undefined): "commentary" | "final_answer" | "unknown" {
+export function eventPhase(
+  role: "intermediate" | "final" | undefined,
+): "commentary" | "final_answer" | "unknown" {
   return role === "intermediate" ? "commentary" : role === "final" ? "final_answer" : "unknown";
 }
 
@@ -94,20 +99,17 @@ export function chunkTextPayload(payload: Record<string, unknown>): Record<strin
   const chunks = splitUtf8(payload.text, MAX_TEXT_CHUNK_BYTES);
   if (chunks.length === 1) return [payload];
   return chunks.map((text, index) => {
-    const chunk: Record<string, unknown> = { ...payload, text, chunkIndex: index, chunkCount: chunks.length };
+    const chunk: Record<string, unknown> = {
+      ...payload,
+      text,
+      chunkIndex: index,
+      chunkCount: chunks.length,
+    };
     // A replacement applies only to the first chunk; following chunks append
     // to that replacement while retaining the original revision identity.
     if (index > 0 && chunk.replace === true) delete chunk.replace;
     return chunk;
   });
-}
-
-export function modelError(event: ProductInput): string | null {
-  if (event.type !== "message.completed") return null;
-  const message = (event.message && typeof event.message === "object" ? event.message : event) as Record<string, unknown>;
-  const stopReason = String(message.stopReason ?? event.stopReason ?? "");
-  const errorMessage = message.errorMessage ?? event.errorMessage;
-  return stopReason === "error" || errorMessage ? String(errorMessage ?? "The model request failed") : null;
 }
 
 export function matchesWorkspace(key: string, cwd?: string): boolean {
