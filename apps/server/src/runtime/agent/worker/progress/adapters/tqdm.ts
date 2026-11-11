@@ -74,5 +74,7 @@ export const tqdmProgressAdapter: ProgressAdapter = {
 function description(text: string, index: number): string | undefined {
   const start = Math.max(text.lastIndexOf("]", index), text.lastIndexOf("\n", index)) + 1;
   const prefix = text.slice(start, index).trim().replace(/:\s*$/, "");
-  return prefix && !/\d/.test(prefix) && !prefix.includes("|") && prefix.length <= 100 ? prefix : undefined;
+  return prefix && !/\d/.test(prefix) && !prefix.includes("|") && prefix.length <= 100
+    ? prefix
+    : undefined;
 }

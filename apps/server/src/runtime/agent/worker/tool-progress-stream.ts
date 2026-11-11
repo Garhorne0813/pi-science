@@ -9,7 +9,11 @@ export function readToolProgressStream(text: string): { text: string; progress?:
   const { visible, records } = controlLines(text);
   let progress: ToolProgressV1 | undefined;
   for (const record of records) {
-    try { progress = normalizeToolProgress(JSON.parse(record)) ?? progress; } catch { /* ordinary text that began with the token */ }
+    try {
+      progress = normalizeToolProgress(JSON.parse(record)) ?? progress;
+    } catch {
+      /* ordinary text that began with the token */
+    }
   }
   return { text: visible, ...(progress ? { progress } : {}) };
 }

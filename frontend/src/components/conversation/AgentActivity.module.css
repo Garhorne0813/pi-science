@@ -192,6 +192,18 @@
   transition: width var(--motion-normal) var(--ease-standard);
 }
 
+/* A settled row freezes the layer it already earned: the measurement ink is
+   `--muted`, and neither the reveal nor the width transition runs, so the value
+   outlives the step without animating towards a verdict. */
+.progressLayer[data-settled="true"] {
+  animation: none;
+}
+
+.progressFillSettled {
+  background: var(--muted);
+  transition: none;
+}
+
 .tool[data-running="true"] .toolButton,
 .thinking[data-running="true"] .toolButton {
   color: var(--activity-color);

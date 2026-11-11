@@ -542,11 +542,49 @@ describe("AgentActivity measured progress", () => {
     expect(screen.getByText("Indexing files · 18 · total unknown")).toBeInTheDocument();
   });
 
-  it.each(["done", "error"] as const)("hides the progress layer when the tool is %s", (status) => {
-    render(<AgentActivity blocks={[{ ...tool("python-1", "python", status), startedAt: startedLongAgo(), progress: measuredProgress({ current: 100, total: 100 }) }]} />);
+  it("freezes the last measurement when the tool settles", () => {
+    const { container } = render(<AgentActivity blocks={[{ ...tool("python-1", "python", "done"), startedAt: startedLongAgo(), endedAt: new Date().toISOString(), progress: measuredProgress({ current: 72, total: 100, unit: "cells" }) }]} />);
 
-    expect(screen.queryByText(/Indexing files/)).not.toBeInTheDocument();
+    expect(screen.getByText("Indexing files · 72 / 100 cells")).toBeInTheDocument();
+    expect(screen.getByText("72%")).toBeInTheDocument();
+    const layer = container.querySelector('[data-settled="true"]');
+    expect(layer).not.toBeNull();
+    expect(layer?.querySelector("[style]")).toHaveStyle({ width: "72%" });
+    expect(container.querySelector('[role="progressbar"]')).toHaveAttribute("aria-hidden", "true");
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("floors a settled count instead of rounding it up to the total", () => {
+    const { container } = render(<AgentActivity blocks={[{ ...tool("python-1", "python", "done"), startedAt: startedLongAgo(), endedAt: new Date().toISOString(), progress: measuredProgress({ current: 8, total: 30, unit: "cells" }) }]} />);
+
+    expect(screen.getByText("Indexing files · 8 / 30 cells")).toBeInTheDocument();
+    expect(screen.getByText("26%")).toBeInTheDocument();
+    expect(container.querySelector('[data-settled="true"] [style]')).toHaveStyle({ width: "26%" });
+  });
+
+  it("keeps an error row's number without a running bar", () => {
+    const { container } = render(<AgentActivity blocks={[{ ...tool("python-1", "python", "error"), startedAt: startedLongAgo(), endedAt: new Date().toISOString(), progress: measuredProgress({ current: 27, total: 100, unit: "cells" }) }]} />);
+
+    expect(screen.getByText("Indexing files · 27 / 100 cells")).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(container.querySelector('[data-settled="true"]')?.textContent).toContain("27%");
+    expect(container.querySelector("svg.lucide-circle-x")).not.toBeNull();
+  });
+
+  it("does not add a bar to a step that finished before the reveal delay", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-08T00:00:00.000Z"));
+      const block = { ...tool("python-1", "python", "running"), startedAt: "2026-09-08T00:00:00.000Z", progress: measuredProgress({ current: 3, total: 10 }) };
+      const { container, rerender } = render(<AgentActivity blocks={[block]} />);
+      expect(container.querySelector('[data-settled="true"]')).toBeNull();
+      act(() => { vi.advanceTimersByTime(100); });
+      rerender(<AgentActivity blocks={[{ ...block, status: "done", endedAt: "2026-09-08T00:00:00.100Z" }]} />);
+      expect(container.querySelector('[data-settled="true"]')).toBeNull();
+      expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("holds the layer back for half a second so a fast step does not flash", () => {

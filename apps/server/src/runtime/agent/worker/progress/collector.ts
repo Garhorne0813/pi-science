@@ -1,4 +1,9 @@
-import { mergeToolProgress, normalizeToolProgress, TOOL_PROGRESS_LIMITS, type ToolProgressV1 } from "@pi-science/contracts";
+import {
+  mergeToolProgress,
+  normalizeToolProgress,
+  TOOL_PROGRESS_LIMITS,
+  type ToolProgressV1,
+} from "@pi-science/contracts";
 import { controlLines } from "./control-lines.js";
 import type { ProgressAdapter, ProgressObservation } from "./types.js";
 
@@ -47,7 +52,9 @@ export class ToolProgressCollector {
   #closed = false;
 
   constructor(options: ToolProgressCollectorOptions) {
-    this.#adapters = options.adapters.filter((adapter) => adapter.matches?.(options.command) ?? true);
+    this.#adapters = options.adapters.filter(
+      (adapter) => adapter.matches?.(options.command) ?? true,
+    );
     this.#intervalMs = options.intervalMs ?? PROGRESS_PUBLISH_INTERVAL_MS;
     this.#now = options.now ?? Date.now;
   }
@@ -96,8 +103,11 @@ export class ToolProgressCollector {
   #read(raw: string, visible: string): ToolProgressV1 | undefined {
     for (const adapter of this.#adapters) {
       let observations: readonly ProgressObservation[];
-      try { observations = adapter.read(adapter.readsControlLines ? raw : visible); }
-      catch { continue; }
+      try {
+        observations = adapter.read(adapter.readsControlLines ? raw : visible);
+      } catch {
+        continue;
+      }
       const last = observations.at(-1);
       if (!last) continue;
       const value = toProgress(adapter.id, last);
@@ -108,14 +118,25 @@ export class ToolProgressCollector {
 
   #adopt(next: ToolProgressV1): void {
     const current = this.#current;
-    if (!current || current.scopeId !== next.scopeId) { this.#current = next; this.#pending = next; return; }
+    if (!current || current.scopeId !== next.scopeId) {
+      this.#current = next;
+      this.#pending = next;
+      return;
+    }
     // A count that went backwards inside one scope is normally a replayed
     // event, and the measured value stays. Once the scope has reported its
     // total, a lower count is the next cycle of the same named work, so it
     // resets instead. Without the reset a loop that runs a named bar twice
     // would freeze at its first total.
-    const finished = current.current !== undefined && current.total !== undefined && current.current >= current.total;
-    const restarted = finished && next.current !== undefined && current.current !== undefined && next.current < current.current;
+    const finished =
+      current.current !== undefined &&
+      current.total !== undefined &&
+      current.current >= current.total;
+    const restarted =
+      finished &&
+      next.current !== undefined &&
+      current.current !== undefined &&
+      next.current < current.current;
     const merged = restarted ? next : mergeToolProgress(current, next);
     if (!merged) return;
     this.#current = merged;
@@ -136,7 +157,10 @@ export class ToolProgressCollector {
 
 /** A namespaced scope id longer than the contract allows is dropped rather than
  *  truncated, because two ids that share a prefix would become one scope. */
-function toProgress(adapterId: string, observation: ProgressObservation): ToolProgressV1 | undefined {
+function toProgress(
+  adapterId: string,
+  observation: ProgressObservation,
+): ToolProgressV1 | undefined {
   const scopeId = `${adapterId}:${observation.scopeId}`;
   if (scopeId.length > TOOL_PROGRESS_LIMITS.scopeId) return undefined;
   return normalizeToolProgress({

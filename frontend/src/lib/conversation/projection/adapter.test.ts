@@ -81,9 +81,9 @@ it("carries the contract's progress decision into the activity projection", () =
   expect(activity.progress).toEqual({ scopeLabel: "Indexing cells", current: 7, total: 10, percent: 70, unit: "cells" });
 });
 
-it("drops progress from a finished activity projection", () => {
+it("keeps the last measurement on a finished activity projection", () => {
   const progress = normalizeToolProgress({ version: 1, scopeId: "cells", scopeLabel: "Indexing cells", current: 10, total: 10, totalKind: "fixed" });
   const activity = projectToolActivity({ kind: "tool", id: "tool-1", callId: "call-1", tool: "python", status: "done", progress });
 
-  expect(activity.progress).toBeUndefined();
+  expect(activity.progress).toEqual({ scopeLabel: "Indexing cells", current: 10, total: 10, percent: 100, unit: undefined });
 });

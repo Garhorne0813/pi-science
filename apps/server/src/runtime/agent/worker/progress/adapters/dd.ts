@@ -17,6 +17,16 @@ export const ddProgressAdapter: ProgressAdapter = {
       const value = Number(match[1]);
       if (Number.isSafeInteger(value) && value >= 0) bytes = value;
     }
-    return bytes === undefined ? [] : [{ scopeId: SCOPE, scopeLabel: "Copied", current: bytes, totalKind: "unknown", unit: "bytes" }];
+    return bytes === undefined
+      ? []
+      : [
+          {
+            scopeId: SCOPE,
+            scopeLabel: "Copied",
+            current: bytes,
+            totalKind: "unknown",
+            unit: "bytes",
+          },
+        ];
   },
 };

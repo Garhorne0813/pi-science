@@ -232,7 +232,9 @@ export function sandboxBashTool(
           const result = {
             ...rawResult,
             content: rawResult.content.map((part) =>
-              part.type === "text" ? { ...part, text: readToolProgressStream(part.text).text } : part,
+              part.type === "text"
+                ? { ...part, text: readToolProgressStream(part.text).text }
+                : part,
             ),
           };
           const evidence = await outputs();

@@ -16,8 +16,21 @@ export const rsyncProgressAdapter: ProgressAdapter = {
     for (const match of text.matchAll(CHECK)) {
       const remaining = Number(match[1]);
       const total = Number(match[2]);
-      if (!Number.isSafeInteger(remaining) || !Number.isSafeInteger(total) || total <= 0 || remaining > total) continue;
-      observation = { scopeId: "files", scopeLabel: "Checking files", current: total - remaining, total, totalKind: "reestimated", unit: "files" };
+      if (
+        !Number.isSafeInteger(remaining) ||
+        !Number.isSafeInteger(total) ||
+        total <= 0 ||
+        remaining > total
+      )
+        continue;
+      observation = {
+        scopeId: "files",
+        scopeLabel: "Checking files",
+        current: total - remaining,
+        total,
+        totalKind: "reestimated",
+        unit: "files",
+      };
     }
     return observation ? [observation] : [];
   },

@@ -4,11 +4,21 @@ import { PROGRESS_PUBLISH_INTERVAL_MS, ToolProgressCollector } from "./collector
 import { emitterProgressAdapter } from "./control-lines.js";
 import type { ProgressAdapter } from "./types.js";
 
-const record = (value: Record<string, unknown>) => `<<pi-progress>> ${JSON.stringify({ version: 1, scopeId: "scan:1", scopeLabel: "Scanning", totalKind: "fixed", ...value })}\n`;
+const record = (value: Record<string, unknown>) =>
+  `<<pi-progress>> ${JSON.stringify({ version: 1, scopeId: "scan:1", scopeLabel: "Scanning", totalKind: "fixed", ...value })}\n`;
 
-function collector(adapters: readonly ProgressAdapter[] = [emitterProgressAdapter], command = "bash script.sh", intervalMs = PROGRESS_PUBLISH_INTERVAL_MS) {
+function collector(
+  adapters: readonly ProgressAdapter[] = [emitterProgressAdapter],
+  command = "bash script.sh",
+  intervalMs = PROGRESS_PUBLISH_INTERVAL_MS,
+) {
   const clock = { at: 1_000 };
-  const instance = new ToolProgressCollector({ command, adapters, intervalMs, now: () => clock.at });
+  const instance = new ToolProgressCollector({
+    command,
+    adapters,
+    intervalMs,
+    now: () => clock.at,
+  });
   return { clock, instance };
 }
 
@@ -19,7 +29,16 @@ describe("ToolProgressCollector", () => {
     const { instance } = collector();
     expect(instance.observe(record({ current: 2, total: 5 }))).toEqual({
       text: "",
-      progress: { version: 1, scopeId: "emitter:scan:1", scopeLabel: "Scanning", totalKind: "fixed", source: "builtin", current: 2, total: 5, determinate: true },
+      progress: {
+        version: 1,
+        scopeId: "emitter:scan:1",
+        scopeLabel: "Scanning",
+        totalKind: "fixed",
+        source: "builtin",
+        current: 2,
+        total: 5,
+        determinate: true,
+      },
     });
   });
 
@@ -57,9 +76,17 @@ describe("ToolProgressCollector", () => {
   });
 
   it("lets an explicit protocol outrank a command-reading adapter", () => {
-    const noisy: ProgressAdapter = { id: "noisy", matches: () => true, read: () => [{ scopeId: "x", scopeLabel: "Guess", current: 1, total: 100, totalKind: "fixed" }] };
+    const noisy: ProgressAdapter = {
+      id: "noisy",
+      matches: () => true,
+      read: () => [
+        { scopeId: "x", scopeLabel: "Guess", current: 1, total: 100, totalKind: "fixed" },
+      ],
+    };
     const { clock, instance } = collector([emitterProgressAdapter, noisy]);
-    expect(instance.observe(record({ current: 2, total: 5 })).progress?.scopeId).toBe("emitter:scan:1");
+    expect(instance.observe(record({ current: 2, total: 5 })).progress?.scopeId).toBe(
+      "emitter:scan:1",
+    );
     clock.at += PROGRESS_PUBLISH_INTERVAL_MS;
     expect(instance.observe("no control line\n").progress?.scopeId).toBe("noisy:x");
   });
@@ -68,7 +95,9 @@ describe("ToolProgressCollector", () => {
     const { clock, instance } = collector();
     instance.observe(record({ current: 1, total: 5 }));
     clock.at += PROGRESS_PUBLISH_INTERVAL_MS;
-    expect(instance.observe(record({ scopeId: "second", current: 1, total: 9 })).progress?.scopeId).toBe("emitter:second");
+    expect(
+      instance.observe(record({ scopeId: "second", current: 1, total: 9 })).progress?.scopeId,
+    ).toBe("emitter:second");
   });
 
   it("keeps the measured value when one scope reports a lower count", () => {
@@ -114,19 +143,35 @@ describe("ToolProgressCollector", () => {
 
   it("drops an observation whose namespaced scope does not fit the contract", () => {
     const { instance } = collector();
-    expect(instance.observe(record({ scopeId: "a".repeat(64), current: 1, total: 2 })).progress).toBeUndefined();
+    expect(
+      instance.observe(record({ scopeId: "a".repeat(64), current: 1, total: 2 })).progress,
+    ).toBeUndefined();
   });
 
   it("survives an adapter that throws", () => {
-    const broken: ProgressAdapter = { id: "broken", matches: () => true, read: () => { throw new Error("boom"); } };
+    const broken: ProgressAdapter = {
+      id: "broken",
+      matches: () => true,
+      read: () => {
+        throw new Error("boom");
+      },
+    };
     const { instance } = collector([broken, emitterProgressAdapter]);
-    expect(instance.observe(record({ current: 1, total: 2 })).progress?.scopeId).toBe("emitter:scan:1");
+    expect(instance.observe(record({ current: 1, total: 2 })).progress?.scopeId).toBe(
+      "emitter:scan:1",
+    );
   });
 
   it("reads only adapters that recognize the command", () => {
-    const scoped: ProgressAdapter = { id: "scoped", matches: (command) => command.startsWith("dd "), read: () => [{ scopeId: "bytes", scopeLabel: "Copied", current: 1 }] };
+    const scoped: ProgressAdapter = {
+      id: "scoped",
+      matches: (command) => command.startsWith("dd "),
+      read: () => [{ scopeId: "bytes", scopeLabel: "Copied", current: 1 }],
+    };
     expect(collector([scoped], "python3 run.py").instance.observe("x\n").progress).toBeUndefined();
-    expect(collector([scoped], "dd if=a of=b status=progress").instance.observe("x\n").progress?.scopeId).toBe("scoped:bytes");
+    expect(
+      collector([scoped], "dd if=a of=b status=progress").instance.observe("x\n").progress?.scopeId,
+    ).toBe("scoped:bytes");
   });
 
   it("ignores output after the call finished", () => {

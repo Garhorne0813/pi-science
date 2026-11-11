@@ -19,8 +19,16 @@ export const pvProgressAdapter: ProgressAdapter = {
     for (const match of text.matchAll(PAIR)) {
       const done = Number(match[1]);
       const total = Number(match[2]);
-      if (!Number.isSafeInteger(done) || !Number.isSafeInteger(total) || total <= 0 || done > total) continue;
-      observation = { scopeId: `bytes:${total}`, scopeLabel: "Transfer", current: done, total, totalKind: "fixed", unit: "bytes" };
+      if (!Number.isSafeInteger(done) || !Number.isSafeInteger(total) || total <= 0 || done > total)
+        continue;
+      observation = {
+        scopeId: `bytes:${total}`,
+        scopeLabel: "Transfer",
+        current: done,
+        total,
+        totalKind: "fixed",
+        unit: "bytes",
+      };
     }
     if (observation) return [observation];
     for (const match of text.matchAll(SHARE)) {

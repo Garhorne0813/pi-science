@@ -6,7 +6,13 @@
  *  external party asserting a percentage, degrades to a count or to no number
  *  at all. Nothing here reads output text, elapsed time or model prose. */
 
-export const TOOL_PROGRESS_LIMITS = { scopeId: 64, scopeLabel: 100, phase: 64, label: 160, unit: 24 } as const;
+export const TOOL_PROGRESS_LIMITS = {
+  scopeId: 64,
+  scopeLabel: 100,
+  phase: 64,
+  label: 160,
+  unit: 24,
+} as const;
 
 export type ToolProgressTotalKind = "fixed" | "reestimated" | "unknown";
 export type ToolProgressSource = "builtin" | "mcp" | "kernel";
@@ -96,7 +102,16 @@ function source(value: unknown): ToolProgressSource | undefined {
  *  for a merged one alike, so the two paths cannot disagree. */
 function determined(value: Omit<ToolProgressV1, "determinate">): ToolProgressV1 {
   const { current, total } = value;
-  return { ...value, determinate: value.indeterminate !== true && value.totalKind === "fixed" && current !== undefined && total !== undefined && total > 0 && current <= total };
+  return {
+    ...value,
+    determinate:
+      value.indeterminate !== true &&
+      value.totalKind === "fixed" &&
+      current !== undefined &&
+      total !== undefined &&
+      total > 0 &&
+      current <= total,
+  };
 }
 
 /** Parse progress arriving from a tool, an MCP server or a kernel. An
@@ -143,14 +158,28 @@ export function normalizeToolProgress(raw: unknown): ToolProgressV1 | undefined 
  *  a phase has not measured zero. A lower count inside one scope is a stale or
  *  replayed event: the measured value stays and only the newer wording is taken.
  *  A new scope is the only thing that resets the numbers. */
-export function mergeToolProgress(previous: ToolProgressV1 | undefined, next: ToolProgressV1 | undefined): ToolProgressV1 | undefined {
+export function mergeToolProgress(
+  previous: ToolProgressV1 | undefined,
+  next: ToolProgressV1 | undefined,
+): ToolProgressV1 | undefined {
   if (!next) return previous;
   if (!previous || previous.scopeId !== next.scopeId) return next;
-  if (next.current === undefined && next.total === undefined) return inheritMeasurement(previous, next);
-  if (previous.current !== undefined && next.current !== undefined && next.current < previous.current) {
-    return determined({ ...previous, ...(next.phase ? { phase: next.phase } : {}), ...(next.label ? { label: next.label } : {}) });
+  if (next.current === undefined && next.total === undefined)
+    return inheritMeasurement(previous, next);
+  if (
+    previous.current !== undefined &&
+    next.current !== undefined &&
+    next.current < previous.current
+  ) {
+    return determined({
+      ...previous,
+      ...(next.phase ? { phase: next.phase } : {}),
+      ...(next.label ? { label: next.label } : {}),
+    });
   }
-  return next.current === undefined && previous.current !== undefined ? determined({ ...next, current: previous.current }) : next;
+  return next.current === undefined && previous.current !== undefined
+    ? determined({ ...next, current: previous.current })
+    : next;
 }
 
 /** A wording-only update keeps the measurement it does not repeat. */
@@ -158,7 +187,9 @@ function inheritMeasurement(previous: ToolProgressV1, next: ToolProgressV1): Too
   return determined({
     ...next,
     totalKind: previous.totalKind,
-    ...(next.current === undefined && previous.current !== undefined ? { current: previous.current } : {}),
+    ...(next.current === undefined && previous.current !== undefined
+      ? { current: previous.current }
+      : {}),
     ...(next.total === undefined && previous.total !== undefined ? { total: previous.total } : {}),
     ...(next.percent === undefined && previous.percent !== undefined
       ? { percent: previous.percent }
@@ -167,17 +198,19 @@ function inheritMeasurement(previous: ToolProgressV1, next: ToolProgressV1): Too
   });
 }
 
-/** The display tiers. A terminal, queued or waiting row never shows a
- *  percentage, because the tool is not doing the measured work. A fixed total
- *  is a measurement, a revisable total is still drawn but only the text calls it
- *  an estimate, and a producer's own percentage has no denominator to divide, so
- *  it keeps the producer's number instead of inventing a total. */
+/** The display tiers. A running row without a measurement yet is
+ *  indeterminate; a settled row keeps the producer's last measurement, because
+ *  the layer reports what was measured rather than what state the row is in —
+ *  the row's own marker carries the state, so a frozen bar must never read as
+ *  success. A fixed total is a measurement, a revisable total is still drawn
+ *  but only the text calls it an estimate, and a producer's own percentage has
+ *  no denominator to divide, so it keeps the producer's number instead of
+ *  inventing a total. */
 export function selectToolProgressDisplay(
   status: ToolProgressStatus,
   progress: ToolProgressV1 | undefined,
 ): ToolProgressDisplay {
-  if (status !== "running") return { mode: "hidden" };
-  if (!progress) return { mode: "indeterminate" };
+  if (!progress) return status === "running" ? { mode: "indeterminate" } : { mode: "hidden" };
   const phase = progress.phase;
   const unit = progress.unit;
   if (progress.determinate && progress.current !== undefined && progress.total !== undefined) {
@@ -217,7 +250,13 @@ export function selectToolProgressDisplay(
     };
   }
   if (progress.current !== undefined) {
-    return { mode: "count", value: progress.current, scopeLabel: progress.scopeLabel, ...(unit ? { unit } : {}), ...(phase ? { phase } : {}) };
+    return {
+      mode: "count",
+      value: progress.current,
+      scopeLabel: progress.scopeLabel,
+      ...(unit ? { unit } : {}),
+      ...(phase ? { phase } : {}),
+    };
   }
   return { mode: "indeterminate", ...(progress.label ? { label: progress.label } : {}) };
 }

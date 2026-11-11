@@ -36,23 +36,33 @@ export const emitterProgressAdapter = {
   read(text: string): ProgressObservation[] {
     return controlLines(text).records.flatMap((record) => {
       let value: unknown;
-      try { value = JSON.parse(record); } catch { return []; }
+      try {
+        value = JSON.parse(record);
+      } catch {
+        return [];
+      }
       if (!value || typeof value !== "object" || Array.isArray(value)) return [];
       const raw = value as Record<string, unknown>;
       const scopeId = raw.scopeId;
       const scopeLabel = raw.scopeLabel;
       if (typeof scopeId !== "string" || typeof scopeLabel !== "string") return [];
-      return [{
-        scopeId,
-        scopeLabel,
-        ...(typeof raw.current === "number" ? { current: raw.current } : {}),
-        ...(typeof raw.total === "number" ? { total: raw.total } : {}),
-        ...(raw.totalKind === "fixed" || raw.totalKind === "reestimated" || raw.totalKind === "unknown" ? { totalKind: raw.totalKind } : {}),
-        ...(typeof raw.unit === "string" ? { unit: raw.unit } : {}),
-        ...(typeof raw.phase === "string" ? { phase: raw.phase } : {}),
-        ...(typeof raw.label === "string" ? { label: raw.label } : {}),
-        ...(raw.indeterminate === true ? { indeterminate: raw.indeterminate } : {}),
-      }];
+      return [
+        {
+          scopeId,
+          scopeLabel,
+          ...(typeof raw.current === "number" ? { current: raw.current } : {}),
+          ...(typeof raw.total === "number" ? { total: raw.total } : {}),
+          ...(raw.totalKind === "fixed" ||
+          raw.totalKind === "reestimated" ||
+          raw.totalKind === "unknown"
+            ? { totalKind: raw.totalKind }
+            : {}),
+          ...(typeof raw.unit === "string" ? { unit: raw.unit } : {}),
+          ...(typeof raw.phase === "string" ? { phase: raw.phase } : {}),
+          ...(typeof raw.label === "string" ? { label: raw.label } : {}),
+          ...(raw.indeterminate === true ? { indeterminate: raw.indeterminate } : {}),
+        },
+      ];
     });
   },
 } as const;

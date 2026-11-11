@@ -50,7 +50,7 @@ The tool progress layer uses a 3 px rounded track, a `14px marker + 8px gap = 22
 | count | no | no | `{{scope}} · {{count}}{{unitSuffix}} · total unknown` |
 | indeterminate | no | no | the producer's label, when it published one |
 
-Two decisions belong to this proposal: an estimate is a text property, not a bar property, because at 3 px a stripe is indistinguishable from a solid line and a 60% accent fill mixed with white measures 2.25:1 on the light surface, below the 3:1 graphical minimum; and byte counts are formatted in powers of 1000 with at most one decimal below ten.
+Three decisions belong to this proposal: an estimate is a text property, not a bar property, because at 3 px a stripe is indistinguishable from a solid line and a 60% accent fill mixed with white measures 2.25:1 on the light surface, below the 3:1 graphical minimum; byte counts are formatted in powers of 1000 with at most one decimal below ten; and a settled row keeps its last measurement frozen instead of hiding the layer — the fill switches to `--muted`, the reveal and width transitions are off, and the track is `aria-hidden` while its text still carries the numbers, so a finished step never reads as success through the bar.
 
 ## Confirmed values (have a file + selector source)
 
