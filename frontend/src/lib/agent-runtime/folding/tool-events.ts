@@ -24,9 +24,18 @@ export function reduceToolEvent(event: PiScienceEvent, { foldState, blocks, inde
         ? blocks[existingIdx]
         : undefined;
       const rawStatus = stringValue(event.status);
-      const status: ToolCallBlock["status"] = (rawStatus === "running" || rawStatus === "done" || rawStatus === "error" || rawStatus === "waiting-approval" || rawStatus === "unknown")
+      const parsedStatus: ToolCallBlock["status"] = (rawStatus === "running" || rawStatus === "done" || rawStatus === "error" || rawStatus === "waiting-approval" || rawStatus === "unknown")
         ? rawStatus
         : "unknown";
+      // A settled call is final: a late update must never move the row back to
+      // running. A retry carries its own operation/attempt identity, so it
+      // gets its own block instead of reopening this one.
+      const previousStatus = previous?.status;
+      const status: ToolCallBlock["status"] =
+        (previousStatus === "done" || previousStatus === "error") &&
+        parsedStatus !== "done" && parsedStatus !== "error"
+          ? previousStatus
+          : parsedStatus;
       const statusHistory = previous?.statusHistory
         ? [...previous.statusHistory, ...(previous.statusHistory.at(-1) === status ? [] : [status])]
         : [status];

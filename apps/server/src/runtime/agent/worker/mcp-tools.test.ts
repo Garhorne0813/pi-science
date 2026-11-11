@@ -119,17 +119,16 @@ describe("agent-core managed MCP tools", () => {
         ),
       ).toMatchObject({ content: [{ type: "text", text: "bar" }] });
       expect(updates).not.toHaveBeenCalled();
+      const progressResult = await mcp.tools[1]!.execute(
+        "progress-call",
+        {},
+        updates,
+        {} as never,
+        {} as never,
+        {} as never,
+      );
+      expect(progressResult).toMatchObject({ content: [{ type: "text", text: "done" }] });
       const emitted = updates.mock.calls.map(([update]) => update);
-      expect(
-        await mcp.tools[1]!.execute(
-          "progress-call",
-          {},
-          updates,
-          {} as never,
-          {} as never,
-          {} as never,
-        ),
-      ).toMatchObject({ content: [{ type: "text", text: "done" }] });
       expect(emitted).toEqual([
         {
           content: [],
@@ -183,6 +182,11 @@ describe("agent-core managed MCP tools", () => {
               .mode,
         ),
       ).toEqual(["estimated", "estimated", "count"]);
+      // The last notification is the value the settled result keeps, so the
+      // row and its restored history end on the same number.
+      expect((progressResult as { details?: { progress?: unknown } }).details?.progress).toEqual(
+        emitted.at(-1)!.details.progress,
+      );
     } finally {
       credentials.mockRestore();
       await mcp?.close();

@@ -59,9 +59,43 @@ describe("Pi-Science notebook extension", () => {
     const onUpdate = vi.fn();
     const run = await tools.get("notebook_run").execute("run-1", { path: "analysis/demo.ipynb", cell_ids: ["c1", "c2"] }, undefined, onUpdate, ctx);
     expect(run.content[0].text).toContain("Ran 2/2 cell(s)");
-    expect(onUpdate.mock.calls.map(([update]) => update)).toEqual([1, 2].map((current) => ({ content: [], details: { progress: { version: 1, scopeId: "notebook-cells:1", scopeLabel: "Running notebook cells", current, total: 2, unit: "cells", totalKind: "fixed" } } })));
-    expect(calls.filter((call) => call.url.includes("/api/kernels/execute")).map((call) => JSON.parse(String(call.init.body)).cell_id)).toEqual(["c1", "c2"]);
-    expect(JSON.parse(String(calls.find((call) => call.url.includes("/api/notebooks/edit"))?.init.body))).toMatchObject({ session_id: "session-1", expected_sha256: "a".repeat(64) });
+    expect(onUpdate.mock.calls.map(([update]) => update)).toEqual(
+      [1, 2].map((current) => ({
+        content: [],
+        details: {
+          progress: {
+            version: 1,
+            scopeId: "notebook-cells:1",
+            scopeLabel: "Running notebook cells",
+            current,
+            total: 2,
+            unit: "cells",
+            totalKind: "fixed",
+          },
+        },
+      })),
+    );
+    // The settled result keeps the last cell counted, so a restored thread
+    // still knows how far the run got.
+    expect(run.details).toMatchObject({
+      progress: {
+        version: 1,
+        scopeId: "notebook-cells:1",
+        scopeLabel: "Running notebook cells",
+        current: 2,
+        total: 2,
+        unit: "cells",
+        totalKind: "fixed",
+      },
+    });
+    expect(
+      calls
+        .filter((call) => call.url.includes("/api/kernels/execute"))
+        .map((call) => JSON.parse(String(call.init.body)).cell_id),
+    ).toEqual(["c1", "c2"]);
+    expect(
+      JSON.parse(String(calls.find((call) => call.url.includes("/api/notebooks/edit"))?.init.body)),
+    ).toMatchObject({ session_id: "session-1", expected_sha256: "a".repeat(64) });
     const outputCalls = calls.filter((call) => call.url.includes("/api/notebooks/output"));
     expect(outputCalls).toHaveLength(2);
     expect(JSON.parse(String(outputCalls[0]!.init.body))).toMatchObject({

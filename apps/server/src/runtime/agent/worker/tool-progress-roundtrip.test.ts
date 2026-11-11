@@ -29,10 +29,51 @@ it.skipIf(!["linux", "darwin"].includes(process.platform))("carries real Bash pr
   expect(snapshots.length).toBeGreaterThan(0);
   expect(JSON.stringify(snapshots)).not.toContain("<<pi-progress>>");
 
-  const projection = new ConversationProjection(new ConversationStreams({}));
-  const events = snapshots.map((snapshot) => projection.normalize(cwd, "session",
-    { type: "tool.updated", toolCallId: "call", toolName: "bash", partialResult: snapshot } as never)[0]! as { partialOutput?: string; progress?: ToolProgressV1 });
-  expect(events.map((event) => event.partialOutput ?? "").join("")).not.toContain("<<pi-progress>>");
-  expect(events.map((event) => selectToolProgressDisplay("running", event.progress)))
-    .toContainEqual({ mode: "determinate", current: 3, total: 5, percent: 60, scopeLabel: "Scanning files", unit: "files" });
-}, 30_000);
+    const projection = new ConversationProjection(new ConversationStreams({}));
+    const events = snapshots.map(
+      (snapshot) =>
+        projection.normalize(cwd, "session", {
+          type: "tool.updated",
+          toolCallId: "call",
+          toolName: "bash",
+          partialResult: snapshot,
+        } as never)[0]! as { partialOutput?: string; progress?: ToolProgressV1 },
+    );
+    expect(events.map((event) => event.partialOutput ?? "").join("")).not.toContain(
+      "<<pi-progress>>",
+    );
+    expect(
+      events.map((event) => selectToolProgressDisplay("running", event.progress)),
+    ).toContainEqual({
+      mode: "determinate",
+      current: 3,
+      total: 5,
+      percent: 60,
+      scopeLabel: "Scanning files",
+      unit: "files",
+    });
+
+    // The settled result keeps the last measured value, so the row does not
+    // blank out the moment the call ends, and history can restore it.
+    const settled = (result as { details?: { progress?: unknown } }).details?.progress;
+    expect(settled).toMatchObject({
+      scopeId: "emitter:scan:1",
+      current: 3,
+      total: 5,
+      unit: "files",
+    });
+    const completed = projection.normalize(cwd, "session", {
+      type: "tool.completed",
+      toolCallId: "call",
+      toolName: "bash",
+      result: "scanned",
+      details: (result as { details?: unknown }).details,
+      isError: false,
+    } as never);
+    expect(completed[0]).toMatchObject({
+      type: "tool.completed",
+      progress: { scopeId: "emitter:scan:1", current: 3, total: 5, determinate: true },
+    });
+  },
+  30_000,
+);

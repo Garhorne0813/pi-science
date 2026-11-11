@@ -25,6 +25,7 @@ import type { InteractionBridge } from "./interaction-bridge.js";
 import { toolEnvironment } from "../agent-runtime-environment.js";
 import { localMcpTransport } from "../../../mcp/sandbox-transport.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { ToolProgressV1 } from "@pi-science/contracts";
 
 type ServerDefinition = {
   command?: string;
@@ -383,6 +384,7 @@ export class AgentMcpTools {
                 );
               if ((await checkAuthority()) === "ask" && !approvedByUser)
                 throw new Error("MCP authorization revoked before dispatch");
+              let lastProgress: Omit<ToolProgressV1, "determinate"> | undefined;
               const response = await clock.run(
                 contextId,
                 clock.activeNow(contextId) + (server.requestTimeoutMs ?? 60_000),
@@ -401,22 +403,19 @@ export class AgentMcpTools {
                           progress < 0
                         )
                           return;
-                        _onUpdate({
-                          content: [],
-                          details: {
-                            progress: {
-                              version: 1,
-                              scopeId: `mcp:${name}/${tool.name}`,
-                              scopeLabel: `${name}: ${tool.name}`,
-                              current: progress,
-                              ...(total === undefined ? {} : { total }),
-                              // An external server re-estimates its total freely, so its
-                              // total is never treated as a fixed measurement.
-                              totalKind: total === undefined ? "unknown" : "reestimated",
-                              source: "mcp",
-                            },
-                          },
-                        });
+                        // An external server re-estimates its total freely, and nothing in the
+                        // protocol promises otherwise, so its total is never treated as fixed.
+                        const value: Omit<ToolProgressV1, "determinate"> = {
+                          version: 1,
+                          scopeId: `mcp:${name}/${tool.name}`,
+                          scopeLabel: `${name}: ${tool.name}`,
+                          current: progress,
+                          ...(total === undefined ? {} : { total }),
+                          totalKind: total === undefined ? "unknown" : "reestimated",
+                          source: "mcp",
+                        };
+                        lastProgress = value;
+                        _onUpdate({ content: [], details: { progress: value } });
                       },
                     },
                   ),
@@ -443,6 +442,9 @@ export class AgentMcpTools {
                 content,
                 details: {
                   result: response.structuredContent,
+                  // The final notification is the value the row settles on;
+                  // history restores it from these details.
+                  ...(lastProgress ? { progress: lastProgress } : {}),
                   scheduling: {
                     approval_ms: approvalMs,
                     queued_ms: slot.queuedMs,
