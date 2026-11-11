@@ -268,6 +268,18 @@ it("bounds extraction input and advances only the portion of the transcript actu
       expect((await memory.command(ctx, "run.get", { id: run.id })).status).toBe("completed"),
     );
     const saved = await memory.command(ctx, "run.get", { id: run.id });
+    expect(model).toHaveBeenCalledOnce();
+    const extractionPrompt = model.mock.calls[0]?.[0] ?? "";
+    expect(extractionPrompt).toContain("when nothing qualifies return []");
+    expect(extractionPrompt).toContain("A question does not imply a preference or decision.");
+    expect(extractionPrompt).toContain("Assistant messages alone do not establish user intent");
+    expect(extractionPrompt).toContain("Every source MUST have kind=message");
+    expect(extractionPrompt).toContain(
+      "Use evidenceLevel=user_stated only for explicit user statements",
+    );
+    const settings = await memory.command(ctx, "settings");
+    expect(extractionPrompt.length + 512).toBeLessThanOrEqual(settings.budget.perRunTokens - 256);
+    expect((await memory.command(ctx, "list")).records).toHaveLength(0);
     expect(saved.watermark).toBeLessThan(messages.length);
     expect(JSON.stringify(saved.messages).length).toBeLessThan(4500);
     expect(await memory.command(ctx, "cursor", { sessionId: "bounded-session" })).toBe(
