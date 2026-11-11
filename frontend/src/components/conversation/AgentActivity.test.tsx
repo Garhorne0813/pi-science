@@ -590,6 +590,23 @@ describe("Activity step glyphs and disclosure", () => {
     expect(document.querySelector("[data-activity-category]")).toBeNull();
   });
 
+  it("marks a settled reasoning row with a neutral brain, never a checkmark", () => {
+    render(<AgentActivity lifecycle="settled" blocks={[{ kind: "thinking", id: "th1", parts: [{ id: "th1-0", text: "Weigh the options." }], partial: false, startedAt: "2026-09-15T00:00:00.000Z", endedAt: "2026-09-15T00:00:03.200Z" }]} />);
+    fireEvent.click(screen.getByText(/Complete|Encountered a problem|Stopped|Working/));
+    const row = document.getElementById("thread-block-th1");
+    // A finished phase describes what it was, not that it succeeded: the marker
+    // is the neutral reasoning glyph, and no step may claim success with a check.
+    expect(row?.querySelector('[data-activity-kind="reasoning"] svg.lucide-brain')).not.toBeNull();
+    expect(row?.querySelector("svg.lucide-check")).toBeNull();
+  });
+
+  it("keeps the accent dot and no brain while the reasoning row streams", () => {
+    render(<AgentActivity blocks={[{ kind: "thinking", id: "th1", parts: [{ id: "th1-0", text: "Weigh the options." }], partial: true, startedAt: "2026-09-15T00:00:00.000Z" }]} />);
+    const row = document.getElementById("thread-block-th1");
+    expect(row?.querySelector(".bg-accent")).not.toBeNull();
+    expect(row?.querySelector("svg.lucide-brain")).toBeNull();
+  });
+
 
   it("names the panel a folded summary opens", () => {
     const { container } = render(<AgentActivity blocks={[tool("t1", "read")]} lifecycle="aborted" turnStartedAt="2026-10-03T00:00:00.000Z" turnEndedAt="2026-10-03T00:00:04.000Z" />);

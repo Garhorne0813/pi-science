@@ -542,6 +542,12 @@ colour. Status keeps its own markers — the accent dot while running, `CircleX`
 on failure, no marker that pretends success for an unknown status. The glyph is
 `aria-hidden`; the row's text still carries the accessible name.
 
+Reasoning is not one of those categories and stays out of the table below. A
+settled reasoning row labels itself with the neutral `Brain` glyph at the same
+14px `text-muted` slot, while the accent dot (streaming) and the phase duration
+(ended) carry running versus finished. The checkmark rule above covers reasoning
+too — no finished thinking phase claims completion with a checkmark.
+
 | Category | Lucide glyph |
 |---|---|
 | read | FileText |
