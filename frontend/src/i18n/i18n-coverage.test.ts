@@ -124,6 +124,8 @@ describe("i18n resource coverage", () => {
 const PLURAL_INVARIANT_KEYS = new Set([
   "conversation.activity.failureSummary",
   "conversation.activity.executionDetails",
+  // The count-only progress copy interpolates a number and a dynamic unit token ("items", "files"); no noun inflects.
+  "conversation.activity.progressCount",
   "settings.mcpPage.importLegacy",
   "settings.mcpPage.importSelected",
   "phase.stableCount",
