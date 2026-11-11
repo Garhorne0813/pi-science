@@ -74,6 +74,15 @@ describe("gateway contracts", () => {
         cursor: 4,
       }),
     ).toMatchObject({ cursor: 4 });
+    expect(
+      createSessionRequestSchema.parse({ cwd: "/tmp/project", idempotencyKey: "8fd824aa" }),
+    ).toMatchObject({ idempotencyKey: "8fd824aa" });
+    expect(createSessionRequestSchema.parse({ cwd: "/tmp/project" })).not.toHaveProperty(
+      "idempotencyKey",
+    );
+    expect(() =>
+      createSessionRequestSchema.parse({ cwd: "/tmp/project", idempotencyKey: "" }),
+    ).toThrow();
     expect(() => createSessionRequestSchema.parse({ cwd: "" })).toThrow();
     expect(
       jobRecordSchema.parse({

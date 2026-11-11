@@ -46,6 +46,10 @@ export const createSessionRequestSchema = z.object({
   cwd: z.string().min(1),
   config: piConfigSchema.default({ skills: [], extensions: [] }),
   initialApproval: initialSessionApprovalSchema.optional(),
+  // Callers that may retry a create (a reloaded page replaying its first
+  // prompt) supply the same key so the server adopts the session it already
+  // started instead of spawning a second worker.
+  idempotencyKey: z.string().min(1).max(200).optional(),
 });
 
 export const createSessionResponseSchema = z.object({

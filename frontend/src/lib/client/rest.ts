@@ -7,8 +7,16 @@ import type { HistoryMessage, InteractionResponse, PromptRequestStatus, SessionI
 import type { CreateSessionRequest } from "@pi-science/contracts";
 import { parseWirePayload } from "./wire-schema";
 
-export async function createSession(baseUrl: string, cwd: string, model?: string, thinking?: string, initialApproval?: CreateSessionRequest["initialApproval"]): Promise<{ id: string; cwd?: string; project_id?: string }> {
-  const config = model ? { model, ...(thinking ? { thinking } : {}) } : {};
+export interface CreateSessionOptions {
+  model?: string;
+  thinking?: string;
+  initialApproval?: CreateSessionRequest["initialApproval"];
+  /** Retry identity: a replayed create with the same key adopts the session the first attempt started. */
+  idempotencyKey?: string;
+}
+
+export async function createSession(baseUrl: string, cwd: string, options: CreateSessionOptions = {}): Promise<{ id: string; cwd?: string; project_id?: string }> {
+  const config = options.model ? { model: options.model, ...(options.thinking ? { thinking: options.thinking } : {}) } : {};
   const res = await request(`${baseUrl}/api/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -16,7 +24,8 @@ export async function createSession(baseUrl: string, cwd: string, model?: string
     body: JSON.stringify({
       cwd,
       config,
-      ...(initialApproval ? { initialApproval } : {}),
+      ...(options.initialApproval ? { initialApproval: options.initialApproval } : {}),
+      ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
     }),
   });
   const data = await res.json().catch(() => ({}));

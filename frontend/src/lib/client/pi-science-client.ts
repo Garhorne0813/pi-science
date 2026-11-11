@@ -1,4 +1,3 @@
-import type { CreateSessionRequest } from "@pi-science/contracts";
 /** PiScienceClient — HTTP+SSE client for the pi-science backend.
  *  Replaces open-science's OpenCodeClient.
  *
@@ -62,8 +61,8 @@ export class PiScienceClient {
 
   // ── REST ──
 
-  async createSession(cwd: string, model?: string, thinking?: string, initialApproval?: CreateSessionRequest["initialApproval"]): Promise<{ id: string; cwd?: string; project_id?: string }> {
-    return rest.createSession(this.baseUrl, cwd, model, thinking, initialApproval);
+  async createSession(cwd: string, options: rest.CreateSessionOptions = {}): Promise<{ id: string; cwd?: string; project_id?: string }> {
+    return rest.createSession(this.baseUrl, cwd, options);
   }
 
   async listSessions(cwd: string): Promise<SessionInfo[]> {

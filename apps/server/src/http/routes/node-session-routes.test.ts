@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { workspaceFile } from "../../storage/persistence.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNodeSessionRoutes } from "./node-session-routes.js";
 import { NodeSessionService } from "../../runtime/node/node-session-service.js";
@@ -1438,4 +1439,85 @@ it("requires a submission ID on the new prompt endpoint and shares deduplication
   } finally {
     await server.close();
   }
+});
+
+describe("session create idempotency", () => {
+  const create = (server: Fastify.FastifyInstance, payload: Record<string, unknown>) =>
+    server.inject({ method: "POST", url: "/api/sessions", payload });
+
+  it("returns the first session for a repeated key and a second one for a new key", async () => {
+    const cwd = await workspaceWithSessions();
+    const server = app();
+    try {
+      const first = await create(server, { cwd, idempotencyKey: "retry-key-1" });
+      expect(first.statusCode).toBe(201);
+      const replay = await create(server, { cwd, idempotencyKey: "retry-key-1" });
+      expect(replay.statusCode).toBe(200);
+      expect(replay.json()).toEqual({ id: first.json().id, cwd });
+      expect(nodeSessionService.liveSessions(cwd).map((session) => session.id)).toEqual([
+        first.json().id,
+      ]);
+
+      const different = await create(server, { cwd, idempotencyKey: "retry-key-2" });
+      expect(different.statusCode).toBe(201);
+      expect(different.json().id).not.toBe(first.json().id);
+      expect(nodeSessionService.liveSessions(cwd)).toHaveLength(2);
+    } finally {
+      await server.close();
+    }
+  }, 20_000);
+
+  it("starts one session when the same key arrives concurrently", async () => {
+    const cwd = await workspaceWithSessions();
+    const server = app();
+    try {
+      const [left, right] = await Promise.all([
+        create(server, { cwd, idempotencyKey: "concurrent-key" }),
+        create(server, { cwd, idempotencyKey: "concurrent-key" }),
+      ]);
+      expect([left.statusCode, right.statusCode].sort()).toEqual([200, 201]);
+      expect(left.json().id).toBe(right.json().id);
+      expect(nodeSessionService.liveSessions(cwd).map((session) => session.id)).toEqual([
+        left.json().id,
+      ]);
+    } finally {
+      await server.close();
+    }
+  }, 20_000);
+
+  it("ignores an expired mapping instead of adopting its session", async () => {
+    const cwd = await workspaceWithSessions();
+    const server = app();
+    try {
+      const first = await create(server, { cwd, idempotencyKey: "expired-key" });
+      expect(first.statusCode).toBe(201);
+      await writeFile(
+        workspaceFile(cwd, "session-creates.jsonl"),
+        JSON.stringify({
+          idempotency_key: "expired-key",
+          session_id: first.json().id,
+          created_at: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+        }) + "\n",
+      );
+      const second = await create(server, { cwd, idempotencyKey: "expired-key" });
+      expect(second.statusCode).toBe(201);
+      expect(second.json().id).not.toBe(first.json().id);
+    } finally {
+      await server.close();
+    }
+  }, 20_000);
+
+  it("rejects an unknown workspace with a key before starting a runtime", async () => {
+    const server = app();
+    try {
+      const response = await create(server, {
+        cwd: join(tmpdir(), "pi-science-unregistered-workspace"),
+        idempotencyKey: "unknown-workspace-key",
+      });
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({ ok: false, code: "workspace_invalid" });
+    } finally {
+      await server.close();
+    }
+  });
 });

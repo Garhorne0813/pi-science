@@ -140,7 +140,7 @@ export interface RuntimeState {
   loadSession: (sessionId: string) => Promise<void>;
   loadOlderMessages: () => Promise<number>;
   forkSession: (sessionId: string) => Promise<string>;
-  createNewSession: () => Promise<string>;
+  createNewSession: (options?: { idempotencyKey?: string }) => Promise<string>;
   deleteSession: (sessionId: string) => Promise<void>;
   removeSession: (sessionId: string) => void;
   setDraft: (text: string) => void;

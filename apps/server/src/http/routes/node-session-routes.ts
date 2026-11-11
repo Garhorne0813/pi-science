@@ -24,6 +24,7 @@ import { sessionTitleRepository } from "../../runtime/node/session-titles.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { AiTitleService } from "../../runtime/title/ai-title-service.js";
 import { PromptRequestRepository } from "../../runtime/node/prompt-request-repository.js";
+import { SessionCreateRepository } from "../../modules/sessions/session-create-repository.js";
 import { type McpConnectorService } from "../../mcp/connector-service.js";
 import type { ConversationEventHub } from "../../runtime/events/conversation-event-hub.js";
 
@@ -95,6 +96,12 @@ export function registerNodeSessionRoutes(
   },
 ): void {
   const promptRequests = new PromptRequestRepository(sessionRepository);
+  // A session created moments ago may not have a transcript file yet, so the
+  // runtime is part of the existence check.
+  const hasSession = async (workspace: string, sessionId: string) =>
+    Boolean(await sessionRepository.findPath(workspace, sessionId)) ||
+    nodeSessionService.liveSessions(workspace).some((session) => session.id === sessionId);
+  const sessionCreates = new SessionCreateRepository();
   const promptSubmissions =
     useCases?.promptSubmissions ??
     new PromptSubmissionService(nodeSessionService, sessionRepository, promptRequests);
@@ -107,13 +114,39 @@ export function registerNodeSessionRoutes(
     const parsed = createSessionRequestSchema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ error: "invalid session request", code: "invalid_request" });
-    const result = await nodeSessionService.create(parsed.data);
-    if ("error" in result)
-      return reply.code(sessionRuntimeStatus(result.code)).send({ ok: false, ...result });
-    return reply
-      .code(201)
-      .header("location", `/api/sessions/${result.id}?cwd=${encodeURIComponent(result.cwd)}`)
-      .send(result);
+    const { idempotencyKey, ...createRequest } = parsed.data;
+    const create = async () => {
+      const result = await nodeSessionService.create(createRequest);
+      if ("error" in result)
+        return reply.code(sessionRuntimeStatus(result.code)).send({ ok: false, ...result });
+      return reply
+        .code(201)
+        .header("location", `/api/sessions/${result.id}?cwd=${encodeURIComponent(result.cwd)}`)
+        .send(result);
+    };
+    if (!idempotencyKey) return create();
+    let workspace: string;
+    try {
+      workspace = await validateWorkspaceCwd(createRequest.cwd);
+    } catch (error) {
+      return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) });
+    }
+    return sessionCreates.withKeyLock(workspace, idempotencyKey, async () => {
+      const existing = await sessionCreates.find(workspace, idempotencyKey);
+      if (existing && (await hasSession(workspace, existing)))
+        return reply
+          .code(200)
+          .header("location", `/api/sessions/${existing}?cwd=${encodeURIComponent(workspace)}`)
+          .send({ id: existing, cwd: workspace });
+      const result = await nodeSessionService.create({ ...createRequest, cwd: workspace });
+      if ("error" in result)
+        return reply.code(sessionRuntimeStatus(result.code)).send({ ok: false, ...result });
+      await sessionCreates.remember(workspace, idempotencyKey, result.id);
+      return reply
+        .code(201)
+        .header("location", `/api/sessions/${result.id}?cwd=${encodeURIComponent(result.cwd)}`)
+        .send(result);
+    });
   });
 
   app.post<{ Params: { session_id: string } }>(
@@ -173,10 +206,7 @@ export function registerNodeSessionRoutes(
       } catch (error) {
         return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) });
       }
-      if (
-        !(await sessionRepository.findPath(workspace, sessionId)) &&
-        !nodeSessionService.liveSessions(workspace).some((session) => session.id === sessionId)
-      ) {
+      if (!(await hasSession(workspace, sessionId))) {
         return reply
           .code(404)
           .send({ ok: false, code: "not_found", error: "session not found in this workspace" });

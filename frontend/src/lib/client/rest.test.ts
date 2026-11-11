@@ -39,6 +39,30 @@ describe("PiScienceClient REST calls", () => {
     expect(JSON.parse(init.body)).toEqual({ cwd: "/workspace", config: {} });
   });
 
+  it("repeats the create idempotency key so a replay adopts the first session", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: "session-replay",
+      cwd: "/workspace",
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PiScienceClient();
+
+    await client.createSession("/workspace", {
+      model: "openai/gpt-4.1-mini",
+      idempotencyKey: "8fd824aa-51d3-4f63-839c-09e021b7970b",
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({
+      cwd: "/workspace",
+      config: { model: "openai/gpt-4.1-mini" },
+      idempotencyKey: "8fd824aa-51d3-4f63-839c-09e021b7970b",
+    });
+  });
+
   it("surfaces delete failures instead of silently removing the UI entry", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
       ok: false,

@@ -78,7 +78,7 @@ export function createSessionActions(set: SetState, get: GetState): Pick<Runtime
       await loadSessionsInternal();
       return result.id;
     },
-    createNewSession: async () => {
+    createNewSession: async (options?: { idempotencyKey?: string }) => {
       const requestCwd = get().cwd;
       const requestSessionId = get().activeSessionId;
       const requestGeneration = generations.connection;
@@ -91,9 +91,12 @@ export function createSessionActions(set: SetState, get: GetState): Pick<Runtime
         const selection = draft?.cwd === requestCwd ? draft.selection : undefined;
         const approvalDraft = get().draftApproval;
         const initialApproval = !requestSessionId && approvalDraft?.cwd === requestCwd ? approvalDraft.approval : undefined;
-        const result = initialApproval
-          ? await client.createSession(requestCwd, selection?.model ?? undefined, selection?.thinking ?? undefined, initialApproval)
-          : selection?.model ? await client.createSession(requestCwd, selection.model, selection.thinking) : await client.createSession(requestCwd);
+        const result = await client.createSession(requestCwd, {
+          ...(selection?.model ? { model: selection.model } : {}),
+          ...(selection?.thinking ? { thinking: selection.thinking } : {}),
+          ...(initialApproval ? { initialApproval } : {}),
+          ...(options?.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
+        });
         if (get().cwd !== requestCwd || generations.connection !== requestGeneration) {
           // A late blank runtime must neither replace a newer conversation nor leak capacity.
           // Deleting it is only safe while nobody has opened it: the server lists a session as

@@ -25,9 +25,10 @@ export function createPromptActions(set: SetState, get: GetState): Pick<RuntimeS
       }
       let { activeSessionId, cwd } = initialState;
       const contentDigest = promptContentDigest(message);
-      // A retry identity is meaningful only while the original session is
-      // active; a new-session send always receives a fresh scoped ID.
-      let clientMessageId = activeSessionId ? requestedClientMessageId : undefined;
+      // An explicit ID only comes from retrying or replaying an earlier send: the
+      // composer passes none. Keep it before a session exists so the create below can
+      // reuse it as its idempotency key and adopt the session that send already started.
+      let clientMessageId = requestedClientMessageId;
       let recoveredStatus: PromptRequestStatus | null = null;
       // A normal composer submission always means a new user send, even when
       // its text matches an older pending/rejected send. Only an explicit
@@ -90,7 +91,9 @@ export function createPromptActions(set: SetState, get: GetState): Pick<RuntimeS
       set({ thread: { blocks, index, loaded: true }, working: true, turnLifecycle: "active", promptDeliveryNotice: null });
       if (!activeSessionId) {
         try {
-          activeSessionId = await get().createNewSession();
+          // The first prompt of a conversation owns the create: replaying it after a
+          // reload reuses this ID so the server adopts the session it already started.
+          activeSessionId = await get().createNewSession({ idempotencyKey: requestId });
           updateLocalPromptRequest(requestId, { sessionId: activeSessionId });
         } catch (error) {
           const current = get();

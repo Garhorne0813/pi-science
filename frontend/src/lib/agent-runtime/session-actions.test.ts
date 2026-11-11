@@ -1054,3 +1054,73 @@ it("ignores and retains approval drafts from another workspace", async () => {
   expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).not.toHaveProperty("initialApproval");
   expect(useRuntimeStore.getState().draftApproval).toBe(draft);
 });
+
+describe("session create idempotency", () => {
+  it("forwards the create idempotency key to the server", async () => {
+    const bodies: unknown[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/sessions" && init?.method === "POST") {
+        bodies.push(JSON.parse(String(init.body)));
+        return jsonResponse({ id: "keyed-session", cwd: "/workspace" });
+      }
+      if (url.includes("keyed-session/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("keyed-session/state")) return jsonResponse(state("keyed-session"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    useRuntimeStore.setState({ cwd: "/workspace", activeSessionId: null, status: "ready" });
+    await useRuntimeStore.getState().createNewSession({ idempotencyKey: "retry-key" });
+    expect(bodies).toEqual([{ cwd: "/workspace", config: {}, idempotencyKey: "retry-key" }]);
+    useRuntimeStore.getState().disconnect();
+  });
+
+  it("replays a first send with the same create key", async () => {
+    const createKeys: (string | undefined)[] = [];
+    const sentIds: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/sessions" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { idempotencyKey?: string };
+        createKeys.push(body.idempotencyKey);
+        return jsonResponse({ id: "adopted-session", cwd: "/workspace" });
+      }
+      if (url.includes("/prompts?") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { client_message_id: string };
+        sentIds.push(body.client_message_id);
+        return jsonResponse({
+          ok: true,
+          status: "persisted",
+          client_message_id: body.client_message_id,
+          durable_message_id: "durable-replay",
+        }, 202);
+      }
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("adopted-session"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: null,
+      status: "ready",
+      thread: emptyThread(),
+    });
+
+    await useRuntimeStore.getState().sendPrompt("hello");
+    const persistedId = sentIds[0];
+    expect(persistedId).toBeTruthy();
+    expect(createKeys).toEqual([persistedId]);
+
+    // A reloaded conversation replays the persisted request ID instead of minting a new one.
+    useRuntimeStore.setState({
+      activeSessionId: null,
+      thread: emptyThread(),
+      working: false,
+      turnLifecycle: "settled",
+    });
+    await useRuntimeStore.getState().sendPrompt("hello", persistedId);
+    expect(createKeys).toEqual([persistedId, persistedId]);
+    useRuntimeStore.getState().disconnect();
+  });
+});
