@@ -10,7 +10,7 @@ import { clearCachedMessages, readCachedMessages } from "./message-cache";
 import * as rest from "./rest";
 import { clearAiTitle, clearAiTitleAttempted, clearSessionName } from "./session-names";
 import { SseTransport, type TransportReason } from "./sse-transport";
-import type { HistoryMessage, InteractionResponse, PiScienceEvent, PromptRequestStatus, SessionInfo, SessionListPage, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
+import type { HistoryMessage, InteractionResponse, PiScienceEvent, PromptRequestStatus, QueuedMessage, QueueDispatchReceipt, SessionInfo, SessionListPage, SessionMessagePage, SessionQueue, SessionState, SessionStats, SessionUserMessageIndex, SteerDeliveryStatus, TurnArtifactTurn } from "./types";
 
 export type { TransportReason } from "./sse-transport";
 
@@ -19,13 +19,16 @@ export type {
   HistoryMessage,
   InteractionResponse,
   PiScienceEvent,
+  QueuedMessage,
   SessionInfo,
   SessionListPage,
   SessionMessagePage,
   PromptRequestStatus,
+  SessionQueue,
   SessionState,
   SessionStats,
   SessionUserMessageIndex,
+  SteerDeliveryStatus,
   TurnArtifactTurn,
 } from "./types";
 export { clampThinkingLevel, conversationModelOptions } from "./models";
@@ -130,6 +133,38 @@ export class PiScienceClient {
 
   async getPromptRequestStatus(sessionId: string, clientMessageId: string, cwd?: string): Promise<PromptRequestStatus> {
     return rest.getPromptRequestStatus(this.baseUrl, sessionId, clientMessageId, cwd);
+  }
+
+  async sendSteer(sessionId: string, message: string, clientMessageId: string, cwd?: string): Promise<SteerDeliveryStatus> {
+    return rest.sendSteer(this.baseUrl, sessionId, message, clientMessageId, cwd);
+  }
+
+  async getSessionQueue(sessionId: string, cwd?: string): Promise<SessionQueue> {
+    return rest.getSessionQueue(this.baseUrl, sessionId, cwd);
+  }
+
+  async enqueueMessage(sessionId: string, message: string, clientMessageId: string, cwd?: string): Promise<QueuedMessage> {
+    return rest.enqueueSessionMessage(this.baseUrl, sessionId, message, clientMessageId, cwd);
+  }
+
+  async editQueuedMessage(sessionId: string, entryId: string, message: string, cwd?: string): Promise<QueuedMessage> {
+    return rest.editQueuedMessage(this.baseUrl, sessionId, entryId, message, cwd);
+  }
+
+  async cancelQueuedMessage(sessionId: string, entryId: string, cwd?: string): Promise<QueuedMessage> {
+    return rest.cancelQueuedMessage(this.baseUrl, sessionId, entryId, cwd);
+  }
+
+  async dispatchQueuedMessage(sessionId: string, entryId: string, cwd?: string): Promise<QueueDispatchReceipt> {
+    return rest.dispatchQueuedMessage(this.baseUrl, sessionId, entryId, cwd);
+  }
+
+  async retryQueuedMessage(sessionId: string, entryId: string, cwd?: string): Promise<QueuedMessage> {
+    return rest.retryQueuedMessage(this.baseUrl, sessionId, entryId, cwd);
+  }
+
+  async resumeQueue(sessionId: string, cwd?: string): Promise<SessionQueue> {
+    return rest.resumeSessionQueue(this.baseUrl, sessionId, cwd);
   }
 
   async setModel(

@@ -1,4 +1,16 @@
-import type { ToolPresentation } from "@pi-science/contracts";
+import type { QueuedMessage, ToolPresentation } from "@pi-science/contracts";
+
+/** Queue and steer wire types come straight from the shared contract so the
+ *  server and the composer cannot drift apart. */
+export type { QueuedMessage, QueuedMessageStatus, SessionQueue, SteerDeliveryStatus } from "@pi-science/contracts";
+
+/** A dispatch answers with the settled entry and the delivery outcome. An
+ *  indeterminate receipt means the steer may have landed but is unconfirmed. */
+export interface QueueDispatchReceipt {
+  entry: QueuedMessage;
+  status: "accepted" | "indeterminate";
+  error_code?: string;
+}
 
 /** Wire types shared by the REST calls, the SSE transport and the runtime store. */
 export interface PiScienceEvent {

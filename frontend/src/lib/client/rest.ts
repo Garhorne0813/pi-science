@@ -3,7 +3,7 @@
 
 import { request, responseError, RUNTIME_START_TIMEOUT_MS } from "./http";
 import { cacheMessages } from "./message-cache";
-import type { HistoryMessage, InteractionResponse, PromptRequestStatus, SessionInfo, SessionListPage, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
+import type { HistoryMessage, InteractionResponse, PromptRequestStatus, QueuedMessage, QueueDispatchReceipt, SessionInfo, SessionListPage, SessionMessagePage, SessionQueue, SessionState, SessionStats, SessionUserMessageIndex, SteerDeliveryStatus, TurnArtifactTurn } from "./types";
 import type { CreateSessionRequest } from "@pi-science/contracts";
 import { parseWirePayload } from "./wire-schema";
 
@@ -395,4 +395,170 @@ export async function requestScienceReview(baseUrl: string, sessionId: string, c
     const data = await response.json();
     if (!response.ok) throw new Error(responseError(data, `Science review failed: ${response.statusText}`));
     return data;
+}
+
+function queueError(
+  data: Record<string, unknown>,
+  fallback: string,
+  statusCode: number,
+): Error & { code?: string; status?: number } {
+  const error = new Error(responseError(data, fallback)) as Error & {
+    code?: string;
+    status?: number;
+  };
+  error.code = typeof data.code === "string" ? data.code : undefined;
+  error.status = statusCode;
+  return error;
+}
+
+export async function sendSteer(
+  baseUrl: string,
+  sessionId: string,
+  message: string,
+  clientMessageId: string,
+  cwd?: string,
+): Promise<SteerDeliveryStatus> {
+  const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/steer${params}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, client_message_id: clientMessageId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false)
+    throw queueError(data, `Steer failed: ${res.statusText}`, res.status);
+  const { steerResponseSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data, steerResponseSchema, "Steer failed").status;
+}
+
+export async function getSessionQueue(
+  baseUrl: string,
+  sessionId: string,
+  cwd?: string,
+): Promise<SessionQueue> {
+  const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/queue${params}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false)
+    throw queueError(data, `Read queue failed: ${res.statusText}`, res.status);
+  const { sessionQueueSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data.queue, sessionQueueSchema, "Read queue failed");
+}
+
+export async function enqueueSessionMessage(
+  baseUrl: string,
+  sessionId: string,
+  message: string,
+  clientMessageId: string,
+  cwd?: string,
+): Promise<QueuedMessage> {
+  const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/queue${params}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, client_message_id: clientMessageId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false)
+    throw queueError(data, `Add to queue failed: ${res.statusText}`, res.status);
+  const { queuedMessageSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data.entry, queuedMessageSchema, "Add to queue failed");
+}
+
+export async function editQueuedMessage(
+  baseUrl: string,
+  sessionId: string,
+  entryId: string,
+  message: string,
+  cwd?: string,
+): Promise<QueuedMessage> {
+  const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+  const res = await request(
+    `${baseUrl}/api/sessions/${sessionId}/queue/${encodeURIComponent(entryId)}${params}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    },
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false)
+    throw queueError(data, `Edit queued message failed: ${res.statusText}`, res.status);
+  const { queuedMessageSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data.entry, queuedMessageSchema, "Edit queued message failed");
+}
+
+export async function cancelQueuedMessage(
+  baseUrl: string,
+  sessionId: string,
+  entryId: string,
+  cwd?: string,
+): Promise<QueuedMessage> {
+  const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+  const res = await request(
+    `${baseUrl}/api/sessions/${sessionId}/queue/${encodeURIComponent(entryId)}${params}`,
+    { method: "DELETE" },
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false)
+    throw queueError(data, `Remove queued message failed: ${res.statusText}`, res.status);
+  const { queuedMessageSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data.entry, queuedMessageSchema, "Remove queued message failed");
+}
+
+export async function dispatchQueuedMessage(
+  baseUrl: string,
+  sessionId: string,
+  entryId: string,
+  cwd?: string,
+): Promise<QueueDispatchReceipt> {
+  const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+  const res = await request(
+    `${baseUrl}/api/sessions/${sessionId}/queue/${encodeURIComponent(entryId)}/dispatch${params}`,
+    { method: "POST" },
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false)
+    throw queueError(data, `Deliver queued message failed: ${res.statusText}`, res.status);
+  const { queuedMessageSchema } = await import("@pi-science/contracts");
+  const entry = parseWirePayload(data.entry, queuedMessageSchema, "Deliver queued message failed");
+  return {
+    entry,
+    status: data.status === "indeterminate" ? "indeterminate" : "accepted",
+    ...(typeof data.error_code === "string" ? { error_code: data.error_code } : {}),
+  };
+}
+
+export async function retryQueuedMessage(
+  baseUrl: string,
+  sessionId: string,
+  entryId: string,
+  cwd?: string,
+): Promise<QueuedMessage> {
+  const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+  const res = await request(
+    `${baseUrl}/api/sessions/${sessionId}/queue/${encodeURIComponent(entryId)}/retry${params}`,
+    { method: "POST" },
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false)
+    throw queueError(data, `Retry queued message failed: ${res.statusText}`, res.status);
+  const { queuedMessageSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data.entry, queuedMessageSchema, "Retry queued message failed");
+}
+
+export async function resumeSessionQueue(
+  baseUrl: string,
+  sessionId: string,
+  cwd?: string,
+): Promise<SessionQueue> {
+  const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/queue/resume${params}`, {
+    method: "POST",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false)
+    throw queueError(data, `Continue queue failed: ${res.statusText}`, res.status);
+  const { sessionQueueSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data.queue, sessionQueueSchema, "Continue queue failed");
 }

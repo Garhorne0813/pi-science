@@ -124,6 +124,10 @@ export function installRuntimeTestEnvironment(): void {
       pendingInteractionQueue: [],
       pendingQuestionnaire: null,
       fileRevision: 0,
+      queuedMessages: [],
+      queueSessionId: null,
+      queuePaused: false,
+      queuePausedReason: null,
       draft: "",
     });
   });

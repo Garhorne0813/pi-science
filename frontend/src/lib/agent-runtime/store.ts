@@ -40,6 +40,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   pendingInteractionQueue: [],
   pendingQuestionnaire: null,
   fileRevision: 0,
+  queuedMessages: [],
+  queueSessionId: null,
+  queuePaused: false,
+  queuePausedReason: null,
   draft: "",
 
   ...createRuntimeActions(set, get),

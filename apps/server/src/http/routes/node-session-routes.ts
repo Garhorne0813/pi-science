@@ -360,6 +360,9 @@ export function registerNodeSessionRoutes(
           cwd(request),
           "abort",
         );
+        // Stop ends the running turn; it is not a queue flush. Undispatched
+        // follow-ups stay queued and the dispatcher picks the head as soon as
+        // the session is idle again.
         return result.success ? { ok: true } : sendFailure(reply, result);
       });
     },

@@ -37,6 +37,8 @@ export function useComposer(params: {
   const location = useLocation();
   const working = useRuntimeStore((s) => s.working);
   const sendPrompt = useRuntimeStore((s) => s.sendPrompt);
+  const sendSteer = useRuntimeStore((s) => s.sendSteer);
+  const enqueueMessage = useRuntimeStore((s) => s.enqueueMessage);
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
   const input = useRuntimeStore((s) => s.draft);
   const setDraft = useRuntimeStore((s) => s.setDraft);
@@ -144,12 +146,57 @@ export function useComposer(params: {
     return false;
   };
 
-  const handleSend = async () => {
+  const handleSend = async (options: { immediate?: boolean } = {}) => {
     const originalDraft = input;
     const text = input.trim();
     const references = [...inlineReferences, ...workspaceReferences].filter((reference, index, all) =>
       all.findIndex((other) => other.cwd === reference.cwd && other.path === reference.path) === index);
-    if (!selectedModel || (!text && files.length === 0 && references.length === 0 && !quote) || working || reviewingProject || configuringModel) return;
+    if (!selectedModel || (!text && files.length === 0 && references.length === 0 && !quote) || reviewingProject || configuringModel) return;
+
+    const composeMessage = (body: string): string => {
+      let message = body;
+      if (files.length > 0) {
+        const names = files.map((file) => file.name).join(", ");
+        message = message
+          ? `${message}\n\n[Attached files: ${names}]`
+          : `I've uploaded these files: ${names}`;
+      }
+      message = injectSubagentMentions(message, mentions);
+      message = injectWorkspaceReferences(message, references);
+      // The quote goes in before the research header, so the skill line stays
+      // the first thing the server reads.
+      if (quote) message = composeQuotedPrompt(quote, message);
+      const mode = research.mode;
+      return mode ? `/skill:auto-research [Workflow: ${mode}]\n${message}` : message;
+    };
+
+    if (working) {
+      // The queue is the default while a turn runs: ordinary Enter (or the send
+      // button) appends to the queue so an accidental keystroke never reshapes
+      // the running turn. Cmd/Ctrl+Enter is the explicit immediate delivery.
+      // The draft, quote, mentions and attachments survive a rejected running
+      // send, so the user can retry without retyping.
+      const message = composeMessage(text);
+      try {
+        if (options.immediate) await sendSteer(message);
+        else await enqueueMessage(message);
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        // A finished turn is not a prompt: say so instead of silently changing
+        // what the user asked for. Queued sends do not need a running turn.
+        if (options.immediate && code === "not_running") toast(t("conversation.steerNotRunning"), "error");
+        else toast(error instanceof Error ? error.message : t("conversation.runningSendFailed"), "error");
+        return;
+      }
+      setInput("");
+      setEntities([]);
+      setFiles([]);
+      clearWorkspaceReferences(cwd);
+      if (quote) useMessageQuoteStore.getState().clearQuote(quote.source);
+      onSend?.();
+      return;
+    }
+
     // A quote turns the message into a real prompt, so a slash command cannot
     // swallow it. The quote would otherwise be dropped without a trace.
     if (!quote && text.startsWith("/") && mentions.length === 0 && files.length === 0 && references.length === 0) {
@@ -161,22 +208,8 @@ export function useComposer(params: {
       }
     }
 
-    let message = text;
-    if (files.length > 0) {
-      const names = files.map((f) => f.name).join(", ");
-      message = message
-        ? `${message}\n\n[Attached files: ${names}]`
-        : `I've uploaded these files: ${names}`;
-    }
-
-    message = injectSubagentMentions(message, mentions);
-    message = injectWorkspaceReferences(message, references);
-    // The quote goes in before the research header, so the skill line stays the
-    // first thing the server reads.
-    if (quote) message = composeQuotedPrompt(quote, message);
-
+    const message = composeMessage(text);
     const sentResearchMode = research.mode;
-    if (sentResearchMode) message = `/skill:auto-research [Workflow: ${sentResearchMode}]\n${message}`;
 
     const sentFiles = files;
     const sentReferences = workspaceReferences;
@@ -227,7 +260,7 @@ export function useComposer(params: {
     // own ref because some browsers fire compositionend before keydown.
     if (e.key === "Enter" && !e.shiftKey && !(e.nativeEvent as KeyboardEvent).isComposing && !composingRef.current) {
       e.preventDefault();
-      void handleSend();
+      void handleSend({ immediate: e.metaKey || e.ctrlKey });
     }
   };
 

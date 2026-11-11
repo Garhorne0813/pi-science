@@ -1,7 +1,7 @@
 /** Public state shape of the agent runtime store. */
 
 import type { PiScienceClient, SessionInfo, SessionStats } from "../client/pi-science-client";
-import type { ModelSelection, CreateSessionRequest } from "@pi-science/contracts";
+import type { ModelSelection, CreateSessionRequest, QueuedMessage } from "@pi-science/contracts";
 import type { TransportStatus } from "./transport-status";
 import type { Thread } from "./folding/types";
 
@@ -125,6 +125,13 @@ export interface RuntimeState {
   /** Increments after a turn settles so workspace file views can reload. */
   fileRevision: number;
 
+  /** Follow-up messages for the active session, as the server reports them.
+   *  `queueSessionId` keeps a late reply from painting another conversation. */
+  queuedMessages: QueuedMessage[];
+  queueSessionId: string | null;
+  queuePaused: boolean;
+  queuePausedReason: "stop" | null;
+
   // Draft (unsent message)
   draft: string;
 
@@ -132,6 +139,16 @@ export interface RuntimeState {
   connect: (cwd: string, sessionId?: string) => Promise<void>;
   disconnect: () => void;
   sendPrompt: (message: string, clientMessageId?: string) => Promise<string | null>;
+  /** Deliver extra instructions to the running turn. */
+  sendSteer: (message: string, clientMessageId?: string) => Promise<void>;
+  /** Stage a message that runs after the current turn ends. */
+  enqueueMessage: (message: string, clientMessageId?: string) => Promise<void>;
+  loadQueue: () => Promise<void>;
+  editQueuedMessage: (entryId: string, text: string) => Promise<void>;
+  cancelQueuedMessage: (entryId: string) => Promise<void>;
+  resumeQueue: () => Promise<void>;
+  dispatchQueuedMessage: (entryId: string) => Promise<"accepted" | "indeterminate">;
+  retryQueuedMessage: (entryId: string) => Promise<void>;
   abort: () => Promise<void>;
   setModel: (model: string, thinking?: string) => Promise<string | null>;
   respondToInteraction: (response: { value?: string; confirmed?: boolean; cancelled?: boolean; alwaysAllow?: boolean }) => Promise<void>;

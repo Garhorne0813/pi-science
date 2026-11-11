@@ -5,6 +5,7 @@ export * from "./sessions.js";
 export * from "./presentation.js";
 export * from "./workspaces.js";
 export * from "./conversation.js";
+export * from "./session-queue.js";
 export * from "./executions.js";
 export * from "./artifacts.js";
 export * from "./health.js";

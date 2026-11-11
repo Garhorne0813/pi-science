@@ -1,10 +1,10 @@
 import { McpDiagnosticsNotice } from "./McpDiagnosticsNotice";
 import { ApprovalModeMenu } from "./ApprovalModeMenu";
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowDown, ArrowUp, File, FolderOpen, Loader2, Plus, Sparkles, Square, X } from "lucide-react";
-import type { SessionStats } from "../../lib/client/pi-science-client";
+import type { QueuedMessage, SessionStats } from "../../lib/client/pi-science-client";
 import type { useComposer } from "../../hooks/useComposer";
 import type { useModelConfig } from "../../hooks/useModelConfig";
 import type { useAutoResearch } from "../../hooks/useAutoResearch";
@@ -13,11 +13,16 @@ import { findLocalPromptRequest, promptContentDigest } from "../../lib/client/pr
 import { ConversationStatsLine } from "./ConversationStatsLine";
 import { MessageQuoteCard } from "./MessageQuoteCard";
 import { MentionComposer } from "./MentionComposer";
+import { QueuedMessagesPanel } from "./QueuedMessagesPanel";
 import { ModelControlMenu } from "./ModelControlMenu";
+import { useFeedback } from "../feedback/feedback-context";
 import { useMessageQuoteStore } from "../../lib/conversation/message-quote";
 import { composeQuotedPrompt } from "../../lib/conversation/quoted-message";
 import { cn, useUiStore } from "../../lib/ui";
 
+
+/** Stable empty list: a fresh array in a store selector re-renders forever. */
+const NO_QUEUED_MESSAGES: QueuedMessage[] = [];
 
 const ComposerTodo = lazy(() => import("../todo/ComposerTodo").then((module) => ({ default: module.ComposerTodo })));
 
@@ -58,6 +63,7 @@ export interface ConversationComposerProps {
 export function ConversationComposer({ workspaceCwd, status, activeSessionId, sessionStats, contextTokens, contextWindow, contextPercent, compactionEnabled, compactionThresholdPercent, working, promptDeliveryNotice, interactionPending, reviewingProject, reviewNotice, autoReviewOn, modelControlsDisabled, showWelcome, showScrollDown, composer, model, research, onScrollToBottom, onReview, onAbort, onRemoveWorkspaceReference }: ConversationComposerProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { toast } = useFeedback();
   const openSettings = useUiStore((s) => s.openSettings);
   const { input, setInput, files, setFiles, workspaceReferences } = composer;
   const mcpDiagnostics = useRuntimeStore((state) => state.cwd === workspaceCwd && state.activeSessionId === activeSessionId ? state.mcpDiagnostics : undefined);
@@ -72,6 +78,46 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
     ? findLocalPromptRequest(workspaceCwd, activeSessionId, promptContentDigest(composedDraft))
     : null;
   const canSend = Boolean(input.trim() || files.length > 0 || workspaceReferences.length > 0 || quote);
+  const queuedMessages = useRuntimeStore((state) => (state.queueSessionId === activeSessionId ? state.queuedMessages : NO_QUEUED_MESSAGES));
+  const queuePaused = useRuntimeStore((state) => (state.queueSessionId === activeSessionId ? state.queuePaused : false));
+  const loadQueue = useRuntimeStore((state) => state.loadQueue);
+  const resumeQueue = useRuntimeStore((state) => state.resumeQueue);
+  const cancelQueuedMessage = useRuntimeStore((state) => state.cancelQueuedMessage);
+  const dispatchQueuedMessage = useRuntimeStore((state) => state.dispatchQueuedMessage);
+  const retryQueuedMessage = useRuntimeStore((state) => state.retryQueuedMessage);
+  const pendingQueueCount = queuedMessages.filter((entry) => entry.status === "queued" || entry.status === "dispatching").length;
+
+  useEffect(() => {
+    if (!activeSessionId) return;
+    void loadQueue();
+  }, [activeSessionId, working, loadQueue]);
+
+  useEffect(() => {
+    // The server dispatches queued messages on its own clock, so the list is
+    // authoritative and has to be re-read while something can still move.
+    // A paused queue only moves when the user acts, and that path refreshes it.
+    if (!activeSessionId || pendingQueueCount === 0 || queuePaused) return;
+    const timer = setInterval(() => { void loadQueue(); }, 3000);
+    return () => clearInterval(timer);
+  }, [activeSessionId, pendingQueueCount, queuePaused, loadQueue]);
+
+  /** Editing means moving the message back into the composer: cancel first, so a
+   *  failed cancel leaves the queue and the draft untouched, and never overwrite
+   *  text the user is writing — that loss cannot be undone. */
+  const editInComposer = async (entry: QueuedMessage) => {
+    if (composer.input.trim()) {
+      composer.inputRef.current?.focus();
+      toast(t("conversation.queue.composerBusy"), "info");
+      return;
+    }
+    try { await cancelQueuedMessage(entry.id); }
+    catch { toast(t("conversation.queue.updateFailed"), "error"); return; }
+    // The queue only carries plain text, so stale entities would no longer match it.
+    composer.setEntities([]);
+    setInput(entry.text);
+    composer.inputRef.current?.focus();
+  };
+
   return (
     <div className={cn("px-4 sm:px-8 shrink-0", showWelcome ? "py-0" : "pb-1 pt-1")}>
       {!showWelcome && (
@@ -95,6 +141,15 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
         <McpDiagnosticsNotice diagnostics={mcpDiagnostics} />
         {promptDeliveryNotice === "indeterminate" && <div role="status" className="mb-2 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-muted">{t("conversation.promptDelivery.indeterminate")}</div>}
         {retryRequest && <button type="button" onClick={() => { void sendPrompt(composedDraft, retryRequest.clientMessageId).catch(() => undefined); }} className="mb-2 text-xs text-accent hover:underline">{t("conversation.promptDelivery.retrySameRequest")}</button>}
+        <QueuedMessagesPanel
+          entries={queuedMessages}
+          paused={queuePaused}
+          onResume={resumeQueue}
+          onEditInComposer={editInComposer}
+          onCancel={cancelQueuedMessage}
+          onRetry={retryQueuedMessage}
+          onDispatch={dispatchQueuedMessage}
+        />
         {/* Fixed 36px fade band above the composer card (reference:
             ConversationRoot composer seat gradient). The card sits at the
             bottom of the column, so the band softens the transcript edge
@@ -159,8 +214,8 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
             composingRef={composer.composingRef}
             placeholder={composer.dragOver ? t("conversation.dropFiles") : research.prompt}
           />
-          <div className="flex items-center justify-between gap-2 px-3 pb-2">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <div className={cn("flex items-center justify-between gap-2 px-3 pb-2", working && "flex-wrap")}>
+            <div className="flex min-w-0 items-center gap-2">
               <button
                 type="button"
                 onClick={() => composer.fileInputRef.current?.click()}
@@ -196,7 +251,13 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
               )}
             </div>
             <input ref={composer.fileInputRef} type="file" multiple className="hidden" onChange={composer.handleFilePick} />
-            <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
+            {/* The trailing controls give up horizontal space before they leave the
+                card: the send/stop buttons hold their size, the model menu truncates
+                to a readable floor, and below the sm breakpoint the approval chip and
+                the thinking level give up their labels. The row breaks between the
+                two clusters, never inside the trailing one, so Stop shares a line
+                with the send control instead of dangling on a line of its own. */}
+            <div className="ml-auto flex min-w-0 items-center justify-end gap-1.5">
               {model.models.length > 0 && (
                 <ModelControlMenu
                   models={model.models}
@@ -214,18 +275,43 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
                   onThinkingChange={model.handleThinkingChange}
                 />
               )}
+              {/* One accent slot per state: while a turn is running, a draft
+                  turns the slot into queue-send and an empty input keeps it as
+                  Stop. The draft keeps a muted 24px stop to its left so the
+                  interrupt stays reachable without a second accent. */}
               {working ? (
-                <button type="button" aria-label={t("conversation.stopGeneration")} onClick={() => void onAbort().catch(() => undefined)} className="flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full bg-accent-fill text-accent-fg transition-colors hover:bg-error-fill">
-                  <Square size={14} fill="currentColor" />
-                </button>
+                canSend ? (
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button type="button" aria-label={t("conversation.stopGeneration")} title={t("conversation.stopGeneration")} onClick={() => void onAbort().catch(() => undefined)} className="flex h-6 w-6 items-center justify-center rounded-full text-muted hover:text-error-text">
+                      <Square size={14} fill="currentColor" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={t("conversation.sendToQueue")}
+                      title={t("conversation.queueSendHint")}
+                      onClick={() => { void composer.handleSend().catch(() => undefined); }}
+                      disabled={model.configuringModel || interactionPending || reviewingProject || !model.selectedModel}
+                      className={cn(
+                        "flex h-[var(--send-button-size)] w-[var(--send-button-size)] shrink-0 items-center justify-center rounded-full",
+                        (model.selectedModel && !model.configuringModel && !interactionPending && !reviewingProject) ? "bg-accent-fill text-accent-fg" : "bg-surface-2 text-muted cursor-default",
+                      )}
+                    >
+                      <ArrowUp size={16} />
+                    </button>
+                  </div>
+                ) : (
+                  <button type="button" aria-label={t("conversation.stopGeneration")} title={t("conversation.stopGeneration")} onClick={() => void onAbort().catch(() => undefined)} className="flex h-[var(--send-button-size)] w-[var(--send-button-size)] shrink-0 items-center justify-center rounded-full bg-accent-fill text-accent-fg transition-colors hover:bg-error-fill">
+                    <Square size={14} fill="currentColor" />
+                  </button>
+                )
               ) : (
                 <button
                   type="button"
                   aria-label={t("conversation.sendMessage")}
-                  onClick={composer.handleSend}
+                  onClick={() => { void composer.handleSend().catch(() => undefined); }}
                   disabled={working || model.configuringModel || interactionPending || !model.selectedModel || reviewingProject || (!activeSessionId && status === "connecting") || !canSend}
                   className={cn(
-                    "flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full",
+                    "flex h-[var(--send-button-size)] w-[var(--send-button-size)] shrink-0 items-center justify-center rounded-full",
                     (model.selectedModel && !model.configuringModel && !interactionPending && !reviewingProject && (activeSessionId || status !== "connecting") && canSend) ? "bg-accent-fill text-accent-fg" : "bg-surface-2 text-muted cursor-default",
                   )}
                 >
