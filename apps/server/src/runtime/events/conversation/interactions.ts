@@ -1,4 +1,5 @@
 import type { ProductInput } from "../product-input.js";
+import { MAX_QUESTIONS } from "../../shared/questionnaire-limits.js";
 import { cap } from "./text.js";
 
 export const BROWSER_QUESTIONNAIRE_REQUEST_PREFIX = "pi-science-questionnaire-v1:";
@@ -11,7 +12,7 @@ export function questionnairePayload(
   if (!args || typeof args !== "object" || Array.isArray(args)) return null;
   const rawQuestions = (args as Record<string, unknown>).questions;
   if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) return null;
-  const questions = rawQuestions.slice(0, 4).flatMap((rawQuestion) => {
+  const questions = rawQuestions.slice(0, MAX_QUESTIONS).flatMap((rawQuestion) => {
     if (!rawQuestion || typeof rawQuestion !== "object" || Array.isArray(rawQuestion)) return [];
     const question = rawQuestion as Record<string, unknown>;
     const rawOptions = Array.isArray(question.options) ? question.options : [];

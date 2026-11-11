@@ -5,10 +5,11 @@
  * the structured result to the Worker that owns the tool call.
  */
 
+import { MAX_QUESTIONS } from "../questionnaire-limits.js";
+
 const TOOL_NAME = "ask_user_question";
 const REQUEST_PREFIX = "pi-science-questionnaire-v1:";
 const RESPONSE_PLACEHOLDER = "pi-science-questionnaire-response";
-const MAX_QUESTIONS = 4;
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 4;
 const MAX_HEADER_LENGTH = 16;
@@ -341,7 +342,7 @@ export default function registerPiScienceAskUserQuestion(pi: any) {
     label: "Ask User Question",
     description:
       "Ask the user one or more structured questions during execution. Use this when requirements are ambiguous and you need concrete decisions. Each question must provide 2-4 options; users can select one, select several, type a custom answer, inspect markdown previews, and add notes.",
-    promptSnippet: "Ask the user up to 4 structured questions when requirements are ambiguous",
+    promptSnippet: "Ask the user up to 20 structured questions when requirements are ambiguous",
     promptGuidelines: [
       "Use ask_user_question when you cannot proceed without a concrete user decision; group related questions into one invocation.",
       "Each question must have 2-4 options with concise labels and descriptions. Set multiSelect: true when multiple choices are valid.",
