@@ -444,23 +444,70 @@ describe("agent-core product turns", () => {
       }),
     ).toMatchObject({ success: true });
     await vi.waitFor(() => expect(requests).toHaveLength(1), { timeout: 15000 });
+    const killedAt = Date.now();
     original.child.kill("SIGKILL");
-    await vi.waitFor(() => expect(requests).toHaveLength(2), { timeout: 15000 });
-    await vi.waitFor(
-      () => expect(events.some((event) => event.type === "session.stats")).toBe(true),
-      { timeout: 15000 },
+    // A reopen has to fork, boot and initialize a second worker before the durable prompt can be
+    // driven again. That second boot can legitimately outlast the old wall-clock budget, so wait
+    // for each observable step instead of for the final request count alone. The failure message
+    // keeps "slow" and "recovery never happened" distinguishable after the fact.
+    const recoverySignals = () =>
+      [
+        ...new Set(
+          events.flatMap((event) => {
+            const signals: string[] = [];
+            if (typeof event.code === "string") signals.push(event.code);
+            if (event.type === "runtime.paused") signals.push("runtime.paused");
+            return signals;
+          }),
+        ),
+      ].join(", ");
+    const waitForRecovery = async (
+      step: string,
+      assertion: () => void | Promise<void>,
+      timeout = 15000,
+    ) => {
+      try {
+        await vi.waitFor(assertion, { timeout });
+      } catch (error) {
+        throw new Error(
+          `worker reopen: ${step} did not happen within ${timeout}ms ` +
+            `(${Date.now() - killedAt}ms after SIGKILL; recovery signals: ${
+              recoverySignals() || "none"
+            }); last assertion failure: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    };
+    await waitForRecovery(
+      "worker_recovering was published",
+      () => expect(events.some((event) => event.code === "worker_recovering")).toBe(true),
+      30000,
     );
-    expect(core.liveRuntime(cwd)).not.toBe(original);
+    await waitForRecovery(
+      "the replacement worker is attached",
+      () => {
+        const replacement = core.liveRuntime(cwd);
+        expect(replacement).toBeDefined();
+        expect(replacement).not.toBe(original);
+      },
+      30000,
+    );
+    await waitForRecovery(
+      "the durable prompt produced a second model request",
+      () => expect(requests).toHaveLength(2),
+      30000,
+    );
+    await waitForRecovery("session stats were published", () =>
+      expect(events.some((event) => event.type === "session.stats")).toBe(true),
+    );
     expect(events.some((event) => event.code === "worker_recovering")).toBe(true);
     const history = await new SessionRepository().messages(cwd, id);
     expect(history.filter((message) => message.client_message_id === "recover-once")).toHaveLength(
       1,
     );
-    await vi.waitFor(
-      async () => expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }),
-      { timeout: 15000 },
+    await waitForRecovery("the session state settled", async () =>
+      expect(await service.state(id, cwd)).toMatchObject({ is_streaming: false }),
     );
-  }, 45000);
+  }, 90000);
 
   it("reconciles a lost settled event and completes the persisted product lifecycle once", async () => {
     const { cwd, id, service, core, events, review } = await fixture();
