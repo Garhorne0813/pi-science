@@ -3,8 +3,11 @@ import { formatDateTime } from "../../i18n/format";
 
 export function executionLabel(run: ExecutionRecord): string {
   if (run.kind === "kernel_cell") {
-    const notebook = typeof run.request.notebook_id === "string" ? run.request.notebook_id : "default";
     const code = typeof run.request.code === "string" ? run.request.code.trim().split("\n")[0] : "";
+    // Chat runs have a synthetic `chat-<session>` notebook id; the first code line
+    // identifies them better than that id would in the ledger.
+    if (run.request.source === "chat") return code || run.surface;
+    const notebook = typeof run.request.notebook_id === "string" ? run.request.notebook_id : "default";
     return `${notebook} · ${code || run.surface}`;
   }
   return run.request.command?.join(" ") || String(run.request.tool || run.execution_id);

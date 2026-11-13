@@ -28,14 +28,14 @@ import type {
   NodeKernelManager,
 } from "../../runtime/kernel/node-kernel-manager.js";
 
-const executeCellRequestSchema = z.object({
+export const executeCellRequestSchema = z.object({
   language: z.enum(["python", "r"]),
   code: z.string(),
   notebook_id: z.string().optional().nullable(),
   session_id: z.string().min(1).optional().nullable(),
   environment_revision_id: z.string().min(1).optional().nullable(),
   kernel_instance_id: z.string().min(1).optional().nullable(),
-  source: z.enum(["agent", "session_notebook", "file_notebook", "terminal"]).optional(),
+  source: z.enum(["agent", "session_notebook", "file_notebook", "terminal", "chat"]).optional(),
   notebook_path: z.string().optional().nullable(),
   cell_id: z.string().optional().nullable(),
   timeout_seconds: z.number().min(1).max(600).optional(),

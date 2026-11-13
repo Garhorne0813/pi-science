@@ -41,7 +41,7 @@ export const notebookRuntime = {
     language: "python" | "r",
     code: string,
     sessionId?: string,
-    options: { source?: "agent" | "session_notebook" | "file_notebook" | "terminal"; notebookPath?: string; cellId?: string } = {},
+    options: { source?: "agent" | "session_notebook" | "file_notebook" | "terminal" | "chat"; notebookPath?: string; cellId?: string } = {},
   ): Promise<CellResult> {
     const query = new URLSearchParams({ cwd });
     return apiRequest<CellResult>(`/api/kernels/execute?${query}`, {
@@ -67,7 +67,7 @@ export const notebookRuntime = {
     language: "python" | "r",
     code: string,
     sessionId: string | undefined,
-    options: { source?: "agent" | "session_notebook" | "file_notebook" | "terminal"; notebookPath?: string; cellId?: string } = {},
+    options: { source?: "agent" | "session_notebook" | "file_notebook" | "terminal" | "chat"; notebookPath?: string; cellId?: string } = {},
     onEvent?: (event: KernelStreamEvent) => void,
   ): Promise<CellResult> {
     const response = await fetch(`/api/kernels/execute-stream?${new URLSearchParams({ cwd })}`, {

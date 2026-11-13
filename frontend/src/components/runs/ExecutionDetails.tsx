@@ -46,7 +46,8 @@ export function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpen
           <div className="min-w-0">
             <div className="flex items-center gap-2"><ExecutionStatusIcon status={run.status} size={16} /><h2 title={executionPreview(executionLabel(run))} className="line-clamp-2 break-all text-base font-semibold leading-6 text-text">{executionShortLabel(run)}</h2></div>
             <div className="mt-1.5 flex flex-wrap gap-2 text-xs text-muted">
-              <span className="rounded bg-surface-2 px-1.5 py-0.5 font-semibold uppercase tracking-wide text-text">{run.surface}</span>
+              <span className="rounded bg-surface-2 px-1.5 py-0.5 font-semibold uppercase tracking-wide text-text">{t(`runs.surface.${run.surface}`, { defaultValue: run.surface })}</span>
+              {run.request.source === "chat" && <span className="rounded bg-accent/10 px-1.5 py-0.5 text-accent">{t("runs.source.chat")}</span>}
               <span className="rounded bg-surface-2 px-1.5 py-0.5">{t(`runs.kind.${run.kind}`)}</span>
               <span className="rounded bg-surface-2 px-1.5 py-0.5">{t(`runs.status.${run.status}`)}</span>
             </div>
