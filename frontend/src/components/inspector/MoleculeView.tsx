@@ -20,6 +20,15 @@ const STYLE_PRESETS: Array<{ id: MoleculeStylePreset; labelKey: string }> = [
 ];
 const RENDER_TIMEOUT_MS = 45_000;
 
+/** Mol* renders its plugin UI (buttons, viewport controls) into the host and
+ *  creates the WebGL canvas itself. Only the canvas is the image; marking the
+ *  host would make the whole interactive subtree presentational. */
+function markCanvas(canvas: Element, label: string, busy: boolean): void {
+  canvas.setAttribute("role", "img");
+  canvas.setAttribute("aria-label", label);
+  canvas.setAttribute("aria-busy", String(busy));
+}
+
 /**
  * Local-first Mol* structure viewer. Embedded Mol* controls expose structure
  * representations, coloring, selections, measurements, screenshots, settings
@@ -76,6 +85,8 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
           return;
         }
         viewerRef.current = handle;
+        const canvas = container.querySelector("canvas");
+        if (canvas) markCanvas(canvas, t("molecule.viewerLabel"), true);
         const next = await handle.load(filename, text);
         if (disposed || timedOut || generation !== generationRef.current) return;
         setSummary(next);
@@ -97,6 +108,14 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
       handle?.dispose();
     };
   }, [filename, text, format, t, retry]);
+
+  // The canvas is created asynchronously by Mol*; re-label it whenever the
+  // viewer is rebuilt or the render state changes.
+  useEffect(() => {
+    const canvas = containerRef.current?.querySelector("canvas");
+    if (!canvas) return;
+    markCanvas(canvas, t("molecule.viewerLabel"), rendering);
+  }, [rendering, summary, retry, t]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -161,7 +180,7 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
         ))}
       </div>
       <div className="relative min-h-0 flex-1">
-        <div ref={containerRef} className="absolute inset-0" aria-label={t("molecule.viewerLabel")} />
+        <div ref={containerRef} className="absolute inset-0" />
         {(rendering || error) && (
           <div className={`ui-popover absolute bottom-3 left-3 z-10 max-w-[70%] rounded-input bg-surface/95 px-3 py-1.5 text-xs text-muted backdrop-blur ${error && !rendering ? "pointer-events-auto" : "pointer-events-none"}`}>
             {rendering ? t("molecule.rendering") : <>{error} <button type="button" className="ml-2 text-link underline" onClick={() => setRetry((value) => value + 1)}>{t("molecule.retry")}</button></>}
