@@ -7,6 +7,7 @@ export interface WorkspaceReference {
   path: string;
   name: string;
   isDir: boolean;
+  imageRegion?: string;
 }
 
 // Core persists the expanded skill for reproducibility; the user bubble shows the objective.
@@ -14,10 +15,14 @@ const SKILL_BLOCK = /^<skill name="([^"]+)" location="[^"]+">\r?\nReferences are
 const RESEARCH_STARTER = /^(?:\/skill:auto-research\s+)?\[Workflow: (?:research_loop|optimize|compare|evaluate|reproduce)\]\r?\n/;
 const REFERENCE_BLOCK = /<workspace_references>[\s\S]*?<\/workspace_references>\s*/g;
 
+const REGION_PREFIX = "- image-region (read this PNG for the marked overview above and detail below): ";
+
 export function injectWorkspaceReferences(message: string, references: WorkspaceReference[]): string {
   if (references.length === 0) return message;
   const items = references
-    .map((reference) => `- ${reference.isDir ? "folder" : "file"}: ${JSON.stringify(reference.path)}`)
+    .map((reference) => reference.imageRegion
+      ? `${REGION_PREFIX}${JSON.stringify([reference.path, reference.imageRegion]).replace(/</g, "\\u003c")}`
+      : `- ${reference.isDir ? "folder" : "file"}: ${JSON.stringify(reference.path)}`)
     .join("\n");
   return `${message}\n\n<workspace_references>\n${items}\n</workspace_references>`.trim();
 }
@@ -29,10 +34,19 @@ export function visibleUserMessage(message: string): string {
   return stripSubagentMentionBlock(stripQuotedMessageBlocks(visible.replace(REFERENCE_BLOCK, "")));
 }
 
-export function referencesFromMessage(message: string): Array<Pick<WorkspaceReference, "path" | "name" | "isDir">> {
+export function referencesFromMessage(message: string): Array<Pick<WorkspaceReference, "path" | "name" | "isDir" | "imageRegion">> {
   const block = message.match(/<workspace_references>([\s\S]*?)<\/workspace_references>/)?.[1];
   if (!block) return [];
   return block.split("\n").flatMap((line) => {
+    if (line.startsWith(REGION_PREFIX)) {
+      try {
+        const decoded: unknown = JSON.parse(line.slice(REGION_PREFIX.length));
+        if (!Array.isArray(decoded) || decoded.length !== 2) return [];
+        const [path, description] = decoded;
+        if (typeof path !== "string" || !/^image-regions\/[\da-f-]{36}\.png$/i.test(path) || typeof description !== "string") return [];
+        return [{ path, name: pathLeaf(path), isDir: false, imageRegion: description }];
+      } catch { return []; }
+    }
     const match = line.match(/^\s*-\s+(file|folder):\s+("(?:[^"\\]|\\.)*")\s*$/);
     if (!match) return [];
     try {

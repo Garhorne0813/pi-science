@@ -9,7 +9,7 @@ import { MarkdownViewer, type CodeRunner } from "../markdown-viewer/MarkdownView
 import { normalizeArtifactPath, pinnedFileInspector, pinnedReferenceMap } from "../../lib/artifacts";
 import type { PublishedReference } from "../../lib/artifacts/artifact-versions";
 import { ReferencedArtifactStrip, TurnArtifactStrip } from "./TurnArtifactStrip";
-import { referencesFromMessage, visibleUserMessage } from "../../lib/files";
+import { previewUrl, referencesFromMessage, visibleUserMessage } from "../../lib/files";
 import { agentActionTextByTurns } from "../../lib/conversation";
 import { numberCitations, withReferences, type CitationNumbering, type CitationReferenceDetail } from "../../lib/citations";
 import { useCitationCwd, useCitationEvidence, type CitationEvidence } from "../../lib/citations/citation-evidence";
@@ -88,7 +88,12 @@ function UserMessage({ block, scope }: { block: UserMessageBlock; scope: Message
       {visibleText && <div ref={selection.ref} className="ui-user-message rounded-bubble px-4 py-2.5 text-sm leading-relaxed text-text whitespace-pre-wrap">{visibleText}</div>}
       {selection.selection && <MessageSelectionQuoteMenu selection={selection.selection} onQuote={selection.quote} />}
       {references.length > 0 && <div className="flex flex-wrap justify-end gap-1.5" aria-label={t("conversation.referencedContext")}>
-        {references.map((reference) => <span key={`${reference.isDir ? "folder" : "file"}-${reference.path}`} className="flex max-w-full items-center gap-1 rounded-input border border-accent/20 bg-accent/5 px-2 py-1 font-mono text-[10px] text-muted" title={reference.path}>
+        {references.map((reference) => reference.imageRegion ? <button key={reference.path} type="button"
+          className="flex max-w-full items-center gap-2 rounded-input border border-accent/20 px-2 py-1 text-xs text-text"
+          onClick={() => useUiStore.getState().openInspector({ variant: "file", cwd: scope.workspaceCwd, path: reference.path, filename: reference.name })}>
+          <img src={previewUrl(reference.path, "workspace", scope.workspaceCwd)} alt="" className="h-10 w-14 rounded object-contain" />
+          <span className="truncate">{reference.imageRegion}</span>
+        </button> : <span key={`${reference.isDir ? "folder" : "file"}-${reference.path}`} className="flex max-w-full items-center gap-1 rounded-input border border-accent/20 bg-accent/5 px-2 py-1 font-mono text-[10px] text-muted" title={reference.path}>
           {reference.isDir ? <FolderOpen size={10} /> : <File size={10} />}
           <span className="truncate">{reference.path}</span>
         </span>)}
