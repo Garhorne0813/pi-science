@@ -74,6 +74,43 @@ describe("SessionExecutionButton", () => {
     expect(onToggle).toHaveBeenCalledOnce();
   });
 
+  it("reports the failed count when nothing is running", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      executions: [
+        { ...execution(1), execution_id: "exec-failed", status: "failed" },
+        { ...execution(2), execution_id: "exec-ok", status: "succeeded" },
+      ],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SessionExecutionButton cwd="/workspace" sessionId="session-1" active={false} onToggle={() => undefined} />
+      </QueryClientProvider>,
+    );
+
+    const button = await screen.findByRole("button", { name: "1 failed execution in this session" });
+    const dot = button.querySelector('span[aria-hidden="true"]');
+    expect(dot).not.toBeNull();
+    expect(dot?.className).toContain("bg-error");
+  });
+
+  it("reports running and failed counts together", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      executions: [
+        { ...execution(1), execution_id: "exec-running", status: "running" },
+        { ...execution(2), execution_id: "exec-failed", status: "failed" },
+      ],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SessionExecutionButton cwd="/workspace" sessionId="session-1" active={false} onToggle={() => undefined} />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByRole("button", { name: "1 running, 1 failed in this session" });
+  });
+
   it("shows all executions returned for the current session", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
       executions: Array.from({ length: 70 }, (_, index) => execution(index)),

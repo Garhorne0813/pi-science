@@ -22,12 +22,16 @@ describe("MoleculeView", () => {
     vi.clearAllMocks();
     viewerMocks.load.mockResolvedValue({ atomCount: 42, hasSequence: true, format: "pdb" });
     viewerMocks.applyStylePreset.mockResolvedValue(undefined);
-    viewerMocks.create.mockResolvedValue({
-      load: viewerMocks.load,
-      applyStylePreset: viewerMocks.applyStylePreset,
-      resize: viewerMocks.resize,
-      fitToViewport: viewerMocks.fitToViewport,
-      dispose: viewerMocks.dispose,
+    viewerMocks.create.mockImplementation(async (target: HTMLElement) => {
+      // Mol* creates the WebGL canvas inside the host element it is given.
+      target.append(document.createElement("canvas"));
+      return {
+        load: viewerMocks.load,
+        applyStylePreset: viewerMocks.applyStylePreset,
+        resize: viewerMocks.resize,
+        fitToViewport: viewerMocks.fitToViewport,
+        dispose: viewerMocks.dispose,
+      };
     });
     await i18n.changeLanguage("en");
   });
@@ -44,6 +48,20 @@ describe("MoleculeView", () => {
     await waitFor(() => expect(viewerMocks.load).toHaveBeenCalledWith("protein.pdb", "ATOM"));
     expect(await screen.findByText("42 atoms")).toBeInTheDocument();
     expect(screen.getByText("Mol*")).toBeInTheDocument();
+  });
+
+  it("labels only the Mol* canvas as an image and reports its busy state", async () => {
+    let resolveLoad!: (value: { atomCount: number; hasSequence: boolean; format: string }) => void;
+    viewerMocks.load.mockReturnValue(new Promise((resolve) => { resolveLoad = resolve; }));
+    render(<MoleculeView filename="protein.pdb" text="ATOM" />);
+
+    const canvas = await screen.findByRole("img", { name: "3D molecule viewer" });
+    expect(canvas.tagName).toBe("CANVAS");
+    expect(canvas.parentElement).not.toHaveAttribute("role");
+    expect(canvas).toHaveAttribute("aria-busy", "true");
+
+    await act(async () => { resolveLoad({ atomCount: 42, hasSequence: true, format: "pdb" }); });
+    await waitFor(() => expect(canvas).toHaveAttribute("aria-busy", "false"));
   });
 
   it("disposes the viewer when the preview unmounts", async () => {
