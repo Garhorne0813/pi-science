@@ -69,7 +69,17 @@ export function sandboxBashTool(
       if (!confined && !identity.delegatedAgent && !packages && interactions) {
         update({ content: [], details: { approval: "waiting" } });
         try {
-          if (!await approveLocalExecution(interactions, identity.cwd, identity.sessionId, "bash", values.command, id, context.abortSignal))
+          if (
+            !(await approveLocalExecution(
+              interactions,
+              identity.cwd,
+              identity.sessionId,
+              "bash",
+              values.command,
+              id,
+              context.abortSignal,
+            ))
+          )
             throw new Error("Bash execution was declined");
         } finally {
           update({ content: [], details: { approval: "resolved" } });

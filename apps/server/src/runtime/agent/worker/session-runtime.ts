@@ -478,9 +478,12 @@ export class SessionRuntime {
             todoHarnessTool(session),
             subagentControlTool(subagents),
             budgets.wrap(subagentHarnessTool(subagents)),
-            ...notebookHarnessTools(options.cwd, session.metadata.id, sandboxIdentity, interactions).map(
-              budgets.wrap,
-            ),
+            ...notebookHarnessTools(
+              options.cwd,
+              session.metadata.id,
+              sandboxIdentity,
+              interactions,
+            ).map(budgets.wrap),
             questionnaireHarnessTool(interactions),
             ...(interactive && options.settings?.codemode_enabled === true
               ? [

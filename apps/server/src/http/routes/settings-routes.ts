@@ -15,7 +15,10 @@ import {
   webSettingsFromConfig,
 } from "../../web/settings.js";
 import { registerNetworkGrantRoutes } from "./network-grant-routes.js";
-import { executionGrantSettings, revokeExecutionGrant } from "../../runtime/agent/worker/local-execution-approval.js";
+import {
+  executionGrantSettings,
+  revokeExecutionGrant,
+} from "../../runtime/agent/worker/local-execution-approval.js";
 import { z } from "zod";
 import { discoverAgentDefinitions } from "../../runtime/agent/agent-definitions.js";
 import { registerModelSelectionRoutes } from "./model-selection-routes.js";
@@ -58,13 +61,26 @@ export function registerSettingsRoutes(
   mcp?: McpConnectorService,
 ): void {
   registerNetworkGrantRoutes(app);
-  app.get<{ Querystring: { cwd?: string } }>("/api/settings/execution-permissions", async (request) =>
-    executionGrantSettings(request.query.cwd ? await validateWorkspaceCwd(request.query.cwd) : undefined));
+  app.get<{ Querystring: { cwd?: string } }>(
+    "/api/settings/execution-permissions",
+    async (request) =>
+      executionGrantSettings(
+        request.query.cwd ? await validateWorkspaceCwd(request.query.cwd) : undefined,
+      ),
+  );
   app.delete("/api/settings/execution-permissions", async (request, reply) => {
-    const parsed = z.object({ scope: z.enum(["project", "global"]), tool: z.enum(["bash", "notebook"]), cwd: z.string().optional() }).strict().safeParse(request.body);
+    const parsed = z
+      .object({
+        scope: z.enum(["project", "global"]),
+        tool: z.enum(["bash", "notebook"]),
+        cwd: z.string().optional(),
+      })
+      .strict()
+      .safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid execution permission" });
     const { scope, tool, cwd } = parsed.data;
-    if (scope === "project" && !cwd) return reply.code(400).send({ error: "Project workspace is required" });
+    if (scope === "project" && !cwd)
+      return reply.code(400).send({ error: "Project workspace is required" });
     await revokeExecutionGrant(scope, tool, cwd ? await validateWorkspaceCwd(cwd) : undefined);
     return { ok: true };
   });

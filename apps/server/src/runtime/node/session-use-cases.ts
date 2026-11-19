@@ -212,7 +212,7 @@ export class ApprovalInteractionService {
         const workspace = await validateWorkspaceCwd(requestedCwd);
         const pending = this.approvals?.events.pendingInteraction(workspace, sessionId, requestId);
         if (
-          body.confirmed !== true && body.value !== "global" ||
+          (body.confirmed !== true && body.value !== "global") ||
           body.cancelled === true ||
           pending?.kind !== "permission" ||
           pending.method !== "confirm" ||
@@ -224,7 +224,11 @@ export class ApprovalInteractionService {
             error: "No matching pending MCP approval",
           });
         }
-        saveGrant = await this.approvals.mcp.prepareInteractionGrant(workspace, pending.mcpGrant, body.value === "global" ? "global" : "project");
+        saveGrant = await this.approvals.mcp.prepareInteractionGrant(
+          workspace,
+          pending.mcpGrant,
+          body.value === "global" ? "global" : "project",
+        );
       }
       const payload: Record<string, unknown> = { id: requestId };
       if (body.cancelled === true) payload.cancelled = true;

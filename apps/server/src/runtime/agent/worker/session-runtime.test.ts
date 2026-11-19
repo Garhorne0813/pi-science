@@ -77,6 +77,23 @@ async function runtime(
   };
 }
 
+async function approveBashOnce(
+  instance: SessionRuntime,
+  events: Array<Record<string, unknown>>,
+  toolCallId: string,
+) {
+  const event = await vi.waitFor(() => {
+    const request = events.find(
+      (event) => event.type === "interaction.requested" && event.toolCallId === toolCallId,
+    );
+    expect(request).toMatchObject({ kind: "permission", method: "select", title: "Run bash?" });
+    return request!;
+  });
+  expect(instance.notify("extension_ui_response", { id: event.id, value: "once" })).toMatchObject({
+    success: true,
+  });
+}
+
 function captureRequests(parts: Awaited<ReturnType<typeof runtime>>["parts"]) {
   const requests: ReturnType<typeof normalizeContext>[] = [];
   vi.spyOn(parts.models, "streamSimple").mockImplementation((model, request) => {
@@ -1140,7 +1157,7 @@ describe("agent-core worker mutations", () => {
 
   it("derives Bash resource grants from current skills after policy changes and refresh", async () => {
     vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "required");
-    const { instance, parts } = await runtime(async (cwd) => {
+    const { instance, parts, events } = await runtime(async (cwd) => {
       await mkdir(join(cwd, ".pi/skills/review"), { recursive: true });
       await writeFile(
         join(cwd, ".pi/skills/review/SKILL.md"),
@@ -1161,22 +1178,25 @@ describe("agent-core worker mutations", () => {
       .mockRejectedValue(new Error("stop before spawn"));
     const bash = (await parts.harness.getTools(context)).find((tool) => tool.name === "bash")!;
     async function policyForCall(id: string) {
-      await expect(
-        bash.execute(
-          id,
-          { command: "true" },
-          () => {},
-          { env: parts.executionEnv },
-          {
-            operationId: "skill-resources",
-            invocationId: id,
-            turnId: "turn",
-            getMemo: async () => undefined,
-            setMemo: async () => {},
-          },
-          context,
-        ),
-      ).rejects.toThrow("stop before spawn");
+      await Promise.all([
+        expect(
+          bash.execute(
+            id,
+            { command: "true" },
+            () => {},
+            { env: parts.executionEnv },
+            {
+              operationId: "skill-resources",
+              invocationId: id,
+              turnId: "turn",
+              getMemo: async () => undefined,
+              setMemo: async () => {},
+            },
+            context,
+          ),
+        ).rejects.toThrow("stop before spawn"),
+        approveBashOnce(instance, events, id),
+      ]);
       return prepare.mock.calls.at(-1)![0];
     }
     const review = join(cwd, ".pi/skills/review");
@@ -1298,25 +1318,31 @@ describe("agent-core worker mutations", () => {
   it("does not give ordinary bash processes model, server, or inherited credentials", async () => {
     vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "trusted-host");
     vi.stubEnv("PR115_PARENT_SECRET", "parent-test-secret");
-    const { parts } = await runtime();
+    const { instance, parts, events } = await runtime(async (cwd) => {
+      vi.stubEnv("PI_SCIENCE_HOME", join(cwd, "private"));
+    });
     const bash = (await parts.harness.getTools(context)).find((tool) => tool.name === "bash")!;
     const script =
       "console.log(JSON.stringify({model:!!process.env.OPENAI_API_KEY,server:!!process.env.PI_SCIENCE_INTERNAL_TOKEN,parent:!!process.env.PR115_PARENT_SECRET,path:!!process.env.PATH}))";
     const command = `'${process.execPath.replaceAll("'", "'\\''")}' -e '${script}'`;
-    const result = await bash.execute(
-      "environment-test",
-      { command },
-      () => undefined,
-      { env: parts.executionEnv },
-      {
-        operationId: "environment-operation",
-        invocationId: "environment-test",
-        turnId: "environment-turn",
-        getMemo: async () => undefined,
-        setMemo: async () => {},
-      },
-      context,
-    );
+    const callId = "environment-test";
+    const [result] = await Promise.all([
+      bash.execute(
+        callId,
+        { command },
+        () => undefined,
+        { env: parts.executionEnv },
+        {
+          operationId: "environment-operation",
+          invocationId: "environment-test",
+          turnId: "environment-turn",
+          getMemo: async () => undefined,
+          setMemo: async () => {},
+        },
+        context,
+      ),
+      approveBashOnce(instance, events, callId),
+    ]);
     const text = result.content
       .filter((part) => part.type === "text")
       .map((part) => (part.type === "text" ? part.text : ""))

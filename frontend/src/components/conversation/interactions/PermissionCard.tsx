@@ -15,13 +15,14 @@ interface PermissionCardProps {
 export function PermissionCard({ interaction, submitting, selectedOption, selectedConfirmation, selectedAlwaysAllow, onRespond }: PermissionCardProps) {
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
-  const [scope, setScope] = useState<"once" | "conversation" | "project" | "global">(interaction.mcpGrant ? "project" : "conversation");
+  const defaultScope = interaction.mcpGrant ? "project" : "conversation";
+  const [scope, setScope] = useState<"once" | "conversation" | "project" | "global">(defaultScope);
   const [confirmBroadScope, setConfirmBroadScope] = useState(false);
   useEffect(() => {
     rootRef.current?.focus();
-    setScope(interaction.mcpGrant ? "project" : "conversation");
+    setScope(defaultScope);
     setConfirmBroadScope(false);
-  }, [interaction.requestId]);
+  }, [defaultScope, interaction.requestId]);
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     // Enter on the focused dialog approves only once. Native button keyboard
     // activation owns Enter after focus moves to a button.
