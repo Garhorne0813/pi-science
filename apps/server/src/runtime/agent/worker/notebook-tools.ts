@@ -8,6 +8,8 @@ import { isWithin } from "../../sandbox/policy.js";
 import { confinedKernelGrant, workerKernelGrant } from "../../sandbox/kernel-authorization.js";
 import { executionGrantPolicy } from "../../sandbox/execution-grants.js";
 import { type SandboxIdentity } from "./confined-read-tool.js";
+import type { InteractionBridge } from "./interaction-bridge.js";
+import { approveLocalExecution } from "./local-execution-approval.js";
 
 type LegacyNotebookTool = {
   name: string;
@@ -34,6 +36,7 @@ export function notebookHarnessTools(
   cwd: string,
   sessionId: string,
   identity?: SandboxIdentity,
+  interactions?: InteractionBridge,
 ): AgentHarnessTool<{ env: NodeExecutionEnv }>[] {
   const registered: LegacyNotebookTool[] = [];
   registerNotebookTools({ registerTool: (tool: LegacyNotebookTool) => registered.push(tool) });
@@ -46,6 +49,15 @@ export function notebookHarnessTools(
     parameters:
       tool.name === "notebook_run" ? withTaskDescription(tool.parameters) : tool.parameters,
     async execute(toolCallId, params, onUpdate, _context, invocation, context) {
+      if (tool.name === "notebook_run" && interactions && !identity?.executionGrantId && !identity?.candidateId && !identity?.delegatedAgent && identity?.executionScope !== "candidate" && identity?.executionScope !== "confined") {
+        onUpdate({ content: [], details: { approval: "waiting" } });
+        try {
+          if (!await approveLocalExecution(interactions, cwd, sessionId, "notebook", JSON.stringify(params), toolCallId, context.abortSignal))
+            throw new Error("Notebook execution was declined");
+        } finally {
+          onUpdate({ content: [], details: { approval: "resolved" } });
+        }
+      }
       let sandboxGrant: string | undefined;
       if (
         identity?.executionGrantId ||

@@ -248,6 +248,18 @@ export class McpRepository {
     return Number(result.changes) > 0;
   }
 
+  async allowPendingToolGlobal(connectorId: string, toolName: string, revision: number, settingsRevision: number, previous: McpToolDecision | null): Promise<boolean> {
+    const result = await this.store.run(
+      `INSERT INTO mcp_global_tool_grants (connector_id, tool_name, decision, updated_at)
+       SELECT ?, ?, 'allow', ? WHERE EXISTS (
+         SELECT 1 FROM mcp_connectors WHERE connector_id = ? AND revision = ? AND settings_revision = ? AND enabled = 1
+       ) AND (SELECT decision FROM mcp_global_tool_grants WHERE connector_id = ? AND tool_name = ?) IS ?
+       ON CONFLICT(connector_id, tool_name) DO UPDATE SET decision = excluded.decision, updated_at = excluded.updated_at`,
+      [connectorId, toolName, Date.now(), connectorId, revision, settingsRevision, connectorId, toolName, previous],
+    );
+    return Number(result.changes) > 0;
+  }
+
   async globalToolGrants(connectorId: string): Promise<Map<string, McpToolDecision>> {
     const rows = await this.store.all<{ tool_name: string; decision: McpToolDecision }>("SELECT tool_name, decision FROM mcp_global_tool_grants WHERE connector_id = ?", [connectorId]);
     return new Map(rows.map((row) => [row.tool_name, row.decision]));

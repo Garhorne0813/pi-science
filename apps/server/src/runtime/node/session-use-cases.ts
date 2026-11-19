@@ -208,11 +208,11 @@ export class ApprovalInteractionService {
       let saveGrant:
         | (() => Promise<{ persistentGrant: boolean | null; warning?: string }>)
         | undefined;
-      if (body.alwaysAllow === true) {
+      if (body.alwaysAllow === true || body.value === "global") {
         const workspace = await validateWorkspaceCwd(requestedCwd);
         const pending = this.approvals?.events.pendingInteraction(workspace, sessionId, requestId);
         if (
-          body.confirmed !== true ||
+          body.confirmed !== true && body.value !== "global" ||
           body.cancelled === true ||
           pending?.kind !== "permission" ||
           pending.method !== "confirm" ||
@@ -224,10 +224,11 @@ export class ApprovalInteractionService {
             error: "No matching pending MCP approval",
           });
         }
-        saveGrant = await this.approvals.mcp.prepareInteractionGrant(workspace, pending.mcpGrant);
+        saveGrant = await this.approvals.mcp.prepareInteractionGrant(workspace, pending.mcpGrant, body.value === "global" ? "global" : "project");
       }
       const payload: Record<string, unknown> = { id: requestId };
       if (body.cancelled === true) payload.cancelled = true;
+      else if (body.value === "global") payload.confirmed = true;
       else if (typeof body.confirmed === "boolean") payload.confirmed = body.confirmed;
       else if (body.value !== undefined) payload.value = body.value;
       else payload.cancelled = true;

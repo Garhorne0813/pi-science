@@ -504,10 +504,17 @@ describe("agent-core managed MCP tools", () => {
         );
         if (asks) {
           await vi.waitFor(() => expect(events).toHaveLength(1));
-          bridge.notify("extension_ui_response", { id: events[0]!.id, confirmed: true });
+          bridge.notify("extension_ui_response", mode === "ask"
+            ? { id: events[0]!.id, value: "conversation" }
+            : { id: events[0]!.id, confirmed: true });
         }
         expect(await pending).toMatchObject({ content: [{ text: "ok" }] });
         expect(events).toHaveLength(asks ? 1 : 0);
+        if (mode === "ask") {
+          expect(await mcp.tools[0]!.execute("call-mode-again", {}, () => {}, {} as never, {} as never, {} as never))
+            .toMatchObject({ content: [{ text: "ok" }] });
+          expect(events.filter((event) => event.type === "interaction.requested")).toHaveLength(1);
+        }
         if (mode === "full") {
           const slots = [];
           try {

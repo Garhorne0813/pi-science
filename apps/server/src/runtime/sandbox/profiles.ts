@@ -22,10 +22,21 @@ const schema = z.object({
   profiles: z.object({ analysis: role.optional(), mcp: role.optional(), install: role.optional(), control: role.optional(), byoc: role.optional() }).strict().default({}),
 }).strict();
 export const DEFAULT_PACKAGE_DOMAINS = ["conda.anaconda.org:443", "repo.anaconda.com:443", "pypi.org:443", "files.pythonhosted.org:443"];
+export const SCIENCE_NETWORK_DEFAULTS_VERSION = 1;
+export const DEFAULT_SCIENCE_DOMAINS = {
+  analysis: [
+    "eutils.ncbi.nlm.nih.gov", "pubchem.ncbi.nlm.nih.gov", "rest.uniprot.org",
+    "www.ebi.ac.uk", "files.rcsb.org", "rest.ensembl.org", "api.crossref.org",
+  ],
+  mcp: [
+    "eutils.ncbi.nlm.nih.gov", "pubchem.ncbi.nlm.nih.gov", "rest.uniprot.org",
+    "www.ebi.ac.uk", "files.rcsb.org", "rest.ensembl.org", "api.crossref.org",
+  ],
+} as const;
 export async function profileConfiguration() {
   const file = process.env.PI_SCIENCE_SANDBOX_PROFILES;
   const config = schema.parse(file ? await readOperatorConfig(file) : { schemaVersion: 1 });
-  return { ...config, file, id: createHash("sha256").update(JSON.stringify({ config, file })).digest("hex") };
+  return { ...config, file, id: createHash("sha256").update(JSON.stringify({ config, file, scienceDefaultsVersion: SCIENCE_NETWORK_DEFAULTS_VERSION, scienceDefaults: DEFAULT_SCIENCE_DOMAINS })).digest("hex") };
 }
 const defaultPort = (domain: string) => domain.includes(":") ? domain : `${domain}:443`;
 
@@ -48,8 +59,11 @@ export async function applySandboxProfile(policy: SandboxPolicy, profile: Sandbo
     denied.push(...await protectedPaths(path));
   }
   const network = config.profiles[profile] ?? (profile === "install" ? { allowedDomains: DEFAULT_PACKAGE_DOMAINS, deniedDomains: [] } : undefined);
+  const scienceDomains = profile === "analysis" || profile === "mcp" ? DEFAULT_SCIENCE_DOMAINS[profile].map(defaultPort) : [];
   return identifyPolicy({ ...policy, profile, profilePolicyId: config.id,
     readPaths: [...new Set([...policy.readPaths, ...reads, ...writes])], writePaths: [...new Set([...policy.writePaths, ...writes])], denyPaths: [...new Set(denied)].sort(),
-    network: network && (network.allowedDomains.length || network.deniedDomains.length) ? { mode: "allowlist", allowedDomains: network.allowedDomains.map(defaultPort), deniedDomains: [...BUILTIN_DENIED_DOMAINS, ...network.deniedDomains] } : { mode: "none" },
+    network: scienceDomains.length || network && (network.allowedDomains.length || network.deniedDomains.length)
+      ? { mode: "allowlist", allowedDomains: network?.allowedDomains.map(defaultPort) ?? [], httpsOnlyDomains: scienceDomains, deniedDomains: [...BUILTIN_DENIED_DOMAINS, ...(network?.deniedDomains ?? [])] }
+      : { mode: "none" },
   });
 }

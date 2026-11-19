@@ -60,7 +60,8 @@ it("auto allows public HTTPS while retaining workspace files, operator denials a
     ),
   ).toBe(false);
   const ask = await workspacePolicy(cwd, undefined, "analysis", "b");
-  expect(domainAllowed("rest.uniprot.org", 443, ask.network)).toBe(false);
+  expect(domainAllowed("rest.uniprot.org", 443, ask.network)).toBe(true);
+  expect(domainAllowed("rest.uniprot.org", 443, grantedNetwork(ask.network, await readNetworkGrants(), "analysis"))).toBe(false);
 });
 it("full expands home access, protects application state and never broadens confined policies", async () => {
   await saveSessionApproval(cwd, "a", "full", 0);

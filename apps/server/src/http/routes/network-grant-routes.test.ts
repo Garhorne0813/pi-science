@@ -11,7 +11,7 @@ it("lists, grants, blocks and revokes persistent role-scoped domain decisions", 
   const app = Fastify(); registerNetworkGrantRoutes(app);
   try {
     const initial = await app.inject({ method: "GET", url: "/api/settings/network" });
-    expect(initial.json()).toMatchObject({ revision: 0, rules: [], profiles: { analysis: { allowedDomains: [] } } });
+    expect(initial.json()).toMatchObject({ revision: 0, rules: [], defaultsVersion: 1, profiles: { analysis: { allowedDomains: [], defaultDomains: expect.arrayContaining(["rest.uniprot.org"]) } } });
     for (const decision of ["allow", "deny"]) {
       expect((await app.inject({ method: "POST", url: "/api/settings/network", payload: { profile: "analysis", domain: "API.Example.org", decision } })).statusCode).toBe(200);
       const state = (await app.inject({ method: "GET", url: "/api/settings/network" })).json();

@@ -457,6 +457,7 @@ export class SessionRuntime {
                       confirm: interactions.confirmPermission.bind(interactions),
                     }
                   : undefined,
+                interactions,
               ),
             ),
             workspaceFileTool(
@@ -474,7 +475,7 @@ export class SessionRuntime {
             todoHarnessTool(session),
             subagentControlTool(subagents),
             budgets.wrap(subagentHarnessTool(subagents)),
-            ...notebookHarnessTools(options.cwd, session.metadata.id, sandboxIdentity).map(
+            ...notebookHarnessTools(options.cwd, session.metadata.id, sandboxIdentity, interactions).map(
               budgets.wrap,
             ),
             questionnaireHarnessTool(interactions),

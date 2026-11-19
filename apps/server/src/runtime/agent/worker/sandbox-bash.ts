@@ -29,6 +29,7 @@ import { readToolProgressStream } from "./tool-progress-stream.js";
 import type { RequestEnvironment } from "./environment-bridge.js";
 import type { InteractionBridge } from "./interaction-bridge.js";
 import { parsePythonInstallCommand } from "./python-install-command.js";
+import { approveLocalExecution } from "./local-execution-approval.js";
 
 type EnvironmentOperations = {
   request: RequestEnvironment;
@@ -42,6 +43,7 @@ export function sandboxBashTool(
   skillDirectories: () => Promise<string[]> = async () => [],
   getExecutions: () => Promise<ExecutionRepository> = async () => executionRepository,
   environments?: EnvironmentOperations,
+  interactions?: InteractionBridge,
 ): Tool {
   const original = createBashTool();
   return {
@@ -64,6 +66,15 @@ export function sandboxBashTool(
         throw new Error("Invalid timeout: must be a finite number of seconds");
       const operations = !confined && !identity.delegatedAgent ? environments : undefined;
       const packages = operations ? parsePythonInstallCommand(values.command) : null;
+      if (!confined && !identity.delegatedAgent && !packages && interactions) {
+        update({ content: [], details: { approval: "waiting" } });
+        try {
+          if (!await approveLocalExecution(interactions, identity.cwd, identity.sessionId, "bash", values.command, id, context.abortSignal))
+            throw new Error("Bash execution was declined");
+        } finally {
+          update({ content: [], details: { approval: "resolved" } });
+        }
+      }
       const current = await operations?.request({ action: "binding" }, context.abortSignal);
       const environment = { ...hostEnvironment };
       if (current) {

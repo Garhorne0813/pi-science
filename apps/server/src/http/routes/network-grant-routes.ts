@@ -1,14 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { changeNetworkGrant, networkDomain, networkGrantProfile, networkRuleInput, readNetworkGrants, revokeNetworkGrant } from "../../runtime/sandbox/network-grants.js";
-import { BUILTIN_DENIED_DOMAINS, profileConfiguration } from "../../runtime/sandbox/profiles.js";
+import { BUILTIN_DENIED_DOMAINS, DEFAULT_SCIENCE_DOMAINS, SCIENCE_NETWORK_DEFAULTS_VERSION, profileConfiguration } from "../../runtime/sandbox/profiles.js";
 
 export function registerNetworkGrantRoutes(app: FastifyInstance) {
   app.get("/api/settings/network", async () => {
     const [state, config] = await Promise.all([readNetworkGrants(), profileConfiguration()]);
-    return { ...state, profiles: Object.fromEntries(["analysis", "mcp"].map((profile) => {
+    return { ...state, defaultsVersion: SCIENCE_NETWORK_DEFAULTS_VERSION, profiles: Object.fromEntries(["analysis", "mcp"].map((profile) => {
       const policy = config.profiles[profile as "analysis" | "mcp"];
-      return [profile, { allowedDomains: policy?.allowedDomains ?? [], deniedDomains: [...BUILTIN_DENIED_DOMAINS, ...(policy?.deniedDomains ?? [])] }];
+      return [profile, { defaultDomains: DEFAULT_SCIENCE_DOMAINS[profile as "analysis" | "mcp"], allowedDomains: policy?.allowedDomains ?? [], deniedDomains: [...BUILTIN_DENIED_DOMAINS, ...(policy?.deniedDomains ?? [])] }];
     })) };
   });
   app.post("/api/settings/network", async (request, reply) => {

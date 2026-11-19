@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, expect, it as platformTest, vi } from "vitest";
 import { workspacePolicy, identifyPolicy } from "./policy.js";
-import { applySandboxProfile, profileConfiguration } from "./profiles.js";
+import { applySandboxProfile, DEFAULT_SCIENCE_DOMAINS, SCIENCE_NETWORK_DEFAULTS_VERSION, profileConfiguration } from "./profiles.js";
+import { domainAllowed } from "./network.js";
 import { processSettings } from "./settings.js";
 import { workerEnvironment } from "../agent/agent-runtime-client.js";
 import { providerHelperPolicy } from "./provider-policy.js";
@@ -29,6 +30,18 @@ it("keeps host grants and network allowlists separate for analysis, MCP and cont
     const policy = await workspacePolicy(workspace, undefined, role);
     expect(policy.readPaths).not.toContain(granted); expect(policy.writePaths).not.toContain(granted);
   }
+});
+it("applies versioned science defaults to analysis and local MCP over HTTPS", async () => {
+  vi.stubEnv("PI_SCIENCE_SANDBOX_PROFILES", "");
+  expect(SCIENCE_NETWORK_DEFAULTS_VERSION).toBe(1);
+  for (const profile of ["analysis", "mcp"] as const) {
+    const policy = await workspacePolicy(workspace, undefined, profile);
+    expect(policy.network).toMatchObject({ mode: "allowlist", httpsOnlyDomains: DEFAULT_SCIENCE_DOMAINS[profile].map((domain) => `${domain}:443`) });
+    expect(domainAllowed("rest.uniprot.org", 443, policy.network)).toBe(true);
+    expect(domainAllowed("rest.uniprot.org", 443, policy.network, "http")).toBe(false);
+    expect(domainAllowed("example.org", 443, policy.network)).toBe(false);
+  }
+  expect((await workspacePolicy(workspace, undefined, "control")).network).toEqual({ mode: "none" });
 });
 it("never lets a candidate inherit grants or gain network access", async () => {
   const candidate = identifyPolicy({ mode: "required", scope: "candidate", cwd: workspace, readPaths: [workspace], writePaths: [workspace], denyPaths: [], network: { mode: "none" } });
