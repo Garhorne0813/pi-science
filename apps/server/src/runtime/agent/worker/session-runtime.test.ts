@@ -157,10 +157,14 @@ afterEach(async () => {
 
 it("registers Codemode only when the runtime setting is enabled", async () => {
   const disabled = await runtime(undefined, { settings: { codemode_enabled: false } });
-  expect((await disabled.parts.harness.getTools(context)).map((tool) => tool.name)).not.toContain("codemode");
+  expect((await disabled.parts.harness.getTools(context)).map((tool) => tool.name)).not.toContain(
+    "codemode",
+  );
 
   const enabled = await runtime(undefined, { settings: { codemode_enabled: true } });
-  expect((await enabled.parts.harness.getTools(context)).map((tool) => tool.name)).toContain("codemode");
+  expect((await enabled.parts.harness.getTools(context)).map((tool) => tool.name)).toContain(
+    "codemode",
+  );
   const watch = await enabled.parts.lane.watch(context);
   expect((await watch.resnapshot(context)).configuration.activeToolNames).toContain("codemode");
   watch.unsubscribe();

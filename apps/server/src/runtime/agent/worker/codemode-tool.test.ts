@@ -106,5 +106,9 @@ it("returns script and nested-tool failures as tool errors", async () => {
     BACKGROUND_CONTEXT,
   );
   expect(result.isError).toBe(true);
-  expect(result.content.some((item) => item.type === "text" && item.text.includes("Invalid arguments for add"))).toBe(true);
+  expect(
+    result.content.some(
+      (item) => item.type === "text" && item.text.includes("Invalid arguments for add"),
+    ),
+  ).toBe(true);
 });

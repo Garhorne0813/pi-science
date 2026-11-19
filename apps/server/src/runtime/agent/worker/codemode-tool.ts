@@ -81,7 +81,8 @@ function truncateText(text: string, maxChars: number): string {
 function toHarnessResult(result: CodemodeResult, maxOutputTokens: number): HarnessResult {
   const rawContent = [...result.output];
   if (result.ok && result.value !== undefined) {
-    const serialized = typeof result.value === "string" ? result.value : JSON.stringify(result.value);
+    const serialized =
+      typeof result.value === "string" ? result.value : JSON.stringify(result.value);
     if (serialized !== undefined) rawContent.push({ type: "text", text: serialized });
   }
   if (!result.ok)
@@ -109,7 +110,9 @@ function toHarnessResult(result: CodemodeResult, maxOutputTokens: number): Harne
 }
 
 function isHarnessResult(value: JsonValue | undefined): value is HarnessResult & JsonValue {
-  return !!value && typeof value === "object" && !Array.isArray(value) && Array.isArray(value.content);
+  return (
+    !!value && typeof value === "object" && !Array.isArray(value) && Array.isArray(value.content)
+  );
 }
 
 function isCodemodeResult(value: JsonValue | undefined): value is CodemodeResult & JsonValue {
@@ -129,7 +132,7 @@ export function codemodeHarnessTool(options: CodemodeToolOptions): HarnessTool {
     name: "codemode",
     label: "Codemode",
     description:
-      "Run JavaScript that composes the other active tools in one call. Use await tools.<name>(args), Promise.all for independent calls, and return or text() for the result. ALL_TOOLS lists callable tools. Direct tools remain available for simple one-step work. The sandbox has no filesystem, network, Node APIs, imports, or timers except through tools. Scripts may start with // @options: {\"timeout_ms\": 60000, \"max_output_tokens\": 2000}.",
+      'Run JavaScript that composes the other active tools in one call. Use await tools.<name>(args), Promise.all for independent calls, and return or text() for the result. ALL_TOOLS lists callable tools. Direct tools remain available for simple one-step work. The sandbox has no filesystem, network, Node APIs, imports, or timers except through tools. Scripts may start with // @options: {"timeout_ms": 60000, "max_output_tokens": 2000}.',
     parameters: Type.Object(
       {
         code: Type.String({ minLength: 1, description: "JavaScript async-function body" }),
@@ -152,8 +155,7 @@ export function codemodeHarnessTool(options: CodemodeToolOptions): HarnessTool {
       );
       const completedExecution = await invocation.getMemo(EXECUTION_MEMO);
       if (isCodemodeResult(completedExecution)) {
-        if (completedExecution.ok)
-          await options.saveStore(completedExecution.storeWrites, context);
+        if (completedExecution.ok) await options.saveStore(completedExecution.storeWrites, context);
         const final = toHarnessResult(completedExecution, maxOutputTokens);
         await invocation.setMemo(RESULT_MEMO, final as unknown as JsonValue);
         return final;
