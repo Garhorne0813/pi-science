@@ -513,6 +513,7 @@ export class McpConnectorService {
   async prepareInteractionGrant(
     cwd: string,
     raw: unknown,
+    scope: "project" | "global" = "project",
   ): Promise<() => Promise<{ persistentGrant: boolean | null; warning?: string }>> {
     const grant = raw as
       | {
@@ -549,6 +550,7 @@ export class McpConnectorService {
       connector.settings_revision !== grant.settingsRevision ||
       global.get(toolName) === "deny" ||
       previous === "deny" ||
+      (scope === "global" && previous === "ask") ||
       (included.length && !included.includes(toolName)) ||
       connector.exclude_tools.includes(toolName) ||
       connector.runtime_config.exclude_tools.includes(toolName)
@@ -571,21 +573,31 @@ export class McpConnectorService {
       );
       let persisted = false;
       try {
-        persisted = await this.repository.allowPendingTool(
-          project.project_id,
-          connectorId,
-          toolName,
-          connector.revision,
-          connector.settings_revision,
-          previous,
-        );
+        persisted =
+          scope === "global"
+            ? await this.repository.allowPendingToolGlobal(
+                connectorId,
+                toolName,
+                connector.revision,
+                connector.settings_revision,
+                global.get(toolName) ?? null,
+              )
+            : await this.repository.allowPendingTool(
+                project.project_id,
+                connectorId,
+                toolName,
+                connector.revision,
+                connector.settings_revision,
+                previous,
+              );
         if (!persisted)
           return {
             persistentGrant: false,
             warning:
               "This call was allowed once. MCP policy changed, so Always allow was not saved.",
           };
-        await this.projection?.materialize(project.canonical_path, project.project_id);
+        if (scope === "project")
+          await this.projection?.materialize(project.canonical_path, project.project_id);
         // Live workers reread the snapshot before each call; reloading here can
         // interrupt the very invocation that was just approved.
         return { persistentGrant: true };

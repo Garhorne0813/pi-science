@@ -15,6 +15,11 @@ import {
   webSettingsFromConfig,
 } from "../../web/settings.js";
 import { registerNetworkGrantRoutes } from "./network-grant-routes.js";
+import {
+  executionGrantSettings,
+  revokeExecutionGrant,
+} from "../../runtime/agent/worker/local-execution-approval.js";
+import { z } from "zod";
 import { discoverAgentDefinitions } from "../../runtime/agent/agent-definitions.js";
 import { registerModelSelectionRoutes } from "./model-selection-routes.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
@@ -56,6 +61,29 @@ export function registerSettingsRoutes(
   mcp?: McpConnectorService,
 ): void {
   registerNetworkGrantRoutes(app);
+  app.get<{ Querystring: { cwd?: string } }>(
+    "/api/settings/execution-permissions",
+    async (request) =>
+      executionGrantSettings(
+        request.query.cwd ? await validateWorkspaceCwd(request.query.cwd) : undefined,
+      ),
+  );
+  app.delete("/api/settings/execution-permissions", async (request, reply) => {
+    const parsed = z
+      .object({
+        scope: z.enum(["project", "global"]),
+        tool: z.enum(["bash", "notebook"]),
+        cwd: z.string().optional(),
+      })
+      .strict()
+      .safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid execution permission" });
+    const { scope, tool, cwd } = parsed.data;
+    if (scope === "project" && !cwd)
+      return reply.code(400).send({ error: "Project workspace is required" });
+    await revokeExecutionGrant(scope, tool, cwd ? await validateWorkspaceCwd(cwd) : undefined);
+    return { ok: true };
+  });
   app.get("/api/settings/approval", async () => approvalPreferences(await settingsStore.read()));
   app.put("/api/settings/approval", async (request, reply) => {
     const parsed = approvalPreferencesSchema.safeParse(request.body);

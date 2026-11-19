@@ -6,12 +6,14 @@ import { useTranslation } from "react-i18next";
 import { ContextManagementSection } from "../ContextManagementSection";
 import type { SettingsConfig } from "../../../lib/settings";
 import { DefaultModelSelection } from "./DefaultModelSelection";
+import { ExecutionPermissions } from "./ExecutionPermissions";
 
 export function AgentTab({ config, loading, error, scope, saving, onSave, onRefreshContext, onOpenModels }: { config: SettingsConfig | null; loading: boolean; error: string | null; scope: string | null; saving: boolean; onSave: (enabled: boolean, threshold: number) => Promise<void>; onRefreshContext: () => Promise<void>; onOpenModels?: () => void }) {
   const { t } = useTranslation();
   return <div className="space-y-6">
     <p className="text-ui-caption leading-relaxed text-muted">{t("settings.agent.description")}</p>
     <ApprovalPreferences />
+    <ExecutionPermissions cwd={scope} />
     <CitationAutoVerifySettings enabled={config?.citation_auto_verify === true} onSaved={onRefreshContext} />
     <CitationInlineStyleSettings style={config?.citation_inline_style === "identifier" ? "identifier" : "number"} onSaved={onRefreshContext} />
     <DefaultModelSelection scope={scope} onCommitted={onRefreshContext} onOpenModels={onOpenModels} />

@@ -53,6 +53,21 @@ async function hostLimits(
   );
 }
 
+function approveBashOnce(
+  runtime: Parameters<typeof runHiddenPrompt>[0],
+): NonNullable<Parameters<typeof runHiddenPrompt>[4]> {
+  return (event) => {
+    if (
+      event.type === "interaction.requested" &&
+      event.kind === "permission" &&
+      event.method === "select" &&
+      event.title === "Run bash?"
+    ) {
+      void runtime.sendNotification("extension_ui_response", { id: event.id, value: "once" });
+    }
+  };
+}
+
 type ModelAnswer = string | { name: string; args: unknown } | null;
 async function modelFixture(
   answer: (
@@ -331,6 +346,7 @@ describe("agent-core product tools", () => {
           "Append research decisions",
           "journal-once",
           Date.now() + 30_000,
+          approveBashOnce(parent),
         ),
       ).toBe("Research decision committed and index rebuilt.");
       const manifest = JSON.parse(await readFile(join(fixture.cwd, "study/manifest.json"), "utf8"));
@@ -631,7 +647,13 @@ describe("agent-core product tools", () => {
         "universal-owner",
       );
       expect(
-        await runHiddenPrompt(parent, "Run main and child", "universal-once", Date.now() + 30_000),
+        await runHiddenPrompt(
+          parent,
+          "Run main and child",
+          "universal-once",
+          Date.now() + 30_000,
+          approveBashOnce(parent),
+        ),
       ).toBe("Main and child completed.");
       expect(await readFile(join(fixture.cwd, "main.txt"), "utf8")).toBe("main");
       expect(await readFile(join(fixture.cwd, "child.txt"), "utf8")).toBe("child");
@@ -770,6 +792,7 @@ describe("agent-core product tools", () => {
           "Execute, evaluate and review",
           "candidate-bash-once",
           Date.now() + 45_000,
+          approveBashOnce(parent),
         ),
       ).toBe("Stopped after independent evaluation and review.");
       expect(repairs).toBe(2);
@@ -1443,6 +1466,7 @@ fs.writeFileSync('research/quant/result.json', JSON.stringify(result)); console.
       "/skill:auto-research Compare numerical predictions",
       "quant-once",
       Date.now() + 20000,
+      approveBashOnce(parent),
     );
     expect(result).toContain("leakage blocks a success claim");
     const { executionRepository } = await import("../executions/execution-repository.js");
@@ -2067,7 +2091,8 @@ it("approves an exact pip request over Worker IPC and refreshes the next Bash in
     allowedTools: ["bash"],
     skillPolicy: { mode: "none" },
   });
-  let approval: Promise<void> | undefined;
+  const approvals: Array<Promise<void>> = [];
+  const prompts: Array<{ method: unknown; message: unknown; revision: string }> = [];
   expect(
     await runHiddenPrompt(
       runtime,
@@ -2076,20 +2101,47 @@ it("approves an exact pip request over Worker IPC and refreshes the next Bash in
       Date.now() + 35_000,
       (event) => {
         if (event.type !== "interaction.requested") return;
-        expect(event).toMatchObject({
-          kind: "permission",
-          method: "confirm",
-          message: expect.stringContaining("Packages: sympy"),
+        prompts.push({
+          method: event.method,
+          message: event.message,
+          revision: binding.revisionId,
         });
-        expect(binding).toBe(old);
-        approval = runtime.sendNotification("extension_ui_response", {
-          id: event.id,
-          confirmed: true,
-        });
+        if (event.kind !== "permission") return;
+        if (
+          event.method === "confirm" &&
+          typeof event.message === "string" &&
+          event.message.includes("Packages: sympy")
+        ) {
+          approvals.push(
+            runtime.sendNotification("extension_ui_response", {
+              id: event.id,
+              confirmed: true,
+            }),
+          );
+        } else if (event.method === "select" && event.title === "Run bash?") {
+          approvals.push(
+            runtime.sendNotification("extension_ui_response", {
+              id: event.id,
+              value: "once",
+            }),
+          );
+        }
       },
     ),
   ).toBe("The workspace uses the updated Python.");
-  await approval;
+  await Promise.all(approvals);
+  expect(prompts).toEqual([
+    {
+      method: "confirm",
+      message: expect.stringContaining("Packages: sympy"),
+      revision: "rev_base",
+    },
+    {
+      method: "select",
+      message: expect.stringContaining(process.platform === "win32" ? "echo " : "python --version"),
+      revision: "rev_next",
+    },
+  ]);
   expect(results[0]).toContain('"environment_revision_id":"rev_next"');
   expect(results[1]).toContain("Python from rev_next");
   expect(handler.mock.calls.filter(([, op]) => op.action === "install")).toHaveLength(1);

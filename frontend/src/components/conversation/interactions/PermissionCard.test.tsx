@@ -77,7 +77,7 @@ describe("PermissionCard presentation keys", () => {
     expect(document.body.textContent).toContain("代理不验证 TLS 握手");
     expect(document.body.textContent).toContain("设置 → 网络");
     expect(document.body.textContent).not.toContain("加密隧道");
-    expect(screen.getByRole("button", { name: "始终允许" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "跨项目始终允许" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "拒绝本次请求" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "永不允许" })).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("{{");
