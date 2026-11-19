@@ -2,15 +2,17 @@ import { cleanup, fireEvent, render, screen, act } from "@testing-library/react"
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
 import { ImagePreview } from "./ImagePreview";
+import { RegionAskError } from "./image-region-ask";
 let resize: () => void;
 beforeEach(async () => {
   await i18n.changeLanguage("en");
+  vi.spyOn(console, "error").mockImplementation(() => {});
   vi.stubGlobal("ResizeObserver", class {
     constructor(callback: () => void) { resize = callback; }
     observe() {} disconnect() {}
   });
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 it("fits image dimensions, changes magnification independently, and restores fit after resize", () => {
   render(<ImagePreview url="/sample.png" filename="sample.png" />);
   const img = screen.getByRole("img") as HTMLImageElement;
@@ -88,3 +90,25 @@ it("retains the selected source pixels after a failed attachment and supports ke
   expect(onAsk).toHaveBeenLastCalledWith(image, { x: 8, y: 0, width: 200, height: 104 });
   expect(screen.queryByRole("button", { name: "Ask about region" })).not.toBeInTheDocument();
 });
+
+it.each(["rejected", "network"] as const)(
+  "explains a %s attachment failure and keeps the original error for the console",
+  async (kind) => {
+    const failure = new RegionAskError(kind, "server said no");
+    const onAsk = vi.fn().mockRejectedValueOnce(failure);
+    render(<ImagePreview url="/region.png" filename="region.png" onAsk={onAsk} />);
+    const image = screen.getByRole("img");
+    Object.defineProperties(image, { naturalWidth: { value: 800 }, naturalHeight: { value: 400 } });
+    fireEvent.load(image);
+    fireEvent.click(screen.getByRole("button", { name: "Select image region" }));
+    const surface = screen.getByRole("group", { name: /Use arrow keys/ });
+    fireEvent.keyDown(surface, { key: "ArrowRight" });
+    fireEvent.click(screen.getByRole("button", { name: "Ask about region" }));
+    const copy = kind === "rejected" ? /rejected the region upload/ : /Could not reach the workspace/;
+    expect(await screen.findByRole("alert")).toHaveTextContent(copy);
+    expect(vi.mocked(console.error)).toHaveBeenCalledWith(
+      "Could not attach the image region",
+      failure,
+    );
+  },
+);

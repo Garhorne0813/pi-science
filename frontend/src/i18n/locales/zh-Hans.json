@@ -1777,6 +1777,8 @@
   "filePreview.regionKeyboard": "用方向键移动选区，按住 Shift 并按方向键调整大小。",
   "filePreview.regionHint": "在图上拖动以框选区域。",
   "filePreview.regionFailed": "未能添加图片选区，请重试。",
+  "filePreview.regionFailedNetwork": "无法连接工作区上传选区，请检查网络后重试。",
+  "filePreview.regionFailedRejected": "工作区拒绝了这次选区上传，可能是图片太大或工作区只读；可以缩小选区后重试，或检查权限。",
   "filePreview.imageToolbar": "图片视图",
   "filePreview.viewerToolbar": "视图工具",
   "filePreview.fontSize": "文字大小",

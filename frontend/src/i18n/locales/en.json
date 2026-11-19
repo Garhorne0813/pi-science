@@ -1777,6 +1777,8 @@
   "filePreview.regionKeyboard": "Use arrow keys to position the region and Shift + arrows to resize it.",
   "filePreview.regionHint": "Drag across the image to select a region.",
   "filePreview.regionFailed": "Could not attach the image region. Try again.",
+  "filePreview.regionFailedNetwork": "Could not reach the workspace to upload the region. Check the connection and try again.",
+  "filePreview.regionFailedRejected": "The workspace rejected the region upload; the image may be too large or the workspace read-only. Try a smaller region or check permissions.",
   "filePreview.imageToolbar": "Image view",
   "filePreview.viewerToolbar": "Viewer tools",
   "filePreview.fontSize": "Text size",
