@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Copy, ExternalLink, FilePlus, FolderPlus, Link2, Pencil, Trash2 } from "lucide-react";
+import { Copy, Download, ExternalLink, FilePlus, FolderPlus, Link2, Pencil, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 export interface FileListEntry {
@@ -12,7 +12,7 @@ export interface FileListEntry {
 
 export interface ContextPoint { x: number; y: number }
 
-export function FileContextMenu({ entry, point, onClose, onReference, onCopy, onCopyAbsolutePath, onReveal, onCreateFile, onCreateFolder, onRename, onDelete }: {
+export function FileContextMenu({ entry, point, onClose, onReference, onCopy, onCopyAbsolutePath, onDownload, onReveal, onCreateFile, onCreateFolder, onRename, onDelete }: {
   entry: FileListEntry;
   point: ContextPoint;
   onClose: () => void;
@@ -21,6 +21,8 @@ export function FileContextMenu({ entry, point, onClose, onReference, onCopy, on
   /** Copy the absolute path instead of the workspace-relative one. Omitted by
    *  callers that have no workspace cwd to resolve against. */
   onCopyAbsolutePath?: () => void;
+  /** Save the file's bytes under its own name. Files only. */
+  onDownload?: () => void;
   /** Open the entry in the OS file manager. Omitted by callers without a cwd. */
   onReveal?: () => void;
   /** Inline-create a file beside this entry. Omitted where creation is unavailable. */
@@ -65,6 +67,7 @@ export function FileContextMenu({ entry, point, onClose, onReference, onCopy, on
       <MenuButton icon={<Copy size={12} />} label={t("files.copyPath")} onClick={() => onCopy(entry.path)} />
       {onCopyAbsolutePath && <MenuButton icon={<Copy size={12} />} label={t("files.copyAbsolutePath")} onClick={onCopyAbsolutePath} />}
       <MenuButton icon={<Copy size={12} />} label={t("files.copyName")} onClick={() => onCopy(entry.name)} />
+      {onDownload && !entry.isDir && <MenuButton icon={<Download size={12} />} label={t("files.download")} onClick={onDownload} />}
       {onReveal && <MenuButton icon={<ExternalLink size={12} />} label={t("files.revealInFileManager")} onClick={onReveal} />}
       <MenuDivider />
       {onRename && <MenuButton icon={<Pencil size={12} />} label={t("files.rename")} onClick={onRename} />}

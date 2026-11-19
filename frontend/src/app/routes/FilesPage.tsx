@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { copyTextToClipboard, useUiStore } from "../../lib/ui";
 import { fileInspectorForPath } from "../../lib/artifacts";
 import { absoluteWorkspacePath } from "../../lib/files/workspace-path";
-import { workspaceFiles, type Breadcrumb } from "../../lib/workspace";
+import { downloadWorkspaceFile, workspaceFiles, type Breadcrumb } from "../../lib/workspace";
 import { baseName, createDraft, editErrorFor, planCommit, projectEditRows, renameDraft, type FileKind, type InlineEditDraft } from "../../lib/workspace/inline-file-edit";
 import { FileContextMenu, type ContextPoint, type FileListEntry } from "../../components/sidebar/FileContextMenu";
 import { InlineNameInput } from "../../components/files/InlineNameInput";
@@ -187,6 +187,15 @@ export function FilesPage() {
     }
   };
 
+  const downloadEntry = async (entry: FileListEntry) => {
+    setContextMenu(null);
+    try {
+      await downloadWorkspaceFile(workspaceCwd, entry.path, entry.name);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : t("files.downloadError"), "error");
+    }
+  };
+
   const rows = useMemo(() => projectEditRows(visibleEntries.map((entry) => ({ ...entry, depth: 0 })), draft), [visibleEntries, draft]);
 
   return (
@@ -268,7 +277,7 @@ export function FilesPage() {
       </div>
 
       {/* Context menu */}
-      {contextMenu && <FileContextMenu entry={contextMenu.entry} point={contextMenu.point} onClose={() => setContextMenu(null)} onReference={() => referenceEntry(contextMenu.entry)} onCopy={(text) => void copyPath(text)} onCopyAbsolutePath={() => void copyPath(absoluteWorkspacePath(workspaceCwd, contextMenu.entry.path))} onReveal={() => void revealEntry(contextMenu.entry)} onCreateFile={() => startCreate("file", contextMenu.entry)} onCreateFolder={() => startCreate("dir", contextMenu.entry)} onRename={() => startRename(contextMenu.entry)} onDelete={() => void handleDelete(contextMenu.entry)} />}
+      {contextMenu && <FileContextMenu entry={contextMenu.entry} point={contextMenu.point} onClose={() => setContextMenu(null)} onReference={() => referenceEntry(contextMenu.entry)} onCopy={(text) => void copyPath(text)} onCopyAbsolutePath={() => void copyPath(absoluteWorkspacePath(workspaceCwd, contextMenu.entry.path))} onDownload={() => void downloadEntry(contextMenu.entry)} onReveal={() => void revealEntry(contextMenu.entry)} onCreateFile={() => startCreate("file", contextMenu.entry)} onCreateFolder={() => startCreate("dir", contextMenu.entry)} onRename={() => startRename(contextMenu.entry)} onDelete={() => void handleDelete(contextMenu.entry)} />}
     </WorkspacePage>
   );
 }

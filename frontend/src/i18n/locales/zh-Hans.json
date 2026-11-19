@@ -916,6 +916,8 @@
   "files.copyPath": "复制路径",
   "files.copyAbsolutePath": "复制绝对路径",
   "files.copyName": "复制名称",
+  "files.download": "下载",
+  "files.downloadError": "下载失败",
   "files.copied": "已复制到剪贴板",
   "files.copyFailed": "复制失败",
   "files.refresh": "刷新文件",

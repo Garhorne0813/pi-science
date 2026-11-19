@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { cn, copyTextToClipboard, useUiStore } from "../../lib/ui";
 import { pinnedFileInspector } from "../../lib/artifacts";
 import { absoluteWorkspacePath } from "../../lib/files/workspace-path";
-import { SIDEBAR_FILE_LIMIT, sortFileEntries, workspaceFiles } from "../../lib/workspace";
+import { SIDEBAR_FILE_LIMIT, downloadWorkspaceFile, sortFileEntries, workspaceFiles } from "../../lib/workspace";
 import { baseName, createDraft, editErrorFor, parentDir, planCommit, projectEditRows, renameDraft, type FileKind, type InlineEditDraft } from "../../lib/workspace/inline-file-edit";
 import { useFeedback } from "../feedback/feedback-context";
 import { InlineNameInput } from "../files/InlineNameInput";
@@ -495,6 +495,15 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
     }
   };
 
+  const downloadEntry = async (entry: FileListEntry) => {
+    setContextMenu(null);
+    try {
+      await downloadWorkspaceFile(cwd, entry.path, entry.name);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : t("files.downloadError"), "error");
+    }
+  };
+
   const deleteEntry = async (entry: FileListEntry) => {
     setContextMenu(null);
     // Folder deletion removes the whole subtree; the confirmation names that.
@@ -660,7 +669,7 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
       </div>
 
       {/* Context menu */}
-      {contextMenu && <FileContextMenu entry={contextMenu.entry} point={contextMenu.point} onClose={() => setContextMenu(null)} onReference={() => referenceEntry(contextMenu.entry)} onCopy={(text) => void copyToClipboard(text)} onCopyAbsolutePath={() => void copyToClipboard(absoluteWorkspacePath(cwd, contextMenu.entry.path))} onReveal={() => void revealEntry(contextMenu.entry)} onCreateFile={() => startCreate("file", contextMenu.entry)} onCreateFolder={() => startCreate("dir", contextMenu.entry)} onRename={() => startRename(contextMenu.entry)} onDelete={() => void deleteEntry(contextMenu.entry)} />}
+      {contextMenu && <FileContextMenu entry={contextMenu.entry} point={contextMenu.point} onClose={() => setContextMenu(null)} onReference={() => referenceEntry(contextMenu.entry)} onCopy={(text) => void copyToClipboard(text)} onCopyAbsolutePath={() => void copyToClipboard(absoluteWorkspacePath(cwd, contextMenu.entry.path))} onDownload={() => void downloadEntry(contextMenu.entry)} onReveal={() => void revealEntry(contextMenu.entry)} onCreateFile={() => startCreate("file", contextMenu.entry)} onCreateFolder={() => startCreate("dir", contextMenu.entry)} onRename={() => startRename(contextMenu.entry)} onDelete={() => void deleteEntry(contextMenu.entry)} />}
     </div>
   );
 }

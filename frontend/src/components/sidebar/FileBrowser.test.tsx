@@ -28,6 +28,7 @@ vi.mock("../../lib/workspace", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/workspace")>();
   return {
     ...actual,
+    downloadWorkspaceFile: vi.fn(async () => undefined),
     workspaceFiles: {
       invalidate: vi.fn(),
       sidebar: vi.fn(async () => sidebarEntries(["work", "reports"])),
@@ -54,11 +55,13 @@ vi.mock("../../components/feedback/feedback-context", () => {
 });
 
 let files: ReturnType<typeof vi.mocked> & { sidebar: ReturnType<typeof vi.fn>; directory: ReturnType<typeof vi.fn>; invalidate: ReturnType<typeof vi.fn>; mkdir: ReturnType<typeof vi.fn>; createFile: ReturnType<typeof vi.fn>; rename: ReturnType<typeof vi.fn> };
+let downloadFile: ReturnType<typeof vi.fn>;
 
 beforeAll(async () => {
   await i18n.changeLanguage("en");
-  const { workspaceFiles } = await import("../../lib/workspace");
+  const { workspaceFiles, downloadWorkspaceFile } = await import("../../lib/workspace");
   files = workspaceFiles as never;
+  downloadFile = downloadWorkspaceFile as unknown as ReturnType<typeof vi.fn>;
 });
 
 beforeEach(() => {
@@ -717,5 +720,46 @@ describe("FileBrowser external file uploads", () => {
     expect(request).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("status")).toHaveTextContent("data: Folder uploads are not supported");
     expect(screen.getByRole("status")).toHaveTextContent("../escape.csv: Invalid file name");
+  });
+});
+
+describe("FileBrowser download menu", () => {
+  const fileRow: FileListEntry = { path: "notes.md", name: "notes.md", isDir: false, size: 3, modified: 1 };
+
+  it("downloads a file row under its own name and closes the menu", async () => {
+    files.sidebar.mockReset().mockResolvedValue([fileRow]);
+    files.directory.mockReset().mockResolvedValue({ entries: [], breadcrumbs: [] });
+    render(<FileBrowser cwd="/workspaces/proj" embedded />);
+
+    const row = (await screen.findByText("notes.md")).closest("button")!;
+    fireEvent.contextMenu(row, { clientX: 20, clientY: 30 });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Download" }));
+
+    await vi.waitFor(() => expect(downloadFile).toHaveBeenCalledWith("/workspaces/proj", "notes.md", "notes.md"));
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("reports a failed download instead of failing silently", async () => {
+    files.sidebar.mockReset().mockResolvedValue([fileRow]);
+    files.directory.mockReset().mockResolvedValue({ entries: [], breadcrumbs: [] });
+    downloadFile.mockRejectedValueOnce(new Error("Unable to read file: notes.md"));
+    render(<FileBrowser cwd="/workspaces/proj" embedded />);
+
+    const row = (await screen.findByText("notes.md")).closest("button")!;
+    fireEvent.contextMenu(row, { clientX: 20, clientY: 30 });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Download" }));
+
+    await vi.waitFor(() => expect(useFeedback().toast).toHaveBeenCalledWith("Unable to read file: notes.md", "error"));
+  });
+
+  it("does not offer Download on a folder row", async () => {
+    files.sidebar.mockReset().mockResolvedValue([{ path: "reports", name: "reports", isDir: true, size: 0, modified: 1 }]);
+    files.directory.mockReset().mockResolvedValue({ entries: [], breadcrumbs: [] });
+    render(<FileBrowser cwd="/workspaces/proj" embedded />);
+
+    const row = (await screen.findByText("reports")).closest("button")!;
+    fireEvent.contextMenu(row, { clientX: 20, clientY: 30 });
+    await screen.findByRole("menuitem", { name: "Reference folder" });
+    expect(screen.queryByRole("menuitem", { name: "Download" })).toBeNull();
   });
 });
