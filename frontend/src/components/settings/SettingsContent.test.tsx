@@ -18,6 +18,9 @@ const putCalls: { url: string; body: unknown }[] = [];
 function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   const method = (init.method || "GET").toUpperCase();
   if (url === "/api/settings/approval") return Promise.resolve(jsonResponse({ defaultMode: "ask" }));
+  if (method === "GET" && url.split("?")[0] === "/api/settings/execution-permissions") {
+    return Promise.resolve(jsonResponse({ global: {}, project: {} }));
+  }
   if (url === "/api/model-config") return Promise.resolve(jsonResponse(nativeSnapshot));
   if (url === "/api/model-config/catalog") return Promise.resolve(jsonResponse({ revision: 0, providers: [] }));
   if (url.startsWith("/api/provider-views")) return Promise.resolve(jsonResponse({ providers: [] }));
