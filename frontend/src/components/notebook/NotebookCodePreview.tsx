@@ -3,6 +3,7 @@ import hljs from "highlight.js/lib/common";
 import { Check, Copy } from "lucide-react";
 import { cn } from "../../lib/ui";
 import { useTranslation } from "react-i18next";
+import { shouldSkipHighlight } from "../../lib/artifacts/highlight-policy";
 
 export function NotebookCodePreview({
   code,
@@ -15,15 +16,16 @@ export function NotebookCodePreview({
 }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
+  const skipHighlight = shouldSkipHighlight(code);
   const html = useMemo(() => {
+    if (skipHighlight) return escapeHtml(code);
     try {
-      return hljs.getLanguage(language)
-        ? hljs.highlight(code, { language }).value
-        : hljs.highlightAuto(code).value;
+      if (language === "plaintext" || !hljs.getLanguage(language)) return escapeHtml(code);
+      return hljs.highlight(code, { language }).value;
     } catch {
       return escapeHtml(code);
     }
-  }, [code, language]);
+  }, [code, language, skipHighlight]);
   const lines = Math.max(1, code.replace(/\n$/, "").split("\n").length);
 
   const copy = async () => {

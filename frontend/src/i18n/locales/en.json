@@ -1451,6 +1451,8 @@
   "filePreview.markdownPreviewTruncated": "Only the first {{size}} are shown to keep the preview responsive.",
   "filePreview.loadFullMarkdown": "Load full file",
   "filePreview.loadingFullMarkdown": "Loading full file…",
+  "filePreview.highlightSkipped": "Syntax highlighting is off for this large file to keep the preview responsive.",
+  "filePreview.highlightSkippedNoLanguage": "No syntax was declared, so auto-highlighting is off.",
   "mesh.noGeometry": "No geometry data",
   "mesh.loadFailed": "Failed to load 3D model",
   "mesh.viewerLabel": "3D model viewer",

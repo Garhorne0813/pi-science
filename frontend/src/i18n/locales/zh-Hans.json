@@ -1451,6 +1451,8 @@
   "filePreview.markdownPreviewTruncated": "为保持预览流畅，目前仅显示前 {{size}} 内容。",
   "filePreview.loadFullMarkdown": "加载完整文件",
   "filePreview.loadingFullMarkdown": "正在加载完整文件…",
+  "filePreview.highlightSkipped": "文件较大，已关闭语法高亮以保持预览流畅。",
+  "filePreview.highlightSkippedNoLanguage": "未声明语法，已关闭自动高亮。",
   "mesh.noGeometry": "没有几何数据",
   "mesh.loadFailed": "三维模型加载失败",
   "mesh.viewerLabel": "三维模型查看器",

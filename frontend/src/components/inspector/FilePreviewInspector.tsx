@@ -3,6 +3,7 @@ import { Check, Code2, Eye, ExternalLink, FileSearch, GitCompare, History, Loade
 import { useTranslation } from "react-i18next";
 import type { FilePreviewInspector as FilePreviewInspectorT, FileRoot } from "../../types/thread";
 import { previewKindForName, type PreviewKind } from "@/lib/artifacts";
+import { codeViewLanguage } from "@/lib/artifacts/highlight-policy";
 import {
   base64ToBytes,
   openArtifactExternally,
@@ -491,6 +492,7 @@ function Body({
   root?: FileRoot;
 }) {
   const { t } = useTranslation();
+  const codeLanguage = codeViewLanguage(kind, language);
   if (kind === "docx" || kind === "xlsx" || kind === "pptx") {
     // Office views scroll internally (the outer pane never does), so they
     // carry their own scroll memory, keyed apart from the outer container's.
@@ -554,7 +556,7 @@ function Body({
     if (showCode) {
       return text !== null ? (
         <div>
-          <CodeViewer fontSize={12.5 * textScale} code={text} language={language} className="w-full rounded-none border-0" />
+          <CodeViewer fontSize={12.5 * textScale} code={text} language={codeLanguage} className="w-full rounded-none border-0" />
         </div>
       ) : (
         <Note text={t("filePreview.openInDesktop")} />
@@ -570,7 +572,7 @@ function Body({
     if (showCode) {
       return text !== null ? (
         <div>
-          <CodeViewer fontSize={12.5 * textScale} code={text} language={language} className="w-full rounded-none border-0" />
+          <CodeViewer fontSize={12.5 * textScale} code={text} language={codeLanguage} className="w-full rounded-none border-0" />
         </div>
       ) : (
         <Note text={t("filePreview.openInDesktop")} />
@@ -705,7 +707,7 @@ function Body({
   }
   return text !== null ? (
     <div>
-      <CodeViewer fontSize={12.5 * textScale} code={text} language={language} className="w-full rounded-none border-0" />
+      <CodeViewer fontSize={12.5 * textScale} code={text} language={codeLanguage} className="w-full rounded-none border-0" />
     </div>
   ) : (
     <Note text={t("filePreview.loading")} />

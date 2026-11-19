@@ -165,6 +165,33 @@ export const FIXTURES = {
     compaction_threshold_percent: 70,
   },
 
+  /** One recorded session-kernel cell so the notebook inspector renders history. */
+  executions: [
+    {
+      schema_version: 1,
+      execution_id: "exec-visual-kernel-1",
+      kind: "kernel_cell",
+      surface: "python",
+      status: "succeeded",
+      workspace_id: VISUAL_CWD,
+      created_at: "2026-08-15T09:02:00.000Z",
+      started_at: "2026-08-15T09:02:00.000Z",
+      ended_at: "2026-08-15T09:02:01.200Z",
+      producer: "node-kernel-gateway",
+      correlation: { request_id: "request-visual-1", session_id: VISUAL_SESSION },
+      request: {
+        notebook_id: `session-${VISUAL_SESSION}`,
+        code: "def fold_change(values):\n    return [value / values[0] for value in values]\n\nprint(fold_change([1.0, 2.0, 4.0]))",
+        language: "python",
+        source: "session_notebook",
+      },
+      runtime: { cwd: VISUAL_CWD },
+      result: { stdout_preview: "[1.0, 2.0, 4.0]\n", output_preview: "" },
+      files: { read: [], written: [] },
+      artifacts: [],
+    },
+  ],
+
   files: [
     { path: "README.md", name: "README.md", isDir: false, size: 512, modified: 1755268800000 },
     { path: "data", name: "data", isDir: true, size: 0, modified: 1755268800000 },

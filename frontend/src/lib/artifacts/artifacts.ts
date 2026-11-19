@@ -33,9 +33,16 @@ const EXT_KIND: Record<string, ArtifactKind> = {
   dos: "data", qcode: "data", anom: "figure", eigenval: "data", phase: "figure",
 };
 
+// Only grammars present in highlight.js/lib/common are listed here; the common
+// bundle has neither julia nor latex, so those extensions are deliberately
+// plaintext instead of silently falling back to auto-detection.
 const EXT_LANG: Record<string, string> = {
-  py: "python", r: "r", jl: "julia", sh: "bash",
-  tex: "latex", md: "markdown", csv: "plaintext", tsv: "plaintext",
+  py: "python", r: "r", jl: "plaintext", sh: "bash",
+  tex: "plaintext", md: "markdown", csv: "plaintext", tsv: "plaintext",
+  json: "json", xml: "xml", yaml: "yaml", yml: "yaml", toml: "toml", sql: "sql",
+  c: "c", h: "c", cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp",
+  java: "java", go: "go", rs: "rust", js: "javascript", jsx: "javascript",
+  ts: "typescript", tsx: "typescript", ini: "ini", diff: "diff", patch: "diff",
 };
 
 function extToKind(ext: string): ArtifactKind {

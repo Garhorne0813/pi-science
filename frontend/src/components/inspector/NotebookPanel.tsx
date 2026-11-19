@@ -191,7 +191,10 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
                     {run.status === "running" && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-ok" />}{run.status}
                   </span>
                 </div>
-                {typeof run.request.code === "string" && <NotebookCodePreview code={run.request.code} language={String(run.surface)} className="rounded-lg border border-faint" />}
+                {/* kernel_cell records come only from /api/kernels/execute and /api/kernels/execute-file, which write
+                    surface from `language: z.enum(["python", "r"])`
+                    (apps/server/src/http/routes/kernel-execution-routes.ts:32, :178, :356). */}
+                {typeof run.request.code === "string" && <NotebookCodePreview code={run.request.code} language={run.surface === "r" ? "r" : "python"} className="rounded-lg border border-faint" />}
                 {output && (
                   <details className="mt-2" open={failed || run.request.source === "session_notebook"}>
                     <summary className="flex cursor-pointer list-none items-center gap-1 text-[11px] text-muted hover:text-text"><ChevronDown size={11} /> {t("notebook.outputLabel")}</summary>

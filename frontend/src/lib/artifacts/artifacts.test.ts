@@ -83,3 +83,22 @@ describe("artifact inspector routing", () => {
     )).toEqual(["outputs/report.md"]);
   });
 });
+
+describe("code preview languages", () => {
+  it("maps extensions whose grammar ships in highlight.js/lib/common", () => {
+    const cases = [
+      ["data.json", "json"], ["data.xml", "xml"], ["data.yaml", "yaml"], ["data.yml", "yaml"],
+      ["data.toml", "toml"], ["query.sql", "sql"], ["main.c", "c"], ["main.cpp", "cpp"],
+      ["Main.java", "java"], ["main.go", "go"], ["main.rs", "rust"], ["app.js", "javascript"],
+      ["app.ts", "typescript"], ["app.ini", "ini"], ["change.diff", "diff"],
+    ] as const;
+    for (const [file, language] of cases) {
+      expect((fileInspectorForPath(file) as { language?: string }).language).toBe(language);
+    }
+  });
+
+  it("keeps grammars missing from the common bundle on plaintext", () => {
+    expect((fileInspectorForPath("notebook.jl") as { language?: string }).language).toBe("plaintext");
+    expect((fileInspectorForPath("paper.tex") as { language?: string }).language).toBe("plaintext");
+  });
+});

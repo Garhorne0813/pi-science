@@ -21,7 +21,7 @@ import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FIXTURES, VISUAL_CWD, VISUAL_LANDING_CWD } from "./data.mjs";
+import { FIXTURES, VISUAL_CWD, VISUAL_LANDING_CWD, VISUAL_SESSION } from "./data.mjs";
 
 const distRoot = resolve(fileURLToPath(new URL("../../../dist", import.meta.url)));
 const port = Number(process.env.PORT || 4173);
@@ -242,7 +242,9 @@ async function handleApi(req, res, url) {
   if(method==='GET'&&pathname==='/api/project/archives')return json(res,200,{archives:[]});
   if (method === "GET" && pathname === "/api/executions") {
     log();
-    return json(res, 200, { executions: [], total: 0, filtered_total: 0, offset: 0, limit: 50 });
+    const sessionId = searchParams.get("session_id");
+    const executions = sessionId === VISUAL_SESSION ? FIXTURES.executions : [];
+    return json(res, 200, { executions, total: executions.length, filtered_total: executions.length, offset: 0, limit: 50 });
   }
   if (method === "GET" && pathname === "/api/executions/events") {
     log();
