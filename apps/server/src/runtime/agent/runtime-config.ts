@@ -1,6 +1,15 @@
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync} from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import type { PiConfig } from "@pi-science/contracts";
 import { configRoot, metadataRoot } from "../../storage/persistence.js";
 /** Packaged builtin skills source. Read-only callers (the composer catalogue) use
@@ -146,14 +155,18 @@ function removeStaleEntries(source: string, target: string): void {
     } catch {
       // No upstream counterpart: the entry is stale (or the upstream tree
       // changed shape), so drop it to keep the mirror exact.
-      console.warn(`[pi-science] removing stale seeded entry: ${targetPath} (no upstream counterpart)`);
+      console.warn(
+        `[pi-science] removing stale seeded entry: ${targetPath} (no upstream counterpart)`,
+      );
       rmSync(targetPath, { recursive: true, force: true });
       continue;
     }
     if (targetInfo.isDirectory() && sourceInfo.isDirectory()) {
       removeStaleEntries(sourcePath, targetPath);
     } else if (targetInfo.isDirectory() !== sourceInfo.isDirectory()) {
-      console.warn(`[pi-science] removing stale seeded entry: ${targetPath} (type mismatch with upstream)`);
+      console.warn(
+        `[pi-science] removing stale seeded entry: ${targetPath} (type mismatch with upstream)`,
+      );
       rmSync(targetPath, { recursive: true, force: true });
     }
   }
@@ -166,21 +179,35 @@ export function loadDefaultPiConfig(): PiConfig {
     model: typeof settings.model === "string" && settings.model ? settings.model : null,
     thinking: typeof settings.thinking === "string" && settings.thinking ? settings.thinking : null,
     compaction_enabled: settings.compaction_enabled !== false,
+    codemode_enabled: settings.codemode_enabled === true,
     compaction_threshold_percent: validThreshold(settings.compaction_threshold_percent),
     model_context_window: positiveInteger(settings.model_context_window),
-    model_context_window_override: typeof settings.model_context_window_override?.model === "string"
-      && positiveInteger(settings.model_context_window_override.context_window)
-      ? { model: settings.model_context_window_override.model, context_window: positiveInteger(settings.model_context_window_override.context_window)! } : undefined,
+    model_context_window_override:
+      typeof settings.model_context_window_override?.model === "string" &&
+      positiveInteger(settings.model_context_window_override.context_window)
+        ? {
+            model: settings.model_context_window_override.model,
+            context_window: positiveInteger(settings.model_context_window_override.context_window)!,
+          }
+        : undefined,
     model_max_output_tokens: positiveInteger(settings.model_max_output_tokens),
     provider: null,
     api_key: null,
-    skills: Array.isArray(settings.skill_paths) ? settings.skill_paths.map(String).filter(Boolean) : [],
+    skills: Array.isArray(settings.skill_paths)
+      ? settings.skill_paths.map(String).filter(Boolean)
+      : [],
     extensions: [],
   };
 }
 function readSettings(dataRoot: string): Record<string, any> {
-  try { return JSON.parse(readFileSync(join(resolve(dataRoot), "config.json"), "utf8")) as Record<string, any>; }
-  catch { return {}; }
+  try {
+    return JSON.parse(readFileSync(join(resolve(dataRoot), "config.json"), "utf8")) as Record<
+      string,
+      any
+    >;
+  } catch {
+    return {};
+  }
 }
 
 function positiveInteger(value: unknown): number | undefined {

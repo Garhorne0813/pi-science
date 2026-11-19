@@ -130,6 +130,16 @@ export const settingsApi = {
     return result;
   },
 
+  async saveCodemode<T>(enabled: boolean): Promise<T> {
+    const result = await writeSettings<T>(
+      "/api/settings/codemode",
+      json("PUT", { enabled }),
+      "Could not save Codemode setting",
+    );
+    await invalidateSettings();
+    return result;
+  },
+
   async saveProgress(progress: ProgressAppearance): Promise<ProgressAppearance> {
     const data = unwrapSettings(await apiRequest<{ ok?: boolean; progress_appearance?: ProgressAppearance } & SettingsEnvelope>("/api/settings/progress", json("PUT", progress)), "Unable to save progress appearance");
     await invalidateSettings();

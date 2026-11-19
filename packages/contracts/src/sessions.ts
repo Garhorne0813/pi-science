@@ -7,6 +7,7 @@ export const piConfigSchema = z.object({
   api_key: z.string().nullish(),
   thinking: z.string().nullish(),
   compaction_enabled: z.boolean().optional(),
+  codemode_enabled: z.boolean().optional(),
   compaction_threshold_percent: z.number().min(50).max(95).optional(),
   model_context_window: z.number().int().positive().optional(),
   model_context_window_override: z

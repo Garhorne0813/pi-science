@@ -155,6 +155,21 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
+it("registers Codemode only when the runtime setting is enabled", async () => {
+  const disabled = await runtime(undefined, { settings: { codemode_enabled: false } });
+  expect((await disabled.parts.harness.getTools(context)).map((tool) => tool.name)).not.toContain(
+    "codemode",
+  );
+
+  const enabled = await runtime(undefined, { settings: { codemode_enabled: true } });
+  expect((await enabled.parts.harness.getTools(context)).map((tool) => tool.name)).toContain(
+    "codemode",
+  );
+  const watch = await enabled.parts.lane.watch(context);
+  expect((await watch.resnapshot(context)).configuration.activeToolNames).toContain("codemode");
+  watch.unsubscribe();
+});
+
 it("refreshes optional user instructions after creation, edits, emptying and deletion without persisting snapshots", async () => {
   const { instance, parts } = await runtime(
     async (cwd) => {
