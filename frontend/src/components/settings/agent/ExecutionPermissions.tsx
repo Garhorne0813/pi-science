@@ -33,7 +33,7 @@ export function ExecutionPermissions({ cwd }: { cwd: string | null }) {
         <div key={`${scope}:${tool}`} className="mt-3 flex items-center justify-between gap-3 text-ui-caption">
           <span>{tool === "bash" ? "Bash" : "Notebook"} · {t(`settings.executionPermissions.${scope}`)}</span>
           <button type="button" disabled={busy} onClick={() => void revoke(scope, tool)} className="rounded-input border border-border px-2 py-1 disabled:opacity-50">{t("settings.executionPermissions.revoke")}</button>
-        </div>)))}
+        </div>))}
     {permissions && !Object.values(permissions.global).some(Boolean) && !Object.values(permissions.project).some(Boolean) && <p className="mt-2 text-ui-caption text-muted">{t("settings.executionPermissions.empty")}</p>}
   </section>;
 }

@@ -166,6 +166,7 @@ export function loadDefaultPiConfig(): PiConfig {
     model: typeof settings.model === "string" && settings.model ? settings.model : null,
     thinking: typeof settings.thinking === "string" && settings.thinking ? settings.thinking : null,
     compaction_enabled: settings.compaction_enabled !== false,
+    codemode_enabled: settings.codemode_enabled === true,
     compaction_threshold_percent: validThreshold(settings.compaction_threshold_percent),
     model_context_window: positiveInteger(settings.model_context_window),
     model_context_window_override: typeof settings.model_context_window_override?.model === "string"

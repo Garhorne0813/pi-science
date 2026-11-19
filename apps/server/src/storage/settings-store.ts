@@ -14,6 +14,8 @@ export type SettingsData = {
   model?: string;
   thinking?: string;
   compaction_enabled?: boolean;
+  /** Expose the sandboxed JavaScript tool composer to interactive agents. */
+  codemode_enabled?: boolean;
   /** Automatic citation verification on every settled turn. On when unset;
    *  an explicit false is a stored user choice that stays off. */
   citation_auto_verify?: boolean;

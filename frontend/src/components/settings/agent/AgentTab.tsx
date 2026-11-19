@@ -7,6 +7,7 @@ import { ContextManagementSection } from "../ContextManagementSection";
 import type { SettingsConfig } from "../../../lib/settings";
 import { DefaultModelSelection } from "./DefaultModelSelection";
 import { ExecutionPermissions } from "./ExecutionPermissions";
+import { CodemodeSettings } from "./CodemodeSettings";
 
 export function AgentTab({ config, loading, error, scope, saving, onSave, onRefreshContext, onOpenModels }: { config: SettingsConfig | null; loading: boolean; error: string | null; scope: string | null; saving: boolean; onSave: (enabled: boolean, threshold: number) => Promise<void>; onRefreshContext: () => Promise<void>; onOpenModels?: () => void }) {
   const { t } = useTranslation();
@@ -14,6 +15,7 @@ export function AgentTab({ config, loading, error, scope, saving, onSave, onRefr
     <p className="text-ui-caption leading-relaxed text-muted">{t("settings.agent.description")}</p>
     <ApprovalPreferences />
     <ExecutionPermissions cwd={scope} />
+    <CodemodeSettings enabled={config?.codemode_enabled === true} onSaved={onRefreshContext} />
     <CitationAutoVerifySettings enabled={config?.citation_auto_verify === true} onSaved={onRefreshContext} />
     <CitationInlineStyleSettings style={config?.citation_inline_style === "identifier" ? "identifier" : "number"} onSaved={onRefreshContext} />
     <DefaultModelSelection scope={scope} onCommitted={onRefreshContext} onOpenModels={onOpenModels} />

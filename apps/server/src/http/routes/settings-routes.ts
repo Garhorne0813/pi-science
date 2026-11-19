@@ -164,6 +164,7 @@ export function registerSettingsRoutes(
       model_max_output_tokens: Number(selected?.max_output_tokens ?? 0) || null,
       progress_appearance: effectiveProgressAppearance,
       compaction_enabled: config.compaction_enabled !== false,
+      codemode_enabled: config.codemode_enabled === true,
       compaction_threshold_percent: compactionThreshold(config, available, configured),
       citation_auto_verify: await citationAutoVerifyEnabled(),
       citation_inline_style:
@@ -220,6 +221,16 @@ export function registerSettingsRoutes(
       return config.citation_auto_verify;
     });
     return { ok: true, citation_auto_verify: stored === true };
+  });
+  app.put("/api/settings/codemode", async (request, reply) => {
+    const body = (request.body ?? {}) as { enabled?: unknown };
+    if (typeof body.enabled !== "boolean")
+      return reply.code(400).send({ error: "enabled must be a boolean" });
+    const stored = await mutate((config) => {
+      config.codemode_enabled = body.enabled as boolean;
+      return config.codemode_enabled;
+    });
+    return respondWithReload(reply, { ok: true, codemode_enabled: stored === true });
   });
   // Same read-back rule as the switch above: the answer reports what the stored
   // config now holds, so a caller can tell a saved style from a requested one.

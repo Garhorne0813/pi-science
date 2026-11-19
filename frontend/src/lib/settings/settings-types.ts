@@ -70,6 +70,7 @@ export interface SettingsConfig {
   available_models: AvailableModel[];
   model_catalog_source?: "pi" | "fallback";
   compaction_enabled: boolean;
+  codemode_enabled?: boolean;
   /** Effective automatic citation verification on every settled turn: on when
    *  the stored key is absent, otherwise the stored boolean. */
   citation_auto_verify?: boolean;

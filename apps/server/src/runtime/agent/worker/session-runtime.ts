@@ -68,6 +68,7 @@ import { notebookHarnessTools } from "./notebook-tools.js";
 import { citationVerifyTool } from "./citation-tool.js";
 import { citeEvidenceTool, readSourceEvidenceTool } from "./citation-evidence-tool.js";
 import { todoHarnessTool } from "./todo-tool.js";
+import { codemodeHarnessTool } from "./codemode-tool.js";
 import { SubagentBridge, subagentHarnessTool, subagentControlTool } from "./subagent-tool.js";
 import { InteractionBridge } from "./interaction-bridge.js";
 import type { RequestEnvironment } from "./environment-bridge.js";
@@ -89,6 +90,7 @@ import {
 
 const context = BACKGROUND_CONTEXT;
 const initialMcpDiscovery = value<boolean>("pi-science", "initial-mcp-discovery");
+const codemodeStore = value<Record<string, unknown>>("pi-science", "codemode-store");
 
 function failure(error: unknown): RuntimeResult {
   return {
@@ -420,7 +422,8 @@ export class SessionRuntime {
                 return tool.execute(id, params, update, ctx, invocation, requestContext);
               },
             };
-      const { harness, open } = await AgentHarness.create(
+      let harness: Harness;
+      const createdHarness = await AgentHarness.create(
         {
           session,
           models,
@@ -479,6 +482,30 @@ export class SessionRuntime {
               budgets.wrap,
             ),
             questionnaireHarnessTool(interactions),
+            ...(interactive && options.settings?.codemode_enabled === true
+              ? [
+                  codemodeHarnessTool({
+                    tools: async (requestContext) => {
+                      const configuration = (
+                        await session.getValue(laneConfig("main"), requestContext)
+                      )?.value;
+                      const active = new Set(configuration?.activeToolNames ?? []);
+                      return (await harness.getTools(requestContext)).filter((tool) =>
+                        active.has(tool.name),
+                      );
+                    },
+                    loadStore: async (requestContext) =>
+                      (await session.getValue(codemodeStore, requestContext))?.value ?? {},
+                    saveStore: async (writes, requestContext) => {
+                      const current =
+                        (await session.getValue(codemodeStore, requestContext))?.value ?? {};
+                      const next = { ...current, ...writes.set };
+                      for (const key of writes.delete) delete next[key];
+                      await session.setValue(codemodeStore, next, requestContext);
+                    },
+                  }),
+                ]
+              : []),
             ...(!candidateScoped && !options.delegatedAgent
               ? [
                   citationVerifyTool(options.cwd),
@@ -524,6 +551,8 @@ export class SessionRuntime {
         },
         context,
       );
+      harness = createdHarness.harness;
+      const { open } = createdHarness;
       if (interactive) {
         harness.hooks.on("transform_context", async ({ messages }, requestContext) => {
           let references = memoryClient ? await memoryClient.references(messages) : messages;
@@ -609,6 +638,7 @@ export class SessionRuntime {
         "search_memory",
         "read_memory",
         "write_memory",
+        "codemode",
       ])
         if (available.has(name) && !activeTools.includes(name)) activeTools.push(name);
       if (

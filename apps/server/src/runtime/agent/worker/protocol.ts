@@ -125,6 +125,7 @@ const startOptionsSchema = z
     settings: z
       .object({
         compaction_enabled: z.boolean().optional(),
+        codemode_enabled: z.boolean().optional(),
         compaction_threshold_percent: z.number().min(50).max(95).optional(),
         model_context_window_override: z
           .object({ model: z.string(), context_window: z.number().int().positive() })
