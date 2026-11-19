@@ -49,10 +49,28 @@ export function notebookHarnessTools(
     parameters:
       tool.name === "notebook_run" ? withTaskDescription(tool.parameters) : tool.parameters,
     async execute(toolCallId, params, onUpdate, _context, invocation, context) {
-      if (tool.name === "notebook_run" && interactions && !identity?.executionGrantId && !identity?.candidateId && !identity?.delegatedAgent && identity?.executionScope !== "candidate" && identity?.executionScope !== "confined") {
+      if (
+        tool.name === "notebook_run" &&
+        interactions &&
+        !identity?.executionGrantId &&
+        !identity?.candidateId &&
+        !identity?.delegatedAgent &&
+        identity?.executionScope !== "candidate" &&
+        identity?.executionScope !== "confined"
+      ) {
         onUpdate({ content: [], details: { approval: "waiting" } });
         try {
-          if (!await approveLocalExecution(interactions, cwd, sessionId, "notebook", JSON.stringify(params), toolCallId, context.abortSignal))
+          if (
+            !(await approveLocalExecution(
+              interactions,
+              cwd,
+              sessionId,
+              "notebook",
+              JSON.stringify(params),
+              toolCallId,
+              context.abortSignal,
+            ))
+          )
             throw new Error("Notebook execution was declined");
         } finally {
           onUpdate({ content: [], details: { approval: "resolved" } });

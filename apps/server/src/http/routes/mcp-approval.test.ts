@@ -132,7 +132,10 @@ async function fixture(withServer = false) {
   vi.stubEnv("PI_SCIENCE_BACKEND_URL", origin);
   const approve = (
     requestId = "request",
-    payload: { confirmed?: boolean; alwaysAllow?: boolean; value?: string } = { confirmed: true, alwaysAllow: true },
+    payload: { confirmed?: boolean; alwaysAllow?: boolean; value?: string } = {
+      confirmed: true,
+      alwaysAllow: true,
+    },
     workspace = cwd,
   ) =>
     app.inject({

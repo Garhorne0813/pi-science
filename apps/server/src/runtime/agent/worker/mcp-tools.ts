@@ -8,7 +8,11 @@ import {
   mcpApprovalKey,
 } from "../../../mcp/runtime-policy.js";
 import { redactMcpError } from "../../../mcp/diagnostics.js";
-import { readSessionApproval, sessionApprovalPath, sessionMode } from "../../sandbox/session-approval.js";
+import {
+  readSessionApproval,
+  sessionApprovalPath,
+  sessionMode,
+} from "../../sandbox/session-approval.js";
 import { withFileWriteLock, writeJsonAtomic } from "../../../storage/persistence.js";
 import { readOperatorConfig } from "../../sandbox/operator-config.js";
 import { acquireMcpCall } from "../../../mcp/call-scheduler.js";
@@ -305,12 +309,16 @@ export class AgentMcpTools {
                 context.abortSignal,
               );
             const decision = await checkAuthority();
-            const conversationPath = sessionId && !preauthorizedOnly
-              ? await conversationGrantPath(cwd, sessionId)
-              : undefined;
+            const conversationPath =
+              sessionId && !preauthorizedOnly
+                ? await conversationGrantPath(cwd, sessionId)
+                : undefined;
             const conversationKey = JSON.stringify([
-              server.__piScienceProjectId, server.__piScienceConnectorId, tool.name,
-              server.__piScienceConnectorRevision, server.__piScienceSettingsRevision,
+              server.__piScienceProjectId,
+              server.__piScienceConnectorId,
+              tool.name,
+              server.__piScienceConnectorRevision,
+              server.__piScienceSettingsRevision,
               connectionFingerprint,
             ]);
             const approvalRevision =
@@ -326,8 +334,11 @@ export class AgentMcpTools {
               server.__piScienceBuiltin === true &&
               tool.annotations?.readOnlyHint === true &&
               tool.annotations?.destructiveHint !== true;
-            let approvedByUser = mode === "full" || (mode === "auto" && safe)
-              || !!conversationPath && (await readConversationGrants(conversationPath)).includes(conversationKey);
+            let approvedByUser =
+              mode === "full" ||
+              (mode === "auto" && safe) ||
+              (!!conversationPath &&
+                (await readConversationGrants(conversationPath)).includes(conversationKey));
             let approvalMs = 0;
             if (decision === "ask" && !approvedByUser) {
               if (preauthorizedOnly)
@@ -359,22 +370,29 @@ export class AgentMcpTools {
                     // Another worker may have saved Always allow while this call waited.
                     if ((await checkAuthority()) === "allow") return "allowed";
                     const argumentsPreview = JSON.stringify(params).slice(0, 4_000);
-                    const answer = await bridge.request(`Allow ${name}: ${tool.name}?`, "", context.abortSignal, {
-                      method: "confirm", kind: "permission", toolCallId: _toolCallId,
-                      message: `Arguments: ${argumentsPreview}`,
-                      mcpGrant: {
-                        connectorId: server.__piScienceConnectorId!,
-                        toolName: tool.name,
-                        connectorRevision: server.__piScienceConnectorRevision,
-                        settingsRevision: server.__piScienceSettingsRevision,
+                    const answer = await bridge.request(
+                      `Allow ${name}: ${tool.name}?`,
+                      "",
+                      context.abortSignal,
+                      {
+                        method: "confirm",
+                        kind: "permission",
+                        toolCallId: _toolCallId,
+                        message: `Arguments: ${argumentsPreview}`,
+                        mcpGrant: {
+                          connectorId: server.__piScienceConnectorId!,
+                          toolName: tool.name,
+                          connectorRevision: server.__piScienceConnectorRevision,
+                          settingsRevision: server.__piScienceSettingsRevision,
+                        },
+                        presentation: {
+                          titleKey: "interaction.mcpPermission.title",
+                          titleParams: { connector: name, tool: tool.name },
+                          messageKey: "interaction.mcpPermission.arguments",
+                          messageParams: { preview: argumentsPreview },
+                        },
                       },
-                      presentation: {
-                        titleKey: "interaction.mcpPermission.title",
-                        titleParams: { connector: name, tool: tool.name },
-                        messageKey: "interaction.mcpPermission.arguments",
-                        messageParams: { preview: argumentsPreview },
-                      },
-                    });
+                    );
                     if (answer === "conversation" && conversationPath) {
                       currentPolicy(tool.name);
                       if ((await checkAuthority()) !== "ask") return "allowed";
