@@ -145,14 +145,14 @@ function QuestionnaireForm({ questionnaire, interaction, onRespond, onProgress, 
   const optionGridRow = `1 / span ${Math.max(1, question.options.length)}`;
 
   return (
-    <section data-request-id={interaction.requestId} aria-label={t("questionnaire.title")} className="flex max-h-[min(360px,60dvh)] min-h-0 flex-col overflow-hidden rounded-composer border border-border bg-surface sm:max-h-[min(320px,50dvh)]" onKeyDown={(event) => {
+    <section data-request-id={interaction.requestId} aria-labelledby={`${id}-heading`} className="flex max-h-[min(360px,60dvh)] min-h-0 flex-col overflow-hidden rounded-composer border border-border bg-surface sm:max-h-[min(320px,50dvh)]" onKeyDown={(event) => {
       if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing) { event.preventDefault(); submit(); }
     }}>
       <header className="flex shrink-0 items-start gap-3 px-4 pb-2 pt-3">
         <h3 id={`${id}-heading`} ref={headingRef} tabIndex={-1} className="max-h-20 min-w-0 flex-1 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words text-sm font-medium text-text outline-none">{review ? t("questionnaire.review") : question.question}</h3>
         <span className="shrink-0 pt-0.5 text-xs tabular-nums text-muted" aria-label={t("questionnaire.position", { current: index + 1, total: questions.length })}>{index + 1} / {questions.length}</span>
         {onCollapse && <button type="button" onClick={onCollapse} aria-label={t("interaction.collapse")} className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted hover:bg-surface-2"><ChevronDown size={15} /></button>}
-        <span className="sr-only" role="status">{t("questionnaire.progress", { answered: answeredCount, total: questions.length })}</span>
+        {review && <span className="sr-only" role="status">{t("questionnaire.progress", { answered: answeredCount, total: questions.length })}</span>}
       </header>
       <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3">
         <fieldset disabled={submitting} className="m-0 min-w-0 border-0 p-0 pb-1">
@@ -189,7 +189,7 @@ function QuestionnaireForm({ questionnaire, interaction, onRespond, onProgress, 
                 }} className={cn("flex min-h-9 w-full items-center gap-3 rounded-input px-3 py-2 text-left text-sm hover:bg-surface-2", customOpen[index] || answer?.kind === "custom" ? "bg-surface-selected text-text" : "text-muted")}><PenLine size={14} className="shrink-0" />{t("questionnaire.custom")}</button>
               {customOpen[index] && <div id={`${id}-custom`} className="px-3 pb-2 pt-1">
                 <label htmlFor={`${id}-answer`} className="sr-only">{t("questionnaire.customLabel")}</label>
-                <textarea id={`${id}-answer`} autoFocus rows={2} value={drafts[index] ?? ""} onChange={(event) => setDrafts((previous) => replaceAt(previous, index, event.target.value))} placeholder={t("questionnaire.customPlaceholder")} className="w-full resize-none rounded-input border border-border bg-surface px-3 py-2 text-sm text-text outline-none focus:border-accent" />
+                <textarea id={`${id}-answer`} autoFocus rows={2} value={drafts[index] ?? ""} onChange={(event) => setDrafts((previous) => replaceAt(previous, index, event.target.value))} className="w-full resize-none rounded-input border border-border bg-surface px-3 py-2 text-sm text-text outline-none focus:border-accent" />
                 <div className="mt-1 flex justify-end gap-2">
                   <button type="button" onClick={() => { setDrafts((previous) => replaceAt(previous, index, "")); setCustomOpen((previous) => replaceAt(previous, index, false)); }} className="rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2">{t("common.cancel")}</button>
                   <button type="button" disabled={!drafts[index]?.trim()} onClick={() => { commitCustom(); setError(null); }} className="rounded-input px-2 py-1 text-xs text-accent hover:bg-surface-2">{t("questionnaire.saveAnswer")}</button>

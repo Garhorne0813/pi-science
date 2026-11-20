@@ -58,7 +58,7 @@ export function MessageQuoteCard({ quote, onRemove }: { quote: MessageQuote; onR
                 aria-expanded={expanded}
               >
                 {expanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
-                {expanded ? t("conversation.quoteCardCollapse") : t("conversation.quoteCardExpand")}
+                <span className="sr-only">{expanded ? t("conversation.quoteCardCollapse") : t("conversation.quoteCardExpand")}</span>
               </button>
             )}
           </div>
@@ -67,7 +67,7 @@ export function MessageQuoteCard({ quote, onRemove }: { quote: MessageQuote; onR
           </div>
           {expanded && hasFullMessage && (
             <div className="mt-1 border-t border-faint pt-1">
-              <div className="text-[10px] text-muted">{t("conversation.quoteCardFullMessage")}</div>
+              <div className="text-[10px] text-muted">{t("conversation.quoteCardMessage")}</div>
               <div className="mt-0.5 max-h-40 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed text-muted">{quote.messageText}</div>
             </div>
           )}

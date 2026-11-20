@@ -91,8 +91,8 @@ export function ArtifactDiffPanel({
                 <tr className="border-b border-border text-muted">
                   <th className="py-1 pr-3 font-medium">{t("diff.row")}</th>
                   <th className="py-1 pr-3 font-medium">{t("diff.column")}</th>
-                  <th className="py-1 pr-3 font-medium">{t("diff.before")}</th>
-                  <th className="py-1 font-medium">{t("diff.after")}</th>
+                  <th className="py-1 pr-3 font-medium">{t("diff.previousVersion", { version: diff.from_version })}</th>
+                  <th className="py-1 font-medium">{t("diff.currentVersion", { version: diff.to_version })}</th>
                 </tr>
               </thead>
               <tbody>

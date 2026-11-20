@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { File, FileText, FileSpreadsheet, FileImage, FileCode2, NotebookPen, ChevronDown, ChevronUp, ArrowUpRight } from "lucide-react";
 import { previewUrl, probeLargeFile, readArtifact } from "../../lib/files";
@@ -348,14 +348,14 @@ export function TurnArtifactStrip({ artifacts, cwd, heading = "generated" }: { a
   const stableArtifacts = useMemo(() => latestArtifactVersions(artifacts), [artifacts]);
   const visible = useMemo(() => (expanded ? stableArtifacts : stableArtifacts.slice(0, MAX_VISIBLE)), [stableArtifacts, expanded]);
   const extra = stableArtifacts.length - visible.length;
+  const headingId = useId();
 
   if (!stableArtifacts.length) return null;
 
-  const ariaLabel = heading === "referenced" ? t("conversation.referencedFiles") : t("conversation.generatedFiles");
   const headingLabel = heading === "referenced" ? t("conversation.referencedFilesLabel", { count: stableArtifacts.length }) : t("conversation.generatedFilesLabel", { count: stableArtifacts.length });
   return (
-    <section aria-label={ariaLabel} className="mt-3.5">
-      <div className="mb-1.5 text-[10.5px] font-medium tracking-[0.02em] text-muted">
+    <section aria-labelledby={headingId} className="mt-3.5">
+      <div id={headingId} className="mb-1.5 text-[10.5px] font-medium tracking-[0.02em] text-muted">
         {headingLabel}
       </div>
       <div className="flex flex-wrap gap-2">

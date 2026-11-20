@@ -85,7 +85,7 @@ export function ArtifactInspector({
           onClick={() => void saveTextWithFeedback(scriptName, content.code)}
         />
         {controls}
-        {!compactHeader && <IconButton icon={X} label={t("inspector.close")} size="compact" className="text-text" onClick={onClose} />}
+        {!compactHeader && <IconButton icon={X} label={t("common.close")} size="compact" className="text-text" onClick={onClose} />}
       </header>
 
       <nav className="flex items-center gap-4 border-b border-border px-4">

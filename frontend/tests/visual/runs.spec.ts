@@ -44,7 +44,7 @@ test("execution history scopes, paginates, and links timeline details @accessibi
   await expect(page.getByLabel("Execution scope")).toHaveValue("session");
   await expect(page.getByRole("button", { name: "Execution timeline", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("header").getByText(/Markdown rendering demo/)).toBeVisible();
-  await expect(page.getByLabel("Group by session (current page)")).toHaveCount(0);
+  await expect(page.getByLabel("Group by session")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /analysis-124/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /analysis-123/ })).toHaveCount(0);
   await page.getByLabel("Execution scope").selectOption("workspace");

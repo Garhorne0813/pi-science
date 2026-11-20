@@ -67,7 +67,7 @@ describe("TurnArtifactStrip", () => {
   it("renders verified workspace paths cited by the final answer", async () => {
     mockProbeLargeFile.mockImplementation(async (path: string) => path === "work/plot.png" ? { path, name: "plot.png", size: 2048, is_dir: false } : null);
     render(<ReferencedArtifactStrip cwd="/workspace" text="See `work/plot.png` and missing/file.pdf." />);
-    await waitFor(() => expect(screen.getByLabelText("Referenced files")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText(/referenced/i)).toBeInTheDocument());
     expect(screen.getByText("REFERENCED · 1")).toBeInTheDocument();
     expect(mockReadArtifact).not.toHaveBeenCalledWith("work/plot.png", "workspace", "/workspace", 1);
   });
@@ -105,7 +105,7 @@ describe("TurnArtifactStrip", () => {
         ]}
       />,
     );
-    expect(screen.getByLabelText("Generated files")).toBeInTheDocument();
+    expect(screen.getByLabelText(/generated/i)).toBeInTheDocument();
     expect(screen.getByText("GENERATED · 2")).toBeInTheDocument();
     const image = screen.getByAltText("plot.png");
     expect(image).toHaveAttribute("src", expect.stringContaining("/api/files/serve/work/plot.png"));

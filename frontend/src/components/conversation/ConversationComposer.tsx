@@ -231,7 +231,6 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
                   type="button"
                   onClick={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/memory`)}
                   className="flex min-h-7 items-center gap-1 rounded-input border border-ok/40 bg-ok/10 px-2 py-1 text-xs text-ok-text hover:bg-ok/15"
-                  title={t("conversation.autoReviewOnTitle")}
                 >
                   <Sparkles size={13} />
                   {t("conversation.autoReviewOn")}

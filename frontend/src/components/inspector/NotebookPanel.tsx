@@ -199,7 +199,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
                   </details>
                 )}
                 {storedOutputs.length > 0 && <div className="mt-2"><StoredOutputs outputs={storedOutputs} /></div>}
-                {storedOutputs.length === 0 && Object.keys(mime).length > 0 && <div className="mt-2"><NotebookMimeOutput mime={mime} label={t("notebook.output", { index: historicalCells.length - index })} /></div>}
+                {storedOutputs.length === 0 && Object.keys(mime).length > 0 && <div className="mt-2"><NotebookMimeOutput mime={mime} label={t("notebook.outputLabel")} /></div>}
                 {run.files.written.length > 0 && <div className="mt-2 text-[11px] text-muted">{t("notebook.wroteFiles", { files: run.files.written.map((file) => file.path.split("/").pop()).join(", ") })}</div>}
               </section>
             );
@@ -249,7 +249,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
                   {cell.result.error && <pre className="whitespace-pre-wrap">{cell.result.error}</pre>}
                 </div>
               )}
-              {!cell.result?.outputs?.length && cell.result?.mime && Object.keys(cell.result.mime).length > 0 && <div className="mt-2"><NotebookMimeOutput mime={cell.result.mime} label={t("notebook.output", { index: index + 1 })} /></div>}
+              {!cell.result?.outputs?.length && cell.result?.mime && Object.keys(cell.result.mime).length > 0 && <div className="mt-2"><NotebookMimeOutput mime={cell.result.mime} label={t("notebook.outputLabel")} /></div>}
             </section>
           ))}
         </div>

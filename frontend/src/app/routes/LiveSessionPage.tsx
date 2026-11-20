@@ -313,7 +313,7 @@ export function LiveSessionPage() {
                         {(historyLoading || navigationLoading) && (
                           <div className="flex items-center gap-2 text-xs text-muted" role="status">
                             <Loader2 size={13} className="animate-spin text-accent" />
-                            {navigationLoading ? "Locating message…" : "Loading earlier messages…"}
+                            {navigationLoading ? t("conversation.locatingMessage") : t("conversation.loadingEarlier")}
                           </div>
                         )}
                       </div>

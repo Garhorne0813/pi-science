@@ -476,7 +476,7 @@ describe("FileBrowser external file uploads", () => {
     files.sidebar.mockImplementation(realFiles.sidebar.bind({ ...realFiles, directory: files.directory }));
     request.mockImplementation(async () => { uploaded = true; return { ok: true }; });
     const view = render(<FileBrowser cwd="proj" embedded />);
-    await screen.findByText("No files");
+    await screen.findByText("No files to show");
     const zone = rootZone();
     fireEvent.dragOver(zone, { dataTransfer: transfer(["z-upload.csv"]) });
     expect(zone).toHaveClass("ring-accent/60");

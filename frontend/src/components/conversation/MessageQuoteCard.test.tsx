@@ -34,11 +34,11 @@ describe("MessageQuoteCard", () => {
     render(<MessageQuoteCard quote={quote({ text, messageText: `${text}\nthe rest of the message` })} onRemove={() => undefined} />);
     const toggle = screen.getByRole("button", { name: /show full text/i });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByText("Full message")).toBeNull();
+    expect(screen.queryByText("Whole message")).toBeNull();
 
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByText("Full message")).toBeTruthy();
+    expect(screen.getByText("Whole message")).toBeTruthy();
     expect(screen.getByText("Collapse")).toBeTruthy();
   });
 

@@ -130,7 +130,7 @@ export function FilesPage() {
       const errorKind = editErrorFor(error);
       // A conflict leaves the input open so the name can be corrected in place.
       if (draftRef.current) updateDraft({ ...draftRef.current, saving: false, error: errorKind });
-      if (errorKind === "request") toast(error instanceof Error ? error.message : t(mutation.kind === "rename" ? "files.renameError" : mutation.kind === "create-folder" ? "files.folderCreateError" : "files.fileCreateError"), "error");
+      if (errorKind === "request") toast(error instanceof Error ? error.message : t("files.createError"), "error");
     }
   };
 
@@ -236,7 +236,7 @@ export function FilesPage() {
           ) : loadError && entries.length === 0 ? null : (
             <div className="text-center py-16">
               <FolderOpen size={40} className="mx-auto text-muted/30 mb-3" />
-              <p className="text-sm text-muted">{t(search ? "files.noMatches" : "files.empty")}</p>
+              <p className="text-sm text-muted">{t("files.emptyState")}</p>
             </div>
           )
         ) : (

@@ -82,7 +82,7 @@ function UserMessage({ block, scope }: { block: UserMessageBlock; scope: Message
         </div>
         <div className="mt-0.5 max-h-40 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed text-muted">{item.text}</div>
       </div>)}
-      {block.images && block.images.length > 0 && <div className="flex max-w-full flex-wrap justify-end gap-2" aria-label={t("conversation.attachedImages")}>
+      {block.images && block.images.length > 0 && <div className="flex max-w-full flex-wrap justify-end gap-2" aria-label={t("conversation.attachment")}>
         {block.images.map((image, index) => <img key={`${image.mimeType}-${index}`} src={`data:${image.mimeType};base64,${image.data}`} alt={`Attachment ${index + 1}`} className="max-h-64 max-w-full rounded-input border border-border object-contain" />)}
       </div>}
       {visibleText && <div ref={selection.ref} className="ui-user-message rounded-bubble px-4 py-2.5 text-sm leading-relaxed text-text whitespace-pre-wrap">{visibleText}</div>}
@@ -93,7 +93,6 @@ function UserMessage({ block, scope }: { block: UserMessageBlock; scope: Message
           <span className="truncate">{reference.path}</span>
         </span>)}
       </div>}
-      {block.deliveryStatus && block.deliveryStatus !== "pending" && <div role="status" className={cn("text-[10px]", block.deliveryStatus === "rejected" ? "text-error-text" : "text-muted")}>{t(`conversation.promptDelivery.${block.deliveryStatus}`)}</div>}
       {block.deliveryStatus === "rejected" && block.client_message_id && <button type="button" onClick={() => { void sendPrompt(block.text, block.client_message_id).catch(() => undefined); }} className="text-[10px] text-accent hover:underline">{t("conversation.promptDelivery.retrySameRequest")}</button>}
       <MessageActions text={copyText} timestamp={block.timestamp} align="right" quote={visibleText ? { blockId: block.id, role: "user", ...scope, messageText: visibleText } : undefined} />
     </div>

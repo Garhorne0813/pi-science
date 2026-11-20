@@ -607,7 +607,7 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
             className={cn("mt-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto rounded-input", dropTarget?.path === "" && dropTarget.valid && "bg-accent/10 ring-2 ring-inset ring-accent/60")}
           >
             {!draft && folderEntries.length === 0 ? (
-              <p className="px-2 text-ui-meta italic text-muted/60">{loading ? t("common.loading") : t("files.empty")}</p>
+              <p className="px-2 text-ui-meta italic text-muted/60">{loading ? t("common.loading") : t("files.emptyState")}</p>
             ) : (
               rows.map((item) => {
                 if (item.kind === "editor") return draft ? (

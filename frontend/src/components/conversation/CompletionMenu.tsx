@@ -96,7 +96,7 @@ export function CompletionMenu({ id, label, items, activeIndex, onSelect, onActi
   return (
     <div ref={menuRef} className="ui-popover absolute bottom-full left-0 right-0 z-50 mb-1 max-h-56 w-full max-w-full overflow-y-auto rounded-card p-1">
       {breadcrumbs && breadcrumbs.length > 0 && navigate && (
-        <nav aria-label={t("conversation.completion.workspacePath")} className="flex flex-wrap items-center gap-1 px-2 py-1 text-ui-meta text-muted">
+        <nav aria-label={t("conversation.completion.workspaceRoot")} className="flex flex-wrap items-center gap-1 px-2 py-1 text-ui-meta text-muted">
           <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => navigate("")} className="hover:text-text">{t("conversation.completion.workspaceRoot")}</button>
           {breadcrumbs.map((breadcrumb, index) => (
             <span key={breadcrumb.path} className="flex items-center gap-1">

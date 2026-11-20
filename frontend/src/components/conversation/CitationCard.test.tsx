@@ -66,7 +66,7 @@ it("keeps the abstract behind a labelled preview that says what an abstract prov
   const summary = screen.getByText("Paper abstract (preview)");
   expect(summary).toBeInTheDocument();
   expect(summary.closest("details")).toContainElement(screen.getByText("We describe the method."));
-  expect(screen.getByText(/does not show that the paper supports the sentence citing it/)).toBeInTheDocument();
+  expect(screen.getByText(/neither shows that it supports this sentence/)).toBeInTheDocument();
 });
 
 it("offers GB/T 7714 and APA text, each with its own copy action", async () => {

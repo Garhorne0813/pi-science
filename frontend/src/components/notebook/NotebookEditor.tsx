@@ -410,7 +410,7 @@ function LiveResult({ result }: { result: CellResult }) {
       {result.outputs?.length ? <StoredOutputs outputs={result.outputs} /> : null}
       {!result.outputs?.length && result.result && Object.keys(result.mime || {}).length === 0 && <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-accent">{result.result}</pre>}
       {result.error && <pre role="alert" className={cn("max-h-64 overflow-auto whitespace-pre-wrap", result.interrupted ? "text-muted" : "text-error")}>{result.error}</pre>}
-      {!result.outputs?.length && result.mime && Object.keys(result.mime).length > 0 && <NotebookMimeOutput mime={result.mime} label={t("notebook.cellOutput")} />}
+      {!result.outputs?.length && result.mime && Object.keys(result.mime).length > 0 && <NotebookMimeOutput mime={result.mime} label={t("notebook.outputLabel")} />}
     </div>
   );
 }

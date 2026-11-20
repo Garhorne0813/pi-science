@@ -246,7 +246,6 @@ describe("SettingsContent", () => {
   it("opens Agent with context management controls", async () => {
     renderContent(null);
     fireEvent.click(await screen.findByRole("tab", { name: "Agent" }));
-    expect(await screen.findByText("Control how Pi manages long-running work.")).toBeInTheDocument();
     expect(await screen.findByText("Context Management")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Default model for new conversations" })).toBeInTheDocument();
     expect(screen.getByText(/Defaults apply to new conversations/)).toBeInTheDocument();

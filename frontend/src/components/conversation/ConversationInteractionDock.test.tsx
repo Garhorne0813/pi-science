@@ -10,7 +10,7 @@ const questionnaire: PendingQuestionnaire = { toolCallId: "tool-1", questions: [
   { question: "Choose a mode", header: "Mode", multiSelect: false, options: [{ label: "Fast", description: "Quick", preview: "**Details**" }] },
   { question: "Choose outputs", header: "Outputs", multiSelect: true, options: [{ label: "Tables", description: "Data" }] },
 ] };
-const form = () => screen.getByRole("region", { name: "Answer a few questions" });
+const form = () => screen.getByRole("region", { name: /Choose (a mode|outputs)/ });
 
 describe("compact ConversationInteractionDock", () => {
   it("waits for a matching pair, never renders an actionable stale form, and removes expired prompts", () => {

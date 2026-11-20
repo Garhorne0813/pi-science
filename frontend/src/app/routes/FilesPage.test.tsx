@@ -152,7 +152,7 @@ it("distinguishes initial failure from an empty directory and supports retry", a
   files.directory.mockResolvedValue({ entries: entries(["inner.txt"]), breadcrumbs: [] }).mockRejectedValueOnce(new Error("offline"));
   render(<FilesPage />);
   expect(await screen.findByRole("alert")).toHaveTextContent("offline");
-  expect(screen.queryByText(i18n.t("files.empty"))).toBeNull();
+  expect(screen.queryByText(i18n.t("files.emptyState"))).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await screen.findByText("inner.txt");
   expect(screen.queryByRole("alert")).toBeNull();
@@ -190,7 +190,7 @@ describe("FilesPage inline file edits", () => {
     fireEvent.click(screen.getByText("New folder"));
     // The listing navigates into work/ and is empty, yet the input still renders.
     const input = await screen.findByRole("textbox", { name: "Folder name" });
-    expect(screen.queryByText("No files")).toBeNull();
+    expect(screen.queryByText("No files to show")).toBeNull();
     fireEvent.change(input, { target: { value: "sub" } });
     fireEvent.keyDown(input, { key: "Enter" });
     await vi.waitFor(() => expect(files.mkdir).toHaveBeenCalledWith("proj", "work/sub", { exclusive: true }));
@@ -200,7 +200,7 @@ describe("FilesPage inline file edits", () => {
   it("creates in the current directory from the header button while the listing is empty", async () => {
     files.directory.mockImplementation(async () => ({ entries: [], breadcrumbs: [] }));
     render(<FilesPage />);
-    await screen.findByText("No files");
+    await screen.findByText("No files to show");
     fireEvent.click(screen.getByRole("button", { name: "New file" }));
     const input = await screen.findByRole("textbox", { name: "File name" });
     fireEvent.change(input, { target: { value: "blank.md" } });

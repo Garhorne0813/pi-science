@@ -131,9 +131,7 @@ export function ProvenancePanel({ path, language, cwd: cwdOverride }: { path: st
   if (records.length === 0) {
     return (
       <div className="p-4 text-sm text-muted">
-        {t("provenance.emptyPrefix")}{" "}
-        <span className="font-mono text-text">{path}</span>
-        {t("provenance.emptySuffix")}
+        {t("provenance.emptyPrefix", { name: path })}
       </div>
     );
   }
@@ -197,12 +195,8 @@ export function ProvenancePanel({ path, language, cwd: cwdOverride }: { path: st
                   {(r.content || (r.executionId && runsById.has(r.executionId))) && (
                     <button
                       className="flex items-center gap-1 text-link hover:underline"
+                      title={t("provenance.reproduceHint")}
                       onClick={() => reproduce(r)}
-                      title={
-                        r.executionId
-                          ? t("provenance.reproduceRunTitle")
-                          : t("provenance.reproduceVersionTitle")
-                      }
                     >
                       <RotateCcw size={12} /> {t("provenance.reproduce")}
                     </button>
@@ -211,9 +205,8 @@ export function ProvenancePanel({ path, language, cwd: cwdOverride }: { path: st
                     <button
                       className="flex items-center gap-1 text-link hover:underline"
                       onClick={() => navigate(`${workspaceRoute}/session/${encodeURIComponent(r.sessionId)}`)}
-                      title={t("provenance.openConversationTitle")}
                     >
-                      <MessageSquare size={12} /> {t("provenance.openConversation")}
+                      <MessageSquare size={12} /> {t("provenance.openConversationTitle")}
                     </button>
                   )}
                 </div>

@@ -42,7 +42,11 @@ describe("completed turn duration", () => {
       turnEndedAt="2026-09-08T00:00:05.300Z"
     />);
 
-    expect(screen.getByRole("button", { name: /Total turn duration: 5\.3s/ })).toHaveTextContent("Completed · 5.3s");
+    const summary = screen.getByRole("button", { name: /Completed · 5\.3s\. Total turn duration: 5\.3s/ });
+    // C16: a quiet completion shows the duration; the state word lives in the
+    // accessible name so screen readers still hear "Completed".
+    expect(summary).toHaveTextContent("5.3s");
+    expect(summary).not.toHaveTextContent("Completed");
   });
 
   it("reports a whole turn that finished in under 100 ms as less than 0.1 seconds", () => {
@@ -54,7 +58,7 @@ describe("completed turn duration", () => {
       turnEndedAt="2026-09-08T00:00:00.007Z"
     />);
 
-    expect(screen.getByRole("button", { name: /Total turn duration: <0\.1s/ })).toHaveTextContent("Completed · <0.1s");
+    expect(screen.getByRole("button", { name: /Total turn duration: <0\.1s/ })).toHaveTextContent("<0.1s");
   });
 
   it("labels the whole-turn duration in Simplified Chinese", async () => {
@@ -68,7 +72,7 @@ describe("completed turn duration", () => {
         turnEndedAt="2026-09-08T00:00:05.300Z"
       />);
 
-      expect(screen.getByRole("button", { name: /本轮总耗时：5\.3s/ })).toHaveTextContent("已完成 · 5.3s");
+      expect(screen.getByRole("button", { name: /本轮总耗时：5\.3s/ })).toHaveTextContent("5.3s");
     } finally {
       await i18n.changeLanguage("en");
     }
@@ -94,7 +98,7 @@ describe("completed turn duration", () => {
   it("shows the turn duration when the turn folded no activity away", () => {
     render(<AgentActivity blocks={[]} lifecycle="settled" hasFinalAnswer turnStartedAt="2026-09-08T00:00:00.000Z" turnEndedAt="2026-09-08T00:00:05.300Z" />);
 
-    expect(screen.getByRole("status", { name: "Completed. Total turn duration: 5.3s" })).toHaveTextContent("Completed · 5.3s");
+    expect(screen.getByRole("status", { name: "Completed. Total turn duration: 5.3s" })).toHaveTextContent("5.3s");
   });
 });
 
@@ -236,6 +240,14 @@ describe("AgentActivity live stream", () => {
     expect(within(trace).getByText("Searching for tool.updated")).toBeInTheDocument();
   });
 
+  it("hides the phase word only while a narrative detail carries the state", () => {
+    const described = tool("read", "read", "running", { path: "a.ts", description: "Find why the second reply stops following" });
+    const { rerender } = render(<AgentActivity blocks={[described]} />);
+    expect(screen.getByText("Working")).toHaveClass("sr-only");
+    rerender(<AgentActivity blocks={[tool("todo", "todo")]} />);
+    expect(screen.getByText("Working")).not.toHaveClass("sr-only");
+  });
+
   it("keeps the active status visible for todo-only turns", () => { render(<AgentActivity blocks={[tool("todo", "todo")]} />); expect(screen.getByText("Working")).toBeInTheDocument(); expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument(); });
 
   it.each(["settled", "aborted", "failed"] as const)("streams open through %s until the turn ends", (lifecycle) => {
@@ -358,8 +370,8 @@ describe("AgentActivity live stream", () => {
       { kind: "agent", id: "a1", presentationRole: "final", parts: [{ id: "a1-0", text: "The final answer." }] },
     ];
     render(<AgentActivity blocks={blocks} lifecycle="settled" />);
-    fireEvent.click(screen.getByText(/Complete|Encountered a problem|Stopped|Working/));
-    expect(screen.getByText("3.2s")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Completed|Encountered a problem|Stopped|Working/ }));
+    expect(screen.getAllByText("3.2s").length).toBeGreaterThan(0);
   });
 
   it("ticks the elapsed time of the reasoning phase while it runs", () => {
@@ -397,7 +409,7 @@ describe("AgentActivity live stream", () => {
     expect(screen.queryByText("Thinking")).not.toBeInTheDocument();
     // Expanding restores the complete pre-answer trajectory: the reasoning row
     // returns as a step, and its prose folds behind it like a tool's details.
-    fireEvent.click(screen.getByText(/Complete|Encountered a problem|Stopped|Working/));
+    fireEvent.click(screen.getByRole("button", { name: /Completed|Encountered a problem|Stopped|Working/ }));
     expect(screen.getByText("Reading a.ts")).toBeInTheDocument();
     expect(screen.getByText("Thinking")).toBeInTheDocument();
     expect(screen.queryByText("Weigh the options.")).not.toBeInTheDocument();
@@ -683,7 +695,7 @@ describe("AgentActivity settled display", () => {
     expect(screen.queryByText("Running bash")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByText(/Complete|Encountered a problem|Stopped|Working/));
+    fireEvent.click(screen.getByRole("button", { name: /Completed|Encountered a problem|Stopped|Working/ }));
     expect(screen.getByText("Step notes: the CSV has 4 columns.")).toBeInTheDocument();
     expect(screen.getByText("Reading one.ts")).toBeInTheDocument();
     expect(screen.getByText("Running bash")).toBeInTheDocument();
@@ -716,7 +728,7 @@ describe("AgentActivity settled display", () => {
 
   it("exposes structured tool details even when there is no text output", () => {
     render(<AgentActivity lifecycle="settled" blocks={[{ ...tool("structured", "compute"), output: undefined, details: { rows: 3 } }]} />);
-    fireEvent.click(screen.getByText(/Complete|Encountered a problem|Stopped|Working/));
+    fireEvent.click(screen.getByRole("button", { name: /Completed|Encountered a problem|Stopped|Working/ }));
     fireEvent.click(screen.getByText("compute"));
     expect(screen.getByText("Details")).toBeInTheDocument();
     expect(screen.getByText(/"rows": 3/)).toBeInTheDocument();
@@ -783,7 +795,7 @@ describe("Activity step glyphs and disclosure", () => {
 
   it("marks a settled reasoning row with a neutral brain, never a checkmark", () => {
     render(<AgentActivity lifecycle="settled" blocks={[{ kind: "thinking", id: "th1", parts: [{ id: "th1-0", text: "Weigh the options." }], partial: false, startedAt: "2026-09-15T00:00:00.000Z", endedAt: "2026-09-15T00:00:03.200Z" }]} />);
-    fireEvent.click(screen.getByText(/Complete|Encountered a problem|Stopped|Working/));
+    fireEvent.click(screen.getByRole("button", { name: /Completed|Encountered a problem|Stopped|Working/ }));
     const row = document.getElementById("thread-block-th1");
     // A finished phase describes what it was, not that it succeeded: the marker
     // is the neutral reasoning glyph, and no step may claim success with a check.

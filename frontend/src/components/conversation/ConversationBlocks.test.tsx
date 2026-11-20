@@ -38,7 +38,7 @@ describe("turn-level conversation rendering", () => {
 
   it("offers a same-ID retry for a definitely rejected request", () => {
     render(<>{renderBlocks([{ kind: "user", id: "u1", text: "status", deliveryStatus: "rejected", client_message_id: "8fd824aa-51d3-4f63-839c-09e021b7970b" }], codeRunner)}</>);
-    expect(screen.getByRole("button", { name: /same request ID/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Retry send/i })).toBeTruthy();
   });
 
   it("renders nothing for invalid input", () => {
@@ -144,7 +144,7 @@ describe("turn-level conversation rendering", () => {
   it("renders artifacts after the final answer", () => {
     render(<>{renderBlocks([user("u1"), agent("a1", "final answer"), { kind: "artifact-summary", id: "turn-artifacts-t1", turnId: "t1", assistantMessageId: "a1", artifacts: [{ path: "work/plot.png", kind: "image", mime: "image/png", size: 10 }] }], codeRunner)}</>);
     expect(screen.getByText("final answer")).toBeInTheDocument();
-    expect(screen.getByLabelText("Generated files")).toBeInTheDocument();
+    expect(screen.getByLabelText(/generated/i)).toBeInTheDocument();
   });
 });
 

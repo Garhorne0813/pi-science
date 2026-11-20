@@ -47,7 +47,7 @@ describe("XlsxView", () => {
     workbookSheets.mockResolvedValue([sheet("Data", 600, { truncatedRows: true })]);
     render(<XlsxView bytes={new ArrayBuffer(4)} scrollKey="truncation" />);
 
-    const notice = await screen.findByText(/Showing first 600 rows/);
+    const notice = await screen.findByText(/Showing the first 600 rows/);
     expect(notice.textContent).not.toContain("{{count}}");
 
     await act(() => i18n.changeLanguage("zh-Hans"));
@@ -84,7 +84,7 @@ describe("XlsxView", () => {
     render(<XlsxView bytes={new ArrayBuffer(4)} scrollKey="fits" />);
 
     await screen.findByText(/Embedded charts are not shown in preview/);
-    expect(document.body.textContent).not.toMatch(/Showing first/);
+    expect(document.body.textContent).not.toMatch(/Showing the first/);
   });
 
   it("keeps the selected sheet when a language change re-parses the workbook", async () => {

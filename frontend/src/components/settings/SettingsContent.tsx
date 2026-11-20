@@ -203,7 +203,7 @@ export function SettingsContent({ scope, onClose, initialTab="general" }: { scop
           <header className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-card border-b border-faint bg-surface-raised px-card py-panel md:px-0 md:py-4">
             <div className="min-w-0">
               <p className="mb-1 text-ui-meta text-muted">{t("nav.settings")} / {t(tab === "skills" || tab === "capabilities" || tab === "mcp" || tab === "network" || tab === "web-search" ? "settings.redesign.capabilities" : tab === "environments" || tab === "compute" ? "settings.redesign.computeGroup" : "settings.redesign.workbench")}</p>
-              <h1 id="settings-panel-title" className="text-ui-title font-medium tracking-tight text-text">{t(activeTab.titleKey)}</h1>
+              <h1 id="settings-panel-title" className={cn("text-ui-title font-medium tracking-tight text-text", activeTab.labelKey === activeTab.titleKey && "md:sr-only")}>{t(activeTab.titleKey)}</h1>
             </div>
             <IconButton
               icon={X}

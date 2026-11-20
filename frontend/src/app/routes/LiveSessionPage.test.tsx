@@ -631,7 +631,7 @@ describe("turn-completion effects", () => {
       });
     });
 
-    const generatedFiles = await screen.findByLabelText("Generated files");
+    const generatedFiles = await screen.findByLabelText(/generated/i);
     const suggestions = await screen.findByLabelText("Suggested follow-ups");
     expect(generatedFiles.compareDocumentPosition(suggestions) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   });
@@ -647,8 +647,8 @@ describe("Composer interaction dock", () => {
     const input = textarea();
     fireEvent.change(input, { target: { value: "Keep my chat draft" } });
     act(() => { useRuntimeStore.setState({ pendingInteraction: interaction, pendingQuestionnaire: questionnaire }); });
-    const form = await screen.findByRole("region", { name: "Answer a few questions" });
-    expect(screen.getAllByRole("region", { name: "Answer a few questions" })).toHaveLength(1);
+    const form = await screen.findByRole("region", { name: "Which mode?" });
+    expect(screen.getAllByRole("region", { name: "Which mode?" })).toHaveLength(1);
     expect(input).not.toBeVisible();
     expect(input).toBeInTheDocument();
     expect(input).toHaveValue("Keep my chat draft");
@@ -665,7 +665,7 @@ describe("Composer interaction dock", () => {
     expect(input).not.toBeVisible();
     expect(screen.getByRole("status")).toHaveTextContent("Preparing the question");
     act(() => { useRuntimeStore.setState({ pendingQuestionnaire: null }); });
-    expect(screen.queryByRole("region", { name: "Answer a few questions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Which mode?" })).not.toBeInTheDocument();
     expect(input).toBeVisible();
     expect(input).toHaveValue("Keep my chat draft");
     expect(input).toHaveFocus();
@@ -676,7 +676,7 @@ describe("Composer interaction dock", () => {
     const interaction: PendingInteraction = { requestId: "focus-request", method: "input", title: "Questionnaire", questionnaire: true, toolCallId: "focus-tool" };
     const questionnaire: PendingQuestionnaire = { toolCallId: "focus-tool", questions: [{ question: "Which mode?", header: "Mode", multiSelect: false, options: [{ label: "Fast", description: "Run quickly." }] }] };
     act(() => { useRuntimeStore.setState({ pendingInteraction: interaction, pendingQuestionnaire: questionnaire }); });
-    await screen.findByRole("region", { name: "Answer a few questions" });
+    await screen.findByRole("region", { name: "Which mode?" });
     render(kind === "editor" ? <div role="textbox" aria-label="File editor" contentEditable suppressContentEditableWarning /> : <button type="button">Open files</button>);
     const other = kind === "editor" ? screen.getByRole("textbox", { name: "File editor" }) : screen.getByRole("button", { name: "Open files" });
     other.focus();

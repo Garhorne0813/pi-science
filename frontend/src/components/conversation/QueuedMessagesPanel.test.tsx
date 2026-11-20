@@ -111,17 +111,17 @@ describe("QueuedMessagesPanel", () => {
         entry({ id: "3c4c0c4e-6f0e-4f0e-9c1a-2b3d4e5f6a7b", status: "dispatched" }),
       ],
     });
-    expect(screen.getByRole("button", { name: "Hide queued messages" })).toHaveTextContent("2 messages");
+    expect(screen.getByRole("button", { name: "Hide queued messages" })).toHaveTextContent("1 queued");
   });
 
-  it("keeps the queued count while every message is still waiting", () => {
+  it("counts only messages still waiting, not ones already dispatching", () => {
     renderPanel({
       entries: [
         entry(),
         entry({ id: "1a7d3e5b-6c84-4f92-b1d0-8e2c4a9f7b63", status: "dispatching" }),
       ],
     });
-    expect(screen.getByRole("button", { name: "Hide queued messages" })).toHaveTextContent("2 queued");
+    expect(screen.getByRole("button", { name: "Hide queued messages" })).toHaveTextContent("1 queued");
   });
 
   it("keeps the paused banner even when no entry is visible", () => {

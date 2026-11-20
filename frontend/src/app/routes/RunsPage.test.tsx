@@ -234,7 +234,7 @@ describe("RunsPage execution ledger", () => {
     });
 
     fireEvent.change(screen.getByLabelText("Filter by status"), { target: { value: "succeeded" } });
-    expect(await screen.findByText("No matching executions")).toBeInTheDocument();
+    expect(await screen.findByText("No executions to show")).toBeInTheDocument();
   });
 
   it("shows input, files, artifacts, timing, and lazily loaded output", async () => {
@@ -489,11 +489,11 @@ describe("review regressions", () => {
       expect(screen.getByLabelText("location")).toHaveTextContent(`execution=${deepLink ? "exec_job" : "exec_tool"}`);
       expect(screen.getByRole("button", { name: /write/ })).toBeInTheDocument();
     });
-    if (deepLink) expect(await screen.findByText(/outside the current scope or filters/)).toBeInTheDocument();
+    if (deepLink) expect(await screen.findByText(/outside the current page, scope, or filters/)).toBeInTheDocument();
     else {
       await screen.findByText("agent-event-observer");
       expect(screen.queryByText("node-job-coordinator")).toBeNull();
-      expect(screen.queryByText(/outside the current scope or filters/)).toBeNull();
+      expect(screen.queryByText(/outside the current page, scope, or filters/)).toBeNull();
     }
     fireEvent.change(screen.getByLabelText("Filter by execution type"), { target: { value: "kernel_cell" } });
     await waitFor(() => {
@@ -513,7 +513,7 @@ describe("review regressions", () => {
   it("keeps an out-of-scope target and offers an explicit range adjustment", async () => {
     renderPage("/workspace/project/runs?session_id=session-1&execution=exec_job");
     await screen.findByText("node-job-coordinator");
-    expect(await screen.findByText(/outside the current scope or filters/)).toBeInTheDocument();
+    expect(await screen.findByText(/outside the current page, scope, or filters/)).toBeInTheDocument();
     expect(screen.getByLabelText("location")).toHaveTextContent("execution=exec_job");
     fireEvent.click(screen.getByRole("button", { name: "Show workspace and clear filters" }));
     await screen.findByRole("button", { name: /node train\.js/ });
@@ -554,12 +554,19 @@ describe("review regressions", () => {
     renderPage("/workspace/project/runs?session_id=session-1");
     await screen.findByText("agent-event-observer");
     expect(screen.getByRole("button", { name: "Execution timeline" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.queryByLabelText("Group by session (current page)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Group by session")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Zoom in" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
     expect(screen.getByTestId("timeline-canvas")).toHaveStyle({ width: "200%" });
     fireEvent.click(screen.getByRole("button", { name: "Fit range" }));
     expect(screen.getByTestId("timeline-canvas")).toHaveStyle({ width: "100%" });
+  });
+
+  it("describes the grouping control with its page limitation", async () => {
+    renderPage();
+    const group = await screen.findByRole("checkbox", { name: "Group by session" });
+    expect(group).toHaveAttribute("aria-describedby", "runs-group-session-hint");
+    expect(document.getElementById("runs-group-session-hint")).toHaveTextContent("Applies to the executions on this page.");
   });
 
   it("shows code, results and actual output filenames without expanding raw JSON", async () => {

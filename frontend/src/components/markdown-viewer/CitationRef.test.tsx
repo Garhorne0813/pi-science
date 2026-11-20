@@ -81,7 +81,7 @@ it("opens a real dialog that contacts no provider and names the retraction separ
   await waitFor(() => expect(screen.getByText("A cited paper")).toBeInTheDocument());
   expect(screen.getByText(/Retraction notice: Retracted by the journal/)).toBeInTheDocument();
   expect(screen.getByText("No locatable full text")).toBeInTheDocument();
-  expect(screen.getByText(/does not show that the paper supports this claim/)).toBeInTheDocument();
+  expect(screen.getByText(/neither shows that it supports this sentence/)).toBeInTheDocument();
   expect(calls.some((call) => call.url.startsWith("/api/citations/verify"))).toBe(false);
 });
 

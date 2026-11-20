@@ -46,12 +46,10 @@ export function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpen
           <div className="min-w-0">
             <div className="flex items-center gap-2"><ExecutionStatusIcon status={run.status} size={16} /><h2 title={executionPreview(executionLabel(run))} className="line-clamp-2 break-all text-base font-semibold leading-6 text-text">{executionShortLabel(run)}</h2></div>
             <div className="mt-1.5 flex flex-wrap gap-2 text-xs text-muted">
-              <span className="rounded bg-surface-2 px-1.5 py-0.5 font-semibold uppercase tracking-wide text-text">{run.surface}</span>
               <span className="rounded bg-surface-2 px-1.5 py-0.5">{t(`runs.kind.${run.kind}`)}</span>
-              <span className="rounded bg-surface-2 px-1.5 py-0.5">{t(`runs.status.${run.status}`)}</span>
             </div>
           </div>
-          <span className="shrink-0 font-mono text-xs text-muted">{executionDuration(run, t("runs.running"))}</span>
+          <span className="shrink-0 font-mono text-xs text-muted">{executionDuration(run, "")}</span>
         </div>
         <p className="mt-2 truncate text-xs text-muted" title={run.correlation.session_id}>{sessionTitle || run.correlation.session_id || t("runs.unassociated")} · {formatTimestamp(run.started_at ?? run.created_at)}</p>
         <div className="mt-3 flex flex-wrap gap-1.5">
@@ -72,10 +70,10 @@ export function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpen
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {tab === "summary" && <SummaryDetails run={run} onOpenFile={onOpenFile} onOpenArtifact={onOpenArtifact} />}
-        {tab === "input" && <div className="space-y-4"><InputDetails run={run} /><FileList title={t("runs.filesRead")} icon={<FileSearch size={14} />} files={run.files.read} empty={t("runs.noFilesRead")} onOpen={onOpenFile} /><RawRecord value={run.request} empty={t("runs.noInput")} /></div>}
-        {tab === "output" && <div className="space-y-4"><DetailSection title={t("runs.log")}>{loadingLog ? <div className="flex items-center gap-2 text-xs text-muted"><Loader2 size={13} className="animate-spin" />{t("common.loading")}</div> : <div>{log && !log.complete && <p className="mb-2 text-xs text-muted">{t("runs.logPreview")}</p>}<pre tabIndex={0} className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-input border border-border bg-surface-2 p-3 font-mono text-[13px] leading-relaxed text-text">{log?.text ?? t("runs.noLog")}</pre></div>}</DetailSection><RawRecord value={run.result} empty={t("runs.noResult")} /></div>}
+        {tab === "input" && <div className="space-y-4"><InputDetails run={run} /><FileList title={t("runs.filesRead")} icon={<FileSearch size={14} />} files={run.files.read} empty={t("runs.fieldNotRecorded", { field: t("runs.filesRead") })} onOpen={onOpenFile} /><RawRecord value={run.request} empty={t("runs.fieldNotRecorded", { field: t("runs.tab.input") })} /></div>}
+        {tab === "output" && <div className="space-y-4"><DetailSection title={t("runs.log")}>{loadingLog ? <div className="flex items-center gap-2 text-xs text-muted"><Loader2 size={13} className="animate-spin" />{t("common.loading")}</div> : <div>{log && !log.complete && <p className="mb-2 text-xs text-muted">{t("runs.logPreview")}</p>}<pre tabIndex={0} className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-input border border-border bg-surface-2 p-3 font-mono text-[13px] leading-relaxed text-text">{log?.text ?? t("runs.fieldNotRecorded", { field: t("runs.log") })}</pre></div>}</DetailSection><RawRecord value={run.result} empty={t("runs.fieldNotRecorded", { field: t("runs.result") })} /></div>}
         {tab === "files" && <FileDetails run={run} onOpenFile={onOpenFile} onOpenArtifact={onOpenArtifact} />}
-        {tab === "runtime" && <div className="space-y-4"><dl className="runs-detail-fields grid gap-2 text-xs">{Object.entries(run.runtime).filter(([, value]) => typeof value === "string" || typeof value === "number").map(([key, value]) => <div key={key} className="contents"><DetailTerm>{key}</DetailTerm><DetailValue>{String(value)}</DetailValue></div>)}</dl><RawRecord value={run.runtime} empty={t("runs.noRuntime")} /></div>}
+        {tab === "runtime" && <div className="space-y-4"><dl className="runs-detail-fields grid gap-2 text-xs">{Object.entries(run.runtime).filter(([, value]) => typeof value === "string" || typeof value === "number").map(([key, value]) => <div key={key} className="contents"><DetailTerm>{key}</DetailTerm><DetailValue>{String(value)}</DetailValue></div>)}</dl><RawRecord value={run.runtime} empty={t("runs.fieldNotRecorded", { field: t("runs.tab.runtime") })} /></div>}
         {tab === "timing" && <TimingDetails run={run} />}
       </div>
       <div className="shrink-0 border-t border-border px-4 py-4">
@@ -93,8 +91,8 @@ function InputDetails({ run }: { run: ExecutionRecord }) {
   return <DetailSection title={t("runs.tab.input")}>
     {run.request.code_truncated === true && <p className="mb-2 text-sm text-error-text">{t("runs.codeTruncated")}</p>}
     {code ? <pre tabIndex={0} className="max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-input border border-border bg-surface-2 p-3 font-mono text-[13px] leading-6 text-text">{code}</pre>
-      : input && typeof input === "object" ? <JsonBlock value={input as Record<string, unknown>} empty={t("runs.noInput")} />
-      : <p className="text-sm text-muted">{run.request.tool || t("runs.noInput")}</p>}
+      : input && typeof input === "object" ? <JsonBlock value={input as Record<string, unknown>} empty={t("runs.fieldNotRecorded", { field: t("runs.tab.input") })} />
+      : <p className="text-sm text-muted">{run.request.tool || t("runs.fieldNotRecorded", { field: t("runs.tab.input") })}</p>}
   </DetailSection>;
 }
 
@@ -103,12 +101,12 @@ function SummaryDetails({ run, onOpenFile, onOpenArtifact }: { run: ExecutionRec
   const output = [...new Set([run.result.stdout_preview, run.result.output_preview].filter(Boolean))].join("\n");
   return <div className="space-y-5">
     <InputDetails run={run} />
-    {run.files.read.length > 0 && <FileList title={t("runs.filesRead")} icon={<FileSearch size={14} />} files={run.files.read} empty={t("runs.noFilesRead")} onOpen={onOpenFile} compact />}
+    {run.files.read.length > 0 && <FileList title={t("runs.filesRead")} icon={<FileSearch size={14} />} files={run.files.read} empty={t("runs.fieldNotRecorded", { field: t("runs.filesRead") })} onOpen={onOpenFile} compact />}
     <DetailSection title={t("runs.result")}>
       {output ? <><pre tabIndex={0} className="max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-input border border-border bg-surface-2 p-3 text-[13px] leading-6 text-text">{output}</pre><p className="mt-2 text-xs leading-5 text-muted">{t("runs.logPreview")}</p></>
-        : <p className="text-sm text-muted">{executionError(run) || t("runs.noResult")}</p>}
+        : <p className="text-sm text-muted">{executionError(run) || t("runs.fieldNotRecorded", { field: t("runs.result") })}</p>}
     </DetailSection>
-    <FileList title={t("runs.filesWritten")} icon={<FileOutput size={14} />} files={run.files.written} empty={t("runs.noFilesWritten")} onOpen={onOpenFile} compact />
+    <FileList title={t("runs.filesWritten")} icon={<FileOutput size={14} />} files={run.files.written} empty={t("runs.fieldNotRecorded", { field: t("runs.filesWritten") })} onOpen={onOpenFile} compact />
     {run.artifacts.length > 0 && <DetailSection title={t("runs.artifacts")}><div className="flex flex-wrap gap-2">{run.artifacts.map((artifact) => <button type="button" key={`${artifact.artifact_id}:${artifact.version}:${artifact.relation}`} onClick={() => onOpenArtifact(artifact)} title={artifact.artifact_id} className="max-w-full truncate rounded-input border border-border bg-surface px-3 py-2 text-xs text-text">{artifact.artifact_id} · v{artifact.version}<ArrowUpRight size={12} className="ml-2 inline" /></button>)}</div></DetailSection>}
     <details><summary className="cursor-pointer text-sm text-muted">{t("runs.advancedEvidence")}</summary>
       <div className="mt-3 space-y-4">    <dl className="runs-detail-fields grid gap-x-3 gap-y-2 text-sm">
@@ -122,7 +120,7 @@ function SummaryDetails({ run, onOpenFile, onOpenArtifact }: { run: ExecutionRec
 
 function FileDetails({ run, onOpenFile, onOpenArtifact }: { run: ExecutionRecord; onOpenFile: (path: string) => void; onOpenArtifact: (artifact: ExecutionRecord["artifacts"][number]) => void }) {
   const { t } = useTranslation();
-  return <div className="space-y-5"><FileList title={t("runs.filesRead")} icon={<FileSearch size={13} />} files={run.files.read} empty={t("runs.noFilesRead")} onOpen={onOpenFile} /><FileList title={t("runs.filesWritten")} icon={<FileOutput size={13} />} files={run.files.written} empty={t("runs.noFilesWritten")} onOpen={onOpenFile} /><DetailSection title={t("runs.artifacts")}>{run.artifacts.length === 0 ? <p className="text-xs text-muted">{t("runs.noArtifacts")}</p> : <div className="space-y-2">{run.artifacts.map((artifact) => <button type="button" onClick={() => onOpenArtifact(artifact)} key={`${artifact.artifact_id}:${artifact.version}:${artifact.relation}`} className="group flex w-full items-center gap-3 rounded-input border border-border bg-surface-2 px-3 py-2 text-left hover:border-accent-border hover:bg-accent-soft"><span className="min-w-0 flex-1"><span className="block truncate font-mono text-[13px] text-text">{artifact.artifact_id}</span><span className="mt-1 block text-xs text-muted">{artifact.relation} · v{artifact.version}</span></span><ArrowUpRight size={13} className="shrink-0 text-muted group-hover:text-accent" /></button>)}</div>}</DetailSection></div>;
+  return <div className="space-y-5"><FileList title={t("runs.filesRead")} icon={<FileSearch size={13} />} files={run.files.read} empty={t("runs.fieldNotRecorded", { field: t("runs.filesRead") })} onOpen={onOpenFile} /><FileList title={t("runs.filesWritten")} icon={<FileOutput size={13} />} files={run.files.written} empty={t("runs.fieldNotRecorded", { field: t("runs.filesWritten") })} onOpen={onOpenFile} /><DetailSection title={t("runs.artifacts")}>{run.artifacts.length === 0 ? <p className="text-xs text-muted">{t("runs.fieldNotRecorded", { field: t("runs.artifacts") })}</p> : <div className="space-y-2">{run.artifacts.map((artifact) => <button type="button" onClick={() => onOpenArtifact(artifact)} key={`${artifact.artifact_id}:${artifact.version}:${artifact.relation}`} className="group flex w-full items-center gap-3 rounded-input border border-border bg-surface-2 px-3 py-2 text-left hover:border-accent-border hover:bg-accent-soft"><span className="min-w-0 flex-1"><span className="block truncate font-mono text-[13px] text-text">{artifact.artifact_id}</span><span className="mt-1 block text-xs text-muted">{artifact.relation} · v{artifact.version}</span></span><ArrowUpRight size={13} className="shrink-0 text-muted group-hover:text-accent" /></button>)}</div>}</DetailSection></div>;
 }
 
 function FileList({ title, icon, files, empty, onOpen, compact = false }: { title: string; icon: ReactNode; files: ExecutionRecord["files"]["read"]; empty: string; onOpen: (path: string) => void; compact?: boolean }) {
@@ -131,7 +129,7 @@ function FileList({ title, icon, files, empty, onOpen, compact = false }: { titl
 
 function TimingDetails({ run }: { run: ExecutionRecord }) {
   const { t } = useTranslation();
-  return <dl className="runs-detail-fields grid gap-x-3 gap-y-3 text-xs"><DetailTerm>{t("runs.field.created")}</DetailTerm><DetailValue mono>{formatTimestamp(run.created_at)}</DetailValue><DetailTerm>{t("runs.field.started")}</DetailTerm><DetailValue mono>{formatTimestamp(run.started_at)}</DetailValue><DetailTerm>{t("runs.field.ended")}</DetailTerm><DetailValue mono>{formatTimestamp(run.ended_at)}</DetailValue><DetailTerm>{t("runs.duration")}</DetailTerm><DetailValue mono>{executionDuration(run, t("runs.running"))}</DetailValue></dl>;
+  return <dl className="runs-detail-fields grid gap-x-3 gap-y-3 text-xs"><DetailTerm>{t("runs.field.created")}</DetailTerm><DetailValue mono>{formatTimestamp(run.created_at)}</DetailValue><DetailTerm>{t("runs.field.started")}</DetailTerm><DetailValue mono>{formatTimestamp(run.started_at)}</DetailValue><DetailTerm>{t("runs.field.ended")}</DetailTerm><DetailValue mono>{formatTimestamp(run.ended_at)}</DetailValue><DetailTerm>{t("runs.duration")}</DetailTerm><DetailValue mono>{executionDuration(run, "")}</DetailValue></dl>;
 }
 
 function DetailSection({ title, icon, children }: { title: string; icon?: ReactNode; children: ReactNode }) { return <section><h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.08em] text-muted">{icon}{title}</h3>{children}</section>; }

@@ -55,7 +55,7 @@ export function ProgressTab({ config }: { config?: Pick<SettingsConfig, "progres
   return <div className="space-y-4">
     <section className="overflow-hidden rounded-card border border-faint bg-surface-2/40">
       <div className="flex min-h-14 items-center justify-between gap-3 border-b border-faint px-4 py-2">
-        <div><h2 className="text-[13px] font-semibold text-text">{t("settings.progress.title")}</h2><p className="mt-0.5 text-ui-caption text-muted">{t("settings.progress.description")}</p></div>
+        <div><h2 className="text-[13px] font-semibold text-text">{t("settings.progress.title")}</h2></div>
         <button type="button" disabled={saving} onClick={reset} className="flex min-h-8 items-center gap-1.5 rounded-input px-2 text-ui-caption text-muted hover:bg-surface-hover hover:text-text"><RotateCcw size={13} />{t("settings.progress.reset")}</button>
       </div>
       {saveError && dirty && <div className="border-b border-faint bg-error-fill/40 px-4 py-2 text-ui-caption text-error-text" role="status">{t("settings.progress.saveError")}</div>}

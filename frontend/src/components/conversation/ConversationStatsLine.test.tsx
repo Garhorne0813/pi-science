@@ -43,7 +43,7 @@ describe("ConversationStatsLine", () => {
     render(<ConversationStatsLine stats={stats()} />);
     const line = screen.getByLabelText("Session stats");
     expect(line.textContent).toBe(
-      "3 turns · 4 steps | LLM 1m0s · Tool call 25.0s | TTFT avg 0.1s · 192 tok/s | Cache hit 42% · Input 50.0K tok · Output 10.0K tok",
+      "3 turns · 4 steps | LLM 1m0s · Tool call 25.0s | TTFT avg 0.1s · 192 tok/s | Cache hit 42% · Input 50.0K · Output 10.0K tok",
     );
     // Single-line UI: nowrap, hidden overflow, ellipsis, centered, composer width.
     expect(line).toHaveClass("whitespace-nowrap", "overflow-hidden", "text-ellipsis", "text-center");
@@ -74,7 +74,7 @@ describe("ConversationStatsLine", () => {
     const line = screen.getByLabelText("Session stats");
     // 16710/(1000+16710+500) ≈ 91.8% — never the old cacheRead/input = 1671%.
     expect(line.textContent).toBe(
-      "3 turns · 4 steps | LLM 1m0s · Tool call 25.0s | TTFT avg 0.1s · 9.6 tok/s | Cache hit 92% · Input 1.0K tok · Output 500 tok",
+      "3 turns · 4 steps | LLM 1m0s · Tool call 25.0s | TTFT avg 0.1s · 9.6 tok/s | Cache hit 92% · Input 1.0K · Output 500 tok",
     );
     expect(line.textContent).not.toContain("1671");
   });
@@ -83,7 +83,7 @@ describe("ConversationStatsLine", () => {
     render(<ConversationStatsLine stats={stats({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } })} />);
     const text = screen.getByLabelText("Session stats").textContent ?? "";
     expect(text).not.toContain("Cache hit");
-    expect(text).toContain("Input 0 tok · Output 0 tok");
+    expect(text).toContain("Input 0 · Output 0 tok");
   });
 
   it("hides timing and speed groups when the checkpoint has no timing (cold restore)", () => {
@@ -93,7 +93,7 @@ describe("ConversationStatsLine", () => {
     expect(text).not.toContain("Tool call");
     expect(text).not.toContain("TTFT");
     expect(text).not.toContain("tok/s");
-    expect(text).toBe("3 turns · 4 steps | Cache hit 42% · Input 50.0K tok · Output 10.0K tok");
+    expect(text).toBe("3 turns · 4 steps | Cache hit 42% · Input 50.0K · Output 10.0K tok");
   });
 
   it("uses the Chinese copy with the same group order and tok suffix", async () => {
@@ -101,7 +101,7 @@ describe("ConversationStatsLine", () => {
     try {
       render(<ConversationStatsLine stats={stats()} />);
       expect(screen.getByLabelText("会话统计").textContent).toBe(
-        "3 轮 · 4 步 | LLM 1m0s · 工具调用 25.0s | 首 token 平均 0.1s · 192 tok/s | 缓存命中 42% · 输入 50.0K tok · 输出 10.0K tok",
+        "3 轮 · 4 步 | LLM 1m0s · 工具调用 25.0s | 首 token 平均 0.1s · 192 tok/s | 缓存命中 42% · 输入 50.0K · 输出 10.0K tok",
       );
     } finally {
       await i18n.changeLanguage("en");
@@ -111,7 +111,7 @@ describe("ConversationStatsLine", () => {
   it("exposes the full stats line in the title attribute", () => {
     render(<ConversationStatsLine stats={stats()} />);
     expect(screen.getByLabelText("Session stats").getAttribute("title")).toBe(
-      "3 turns · 4 steps | LLM 1m0s · Tool call 25.0s | TTFT avg 0.1s · 192 tok/s | Cache hit 42% · Input 50.0K tok · Output 10.0K tok",
+      "3 turns · 4 steps | LLM 1m0s · Tool call 25.0s | TTFT avg 0.1s · 192 tok/s | Cache hit 42% · Input 50.0K · Output 10.0K tok",
     );
   });
 });

@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { useTranslation } from "react-i18next";
 import { ExternalLink } from "lucide-react";
 import { useCitationCwd, useCitationEvidence, citationResolver, citationCardState, type CitationEvidence } from "../../lib/citations/citation-evidence";
@@ -14,10 +15,11 @@ export function CitationReferences({ numbering, text, streaming = false }: { num
   const { t } = useTranslation();
   const cwd = useCitationCwd();
   const { bySource, unprocessed } = useCitationEvidence(cwd, text, streaming);
+  const headingId = useId();
   if (!numbering.sources.length) return null;
   return (
-    <section className="mt-2 border-t border-border/70 pt-1.5" aria-label={t("conversation.references")}>
-      <p className="text-[10px] text-muted">{t("conversation.references")} ({numbering.sources.length})</p>
+    <section className="mt-2 border-t border-border/70 pt-1.5" aria-labelledby={headingId}>
+      <p id={headingId} className="text-[10px] text-muted">{t("conversation.references")} ({numbering.sources.length})</p>
       <ol className="mt-1 space-y-1">
         {/* The snapshot files a source under the version it was cited at, so the
             row reads it by that spelling rather than by the version-less id. */}

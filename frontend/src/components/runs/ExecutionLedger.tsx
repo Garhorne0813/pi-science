@@ -45,13 +45,13 @@ function ExecutionRow({ run, index, selected, onClick, showSession, sessionTitle
       <span className="min-w-0">
         <span className="flex items-center gap-2"><ExecutionStatusIcon status={run.status} /><span title={source} className="min-w-0 flex-1 truncate text-[13px] font-medium text-text">{label}</span>{label !== source && <span className="sr-only">{source}</span>}</span>
         <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 pl-5 text-xs text-muted">
-          <span className="font-semibold uppercase tracking-wide text-text">{run.surface}</span><span>{t(`runs.kind.${run.kind}`)}</span><span>{formatTimestamp(run.started_at ?? run.created_at)}</span><span>{t(`runs.status.${run.status}`)}</span>
+          <span>{t(`runs.kind.${run.kind}`)}</span><span>{formatTimestamp(run.started_at ?? run.created_at)}</span>{isProblemExecution(run) ? <span>{t(`runs.status.${run.status}`)}</span> : <span className="sr-only">{t(`runs.status.${run.status}`)}</span>}
           {outputs > 0 && <span>{t("runs.outputCount", { count: outputs })}</span>}
         </span>
         {showSession && <span title={run.correlation.session_id} className="mt-1 block truncate pl-5 text-xs text-muted">{sessionTitle || run.correlation.session_id || t("runs.unassociated")}</span>}
         {summary && <span className={cn("mt-1 line-clamp-2 whitespace-pre-wrap break-all pl-5 text-xs", isProblemExecution(run) ? "text-error-text" : "text-muted")}>{executionPreview(summary, 240)}</span>}
       </span>
-      <span className="whitespace-nowrap pt-0.5 font-mono text-xs tabular-nums text-muted">{executionDuration(run, t("runs.running"))}</span>
+      <span className="whitespace-nowrap pt-0.5 font-mono text-xs tabular-nums text-muted">{executionDuration(run, "")}</span>
     </button>
   );
 }

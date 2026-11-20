@@ -209,8 +209,8 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
     </>} />
 
     <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted" aria-label={t("runs.scopeStatistics")}>
-        <span><strong className="mr-1 text-xl font-semibold text-text">{total ?? "—"}</strong>{t("runs.executionsTotal")}</span>
+      <div role="group" aria-label={t("runs.scopeStatistics")} className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted">
+        <span className="text-xl font-semibold tabular-nums text-text">{total ?? "—"}</span>
         {counts && <><span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-ok" />{t("runs.succeededCount", { count: counts.succeeded || 0 })}</span><span className={cn("flex items-center gap-1.5", failures && "text-error-text")}><AlertTriangle size={14} />{t("runs.problemCount", { count: failures })}</span></>}
         {duration !== undefined && <span>{t("runs.completedDuration", { seconds: (duration / 1_000).toLocaleString(undefined, { maximumFractionDigits: 1 }) })}</span>}
       </div>
@@ -227,23 +227,24 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
     {invalidRange && <p role="alert" className="mt-2 text-sm text-error-text">{t("runs.invalidRange")}</p>}
     <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
       <span>{t("runs.matchingPage", { filtered: filteredTotal, visible: runs.length })}</span>
-      {!activeSessionId && <label className="flex items-center gap-2"><input type="checkbox" checked={groupBySession} onChange={(e) => updateRoute({ group: e.target.checked ? null : "none" })} />{t("runs.groupSession")}</label>}
-      <span className="flex items-center gap-1.5" title={t("runs.liveHint")}><span className={cn("h-1.5 w-1.5 rounded-full", liveConnected ? "bg-ok" : "bg-muted")} />{t("runs.live")}</span>
+      {!activeSessionId && <label title={t("runs.groupSessionHint")} className="flex items-center gap-2"><input type="checkbox" aria-describedby="runs-group-session-hint" checked={groupBySession} onChange={(e) => updateRoute({ group: e.target.checked ? null : "none" })} />{t("runs.groupSession")}</label>}
+      <span className="flex items-center gap-1.5"><span className={cn("h-1.5 w-1.5 rounded-full", liveConnected ? "bg-ok" : "bg-muted")} />{t("runs.live")}</span>
     </div>
+    {!activeSessionId && <span id="runs-group-session-hint" className="sr-only">{t("runs.groupSessionHint")}</span>}
 
     <div className="runs-workbench-container mt-3">
       <div data-testid="runs-workbench" data-compact-detail={compactDetailOpen ? "true" : "false"} className="runs-ledger-layout runs-workbench grid min-h-[560px] overflow-hidden rounded-card border border-border bg-surface">
         {runs.length ? (view === "timeline"
           ? <ExecutionTimeline runs={runs} selectedId={selected?.execution_id ?? null} onSelect={selectExecution} groupBySession={groupBySession} sessionTitles={sessionTitles} />
           : <ExecutionLedger runs={runs} selectedId={selected?.execution_id ?? null} onSelect={selectExecution} groupBySession={groupBySession} sessionTitles={sessionTitles} showSession={!activeSessionId} />)
-          : <section className="runs-ledger-pane min-w-0">{loading ? <div className="p-10 text-center text-muted"><Loader2 className="mx-auto animate-spin" size={20} />{t("common.loading")}</div> : runsResult.error ? <EmptyState icon={<AlertTriangle size={32} />} title={t("runs.loadError")} hint={String(runsResult.error)} /> : <EmptyState icon={search || kind || status || from || to ? <FileSearch size={36} /> : <Play size={36} />} title={t(search || kind || status || from || to ? "runs.noMatches" : "runs.empty")} hint={t(search || kind || status || from || to ? "runs.noMatchesHint" : "runs.emptyHint")} />}</section>}
+          : <section className="runs-ledger-pane min-w-0">{loading ? <div className="p-10 text-center text-muted"><Loader2 className="mx-auto animate-spin" size={20} />{t("common.loading")}</div> : runsResult.error ? <EmptyState icon={<AlertTriangle size={32} />} title={t("runs.loadError")} hint={String(runsResult.error)} /> : <EmptyState icon={search || kind || status || from || to ? <FileSearch size={36} /> : <Play size={36} />} title={t("runs.emptyState")} />}</section>}
         <section aria-label={t("runs.details")} className="runs-detail-pane min-w-0 bg-bg/40">
-          {outsidePage && <div role="status" className="shrink-0 border-b border-border bg-surface-2 px-4 py-3 text-sm text-text"><p>{t(targetOutsideFilters ? "runs.targetOutsideFilters" : "runs.targetOutsidePage")}</p><button type="button" onClick={() => void locateTarget()} disabled={targetPageResult.isFetching} className="mt-2 rounded-input border border-border bg-surface px-3 py-1.5 text-xs font-medium disabled:opacity-50">{t(targetPageResult.isFetching ? "common.loading" : targetOutsideFilters ? "runs.relaxTargetFilters" : "runs.locateTargetPage")}</button></div>}
+          {outsidePage && <div role="status" className="shrink-0 border-b border-border bg-surface-2 px-4 py-3 text-sm text-text"><p>{t("runs.targetOutsidePage")}</p><button type="button" onClick={() => void locateTarget()} disabled={targetPageResult.isFetching} className="mt-2 rounded-input border border-border bg-surface px-3 py-1.5 text-xs font-medium disabled:opacity-50">{t(targetPageResult.isFetching ? "common.loading" : targetOutsideFilters ? "runs.relaxTargetFilters" : "runs.locateTargetPage")}</button></div>}
           {selected ? <ExecutionDetails run={selected} tab={detailTab} onTabChange={setDetailTab} onBack={() => updateRoute({ detail: "0" }, true)} onCopy={(text, message) => void copyText(text, message)} onOpenFile={openFile} onOpenArtifact={(artifact) => void openArtifact(artifact)}
             onOpenSession={selected.correlation.session_id && selected.correlation.session_id !== sessionId ? () => openSession(selected) : undefined}
             onLocate={sessionId && selected.correlation.session_id === sessionId && selected.correlation.tool_call_id ? () => locateExecution(selected) : undefined}
             onReproduce={() => reproduce(selected)} sessionTitle={selected.correlation.session_id ? sessionTitles[selected.correlation.session_id] : undefined}
-            log={logResult.data ? { text: logText || t("runs.noLog"), complete: logResult.data.complete } : logResult.error ? { text: t("runs.logLoadFailed"), complete: false } : undefined} loadingLog={logResult.isFetching} />
+            log={logResult.data ? { text: logText || t("runs.fieldNotRecorded", { field: t("runs.log") }), complete: logResult.data.complete } : logResult.error ? { text: t("runs.logLoadFailed"), complete: false } : undefined} loadingLog={logResult.isFetching} />
             : detailError ? <div role="alert" className="p-6"><button type="button" onClick={() => updateRoute({ detail: "0" }, true)} className="runs-detail-back mb-4 text-sm text-muted">{t("runs.backToLedger")}</button><p className="text-sm text-error-text">{t(detailError instanceof ApiError && detailError.status === 404 ? "runs.targetMissing" : "runs.targetLoadError", { id: selectedId })}</p></div>
             : <EmptyState icon={<Activity size={32} />} title={t(selectedId ? "common.loading" : "runs.selectExecution")} hint={selectedId || ""} />}
         </section>
@@ -251,12 +252,12 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
     </div>
     <nav aria-label={t("runs.pagination")} className="mt-4 flex flex-wrap items-center justify-between gap-2 text-sm text-text">
       <button type="button" disabled={offset === 0 || loading} onClick={() => { changePage(Math.max(0, offset - PAGE_SIZE)); }} className="rounded-input border border-border px-3 py-2 disabled:opacity-40">{t("runs.previous")}</button>
-      <span>{scopeLabel} · {t("runs.pagePosition", { from: runs.length ? offset + 1 : 0, to: runs.length ? offset + runs.length : 0, total: filteredTotal })}</span>
+      <span className="text-xs text-muted">{scopeLabel}</span>
       <button type="button" disabled={offset + runs.length >= filteredTotal || loading || invalidRange} onClick={() => { changePage(offset + PAGE_SIZE); }} className="rounded-input border border-border px-3 py-2 disabled:opacity-40">{t("runs.next")}</button>
     </nav>
   </WorkspacePage>;
 }
 
-function EmptyState({ icon, title, hint }: { icon: ReactNode; title: string; hint: string }) {
-  return <div className="px-4 py-16 text-center"><div className="mx-auto mb-3 w-fit text-muted/50">{icon}</div><p className="text-sm text-text">{title}</p><p className="mt-2 break-all text-xs text-muted">{hint}</p></div>;
+function EmptyState({ icon, title, hint }: { icon: ReactNode; title: string; hint?: string }) {
+  return <div className="px-4 py-16 text-center"><div className="mx-auto mb-3 w-fit text-muted/50">{icon}</div><p className="text-sm text-text">{title}</p>{hint && <p className="mt-2 break-all text-xs text-muted">{hint}</p>}</div>;
 }

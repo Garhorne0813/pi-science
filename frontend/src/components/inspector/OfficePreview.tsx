@@ -199,7 +199,7 @@ export function XlsxView({ bytes, scrollKey }: { bytes: ArrayBuffer; scrollKey: 
       : sheet.truncatedColumns
         ? t("office.truncatedColumns", { count: sheet.columns })
         : sheet.truncatedRows
-          ? t("office.truncatedPrefix", { count: sheet.rows })
+          ? t("table.showingFirstRows", { count: sheet.rows })
           : "";
   // Layout effect (in this hook order): the sheet HTML must be in the DOM
   // before the scroll restore below runs, or the offset would clamp to 0.

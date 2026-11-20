@@ -258,20 +258,20 @@ try {
       });
   }
   await page.reload();
-  await page.getByText("45 memories", { exact: true }).waitFor();
+  await page.getByText(/^45 memories( · Page \d+ of \d+)?$/).waitFor();
   const browseSearch = page.getByRole("textbox", {
     name: "Search memories",
     exact: true,
   });
   await browseSearch.fill("Markdown");
-  await page.getByText("43 memories", { exact: true }).waitFor();
+  await page.getByText(/^43 memories( · Page \d+ of \d+)?$/).waitFor();
   await page
     .getByRole("button", { name: "Sort: Relevance", exact: true })
     .waitFor();
   await page.getByRole("button", { name: "Next", exact: true }).click();
-  await page.getByText("Page 2 of 3", { exact: true }).waitFor();
+  await page.getByText(/Page 2 of 3$/).waitFor();
   await page.getByRole("button", { name: "Next", exact: true }).click();
-  await page.getByText("Page 3 of 3", { exact: true }).waitFor();
+  await page.getByText(/Page 3 of 3$/).waitFor();
   assert.equal(await page.locator("article").count(), 3);
   const choose = async (label, option) => {
     await page
@@ -282,10 +282,10 @@ try {
       .click();
   };
   await choose("Status", "Active");
-  await page.getByText("42 memories", { exact: true }).waitFor();
-  await page.getByText("Page 1 of 3", { exact: true }).waitFor();
+  await page.getByText(/^42 memories( · Page 1 of 3)?$/).waitFor();
+  await page.getByText(/Page 1 of 3$/).waitFor();
   await choose("Type", "Preference");
-  await page.getByText("21 memories", { exact: true }).waitFor();
+  await page.getByText(/^21 memories( · Page \d+ of \d+)?$/).waitFor();
   await choose("Scope", "Project");
   await choose("Category", categoryName);
   await choose("Sort", "Recently created");
@@ -384,7 +384,7 @@ try {
   await sheet
     .getByRole("button", { name: "Apply filters", exact: true })
     .click();
-  await page.getByText("43 memories", { exact: true }).waitFor();
+  await page.getByText(/^43 memories( · Page \d+ of \d+)?$/).waitFor();
   await page
     .getByRole("button", { name: "Filters and sorting", exact: true })
     .click();
@@ -403,7 +403,7 @@ try {
   await page
     .getByRole("button", { name: "Clear filters", exact: true })
     .click();
-  await page.getByText("45 memories", { exact: true }).waitFor();
+  await page.getByText(/^45 memories( · Page \d+ of \d+)?$/).waitFor();
   assert.equal(await browseSearch.inputValue(), "");
   await browseSearch.fill("ImpossibleProbeThatDoesNotExist");
   await page
@@ -413,7 +413,7 @@ try {
   await page
     .getByRole("button", { name: "Clear filters", exact: true })
     .click();
-  await page.getByText("45 memories", { exact: true }).waitFor();
+  await page.getByText(/^45 memories( · Page \d+ of \d+)?$/).waitFor();
   await page.setViewportSize({ width: 1440, height: 1000 });
   for (const r of browseFixtures) {
     const current = (await api(`/records/${r.id}`)).record;

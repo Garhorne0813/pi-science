@@ -198,7 +198,7 @@ it("shows one Memory product with three sections and labeled scientific candidat
     await screen.findByText("Result includes limitations"),
   ).toBeInTheDocument();
   expect(
-    screen.getByRole("navigation", { name: "Memory" }),
+    screen.getByRole("navigation", { name: "Memory sections" }),
   ).toBeInTheDocument();
   for (const name of ["Memories", "Pending review (1)", "Memory tasks"])
     expect(screen.getByRole("button", { name })).toBeInTheDocument();
@@ -298,11 +298,11 @@ it("archives from the more-actions menu using the current version", async () => 
 it("requests server-side filters, sorting and pagination, resetting page after a change", async () => {
   browsing = true;
   mount("/workspace/project/memory?page=3");
-  await screen.findByText("Page 3 of 3");
-  expect(screen.getByText("45 memories")).toBeInTheDocument();
+  await screen.findByText("45 memories · Page 3 of 3");
+  expect(screen.getByText(/45 memories/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "Previous" }));
-  await screen.findByText("Page 2 of 3");
+  await screen.findByText("45 memories · Page 2 of 3");
   const choose = async (label: string, option: string) => {
     const trigger = screen.getByRole("button", {
       name: new RegExp("^" + label + ":"),
@@ -312,7 +312,7 @@ it("requests server-side filters, sorting and pagination, resetting page after a
     fireEvent.click(await screen.findByRole("menuitemradio", { name: option }));
   };
   await choose("Status", "Active");
-  await screen.findByText("Page 1 of 3");
+  await screen.findByText(/· Page 1 of 3$/);
   await choose("Type", "Preference");
   await choose("Scope", "Project");
   await choose("Category", "Writing");

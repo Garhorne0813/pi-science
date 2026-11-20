@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, Pin, PinOff, Pencil, Trash2, Activity, Search, Grid2X2, LayoutList, ArrowRight, Clock3, Sparkles, X, Settings } from "lucide-react";
+import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, Pin, PinOff, Pencil, Trash2, Activity, Search, Grid2X2, LayoutList, ArrowRight, Clock3, X, Settings } from "lucide-react";
 import { cn, useUiStore } from "../../lib/ui";
 import { preloadSettingsContent } from "../../components/settings/settings-loading";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
@@ -265,12 +265,7 @@ export function ProjectsPage() {
 
           <header className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
             <div>
-              <div className="mb-2 flex items-center gap-2 text-ui-caption font-semibold uppercase tracking-[0.16em] text-accent">
-                <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-                {t("projects.workbench")}
-              </div>
               <h1 className="text-3xl font-semibold tracking-[-0.035em] text-text sm:text-4xl">{t("nav.projects")}</h1>
-              <p className="mt-2 max-w-xl text-sm leading-6 text-muted">{t("projects.description")}</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <button type="button" aria-expanded={settingsOpen}
@@ -306,11 +301,7 @@ export function ProjectsPage() {
               <div className="pointer-events-none absolute -right-14 -top-24 h-64 w-64 rounded-full border-[35px] border-accent/5" />
               <div className="pointer-events-none absolute -bottom-28 right-20 h-52 w-52 rounded-full border-[26px] border-accent/5" />
               <div className="relative">
-                <span className="mb-3 inline-flex items-center gap-2 rounded-full border border-accent/15 bg-accent/5 px-3 py-1 text-ui-caption font-medium text-text">
-                  <Sparkles size={13} /> {t("projects.overview")}
-                </span>
                 <h2 className="max-w-lg text-xl font-semibold leading-snug tracking-tight text-text sm:text-2xl">{t("projects.overviewTitle")}</h2>
-                <p className="mt-2 max-w-lg text-ui-body leading-6 text-muted">{t("projects.overviewDescription")}</p>
               </div>
               <div className="relative mt-6 flex flex-wrap items-end gap-x-9 gap-y-4">
                 <div><p className="text-2xl font-semibold tracking-tight tabular-nums text-text">{workspaces.length}</p><p className="mt-1 text-ui-caption text-muted">{t("projects.totalProjects")}</p></div>

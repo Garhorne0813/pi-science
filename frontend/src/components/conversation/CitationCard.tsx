@@ -214,7 +214,7 @@ export function CitationCard({ id, citationKey, claim = "", evidence, focusOnOpe
       {/* A search of the same snapshot is a second opinion, not the evidence
           the answer used, so it stays folded and named as what it is. */}
       {supplementary.length > 0 && <details className="mt-2 rounded border border-border/60 px-1.5 py-1">
-        <summary className="cursor-pointer text-[10px] text-muted hover:text-text">{t("citation.passage.supplementary", { count: supplementary.length })}</summary>
+        <summary className="cursor-pointer text-[10px] text-muted hover:text-text">{t("citation.passage.supplementary")}</summary>
         <ul className="mt-1 space-y-1.5">
           {supplementary.map((candidate) => <li key={candidate.passage_id}>
             {locatorLine(t, candidate) && <p className="font-mono text-[10px] text-muted">{locatorLine(t, candidate)}</p>}
@@ -253,23 +253,21 @@ export function CitationCard({ id, citationKey, claim = "", evidence, focusOnOpe
             <summary className="cursor-pointer text-muted hover:text-text">{t("citation.card.abstract")}</summary>
             <p className="mt-1 leading-4">{evidence.abstract}</p>
           </details>
-          <p className="mt-1 text-[10px] text-warn-text">{t("citation.card.abstractNote")}</p>
         </>}
 
         {gbt && <FormattedReference label={t("citation.card.gbt7714")} text={gbt} />}
         {apa && <FormattedReference label={t("citation.card.apa")} text={apa} />}
 
-        <p className="mt-1.5 text-[10px] text-muted">{t("citation.card.bibliographicOnly")}</p>
+        <p className="mt-1.5 text-[10px] text-muted">{t("citation.card.supportCaveat")}</p>
       </details>
 
-      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      <div className="mt-2 flex flex-wrap items-center gap-1.5" title={t("conversation.citationCardNote")}>
         {resolver && <a href={resolver.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 rounded border border-border px-1.5 py-0.5 text-[10px] text-accent hover:underline">
           {resolver.kind === "doi" ? t("citation.card.openDoi") : t("citation.card.openArxiv")}<ExternalLink size={9} />
         </a>}
         {evidence?.oa_url && <a href={evidence.oa_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 rounded border border-border px-1.5 py-0.5 text-[10px] text-accent hover:underline">{t("citation.card.openFullText")}<ExternalLink size={9} /></a>}
         <CitationVerifyButton citationKey={citationKey} hasEvidence={Boolean(evidence) && evidence?.status !== "unchecked"} verify={verify} />
       </div>
-      <p className="mt-1.5 text-[10px] text-muted/80">{t("conversation.citationCardNote")}</p>
     </div>
     {viewerOpen && excerpt && <CitationSourceViewer
       title={evidence?.title ?? identifier}

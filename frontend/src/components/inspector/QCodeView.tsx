@@ -1,5 +1,5 @@
 import { ViewerToolbar, ViewerStatusBar } from "./PreviewFrame";
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { AlertTriangle, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { parseQCode, segmentsFor, type QCodeParsed } from "@/lib/viewers/qcode";
@@ -24,6 +24,7 @@ function colorFor(doc: QCodeParsed, name: string): string {
 
 export function QCodeView({ filename, text }: { filename: string; text: string }) {
   const { t } = useTranslation();
+  const badgeId = useId();
   const parsed = useMemo<{ doc: QCodeParsed | null; error: string | null }>(() => {
     try {
       return { doc: parseQCode(text), error: null };
@@ -50,11 +51,11 @@ export function QCodeView({ filename, text }: { filename: string; text: string }
   return (
     <div className="flex h-full flex-col bg-surface">
       <ViewerToolbar>
-        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted">
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted" aria-describedby={badgeId}>
           {filename} · {t("qcode.sourceCount", { count: doc.sources.length })} ·{" "}
           {t("qcode.codeCount", { count: doc.codes.length })}
         </span>
-        <span className="inline-flex items-center gap-1 text-[11px] text-ok-text" title={t("qcode.exactSpansTitle")}>
+        <span id={badgeId} className="inline-flex items-center gap-1 text-[11px] text-ok-text">
           <ShieldCheck size={13} /> {t("qcode.exactSpansBadge")}
         </span>
       </ViewerToolbar>

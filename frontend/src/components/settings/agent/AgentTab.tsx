@@ -10,7 +10,6 @@ import { DefaultModelSelection } from "./DefaultModelSelection";
 export function AgentTab({ config, loading, error, scope, saving, onSave, onRefreshContext, onOpenModels }: { config: SettingsConfig | null; loading: boolean; error: string | null; scope: string | null; saving: boolean; onSave: (enabled: boolean, threshold: number) => Promise<void>; onRefreshContext: () => Promise<void>; onOpenModels?: () => void }) {
   const { t } = useTranslation();
   return <div className="space-y-6">
-    <p className="text-ui-caption leading-relaxed text-muted">{t("settings.agent.description")}</p>
     <ApprovalPreferences />
     <CitationAutoVerifySettings enabled={config?.citation_auto_verify === true} onSaved={onRefreshContext} />
     <CitationInlineStyleSettings style={config?.citation_inline_style === "identifier" ? "identifier" : "number"} onSaved={onRefreshContext} />

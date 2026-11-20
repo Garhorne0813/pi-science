@@ -27,7 +27,7 @@ export function StoredOutputs({ outputs }: { outputs: NotebookOutput[] }) {
                 {text}
               </pre>
             )}
-            {rich && <NotebookMimeOutput mime={mime} label={t("notebook.output", { index: index + 1 })} />}
+            {rich && <NotebookMimeOutput mime={mime} label={outputs.length > 1 ? t("notebook.outputIndexed", { index: index + 1 }) : t("notebook.outputLabel")} />}
           </div>
         );
       })}

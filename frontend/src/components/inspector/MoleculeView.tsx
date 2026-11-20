@@ -49,7 +49,7 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
       timedOut = true;
       viewerRef.current?.dispose();
       viewerRef.current = null;
-      setError(t("molecule.renderTimeout"));
+      setError(t("molecule.viewerFailed"));
       setRendering(false);
     }, RENDER_TIMEOUT_MS);
     setRendering(true);
@@ -130,13 +130,13 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
       await handle.applyStylePreset(preset);
       setStylePreset(preset);
     } catch {
-      setError(t("molecule.styleFailed"));
+      setError(t("molecule.viewerFailed"));
     } finally {
       setStyleBusy(false);
     }
   };
 
-  if (!format) return <div className="p-4 text-sm text-muted">{t("molecule.notChemical")}</div>;
+  if (!format) return <div className="p-4 text-sm text-muted">{t("molecule.loadFailed")}</div>;
 
   return (
     <div className="flex h-full min-h-[420px] w-full flex-col overflow-hidden bg-surface" data-molecule-viewer="true">

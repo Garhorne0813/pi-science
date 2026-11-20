@@ -73,7 +73,7 @@ export function ConversationStatsLine({ stats }: { stats: SessionStats | null })
   // 4. Billing: cache hit · input · output (one group, DeepSeek order).
   const billingParts: string[] = [];
   if (cacheHit > 0) billingParts.push(`${t("conversation.stats.cacheHit")} ${Math.round(cacheHit * 100)}%`);
-  billingParts.push(`${t("conversation.stats.input")} ${formatTokens(stats.tokens.input)} ${t("conversation.stats.tokUnit")}`);
+  billingParts.push(`${t("conversation.stats.input")} ${formatTokens(stats.tokens.input)}`);
   billingParts.push(`${t("conversation.stats.output")} ${formatTokens(stats.tokens.output)} ${t("conversation.stats.tokUnit")}`);
   groups.push({ key: "billing", text: billingParts.join(" · ") });
 

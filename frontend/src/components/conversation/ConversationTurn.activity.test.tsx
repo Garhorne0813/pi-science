@@ -107,7 +107,7 @@ describe("turn-level activity through the live event path", () => {
     // final answer remains in the main conversation flow.
     expect(screen.queryByText("我先读取 turn-presentation.ts。")).not.toBeInTheDocument();
     expect(screen.queryByText("接下来看事件折叠。")).not.toBeInTheDocument();
-    expect(screen.getByText(/Complete|Encountered a problem|Stopped|Working/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Completed|Encountered a problem|Stopped|Working/ })).toBeInTheDocument();
     expect(screen.queryByText("Reading turn-presentation.ts")).not.toBeInTheDocument();
     expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
     expect(screen.getByText(/实现符合方案/)).toBeInTheDocument();
@@ -146,7 +146,7 @@ describe("turn-level activity through the live event path", () => {
     expect(screen.getByText("实现符合方案：一个 turn 只有一个 Activity。")).toBeInTheDocument();
     // Todo never leaks as a visible row or an aria-live announcement source.
     expect(screen.queryByText(/Created #1|Updated #1/)).not.toBeInTheDocument();
-    const summary = screen.getByText(/Complete|Encountered a problem|Stopped|Working/);
+    const summary = screen.getByRole("button", { name: /Completed|Encountered a problem|Stopped|Working/ });
     expect(summary).toBeInTheDocument();
     fireEvent.click(summary);
     expect(screen.getByText("我先读取 turn-presentation.ts。")).toBeInTheDocument();
@@ -163,7 +163,7 @@ describe("turn-level activity through the history path", () => {
     expect(screen.queryByText("接下来看事件折叠。")).not.toBeInTheDocument();
     // The turn lasts from the user message (02:00:00) to the final answer
     // timestamp (02:00:07), including the time spent composing the answer.
-    const summary = screen.getByText("Completed · 7.0s");
+    const summary = screen.getByRole("button", { name: /Completed · 7\.0s/ });
     expect(summary).toBeInTheDocument();
     expect(screen.queryByText("Reading file")).not.toBeInTheDocument();
     expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
@@ -256,7 +256,7 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       expect(screen.queryByText("运行测试")).not.toBeInTheDocument();
       expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
       expect(screen.getAllByText("这是最终回答。")).toHaveLength(1);
-      const summary = screen.getByText(/Complete|Encountered a problem|Stopped|Working/);
+      const summary = screen.getByRole("button", { name: /Completed|Encountered a problem|Stopped|Working/ });
       fireEvent.click(summary);
       expect(screen.getByText("我先检查一下。")).toBeInTheDocument();
     } finally {

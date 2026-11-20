@@ -268,10 +268,10 @@ export function MemoryPage() {
   return (
     <WorkspacePage>
       <div className="space-y-3">
-        <WorkspacePageHeader className="max-sm:flex-row max-sm:justify-between max-sm:gap-3 max-sm:pb-3" title={t("memory.title")} description={<span className="hidden sm:inline">{t("memory.description")}</span>} actions={<button className={control} aria-label={t("memory.openSettings")} onClick={() => openSettings(cwd, "memory")}><Settings2 size={16} className="sm:hidden" /><span className="hidden sm:inline">{t("memory.openSettings")}</span></button>} />
+        <WorkspacePageHeader className="max-sm:flex-row max-sm:justify-between max-sm:gap-3 max-sm:pb-3" title={t("memory.title")} actions={<button className={control} aria-label={t("memory.openSettings")} onClick={() => openSettings(cwd, "memory")}><Settings2 size={16} className="sm:hidden" /><span className="hidden sm:inline">{t("memory.openSettings")}</span></button>} />
         <nav
           className="grid grid-cols-3 gap-1 sm:flex sm:flex-wrap sm:gap-2"
-          aria-label={t("memory.title")}
+          aria-label={t("memory.sections")}
         >
           {["records", "reviews", "runs"].map((v) => (
             <button
@@ -291,8 +291,8 @@ export function MemoryPage() {
         {sectionQuery.isError && <ErrorState retry={() => void sectionQuery.refetch()} retryLabel={t("common.retry")} busy={sectionQuery.isFetching}>{t("common.loadFailed", { section: t(`memory.${tab}`) })}{sectionQuery.data && <p>{t("common.refreshFailed")}</p>}</ErrorState>}
         {settings.isError && <ErrorState retry={() => void settings.refetch()} retryLabel={t("common.retry")}>{t("common.loadFailed", { section: t("memory.settings") })}</ErrorState>}
         {sectionQuery.isPending && <p role="status" className="text-ui-body text-muted">{t("common.loading")}</p>}
-        {tab === "reviews" && reviews.isSuccess && !reviews.data.records.length && !reviews.data.proposals.length && <EmptyState>{t("memory.noReviews")}</EmptyState>}
-        {tab === "runs" && runs.isSuccess && !runs.data.runs.length && <EmptyState>{t("memory.noRuns")}</EmptyState>}
+        {tab === "reviews" && reviews.isSuccess && !reviews.data.records.length && !reviews.data.proposals.length && <EmptyState>{t("memory.emptyState", { section: t("memory.reviews") })}</EmptyState>}
+        {tab === "runs" && runs.isSuccess && !runs.data.runs.length && <EmptyState>{t("memory.emptyState", { section: t("memory.runs") })}</EmptyState>}
         {notice && (
           <div role="status" className="flex items-center gap-3">
             <p>{notice}</p>
@@ -377,7 +377,12 @@ export function MemoryPage() {
             >
               {records.isFetching
                 ? t("common.loading")
-                : records.data ? t("memory.matchCount", { count: total }) : t("common.unknownCount")}
+                : records.data
+                  ? t("memory.matchCount", { count: total }) +
+                    (totalPages > 1
+                      ? ` · ${t("memory.pageInfo", { page: currentPage, pages: totalPages })}`
+                      : "")
+                  : t("common.unknownCount")}
             </div>
             <button type="button" className="text-ui-caption text-link" onClick={() => setOrganizationOpen(true)}>{t("memory.organization")}</button>
             <div className="space-y-2">
@@ -385,7 +390,7 @@ export function MemoryPage() {
             </div>
             {!records.isError && records.data?.records.length === 0 && (
               <p className="text-ui-caption text-muted">
-                {t(activeFilters ? "memory.noMatches" : "memory.empty")}
+                {t("memory.emptyState", { section: t("memory.title") })}
               </p>
             )}
             {totalPages > 1 && (
@@ -393,12 +398,6 @@ export function MemoryPage() {
                 aria-label={t("memory.pagination")}
                 className="flex flex-wrap items-center justify-between gap-2 border-t border-faint pt-3 text-ui-caption"
               >
-                <span className="text-muted">
-                  {t("memory.pageInfo", {
-                    page: currentPage,
-                    pages: totalPages,
-                  })}
-                </span>
                 <div className="flex gap-2">
                   <button
                     className={control}

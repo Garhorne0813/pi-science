@@ -26,10 +26,9 @@ export function ThinkingActivity({ className }: { className?: string }) {
   const { t } = useTranslation();
   const config = useProgressAppearance();
   const title = t("conversation.activity.thinking");
-  const detail = t("conversation.activity.continuing");
   return <div data-state="running" data-motion={config.motion} style={activityStyle(config)} className={cn(styles.root, "flex w-full items-center gap-2 py-1", className)}>
     <span className={styles.glyph}><ProgressVisual slot="thinking" config={config} activityState="orient" text={title} /></span>
-    <ActivityLabel title={title} detail={detail} />
+    <ActivityLabel title={title} detail={null} />
   </div>;
 }
 
@@ -141,7 +140,7 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
             min-height, so the row does not grow. */}
         <div className="flex min-h-primary w-full items-center gap-2 py-2 text-left">
           <span key={state} className="flex w-3.5 shrink-0 justify-center"><ActivityIcon state={state} slot={visualSlot} config={progressAppearance} compact label={title} activityState={activityStateFor(lifecycle, shown)} /></span>
-          <ActivityLabel title={title} detail={narrativeDetail} error={false} elapsed={<LiveElapsed live turnStartedAt={turnStartedAt} />} />
+          <ActivityLabel title={title} detail={narrativeDetail} error={false} srOnlyTitle={narrativeDetail !== null} elapsed={<LiveElapsed live turnStartedAt={turnStartedAt} />} />
         </div>
       </div>
     );
@@ -199,11 +198,15 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
   // says the run went wrong.
   const failureSuffix = lifecycle !== "failed" && failureCount > 0 ? t("conversation.activity.failureSummary", { count: failureCount }) : "";
   const summaryLabel = `${stateLabel}${processDuration ? ` · ${processDuration}` : ""}${failureSuffix}${noAnswer ? ` · ${t("conversation.activity.noAnswer")}` : ""}`;
+  // C16: a quiet completion keeps its state word in the accessible name only;
+  // the visible summary is the duration, which is the information users scan for.
+  const quietCompletion = state === "completed" && failureCount === 0 && !noAnswer && Boolean(processDuration);
+  const visibleSummary = quietCompletion ? processDuration! : summaryLabel;
 
   return <div id={blocks.length === 1 && blocks[0].kind === "tool" ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
     {traceBlocks.length > 0 ? (
       <button type="button" aria-label={durationDescription ? `${summaryLabel}. ${durationDescription}` : undefined} aria-expanded={traceExpanded} aria-controls={traceId} onClick={() => setTraceExpanded((value) => !value)} className={cn(styles.summary, styles.summaryButton, "flex min-h-primary w-full items-center gap-2 rounded-input py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-control")}>
-        <span aria-live="polite" aria-atomic="true" className="min-w-0 flex-1 truncate text-sm font-medium text-text">{summaryLabel}</span>
+        <span aria-live="polite" aria-atomic="true" className="min-w-0 flex-1 truncate text-sm font-medium text-text">{visibleSummary}</span>
         <ChevronRight size={12} aria-hidden className={cn(styles.chevron, "shrink-0 text-muted", traceExpanded && "rotate-90")} />
       </button>
     ) : headline ? (
@@ -319,9 +322,9 @@ function useDisplayedActivity(blocks: ToolCallBlock[], lifecycle: TurnLifecycle)
   return live ? target?.mergeKey === displayed?.mergeKey ? target : displayed : null;
 }
 
-function ActivityLabel({ title, detail, error = false, elapsed }: { title: string; detail: string | null; error?: boolean; elapsed?: ReactNode }) {
+function ActivityLabel({ title, detail, error = false, elapsed, srOnlyTitle = false }: { title: string; detail: string | null; error?: boolean; elapsed?: ReactNode; srOnlyTitle?: boolean }) {
   return <span aria-live="polite" aria-atomic="true" className={styles.label}>
-    <span className={cn(styles.title, "text-text", error && "text-error-text")}>{title}</span>
+    <span className={cn(styles.title, "text-text", error && "text-error-text", srOnlyTitle && "sr-only")}>{title}</span>
     {detail && <span className={cn(styles.detail, "text-muted")}>{detail}</span>}
     {elapsed}
   </span>;

@@ -297,9 +297,7 @@ export function FilePreviewInspector({
       <header className={cn("preview-toolbar", compactHeader ? "min-h-9" : "min-h-12")}>
         {showTitle && <span className="truncate text-sm font-medium text-text">{data.filename}</span>}
         {data.sha256 && <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">{t(data.versionSource === "latest" ? "filePreview.latestPublishedVersion" : "filePreview.publishedVersion", { version: data.version ? `v${data.version}` : data.sha256.slice(0, 8) })}</span>}
-        <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">
-          {data.artifact || t("filePreview.file")}
-        </span>
+        {data.artifact && <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">{data.artifact}</span>}
         {canToggle && (
           <div className="ml-2 flex items-center gap-1 rounded-input bg-surface-2 p-0.5">
             {/* eslint-disable-next-line i18next/no-literal-string -- "preview" is an internal tab id, not display text (the visible label is t("filePreview.tabs.preview")) */}
@@ -408,7 +406,7 @@ export function FilePreviewInspector({
         )}
         {!showHistory && !showDiff && !editing && loading && (
           <div className="flex items-center gap-2 p-4 text-sm text-muted">
-            <Loader2 size={15} className="animate-spin" /> {t("filePreview.loadingFile", { filename: data.filename })}
+            <Loader2 size={15} className="animate-spin" /> {t("filePreview.loading")}
           </div>
         )}
         {!showHistory && !showDiff && !editing && !loading && error && (
@@ -422,7 +420,7 @@ export function FilePreviewInspector({
           />
         )}
         {!showHistory && !showDiff && !editing && !loading && !error && (
-          <Suspense fallback={<Note text={t("filePreview.loadingScientificViewer")} />}>
+          <Suspense fallback={<Note text={t("filePreview.loading")} />}>
             <Body
               textScale={textScale}
               kind={kind}
@@ -826,7 +824,6 @@ export function PreviewError({
     <div className="p-4">
       <div className="ui-card-flat rounded-card p-4 text-sm text-muted">
         <div className="mb-1 font-medium text-text">{t("filePreview.tooLargeTitle", { filename })}</div>
-        <p className="mb-3">{t("filePreview.tooLargeBody")}</p>
         <div className="flex flex-wrap gap-2">
           {path && (
             <button
@@ -835,7 +832,7 @@ export function PreviewError({
               disabled={probing}
             >
               {probing ? <Loader2 size={13} className="animate-spin" /> : <FileSearch size={13} />}
-              {t("filePreview.inspectWithoutLoading")}
+              <span className="sr-only">{t("filePreview.inspectWithoutLoading")}</span>
             </button>
           )}
           {onOpenExternally && (

@@ -74,7 +74,7 @@ export function NotebooksPage() {
     try {
       const data = await apiRequest<WorkspaceEnvironment>(`/api/environments/workspace?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "POST" });
       queryClient.setQueryData(environmentQuery(workspaceCwd).queryKey, data);
-      toast(t("notebooks.environmentReady"), "success");
+      toast(t("notebooks.environmentReadyShort"), "success");
     } catch (error) {
       toast(error instanceof Error ? error.message : t("notebooks.environmentCreateError"), "error");
     } finally {
@@ -157,7 +157,7 @@ export function NotebooksPage() {
               {t("notebooks.workspacePython")}
             </div>
             <p className="mt-0.5 truncate font-mono text-[11px] text-muted">
-              {environment?.ready ? environment.python : environment?.error || t("notebooks.environmentMissing")}
+              {environment?.ready ? environment.python : environment?.error || t("notebooks.environmentNotSetUp")}
             </p>
           </div>
           {!environment?.ready && (
@@ -176,8 +176,8 @@ export function NotebooksPage() {
               <p className="text-xs text-muted mt-0.5">
                 {jupyter.running
                   ? jupyter.matches_workspace
-                    ? t("notebooks.runningPort", { port: jupyter.port })
-                    : t("notebooks.runningElsewhere", { cwd: jupyter.cwd })
+                    ? t("notebooks.runningPort", { target: `localhost:${jupyter.port}` })
+                    : t("notebooks.runningPort", { target: jupyter.cwd })
                   : jupyter.env_ready ? t("notebooks.environmentReadyShort") : t("notebooks.environmentNotSetUp")}
               </p>
               {jupyterError && <p role="alert" className="mt-1 text-xs text-error-text">{jupyterError}</p>}
@@ -221,7 +221,6 @@ export function NotebooksPage() {
           <div className="text-center py-16">
             <BookOpen size={40} className="mx-auto text-muted/30 mb-3" />
             <p className="text-sm text-muted">{t("notebooks.empty")}</p>
-            <p className="text-xs text-muted mt-1">{t("notebooks.emptyHint")}</p>
           </div>
         ) : (
           <div className="ui-card-flat overflow-hidden rounded-card">

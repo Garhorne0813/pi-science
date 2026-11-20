@@ -22,7 +22,7 @@ export function InlineNameInput({ draft, indent, onValueChange, onCommit, onCanc
   const label = renaming ? t("files.rename") : t(isFolder ? "files.newFolderName" : "files.newFileName");
   const errorText = draft.error === "conflict" ? t("files.nameExists")
     : draft.error === "invalid" ? t("files.nameInvalid")
-    : draft.error === "request" ? t(renaming ? "files.renameError" : isFolder ? "files.folderCreateError" : "files.fileCreateError")
+    : draft.error === "request" ? t("files.createError")
     : "";
   return (
     <div className="flex flex-col gap-0.5" style={{ paddingLeft: `${8 + indent * 12}px` }}>

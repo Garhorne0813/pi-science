@@ -132,7 +132,7 @@ describe("MoleculeView", () => {
     render(<MoleculeView filename="protein.pdb" text="ATOM" />);
     await act(async () => { await Promise.resolve(); });
     await act(async () => { vi.advanceTimersByTime(45_000); });
-    expect(screen.getByText("Structure rendering timed out")).toBeInTheDocument();
+    expect(screen.getByText("Failed to start the molecular viewer — refresh the page or restart the development server")).toBeInTheDocument();
     expect(viewerMocks.dispose).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await act(async () => { await Promise.resolve(); });
