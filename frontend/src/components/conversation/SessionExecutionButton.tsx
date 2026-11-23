@@ -17,10 +17,14 @@ export function SessionExecutionButton({ cwd, sessionId, active, onToggle }: { c
 
   if (!sessionId) return null;
   const running = runs.filter((run) => run.status === "pending" || run.status === "running").length;
-  const failed = runs.some((run) => ["failed", "timed_out", "interrupted", "lost"].includes(run.status));
-  const label = running > 0
-    ? t("runs.sessionActive", { count: running })
-    : t("runs.sessionButton", { count: runs.length });
+  const failed = runs.filter((run) => ["failed", "timed_out", "interrupted", "lost"].includes(run.status)).length;
+  const label = running > 0 && failed > 0
+    ? t("runs.sessionRunningFailed", { running, count: failed })
+    : running > 0
+      ? t("runs.sessionActive", { count: running })
+      : failed > 0
+        ? t("runs.sessionFailed", { count: failed })
+        : t("runs.sessionButton", { count: runs.length });
 
   return (
     <button
@@ -38,8 +42,8 @@ export function SessionExecutionButton({ cwd, sessionId, active, onToggle }: { c
     >
       <span className="relative">
         <Activity size={14} strokeWidth={1.8} />
-        {(running > 0 || failed) && (
-          <span className={cn(
+        {(running > 0 || failed > 0) && (
+          <span aria-hidden="true" className={cn(
             "absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full ring-2 ring-bg",
             running > 0 ? "animate-pulse bg-accent" : "bg-error",
           )} />
