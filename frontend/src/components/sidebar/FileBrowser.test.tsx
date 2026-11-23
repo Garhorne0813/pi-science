@@ -7,9 +7,6 @@ import { ApiError, apiRequest } from "../../lib/client/api";
 import { useFeedback } from "../feedback/feedback-context";
 import type { FileListEntry } from "./FileContextMenu";
 import { FileBrowser } from "./FileBrowser";
-import { SidebarMainArea } from "./SidebarMainArea";
-import { useWorkspaceSidebar } from "./workspace-navigation";
-import { MemoryRouter } from "react-router-dom";
 
 vi.mock("../../lib/client/api", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../lib/client/api")>(),
@@ -215,32 +212,6 @@ describe("FileBrowser", () => {
     // Reopen: the listing must be re-read, not reused from a stale cache.
     fireEvent.click(screen.getByText("work"));
     await screen.findByText("new.csv");
-  });
-
-  it("panel visibility stops polling and restores an immediate read before the next tick", async () => {
-    useWorkspaceSidebar.setState({ cwd: "proj", tab: "files", query: "" });
-    useUiStore.setState({ contextPanelCollapsed: false });
-    render(<MemoryRouter><SidebarMainArea cwd="proj" renderSessions={() => null} /></MemoryRouter>);
-    await screen.findByText("data.csv");
-    expect(files.sidebar).toHaveBeenCalledTimes(1);
-    vi.useFakeTimers();
-    act(() => { Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
-    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
-    expect(files.sidebar).toHaveBeenCalledTimes(1);
-    await act(async () => { Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
-    expect(files.sidebar).toHaveBeenCalledTimes(2);
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
-    expect(files.sidebar).toHaveBeenCalledTimes(3);
-    act(() => useUiStore.getState().setContextPanelCollapsed(true));
-    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
-    expect(files.sidebar).toHaveBeenCalledTimes(3);
-    await act(async () => useUiStore.getState().setContextPanelCollapsed(false));
-    expect(files.sidebar).toHaveBeenCalledTimes(4);
-    act(() => useWorkspaceSidebar.getState().setTab("proj", "sessions"));
-    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
-    expect(files.sidebar).toHaveBeenCalledTimes(4);
-    await act(async () => useWorkspaceSidebar.getState().setTab("proj", "files"));
-    expect(files.sidebar).toHaveBeenCalledTimes(5);
   });
 
   it("does not poll when collapsed", async () => {

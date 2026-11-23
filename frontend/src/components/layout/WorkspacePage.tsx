@@ -1,7 +1,24 @@
 import type { ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
+import { Link, useLocation, useParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 
 import { cn } from "../../lib/ui";
+import { useRuntimeStore } from "../../lib/agent-runtime";
+import { readLastConversation } from "../../lib/conversation/last-conversation";
+
+export function BackToConversationLink() {
+  const { t } = useTranslation();
+  const { cwd = "" } = useParams<{ cwd: string }>();
+  const location = useLocation();
+  const runtimeSessionId = useRuntimeStore(state => state.cwd === cwd ? state.activeSessionId : null);
+  const querySessionId = new URLSearchParams(location.search).get("session_id");
+  const sessionId = querySessionId || runtimeSessionId || readLastConversation(cwd);
+  const root = `/workspace/${encodeURIComponent(cwd)}`;
+  const to = sessionId ? `${root}/session/${encodeURIComponent(sessionId)}` : root;
+  return <Link to={to} className="mb-2 inline-flex min-h-8 items-center gap-1.5 rounded-input pr-2 text-sm font-medium text-accent hover:bg-surface-2"><ArrowLeft size={15} />{t("conversation.backToConversation")}</Link>;
+}
 
 export function WorkspacePage({ children, className }: { children: ReactNode; className?: string }) {
   return (
@@ -25,6 +42,7 @@ export function WorkspacePageHeader({
   return (
     <header className="flex flex-col gap-4 border-b border-border pb-5 md:flex-row md:items-start md:justify-between">
       <div className="min-w-0">
+        <BackToConversationLink />
         <h1 className="text-2xl font-medium tracking-tight text-text sm:text-[28px]">{title}</h1>
         {description && <div className="mt-1 max-w-[680px] text-sm leading-6 text-muted md:overflow-hidden md:text-ellipsis md:whitespace-nowrap">{description}</div>}
       </div>

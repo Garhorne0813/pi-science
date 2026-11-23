@@ -822,6 +822,7 @@
   "projects.unpin": "Unpin",
   "projects.rename": "Rename",
   "conversation.newSession": "New conversation",
+  "conversation.backToConversation": "Back to conversation",
   "conversation.sessions": "Conversations",
   "conversation.noSessions": "No conversations yet",
   "conversation.loadMoreSessions": "Load older conversations",

@@ -822,6 +822,7 @@
   "projects.unpin": "取消置顶",
   "projects.rename": "重命名",
   "conversation.newSession": "新会话",
+  "conversation.backToConversation": "返回对话",
   "conversation.sessions": "会话",
   "conversation.noSessions": "暂无会话",
   "conversation.loadMoreSessions": "加载更早的会话",

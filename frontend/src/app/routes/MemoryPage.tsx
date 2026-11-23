@@ -27,6 +27,7 @@ import {
 } from "../../components/memory/MemoryBrowseControls";
 import { MemoryRecordCard } from "../../components/memory/MemoryRecordCard";
 import { useUiStore } from "../../lib/ui";
+import { BackToConversationLink } from "../../components/layout/WorkspacePage";
 type Proposal = {
   status?: string;
   id: string;
@@ -265,6 +266,7 @@ export function MemoryPage() {
       <div className="mx-auto max-w-5xl space-y-3 sm:space-y-5">
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div>
+            <BackToConversationLink />
             <h1 className="text-xl font-semibold sm:text-2xl">
               {t("memory.title")}
             </h1>

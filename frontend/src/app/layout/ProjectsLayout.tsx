@@ -55,6 +55,7 @@ function loadInspectorTabs(): Promise<InspectorTabsModule> {
 const InitialInspectorTabs = lazy(loadInspectorTabs);
 import { useTranslation } from "react-i18next";
 import { conversationSessionId } from "../../lib/conversation/session-route";
+import { rememberLastConversation } from "../../lib/conversation/last-conversation";
 
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 420;
@@ -92,6 +93,9 @@ export function ProjectsLayout() {
   const drawerOpen = isWorkspace && narrowViewport && !contextPanelCollapsed;
   const workspaceRoot = activeCwd ? `/workspace/${encodeURIComponent(activeCwd)}` : "";
   const activeConversationSessionId = conversationSessionId(location.pathname);
+  useEffect(() => {
+    if (activeCwd && activeConversationSessionId) rememberLastConversation(activeCwd, activeConversationSessionId);
+  }, [activeConversationSessionId, activeCwd]);
   const isConversationRoute = isWorkspace && (
     location.pathname === workspaceRoot || location.pathname === `${workspaceRoot}/new` || location.pathname.startsWith(`${workspaceRoot}/session/`)
   );
