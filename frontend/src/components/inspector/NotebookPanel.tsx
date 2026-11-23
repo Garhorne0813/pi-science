@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { notebookRuntime, type CellResult } from "../../lib/notebook";
 import { useTranslation } from "react-i18next";
 import { sessionRunsQuery } from "../../lib/runs";
+import type { ExecutionRecord } from "@pi-science/contracts";
 import { subscribeExecutionInvalidation } from "../../lib/runs/execution-events";
 import { apiRequest } from "../../lib/client/api";
 import { Braces, ChevronDown, Loader2, Pencil, Play, Square, TerminalSquare, Trash2, X } from "lucide-react";
@@ -11,6 +12,12 @@ import { NotebookMimeOutput } from "../notebook/NotebookMimeOutput";
 import { newNotebookCellId, type NotebookOutput } from "../notebook/notebook-model";
 import { StoredOutputs } from "../notebook/NotebookOutputs";
 import { cn } from "../../lib/ui";
+
+/** Session-kernel history excludes chat runs: those belong to the conversation
+ *  that started them, not to the notebook panel's shared-kernel list. */
+export function sessionKernelHistory(executions: ExecutionRecord[]): ExecutionRecord[] {
+  return executions.filter((run) => run.kind === "kernel_cell" && run.request.source !== "chat");
+}
 
 interface Cell {
   id: string;
@@ -126,7 +133,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
     setCells((prev) => prev.filter((c) => c.id !== cellId));
   }, []);
 
-  const historicalCells = executions.filter((run) => run.kind === "kernel_cell").slice().reverse();
+  const historicalCells = sessionKernelHistory(executions).slice().reverse();
   const recordedExecutionIds = new Set(historicalCells.map((run) => run.execution_id));
   const pendingCells = cells.filter((cell) => !cell.result?.execution_id || !recordedExecutionIds.has(cell.result.execution_id));
   const runningCell = pendingCells.find((cell) => cell.running);

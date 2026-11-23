@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MarkdownViewer } from "./MarkdownViewer";
+import { MarkdownViewer, type CodeRunner } from "./MarkdownViewer";
 
 const { execute } = vi.hoisted(() => ({ execute: vi.fn() }));
 vi.mock("@/lib/notebook", () => ({ notebookRuntime: { execute } }));
@@ -246,5 +246,84 @@ describe("MarkdownViewer runnable code across streaming frames", () => {
 
     expect(container.querySelectorAll('[aria-label="Run"]')).toHaveLength(2);
     expect(container.querySelector('[aria-label="Running…"]')).not.toBeInTheDocument();
+  });
+});
+
+describe("MarkdownViewer chat run outputs", () => {
+  beforeEach(() => {
+    execute.mockReset();
+  });
+
+  function renderResult(result: unknown, runner: CodeRunner = { cwd: "/workspace", sessionId: "s1" }) {
+    execute.mockResolvedValue(result);
+    const rendered = render(<MarkdownViewer mode="final" codeRunner={runner}>{"```python\nprint(1)\n```"}</MarkdownViewer>);
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    return rendered;
+  }
+
+  it("marks the run as chat with a per-fence cell id", async () => {
+    renderResult(RESULT);
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+    expect(execute).toHaveBeenCalledWith(
+      "chat-s1",
+      "/workspace",
+      "python",
+      "print(1)\n",
+      "s1",
+      { source: "chat", cellId: "chat:fence-0" },
+    );
+  });
+
+  it("renders a mime-only result as an image instead of the placeholder tick", async () => {
+    const { container } = renderResult({ ok: true, stdout: "", result: null, error: null, mime: { "image/png": "iVBORw0KGgo=" } });
+    await waitFor(() => expect(container.querySelector('img[src^="data:image/png;base64,"]')).not.toBeNull());
+    expect(screen.queryByText("✓")).toBeNull();
+  });
+
+  it("renders stdout and a display_data image from the same run", async () => {
+    const { container } = renderResult({
+      ok: true,
+      stdout: "hello from stdout\n",
+      result: null,
+      error: null,
+      outputs: [{ output_type: "display_data", data: { "image/png": "iVBORw0KGgo=" } }],
+    });
+    await waitFor(() => expect(screen.getByText(/hello from stdout/)).toBeInTheDocument());
+    expect(container.querySelector('img[src^="data:image/png;base64,"]')).not.toBeNull();
+    expect(screen.queryByText("✓")).toBeNull();
+  });
+
+  it("does not repeat a trailing expression that is already a structured output", async () => {
+    renderResult({
+      ok: true,
+      stdout: "",
+      result: "from-output-42",
+      error: null,
+      outputs: [{ output_type: "execute_result", data: { "text/plain": "from-output-42" } }],
+    });
+    await waitFor(() => expect(screen.getByText("from-output-42")).toBeInTheDocument());
+    expect(screen.getAllByText("from-output-42")).toHaveLength(1);
+  });
+
+  it("shows stderr that the old renderer swallowed", async () => {
+    renderResult({ ok: false, stdout: "", result: null, error: null, stderr: "warning: deprecated" });
+    await waitFor(() => expect(screen.getByText("warning: deprecated")).toBeInTheDocument());
+  });
+
+  it("keeps the tick only for a successful run with nothing to show", async () => {
+    const { unmount } = renderResult({ ok: true, stdout: "", result: null, error: null });
+    await waitFor(() => expect(screen.getByText("✓")).toBeInTheDocument());
+    unmount();
+    renderResult({ ...RESULT, stdout: "42\n" });
+    await waitFor(() => expect(screen.getByText("42")).toBeInTheDocument());
+    expect(screen.queryByText("✓")).toBeNull();
+  });
+
+  it("links the recorded execution to the run inspector", async () => {
+    const onOpenRun = vi.fn();
+    renderResult({ ...RESULT, execution_id: "exec-1" }, { cwd: "/workspace", sessionId: "s1", onOpenRun });
+    await waitFor(() => screen.getByRole("button", { name: "View run" }));
+    fireEvent.click(screen.getByRole("button", { name: "View run" }));
+    expect(onOpenRun).toHaveBeenCalledWith("exec-1");
   });
 });

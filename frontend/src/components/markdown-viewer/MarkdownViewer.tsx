@@ -117,7 +117,7 @@ const STYLES: Record<Variant, Record<string, string>> = {
   },
 };
 
-export type CodeRunner = { cwd: string; sessionId: string };
+export type CodeRunner = { cwd: string; sessionId: string; onOpenRun?: (executionId: string) => void };
 
 type IdentifiedFence = MarkdownFencedCodeBlock & { id: string };
 type FenceIdentityState = {
@@ -439,6 +439,7 @@ export function MarkdownViewer({
   const s = STYLES[variant];
   const cwd = codeRunner?.cwd;
   const sessionId = codeRunner?.sessionId;
+  const onOpenRun = codeRunner?.onOpenRun;
   const openInspector = useUiStore((s) => s.openInspector);
   const { t } = useTranslation();
   const visibleValue = useFrameCoalescedValue(children, mode === "streaming");
@@ -476,7 +477,7 @@ export function MarkdownViewer({
     if (resourceCwd) return { cwd: resourceCwd, root: resourceRoot, documentPath: resourceDocumentPath };
     return cwd ? { cwd, documentPath: undefined } : undefined;
   }, [cwd, resourceCwd, resourceDocumentPath, resourceRoot]);
-  const runCode = useCallback((executionId: string, code: string) => {
+  const runCode = useCallback((executionId: string, code: string, cellId?: string) => {
     if (!cwd || !sessionId || !code.trim()) return;
     const snapshot = code;
     const inFlightKey = `${executionId}\u0000${snapshot}`;
@@ -487,7 +488,7 @@ export function MarkdownViewer({
       ...current,
       [executionId]: { running: true, snapshot, requestId, result: null },
     }));
-    void notebookRuntime.execute(`chat-${sessionId}`, cwd, "python", snapshot, sessionId)
+    void notebookRuntime.execute(`chat-${sessionId}`, cwd, "python", snapshot, sessionId, { source: "chat", ...(cellId ? { cellId } : {}) })
       .then((result) => {
         setCodeExecutions((current) => {
           const active = current[executionId];
@@ -614,8 +615,9 @@ export function MarkdownViewer({
               preClassName={s.pre}
               running={executionMatchesCode && execution.running === true}
               result={result ?? null}
-              onRun={() => { if (executionId) runCode(executionId, code); }}
+              onRun={() => { if (executionId) runCode(executionId, code, fenceId ? `chat:${fenceId}` : undefined); }}
               onCloseResult={() => { if (executionId) closeCodeResult(executionId); }}
+              onOpenRun={onOpenRun}
             >
               {children}
             </RunnableCodeBlock>
@@ -643,7 +645,7 @@ export function MarkdownViewer({
     ),
     th: ({ children, style }) => <th className={s.th} style={style}>{children}</th>,
     td: ({ children, style }) => <td className={s.td} style={style}>{children}</td>,
-  }), [closeCodeResult, codeChrome, codeExecutions, context, cwd, fenceIdentities, handleFileLink, runCode, s, sessionId, t, textScale, variant]);
+  }), [closeCodeResult, codeChrome, codeExecutions, context, cwd, fenceIdentities, handleFileLink, onOpenRun, runCode, s, sessionId, t, textScale, variant]);
   if (plainStreaming) {
     // Same characters, no Markdown pipeline. The wrapper keeps the settled
     // layout's font metrics so the switch does not resize the reading column.

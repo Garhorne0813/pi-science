@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, ReactNode, Ref } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -133,7 +133,10 @@ export function LiveSessionPage() {
   // streamed delta to a single pass over the thread.
   const actionTextByBlock = useMemo(() => agentActionTextByTurns(turns), [turns]);
   // Stable so memoized turns are not invalidated on every streamed token.
-  const conversationCodeRunner = useMemo(() => ({ cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }), [workspaceCwd, activeSessionId]);
+  const openExecution = useCallback((executionId: string) => {
+    navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/runs?execution=${encodeURIComponent(executionId)}`);
+  }, [navigate, workspaceCwd]);
+  const conversationCodeRunner = useMemo(() => ({ cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch", onOpenRun: openExecution }), [workspaceCwd, activeSessionId, openExecution]);
 
   const { suggestions, setSuggestions } = useTurnEffects(working, thread.blocks);
 
