@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, Pin, PinOff, Pencil, Trash2, Activity, Search, Grid2X2, LayoutList, ArrowRight, Clock3, Sparkles, X, Settings } from "lucide-react";
+import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, Pin, PinOff, Pencil, Trash2, Activity, Search, Grid2X2, LayoutList, ArrowRight, Clock3, Sparkles, X, Settings, MoreHorizontal } from "lucide-react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { cn, useUiStore } from "../../lib/ui";
 import { preloadSettingsContent } from "../../components/settings/settings-loading";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
@@ -12,6 +13,7 @@ import { queryClient } from "../../lib/client/query-client";
 import { timeAgo } from "../../lib/shared";
 import { workspacePathLeaf } from "../../lib/workspace";
 import { randomIdSuffix } from "../../lib/client/random-id";
+import { Modal } from "../../components/ui/Modal";
 
 interface Workspace {
   name: string;
@@ -64,6 +66,8 @@ export function ProjectsPage() {
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   const { toast, confirm: confirmAction } = useFeedback();
   const [creating, setCreating] = useState(false);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createName, setCreateName] = useState("");
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [importingFolder, setImportingFolder] = useState(false);
@@ -87,25 +91,25 @@ export function ProjectsPage() {
   const loading = workspacesResult.isPending;
 
   const handleCreate = async () => {
+    const name = createName.trim();
+    if (!name || creating) return;
     setCreating(true);
     try {
-      const name = `Untitled Workspace ${randomIdSuffix(8)}`;
-      await apiRequest("/api/workspaces", {
+      const created = await apiRequest<Workspace>("/api/workspaces", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }),
       });
       invalidateWorkspaces();
-      const updated = await queryClient.fetchQuery(workspacesQuery);
-      const newest = updated.find((w: Workspace) => w.name === name);
-      if (newest) {
-        setSearch("");
-        setEditingName(newest.path);
-        setEditValue("");
-        setTimeout(() => nameInputRef.current?.focus(), 50);
-      }
+      setCreateDialogOpen(false);
+      setCreateName("");
+      navigate(`/workspace/${encodeURIComponent(created.path)}/new`);
     } catch {
       toast(t("projects.createError"), "error");
     }
     finally { setCreating(false); }
+  };
+  const openCreateDialog = () => {
+    setCreateName("");
+    setCreateDialogOpen(true);
   };
 
   const handleRename = async (oldPath: string) => {
@@ -265,10 +269,7 @@ export function ProjectsPage() {
 
           <header className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
             <div>
-              <div className="mb-2 flex items-center gap-2 text-ui-caption font-semibold uppercase tracking-[0.16em] text-accent">
-                <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-                {t("projects.workbench")}
-              </div>
+              <div className="workspace-brand mb-2 text-accent">pi-science</div>
               <h1 className="text-3xl font-semibold tracking-[-0.035em] text-text sm:text-4xl">{t("nav.projects")}</h1>
               <p className="mt-2 max-w-xl text-sm leading-6 text-muted">{t("projects.description")}</p>
             </div>
@@ -285,7 +286,7 @@ export function ProjectsPage() {
                 {importingFolder ? <Loader2 size={16} className="animate-spin" /> : <FolderInput size={16} />}
                 {t("projects.openFolder")}
               </button>
-              <button type="button" onClick={handleCreate} disabled={creating || importingFolder}
+              <button type="button" onClick={openCreateDialog} disabled={creating || importingFolder}
                 className="inline-flex h-primary items-center gap-2 rounded-input bg-accent-fill px-4 text-ui-body font-semibold text-accent-fg transition-opacity hover:opacity-90 disabled:opacity-50">
                 {creating ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
                 {t("projects.newWorkspace")}
@@ -301,7 +302,7 @@ export function ProjectsPage() {
             </div>
           ) : (
           <>
-          <div className="mb-9 grid gap-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
+          <div className="mb-9 hidden gap-3 lg:grid lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
             <section className="relative flex min-h-[215px] flex-col justify-between overflow-hidden rounded-2xl border border-border bg-surface-2 p-6 sm:p-7">
               <div className="pointer-events-none absolute -right-14 -top-24 h-64 w-64 rounded-full border-[35px] border-accent/5" />
               <div className="pointer-events-none absolute -bottom-28 right-20 h-52 w-52 rounded-full border-[26px] border-accent/5" />
@@ -372,7 +373,7 @@ export function ProjectsPage() {
                 <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-accent/10 text-accent"><FolderOpen size={26} /></div>
                 <h3 className="text-lg font-semibold text-text">{t("projects.emptyTitle")}</h3>
                 <p className="mt-2 max-w-sm text-ui-body leading-6 text-muted">{t("projects.empty")}</p>
-                <button type="button" onClick={handleCreate} disabled={creating || importingFolder} className="mt-5 inline-flex h-primary items-center gap-2 rounded-input bg-accent-fill px-4 text-ui-body font-medium text-accent-fg disabled:opacity-50"><Plus size={16} />{t("projects.newWorkspace")}</button>
+                <button type="button" onClick={openCreateDialog} disabled={creating || importingFolder} className="mt-5 inline-flex h-primary items-center gap-2 rounded-input bg-accent-fill px-4 text-ui-body font-medium text-accent-fg disabled:opacity-50"><Plus size={16} />{t("projects.newWorkspace")}</button>
               </div>
             ) : visible.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-border bg-surface/40 px-6 py-14 text-center">
@@ -391,7 +392,7 @@ export function ProjectsPage() {
                 )}
                 {unpinnedWs.length > 0 && (
                   <div>
-                    <div className="mb-3 flex items-center gap-2.5"><FolderOpen size={15} className="text-accent" /><h3 className="text-ui-body font-semibold text-text">{t("projects.allProjects")}</h3><span className="rounded-full bg-surface-2 px-2 py-0.5 text-ui-meta tabular-nums text-muted">{unpinnedWs.length}</span></div>
+                    <div className="mb-3 flex items-center gap-2.5"><FolderOpen size={15} className="text-accent" /><h3 className="text-ui-body font-semibold text-text">{t("projects.otherProjects")}</h3><span className="rounded-full bg-surface-2 px-2 py-0.5 text-ui-meta tabular-nums text-muted">{unpinnedWs.length}</span></div>
                     {cards(unpinnedWs)}
                   </div>
                 )}
@@ -402,6 +403,10 @@ export function ProjectsPage() {
           )}
         </div>
       </div>
+      {createDialogOpen && <Modal title={t("projects.createTitle")} onClose={() => { if (!creating) setCreateDialogOpen(false); }} footer={<div className="flex justify-end gap-2"><button type="button" disabled={creating} onClick={() => setCreateDialogOpen(false)} className="min-h-9 rounded-input border border-border px-3 text-ui-caption text-text hover:bg-surface-hover disabled:opacity-40">{t("common.cancel")}</button><button type="button" disabled={creating || !createName.trim()} onClick={() => void handleCreate()} className="min-h-9 rounded-input bg-accent-fill px-3 text-ui-caption font-medium text-accent-fg disabled:opacity-40">{creating ? <Loader2 size={14} className="animate-spin" /> : t("projects.createAction")}</button></div>}>
+        <label className="block text-ui-caption font-medium text-text" htmlFor="new-project-name">{t("projects.nameLabel")}</label>
+        <input id="new-project-name" autoFocus disabled={creating} value={createName} onChange={event => setCreateName(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); void handleCreate(); } }} placeholder={t("projects.namePlaceholder")} className="mt-2 min-h-10 w-full rounded-input border border-border bg-bg px-3 py-2 text-ui-label text-text outline-none focus:border-accent disabled:opacity-60" />
+      </Modal>}
     </ErrorBoundary>
   );
 }
@@ -427,7 +432,7 @@ export function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingNam
   const isPinned = pinned.has(w.path);
   const isList = viewMode === "list";
 
-  const startEdit = (e: React.MouseEvent) => {
+  const startEdit = (e: { stopPropagation(): void }) => {
     e.stopPropagation();
     setEditingName(w.path);
     setEditValue(w.name);
@@ -482,12 +487,15 @@ export function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingNam
           className={cn("flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-surface-2", isPinned ? "text-accent" : "text-muted hover:text-text")}>
           {isPinned ? <Pin size={15} fill="currentColor" /> : <PinOff size={15} />}
         </button>
-        <button type="button" onClick={startEdit} title={t("projects.rename")} aria-label={t("projects.rename")}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-text"><Pencil size={15} /></button>
-        <button type="button" onClick={() => handleDelete(w.path)} title={t("projects.deleteTitle")} aria-label={t("projects.deleteTitle")}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-error/10 hover:text-error-text"><Trash2 size={15} /></button>
-        <button type="button" onClick={() => navigate("/workspace/" + encodeURIComponent(w.path) + "/runs")} title={t("runs.viewAll")} aria-label={t("runs.viewAll")}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-accent"><Activity size={15} /></button>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild><button type="button" aria-label={t("projects.manage", { name: w.name })} className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-text"><MoreHorizontal size={16} /></button></DropdownMenu.Trigger>
+          <DropdownMenu.Portal><DropdownMenu.Content align="end" sideOffset={4} collisionPadding={8} className="ui-popover z-[110] min-w-40 rounded-card p-1 text-ui-label text-text shadow-lg">
+            <DropdownMenu.Item onSelect={startEdit} className="flex h-nav cursor-default select-none items-center gap-2 rounded-input px-2 outline-none data-[highlighted]:bg-surface-hover"><Pencil size={14} />{t("projects.rename")}</DropdownMenu.Item>
+            <DropdownMenu.Item onSelect={() => navigate("/workspace/" + encodeURIComponent(w.path) + "/runs")} className="flex h-nav cursor-default select-none items-center gap-2 rounded-input px-2 outline-none data-[highlighted]:bg-surface-hover"><Activity size={14} />{t("runs.viewAll")}</DropdownMenu.Item>
+            <DropdownMenu.Separator className="my-1 h-px bg-border" />
+            <DropdownMenu.Item onSelect={() => void handleDelete(w.path)} className="flex h-nav cursor-default select-none items-center gap-2 rounded-input px-2 text-error-text outline-none data-[highlighted]:bg-surface-hover"><Trash2 size={14} />{t("projects.deleteTitle")}</DropdownMenu.Item>
+          </DropdownMenu.Content></DropdownMenu.Portal>
+        </DropdownMenu.Root>
       </div>
     </article>
   );

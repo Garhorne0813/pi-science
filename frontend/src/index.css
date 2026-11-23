@@ -23,6 +23,12 @@
   @apply text-[18px] font-semibold leading-6 tracking-[-0.03em];
 }
 
+/* Make room for the sidebar toggle in page headers while the single workspace
+   sidebar is collapsed. */
+.workspace-sidebar-collapsed > div > header {
+  padding-left: 3.25rem;
+}
+
 /* Match the context header's page coordinates: rail width + panel padding
    + header padding horizontally, card padding + header padding vertically.
    The containing brand box already starts at (8px, --space-panel). */
