@@ -20,7 +20,7 @@ export function FilesPage() {
         title={t("nav.files")}
         description={t("files.pageDescription")}
       />
-      <div className="mt-4 min-h-0 flex-1 overflow-hidden rounded-card border border-border bg-surface">
+      <div className="mt-4 min-h-0 flex-1 overflow-hidden">
         <FileBrowser cwd={workspaceCwd} embedded mode="page" fileType={fileType} />
       </div>
     </WorkspacePage>

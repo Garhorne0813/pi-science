@@ -761,7 +761,7 @@ export function FileBrowser({
       onDragEnter={rejectFileDrop}
       onDragOver={rejectFileDrop}
       onDrop={rejectFileDrop}
-      className={cn("flex min-h-0 flex-col", embedded ? "h-full flex-1" : "mt-2 shrink-0")}
+      className={cn("file-browser-container flex min-h-0 flex-col", embedded ? "h-full flex-1" : "mt-2 shrink-0")}
       style={!embedded && expanded ? { height: displayedHeight, maxHeight: "calc(100dvh - 240px)" } : undefined}
     >
       {!embedded && (expanded ? (
@@ -889,7 +889,10 @@ export function FileBrowser({
                 />
               </div>
             ) : rows.map(renderTreeRow)}
-            <div className="min-h-10 flex-1 px-2 py-2 text-ui-meta text-muted/60">
+            <div className={cn(
+              "mt-auto flex min-h-10 shrink-0 items-center justify-center px-2 py-2 text-center text-ui-meta text-muted/60",
+              dropTarget?.valid !== false && "file-browser-drop-hint",
+            )}>
               {t(dropTarget?.valid === false ? "files.dropInvalid" : "files.dropRoot")}
             </div>
           </div>

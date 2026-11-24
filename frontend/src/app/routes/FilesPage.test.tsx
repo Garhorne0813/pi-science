@@ -35,6 +35,7 @@ describe("FilesPage", () => {
     expect(screen.getByTestId("file-browser")).toHaveAttribute("data-embedded", "true");
     expect(screen.getByTestId("file-browser")).toHaveAttribute("data-mode", "page");
     expect(screen.getByTestId("file-browser")).toHaveAttribute("data-file-type", "all");
+    expect(screen.getByTestId("file-browser").parentElement).not.toHaveClass("rounded-card", "border", "bg-surface");
   });
 
   it("preserves the notebook-only route", () => {

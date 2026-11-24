@@ -239,6 +239,12 @@ describe("FileBrowser", () => {
     expect(files.invalidate).toHaveBeenCalledTimes(1);
   });
 
+  it("places the root drop hint at the bottom and marks it for narrow-container hiding", () => {
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+    const hint = screen.getByText("Drop files here to upload to the workspace root");
+    expect(hint).toHaveClass("mt-auto", "justify-center", "text-center", "file-browser-drop-hint");
+  });
+
   it("loads the root and auto-opens work/ on first load", async () => {
     render(<FileBrowser cwd="proj" />);
     fireEvent.click(screen.getByText("Files"));
