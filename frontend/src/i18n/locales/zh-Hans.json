@@ -781,6 +781,7 @@
   "settings.computePage.scheduler": "任务调度器",
   "settings.computePage.directSsh": "直接 SSH",
   "settings.computePage.connection": "SSH 连接",
+  "settings.computePage.savedMachines": "已配置的计算机",
   "settings.computePage.authMethod": "认证方式",
   "settings.computePage.sshKey": "SSH 密钥",
   "settings.computePage.password": "密码",

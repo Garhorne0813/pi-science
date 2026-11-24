@@ -781,6 +781,7 @@
   "settings.computePage.scheduler": "Scheduler",
   "settings.computePage.directSsh": "Direct SSH",
   "settings.computePage.connection": "SSH connection",
+  "settings.computePage.savedMachines": "Configured machines",
   "settings.computePage.authMethod": "Authentication",
   "settings.computePage.sshKey": "SSH key",
   "settings.computePage.password": "Password",
