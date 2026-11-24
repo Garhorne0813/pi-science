@@ -4,6 +4,7 @@ import { Activity, FileText, Inbox, Plus, Search, Settings } from "lucide-react"
 import { useTranslation } from "react-i18next";
 import { useUiStore } from "../../lib/ui";
 import { preloadSettingsContent } from "../settings/settings-loading";
+import { useMemorySummary } from "../../lib/memory";
 import { WorkspaceSessionList } from "./WorkspaceSessionList";
 import { closeSidebarOnNarrow, useNewWorkspaceConversation, useWorkspaceSidebar } from "./workspace-navigation";
 
@@ -14,6 +15,8 @@ export function SidebarMainArea({ cwd, renderSessions }: { cwd: string; renderSe
   const setQuery = useWorkspaceSidebar(state => state.setQuery);
   const settingsOpen = useUiStore(state => state.settingsOpen);
   const newConversation = useNewWorkspaceConversation(cwd);
+  const { data: memorySummary } = useMemorySummary(cwd);
+  const pendingMemoryCount = Number(memorySummary?.pendingCount) || 0;
   const searchId = useId();
   const root = `/workspace/${encodeURIComponent(cwd)}`;
   const linkClass = "flex h-nav items-center gap-2 rounded-input px-2 text-ui-label text-muted transition-colors hover:bg-surface-hover hover:text-text";
@@ -22,16 +25,17 @@ export function SidebarMainArea({ cwd, renderSessions }: { cwd: string; renderSe
     if (useWorkspaceSidebar.getState().cwd !== cwd) useWorkspaceSidebar.getState().showConversations(cwd);
   }, [cwd]);
 
-  const routeLink = (to: string, current: boolean, icon: typeof Activity, label: string) => {
+  const routeLink = (to: string, current: boolean, icon: typeof Activity, label: string, count = 0) => {
     const Glyph = icon;
-    return <Link to={to} aria-current={current ? "page" : undefined} onClick={closeSidebarOnNarrow} className={`${linkClass} ${current ? "bg-surface-selected font-medium text-accent" : ""}`}><Glyph size={15} />{label}</Link>;
+    const accessibleLabel = count ? `${label} (${t("sidebar.pendingKnowledge", { count })})` : label;
+    return <Link to={to} aria-label={accessibleLabel} aria-current={current ? "page" : undefined} onClick={closeSidebarOnNarrow} className={`${linkClass} ${current ? "bg-surface-selected font-medium text-accent" : ""}`}><Glyph size={15} /><span className="min-w-0 flex-1 truncate">{label}</span>{count > 0 && <span aria-hidden="true" className="flex min-w-5 items-center justify-center rounded-full bg-accent-fill px-1.5 text-ui-micro text-accent-fg">{count}</span>}</Link>;
   };
 
   return <section className="flex min-h-0 flex-1 flex-col">
     <button type="button" onClick={() => newConversation()} className="mb-2 flex h-primary shrink-0 items-center justify-center gap-2 rounded-input bg-accent-fill px-3 text-ui-label font-semibold text-accent-fg"><Plus size={16} />{t("conversation.newSession")}</button>
     <nav aria-label={t("shell.primaryNav")} className="mb-2 flex shrink-0 flex-col gap-0.5 border-b border-faint pb-2">
       {routeLink(`${root}/files`, location.pathname === `${root}/files`, FileText, t("nav.files"))}
-      {routeLink(`${root}/memory`, location.pathname === `${root}/memory`, Inbox, t("nav.knowledge"))}
+      {routeLink(`${root}/memory`, location.pathname === `${root}/memory`, Inbox, t("nav.knowledge"), pendingMemoryCount)}
       {routeLink(`${root}/runs`, location.pathname === `${root}/runs`, Activity, t("sidebar.runs"))}
     </nav>
     <div className="mb-2 px-1"><span className="text-ui-caption font-semibold text-text">{t("sidebar.conversations")}</span></div>

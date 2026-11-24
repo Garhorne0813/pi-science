@@ -79,6 +79,13 @@ describe("single workspace sidebar", () => {
     expect(screen.getAllByRole("button", { name: "Settings" })).toHaveLength(1);
   });
 
+  it("shows pending Memory proposals in the primary navigation", async () => {
+    pendingKnowledge.count = 2;
+    renderWorkspaceShell();
+    const memory = await screen.findByRole("link", { name: "Memory (2 pending proposals)" });
+    expect(memory).toHaveTextContent("2");
+  });
+
   it("collapses to one explicit toggle and restores the same sidebar", async () => {
     const { container } = renderWorkspaceShell();
     fireEvent.click(await screen.findByRole("button", { name: "Collapse sidebar" }));

@@ -9,6 +9,8 @@ import { FeedbackContext } from "../feedback/feedback-context";
 import { useWorkspaceSidebar } from "./workspace-navigation";
 import i18n from "../../i18n";
 
+vi.mock("../../lib/memory", () => ({ useMemorySummary: () => ({ data: { pendingCount: 0 } }) }));
+
 const feedback = { toast: vi.fn(), confirm: vi.fn(async () => true) };
 let narrow = false;
 let listeners = new Set<(event: MediaQueryListEvent) => void>();
