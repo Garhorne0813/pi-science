@@ -100,7 +100,7 @@ describe("SettingsContent", () => {
     const nav = await screen.findByRole("tablist", { name: "Settings" });
     expect(nav).toHaveClass("gap-1");
     const general = screen.getByRole("tab", { name: "General" });
-    const models = screen.getByRole("tab", { name: "AI Models" });
+    const models = screen.getByRole("tab", { name: "Model connections" });
     expect(general).toHaveClass("bg-surface-selected");
     expect(models).not.toHaveClass("bg-surface-selected");
     expect(models).toHaveClass("hover:bg-surface-hover");
@@ -111,18 +111,13 @@ describe("SettingsContent", () => {
     const nav = await screen.findByRole("tablist", { name: "Settings" });
     const aside = nav.closest("aside");
     if (!aside) throw new Error("settings aside not found");
-    // Desktop column is exactly 188px with 12px side padding and 22px top
-    // padding; mobile stays a 56px icon rail with 10px side padding.
-    expect(aside).toHaveClass("w-14", "px-2.5", "md:w-[188px]", "md:px-3", "md:pt-[22px]", "md:pb-0");
-    // A settings heading sits above the list on desktop (hidden on mobile).
-    expect(screen.getByRole("heading", { name: "Settings" })).toHaveClass("hidden", "md:block", "text-base", "font-medium");
-    // Tabs: 36px circle centered on mobile; 40px full-width rounded row with
-    // an 8px icon gap on desktop; no separate icon tile background.
+    expect(aside).toHaveClass("flex-1", "px-3", "md:w-[188px]", "md:pt-[22px]", "md:pb-0");
+    expect(screen.getByRole("heading", { name: "Settings" })).toHaveClass("text-base", "font-medium");
     const general = screen.getByRole("tab", { name: "General" });
-    expect(general).toHaveClass("h-9", "w-9", "rounded-full", "md:h-10", "md:w-full", "md:rounded-card", "md:px-3", "md:gap-2");
+    expect(general).toHaveClass("h-11", "w-full", "rounded-card", "px-3", "md:h-10", "md:gap-2");
     expect(general).toHaveClass("bg-surface-selected", "text-text");
     expect(screen.getByRole("tab", { name: "Agent Capabilities" })).toHaveClass("hover:bg-surface-hover");
-    expect(screen.getByRole("tab", { name: "Environments" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Project environment" })).toBeInTheDocument();
     // Every nav item uses a different outline icon (distinct svg content).
     const icons = screen.getAllByRole("tab").map((tab) => tab.querySelector("svg")?.innerHTML ?? null);
     expect(icons.every(Boolean)).toBe(true);
@@ -131,7 +126,7 @@ describe("SettingsContent", () => {
 
   it("moves the close control into the content header, outside the sidebar", async () => {
     renderContent(null);
-    const close = await screen.findByLabelText("Close");
+    const close = (await screen.findAllByLabelText("Close")).at(-1)!;
     const header = close.closest("header");
     if (!header) throw new Error("close button is not inside a header");
     expect(header).toHaveClass("sticky", "top-0");
@@ -157,33 +152,29 @@ describe("SettingsContent", () => {
   it("switches tabs and resets aria-selected", async () => {
     renderContent(null);
     await screen.findByRole("tablist", { name: "Settings" });
-    fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
-    expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByRole("tab", { name: "Model connections" }));
+    expect(screen.getByRole("tab", { name: "Model connections" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "false");
-    expect(screen.getByRole("tabpanel", { name: "AI Models" })).toHaveAttribute("aria-labelledby", "settings-tab-models");
+    expect(screen.getByRole("tabpanel", { name: "Model connections" })).toHaveAttribute("aria-labelledby", "settings-tab-models");
     expect(await screen.findByText("My model services")).toBeInTheDocument();
   });
 
   it("shows global Network scope when opened from a workspace and restores workspace scope on other tabs", async () => {
     renderContent("/lab/project");
-    const aside = (await screen.findByRole("tablist", { name: "Settings" })).closest("aside")!;
-    expect(within(aside).getByText("Workspace settings")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "Network" }));
-    expect(within(aside).getByText("Global settings")).toBeInTheDocument();
-    expect(within(aside).queryByText("Workspace settings")).not.toBeInTheDocument();
-    expect(within(aside).queryByText("/lab/project")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "General" }));
-    expect(within(aside).getByText("Workspace settings")).toBeInTheDocument();
-    expect(within(aside).getByText("/lab/project")).toBeInTheDocument();
+    await screen.findByRole("tablist", { name: "Settings" });
+    expect(screen.getByText("This device")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Network access rules" }));
+    expect(screen.getByText("All projects")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Compute resources" }));
+    expect(screen.getByText("Current project")).toBeInTheDocument();
   });
 
   it("opens global web search settings from a workspace", async () => {
     renderContent("/lab/project");
-    const aside = (await screen.findByRole("tablist", { name: "Settings" })).closest("aside")!;
+    await screen.findByRole("tablist", { name: "Settings" });
     fireEvent.click(screen.getByRole("tab", { name: "Web search" }));
     expect(await screen.findByRole("checkbox", { name: "Enable web search" })).toBeChecked();
-    expect(within(aside).getByText("Global settings")).toBeInTheDocument();
-    expect(within(aside).queryByText("/lab/project")).not.toBeInTheDocument();
+    expect(screen.getByText("All projects")).toBeInTheDocument();
   });
 
   it("shows separate Built-in and User Skills tables inside Settings", async () => {
@@ -208,8 +199,8 @@ describe("SettingsContent", () => {
     expect(screen.queryByText("Installed Extensions")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Manage MCP connectors" }));
-    await waitFor(() => expect(screen.getByRole("tab", { name: "MCP" })).toHaveAttribute("aria-selected", "true"));
-    await waitFor(() => expect(screen.getByRole("tab", { name: "MCP" })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole("tab", { name: "MCP connectors" })).toHaveAttribute("aria-selected", "true"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "MCP connectors" })).toHaveFocus());
     const requests = fetchMock.mock.calls.map(([url]) => String(url));
     expect(requests.some((url) => /extensions|web-access|agent-profiles|settings\/config/.test(url))).toBe(false);
   });
@@ -240,20 +231,20 @@ describe("SettingsContent", () => {
     const general = screen.getByRole("tab", { name: "General" });
     general.focus();
     fireEvent.keyDown(nav, { key: "ArrowDown" });
-    await waitFor(() => expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Model connections" })).toHaveAttribute("aria-selected", "true"));
     // Keyboard navigation moves focus into the newly activated tab.
-    await waitFor(() => expect(screen.getByRole("tab", { name: "AI Models" })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Model connections" })).toHaveFocus());
     fireEvent.keyDown(nav, { key: "End" });
-    await waitFor(() => expect(screen.getByRole("tab", { name: "Compute" })).toHaveAttribute("aria-selected", "true"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Compute resources" })).toHaveAttribute("aria-selected", "true"));
     fireEvent.keyDown(nav, { key: "ArrowUp" });
-    await waitFor(() => expect(screen.getByRole("tab", { name: "Environments" })).toHaveAttribute("aria-selected", "true"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Project environment" })).toHaveAttribute("aria-selected", "true"));
     fireEvent.keyDown(nav, { key: "Home" });
     await waitFor(() => expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true"));
   });
 
   it("keeps runtime model controls out of Settings", async () => {
     renderContent(null);
-    fireEvent.click(await screen.findByRole("tab", { name: "AI Models" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Model connections" }));
     expect(await screen.findByText("My model services")).toBeInTheDocument();
     expect(screen.queryByText("Default model")).not.toBeInTheDocument();
     expect(screen.queryByText("Thinking Level")).not.toBeInTheDocument();
@@ -262,7 +253,7 @@ describe("SettingsContent", () => {
 
   it("opens Agent with context management controls", async () => {
     renderContent(null);
-    fireEvent.click(await screen.findByRole("tab", { name: "Agent" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Agent behavior" }));
     expect(await screen.findByText("Control how Pi manages long-running work.")).toBeInTheDocument();
     expect(await screen.findByText("Context Management")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Default model for new conversations" })).toBeInTheDocument();
@@ -273,13 +264,13 @@ describe("SettingsContent", () => {
     renderContent("/lab/project");
     const nav = await screen.findByRole("tablist", { name: "Settings" });
     expect(nav.querySelectorAll('button[tabindex="0"]')).toHaveLength(1);
-    fireEvent.click(screen.getByRole("tab", { name: "Agent" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Agent behavior" }));
     expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("tabindex", "-1");
-    expect(screen.getByRole("tab", { name: "Agent" })).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("tab", { name: "Agent behavior" })).toHaveAttribute("tabindex", "0");
     fireEvent.click(await screen.findByRole("button", { name: "Manage models" }));
-    expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true");
-    await waitFor(() => expect(screen.getByRole("tab", { name: "AI Models" })).toHaveFocus());
-    expect(screen.getByText("/lab/project")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Model connections" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Model connections" })).toHaveFocus());
+    expect(screen.getByText("All projects")).toBeInTheDocument();
   });
 
   it("reloads a repaired native credential before the settings cache TTL expires", async () => {
@@ -290,7 +281,7 @@ describe("SettingsContent", () => {
       if (url === "/api/model-config/providers/user-lab/credential" && init.method === "PUT") { repaired = true; return jsonResponse({ ok: true, revision: 1, runtime: "published" }); }
       return defaultFetch(url, init);
     });
-    renderContent(null); fireEvent.click(await screen.findByRole("tab", { name: "AI Models" }));
+    renderContent(null); fireEvent.click(await screen.findByRole("tab", { name: "Model connections" }));
     fireEvent.pointerDown(await screen.findByRole("button", { name: "Lab actions" }), { button: 0, ctrlKey: false, pointerType: "mouse" });
     fireEvent.click(await screen.findByRole("menuitem", { name: "Manage credentials" }));
     const dialog = screen.getByRole("dialog", { name: "Lab · Manage credentials" });
@@ -307,7 +298,7 @@ describe("SettingsContent", () => {
     renderContent(null);
     expect(screen.getByRole("button", { name: "Light" })).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Model connections" }));
     await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/model-config")).toHaveLength(1));
     fireEvent.click(screen.getByRole("tab", { name: "General" }));
     fireEvent.click(screen.getByRole("button", { name: "Dark" }));
@@ -325,12 +316,12 @@ describe("SettingsContent", () => {
       return defaultFetch(String(input), init);
     });
     renderContent(null);
-    fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Model connections" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Catalog unavailable");
     fireEvent.click(screen.getByRole("tab", { name: "General" }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Light" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Model connections" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Catalog unavailable");
     fireEvent.click(screen.getByRole("button", { name: "Retry loading" }));
     expect(await screen.findByText("My model services")).toBeInTheDocument();
@@ -342,7 +333,7 @@ describe("SettingsContent", () => {
     const context = new Promise<Response>((resolve) => { release = resolve; });
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => String(input).startsWith("/api/settings/config") ? context : defaultFetch(String(input), init));
     renderContent(null);
-    fireEvent.click(screen.getByRole("tab", { name: "Agent" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Agent behavior" }));
     const model = await screen.findByRole("button", { name: /^Default model:/ });
     await waitFor(() => expect(model).toBeEnabled());
     expect(screen.getByText("Loading context settings…")).toBeInTheDocument();
@@ -363,7 +354,7 @@ describe("SettingsContent", () => {
       if (String(input) === "/api/model-config/providers/user-lab/credential") return jsonResponse({ error: "Credential write failed" }, 500);
       return defaultFetch(String(input), init);
     });
-    renderContent(null); fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
+    renderContent(null); fireEvent.click(screen.getByRole("tab", { name: "Model connections" }));
     fireEvent.pointerDown(await screen.findByRole("button", { name: "Lab actions" }), { button: 0, ctrlKey: false, pointerType: "mouse" });
     fireEvent.click(await screen.findByRole("menuitem", { name: "Manage credentials" }));
     const dialog = screen.getByRole("dialog", { name: "Lab · Manage credentials" });

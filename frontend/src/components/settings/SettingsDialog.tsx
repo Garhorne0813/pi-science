@@ -43,9 +43,11 @@ export function SettingsDialog() {
   // Escape lives on the overlay so it still closes when focus escaped once.
   const handlePanelKeyDown = (event: React.KeyboardEvent) => {
     if (event.key !== "Tab") return;
-    const focusables = panelRef.current?.querySelectorAll<HTMLElement>(
+    const candidates = panelRef.current?.querySelectorAll<HTMLElement>(
       'button:not([disabled]):not([tabindex="-1"]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])',
     );
+    const narrow = window.matchMedia?.("(max-width: 767px)").matches ?? false;
+    const focusables = candidates ? Array.from(candidates).filter((element) => narrow || element.dataset.settingsMobileOnly !== "true") : [];
     if (!focusables || focusables.length === 0) return;
     const first = focusables[0];
     const last = focusables[focusables.length - 1];
