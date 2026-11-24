@@ -861,6 +861,7 @@
   "files.searchPlaceholder": "Search files or paths…",
   "files.clearSearch": "Clear search",
   "files.noSearchResults": "No matching files",
+  "files.gitStatus": "Git status: {{status}}",
   "files.up": "Up",
   "files.empty": "No files",
   "files.referenceFile": "Reference file",

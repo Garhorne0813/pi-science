@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { workspaceFiles } from "./workspace-files";
+import { subscribeWorkspaceFileEvents, workspaceFiles } from "./workspace-files";
 import { queryClient } from "../client/query-client";
 
 afterEach(() => {
@@ -81,5 +81,37 @@ describe("workspace files", () => {
       "/api/files/search?cwd=%2Fworkspace+with+spaces&q=final+report",
       expect.objectContaining({ signal: undefined }),
     );
+  });
+
+  it("shares one live file event stream per workspace", () => {
+    class FakeEventSource {
+      static instances: FakeEventSource[] = [];
+      static CLOSED = 2;
+      readonly url: string;
+      readyState = 0;
+      closed = false;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onopen: (() => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      constructor(url: string) { this.url = url; FakeEventSource.instances.push(this); }
+      close() { this.closed = true; this.readyState = FakeEventSource.CLOSED; }
+    }
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const first = vi.fn();
+    const second = vi.fn();
+
+    const unsubscribeFirst = subscribeWorkspaceFileEvents("/workspace A", first);
+    const unsubscribeSecond = subscribeWorkspaceFileEvents("/workspace A", second);
+
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(FakeEventSource.instances[0]?.url).toBe("/api/files/events?cwd=%2Fworkspace%20A");
+    FakeEventSource.instances[0]?.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ type: "change", path: "data.csv" }) }));
+    expect(first).toHaveBeenLastCalledWith({ type: "change", path: "data.csv" }, false);
+    expect(second).toHaveBeenLastCalledWith({ type: "change", path: "data.csv" }, false);
+
+    unsubscribeFirst();
+    expect(FakeEventSource.instances[0]?.closed).toBe(false);
+    unsubscribeSecond();
+    expect(FakeEventSource.instances[0]?.closed).toBe(true);
   });
 });

@@ -8,6 +8,12 @@ import { useFeedback } from "../feedback/feedback-context";
 import type { FileListEntry } from "./FileContextMenu";
 import { FileBrowser } from "./FileBrowser";
 
+vi.mock("react-virtuoso", () => ({
+  Virtuoso: <T,>({ data, itemContent }: { data: T[]; itemContent: (index: number, item: T) => React.ReactNode }) => (
+    <>{data.map((item, index) => <div key={index}>{itemContent(index, item)}</div>)}</>
+  ),
+}));
+
 vi.mock("../../lib/client/api", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../lib/client/api")>(),
   apiRequest: vi.fn(),
@@ -29,6 +35,7 @@ vi.mock("../../lib/workspace", async (importOriginal) => {
       invalidate: vi.fn(),
       sidebar: vi.fn(async () => sidebarEntries(["work", "reports"])),
       search: vi.fn(async () => []),
+      gitStatus: vi.fn(async () => ({ repository: false, entries: {} })),
       directory: vi.fn(async (_cwd: string, subdir: string) => ({
         entries: subdir === "work" ? sidebarEntries(["data.csv"]) : sidebarEntries(["plot.png"]),
         breadcrumbs: [{ name: subdir, path: subdir }],
@@ -51,7 +58,7 @@ vi.mock("../../components/feedback/feedback-context", () => {
   return { useFeedback: () => ({ toast, confirm }) };
 });
 
-let files: ReturnType<typeof vi.mocked> & { sidebar: ReturnType<typeof vi.fn>; search: ReturnType<typeof vi.fn>; directory: ReturnType<typeof vi.fn>; invalidate: ReturnType<typeof vi.fn>; mkdir: ReturnType<typeof vi.fn>; createFile: ReturnType<typeof vi.fn>; rename: ReturnType<typeof vi.fn> };
+let files: ReturnType<typeof vi.mocked> & { sidebar: ReturnType<typeof vi.fn>; search: ReturnType<typeof vi.fn>; gitStatus: ReturnType<typeof vi.fn>; directory: ReturnType<typeof vi.fn>; invalidate: ReturnType<typeof vi.fn>; mkdir: ReturnType<typeof vi.fn>; createFile: ReturnType<typeof vi.fn>; rename: ReturnType<typeof vi.fn> };
 
 beforeAll(async () => {
   await i18n.changeLanguage("en");
@@ -63,6 +70,13 @@ beforeEach(() => {
   useRuntimeStore.setState({ fileRevision: 0, cwd: "proj", activeSessionId: "s1" });
   useUiStore.setState({ inspectorOpen: false, inspectorData: null, sidebarFileBrowserHeight: 288 });
   vi.clearAllMocks();
+  files.sidebar.mockImplementation(async () => sidebarEntries(["work", "reports"]));
+  files.search.mockImplementation(async () => []);
+  files.gitStatus.mockImplementation(async () => ({ repository: false, entries: {} }));
+  files.directory.mockImplementation(async (_cwd: string, subdir: string) => ({
+    entries: subdir === "work" ? sidebarEntries(["data.csv"]) : sidebarEntries(["plot.png"]),
+    breadcrumbs: [{ name: subdir, path: subdir }],
+  }));
   // jsdom reports the tab as visible by default.
   Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
 });
@@ -131,6 +145,39 @@ describe("FileBrowser", () => {
     expect(await screen.findByRole("button", { name: "folder" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "analysis.ipynb" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "notes.md" })).not.toBeInTheDocument();
+  });
+
+  it("compacts a chain of single-child folders in page mode", async () => {
+    const entry = (path: string, isDir: boolean): FileListEntry => ({
+      path, name: path.split("/").at(-1)!, isDir, size: 0, modified: 1,
+    });
+    files.directory.mockImplementation(async (_cwd: string, path: string) => ({
+      entries: path === "" ? [entry("src", true)]
+        : path === "src" ? [entry("src/features", true)]
+          : path === "src/features" ? [entry("src/features/files", true)]
+            : [entry("src/features/files/index.ts", false)],
+      breadcrumbs: [],
+    }));
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "src" }));
+    expect(await screen.findByRole("button", { name: "src/features/files" })).toHaveAttribute("title", "src/features/files");
+    expect(screen.getByRole("button", { name: "index.ts" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "src/features/files" }));
+    expect(await screen.findByRole("button", { name: "src" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "index.ts" })).not.toBeInTheDocument();
+  });
+
+  it("shows git status for files and aggregates it on parent folders", async () => {
+    files.directory.mockResolvedValueOnce({
+      entries: [{ name: "results", path: "results", isDir: true, size: 0, modified: 1 }],
+      breadcrumbs: [],
+    });
+    files.gitStatus.mockResolvedValueOnce({ repository: true, entries: { "results/report.csv": " M" } });
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+
+    expect(await screen.findByLabelText("Git status: M")).toHaveTextContent("M");
   });
 
   it("sorts siblings naturally at each depth without moving files out of their parent", async () => {

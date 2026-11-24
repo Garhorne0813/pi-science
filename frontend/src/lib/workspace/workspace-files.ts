@@ -1,10 +1,57 @@
 import type { FileListEntry } from "../../components/sidebar/FileContextMenu";
 import { apiRequest } from "../client/api";
+import { openJsonEventStream } from "../client/event-stream";
 import { queryClient } from "../client/query-client";
 
 export const SIDEBAR_FILE_LIMIT = 30;
 
 export interface Breadcrumb { name: string; path: string }
+export interface WorkspaceGitStatus { repository: boolean; entries: Record<string, string> }
+export interface WorkspaceFileEvent { type: "rename" | "change"; path: string }
+
+interface FileEventSubscription {
+  connected: boolean;
+  listeners: Set<(event: WorkspaceFileEvent | null, connected: boolean) => void>;
+  close: () => void;
+}
+const fileEventSubscriptions = new Map<string, FileEventSubscription>();
+
+function createFileEventSubscription(cwd: string): FileEventSubscription {
+  const subscription: FileEventSubscription = { connected: false, listeners: new Set(), close: () => {} };
+  const notify = (event: WorkspaceFileEvent | null) => {
+    for (const listener of subscription.listeners) listener(event, subscription.connected);
+  };
+  subscription.close = openJsonEventStream<WorkspaceFileEvent>(`/api/files/events?cwd=${encodeURIComponent(cwd)}`, {
+    onMessage: (event) => notify(event),
+    onOpen: ({ reconnect, resumed }) => { if (reconnect || resumed) notify({ type: "change", path: "" }); },
+    onResume: () => notify({ type: "change", path: "" }),
+    onConnectionChange: (connected) => { subscription.connected = connected; notify(null); },
+    closeOnError: false,
+    pauseWhenHidden: true,
+  });
+  return subscription;
+}
+
+export function subscribeWorkspaceFileEvents(
+  cwd: string,
+  listener: (event: WorkspaceFileEvent | null, connected: boolean) => void,
+): () => void {
+  if (typeof EventSource === "undefined") return () => {};
+  let subscription = fileEventSubscriptions.get(cwd);
+  if (!subscription) {
+    subscription = createFileEventSubscription(cwd);
+    fileEventSubscriptions.set(cwd, subscription);
+  }
+  subscription.listeners.add(listener);
+  listener(null, subscription.connected);
+  return () => {
+    subscription?.listeners.delete(listener);
+    if (subscription?.listeners.size === 0) {
+      subscription.close();
+      if (fileEventSubscriptions.get(cwd) === subscription) fileEventSubscriptions.delete(cwd);
+    }
+  };
+}
 
 export const workspaceFilesKey = (...selector: string[]) => ["workspace-files", ...selector];
 
@@ -62,6 +109,10 @@ export const workspaceFiles = {
   async search(cwd: string, query: string, signal?: AbortSignal): Promise<FileListEntry[]> {
     const params = new URLSearchParams({ cwd, q: query });
     return apiRequest<FileListEntry[]>(`/api/files/search?${params}`, { signal });
+  },
+
+  async gitStatus(cwd: string, signal?: AbortSignal): Promise<WorkspaceGitStatus> {
+    return apiRequest<WorkspaceGitStatus>(`/api/files/git-status?${new URLSearchParams({ cwd })}`, { signal });
   },
 
   async sidebar(cwd: string, signal?: AbortSignal, recentPaths: readonly string[] = []): Promise<FileListEntry[]> {

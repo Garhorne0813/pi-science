@@ -1,4 +1,4 @@
-import { createReadStream } from "node:fs";
+import { createReadStream, watch as watchFiles } from "node:fs";
 import { spawn } from "node:child_process";
 import { lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { isUtf8 } from "node:buffer";
@@ -94,6 +94,49 @@ async function resolveSurfaceableApiFile(root: string, path: string): Promise<st
   return target;
 }
 
+async function readGitStatus(root: string): Promise<{ repository: boolean; entries: Record<string, string> }> {
+  return new Promise((resolve) => {
+    const child = spawn("git", ["-c", "core.fsmonitor=false", "-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+      stdio: ["ignore", "pipe", "ignore"],
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
+    });
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    const finish = (result: { repository: boolean; entries: Record<string, string> }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(result);
+    };
+    const timeout = setTimeout(() => { child.kill(); finish({ repository: false, entries: {} }); }, 5_000);
+    child.stdout.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > 2 * 1024 * 1024) child.kill();
+      else chunks.push(chunk);
+    });
+    child.once("error", () => finish({ repository: false, entries: {} }));
+    child.once("close", (code) => {
+      if (code !== 0 || size > 2 * 1024 * 1024) return finish({ repository: false, entries: {} });
+      const fields = Buffer.concat(chunks).toString("utf8").split("\0");
+      const entries: Record<string, string> = {};
+      for (let index = 0; index < fields.length; index += 1) {
+        const field = fields[index];
+        if (!field || field.length < 4) continue;
+        const status = field.slice(0, 2);
+        const path = normalizeApiPath(field.slice(3));
+        entries[path] = status;
+        if (status.includes("R") || status.includes("C")) {
+          const previousPath = fields[index + 1];
+          if (previousPath) entries[normalizeApiPath(previousPath)] = status;
+          index += 1;
+        }
+      }
+      finish({ repository: true, entries });
+    });
+  });
+}
+
 export function registerFileReadRoutes(app: FastifyInstance): void {
   // Keep the public upload contract used by the browser without bringing a
   // second multipart implementation into the Python runtime.
@@ -131,6 +174,57 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
     } catch (error) {
       return reply.code(403).send({ error: String(error) });
     }
+  });
+
+  app.get("/api/files/git-status", async (request, reply) => {
+    let root: string;
+    try { root = await safeWorkspace(request); } catch (error) { return reply.code(403).send({ error: String(error) }); }
+    return readGitStatus(root);
+  });
+
+  app.get("/api/files/events", async (request, reply) => {
+    let root: string;
+    try { root = await safeWorkspace(request); } catch (error) { return reply.code(403).send({ error: String(error) }); }
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    });
+    const push = (event: unknown) => {
+      if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+    reply.raw.write(": connected\n\n");
+    let watcher: ReturnType<typeof watchFiles>;
+    try {
+      watcher = watchFiles(root, { recursive: true }, (eventType, filename) => {
+        if (!filename) return;
+        const path = normalizeApiPath(String(filename));
+        const parts = path.split("/");
+        if (parts.some((part) => part.startsWith(".")) || parts.includes("node_modules")) return;
+        push({ type: eventType, path });
+      });
+    } catch {
+      reply.raw.end();
+      return;
+    }
+    const heartbeat = setInterval(() => {
+      if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.write(": ping\n\n");
+    }, 15_000);
+    let closed = false;
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(heartbeat);
+      watcher.close();
+    };
+    watcher.once("error", () => {
+      cleanup();
+      if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
+    });
+    request.raw.once("close", cleanup);
+    reply.raw.once("close", cleanup);
   });
 
   app.get("/api/files/search", async (request, reply) => {

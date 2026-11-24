@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Folder, FolderOpen, File, FileSpreadsheet, FileText, Image, BookOpen, ChevronRight, ChevronDown, RefreshCw, FolderPlus, FilePlus, Loader2, Search, X, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { Virtuoso } from "react-virtuoso";
 import { cn, copyTextToClipboard, useUiStore } from "../../lib/ui";
 import { pinnedFileInspector } from "../../lib/artifacts";
 import { absoluteWorkspacePath } from "../../lib/files/workspace-path";
-import { SIDEBAR_FILE_LIMIT, sortFileEntries, workspaceFiles } from "../../lib/workspace";
-import { baseName, createDraft, editErrorFor, parentDir, planCommit, projectEditRows, renameDraft, type FileKind, type InlineEditDraft } from "../../lib/workspace/inline-file-edit";
+import { SIDEBAR_FILE_LIMIT, sortFileEntries, subscribeWorkspaceFileEvents, workspaceFiles } from "../../lib/workspace";
+import { baseName, createDraft, editErrorFor, parentDir, planCommit, projectEditRows, renameDraft, type EditRow, type FileKind, type InlineEditDraft } from "../../lib/workspace/inline-file-edit";
 import { useFeedback } from "../feedback/feedback-context";
 import { InlineNameInput } from "../files/InlineNameInput";
 import { refreshInspectorAfterRename } from "../files/refresh-inspector-after-rename";
@@ -15,6 +16,7 @@ import { Icon } from "../ui/Icon";
 import { ApiError, apiRequest } from "../../lib/client/api";
 
 interface DirState { entries: FileListEntry[]; loading: boolean; error: string | null }
+interface TreeEntry extends FileListEntry { depth: number; displayName?: string; compactRootPath?: string }
 
 // A compact icon vocabulary for common research output formats.
 function iconForFile(name: string): LucideIcon {
@@ -24,6 +26,36 @@ function iconForFile(name: string): LucideIcon {
   if (ext === ".ipynb") return BookOpen;
   if ([".png", ".jpg", ".jpeg", ".webp", ".svg"].includes(ext)) return Image;
   return File;
+}
+
+function gitStatusPriority(status: string): number {
+  if (status.includes("U")) return 5;
+  if (status.includes("D")) return 4;
+  if (status.includes("M") || status.includes("R")) return 3;
+  if (status.includes("A") || status === "??") return 2;
+  return 1;
+}
+
+function buildGitStatusIndex(statuses: Record<string, string>): Map<string, string> {
+  const index = new Map<string, string>();
+  const add = (path: string, status: string) => {
+    const current = index.get(path);
+    if (!current || gitStatusPriority(status) > gitStatusPriority(current)) index.set(path, status);
+  };
+  for (const [path, status] of Object.entries(statuses)) {
+    add(path, status);
+    let directory = parentDir(path);
+    while (directory) {
+      add(directory, status);
+      directory = parentDir(directory);
+    }
+  }
+  return index;
+}
+
+function gitStatusMarker(status: string): string {
+  if (status === "??") return "?";
+  return status.split("").find((character) => character !== " ") ?? "M";
 }
 
 const FILE_BROWSER_MIN_HEIGHT = 112;
@@ -101,6 +133,9 @@ export function FileBrowser({
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<FileListEntry[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [watchConnected, setWatchConnected] = useState(false);
+  const [gitStatuses, setGitStatuses] = useState<Record<string, string>>({});
+  const gitStatusIndex = useMemo(() => buildGitStatusIndex(gitStatuses), [gitStatuses]);
   const normalizedSearch = searchQuery.trim();
 
   useEffect(() => {
@@ -109,6 +144,7 @@ export function FileBrowser({
     setUploading(false);
     setSearchQuery("");
     setSearchResults([]);
+    setGitStatuses({});
     recentRootPathsRef.current = [];
     return () => {
       uploadRef.current?.abort();
@@ -257,14 +293,49 @@ export function FileBrowser({
     return () => controller.abort();
   }, [shouldPoll, fileRevision, loadFiles]);
 
-  // Polling fallback while the browser tab is visible: catches files created
-  // by kernels or external tools that never emitted a terminal event. Quiet so
-  // repeated refreshes never flash the loading indicator.
+  const loadGitStatus = useCallback(async (signal?: AbortSignal) => {
+    if (!pageMode) return;
+    try {
+      const status = await workspaceFiles.gitStatus(cwd, signal);
+      if (!signal?.aborted) setGitStatuses(status.repository ? status.entries : {});
+    } catch {
+      if (!signal?.aborted) setGitStatuses({});
+    }
+  }, [cwd, pageMode]);
+
   useEffect(() => {
     if (!shouldPoll) return;
-    const id = window.setInterval(() => void loadFiles(undefined, true), 2_000);
+    const controller = new AbortController();
+    void loadGitStatus(controller.signal);
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const unsubscribe = subscribeWorkspaceFileEvents(cwd, (event, connected) => {
+      setWatchConnected(connected);
+      if (!event) return;
+      if (refreshTimer !== null) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        workspaceFiles.invalidate();
+        void loadFiles(undefined, true);
+        void loadGitStatus();
+      }, 150);
+    });
+    return () => {
+      controller.abort();
+      unsubscribe();
+      if (refreshTimer !== null) clearTimeout(refreshTimer);
+      setWatchConnected(false);
+    };
+  }, [cwd, loadFiles, loadGitStatus, shouldPoll]);
+
+  // Keep a low-frequency safety net while the watcher is healthy; fall back to
+  // the old fast poll when the platform cannot establish a recursive watcher.
+  useEffect(() => {
+    if (!shouldPoll) return;
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") void loadFiles(undefined, true);
+    }, watchConnected ? 30_000 : 2_000);
     return () => window.clearInterval(id);
-  }, [shouldPoll, loadFiles]);
+  }, [shouldPoll, loadFiles, watchConnected]);
 
   useEffect(() => {
     if (!pageMode || !normalizedSearch) {
@@ -283,13 +354,13 @@ export function FileBrowser({
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [cwd, normalizedSearch, pageMode, t, toast]);
 
-  const handleClick = (entry: FileListEntry) => {
+  const handleClick = (entry: TreeEntry) => {
     if (entry.isDir) {
       if (normalizedSearch) {
         void revealFolder(entry.path);
         return;
       }
-      toggleFolder(entry.path);
+      toggleFolder(entry.compactRootPath ?? entry.path);
       return;
     }
     // File-tree clicks resolve the newest published version first so the
@@ -339,13 +410,34 @@ export function FileBrowser({
     const token = ++requestTokenRef.current;
     setFolderStates((prev) => { const next = new Map(prev); next.set(dirPath, { entries: prev.get(dirPath)?.entries ?? [], loading: true, error: null }); return next; });
     try {
-      const result = await workspaceFiles.directory(cwd, dirPath);
+      const loaded = new Map<string, DirState>();
+      const compactPaths: string[] = [];
+      let currentPath = dirPath;
+      let result = await workspaceFiles.directory(cwd, currentPath);
+      loaded.set(currentPath, { entries: result.entries, loading: false, error: null });
+      // Page mode follows a bounded chain of single-child directories. The
+      // renderer folds the loaded chain into one row, matching IDE compact folders.
+      if (pageMode) {
+        for (let depth = 0; depth < 12; depth += 1) {
+          const visibleEntries = fileType === "notebook"
+            ? result.entries.filter((entry) => entry.isDir || entry.name.toLowerCase().endsWith(".ipynb"))
+            : result.entries;
+          if (visibleEntries.length !== 1 || !visibleEntries[0]?.isDir) break;
+          currentPath = visibleEntries[0].path;
+          compactPaths.push(currentPath);
+          result = await workspaceFiles.directory(cwd, currentPath);
+          loaded.set(currentPath, { entries: result.entries, loading: false, error: null });
+        }
+      }
       if (token !== requestTokenRef.current) return;
+      if (compactPaths.length) {
+        openFoldersRef.current = new Set([...openFoldersRef.current, ...compactPaths]);
+        setOpenFolders(new Set(openFoldersRef.current));
+      }
       setFolderStates((prev) => {
         const next = new Map(prev);
-        const current = next.get(dirPath);
-        if (!current || !current.loading) return next;
-        next.set(dirPath, { entries: result.entries, loading: false, error: null });
+        if (!next.get(dirPath)?.loading) return next;
+        for (const [path, state] of loaded) next.set(path, state);
         return next;
       });
     } catch (error) {
@@ -358,40 +450,54 @@ export function FileBrowser({
         return next;
       });
     }
-  }, [cwd]);
+  }, [cwd, fileType, pageMode]);
 
   const folderEntries = useMemo(() => {
     const seen = new Set<string>();
-    const build = (items: FileListEntry[], depth: number): (FileListEntry & { depth: number })[] => {
-      const row: (FileListEntry & { depth: number })[] = [];
+    const visibleItems = (items: FileListEntry[]) => fileType === "notebook"
+      ? items.filter((entry) => entry.isDir || entry.name.toLowerCase().endsWith(".ipynb"))
+      : items;
+    const build = (items: FileListEntry[], depth: number): TreeEntry[] => {
+      const row: TreeEntry[] = [];
       // Directories first in each level; sorting the flattened result would break nesting.
-      const visibleItems = fileType === "notebook"
-        ? items.filter((entry) => entry.isDir || entry.name.toLowerCase().endsWith(".ipynb"))
-        : items;
-      for (const entry of sortFileEntries(visibleItems)) {
+      for (const entry of sortFileEntries(visibleItems(items))) {
         if (seen.has(entry.path)) continue;
         seen.add(entry.path);
-        row.push({ ...entry, depth });
-        if (entry.isDir && openFolders.has(entry.path)) {
-          const state = folderStates.get(entry.path);
+        let displayed = entry;
+        let displayName = entry.name;
+        if (pageMode && entry.isDir && openFolders.has(entry.path)) {
+          for (let compactDepth = 0; compactDepth < 12; compactDepth += 1) {
+            const state = folderStates.get(displayed.path);
+            const children = state && !state.loading && !state.error ? visibleItems(state.entries) : [];
+            const child = children.length === 1 && children[0]?.isDir && openFolders.has(children[0].path) ? children[0] : null;
+            if (!child) break;
+            seen.add(child.path);
+            displayed = child;
+            displayName += `/${child.name}`;
+          }
+        }
+        row.push({ ...displayed, depth, displayName, compactRootPath: displayed.path === entry.path ? undefined : entry.path });
+        if (displayed.isDir && openFolders.has(displayed.path)) {
+          const state = folderStates.get(displayed.path);
           if (state && !state.loading && !state.error) row.push(...build(state.entries, depth + 1));
         }
       }
       return row;
     };
     return build(entries, 0);
-  }, [entries, fileType, openFolders, folderStates]);
+  }, [entries, fileType, folderStates, openFolders, pageMode]);
 
   const displayedEntries = useMemo(() => normalizedSearch
     ? searchResults
       .filter((entry) => fileType === "all" || entry.isDir || entry.name.toLowerCase().endsWith(".ipynb"))
-      .map((entry) => ({ ...entry, depth: 0 }))
+      .map((entry): TreeEntry => ({ ...entry, depth: 0 }))
     : folderEntries, [fileType, folderEntries, normalizedSearch, searchResults]);
   const rows = useMemo(() => projectEditRows(displayedEntries, draft), [displayedEntries, draft]);
 
   const refreshFiles = () => {
     workspaceFiles.invalidate();
     void loadFiles();
+    void loadGitStatus();
   };
 
   const uploadToDirectory = async (files: File[], directory: string, rejected: string[]) => {
@@ -591,6 +697,64 @@ export function FileBrowser({
     }
   };
 
+  const renderTreeRow = (item: EditRow<TreeEntry>) => {
+    if (item.kind === "editor") return draft ? (
+      <InlineNameInput
+        key="inline-editor"
+        draft={draft}
+        indent={item.indent}
+        onValueChange={(value) => updateDraft({ ...draft, value, error: null })}
+        onCommit={() => void commitDraft()}
+        onCancel={cancelDraft}
+      />
+    ) : null;
+    const e = item.row;
+    const state = folderStates.get(e.path);
+    const isLoading = state?.loading;
+    const error = state?.error;
+    const gitStatus = pageMode ? gitStatusIndex.get(e.compactRootPath ?? e.path) ?? null : null;
+    return (
+      <div key={e.path}>
+        <button
+          onClick={() => handleClick(e)}
+          onContextMenu={(event) => handleContextMenu(event, e)}
+          data-file-drop-path={e.path}
+          data-file-drop-directory={e.isDir}
+          data-drop-state={dropTarget?.path === e.path && dropTarget.valid ? "valid" : dropTarget?.path === e.path && !dropTarget.valid ? "invalid" : undefined}
+          className={cn("flex h-tool w-full items-center gap-2 truncate rounded-input px-2 text-left text-ui-caption text-text/80 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+            activePreviewPath === e.path && !e.isDir && "bg-accent/10 text-accent",
+            dropTarget?.path === e.path && dropTarget.valid && "bg-accent/10 ring-2 ring-inset ring-accent/60",
+            dropTarget?.path === e.path && !dropTarget.valid && "cursor-not-allowed bg-error/10 ring-2 ring-inset ring-error/60")}
+          title={e.path}
+          style={{ paddingLeft: `${8 + e.depth * 12}px` }}
+          aria-current={activePreviewPath === e.path && !e.isDir ? "true" : undefined}
+          aria-expanded={e.isDir ? openFolders.has(e.path) : undefined}
+        >
+          {e.isDir
+            ? <Icon icon={openFolders.has(e.path) ? ChevronDown : ChevronRight} size="xs" className="shrink-0 text-muted" />
+            : <span aria-hidden="true" className="w-3 shrink-0" />}
+          <Icon icon={e.isDir ? (openFolders.has(e.path) ? FolderOpen : Folder) : iconForFile(e.name)} size="sm" className="shrink-0 text-muted" />
+          <span className="min-w-0 flex-1 truncate">{e.displayName ?? e.name}</span>
+          {normalizedSearch && <span className="max-w-[55%] shrink truncate text-ui-meta text-muted">{parentDir(e.path) || t("files.workspace")}</span>}
+          {gitStatus && (
+            <span
+              aria-label={t("files.gitStatus", { status: gitStatus.trim() || gitStatus })}
+              title={t("files.gitStatus", { status: gitStatus.trim() || gitStatus })}
+              className={cn("ml-auto shrink-0 font-mono text-ui-meta font-semibold",
+                gitStatus.includes("D") ? "text-error-text"
+                  : gitStatus.includes("M") || gitStatus.includes("R") ? "text-warn-text"
+                    : "text-ok-text")}
+            >
+              {gitStatusMarker(gitStatus)}
+            </span>
+          )}
+          {isLoading && <Icon icon={Loader2} size="xs" className="ml-auto shrink-0 animate-spin text-muted" />}
+        </button>
+        {error && <p className="px-2 text-ui-micro italic text-error-text" style={{ paddingLeft: `${20 + e.depth * 12}px` }}>{error}</p>}
+      </div>
+    );
+  };
+
   return (
     <div
       ref={rootRef}
@@ -710,58 +874,21 @@ export function FileBrowser({
               }
               setDropTarget(null);
             }}
-            className={cn("mt-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto rounded-input", dropTarget?.path === "" && dropTarget.valid && "bg-accent/10 ring-2 ring-inset ring-accent/60")}
+            className={cn("mt-1 flex min-h-0 flex-1 flex-col gap-0.5 rounded-input", !pageMode && "overflow-y-auto", dropTarget?.path === "" && dropTarget.valid && "bg-accent/10 ring-2 ring-inset ring-accent/60")}
           >
             {!draft && displayedEntries.length === 0 ? (
               <p className="px-2 py-4 text-center text-ui-meta italic text-muted/60">
                 {loading || searchLoading ? t("common.loading") : normalizedSearch ? t("files.noSearchResults") : t("files.empty")}
               </p>
-            ) : (
-              rows.map((item) => {
-                if (item.kind === "editor") return draft ? (
-                  <InlineNameInput
-                    key="inline-editor"
-                    draft={draft}
-                    indent={item.indent}
-                    onValueChange={(value) => updateDraft({ ...draft, value, error: null })}
-                    onCommit={() => void commitDraft()}
-                    onCancel={cancelDraft}
-                  />
-                ) : null;
-                const e = item.row;
-                const state = folderStates.get(e.path);
-                const isLoading = state?.loading;
-                const error = state?.error;
-                return (
-                  <div key={e.path}>
-                    <button
-                      onClick={() => handleClick(e)}
-                      onContextMenu={(ev) => handleContextMenu(ev, e)}
-                      data-file-drop-path={e.path}
-                      data-file-drop-directory={e.isDir}
-                      data-drop-state={dropTarget?.path === e.path && dropTarget.valid ? "valid" : dropTarget?.path === e.path && !dropTarget.valid ? "invalid" : undefined}
-                      className={cn("flex h-tool w-full items-center gap-2 truncate rounded-input px-2 text-left text-ui-caption text-text/80 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
-                        activePreviewPath === e.path && !e.isDir && "bg-accent/10 text-accent",
-                        dropTarget?.path === e.path && dropTarget.valid && "bg-accent/10 ring-2 ring-inset ring-accent/60",
-                        dropTarget?.path === e.path && !dropTarget.valid && "cursor-not-allowed bg-error/10 ring-2 ring-inset ring-error/60")}
-                      title={e.path}
-                      style={{ paddingLeft: `${8 + e.depth * 12}px` }}
-                      aria-current={activePreviewPath === e.path && !e.isDir ? "true" : undefined}
-                      aria-expanded={e.isDir ? openFolders.has(e.path) : undefined}
-                    >
-                      {e.isDir
-                        ? <Icon icon={openFolders.has(e.path) ? ChevronDown : ChevronRight} size="xs" className="shrink-0 text-muted" />
-                        : <span aria-hidden="true" className="w-3 shrink-0" />}
-                      <Icon icon={e.isDir ? (openFolders.has(e.path) ? FolderOpen : Folder) : iconForFile(e.name)} size="sm" className="shrink-0 text-muted" />
-                      <span className="min-w-0 flex-1 truncate">{e.name}</span>
-                      {normalizedSearch && <span className="max-w-[55%] shrink truncate text-ui-meta text-muted">{parentDir(e.path) || t("files.workspace")}</span>}
-                      {isLoading && <Icon icon={Loader2} size="xs" className="ml-auto shrink-0 animate-spin text-muted" />}
-                    </button>
-                    {error && <p className="px-2 text-ui-micro italic text-error-text" style={{ paddingLeft: `${20 + e.depth * 12}px` }}>{error}</p>}
-                  </div>
-                );
-              })
-            )}
+            ) : pageMode ? (
+              <div className="min-h-0 flex-1">
+                <Virtuoso
+                  data={rows}
+                  computeItemKey={(_index, item) => item.kind === "editor" ? "inline-editor" : item.row.path}
+                  itemContent={(_index, item) => renderTreeRow(item)}
+                />
+              </div>
+            ) : rows.map(renderTreeRow)}
             <div className="min-h-10 flex-1 px-2 py-2 text-ui-meta text-muted/60">
               {t(dropTarget?.valid === false ? "files.dropInvalid" : "files.dropRoot")}
             </div>
