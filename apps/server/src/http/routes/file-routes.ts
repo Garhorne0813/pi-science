@@ -133,6 +133,41 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
     }
   });
 
+  app.get("/api/files/search", async (request, reply) => {
+    let root: string;
+    try { root = await safeWorkspace(request); } catch (error) { return reply.code(403).send({ error: String(error) }); }
+    const query = queryValue(request, "q").trim().toLocaleLowerCase();
+    if (!query) return [];
+
+    // Search is deliberately bounded and never follows symlinks. The regular
+    // directory endpoint remains the source of truth for expanding the tree;
+    // this endpoint only supplies a compact cross-workspace result set.
+    const pending: Array<{ absolute: string; relativePath: string }> = [{ absolute: root, relativePath: "" }];
+    const matches: Array<{ path: string; name: string; isDir: boolean; size: number; modified: number }> = [];
+    let visited = 0;
+    let directoryIndex = 0;
+    while (directoryIndex < pending.length && visited < 20_000 && matches.length < 200) {
+      const directory = pending[directoryIndex++];
+      if (!directory) break;
+      let children;
+      try { children = await readdir(directory.absolute, { withFileTypes: true }); } catch { continue; }
+      for (const entry of children) {
+        if (visited >= 20_000 || matches.length >= 200) break;
+        if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.isSymbolicLink()) continue;
+        visited += 1;
+        const relativePath = directory.relativePath ? `${directory.relativePath}/${entry.name}` : entry.name;
+        const absolute = join(directory.absolute, entry.name);
+        if (entry.isDirectory()) pending.push({ absolute, relativePath });
+        if (!entry.name.toLocaleLowerCase().includes(query) && !relativePath.toLocaleLowerCase().includes(query)) continue;
+        try {
+          const metadata = await stat(absolute);
+          matches.push({ path: relativePath, name: entry.name, isDir: entry.isDirectory(), size: metadata.size, modified: metadata.mtimeMs / 1000 });
+        } catch { /* Entry changed during the search. */ }
+      }
+    }
+    return matches.sort((left, right) => Number(right.isDir) - Number(left.isDir) || left.path.localeCompare(right.path, undefined, { numeric: true, sensitivity: "base" }));
+  });
+
   app.post("/api/files/upload", async (request, reply) => {
     let root: string;
     try { root = await safeWorkspace(request); } catch (error) { return reply.code(403).send({ error: String(error) }); }

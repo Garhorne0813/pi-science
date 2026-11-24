@@ -1,5 +1,5 @@
 import Fastify from "fastify";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -28,6 +28,35 @@ async function buildApp(cwd: string) {
   const query = `cwd=${encodeURIComponent(cwd)}`;
   return { app, query };
 }
+
+describe("GET /api/files/search", () => {
+  it("finds nested files by path while excluding hidden, dependency, and symlink trees", async () => {
+    const cwd = await makeWorkspace();
+    const { app, query } = await buildApp(cwd);
+    await mkdir(join(cwd, "results", "final"), { recursive: true });
+    await writeFile(join(cwd, "results", "final", "report.csv"), "a,b\n1,2\n", "utf8");
+    await mkdir(join(cwd, ".hidden"), { recursive: true });
+    await writeFile(join(cwd, ".hidden", "report-secret.csv"), "secret", "utf8");
+    await mkdir(join(cwd, "node_modules", "package"), { recursive: true });
+    await writeFile(join(cwd, "node_modules", "package", "report.js"), "", "utf8");
+    await symlink(join(cwd, "results"), join(cwd, "linked-results"));
+
+    const response = await app.inject({ method: "GET", url: `/api/files/search?${query}&q=report` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([
+      expect.objectContaining({ path: "results/final/report.csv", name: "report.csv", isDir: false }),
+    ]);
+  });
+
+  it("returns an empty result for an empty query", async () => {
+    const cwd = await makeWorkspace();
+    const { app, query } = await buildApp(cwd);
+    const response = await app.inject({ method: "GET", url: `/api/files/search?${query}&q=%20` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([]);
+  });
+});
 
 describe("POST /api/files/mkdir", () => {
   it("creates nested folders and records provenance", async () => {

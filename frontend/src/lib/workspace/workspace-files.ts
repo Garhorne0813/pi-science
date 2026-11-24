@@ -59,6 +59,11 @@ export const workspaceFiles = {
     return this.directory(cwd, subdir, signal);
   },
 
+  async search(cwd: string, query: string, signal?: AbortSignal): Promise<FileListEntry[]> {
+    const params = new URLSearchParams({ cwd, q: query });
+    return apiRequest<FileListEntry[]>(`/api/files/search?${params}`, { signal });
+  },
+
   async sidebar(cwd: string, signal?: AbortSignal, recentPaths: readonly string[] = []): Promise<FileListEntry[]> {
     const { entries } = await this.directory(cwd, "", signal);
     // Reserve directory navigation first. Fill remaining slots with the newest

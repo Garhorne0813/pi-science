@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Folder, FolderOpen, File, FileSpreadsheet, FileText, Image, BookOpen, ChevronRight, ChevronDown, RefreshCw, FolderPlus, FilePlus, Loader2, type LucideIcon } from "lucide-react";
+import { Folder, FolderOpen, File, FileSpreadsheet, FileText, Image, BookOpen, ChevronRight, ChevronDown, RefreshCw, FolderPlus, FilePlus, Loader2, Search, X, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn, copyTextToClipboard, useUiStore } from "../../lib/ui";
 import { pinnedFileInspector } from "../../lib/artifacts";
@@ -37,9 +37,22 @@ function clampFileBrowserHeight(height: number, containerHeight?: number) {
   return Math.min(FILE_BROWSER_MAX_HEIGHT, availableHeight, Math.max(FILE_BROWSER_MIN_HEIGHT, height));
 }
 
-export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: string; embedded?: boolean; active?: boolean }) {
+export function FileBrowser({
+  cwd,
+  embedded = false,
+  active = true,
+  mode = "sidebar",
+  fileType = "all",
+}: {
+  cwd: string;
+  embedded?: boolean;
+  active?: boolean;
+  mode?: "sidebar" | "page";
+  fileType?: "all" | "notebook";
+}) {
   const { t } = useTranslation();
   const { confirm, toast } = useFeedback();
+  const pageMode = mode === "page";
   const [entries, setEntries] = useState<FileListEntry[]>([]);
   // One inline name editor at a time, so no combination of state can render two inputs.
   const [draft, setDraft] = useState<InlineEditDraft | null>(null);
@@ -68,6 +81,11 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
   // refresh does not fight a user who deliberately closed it.
   const initializedRef = useRef(false);
   const openInspector = useUiStore((s) => s.openInspector);
+  const activePreviewPath = useUiStore((s) => {
+    const inspector = s.inspectorData;
+    if (!inspector || (inspector.variant !== "file" && inspector.variant !== "notebook-file")) return null;
+    return !inspector.cwd || inspector.cwd === cwd ? inspector.path : null;
+  });
   const addWorkspaceReference = useUiStore((s) => s.addWorkspaceReference);
   const fileBrowserHeight = useUiStore((s) => s.sidebarFileBrowserHeight);
   const setFileBrowserHeight = useUiStore((s) => s.setSidebarFileBrowserHeight);
@@ -80,11 +98,17 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
   const [uploading, setUploading] = useState(false);
   const uploadRef = useRef<AbortController | null>(null);
   const recentRootPathsRef = useRef<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<FileListEntry[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const normalizedSearch = searchQuery.trim();
 
   useEffect(() => {
     setDropTarget(null);
     setUploadStatus("");
     setUploading(false);
+    setSearchQuery("");
+    setSearchResults([]);
     recentRootPathsRef.current = [];
     return () => {
       uploadRef.current?.abort();
@@ -152,7 +176,9 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
       setLoading(true);
     }
     try {
-      const rootEntries = await workspaceFiles.sidebar(cwd, signal, recentRootPathsRef.current);
+      const rootEntries = pageMode
+        ? (await workspaceFiles.directory(cwd, "", signal)).entries
+        : await workspaceFiles.sidebar(cwd, signal, recentRootPathsRef.current);
       if (token !== requestTokenRef.current || signal?.aborted) return;
       setEntries(rootEntries);
 
@@ -212,7 +238,7 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
         setLoading(false);
       }
     }
-  }, [cwd, t, toast]);
+  }, [cwd, pageMode, t, toast]);
 
   // Reset per-workspace state when the cwd changes.
   useEffect(() => {
@@ -240,14 +266,60 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
     return () => window.clearInterval(id);
   }, [shouldPoll, loadFiles]);
 
+  useEffect(() => {
+    if (!pageMode || !normalizedSearch) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setSearchLoading(true);
+      void workspaceFiles.search(cwd, normalizedSearch, controller.signal)
+        .then((results) => { if (!controller.signal.aborted) setSearchResults(results); })
+        .catch((error) => { if (!controller.signal.aborted) toast(error instanceof Error ? error.message : t("files.loadError"), "error"); })
+        .finally(() => { if (!controller.signal.aborted) setSearchLoading(false); });
+    }, 200);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [cwd, normalizedSearch, pageMode, t, toast]);
+
   const handleClick = (entry: FileListEntry) => {
     if (entry.isDir) {
+      if (normalizedSearch) {
+        void revealFolder(entry.path);
+        return;
+      }
       toggleFolder(entry.path);
       return;
     }
     // File-tree clicks resolve the newest published version first so the
     // inspector shows the version badge and diff controls for artifacts.
     void pinnedFileInspector(entry.path, entry.name, undefined, cwd).then((inspector) => openInspector(inspector));
+  };
+
+  const revealFolder = async (dirPath: string) => {
+    const parts = dirPath.split("/").filter(Boolean);
+    const ancestors = parts.map((_, index) => parts.slice(0, index + 1).join("/"));
+    setSearchQuery("");
+    openFoldersRef.current = new Set([...openFoldersRef.current, ...ancestors]);
+    setOpenFolders(new Set(openFoldersRef.current));
+    setFolderStates((previous) => {
+      const next = new Map(previous);
+      for (const path of ancestors) next.set(path, { entries: previous.get(path)?.entries ?? [], loading: true, error: null });
+      return next;
+    });
+    const results = await Promise.all(ancestors.map(async (path) => {
+      try { return { path, result: await workspaceFiles.directory(cwd, path) }; }
+      catch (error) { return { path, error: error instanceof Error ? error.message : String(error) }; }
+    }));
+    setFolderStates((previous) => {
+      const next = new Map(previous);
+      for (const item of results) {
+        if ("result" in item && item.result) next.set(item.path, { entries: item.result.entries, loading: false, error: null });
+        else next.set(item.path, { entries: [], loading: false, error: "error" in item ? item.error : t("files.loadError") });
+      }
+      return next;
+    });
   };
 
   const toggleFolder = useCallback(async (dirPath: string) => {
@@ -293,7 +365,10 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
     const build = (items: FileListEntry[], depth: number): (FileListEntry & { depth: number })[] => {
       const row: (FileListEntry & { depth: number })[] = [];
       // Directories first in each level; sorting the flattened result would break nesting.
-      for (const entry of sortFileEntries(items)) {
+      const visibleItems = fileType === "notebook"
+        ? items.filter((entry) => entry.isDir || entry.name.toLowerCase().endsWith(".ipynb"))
+        : items;
+      for (const entry of sortFileEntries(visibleItems)) {
         if (seen.has(entry.path)) continue;
         seen.add(entry.path);
         row.push({ ...entry, depth });
@@ -305,9 +380,14 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
       return row;
     };
     return build(entries, 0);
-  }, [entries, openFolders, folderStates]);
+  }, [entries, fileType, openFolders, folderStates]);
 
-  const rows = useMemo(() => projectEditRows(folderEntries, draft), [folderEntries, draft]);
+  const displayedEntries = useMemo(() => normalizedSearch
+    ? searchResults
+      .filter((entry) => fileType === "all" || entry.isDir || entry.name.toLowerCase().endsWith(".ipynb"))
+      .map((entry) => ({ ...entry, depth: 0 }))
+    : folderEntries, [fileType, folderEntries, normalizedSearch, searchResults]);
+  const rows = useMemo(() => projectEditRows(displayedEntries, draft), [displayedEntries, draft]);
 
   const refreshFiles = () => {
     workspaceFiles.invalidate();
@@ -434,6 +514,7 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
 
   const startCreate = (kind: FileKind, entry: FileListEntry | null) => {
     setContextMenu(null);
+    setSearchQuery("");
     const dir = entry ? (entry.isDir ? entry.path : parentDir(entry.path)) : "";
     // A collapsed target hides its own first child, so open it before rendering the input.
     if (entry?.isDir && !openFoldersRef.current.has(entry.path)) void toggleFolder(entry.path);
@@ -442,6 +523,7 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
 
   const startRename = (entry: FileListEntry) => {
     setContextMenu(null);
+    setSearchQuery("");
     updateDraft(renameDraft(entry));
   };
 
@@ -547,6 +629,30 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
         <div className="h-px shrink-0 bg-faint" />
       ))}
       <div className="flex min-h-0 flex-1 flex-col pt-2">
+        {pageMode && (
+          <label className="mx-2 mb-2 flex h-9 shrink-0 items-center gap-2 rounded-input border border-border bg-bg px-2.5 text-muted focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/15">
+            <Icon icon={Search} size="sm" className="shrink-0" />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              aria-label={t("files.search")}
+              placeholder={t("files.searchPlaceholder")}
+              className="min-w-0 flex-1 bg-transparent text-sm text-text outline-none placeholder:text-muted/70"
+            />
+            {searchLoading ? <Icon icon={Loader2} size="xs" className="shrink-0 animate-spin" /> : searchQuery && (
+              <button
+                type="button"
+                aria-label={t("files.clearSearch")}
+                title={t("files.clearSearch")}
+                onClick={() => setSearchQuery("")}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-input hover:bg-surface-hover hover:text-text"
+              >
+                <Icon icon={X} size="xs" />
+              </button>
+            )}
+          </label>
+        )}
         <div className="flex items-center">
           {embedded ? <span className="flex-1 px-2 text-ui-meta font-medium uppercase tracking-wide text-muted">{t("nav.files")}</span> : <button
             type="button"
@@ -606,8 +712,10 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
             }}
             className={cn("mt-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto rounded-input", dropTarget?.path === "" && dropTarget.valid && "bg-accent/10 ring-2 ring-inset ring-accent/60")}
           >
-            {!draft && folderEntries.length === 0 ? (
-              <p className="px-2 text-ui-meta italic text-muted/60">{loading ? t("common.loading") : t("files.empty")}</p>
+            {!draft && displayedEntries.length === 0 ? (
+              <p className="px-2 py-4 text-center text-ui-meta italic text-muted/60">
+                {loading || searchLoading ? t("common.loading") : normalizedSearch ? t("files.noSearchResults") : t("files.empty")}
+              </p>
             ) : (
               rows.map((item) => {
                 if (item.kind === "editor") return draft ? (
@@ -633,17 +741,20 @@ export function FileBrowser({ cwd, embedded = false, active = true }: { cwd: str
                       data-file-drop-directory={e.isDir}
                       data-drop-state={dropTarget?.path === e.path && dropTarget.valid ? "valid" : dropTarget?.path === e.path && !dropTarget.valid ? "invalid" : undefined}
                       className={cn("flex h-tool w-full items-center gap-2 truncate rounded-input px-2 text-left text-ui-caption text-text/80 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+                        activePreviewPath === e.path && !e.isDir && "bg-accent/10 text-accent",
                         dropTarget?.path === e.path && dropTarget.valid && "bg-accent/10 ring-2 ring-inset ring-accent/60",
                         dropTarget?.path === e.path && !dropTarget.valid && "cursor-not-allowed bg-error/10 ring-2 ring-inset ring-error/60")}
                       title={e.path}
                       style={{ paddingLeft: `${8 + e.depth * 12}px` }}
+                      aria-current={activePreviewPath === e.path && !e.isDir ? "true" : undefined}
                       aria-expanded={e.isDir ? openFolders.has(e.path) : undefined}
                     >
                       {e.isDir
                         ? <Icon icon={openFolders.has(e.path) ? ChevronDown : ChevronRight} size="xs" className="shrink-0 text-muted" />
                         : <span aria-hidden="true" className="w-3 shrink-0" />}
                       <Icon icon={e.isDir ? (openFolders.has(e.path) ? FolderOpen : Folder) : iconForFile(e.name)} size="sm" className="shrink-0 text-muted" />
-                      <span className="truncate">{e.name}</span>
+                      <span className="min-w-0 flex-1 truncate">{e.name}</span>
+                      {normalizedSearch && <span className="max-w-[55%] shrink truncate text-ui-meta text-muted">{parentDir(e.path) || t("files.workspace")}</span>}
                       {isLoading && <Icon icon={Loader2} size="xs" className="ml-auto shrink-0 animate-spin text-muted" />}
                     </button>
                     {error && <p className="px-2 text-ui-micro italic text-error-text" style={{ paddingLeft: `${20 + e.depth * 12}px` }}>{error}</p>}

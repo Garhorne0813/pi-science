@@ -67,4 +67,19 @@ describe("workspace files", () => {
     workspaceFiles.invalidate();
     expect((await workspaceFiles.sidebar("/workspace"))[0]?.name).toBe("result-2.csv");
   });
+
+  it("searches the whole workspace with encoded query parameters", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify([
+      { name: "final report.csv", path: "results/final report.csv", isDir: false, size: 1, modified: 1 },
+    ]), { headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(workspaceFiles.search("/workspace with spaces", "final report")).resolves.toMatchObject([
+      { path: "results/final report.csv" },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files/search?cwd=%2Fworkspace+with+spaces&q=final+report",
+      expect.objectContaining({ signal: undefined }),
+    );
+  });
 });

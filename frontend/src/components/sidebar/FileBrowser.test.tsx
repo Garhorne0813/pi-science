@@ -28,6 +28,7 @@ vi.mock("../../lib/workspace", async (importOriginal) => {
     workspaceFiles: {
       invalidate: vi.fn(),
       sidebar: vi.fn(async () => sidebarEntries(["work", "reports"])),
+      search: vi.fn(async () => []),
       directory: vi.fn(async (_cwd: string, subdir: string) => ({
         entries: subdir === "work" ? sidebarEntries(["data.csv"]) : sidebarEntries(["plot.png"]),
         breadcrumbs: [{ name: subdir, path: subdir }],
@@ -50,7 +51,7 @@ vi.mock("../../components/feedback/feedback-context", () => {
   return { useFeedback: () => ({ toast, confirm }) };
 });
 
-let files: ReturnType<typeof vi.mocked> & { sidebar: ReturnType<typeof vi.fn>; directory: ReturnType<typeof vi.fn>; invalidate: ReturnType<typeof vi.fn>; mkdir: ReturnType<typeof vi.fn>; createFile: ReturnType<typeof vi.fn>; rename: ReturnType<typeof vi.fn> };
+let files: ReturnType<typeof vi.mocked> & { sidebar: ReturnType<typeof vi.fn>; search: ReturnType<typeof vi.fn>; directory: ReturnType<typeof vi.fn>; invalidate: ReturnType<typeof vi.fn>; mkdir: ReturnType<typeof vi.fn>; createFile: ReturnType<typeof vi.fn>; rename: ReturnType<typeof vi.fn> };
 
 beforeAll(async () => {
   await i18n.changeLanguage("en");
@@ -72,6 +73,66 @@ afterEach(() => {
 });
 
 describe("FileBrowser", () => {
+  it("loads the complete root listing in page mode instead of the capped sidebar listing", async () => {
+    files.directory.mockResolvedValueOnce({
+      entries: [{ name: "root.txt", path: "root.txt", isDir: false, size: 1, modified: 1 }],
+      breadcrumbs: [],
+    });
+
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+
+    await screen.findByRole("button", { name: "root.txt" });
+    expect(files.directory).toHaveBeenCalledWith("proj", "", expect.any(AbortSignal));
+    expect(files.sidebar).not.toHaveBeenCalled();
+    expect(screen.getByRole("searchbox", { name: "Search files" })).toBeInTheDocument();
+  });
+
+  it("searches across paths and opens a file in the existing preview pane", async () => {
+    files.directory.mockResolvedValueOnce({ entries: [], breadcrumbs: [] });
+    files.search.mockResolvedValueOnce([
+      { name: "report.csv", path: "results/final/report.csv", isDir: false, size: 12, modified: 1 },
+    ]);
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search files" }), { target: { value: "report" } });
+    const result = await screen.findByRole("button", { name: /report\.csv.*results\/final/ });
+    expect(files.search).toHaveBeenCalledWith("proj", "report", expect.any(AbortSignal));
+    fireEvent.click(result);
+    await vi.waitFor(() => expect(useUiStore.getState().inspectorData).toMatchObject({ path: "results/final/report.csv", cwd: "proj" }));
+  });
+
+  it("highlights the file currently shown in the preview pane", async () => {
+    files.directory.mockResolvedValueOnce({
+      entries: [{ name: "active.md", path: "active.md", isDir: false, size: 1, modified: 1 }],
+      breadcrumbs: [],
+    });
+    useUiStore.setState({
+      inspectorOpen: true,
+      inspectorData: { variant: "file", path: "active.md", filename: "active.md", cwd: "proj" },
+    });
+
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+
+    expect(await screen.findByRole("button", { name: "active.md" })).toHaveAttribute("aria-current", "true");
+  });
+
+  it("keeps folders but filters ordinary files on the notebook route", async () => {
+    files.directory.mockResolvedValueOnce({
+      entries: [
+        { name: "folder", path: "folder", isDir: true, size: 0, modified: 1 },
+        { name: "analysis.ipynb", path: "analysis.ipynb", isDir: false, size: 1, modified: 1 },
+        { name: "notes.md", path: "notes.md", isDir: false, size: 1, modified: 1 },
+      ],
+      breadcrumbs: [],
+    });
+
+    render(<FileBrowser cwd="proj" embedded mode="page" fileType="notebook" />);
+
+    expect(await screen.findByRole("button", { name: "folder" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "analysis.ipynb" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "notes.md" })).not.toBeInTheDocument();
+  });
+
   it("sorts siblings naturally at each depth without moving files out of their parent", async () => {
     const entry = (path: string, isDir: boolean): FileListEntry => ({
       path, name: path.split("/").at(-1)!, isDir, size: 0, modified: 1,

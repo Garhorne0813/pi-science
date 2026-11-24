@@ -20,10 +20,10 @@ export function BackToConversationLink() {
   return <Link to={to} className="mb-2 inline-flex min-h-8 items-center gap-1.5 rounded-input pr-2 text-sm font-medium text-accent hover:bg-surface-2"><ArrowLeft size={15} />{t("conversation.backToConversation")}</Link>;
 }
 
-export function WorkspacePage({ children, className }: { children: ReactNode; className?: string }) {
+export function WorkspacePage({ children, className, contentClassName }: { children: ReactNode; className?: string; contentClassName?: string }) {
   return (
     <div className={cn("h-full overflow-y-auto bg-bg [scrollbar-gutter:stable]", className)}>
-      <div className="mx-auto w-full max-w-[1120px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+      <div className={cn("mx-auto w-full max-w-[1120px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8", contentClassName)}>
         {children}
       </div>
     </div>
