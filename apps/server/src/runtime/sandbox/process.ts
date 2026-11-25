@@ -30,12 +30,16 @@ async function prepareCertificateBundle(scratch: string): Promise<string | undef
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
   if (process.platform === "darwin") {
-    try {
-      const { stdout } = await runFile("/usr/bin/security", ["find-certificate", "-a", "-p"], { timeout: 5_000, maxBuffer: 16 * 1024 * 1024, encoding: "buffer" });
-      if (stdout.length > 0) bundles.push(stdout);
-    } catch {
-      // Minimal macOS installations may not expose a default Keychain search
-      // list. The file-based roots above remain a valid fallback.
+    // `security find-certificate` without an explicit keychain does not
+    // reliably include SystemRootCertificates on headless macOS runners.
+    for (const keychain of ["/System/Library/Keychains/SystemRootCertificates.keychain", "/Library/Keychains/System.keychain"]) {
+      try {
+        const { stdout } = await runFile("/usr/bin/security", ["find-certificate", "-a", "-p", keychain], { timeout: 5_000, maxBuffer: 16 * 1024 * 1024, encoding: "buffer" });
+        if (stdout.length > 0) bundles.push(stdout);
+      } catch {
+        // Minimal macOS installations may omit an individual keychain. The
+        // file-based roots and any remaining keychains are still usable.
+      }
     }
   }
   if (bundles.length === 0) return undefined;
