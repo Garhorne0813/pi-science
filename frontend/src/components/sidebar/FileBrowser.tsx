@@ -59,6 +59,16 @@ function gitStatusMarker(status: string): string {
   return status.split("").find((character) => character !== " ") ?? "M";
 }
 
+function gitStatusLabelKey(status: string): string {
+  if (status === "??") return "files.gitUntracked";
+  if (status.includes("U")) return "files.gitConflicted";
+  if (status.includes("D")) return "files.gitDeleted";
+  if (status.includes("R")) return "files.gitRenamed";
+  if (status.includes("M")) return "files.gitModified";
+  if (status.includes("A")) return "files.gitAdded";
+  return "files.gitChanged";
+}
+
 const FILE_BROWSER_MIN_HEIGHT = 112;
 const FILE_BROWSER_MAX_HEIGHT = 560;
 const SIDEBAR_FIXED_CONTENT_HEIGHT = 240;
@@ -802,6 +812,7 @@ export function FileBrowser({
     const isLoading = state?.loading;
     const error = state?.error;
     const gitStatus = pageMode ? gitStatusIndex.get(e.compactRootPath ?? e.path) ?? null : null;
+    const gitStatusLabel = gitStatus ? t(gitStatusLabelKey(gitStatus)) : null;
     return (
       <div key={e.path} role="treeitem" aria-level={e.depth + 1}>
         <button
@@ -834,12 +845,18 @@ export function FileBrowser({
           {normalizedSearch && <span className="max-w-[55%] shrink truncate text-ui-meta text-muted">{parentDir(e.path) || t("files.workspace")}</span>}
           {gitStatus && (
             <span
-              aria-label={t("files.gitStatus", { status: gitStatus.trim() || gitStatus })}
-              title={t("files.gitStatus", { status: gitStatus.trim() || gitStatus })}
-              className={cn("ml-auto shrink-0 font-mono text-ui-meta font-semibold",
-                gitStatus.includes("D") ? "text-error-text"
-                  : gitStatus.includes("M") || gitStatus.includes("R") ? "text-warn-text"
-                    : "text-ok-text")}
+              aria-label={t("files.gitStatus", { status: gitStatusLabel })}
+              title={t("files.gitStatus", { status: gitStatusLabel })}
+              className={cn(
+                "ml-auto inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-[5px] px-1 text-[10px] font-bold leading-none tracking-[-0.01em] ring-1 ring-inset",
+                gitStatus.includes("U") || gitStatus.includes("D")
+                  ? "bg-error/10 text-error-text ring-error/20"
+                  : gitStatus.includes("M") || gitStatus.includes("R")
+                    ? "bg-warn/10 text-warn-text ring-warn/20"
+                    : gitStatus === "??"
+                      ? "bg-accent/10 text-accent ring-accent/20"
+                      : "bg-ok/10 text-ok-text ring-ok/20",
+              )}
             >
               {gitStatusMarker(gitStatus)}
             </span>

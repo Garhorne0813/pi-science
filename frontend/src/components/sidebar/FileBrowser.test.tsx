@@ -171,13 +171,21 @@ describe("FileBrowser", () => {
 
   it("shows git status for files and aggregates it on parent folders", async () => {
     files.directory.mockResolvedValueOnce({
-      entries: [{ name: "results", path: "results", isDir: true, size: 0, modified: 1 }],
+      entries: [
+        { name: "results", path: "results", isDir: true, size: 0, modified: 1 },
+        { name: "draft.txt", path: "draft.txt", isDir: false, size: 1, modified: 1 },
+      ],
       breadcrumbs: [],
     });
-    files.gitStatus.mockResolvedValueOnce({ repository: true, entries: { "results/report.csv": " M" } });
+    files.gitStatus.mockResolvedValueOnce({ repository: true, entries: { "results/report.csv": " M", "draft.txt": "??" } });
     render(<FileBrowser cwd="proj" embedded mode="page" />);
 
-    expect(await screen.findByLabelText("Git status: M")).toHaveTextContent("M");
+    const badge = await screen.findByLabelText("Git status: Modified");
+    expect(badge).toHaveTextContent("M");
+    expect(badge).toHaveClass("rounded-[5px]", "bg-warn/10");
+    const untracked = screen.getByLabelText("Git status: Untracked");
+    expect(untracked).toHaveTextContent("?");
+    expect(untracked).toHaveClass("bg-accent/10");
   });
 
   it("filters the tree to changed files and their parent folders in git workspaces", async () => {
