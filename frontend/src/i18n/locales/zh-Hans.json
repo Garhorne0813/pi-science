@@ -152,6 +152,7 @@
   "conversation.activity.output": "输出",
   "conversation.activity.details": "详情",
   "conversation.activity.diff": "差异",
+  "conversation.activity.lineChanges": "新增 {{additions}} 行，删除 {{deletions}} 行",
   "conversation.activity.previewTruncated": "预览已截断，仅显示前 {{count}} 个字符",
   "conversation.activity.fullOutput": "查看完整输出",
   "conversation.activity.fullOutputUnavailable": "完整输出不可用",

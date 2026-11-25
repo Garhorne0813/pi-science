@@ -152,6 +152,7 @@
   "conversation.activity.output": "Output",
   "conversation.activity.details": "Details",
   "conversation.activity.diff": "Diff",
+  "conversation.activity.lineChanges": "{{additions}} additions, {{deletions}} deletions",
   "conversation.activity.previewTruncated": "Preview truncated at {{count}} characters",
   "conversation.activity.fullOutput": "View full output",
   "conversation.activity.fullOutputUnavailable": "Full output unavailable",

@@ -129,3 +129,22 @@ it.skipIf(process.platform !== "darwin")("writes through the macOS sandbox into 
   expect(await readFile(join(cwd, "research/report.md"), "utf8")).toBe("sandboxed write");
   await env.cleanup(BACKGROUND_CONTEXT);
 }, 120_000);
+
+it("attaches immutable line changes to successful write and edit results", async () => {
+  root = await mkdtemp(join(tmpdir(), "pi-file-changes-"));
+  const cwd = join(root, "workspace");
+  await mkdir(cwd);
+  const env = new NodeExecutionEnv({ cwd });
+  const invocation = { operationId: "op", invocationId: "call", turnId: "turn", getMemo: async () => undefined, setMemo: async () => {} };
+  const write = workspaceFileTool(createWriteTool(), cwd, []);
+  const edit = workspaceFileTool(createEditTool(), cwd, []);
+
+  const created = await write.execute("write", { path: "notes.txt", content: "one\ntwo\n" }, () => {}, { env }, invocation, BACKGROUND_CONTEXT);
+  expect(created.details).toMatchObject({ fileChange: { path: "notes.txt", additions: 2, deletions: 0 } });
+
+  const changed = await edit.execute("edit", { path: "notes.txt", edits: [{ oldText: "two", newText: "changed" }] }, () => {}, { env }, invocation, BACKGROUND_CONTEXT);
+  expect(changed.details).toMatchObject({ fileChange: { path: "notes.txt", additions: 1, deletions: 1 } });
+  expect((changed.details as { fileChange: { patch: string } }).fileChange.patch).toContain("-two");
+  expect((changed.details as { fileChange: { patch: string } }).fileChange.patch).toContain("+changed");
+  await env.cleanup(BACKGROUND_CONTEXT);
+});
