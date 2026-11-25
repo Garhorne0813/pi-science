@@ -49,6 +49,7 @@ export function WorkspaceSessionList({ cwd, query = "" }: { cwd: string; query?:
   const location = useLocation();
   const workspaceRoot = `/workspace/${encodeURIComponent(cwd)}`;
   const isWorkspaceRoot = location.pathname === workspaceRoot;
+  const isNewConversation = location.pathname === `${workspaceRoot}/new`;
   const currentSessionId = conversationSessionId(location.pathname);
   const live = useRef({ location, t, toast });
   live.current = { location, t, toast };
@@ -69,7 +70,7 @@ export function WorkspaceSessionList({ cwd, query = "" }: { cwd: string; query?:
 
   useEffect(() => {
     let cancelled = false;
-    const isConversationRoute = location.pathname.startsWith(`${workspaceRoot}/session/`);
+    const isConversationRoute = isNewConversation || location.pathname.startsWith(`${workspaceRoot}/session/`);
     const isRunsRoute = location.pathname === `${workspaceRoot}/runs`;
     if (!isWorkspaceRoot && ((!isConversationRoute && !isRunsRoute) || !sessionsEmpty)) return;
     if (isWorkspaceRoot && blocksRootAutoNavigation(live.current.location.state, cwd)) return;
@@ -80,11 +81,11 @@ export function WorkspaceSessionList({ cwd, query = "" }: { cwd: string; query?:
       if (!cancelled) live.current.toast(error instanceof Error ? error.message : live.current.t("sidebar.loadError"), "error");
     });
     return () => { cancelled = true; };
-  }, [cwd, isWorkspaceRoot, loadSessions, location.pathname, location.state, navigate, sessionsEmpty, workspaceRoot]);
+  }, [cwd, isNewConversation, isWorkspaceRoot, loadSessions, location.pathname, location.state, navigate, sessionsEmpty, workspaceRoot]);
 
   const handleDelete = async (e: { stopPropagation(): void }, sessionId: string) => {
     e.stopPropagation();
-    if (deleting || forking) return;
+    if (deleting === sessionId || forking === sessionId) return;
     setDeleting(sessionId);
     // Read freshness after the await: the user may have switched sessions
     // while the delete was in flight, and we must not kick them out of the
@@ -119,7 +120,7 @@ export function WorkspaceSessionList({ cwd, query = "" }: { cwd: string; query?:
 
   const handleFork = async (e: { stopPropagation(): void }, sessionId: string) => {
     e.stopPropagation();
-    if (forking || deleting) return;
+    if (forking === sessionId || deleting === sessionId) return;
     setForking(sessionId);
     try {
       const newId = await forkSession(sessionId);
@@ -207,7 +208,7 @@ export function WorkspaceSessionList({ cwd, query = "" }: { cwd: string; query?:
               {regenerating.has(session.id) && <span role="status" className="shrink-0 text-muted"><Loader2 size={12} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /><span className="sr-only">{t("sidebar.generatingTitle")}</span></span>}
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger asChild>
-                  <button type="button" aria-label={t("sidebar.manageSession", { name: label })} disabled={!!deleting || !!forking}
+                  <button type="button" aria-label={t("sidebar.manageSession", { name: label })} disabled={deleting === session.id || forking === session.id}
                     className="mr-1 flex h-tool w-tool shrink-0 items-center justify-center rounded-input text-muted transition-colors hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 data-[state=open]:opacity-100 disabled:opacity-60">
                     <MoreHorizontal size={16} />
                   </button>

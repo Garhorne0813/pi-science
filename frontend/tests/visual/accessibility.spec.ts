@@ -60,7 +60,12 @@ test("conversation has no serious axe violations @accessibility", async ({ page 
 test("settings dialog has no serious axe violations @accessibility", async ({ page }) => {
   await page.goto(workspaceRoute(VISUAL_CWD));
   await expect(page.getByPlaceholder(/Ask anything/)).toBeVisible();
-  await page.getByRole("button", { name: "Settings" }).click();
+  const settings = page.getByRole("button", { name: "Settings" });
+  if (!await settings.isVisible()) {
+    await page.getByRole("button", { name: "Expand sidebar" }).click();
+    await expect(settings).toBeVisible();
+  }
+  await settings.click();
   await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
   await expectNoSeriousViolations(page, "settings dialog");
 });
