@@ -1,5 +1,5 @@
 import { networkGrantsPath } from "./network-grants.js";
-import { mkdtemp, mkdir, rm, writeFile, stat, realpath, copyFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile, stat, realpath } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -10,6 +10,39 @@ import { requireSandboxPlatform } from "./platform.js";
 import { canonicalDirectory, identifyPolicy, isWithin, type SandboxPolicy } from "./policy.js";
 import { processSettings, srtCli, type RuntimeInstallation } from "./settings.js";
 import { prepareMacosSupervisor } from "./platform.js";
+
+const runFile = promisify(execFile);
+const certificateFiles = () => [...new Set([
+  process.env.SSL_CERT_FILE,
+  process.env.CURL_CA_BUNDLE,
+  process.env.REQUESTS_CA_BUNDLE,
+  process.env.NODE_EXTRA_CA_CERTS,
+  ...(process.platform === "darwin" ? ["/etc/ssl/cert.pem"] : ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"]),
+].filter((path): path is string => !!path))];
+
+/** Copy the host's public trust anchors into the otherwise isolated workload.
+ * macOS applications normally consult Keychain in addition to /etc/ssl/cert.pem;
+ * exporting it preserves operator-installed roots without granting Keychain access. */
+async function prepareCertificateBundle(scratch: string): Promise<string | undefined> {
+  const bundles: Buffer[] = [];
+  for (const source of certificateFiles()) {
+    try { bundles.push(await readFile(source)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  }
+  if (process.platform === "darwin") {
+    try {
+      const { stdout } = await runFile("/usr/bin/security", ["find-certificate", "-a", "-p"], { timeout: 5_000, maxBuffer: 16 * 1024 * 1024, encoding: "buffer" });
+      if (stdout.length > 0) bundles.push(stdout);
+    } catch {
+      // Minimal macOS installations may not expose a default Keychain search
+      // list. The file-based roots above remain a valid fallback.
+    }
+  }
+  if (bundles.length === 0) return undefined;
+  const certificate = join(scratch, "system-ca.pem");
+  await writeFile(certificate, Buffer.concat(bundles.flatMap((bundle) => [bundle, Buffer.from("\n")])), { mode: 0o600 });
+  return certificate;
+}
 
 export const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 export const launcherPath = fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "./launcher.ts" : "./launcher.js", import.meta.url));
@@ -35,11 +68,7 @@ export async function prepareSandbox(policy: SandboxPolicy, argv: string[], depe
     for (const path of dependencies) if ((await stat(path)).isDirectory()) bins.push(join(path, "bin"));
     if (dependencies.includes(process.execPath)) bins.unshift(dirname(process.execPath));
     const scoped = Object.fromEntries(Object.entries(scopedEnvironment).filter(([key]) => !/^(?:(?:https?|all|no)_proxy|PI_SCIENCE_SANDBOX_HTTP_PROXY)$/i.test(key)));
-    let certificate: string | undefined;
-    for (const source of process.platform === "darwin" ? ["/etc/ssl/cert.pem"] : ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"]) {
-      try { certificate = join(scratch, "system-ca.pem"); await copyFile(source, certificate); break; }
-      catch (error) { certificate = undefined; if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    }
+    const certificate = await prepareCertificateBundle(scratch);
     const env = { ...scoped, PATH: [...bins, "/usr/bin", "/bin"].join(":"), HOME: scratch, TMPDIR: scratch, TMP: scratch, TEMP: scratch,
       XDG_CACHE_HOME: scratch, MPLCONFIGDIR: scratch, LANG: "C.UTF-8", OPENBLAS_NUM_THREADS: "1", OMP_NUM_THREADS: "1", PYTHONNOUSERSITE: "1", NODE_USE_ENV_PROXY: "1",
       ...(certificate ? { SSL_CERT_FILE: certificate, CURL_CA_BUNDLE: certificate, REQUESTS_CA_BUNDLE: certificate, NODE_EXTRA_CA_CERTS: certificate, ...(policy.profile === "install" ? { MAMBA_SSL_VERIFY: certificate, CONDA_SSL_VERIFY: certificate } : {}) } : {}) };
@@ -57,7 +86,6 @@ export function killSandboxGroup(pid: number | undefined, signal: NodeJS.Signals
   try { process.kill(-pid, signal); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
 }
 
-const runFile = promisify(execFile);
 export async function retireSandboxGroup(pid: number | undefined): Promise<void> {
   if (pid === undefined) return; // A failed spawn never created a process group.
   killSandboxGroup(pid);
