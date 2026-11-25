@@ -1,5 +1,5 @@
 import { createReadTool, createWriteTool, createEditTool, BACKGROUND_CONTEXT, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { chmod, stat, link, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, stat, link, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
@@ -131,7 +131,7 @@ it.skipIf(process.platform !== "darwin")("writes through the macOS sandbox into 
 }, 120_000);
 
 it("attaches immutable line changes to successful write and edit results", async () => {
-  root = await mkdtemp(join(tmpdir(), "pi-file-changes-"));
+  root = await realpath(await mkdtemp(join(tmpdir(), "pi-file-changes-")));
   const cwd = join(root, "workspace");
   await mkdir(cwd);
   const env = new NodeExecutionEnv({ cwd });
