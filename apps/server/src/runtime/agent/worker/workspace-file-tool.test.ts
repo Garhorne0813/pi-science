@@ -131,6 +131,8 @@ it.skipIf(process.platform !== "darwin")("writes through the macOS sandbox into 
 }, 120_000);
 
 it("attaches immutable line changes to successful write and edit results", async () => {
+  // tmpdir may use /var on macOS or a short/case-aliased path on Windows,
+  // while production workspaces enter file tools in canonical form.
   root = await realpath(await mkdtemp(join(tmpdir(), "pi-file-changes-")));
   const cwd = join(root, "workspace");
   await mkdir(cwd);
