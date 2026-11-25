@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { latestArtifactVersions, ReferencedArtifactStrip, TurnArtifactStrip } from "./TurnArtifactStrip";
+import { useUiStore } from "../../lib/ui/store";
 
 const { openInspector, mockReadArtifact, mockProbeLargeFile } = vi.hoisted(() => ({
   openInspector: vi.fn(),
@@ -39,9 +40,22 @@ beforeEach(() => {
   mockProbeLargeFile.mockReset();
   mockReadArtifact.mockResolvedValue(null);
   mockProbeLargeFile.mockResolvedValue(null);
+  useUiStore.setState({ fileTreeReveal: null });
+  window.history.replaceState({}, "", "/");
 });
 
 describe("TurnArtifactStrip", () => {
+  it("jumps from a chat file card to the highlighted file-tree path", () => {
+    render(<TurnArtifactStrip cwd="/workspace" artifacts={[
+      { path: "work/result.txt", kind: "file", mime: "text/plain", size: 1 },
+    ]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reveal in file tree" }));
+
+    expect(useUiStore.getState().fileTreeReveal).toMatchObject({ cwd: "/workspace", path: "work/result.txt" });
+    expect(window.location.pathname).toBe("/workspace/%2Fworkspace/files");
+  });
+
   it("opens the same published SHA shown in a card, including notebook snapshots", async () => {
     const sha256 = "a".repeat(64);
     render(<TurnArtifactStrip cwd="/workspace" artifacts={[
@@ -333,7 +347,7 @@ describe("TurnArtifactStrip", () => {
     expect(row!.className).toContain("flex");
     expect(row!.className).toContain("flex-wrap");
     expect(row!.className).toContain("gap-2");
-    const cards = container.querySelectorAll("section > div:last-child > button");
+    const cards = container.querySelectorAll("section > div:last-child > div > button:first-child");
     expect(cards.length).toBe(2);
     cards.forEach((card) => {
       expect(card.className).toContain("w-[128px]");

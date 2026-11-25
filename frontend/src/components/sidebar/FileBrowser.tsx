@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Folder, FolderOpen, File, FileSpreadsheet, FileText, Image, BookOpen, ChevronRight, ChevronDown, RefreshCw, FolderPlus, FilePlus, Loader2, Search, X, type LucideIcon } from "lucide-react";
+import { Folder, FolderOpen, File, FileSpreadsheet, FileText, Image, BookOpen, ChevronRight, ChevronDown, RefreshCw, FolderPlus, FilePlus, Loader2, Search, X, ListFilter, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { Virtuoso } from "react-virtuoso";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { cn, copyTextToClipboard, useUiStore } from "../../lib/ui";
 import { pinnedFileInspector } from "../../lib/artifacts";
 import { absoluteWorkspacePath } from "../../lib/files/workspace-path";
@@ -14,6 +14,7 @@ import { FileContextMenu, type ContextPoint, type FileListEntry } from "./FileCo
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { Icon } from "../ui/Icon";
 import { ApiError, apiRequest } from "../../lib/client/api";
+import { writeWorkspaceReferenceDrag } from "../../lib/files";
 
 interface DirState { entries: FileListEntry[]; loading: boolean; error: string | null }
 interface TreeEntry extends FileListEntry { depth: number; displayName?: string; compactRootPath?: string }
@@ -101,6 +102,9 @@ export function FileBrowser({
   const [folderStates, setFolderStates] = useState<Map<string, DirState>>(new Map());
   const openFoldersRef = useRef<Set<string>>(new Set());
   const rootRef = useRef<HTMLDivElement>(null);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const rowRefs = useRef(new Map<string, HTMLButtonElement>());
+  const displayedEntriesRef = useRef<TreeEntry[]>([]);
   const resizeStartRef = useRef<{ pointerId: number; y: number; height: number } | null>(null);
   // Guards async results: any newer load/toggle invalidates older in-flight
   // requests (workspace switch, rapid toggles, revision bumps).
@@ -119,6 +123,8 @@ export function FileBrowser({
     return !inspector.cwd || inspector.cwd === cwd ? inspector.path : null;
   });
   const addWorkspaceReference = useUiStore((s) => s.addWorkspaceReference);
+  const fileTreeReveal = useUiStore((s) => s.fileTreeReveal);
+  const clearFileTreeReveal = useUiStore((s) => s.clearFileTreeReveal);
   const fileBrowserHeight = useUiStore((s) => s.sidebarFileBrowserHeight);
   const setFileBrowserHeight = useUiStore((s) => s.setSidebarFileBrowserHeight);
   const fileRevision = useRuntimeStore((s) => s.fileRevision);
@@ -135,6 +141,10 @@ export function FileBrowser({
   const [searchLoading, setSearchLoading] = useState(false);
   const [watchConnected, setWatchConnected] = useState(false);
   const [gitStatuses, setGitStatuses] = useState<Record<string, string>>({});
+  const [gitRepository, setGitRepository] = useState(false);
+  const [changedOnly, setChangedOnly] = useState(false);
+  const [focusedPath, setFocusedPath] = useState<string | null>(null);
+  const [locatedPath, setLocatedPath] = useState<string | null>(null);
   const gitStatusIndex = useMemo(() => buildGitStatusIndex(gitStatuses), [gitStatuses]);
   const normalizedSearch = searchQuery.trim();
 
@@ -145,6 +155,10 @@ export function FileBrowser({
     setSearchQuery("");
     setSearchResults([]);
     setGitStatuses({});
+    setGitRepository(false);
+    setChangedOnly(false);
+    setFocusedPath(null);
+    setLocatedPath(null);
     recentRootPathsRef.current = [];
     return () => {
       uploadRef.current?.abort();
@@ -297,9 +311,15 @@ export function FileBrowser({
     if (!pageMode) return;
     try {
       const status = await workspaceFiles.gitStatus(cwd, signal);
-      if (!signal?.aborted) setGitStatuses(status.repository ? status.entries : {});
+      if (!signal?.aborted) {
+        setGitRepository(status.repository);
+        setGitStatuses(status.repository ? status.entries : {});
+      }
     } catch {
-      if (!signal?.aborted) setGitStatuses({});
+      if (!signal?.aborted) {
+        setGitRepository(false);
+        setGitStatuses({});
+      }
     }
   }, [cwd, pageMode]);
 
@@ -368,10 +388,12 @@ export function FileBrowser({
     void pinnedFileInspector(entry.path, entry.name, undefined, cwd).then((inspector) => openInspector(inspector));
   };
 
-  const revealFolder = async (dirPath: string) => {
-    const parts = dirPath.split("/").filter(Boolean);
-    const ancestors = parts.map((_, index) => parts.slice(0, index + 1).join("/"));
+  const revealTreePath = useCallback(async (targetPath: string, targetIsDirectory = false) => {
+    const parts = targetPath.split("/").filter(Boolean);
+    const directoryParts = targetIsDirectory ? parts : parts.slice(0, -1);
+    const ancestors = directoryParts.map((_, index) => directoryParts.slice(0, index + 1).join("/"));
     setSearchQuery("");
+    setChangedOnly(false);
     openFoldersRef.current = new Set([...openFoldersRef.current, ...ancestors]);
     setOpenFolders(new Set(openFoldersRef.current));
     setFolderStates((previous) => {
@@ -391,7 +413,21 @@ export function FileBrowser({
       }
       return next;
     });
-  };
+    setFocusedPath(targetPath);
+    setLocatedPath(targetPath);
+    const index = displayedEntriesRef.current.findIndex((entry) => entry.path === targetPath);
+    if (index >= 0) virtuosoRef.current?.scrollToIndex({ index, align: "center" });
+    window.requestAnimationFrame(() => rowRefs.current.get(targetPath)?.focus());
+    window.setTimeout(() => setLocatedPath((current) => current === targetPath ? null : current), 2_000);
+  }, [cwd, t]);
+
+  const revealFolder = (dirPath: string) => revealTreePath(dirPath, true);
+
+  useEffect(() => {
+    if (!pageMode || !fileTreeReveal || fileTreeReveal.cwd !== cwd) return;
+    clearFileTreeReveal(fileTreeReveal.id);
+    void revealTreePath(fileTreeReveal.path);
+  }, [clearFileTreeReveal, cwd, fileTreeReveal, pageMode, revealTreePath]);
 
   const toggleFolder = useCallback(async (dirPath: string) => {
     const isClosing = openFoldersRef.current.has(dirPath);
@@ -454,9 +490,9 @@ export function FileBrowser({
 
   const folderEntries = useMemo(() => {
     const seen = new Set<string>();
-    const visibleItems = (items: FileListEntry[]) => fileType === "notebook"
-      ? items.filter((entry) => entry.isDir || entry.name.toLowerCase().endsWith(".ipynb"))
-      : items;
+    const visibleItems = (items: FileListEntry[]) => items.filter((entry) =>
+      (fileType === "all" || entry.isDir || entry.name.toLowerCase().endsWith(".ipynb"))
+      && (!changedOnly || gitStatusIndex.has(entry.path)));
     const build = (items: FileListEntry[], depth: number): TreeEntry[] => {
       const row: TreeEntry[] = [];
       // Directories first in each level; sorting the flattened result would break nesting.
@@ -485,14 +521,67 @@ export function FileBrowser({
       return row;
     };
     return build(entries, 0);
-  }, [entries, fileType, folderStates, openFolders, pageMode]);
+  }, [changedOnly, entries, fileType, folderStates, gitStatusIndex, openFolders, pageMode]);
 
   const displayedEntries = useMemo(() => normalizedSearch
     ? searchResults
-      .filter((entry) => fileType === "all" || entry.isDir || entry.name.toLowerCase().endsWith(".ipynb"))
+      .filter((entry) => (fileType === "all" || entry.isDir || entry.name.toLowerCase().endsWith(".ipynb"))
+        && (!changedOnly || gitStatusIndex.has(entry.path)))
       .map((entry): TreeEntry => ({ ...entry, depth: 0 }))
-    : folderEntries, [fileType, folderEntries, normalizedSearch, searchResults]);
+    : folderEntries, [changedOnly, fileType, folderEntries, gitStatusIndex, normalizedSearch, searchResults]);
+  displayedEntriesRef.current = displayedEntries;
   const rows = useMemo(() => projectEditRows(displayedEntries, draft), [displayedEntries, draft]);
+
+  useEffect(() => {
+    if (!displayedEntries.length) {
+      setFocusedPath(null);
+      return;
+    }
+    if (!focusedPath || !displayedEntries.some((entry) => entry.path === focusedPath)) setFocusedPath(displayedEntries[0]!.path);
+  }, [displayedEntries, focusedPath]);
+
+  const focusTreeEntry = (index: number) => {
+    const bounded = Math.max(0, Math.min(displayedEntries.length - 1, index));
+    const entry = displayedEntries[bounded];
+    if (!entry) return;
+    setFocusedPath(entry.path);
+    virtuosoRef.current?.scrollToIndex({ index: bounded, align: "center" });
+    window.requestAnimationFrame(() => rowRefs.current.get(entry.path)?.focus());
+  };
+
+  const handleTreeKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, entry: TreeEntry) => {
+    const index = displayedEntries.findIndex((item) => item.path === entry.path);
+    if (index < 0) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      const next = event.key === "ArrowDown" ? index + 1
+        : event.key === "ArrowUp" ? index - 1
+          : event.key === "Home" ? 0 : displayedEntries.length - 1;
+      focusTreeEntry(next);
+      return;
+    }
+    if (event.key === "ArrowRight" && entry.isDir) {
+      event.preventDefault();
+      const folderPath = entry.compactRootPath ?? entry.path;
+      if (!openFolders.has(folderPath)) void toggleFolder(folderPath);
+      else if (displayedEntries[index + 1]?.depth > entry.depth) focusTreeEntry(index + 1);
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      const folderPath = entry.compactRootPath ?? entry.path;
+      if (entry.isDir && openFolders.has(folderPath)) {
+        void toggleFolder(folderPath);
+        return;
+      }
+      for (let parentIndex = index - 1; parentIndex >= 0; parentIndex -= 1) {
+        if (displayedEntries[parentIndex]!.depth < entry.depth) {
+          focusTreeEntry(parentIndex);
+          break;
+        }
+      }
+    }
+  };
 
   const refreshFiles = () => {
     workspaceFiles.invalidate();
@@ -714,21 +803,28 @@ export function FileBrowser({
     const error = state?.error;
     const gitStatus = pageMode ? gitStatusIndex.get(e.compactRootPath ?? e.path) ?? null : null;
     return (
-      <div key={e.path}>
+      <div key={e.path} role="treeitem" aria-level={e.depth + 1}>
         <button
+          ref={(node) => { if (node) rowRefs.current.set(e.path, node); else rowRefs.current.delete(e.path); }}
           onClick={() => handleClick(e)}
+          onFocus={() => setFocusedPath(e.path)}
+          onKeyDown={(event) => handleTreeKeyDown(event, e)}
           onContextMenu={(event) => handleContextMenu(event, e)}
+          draggable
+          onDragStart={(event) => writeWorkspaceReferenceDrag(event.dataTransfer, { cwd, path: e.path, name: e.name, isDir: e.isDir })}
           data-file-drop-path={e.path}
           data-file-drop-directory={e.isDir}
           data-drop-state={dropTarget?.path === e.path && dropTarget.valid ? "valid" : dropTarget?.path === e.path && !dropTarget.valid ? "invalid" : undefined}
           className={cn("flex h-tool w-full items-center gap-2 truncate rounded-input px-2 text-left text-ui-caption text-text/80 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
             activePreviewPath === e.path && !e.isDir && "bg-accent/10 text-accent",
+            locatedPath === e.path && "bg-accent/15 text-accent ring-2 ring-inset ring-accent/40",
             dropTarget?.path === e.path && dropTarget.valid && "bg-accent/10 ring-2 ring-inset ring-accent/60",
             dropTarget?.path === e.path && !dropTarget.valid && "cursor-not-allowed bg-error/10 ring-2 ring-inset ring-error/60")}
           title={e.path}
           style={{ paddingLeft: `${8 + e.depth * 12}px` }}
           aria-current={activePreviewPath === e.path && !e.isDir ? "true" : undefined}
           aria-expanded={e.isDir ? openFolders.has(e.path) : undefined}
+          tabIndex={(focusedPath ?? displayedEntries[0]?.path) === e.path ? 0 : -1}
         >
           {e.isDir
             ? <Icon icon={openFolders.has(e.path) ? ChevronDown : ChevronRight} size="xs" className="shrink-0 text-muted" />
@@ -844,6 +940,18 @@ export function FileBrowser({
           >
             <Icon icon={FolderPlus} size="xs" />
           </button>
+          {pageMode && gitRepository && (
+            <button
+              type="button"
+              aria-label={t("files.changedOnly")}
+              title={t("files.changedOnly")}
+              aria-pressed={changedOnly}
+              onClick={() => setChangedOnly((value) => !value)}
+              className={cn("flex h-tool w-tool shrink-0 items-center justify-center rounded-input text-muted transition-colors hover:bg-surface-hover hover:text-text", changedOnly && "bg-accent/10 text-accent")}
+            >
+              <Icon icon={ListFilter} size="xs" />
+            </button>
+          )}
           <button
             type="button"
             aria-label={t("files.refresh", { defaultValue: "Refresh files" })}
@@ -856,6 +964,7 @@ export function FileBrowser({
         </div>
         {visible && (
           <div
+            role="tree"
             aria-label={t("files.dropRoot")}
             aria-busy={uploading}
             onDragEnter={handleFileDrag}
@@ -883,6 +992,7 @@ export function FileBrowser({
             ) : pageMode ? (
               <div className="min-h-0 flex-1">
                 <Virtuoso
+                  ref={virtuosoRef}
                   data={rows}
                   computeItemKey={(_index, item) => item.kind === "editor" ? "inline-editor" : item.row.path}
                   itemContent={(_index, item) => renderTreeRow(item)}

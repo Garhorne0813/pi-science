@@ -8,15 +8,16 @@ import type { ExecutionRecord } from "@pi-science/contracts";
 import { RunsPage } from "./RunsPage";
 import { localDatetime } from "../../components/runs/RunsToolbar";
 
-const { toastMock, openInspectorMock, setDraftMock } = vi.hoisted(() => ({
+const { toastMock, openInspectorMock, revealInFileTreeMock, setDraftMock } = vi.hoisted(() => ({
   toastMock: vi.fn(),
   openInspectorMock: vi.fn(),
+  revealInFileTreeMock: vi.fn(),
   setDraftMock: vi.fn(),
 }));
 
 vi.mock("../../lib/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/ui")>();
-  return { ...actual, useUiStore: (selector: (state: { openInspector: typeof openInspectorMock }) => unknown) => selector({ openInspector: openInspectorMock }) };
+  return { ...actual, useUiStore: (selector: (state: { openInspector: typeof openInspectorMock; revealInFileTree: typeof revealInFileTreeMock }) => unknown) => selector({ openInspector: openInspectorMock, revealInFileTree: revealInFileTreeMock }) };
 });
 
 vi.mock("../../lib/agent-runtime", () => ({
@@ -150,6 +151,7 @@ function renderPage(initial = "/workspace/project/runs") {
         <Routes>
           <Route path="/workspace/:cwd/runs" element={<><RunsPage /><LocationProbe /></>} />
           <Route path="/workspace/:cwd" element={<LocationProbe />} />
+          <Route path="/workspace/:cwd/files" element={<LocationProbe />} />
           <Route path="/workspace/:cwd/session/:sessionId" element={<LocationProbe />} />
         </Routes>
       </MemoryRouter>
@@ -178,6 +180,7 @@ beforeEach(() => {
   fetchMock.mockReset().mockImplementation(defaultFetch);
   toastMock.mockClear();
   openInspectorMock.mockClear();
+  revealInFileTreeMock.mockClear();
   setDraftMock.mockClear();
   vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
@@ -269,6 +272,17 @@ describe("RunsPage execution ledger", () => {
     fireEvent.click(screen.getByRole("button", { name: /artifact-result/ }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/artifacts/artifact-result"), expect.anything()));
     expect(openInspectorMock).toHaveBeenLastCalledWith(expect.objectContaining({ path: "outputs/result.csv" }));
+  });
+
+  it("locates a recorded run file in the workspace tree", async () => {
+    renderPage("/workspace/project/runs?execution=exec_kernel");
+    await screen.findByText("node-kernel-gateway");
+    fireEvent.click(screen.getByRole("tab", { name: "Files" }));
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Reveal in file tree" })[1]!);
+
+    expect(revealInFileTreeMock).toHaveBeenCalledWith("/workspace", "outputs/result.csv");
+    expect(screen.getByLabelText("location")).toHaveTextContent("/workspace/%2Fworkspace/files");
   });
 
   it("copies execution evidence and drafts a reproduction in the originating session", async () => {
