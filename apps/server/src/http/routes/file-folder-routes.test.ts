@@ -50,7 +50,14 @@ describe("GET /api/files/git-status", () => {
     const response = await app.inject({ method: "GET", url: `/api/files/git-status?${query}` });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ repository: true, entries: { "new.txt": "??", "tracked.txt": " M" } });
+    expect(response.json()).toEqual({
+      repository: true,
+      entries: { "new.txt": "??", "tracked.txt": " M" },
+      stats: {
+        "new.txt": { additions: 1, deletions: 0 },
+        "tracked.txt": { additions: 1, deletions: 1 },
+      },
+    });
   });
 
   it("returns a stable empty result outside a git repository", async () => {
@@ -58,7 +65,24 @@ describe("GET /api/files/git-status", () => {
     const { app, query } = await buildApp(cwd);
     const response = await app.inject({ method: "GET", url: `/api/files/git-status?${query}` });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ repository: false, entries: {} });
+    expect(response.json()).toEqual({ repository: false, entries: {}, stats: {} });
+  });
+
+  it("counts staged lines before the repository has its first commit", async () => {
+    const cwd = await makeWorkspace();
+    const { app, query } = await buildApp(cwd);
+    await git(cwd, "init");
+    await writeFile(join(cwd, "first.txt"), "one\ntwo\n", "utf8");
+    await git(cwd, "add", "first.txt");
+
+    const response = await app.inject({ method: "GET", url: `/api/files/git-status?${query}` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      repository: true,
+      entries: { "first.txt": "A " },
+      stats: { "first.txt": { additions: 2, deletions: 0 } },
+    });
   });
 });
 

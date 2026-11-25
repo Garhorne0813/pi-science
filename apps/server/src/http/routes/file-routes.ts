@@ -94,47 +94,119 @@ async function resolveSurfaceableApiFile(root: string, path: string): Promise<st
   return target;
 }
 
-async function readGitStatus(root: string): Promise<{ repository: boolean; entries: Record<string, string> }> {
+interface GitLineStats { additions: number; deletions: number }
+interface GitStatusResult { repository: boolean; entries: Record<string, string>; stats: Record<string, GitLineStats> }
+
+function runGit(root: string, args: string[]): Promise<{ code: number | null; stdout: Buffer; overflow: boolean }> {
   return new Promise((resolve) => {
-    const child = spawn("git", ["-c", "core.fsmonitor=false", "-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+    const child = spawn("git", ["-c", "core.fsmonitor=false", "-C", root, ...args], {
       stdio: ["ignore", "pipe", "ignore"],
       env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
     });
     const chunks: Buffer[] = [];
     let size = 0;
     let settled = false;
-    const finish = (result: { repository: boolean; entries: Record<string, string> }) => {
+    const finish = (code: number | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      resolve(result);
+      resolve({ code, stdout: Buffer.concat(chunks), overflow: size > 2 * 1024 * 1024 });
     };
-    const timeout = setTimeout(() => { child.kill(); finish({ repository: false, entries: {} }); }, 5_000);
+    const timeout = setTimeout(() => { child.kill(); finish(null); }, 5_000);
     child.stdout.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size > 2 * 1024 * 1024) child.kill();
       else chunks.push(chunk);
     });
-    child.once("error", () => finish({ repository: false, entries: {} }));
-    child.once("close", (code) => {
-      if (code !== 0 || size > 2 * 1024 * 1024) return finish({ repository: false, entries: {} });
-      const fields = Buffer.concat(chunks).toString("utf8").split("\0");
-      const entries: Record<string, string> = {};
-      for (let index = 0; index < fields.length; index += 1) {
-        const field = fields[index];
-        if (!field || field.length < 4) continue;
-        const status = field.slice(0, 2);
-        const path = normalizeApiPath(field.slice(3));
-        entries[path] = status;
-        if (status.includes("R") || status.includes("C")) {
-          const previousPath = fields[index + 1];
-          if (previousPath) entries[normalizeApiPath(previousPath)] = status;
-          index += 1;
-        }
-      }
-      finish({ repository: true, entries });
-    });
+    child.once("error", () => finish(null));
+    child.once("close", finish);
   });
+}
+
+function parseNumstat(output: Buffer): Record<string, GitLineStats> {
+  const stats: Record<string, GitLineStats> = {};
+  for (const field of output.toString("utf8").split("\0")) {
+    if (!field) continue;
+    const [rawAdditions, rawDeletions, ...pathParts] = field.split("\t");
+    const additions = Number.parseInt(rawAdditions ?? "", 10);
+    const deletions = Number.parseInt(rawDeletions ?? "", 10);
+    const path = normalizeApiPath(pathParts.join("\t"));
+    // Git reports binary files as "-\t-". Keep their status marker instead of
+    // presenting a misleading line count.
+    if (!path || !Number.isFinite(additions) || !Number.isFinite(deletions)) continue;
+    stats[path] = { additions, deletions };
+  }
+  return stats;
+}
+
+function mergeGitStats(target: Record<string, GitLineStats>, source: Record<string, GitLineStats>): void {
+  for (const [path, value] of Object.entries(source)) {
+    const current = target[path] ?? { additions: 0, deletions: 0 };
+    target[path] = { additions: current.additions + value.additions, deletions: current.deletions + value.deletions };
+  }
+}
+
+async function countUntrackedLines(root: string, entries: Record<string, string>, stats: Record<string, GitLineStats>): Promise<void> {
+  const paths = Object.entries(entries).filter(([, status]) => status === "??").map(([path]) => path).slice(0, 500);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(paths.length, 16) }, async () => {
+    while (cursor < paths.length) {
+      const path = paths[cursor++];
+      if (!path) continue;
+      try {
+        const target = await resolveApiFile(root, path);
+        const metadata = await stat(target);
+        if (!metadata.isFile() || metadata.size > 1024 * 1024) continue;
+        const content = await readFile(target);
+        if (!isUtf8(content)) continue;
+        let additions = content.length > 0 && content.at(-1) !== 10 ? 1 : 0;
+        for (const byte of content) if (byte === 10) additions += 1;
+        stats[path] = { additions, deletions: 0 };
+      } catch {
+        // The working tree may change while status is being collected.
+      }
+    }
+  }));
+}
+
+async function readGitStatus(root: string): Promise<GitStatusResult> {
+  const empty = { repository: false, entries: {}, stats: {} };
+  const statusResult = await runGit(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+  if (statusResult.code !== 0 || statusResult.overflow) return empty;
+
+  const fields = statusResult.stdout.toString("utf8").split("\0");
+  const entries: Record<string, string> = {};
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index];
+    if (!field || field.length < 4) continue;
+    const status = field.slice(0, 2);
+    const path = normalizeApiPath(field.slice(3));
+    entries[path] = status;
+    if (status.includes("R") || status.includes("C")) {
+      const previousPath = fields[index + 1];
+      if (previousPath) entries[normalizeApiPath(previousPath)] = status;
+      index += 1;
+    }
+  }
+
+  // Comparing the working tree directly with HEAD avoids double-counting a
+  // file that contains both staged and unstaged edits.
+  const diffResult = await runGit(root, ["diff", "--numstat", "-z", "--no-renames", "HEAD", "--"]);
+  const stats: Record<string, GitLineStats> = {};
+  if (diffResult.code === 0 && !diffResult.overflow) {
+    mergeGitStats(stats, parseNumstat(diffResult.stdout));
+  } else {
+    // An unborn repository has no HEAD. Match ZCode's staged/unstaged fallback
+    // so newly added files still receive useful line counts before first commit.
+    const [staged, unstaged] = await Promise.all([
+      runGit(root, ["diff", "--cached", "--numstat", "-z", "--no-renames", "--"]),
+      runGit(root, ["diff", "--numstat", "-z", "--no-renames", "--"]),
+    ]);
+    if (staged.code === 0 && !staged.overflow) mergeGitStats(stats, parseNumstat(staged.stdout));
+    if (unstaged.code === 0 && !unstaged.overflow) mergeGitStats(stats, parseNumstat(unstaged.stdout));
+  }
+  await countUntrackedLines(root, entries, stats);
+  return { repository: true, entries, stats };
 }
 
 export function registerFileReadRoutes(app: FastifyInstance): void {

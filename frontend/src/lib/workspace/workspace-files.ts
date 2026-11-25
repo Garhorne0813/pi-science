@@ -6,7 +6,12 @@ import { queryClient } from "../client/query-client";
 export const SIDEBAR_FILE_LIMIT = 30;
 
 export interface Breadcrumb { name: string; path: string }
-export interface WorkspaceGitStatus { repository: boolean; entries: Record<string, string> }
+export interface WorkspaceGitLineStats { additions: number; deletions: number }
+export interface WorkspaceGitStatus {
+  repository: boolean;
+  entries: Record<string, string>;
+  stats: Record<string, WorkspaceGitLineStats>;
+}
 export interface WorkspaceFileEvent { type: "rename" | "change"; path: string }
 
 interface FileEventSubscription {

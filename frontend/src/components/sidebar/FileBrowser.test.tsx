@@ -35,7 +35,7 @@ vi.mock("../../lib/workspace", async (importOriginal) => {
       invalidate: vi.fn(),
       sidebar: vi.fn(async () => sidebarEntries(["work", "reports"])),
       search: vi.fn(async () => []),
-      gitStatus: vi.fn(async () => ({ repository: false, entries: {} })),
+      gitStatus: vi.fn(async () => ({ repository: false, entries: {}, stats: {} })),
       directory: vi.fn(async (_cwd: string, subdir: string) => ({
         entries: subdir === "work" ? sidebarEntries(["data.csv"]) : sidebarEntries(["plot.png"]),
         breadcrumbs: [{ name: subdir, path: subdir }],
@@ -72,7 +72,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   files.sidebar.mockImplementation(async () => sidebarEntries(["work", "reports"]));
   files.search.mockImplementation(async () => []);
-  files.gitStatus.mockImplementation(async () => ({ repository: false, entries: {} }));
+  files.gitStatus.mockImplementation(async () => ({ repository: false, entries: {}, stats: {} }));
   files.directory.mockImplementation(async (_cwd: string, subdir: string) => ({
     entries: subdir === "work" ? sidebarEntries(["data.csv"]) : sidebarEntries(["plot.png"]),
     breadcrumbs: [{ name: subdir, path: subdir }],
@@ -177,15 +177,19 @@ describe("FileBrowser", () => {
       ],
       breadcrumbs: [],
     });
-    files.gitStatus.mockResolvedValueOnce({ repository: true, entries: { "results/report.csv": " M", "draft.txt": "??" } });
+    files.gitStatus.mockResolvedValueOnce({
+      repository: true,
+      entries: { "results/report.csv": " M", "draft.txt": "??" },
+      stats: { "results/report.csv": { additions: 12, deletions: 3 }, "draft.txt": { additions: 8, deletions: 0 } },
+    });
     render(<FileBrowser cwd="proj" embedded mode="page" />);
 
-    const badge = await screen.findByLabelText("Git status: Modified");
-    expect(badge).toHaveTextContent("M");
-    expect(badge).toHaveClass("rounded-[5px]", "bg-warn/10");
-    const untracked = screen.getByLabelText("Git status: Untracked");
-    expect(untracked).toHaveTextContent("?");
-    expect(untracked).toHaveClass("bg-accent/10");
+    const folderStats = await screen.findByLabelText("Git changes: +12 / -3 lines");
+    expect(folderStats).toHaveTextContent("+12-3");
+    expect(folderStats.firstElementChild).toHaveClass("text-ok-text");
+    expect(folderStats.lastElementChild).toHaveClass("text-error-text");
+    const untracked = screen.getByLabelText("Git changes: +8 / -0 lines");
+    expect(untracked).toHaveTextContent("+8");
   });
 
   it("filters the tree to changed files and their parent folders in git workspaces", async () => {
@@ -196,7 +200,7 @@ describe("FileBrowser", () => {
       ],
       breadcrumbs: [],
     });
-    files.gitStatus.mockResolvedValueOnce({ repository: true, entries: { "results/report.csv": " M" } });
+    files.gitStatus.mockResolvedValueOnce({ repository: true, entries: { "results/report.csv": " M" }, stats: {} });
     render(<FileBrowser cwd="proj" embedded mode="page" />);
 
     expect(await screen.findByRole("button", { name: "notes.md" })).toBeInTheDocument();

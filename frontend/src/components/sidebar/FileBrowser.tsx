@@ -5,7 +5,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { cn, copyTextToClipboard, useUiStore } from "../../lib/ui";
 import { pinnedFileInspector } from "../../lib/artifacts";
 import { absoluteWorkspacePath } from "../../lib/files/workspace-path";
-import { SIDEBAR_FILE_LIMIT, sortFileEntries, subscribeWorkspaceFileEvents, workspaceFiles } from "../../lib/workspace";
+import { SIDEBAR_FILE_LIMIT, sortFileEntries, subscribeWorkspaceFileEvents, workspaceFiles, type WorkspaceGitLineStats } from "../../lib/workspace";
 import { baseName, createDraft, editErrorFor, parentDir, planCommit, projectEditRows, renameDraft, type EditRow, type FileKind, type InlineEditDraft } from "../../lib/workspace/inline-file-edit";
 import { useFeedback } from "../feedback/feedback-context";
 import { InlineNameInput } from "../files/InlineNameInput";
@@ -48,6 +48,26 @@ function buildGitStatusIndex(statuses: Record<string, string>): Map<string, stri
     let directory = parentDir(path);
     while (directory) {
       add(directory, status);
+      directory = parentDir(directory);
+    }
+  }
+  return index;
+}
+
+function buildGitStatsIndex(stats: Record<string, WorkspaceGitLineStats>): Map<string, WorkspaceGitLineStats> {
+  const index = new Map<string, WorkspaceGitLineStats>();
+  const add = (path: string, value: WorkspaceGitLineStats) => {
+    const current = index.get(path) ?? { additions: 0, deletions: 0 };
+    index.set(path, {
+      additions: current.additions + value.additions,
+      deletions: current.deletions + value.deletions,
+    });
+  };
+  for (const [path, value] of Object.entries(stats)) {
+    add(path, value);
+    let directory = parentDir(path);
+    while (directory) {
+      add(directory, value);
       directory = parentDir(directory);
     }
   }
@@ -151,11 +171,13 @@ export function FileBrowser({
   const [searchLoading, setSearchLoading] = useState(false);
   const [watchConnected, setWatchConnected] = useState(false);
   const [gitStatuses, setGitStatuses] = useState<Record<string, string>>({});
+  const [gitStats, setGitStats] = useState<Record<string, WorkspaceGitLineStats>>({});
   const [gitRepository, setGitRepository] = useState(false);
   const [changedOnly, setChangedOnly] = useState(false);
   const [focusedPath, setFocusedPath] = useState<string | null>(null);
   const [locatedPath, setLocatedPath] = useState<string | null>(null);
   const gitStatusIndex = useMemo(() => buildGitStatusIndex(gitStatuses), [gitStatuses]);
+  const gitStatsIndex = useMemo(() => buildGitStatsIndex(gitStats), [gitStats]);
   const normalizedSearch = searchQuery.trim();
 
   useEffect(() => {
@@ -165,6 +187,7 @@ export function FileBrowser({
     setSearchQuery("");
     setSearchResults([]);
     setGitStatuses({});
+    setGitStats({});
     setGitRepository(false);
     setChangedOnly(false);
     setFocusedPath(null);
@@ -324,11 +347,13 @@ export function FileBrowser({
       if (!signal?.aborted) {
         setGitRepository(status.repository);
         setGitStatuses(status.repository ? status.entries : {});
+        setGitStats(status.repository ? status.stats : {});
       }
     } catch {
       if (!signal?.aborted) {
         setGitRepository(false);
         setGitStatuses({});
+        setGitStats({});
       }
     }
   }, [cwd, pageMode]);
@@ -812,6 +837,7 @@ export function FileBrowser({
     const isLoading = state?.loading;
     const error = state?.error;
     const gitStatus = pageMode ? gitStatusIndex.get(e.compactRootPath ?? e.path) ?? null : null;
+    const gitLineStats = pageMode ? gitStatsIndex.get(e.compactRootPath ?? e.path) ?? null : null;
     const gitStatusLabel = gitStatus ? t(gitStatusLabelKey(gitStatus)) : null;
     return (
       <div key={e.path} role="treeitem" aria-level={e.depth + 1}>
@@ -843,7 +869,16 @@ export function FileBrowser({
           <Icon icon={e.isDir ? (openFolders.has(e.path) ? FolderOpen : Folder) : iconForFile(e.name)} size="sm" className="shrink-0 text-muted" />
           <span className="min-w-0 flex-1 truncate">{e.displayName ?? e.name}</span>
           {normalizedSearch && <span className="max-w-[55%] shrink truncate text-ui-meta text-muted">{parentDir(e.path) || t("files.workspace")}</span>}
-          {gitStatus && (
+          {gitLineStats && (gitLineStats.additions > 0 || gitLineStats.deletions > 0) ? (
+            <span
+              aria-label={t("files.gitLineChanges", { additions: gitLineStats.additions, deletions: gitLineStats.deletions })}
+              title={t("files.gitLineChanges", { additions: gitLineStats.additions, deletions: gitLineStats.deletions })}
+              className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-[11px] font-semibold leading-none tabular-nums"
+            >
+              {gitLineStats.additions > 0 && <span className="text-ok-text">+{gitLineStats.additions}</span>}
+              {gitLineStats.deletions > 0 && <span className="text-error-text">-{gitLineStats.deletions}</span>}
+            </span>
+          ) : gitStatus ? (
             <span
               aria-label={t("files.gitStatus", { status: gitStatusLabel })}
               title={t("files.gitStatus", { status: gitStatusLabel })}
@@ -860,7 +895,7 @@ export function FileBrowser({
             >
               {gitStatusMarker(gitStatus)}
             </span>
-          )}
+          ) : null}
           {isLoading && <Icon icon={Loader2} size="xs" className="ml-auto shrink-0 animate-spin text-muted" />}
         </button>
         {error && <p className="px-2 text-ui-micro italic text-error-text" style={{ paddingLeft: `${20 + e.depth * 12}px` }}>{error}</p>}

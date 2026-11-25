@@ -862,6 +862,7 @@
   "files.clearSearch": "Clear search",
   "files.noSearchResults": "No matching files",
   "files.gitStatus": "Git status: {{status}}",
+  "files.gitLineChanges": "Git changes: +{{additions}} / -{{deletions}} lines",
   "files.gitModified": "Modified",
   "files.gitUntracked": "Untracked",
   "files.gitAdded": "Added",

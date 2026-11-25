@@ -862,6 +862,7 @@
   "files.clearSearch": "清除搜索",
   "files.noSearchResults": "没有匹配的文件",
   "files.gitStatus": "Git 状态：{{status}}",
+  "files.gitLineChanges": "Git 变更：+{{additions}} / -{{deletions}} 行",
   "files.gitModified": "已修改",
   "files.gitUntracked": "未跟踪",
   "files.gitAdded": "已添加",
