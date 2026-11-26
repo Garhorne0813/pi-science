@@ -101,6 +101,11 @@ export interface ToolCallBlock extends ConversationBlockIdentity {
   presentation?: ToolPresentation;
   input?: Record<string, unknown>;
   output?: string;
+  /** The event projection keeps only a bounded tail for large results. These
+   * fields make that transport truncation explicit instead of presenting the
+   * captured tail as the complete tool output. */
+  outputTruncated?: boolean;
+  originalOutputBytes?: number;
   /** Tool-specific metadata from the persisted toolResult message (e.g.
    *  rpiv-todo's task snapshot). Read-only panels rebuild tool state from
    *  this without needing live events. */

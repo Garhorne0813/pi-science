@@ -1,5 +1,6 @@
 import type { ActivityKind } from "../../../lib/conversation/projection";
 import { GenericActivityRenderer } from "./GenericActivity";
+import { FileActivityRenderer } from "./FileActivity";
 import { KernelActivityRenderer } from "./KernelActivity";
 import { LiteratureActivityRenderer } from "./LiteratureActivity";
 import type { ActivityRenderer } from "./types";
@@ -23,6 +24,7 @@ export class ActivityRendererRegistry {
 }
 
 export const activityRendererRegistry = new ActivityRendererRegistry()
+  .register("file", FileActivityRenderer)
   .register("kernel", KernelActivityRenderer)
   .register("literature", LiteratureActivityRenderer);
 

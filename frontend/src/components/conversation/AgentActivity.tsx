@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { Check, CircleX, ChevronRight } from "lucide-react";
+import { Check, CircleX, ChevronRight, Copy, ExternalLink, FolderSearch } from "lucide-react";
 import type { ProgressAppearance } from "@pi-science/contracts";
 import { useTranslation } from "react-i18next";
 import type { AgentMessageBlock, ThinkingBlock, ToolCallBlock } from "../../types/thread";
@@ -15,6 +15,11 @@ import { cn } from "../../lib/ui";
 import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
 import { parseSuggestions } from "../../lib/conversation";
 import { activityRendererRegistry } from "./activity-renderers/registry";
+import { toolErrorSummary, toolFilePath } from "./activity-renderers/shared";
+import { pinnedFileInspector } from "../../lib/artifacts";
+import { revealWorkspaceFile } from "../../lib/files";
+import { toWorkspaceRelativePath } from "../../lib/files/workspace-path";
+import { useUiStore } from "../../lib/ui";
 import styles from "./AgentActivity.module.css";
 
 export type ActivityBlock = AgentMessageBlock | ThinkingBlock | ToolCallBlock;
@@ -178,7 +183,7 @@ function ActivityTrace({ groups, cwd, live = false }: { groups: ActivityGroup[];
         ? <div key={block.id} id={`thread-block-${block.id}`} className={cn(styles.entry, styles.narration, "min-w-0")}><MarkdownViewer variant="chat" mode={block.partial ? "streaming" : "final"} className="text-ui-body leading-relaxed text-muted [overflow-wrap:anywhere]" resourceContext={cwd ? { cwd } : undefined}>{parseSuggestions(block.parts.map((part) => part.text).join("")).clean}</MarkdownViewer></div>
         : block.kind === "thinking"
           ? <ThinkingRow key={block.id} block={block} />
-          : <TraceItem key={block.id} block={block} live={live} />);
+          : <TraceItem key={block.id} block={block} live={live} cwd={cwd} />);
       if (group.kind !== "exploration" || group.blocks.length < 2) return entries;
       return <div key={group.id} data-activity-group-id={group.id} className={cn(styles.entry, "min-w-0")}>
         <GroupSummary group={group} live={live} />
@@ -372,40 +377,60 @@ function ActivityIcon({ state, slot, config, label, activityState, compact = fal
   return <span aria-hidden className="shrink-0 text-sm font-medium text-warn">!</span>;
 }
 
-function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
+function TraceItem({ block, live, cwd }: { block: ToolCallBlock; live: boolean; cwd?: string }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const [errorCopied, setErrorCopied] = useState(false);
+  const openInspector = useUiStore((state) => state.openInspector);
   const activity = projectToolActivity(block);
   const renderer = activityRendererRegistry.resolve(activity.presentation?.renderer ?? activity.kind);
   const rendererProps = { activity, source: block, live, t };
   const compact = renderer.compact(rendererProps);
+  const errorSummary = toolErrorSummary(block);
+  const rawFilePath = toolFilePath(block);
+  const filePath = cwd && rawFilePath ? toWorkspaceRelativePath(rawFilePath, cwd) : null;
+  const failedAttempts = block.statusHistory?.filter((status) => status === "error").length ?? 0;
+  const recovered = block.status === "done" && failedAttempts > 0;
   const hasStructuredDetails = block.details !== undefined && block.details !== null;
-  const hasDetails = Boolean(block.input || block.output || block.partialOutput || block.diff || hasStructuredDetails);
+  const hasDetails = Boolean(block.input || block.output || block.partialOutput || block.diff || hasStructuredDetails || errorSummary || recovered || filePath);
   const details = expanded ? renderer.expanded(rendererProps) : null;
   const running = live && block.status === "running";
   const duration = running ? null : stepDuration(block);
   // While the operation streams, its freshest output line fills the right
   // edge of the row and the chevron sits at the far right; once the step
   // completes the tail makes way for the duration chip.
-  const liveTail = running && block.partialOutput ? lastStreamLine(block.partialOutput) : compact.detail ?? null;
+  const streamingTail = running && block.partialOutput ? lastStreamLine(block.partialOutput) : null;
+  const liveTail = streamingTail ?? compact.detail ?? null;
   return <div className={cn(styles.entry, styles.tool)} data-running={running}>
     <button type="button" disabled={!hasDetails} aria-expanded={hasDetails ? expanded : undefined} onClick={() => hasDetails && setExpanded((value) => !value)} className={cn(styles.toolButton, "flex min-h-primary max-w-full items-center gap-2 rounded-input py-1.5 text-left text-ui-label text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default sm:min-h-7 sm:py-1")}>
       {running ? <span aria-hidden className="mx-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : block.status === "error" ? <CircleX size={14} aria-hidden className="shrink-0 text-error-text" /> : <Check size={14} aria-hidden className="shrink-0 text-muted" />}
       <span className="min-w-0 truncate">{compact.title}</span>
+      {liveTail && <span aria-hidden className={cn("hidden min-w-0 flex-1 truncate text-right text-[10px] text-muted sm:block", streamingTail && "font-mono")}>{liveTail}</span>}
+      {recovered && <span className="shrink-0 rounded-full bg-warn-fill px-1.5 py-0.5 text-[10px] font-medium text-warn-text">{t("conversation.activity.recoveredAfterRetry")}</span>}
       {compact.fileChange ? <span
         aria-label={t("conversation.activity.lineChanges", { additions: compact.fileChange.additions, deletions: compact.fileChange.deletions })}
-        className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-[11px] font-semibold leading-none tabular-nums"
+        className={cn("inline-flex shrink-0 items-center gap-1.5 text-[11px] font-semibold leading-none tabular-nums", !liveTail && !recovered && "ml-auto")}
       >
         {compact.fileChange.additions > 0 && <span className="text-ok-text">+{compact.fileChange.additions}</span>}
         {compact.fileChange.deletions > 0 && <span className="text-error-text">-{compact.fileChange.deletions}</span>}
-      </span> : liveTail && <span aria-hidden className="hidden min-w-0 flex-1 truncate text-right font-mono text-[10px] text-muted sm:block">{liveTail}</span>}
+        {compact.fileChange.truncated && <span className="text-muted" title={t("conversation.activity.diffTruncated")}>…</span>}
+      </span> : null}
       {duration && <span aria-hidden="true" className="shrink-0 font-mono text-[10px] tabular-nums text-muted">{duration}</span>}
       {hasDetails && <ChevronRight size={12} aria-hidden className={cn(styles.chevron, "shrink-0 transition-transform", expanded && "rotate-90")} />}
     </button>
     {expanded && hasDetails && details && <div className={cn(styles.details, "space-y-2 pb-2 pl-6 text-xs")}>
+      {(filePath || errorSummary || recovered) && <div className="flex flex-wrap items-center gap-2">
+        {filePath && cwd && <>
+          <span className="basis-full break-all font-mono text-[11px] text-muted" title={filePath}>{filePath}</span>
+          <button type="button" onClick={() => { void pinnedFileInspector(filePath, filePath.split("/").at(-1), "workspace", cwd).then(openInspector).catch(() => undefined); }} className="inline-flex min-h-7 items-center gap-1 rounded-input border border-border px-2 text-[11px] text-muted hover:bg-surface-hover hover:text-text"><ExternalLink size={12} />{t("conversation.activity.openFile")}</button>
+          <button type="button" onClick={() => revealWorkspaceFile(cwd, filePath)} className="inline-flex min-h-7 items-center gap-1 rounded-input border border-border px-2 text-[11px] text-muted hover:bg-surface-hover hover:text-text"><FolderSearch size={12} />{t("conversation.activity.locateFile")}</button>
+        </>}
+        {errorSummary && <button type="button" onClick={() => { void navigator.clipboard.writeText(errorSummary).then(() => { setErrorCopied(true); window.setTimeout(() => setErrorCopied(false), 2_000); }).catch(() => setErrorCopied(false)); }} className="inline-flex min-h-7 items-center gap-1 rounded-input border border-border px-2 text-[11px] text-muted hover:bg-surface-hover hover:text-text"><Copy size={12} />{t(errorCopied ? "conversation.activity.errorCopied" : "conversation.activity.copyError")}</button>}
+        {recovered && <span className="text-[11px] text-muted">{t("conversation.activity.retryHistory", { count: failedAttempts })}</span>}
+      </div>}
       {details.map((detail, index) => detail.pre || detail.plain
         ? <Detail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} pre={detail.pre} />
-        : <OutputDetail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} fullValue={detail.fullValue} partial={detail.partial} t={t} />)}
+        : <OutputDetail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} fullValue={detail.fullValue} partial={detail.partial} transportTruncated={detail.transportTruncated} originalBytes={detail.originalBytes} t={t} />)}
     </div>}
   </div>;
 }
@@ -427,28 +452,40 @@ function OutputDetail({
   value,
   fullValue,
   partial = false,
+  transportTruncated = false,
+  originalBytes,
   t,
 }: {
   label: string;
   value: string;
   fullValue?: string;
   partial?: boolean;
+  transportTruncated?: boolean;
+  originalBytes?: number;
   t: (key: string, options?: Record<string, unknown>) => string;
 }) {
   const [showFull, setShowFull] = useState(false);
   const truncated = value.length > DETAIL_PREVIEW_LIMIT;
-  const canShowFull = Boolean(fullValue && fullValue.length > DETAIL_PREVIEW_LIMIT);
+  const canShowFull = !transportTruncated && Boolean(fullValue && fullValue.length > DETAIL_PREVIEW_LIMIT);
   const rendered = showFull && canShowFull ? fullValue! : value.slice(0, DETAIL_PREVIEW_LIMIT);
   return <div>
     <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted">{label}</div>
     <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-input bg-surface px-2 py-1.5 font-mono text-xs leading-5 text-text">{rendered}</pre>
-    {truncated && <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-muted">
-      <span>{t("conversation.activity.previewTruncated", { count: DETAIL_PREVIEW_LIMIT })}</span>
+    {(truncated || transportTruncated) && <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-muted">
+      {transportTruncated && <span>{t("conversation.activity.transportTruncated", { bytes: formatBytes(originalBytes) })}</span>}
+      {truncated && <span>{t("conversation.activity.previewTruncated", { count: DETAIL_PREVIEW_LIMIT })}</span>}
       {canShowFull
         ? <button type="button" onClick={() => setShowFull((current) => !current)} className="underline underline-offset-2 hover:text-text">{t("conversation.activity.fullOutput")}{showFull ? " ↑" : " ↓"}</button>
         : <span>{t("conversation.activity.fullOutputUnavailable")}</span>}
     </div>}
-    {partial && !truncated && <div className="mt-1 text-[10px] text-muted">{t("conversation.activity.fullOutputUnavailable")}</div>}
+    {partial && !transportTruncated && !truncated && <div className="mt-1 text-[10px] text-muted">{t("conversation.activity.fullOutputUnavailable")}</div>}
   </div>;
 }
 function Detail({ label, value, pre = false }: { label: string; value: string; pre?: boolean }) { return <div><div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted">{label}</div>{pre ? <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-input bg-surface px-2 py-1.5 font-mono text-xs leading-5 text-text">{value}</pre> : <div className="font-mono text-xs text-text">{value}</div>}</div>; }
+
+function formatBytes(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value) || value < 0) return "—";
+  if (value < 1024) return `${Math.round(value)} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}

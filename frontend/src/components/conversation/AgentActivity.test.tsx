@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import i18n from "../../i18n";
 import type { ActivityBlock } from "./AgentActivity";
 import type { ToolCallBlock } from "../../types/thread";
@@ -120,6 +120,53 @@ describe("AgentActivity live stream", () => {
     expect(changes).toHaveTextContent("+12-3");
     expect(changes.firstElementChild).toHaveClass("text-ok-text");
     expect(changes.lastElementChild).toHaveClass("text-error-text");
+  });
+
+  it("shows the full file path and offers preview and file-tree actions", () => {
+    window.history.replaceState({}, "", "/workspace/proj/session/one");
+    render(<AgentActivity cwd="proj" blocks={[{
+      ...tool("edit-file", "edit", "done", { path: "src/features/app.ts" }),
+      details: { fileChange: { path: "src/features/app.ts", additions: 2, deletions: 1 } },
+    }]} />);
+
+    expect(screen.getByText("src/features/app.ts")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^Updating app\.ts/ }));
+    expect(screen.getByRole("button", { name: "Open file" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Locate in file tree" }));
+    expect(window.location.pathname).toBe("/workspace/proj/files");
+  });
+
+  it("summarizes failures and copies the actionable error", async () => {
+    const originalClipboard = navigator.clipboard;
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    try {
+      render(<AgentActivity blocks={[{ ...tool("test", "bash", "error", { description: "Run tests" }), output: "Error: expected 2 to equal 3" }]} />);
+      expect(screen.getByText("Failed: Run tests")).toBeInTheDocument();
+      expect(screen.getByText("Error: expected 2 to equal 3")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Failed: Run tests" }));
+      fireEvent.click(screen.getByRole("button", { name: "Copy error" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith("Error: expected 2 to equal 3"));
+      expect(screen.getByRole("button", { name: "Error copied" })).toBeInTheDocument();
+    } finally {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
+    }
+  });
+
+  it("exposes transport truncation and retry recovery without hiding the final state", () => {
+    const recovered = {
+      ...tool("retry", "bash", "done", { description: "Run checks" }),
+      output: "captured tail",
+      outputTruncated: true,
+      originalOutputBytes: 2_400_000,
+      statusHistory: ["running", "error", "running", "done"] as ToolCallBlock["statusHistory"],
+    };
+    render(<AgentActivity blocks={[recovered]} />);
+    expect(screen.getByText("Recovered")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^Run checks/ }));
+    expect(screen.getByText("Succeeded after 1 failed attempt")).toBeInTheDocument();
+    expect(screen.getByText("Tool output was truncated · original size 2.3 MB")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy error" })).not.toBeInTheDocument();
   });
 
   it("does not materialize expanded details while a trace row is collapsed", () => {

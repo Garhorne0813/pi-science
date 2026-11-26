@@ -4,6 +4,8 @@ import type { ActivityDetailView, ActivityRendererProps } from "./types";
 export function genericDetails({ source, t }: ActivityRendererProps): ActivityDetailView[] {
   const discovery = ["ls", "glob", "grep"].includes(source.tool);
   const details: ActivityDetailView[] = [{ label: t("conversation.activity.toolLabel"), value: source.tool, plain: true }];
+  const failure = toolErrorSummary(source);
+  if (failure) details.push({ label: t("conversation.activity.errorDetail"), value: failure, fullValue: failure });
   if (source.input) details.push({ label: t("conversation.activity.input"), value: stringify(source.input), pre: true });
   const output = source.output ?? source.partialOutput;
   if (output) details.push({
@@ -12,6 +14,8 @@ export function genericDetails({ source, t }: ActivityRendererProps): ActivityDe
     ...(discovery ? { pre: true } : {}),
     ...(source.output ? { fullValue: source.output } : {}),
     partial: Boolean(source.partialOutput && !source.output),
+    transportTruncated: source.outputTruncated === true,
+    ...(source.originalOutputBytes !== undefined ? { originalBytes: source.originalOutputBytes } : {}),
   });
   const detailObject = record(source.details);
   const change = fileChange(source);
@@ -48,6 +52,47 @@ export function fileChange(source: ToolCallBlock): FileChangeView | null {
     ...(typeof value.patch === "string" ? { patch: value.patch } : {}),
     ...(value.truncated === true ? { truncated: true } : {}),
   };
+}
+
+export function toolFilePath(source: ToolCallBlock): string | undefined {
+  return fileChange(source)?.path
+    ?? text(source.input?.path)
+    ?? text(source.input?.file_path)
+    ?? text(source.input?.file)
+    ?? text(source.input?.target);
+}
+
+/** Pull one actionable error line out of the result envelope. The complete
+ * output remains available below; this is deliberately a summary, not a
+ * replacement for logs. */
+export function toolErrorSummary(source: ToolCallBlock): string | undefined {
+  // A recovered call keeps its failed attempt in statusHistory, but its final
+  // output is no longer an error. Retry history is presented separately.
+  if (source.status !== "error") return undefined;
+  const details = record(source.details);
+  const nested = record(details?.result);
+  for (const value of [details?.error, details?.message, nested?.error, nested?.message]) {
+    const summary = errorLine(value);
+    if (summary) return summary;
+  }
+  const output = source.output ?? source.partialOutput;
+  if (!output) return undefined;
+  try {
+    const parsed = JSON.parse(output) as unknown;
+    const envelope = record(parsed);
+    for (const value of [envelope?.error, envelope?.message, record(envelope?.details)?.error]) {
+      const summary = errorLine(value);
+      if (summary) return summary;
+    }
+  } catch { /* ordinary stderr/stdout */ }
+  const lines = output.split("\n").map((line) => line.trim()).filter(Boolean);
+  return errorLine(lines.find((line) => /(?:error|failed|exception|traceback)/i.test(line)) ?? lines.at(-1));
+}
+
+function errorLine(value: unknown): string | undefined {
+  const line = text(value)?.split("\n").find((candidate) => candidate.trim())?.trim();
+  if (!line) return undefined;
+  return line.length > 240 ? `${line.slice(0, 239)}…` : line;
 }
 
 export function record(value: unknown): Record<string, unknown> | null {

@@ -152,7 +152,8 @@ describe("ActivityRendererRegistry", () => {
     const renderer = activityRendererRegistry.resolve(projectToolActivity(edit).kind);
     expect(renderer.compact({ activity: projectToolActivity(edit), source: edit, live: false, t })).toEqual({
       title: "conversation.activity.write:app.ts",
-      fileChange: { additions: 12, deletions: 3 },
+      detail: "src/app.ts",
+      fileChange: { path: "src/app.ts", additions: 12, deletions: 3 },
     });
     expect(renderer.expanded({ activity: projectToolActivity(edit), source: edit, live: false, t })).toContainEqual(expect.objectContaining({
       label: "conversation.activity.diff:",

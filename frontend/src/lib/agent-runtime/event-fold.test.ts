@@ -11,6 +11,25 @@ installRuntimeTestEnvironment();
 
 describe("transport event folding", () => {
 
+  it("preserves explicit transport truncation metadata on tool output", () => {
+    const thread = foldEvent(emptyThread(), {
+      sessionId: "s",
+      type: "tool.completed",
+      callId: "large-output",
+      tool: "bash",
+      status: "done",
+      output: "bounded tail",
+      outputTruncated: true,
+      originalOutputBytes: 2_400_000,
+    });
+    expect(thread.blocks).toContainEqual(expect.objectContaining({
+      kind: "tool",
+      callId: "large-output",
+      outputTruncated: true,
+      originalOutputBytes: 2_400_000,
+    }));
+  });
+
   it("preserves older user messages when a settled tail is refreshed", () => {
     const current = { blocks: convertHistoryToBlocks([
       { id: "user-old", role: "user", content: [{ type: "text", text: "old question" }] },
