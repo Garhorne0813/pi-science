@@ -17,6 +17,7 @@ vi.mock("../../lib/workspace", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/workspace")>();
   return {
     ...actual,
+    downloadWorkspaceFile: vi.fn(async () => undefined),
     useRequiredWorkspaceCwd: () => "proj",
     workspaceFiles: {
       invalidate: vi.fn(),
@@ -64,6 +65,8 @@ const files = (await import("../../lib/workspace")).workspaceFiles as unknown as
   reveal: ReturnType<typeof vi.fn>;
   formatSize: (bytes: number) => string;
 };
+
+const downloadFile = (await import("../../lib/workspace")).downloadWorkspaceFile as unknown as ReturnType<typeof vi.fn>;
 
 beforeAll(async () => {
   await i18n.changeLanguage("en");
@@ -233,4 +236,27 @@ describe("FilesPage inline file edits", () => {
     expect(screen.getByRole("textbox", { name: "File name" })).toHaveValue("dup.txt");
   });
 
+});
+
+describe("FilesPage download menu", () => {
+  it("downloads a file row under its own name and closes the menu", async () => {
+    render(<FilesPage />);
+    await screen.findByText("a.txt");
+    fireEvent.contextMenu(screen.getByText("a.txt"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Download" }));
+
+    await vi.waitFor(() => expect(downloadFile).toHaveBeenCalledWith("proj", "a.txt", "a.txt"));
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("reports a failed download instead of failing silently", async () => {
+    downloadFile.mockRejectedValueOnce(new Error("Unable to read file: a.txt"));
+    render(<FilesPage />);
+    await screen.findByText("a.txt");
+    fireEvent.contextMenu(screen.getByText("a.txt"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Download" }));
+
+    const { useFeedback } = await import("../../components/feedback/feedback-context");
+    await vi.waitFor(() => expect(vi.mocked(useFeedback().toast)).toHaveBeenCalledWith("Unable to read file: a.txt", "error"));
+  });
 });

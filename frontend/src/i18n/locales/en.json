@@ -916,6 +916,8 @@
   "files.copyPath": "Copy path",
   "files.copyAbsolutePath": "Copy absolute path",
   "files.copyName": "Copy name",
+  "files.download": "Download",
+  "files.downloadError": "Download failed",
   "files.copied": "Copied to clipboard",
   "files.copyFailed": "Copy failed",
   "files.refresh": "Refresh files",
