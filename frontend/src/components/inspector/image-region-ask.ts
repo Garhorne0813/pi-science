@@ -5,7 +5,7 @@ import type { PixelRect } from "./image-region";
 
 /** Why attaching a region failed. The inspector picks its copy from this, so a
  *  dropped connection does not read like an upload the workspace refused. */
-export type RegionAskFailureKind = "network" | "rejected" | "unknown";
+export type RegionAskFailureKind = "network" | "rejected" | "unknown" | "send";
 
 export class RegionAskError extends Error {
   readonly kind: RegionAskFailureKind;
@@ -33,24 +33,20 @@ export interface RegionAskPorts {
   isCurrent: () => boolean;
   snapshot: (image: HTMLImageElement, rect: PixelRect) => Promise<Blob>;
   upload: (blob: Blob, path: string) => Promise<void>;
-  addReference: (path: string, description: string) => void;
-  finish: () => void;
 }
 
 /** Turns the pixels the user selected into a workspace image reference. */
-export async function askAboutImageRegion(
+export async function uploadImageRegion(
   { image, rect, source }: RegionAskRequest,
   ports: RegionAskPorts,
-): Promise<void> {
+): Promise<{ path: string; description: string } | null> {
   try {
-    if (!ports.isCurrent()) return;
+    if (!ports.isCurrent()) return null;
     const blob = await ports.snapshot(image, rect);
-    if (!ports.isCurrent()) return;
+    if (!ports.isCurrent()) return null;
     const path = imageRegionPath();
     await ports.upload(blob, path);
-    if (!ports.isCurrent()) return;
-    ports.addReference(path, regionDescription(source, rect));
-    ports.finish();
+    return ports.isCurrent() ? { path, description: regionDescription(source, rect) } : null;
   } catch (error) {
     throw classifyRegionAskFailure(error);
   }

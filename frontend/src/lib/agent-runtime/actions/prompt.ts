@@ -37,16 +37,19 @@ export function createPromptActions(set: SetState, get: GetState): Pick<RuntimeS
       else if (activeSessionId) {
         try {
           recoveredStatus = await getClient().getPromptRequestStatus(activeSessionId, clientMessageId, cwd);
-          if (recoveredStatus.status === "persisted") {
-            updateOptimisticStatus(get, set, recoveredStatus);
-            return activeSessionId;
-          }
         } catch (error) {
           if ((error as Error & { status?: number }).status === 404) removeLocalPromptRequest(clientMessageId);
           // Reusing the same ID is safe: the server ledger either recognizes
           // it and returns its state without dispatching again, or has no
           // record and can accept this first attempt.
         }
+        const current = get();
+        if (current.cwd !== cwd || current.activeSessionId !== activeSessionId) throw new Error("Conversation changed while checking prompt delivery");
+        if (recoveredStatus?.status === "persisted") {
+          updateOptimisticStatus(get, set, recoveredStatus);
+          return activeSessionId;
+        }
+        if (current.working || current.pendingInteraction || current.pendingQuestionnaire) throw new Error("The current conversation is still running");
       }
       const requestId = clientMessageId;
       const alreadyPending = recoveredStatus !== null

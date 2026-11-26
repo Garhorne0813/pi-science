@@ -2,7 +2,7 @@
  *  the markdown preview on the right side. */
 
 import { expect, screenshot, test, waitForConversationSettled, workspaceRoute } from "./fixtures/app.fixture";
-import { VISUAL_CWD } from "./fixtures/data.mjs";
+import { VISUAL_CWD, VISUAL_LANDING_CWD } from "./fixtures/data.mjs";
 
 async function openSidebarFile(page: import("@playwright/test").Page, testInfo: import("@playwright/test").TestInfo) {
   // The mobile project renders the collapsed rail without the file browser,
@@ -219,63 +219,90 @@ test("iframe keyboard navigation contains focus and prioritizes native dialogs",
   await expect(page.getByRole("button", { name: "Focus file", exact: true })).toBeFocused();
 });
 
-test("ask about an image region from the preview", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-light", "exercise pointer capture and canvas encoding once");
-  const file = previewFiles["sample.svg"];
-  let uploaded: Buffer = Buffer.alloc(0);
-  await page.route("**/api/files**", async route => {
-    const url = new URL(route.request().url());
-    if (url.pathname === "/api/files/upload") {
-      const body = route.request().postDataBuffer()!;
-      const start = body.indexOf(Buffer.from([137, 80, 78, 71]));
-      const end = body.indexOf("IEND", start);
-      expect(start).toBeGreaterThan(0);
-      expect(end).toBeGreaterThan(start);
-      uploaded = body.subarray(start, end + 8);
-      return route.fulfill({ json: { ok: true, path: url.searchParams.get("path") } });
-    }
-    if (url.pathname.startsWith("/api/files/serve/image-regions/"))
-      return route.fulfill({ contentType: "image/png", body: uploaded });
-    if (url.pathname === "/api/files/serve/sample.svg")
-      return route.fulfill({ contentType: file.mime, body: file.data });
-    if (url.pathname === "/api/files" && !url.searchParams.get("subdir")) {
-      const response = await route.fetch();
-      return route.fulfill({ response, json: [...await response.json(), { path: "sample.svg", name: "sample.svg", isDir: false, size: 512 }] });
-    }
-    return route.continue();
+for (const newConversation of [false, true]) {
+  test(`ask about an image region from the preview in ${newConversation ? "a new" : "an existing"} conversation`, async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-light", "exercise pointer capture and canvas encoding once");
+    const file = previewFiles["sample.svg"];
+    let uploaded: Buffer = Buffer.alloc(0);
+    let uploadCount = 0;
+    const prompts: Array<{ message: string; client_message_id: string }> = [];
+    await page.route("**/api/sessions/*/prompts?*", async (route) => {
+      const prompt = route.request().postDataJSON();
+      prompts.push(prompt);
+      if (prompts.length === 1) {
+        return route.fulfill({ status: 400, json: { status: "rejected", error: "Please retry" } });
+      }
+      return route.fulfill({ json: { status: "persisted", client_message_id: prompt.client_message_id } });
+    });
+    await page.route("**/api/files**", async route => {
+      const url = new URL(route.request().url());
+      if (url.pathname === "/api/files/upload") {
+        uploadCount++;
+        const body = route.request().postDataBuffer()!;
+        const start = body.indexOf(Buffer.from([137, 80, 78, 71]));
+        const end = body.indexOf("IEND", start);
+        expect(start).toBeGreaterThan(0);
+        expect(end).toBeGreaterThan(start);
+        uploaded = body.subarray(start, end + 8);
+        return route.fulfill({ json: { ok: true, path: url.searchParams.get("path") } });
+      }
+      if (url.pathname.startsWith("/api/files/serve/image-regions/"))
+        return route.fulfill({ contentType: "image/png", body: uploaded });
+      if (url.pathname === "/api/files/serve/sample.svg")
+        return route.fulfill({ contentType: file.mime, body: file.data });
+      if (url.pathname === "/api/files" && !url.searchParams.get("subdir")) {
+        const response = await route.fetch();
+        return route.fulfill({ response, json: [...await response.json(), { path: "sample.svg", name: "sample.svg", isDir: false, size: 512 }] });
+      }
+      return route.continue();
+    });
+    const cwd = newConversation ? VISUAL_LANDING_CWD : VISUAL_CWD;
+    await page.goto(workspaceRoute(cwd));
+    if (!newConversation) await waitForConversationSettled(page);
+    const initialPath = new URL(page.url()).pathname;
+    const input = page.getByRole("combobox", { name: "Message", exact: true });
+    await input.fill("Keep this chat draft");
+    const sidebar = page.locator("#workspace-context-panel");
+    await sidebar.getByRole("tab", { name: "Files", exact: true }).click();
+    await sidebar.getByRole("button", { name: "sample.svg", exact: true }).click();
+    await page.getByRole("button", { name: "Expand workspace", exact: true }).click();
+    const image = page.getByRole("img", { name: "sample.svg", exact: true });
+    await page.getByRole("button", { name: "Select image region" }).click();
+    const box = (await image.boundingBox())!;
+    await page.mouse.move(box.x + box.width * 0.75, box.y + box.height * 0.75);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.25, box.y + box.height * 0.25);
+    await page.mouse.up();
+    const regionForm = page.getByRole("form", { name: "Ask about region" });
+    const regionInput = regionForm.getByRole("textbox", { name: "Ask about region" });
+    await expect(regionInput).toBeVisible();
+    expect(uploaded.length).toBe(0);
+    await regionInput.fill("What is shown in this region?");
+    const region = (await regionForm.boundingBox())!;
+    expect(region.y).toBeGreaterThan(box.y + box.height * 0.75);
+    const send = regionForm.getByRole("button", { name: "Send message" });
+    await send.click();
+    await expect(page.getByText("Could not send the question. Check the conversation and try again.")).toBeVisible();
+    await expect(regionInput).toHaveValue("What is shown in this region?");
+    await send.click();
+    await expect(regionForm).toBeHidden();
+    await expect(page).toHaveURL(new RegExp(newConversation ? "/session/visual-created-session$" : initialPath + "$"));
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toEqual(prompts[0]);
+    expect(prompts[0].message).toContain("What is shown in this region?");
+    expect(prompts[0].message).toContain("image-regions/");
+    expect(prompts[0].message).toContain("sample.svg [x=");
+    expect(uploadCount).toBe(1);
+    expect(uploaded.readUInt32BE(16)).toBe(600);
+    expect(uploaded.readUInt32BE(20)).toBeGreaterThan(600);
+    await expect(input).toHaveValue("Keep this chat draft");
+    await expect(image).toBeVisible();
+    const attachment = page.getByRole("button", { name: "Open image region", exact: true });
+    await expect(attachment).toBeVisible();
+    await expect(attachment).toHaveText("");
+    await attachment.click();
+    const snapshot = page.getByRole("img", { name: /^[a-f0-9-]{36}\.png$/ });
+    await expect(snapshot).toBeVisible();
+    await expect.poll(() => snapshot.evaluate(node => (node as HTMLImageElement).naturalWidth)).toBe(600);
   });
-  await page.goto(workspaceRoute(VISUAL_CWD));
-  await waitForConversationSettled(page);
-  const sidebar = page.locator("#workspace-context-panel");
-  await sidebar.getByRole("tab", { name: "Files", exact: true }).click();
-  await sidebar.getByRole("button", { name: "sample.svg", exact: true }).click();
-  await page.getByRole("button", { name: "Expand workspace", exact: true }).click();
-  const image = page.getByRole("img", { name: "sample.svg", exact: true });
-  await page.getByRole("button", { name: "Select image region" }).click();
-  const box = (await image.boundingBox())!;
-  await page.mouse.move(box.x + box.width * 0.75, box.y + box.height * 0.75);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width * 0.25, box.y + box.height * 0.25);
-  await page.mouse.up();
-  await page.getByRole("button", { name: "Ask about region" }).click();
-  await expect(page.getByText(/sample.svg \[x=/)).toBeVisible();
-  await expect(image).toBeVisible();
-  expect(uploaded.readUInt32BE(16)).toBe(600);
-  expect(uploaded.readUInt32BE(20)).toBeGreaterThan(600);
-  const input = page.getByRole("combobox", { name: "Message", exact: true });
-  await expect(input).toBeFocused();
-  await input.fill("Explain this peak");
-  const prompt = page.waitForRequest(request => request.method() === "POST" && request.url().includes("/prompt"));
-  await input.press("Enter");
-  const body = (await prompt).postData()!;
-  expect(body).toContain("image-regions/");
-  expect(body).toContain("sample.svg [x=");
-  await expect(image).toBeVisible();
-  const attachment = page.getByRole("button", { name: "Open image region", exact: true });
-  await expect(attachment).toBeVisible();
-  await expect(attachment).toHaveText("");
-  await attachment.click();
-  const snapshot = page.getByRole("img", { name: /^[a-f0-9-]{36}\.png$/ });
-  await expect(snapshot).toBeVisible();
-  await expect.poll(() => snapshot.evaluate(node => (node as HTMLImageElement).naturalWidth)).toBe(600);
-});
+}

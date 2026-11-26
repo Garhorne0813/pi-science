@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/client/api";
 import { isImageRegionPath } from "@/lib/files/image-region-path";
 import type { FilePreviewInspector } from "@/types/thread";
-import { askAboutImageRegion, RegionAskError, type RegionAskPorts } from "./image-region-ask";
+import { uploadImageRegion, RegionAskError, type RegionAskPorts } from "./image-region-ask";
 
 const image = { isConnected: true } as unknown as HTMLImageElement;
 const rect = { x: 10, y: 15, width: 20, height: 35 };
@@ -19,14 +19,12 @@ function ports(overrides: Partial<RegionAskPorts> = {}): RegionAskPorts {
     isCurrent: () => true,
     snapshot: vi.fn(async () => new Blob(["png"], { type: "image/png" })),
     upload: vi.fn(async () => undefined),
-    addReference: vi.fn(),
-    finish: vi.fn(),
     ...overrides,
   };
 }
 
-describe("askAboutImageRegion", () => {
-  it("snapshots, uploads under an image-region path, then references it", async () => {
+describe("uploadImageRegion", () => {
+  it("snapshots, uploads under an image-region path, then returns its reference", async () => {
     const calls: string[] = [];
     let uploaded: { blob: Blob; path: string } | undefined;
     const target = ports({
@@ -38,35 +36,28 @@ describe("askAboutImageRegion", () => {
         calls.push("upload");
         uploaded = { blob, path };
       }),
-      addReference: vi.fn(() => calls.push("reference")),
-      finish: vi.fn(() => calls.push("finish")),
     });
-    await askAboutImageRegion({ image, rect, source }, target);
-    expect(calls).toEqual(["snapshot", "upload", "reference", "finish"]);
+    const reference = await uploadImageRegion({ image, rect, source }, target);
+    expect(calls).toEqual(["snapshot", "upload"]);
     expect(uploaded?.blob.size).toBe(3);
     expect(uploaded && isImageRegionPath(uploaded.path)).toBe(true);
-    expect(target.addReference).toHaveBeenCalledWith(
-      uploaded?.path,
-      "results/plot.png (sha256 abc123) [x=10, y=15, w=20, h=35 px]",
-    );
+    expect(reference).toEqual({
+      path: uploaded?.path,
+      description: "results/plot.png (sha256 abc123) [x=10, y=15, w=20, h=35 px]",
+    });
   });
 
   it("marks a base-root source in the reference description", async () => {
     const target = ports();
-    await askAboutImageRegion({ image, rect, source: { ...source, root: "base" } }, target);
-    expect(target.addReference).toHaveBeenCalledWith(
-      expect.any(String),
-      "base/results/plot.png (sha256 abc123) [x=10, y=15, w=20, h=35 px]",
-    );
+    await expect(uploadImageRegion({ image, rect, source: { ...source, root: "base" } }, target))
+      .resolves.toMatchObject({ description: "base/results/plot.png (sha256 abc123) [x=10, y=15, w=20, h=35 px]" });
   });
 
   it("does nothing when the route or session already changed", async () => {
     const target = ports({ isCurrent: () => false });
-    await askAboutImageRegion({ image, rect, source }, target);
+    await expect(uploadImageRegion({ image, rect, source }, target)).resolves.toBeNull();
     expect(target.snapshot).not.toHaveBeenCalled();
     expect(target.upload).not.toHaveBeenCalled();
-    expect(target.addReference).not.toHaveBeenCalled();
-    expect(target.finish).not.toHaveBeenCalled();
   });
 
   it("does not upload when the route changes while the snapshot is taken", async () => {
@@ -78,9 +69,8 @@ describe("askAboutImageRegion", () => {
         return new Blob(["png"]);
       }),
     });
-    await askAboutImageRegion({ image, rect, source }, target);
+    await expect(uploadImageRegion({ image, rect, source }, target)).resolves.toBeNull();
     expect(target.upload).not.toHaveBeenCalled();
-    expect(target.addReference).not.toHaveBeenCalled();
   });
 
   it("does not attach a reference when the session changes during the upload", async () => {
@@ -91,10 +81,8 @@ describe("askAboutImageRegion", () => {
         current = false;
       }),
     });
-    await askAboutImageRegion({ image, rect, source }, target);
+    await expect(uploadImageRegion({ image, rect, source }, target)).resolves.toBeNull();
     expect(target.upload).toHaveBeenCalledTimes(1);
-    expect(target.addReference).not.toHaveBeenCalled();
-    expect(target.finish).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -104,7 +92,7 @@ describe("askAboutImageRegion", () => {
     [new Error("PNG encoding failed"), "unknown", "PNG encoding failed"],
   ])("classifies %s as %s", async (original, kind, message) => {
     const target = ports({ upload: vi.fn(async () => Promise.reject(original)) });
-    await expect(askAboutImageRegion({ image, rect, source }, target)).rejects.toMatchObject({
+    await expect(uploadImageRegion({ image, rect, source }, target)).rejects.toMatchObject({
       name: "RegionAskError",
       kind,
       message,
@@ -115,6 +103,6 @@ describe("askAboutImageRegion", () => {
   it("keeps a RegionAskError intact", async () => {
     const original = new RegionAskError("network", "offline");
     const target = ports({ snapshot: vi.fn(async () => Promise.reject(original)) });
-    await expect(askAboutImageRegion({ image, rect, source }, target)).rejects.toBe(original);
+    await expect(uploadImageRegion({ image, rect, source }, target)).rejects.toBe(original);
   });
 });

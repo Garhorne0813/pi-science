@@ -88,7 +88,10 @@ export function useComposer(params: {
     // Attaching a runtime to the current blank draft is not switching conversations.
     // Keep text, mentions, references and attachments while slash discovery initializes it.
     const adoptedDraft = sameDraft && previousContext?.sessionId === null && activeSessionId !== null;
-    if (previousContext && (!sameDraft || previousContext.sessionId !== activeSessionId) && !adoptedDraft) {
+    const adoptedRegionQuestionSession = Boolean((location.state as { preserveRegionQuestionDraft?: boolean } | null)?.preserveRegionQuestionDraft)
+      && previousContext?.cwd === cwd && previousContext.conversationKey === null
+      && conversationKey !== null && conversationKey === activeSessionId;
+    if (previousContext && (!sameDraft || previousContext.sessionId !== activeSessionId) && !adoptedDraft && !adoptedRegionQuestionSession) {
       setInput("");
       setEntities([]);
       setFiles([]);
