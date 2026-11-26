@@ -1578,6 +1578,7 @@
   "conversation.queue.status.cancelled": "Cancelled",
 
   "conversation.attachedImages": "Attached images",
+  "conversation.openImageRegion": "Open image region",
   "conversation.referencedContext": "Referenced context",
   "settings.redesign.workbench": "Workbench",
   "settings.redesign.capabilities": "Capabilities",
@@ -1774,6 +1775,8 @@
   "filePreview.actualImage": "Original size",
   "filePreview.selectRegion": "Select image region",
   "filePreview.askRegion": "Ask about region",
+  "filePreview.regionQuestionPlaceholder": "Ask about this region…",
+  "filePreview.regionQuestionFailed": "Could not send the question. Check the conversation and try again.",
   "filePreview.regionKeyboard": "Use arrow keys to position the region and Shift + arrows to resize it.",
   "filePreview.regionHint": "Drag across the image to select a region.",
   "filePreview.regionFailed": "Could not attach the image region. Try again.",

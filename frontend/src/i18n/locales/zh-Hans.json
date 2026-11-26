@@ -1578,6 +1578,7 @@
   "conversation.queue.status.cancelled": "已取消",
 
   "conversation.attachedImages": "附加图片",
+  "conversation.openImageRegion": "打开图片选区",
   "conversation.referencedContext": "引用的上下文",
   "settings.redesign.workbench": "工作台",
   "settings.redesign.capabilities": "智能体能力",
@@ -1774,6 +1775,8 @@
   "filePreview.actualImage": "原始尺寸",
   "filePreview.selectRegion": "框选图片区域",
   "filePreview.askRegion": "问这一区域",
+  "filePreview.regionQuestionPlaceholder": "询问这一区域…",
+  "filePreview.regionQuestionFailed": "未能发送问题，请检查当前会话后重试。",
   "filePreview.regionKeyboard": "用方向键移动选区，按住 Shift 并按方向键调整大小。",
   "filePreview.regionHint": "在图上拖动以框选区域。",
   "filePreview.regionFailed": "未能添加图片选区，请重试。",

@@ -72,23 +72,34 @@ it.each(["ctrlKey", "metaKey"])("accumulates a batch of %s wheel events before r
 });
 
 it("retains the selected source pixels after a failed attachment and supports keyboard retry", async () => {
-  const onAsk = vi.fn().mockRejectedValueOnce(new Error("Upload failed")).mockResolvedValue(undefined);
+  const onAsk = vi.fn().mockRejectedValueOnce(new Error("Upload failed")).mockResolvedValue(true);
   render(<ImagePreview url="/plot.png" filename="plot.png" onAsk={onAsk} />);
   const image = screen.getByRole("img");
+  const viewport = image.parentElement!.parentElement!.parentElement!;
+  Object.defineProperties(viewport, { clientWidth: { value: 432 }, clientHeight: { value: 232 } });
+  act(() => resize());
   Object.defineProperties(image, { naturalWidth: { value: 800 }, naturalHeight: { value: 400 } });
   fireEvent.load(image);
   fireEvent.click(screen.getByRole("button", { name: "Select image region" }));
-  const ask = screen.getByRole("button", { name: "Ask about region" });
-  expect(ask).toBeDisabled();
+  expect(screen.queryByRole("textbox", { name: "Ask about region" })).not.toBeInTheDocument();
   const surface = screen.getByRole("group", { name: /Use arrow keys/ });
   fireEvent.keyDown(surface, { key: "ArrowRight" });
   fireEvent.keyDown(surface, { key: "ArrowDown", shiftKey: true });
-  fireEvent.click(ask);
+  const input = screen.getByRole("textbox", { name: "Ask about region" });
+  const ask = screen.getByRole("button", { name: "Send message" });
+  expect(ask).toBeDisabled();
+  fireEvent.change(input, { target: { value: "What is in the region?" } });
+  fireEvent.compositionStart(input);
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(onAsk).not.toHaveBeenCalled();
+  fireEvent.compositionEnd(input);
+  fireEvent.keyDown(input, { key: "Enter" });
   expect(await screen.findByRole("alert")).toBeVisible();
+  expect(input).toHaveValue("What is in the region?");
   await act(async () => { fireEvent.click(ask); });
   expect(onAsk).toHaveBeenCalledTimes(2);
-  expect(onAsk).toHaveBeenLastCalledWith(image, { x: 8, y: 0, width: 200, height: 104 });
-  expect(screen.queryByRole("button", { name: "Ask about region" })).not.toBeInTheDocument();
+  expect(onAsk).toHaveBeenLastCalledWith(image, { x: 8, y: 0, width: 200, height: 104 }, "What is in the region?");
+  expect(screen.queryByRole("textbox", { name: "Ask about region" })).not.toBeInTheDocument();
 });
 
 it.each(["rejected", "network"] as const)(
@@ -98,16 +109,20 @@ it.each(["rejected", "network"] as const)(
     const onAsk = vi.fn().mockRejectedValueOnce(failure);
     render(<ImagePreview url="/region.png" filename="region.png" onAsk={onAsk} />);
     const image = screen.getByRole("img");
+    const viewport = image.parentElement!.parentElement!.parentElement!;
+    Object.defineProperties(viewport, { clientWidth: { value: 432 }, clientHeight: { value: 232 } });
+    act(() => resize());
     Object.defineProperties(image, { naturalWidth: { value: 800 }, naturalHeight: { value: 400 } });
     fireEvent.load(image);
     fireEvent.click(screen.getByRole("button", { name: "Select image region" }));
     const surface = screen.getByRole("group", { name: /Use arrow keys/ });
     fireEvent.keyDown(surface, { key: "ArrowRight" });
-    fireEvent.click(screen.getByRole("button", { name: "Ask about region" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Ask about region" }), { target: { value: "What is this?" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     const copy = kind === "rejected" ? /rejected the region upload/ : /Could not reach the workspace/;
     expect(await screen.findByRole("alert")).toHaveTextContent(copy);
     expect(vi.mocked(console.error)).toHaveBeenCalledWith(
-      "Could not attach the image region",
+      "Could not submit the image region question",
       failure,
     );
   },

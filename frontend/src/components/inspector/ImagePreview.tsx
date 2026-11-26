@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Maximize, Scan, Minus, Plus, ScanLine } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ArrowUp, Loader2, Maximize, Scan, Minus, Plus, ScanLine } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { IconButton } from "../ui/Icon";
 import { ViewerToolbar, ViewerStatusBar } from "./PreviewFrame";
@@ -14,6 +14,7 @@ const REGION_FAILURE_KEYS: Record<RegionAskFailureKind, string> = {
   network: "filePreview.regionFailedNetwork",
   rejected: "filePreview.regionFailedRejected",
   unknown: "filePreview.regionFailed",
+  send: "filePreview.regionQuestionFailed",
 };
 
 /** Image magnification is independent of file focus and document typography. */
@@ -24,14 +25,19 @@ export function ImagePreview({
 }: {
   url: string;
   filename: string;
-  onAsk?: (image: HTMLImageElement, rect: PixelRect) => Promise<void>;
+  onAsk?: (image: HTMLImageElement, rect: PixelRect, question: string) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const viewport = useRef<HTMLDivElement>(null);
   const image = useRef<HTMLImageElement>(null);
+  const form = useRef<HTMLFormElement>(null);
+  const inFlight = useRef(false);
+  const composing = useRef(false);
   const drag = useRef<{ start: PixelPoint; id: number } | null>(null);
   const [selecting, setSelecting] = useState(false);
   const [rect, setRect] = useState<PixelRect | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [question, setQuestion] = useState("");
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<RegionAskFailureKind | null>(null);
   const cancel = () => {
@@ -39,19 +45,33 @@ export function ImagePreview({
     setSelecting(false);
     setRect(null);
     setFailure(null);
+    setDragging(false);
+    setQuestion("");
+    composing.current = false;
   };
   const ask = async () => {
-    if (!image.current || !rect?.width || !rect.height || !onAsk || saving) return;
+    const text = question.trim();
+    if (
+      !image.current ||
+      !rect?.width ||
+      !rect.height ||
+      !onAsk ||
+      inFlight.current ||
+      !text ||
+      dragging
+    )
+      return;
+    inFlight.current = true;
     setSaving(true);
     setFailure(null);
     try {
-      await onAsk(image.current, rect);
-      cancel();
+      if (await onAsk(image.current, rect, text)) cancel();
     } catch (cause) {
       // Keep the original error in the console; the alert only carries the category.
-      console.error("Could not attach the image region", cause);
+      console.error("Could not submit the image region question", cause);
       setFailure(cause instanceof RegionAskError ? cause.kind : "unknown");
     } finally {
+      inFlight.current = false;
       setSaving(false);
     }
   };
@@ -78,6 +98,40 @@ export function ImagePreview({
       : 1;
   const current = scale ?? fit;
   const { min, max } = imageScaleLimits(fit, 4, current);
+  const selected = selecting && !dragging && Boolean(rect?.width && rect.height);
+  useLayoutEffect(() => {
+    const el = viewport.current;
+    const img = image.current;
+    const editor = form.current;
+    if (!selected || !el || !img || !editor || !rect) return;
+    const place = () => {
+      const view = el.getBoundingClientRect();
+      const bounds = img.getBoundingClientRect();
+      const left = bounds.left - view.left + rect.x * current;
+      const right = left + rect.width * current;
+      const top = bounds.top - view.top + rect.y * current;
+      const bottom = top + rect.height * current;
+      const visible = right > 0 && left < el.clientWidth && bottom > 0 && top < el.clientHeight;
+      editor.style.visibility = visible ? "visible" : "hidden";
+      if (!visible) return;
+      const gap = 8;
+      const maxLeft = Math.max(gap, el.clientWidth - editor.offsetWidth - gap);
+      const maxTop = Math.max(gap, el.clientHeight - editor.offsetHeight - gap);
+      const above = top - editor.offsetHeight - gap;
+      const y = bottom + gap <= maxTop || above < gap ? bottom + gap : above;
+      editor.style.left = `${el.offsetLeft + Math.min(maxLeft, Math.max(gap, left))}px`;
+      editor.style.top = `${el.offsetTop + Math.min(maxTop, Math.max(gap, y))}px`;
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(editor);
+    observer.observe(el);
+    el.addEventListener("scroll", place, { passive: true });
+    return () => {
+      observer.disconnect();
+      el.removeEventListener("scroll", place);
+    };
+  }, [current, rect, selected]);
   useEffect(() => {
     const el = viewport.current;
     if (!el) return;
@@ -134,7 +188,7 @@ export function ImagePreview({
   };
   return (
     <div
-      className="flex h-full min-h-0 flex-col"
+      className="relative flex h-full min-h-0 flex-col"
       onKeyDown={(e) => {
         if (selecting && !saving && e.key === "Escape") {
           e.stopPropagation();
@@ -186,16 +240,6 @@ export function ImagePreview({
             {t("filePreview.selectRegion")}
           </button>
         )}
-        {selecting && (
-          <button
-            type="button"
-            className="rounded-input px-2 text-xs text-accent disabled:opacity-50"
-            disabled={!rect?.width || !rect.height || saving}
-            onClick={() => void ask()}
-          >
-            {t("filePreview.askRegion")}
-          </button>
-        )}
       </ViewerToolbar>
       {failure && (
         <p role="alert" className="px-3 text-xs text-error-text">
@@ -245,7 +289,9 @@ export function ImagePreview({
                     const start = imagePoint(image.current, event.clientX, event.clientY);
                     drag.current = { start, id: event.pointerId };
                     event.currentTarget.setPointerCapture(event.pointerId);
+                    setDragging(true);
                     setRect(null);
+                    setFailure(null);
                   }}
                   onPointerMove={(event) => {
                     if (drag.current && drag.current.id === event.pointerId && image.current)
@@ -266,11 +312,13 @@ export function ImagePreview({
                       ),
                     );
                     drag.current = null;
+                    setDragging(false);
                   }}
                   onLostPointerCapture={() => {
                     if (drag.current) {
                       drag.current = null;
                       setRect(null);
+                      setDragging(false);
                     }
                   }}
                 >
@@ -291,6 +339,56 @@ export function ImagePreview({
           </div>
         )}
       </div>
+      {selected && (
+        <form
+          ref={form}
+          aria-label={t("filePreview.askRegion")}
+          className="absolute z-10 flex w-[min(20rem,calc(100%-1.5rem))] items-end gap-2 rounded-input border border-border bg-surface p-2 shadow-lg"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void ask();
+          }}
+        >
+          <textarea
+            rows={1}
+            value={question}
+            readOnly={saving}
+            aria-label={t("filePreview.askRegion")}
+            placeholder={t("filePreview.regionQuestionPlaceholder")}
+            className="min-w-0 flex-1 resize-none rounded-input bg-surface-2 px-2 py-1.5 text-sm text-text outline-none focus-visible:ring-1 focus-visible:ring-accent"
+            onChange={(event) => setQuestion(event.target.value)}
+            onCompositionStart={() => {
+              composing.current = true;
+            }}
+            onCompositionEnd={() => {
+              composing.current = false;
+            }}
+            onKeyDown={(event) => {
+              if (
+                event.key !== "Enter" ||
+                event.shiftKey ||
+                event.nativeEvent.isComposing ||
+                composing.current
+              )
+                return;
+              event.preventDefault();
+              void ask();
+            }}
+          />
+          <button
+            type="submit"
+            aria-label={t("conversation.sendMessage")}
+            disabled={saving || !question.trim()}
+            className="grid size-8 shrink-0 place-items-center rounded-full bg-accent-fill text-accent-fg disabled:bg-surface-2 disabled:text-muted"
+          >
+            {saving ? (
+              <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+            ) : (
+              <ArrowUp size={16} aria-hidden="true" />
+            )}
+          </button>
+        </form>
+      )}
       <ViewerStatusBar>
         {selecting && <span>{t("filePreview.regionHint")}</span>}
         {size.width > 0 && (
