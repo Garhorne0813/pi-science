@@ -1,6 +1,7 @@
 import { pathLeaf } from "../workspace";
 import { stripSubagentMentionBlock } from "../conversation/subagent-mentions";
 import { stripQuotedMessageBlocks } from "../conversation/quoted-message";
+import { isImageRegionPath } from "./image-region-path";
 
 export interface WorkspaceReference {
   cwd: string;
@@ -43,7 +44,7 @@ export function referencesFromMessage(message: string): Array<Pick<WorkspaceRefe
         const decoded: unknown = JSON.parse(line.slice(REGION_PREFIX.length));
         if (!Array.isArray(decoded) || decoded.length !== 2) return [];
         const [path, description] = decoded;
-        if (typeof path !== "string" || !/^image-regions\/[\da-f-]{36}\.png$/i.test(path) || typeof description !== "string") return [];
+        if (typeof path !== "string" || !isImageRegionPath(path) || typeof description !== "string") return [];
         return [{ path, name: pathLeaf(path), isDir: false, imageRegion: description }];
       } catch { return []; }
     }

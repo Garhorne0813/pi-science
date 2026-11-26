@@ -6,6 +6,15 @@ import { ViewerToolbar, ViewerStatusBar } from "./PreviewFrame";
 import { clampImageScale, imageScaleLimits } from "./image-scale";
 
 import { imagePoint, pixelRect, type PixelPoint, type PixelRect } from "./image-region";
+import { RegionAskError, type RegionAskFailureKind } from "./image-region-ask";
+
+/** A failed attachment keeps the two failure modes apart: the workspace
+ *  refusing the upload is not the same problem as a dropped connection. */
+const REGION_FAILURE_KEYS: Record<RegionAskFailureKind, string> = {
+  network: "filePreview.regionFailedNetwork",
+  rejected: "filePreview.regionFailedRejected",
+  unknown: "filePreview.regionFailed",
+};
 
 /** Image magnification is independent of file focus and document typography. */
 export function ImagePreview({
@@ -24,22 +33,24 @@ export function ImagePreview({
   const [selecting, setSelecting] = useState(false);
   const [rect, setRect] = useState<PixelRect | null>(null);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(false);
+  const [failure, setFailure] = useState<RegionAskFailureKind | null>(null);
   const cancel = () => {
     drag.current = null;
     setSelecting(false);
     setRect(null);
-    setError(false);
+    setFailure(null);
   };
   const ask = async () => {
     if (!image.current || !rect?.width || !rect.height || !onAsk || saving) return;
     setSaving(true);
-    setError(false);
+    setFailure(null);
     try {
       await onAsk(image.current, rect);
       cancel();
-    } catch {
-      setError(true);
+    } catch (cause) {
+      // Keep the original error in the console; the alert only carries the category.
+      console.error("Could not attach the image region", cause);
+      setFailure(cause instanceof RegionAskError ? cause.kind : "unknown");
     } finally {
       setSaving(false);
     }
@@ -186,9 +197,9 @@ export function ImagePreview({
           </button>
         )}
       </ViewerToolbar>
-      {error && (
+      {failure && (
         <p role="alert" className="px-3 text-xs text-error-text">
-          {t("filePreview.regionFailed")}
+          {t(REGION_FAILURE_KEYS[failure])}
         </p>
       )}
       <div ref={viewport} className="min-h-0 flex-1 overflow-auto bg-surface-2">
