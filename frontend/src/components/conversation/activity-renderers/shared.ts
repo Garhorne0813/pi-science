@@ -6,7 +6,7 @@ export function genericDetails({ source, t }: ActivityRendererProps): ActivityDe
   const details: ActivityDetailView[] = [{ label: t("conversation.activity.toolLabel"), value: source.tool, plain: true }];
   const failure = toolErrorSummary(source);
   if (failure) details.push({ label: t("conversation.activity.errorDetail"), value: failure, fullValue: failure });
-  if (source.input) details.push({ label: t("conversation.activity.input"), value: stringify(source.input), pre: true });
+  details.push(...toolInputDetails(source, t));
   const output = source.output ?? source.partialOutput;
   if (output) details.push({
     label: t("conversation.activity.output"),
@@ -20,7 +20,14 @@ export function genericDetails({ source, t }: ActivityRendererProps): ActivityDe
   const detailObject = record(source.details);
   const change = fileChange(source);
   if (source.details !== undefined && source.details !== null) {
-    const remaining = detailObject ? Object.fromEntries(Object.entries(detailObject).filter(([key]) => key !== "fileChange" && key !== "diff" && key !== "patch")) : source.details;
+    const consumed = new Set(["fileChange", "diff", "patch"]);
+    if (source.presentation?.kind === "verify" || ["bash", "shell", "exec", "execute", "test", "vitest", "pytest", "jest", "typecheck", "lint", "build", "compile", "check"].includes(source.tool.trim().toLowerCase())) {
+      for (const key of ["execution", "verification", "tests", "exitCode", "exit_code", "executionId", "execution_id"]) consumed.add(key);
+    }
+    if (source.tool.trim().toLowerCase() === "subagent_control") {
+      for (const key of ["status", "task_id"]) consumed.add(key);
+    }
+    const remaining = detailObject ? Object.fromEntries(Object.entries(detailObject).filter(([key]) => !consumed.has(key))) : source.details;
     const value = stringify(remaining);
     if (value !== "{}") {
       details.push({ label: t("conversation.activity.details"), value, fullValue: value, ...(discovery ? { pre: true } : {}) });
@@ -29,6 +36,58 @@ export function genericDetails({ source, t }: ActivityRendererProps): ActivityDe
   const patch = change?.patch ?? text(detailObject?.patch) ?? text(detailObject?.diff) ?? source.diff;
   if (patch) details.push({ label: t("conversation.activity.diff"), value: patch, fullValue: patch, pre: true });
   return details;
+}
+
+/** Present stable, human-readable inputs for built-in tools. Descriptions are
+ * already used as activity titles, so repeating them in an input JSON blob
+ * adds noise. Unknown tools retain a filtered JSON fallback. */
+export function toolInputDetails(source: ToolCallBlock, t: ActivityRendererProps["t"]): ActivityDetailView[] {
+  const input = source.input;
+  if (!input) return [];
+  const tool = source.tool.trim().toLowerCase();
+  const rows: ActivityDetailView[] = [];
+  const add = (label: string, value: unknown, pre = false) => {
+    const rendered = text(value);
+    if (rendered) rows.push({ label, value: rendered, ...(pre ? { pre: true } : { plain: true }) });
+  };
+
+  if (["bash", "shell", "exec", "execute"].includes(tool)) {
+    add(t("conversation.activity.command"), input.command, true);
+    return rows;
+  }
+
+  if (tool.includes("python") || tool.includes("kernel") || ["r", "notebook", "notebook_run", "run_cell", "execute_code", "run_code"].includes(tool)) {
+    add(t("conversation.activity.code"), input.code ?? input.source ?? input.script, true);
+    return rows;
+  }
+
+  if (tool === "subagent_control") {
+    add(t("conversation.activity.action"), input.action);
+    add(t("conversation.activity.taskId"), input.task_id);
+    return rows;
+  }
+
+  if (tool === "subagent" || tool.includes("subagent")) return rows;
+
+  const path = input.path ?? input.file_path ?? input.file ?? input.directory ?? input.target;
+  const query = input.query ?? input.pattern;
+  if (tool === "ls" || /read|write|edit|patch|file|grep|glob|find|list/.test(tool)) {
+    add(t("conversation.activity.path"), path);
+    add(t(input.pattern !== undefined ? "conversation.activity.pattern" : "conversation.activity.query"), query);
+    add(t("conversation.activity.diff"), input.patch ?? input.diff, true);
+    if (rows.length > 0) return rows;
+  }
+
+  if (/search|fetch|literature|pubmed|arxiv|crossref/.test(tool)) {
+    add(t("conversation.activity.query"), query);
+    add(t("conversation.activity.url"), input.url);
+    add(t("conversation.activity.source"), input.database ?? input.source ?? input.provider ?? input.server);
+    if (rows.length > 0) return rows;
+  }
+
+  const filtered = Object.fromEntries(Object.entries(input).filter(([key, value]) => key !== "description" && value !== undefined));
+  if (Object.keys(filtered).length === 0) return [];
+  return [{ label: t("conversation.activity.input"), value: stringify(filtered), pre: true }];
 }
 
 export interface FileChangeView {

@@ -551,7 +551,8 @@ it("renders discovery matches as escaped plain text with truncation status", () 
   const { container } = render(<AgentActivity blocks={[{ ...tool("search", "grep"), input: { pattern: "img" }, output }]} />);
   fireEvent.click(screen.getByRole("button"));
   expect(container.querySelector("img")).toBeNull();
-  expect(container.querySelector("pre")?.parentElement).toHaveTextContent("Input");
+  expect(container.textContent).toContain("Pattern");
+  expect(container.querySelector("pre")?.parentElement).toHaveTextContent("Output");
   expect(container.textContent).toContain("truncated");
   expect(container.textContent).toContain("<img src=x");
   expect(container.querySelector("strong")).toBeNull();

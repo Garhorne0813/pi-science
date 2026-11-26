@@ -152,7 +152,7 @@ describe("conversation presentation protocol v2", () => {
   });
 
   it("keeps tool status validation separate from the generic envelope", () => {
-    expect(conversationToolUpdatedPayloadSchema.parse({ callId: "call-1", tool: "bash", status: "error" })).toMatchObject({ callId: "call-1" });
+    expect(conversationToolUpdatedPayloadSchema.parse({ callId: "call-1", tool: "bash", status: "error", outputTruncated: true, originalOutputBytes: 70_000 })).toMatchObject({ callId: "call-1", outputTruncated: true, originalOutputBytes: 70_000 });
     expect(() => conversationToolUpdatedPayloadSchema.parse({ callId: "call-1", tool: "bash", status: "success" })).toThrow();
   });
 
