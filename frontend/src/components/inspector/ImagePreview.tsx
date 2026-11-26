@@ -350,7 +350,7 @@ export function ImagePreview({
           }}
         >
           <textarea
-            rows={2}
+            rows={1}
             value={question}
             readOnly={saving}
             aria-label={t("filePreview.askRegion")}
