@@ -406,7 +406,7 @@ function TraceItem({ block, live, cwd }: { block: ToolCallBlock; live: boolean; 
       {running ? <span aria-hidden className="mx-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : block.status === "error" ? <CircleX size={14} aria-hidden className="shrink-0 text-error-text" /> : <Check size={14} aria-hidden className="shrink-0 text-muted" />}
       <span className="min-w-0 truncate">{compact.title}</span>
       {liveTail && <span aria-hidden className={cn("hidden min-w-0 flex-1 truncate text-right text-[10px] text-muted sm:block", streamingTail && "font-mono")}>{liveTail}</span>}
-      {recovered && <span className="shrink-0 rounded-full bg-warn-fill px-1.5 py-0.5 text-[10px] font-medium text-warn-text">{t("conversation.activity.recoveredAfterRetry")}</span>}
+      {recovered && <span className="shrink-0 rounded-full bg-warn-fill px-1.5 py-0.5 text-[10px] font-medium text-white">{t("conversation.activity.recoveredAfterRetry")}</span>}
       {compact.fileChange ? <span
         aria-label={t("conversation.activity.lineChanges", { additions: compact.fileChange.additions, deletions: compact.fileChange.deletions })}
         className={cn("inline-flex shrink-0 items-center gap-1.5 text-[11px] font-semibold leading-none tabular-nums", !liveTail && !recovered && "ml-auto")}

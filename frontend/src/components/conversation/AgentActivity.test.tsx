@@ -162,7 +162,9 @@ describe("AgentActivity live stream", () => {
       statusHistory: ["running", "error", "running", "done"] as ToolCallBlock["statusHistory"],
     };
     render(<AgentActivity blocks={[recovered]} />);
-    expect(screen.getByText("Recovered")).toBeInTheDocument();
+    const recoveredBadge = screen.getByText("Recovered");
+    expect(recoveredBadge).toHaveClass("bg-warn-fill", "text-white");
+    expect(recoveredBadge).not.toHaveClass("text-warn-text");
     fireEvent.click(screen.getByRole("button", { name: /^Run checks/ }));
     expect(screen.getByText("Succeeded after 1 failed attempt")).toBeInTheDocument();
     expect(screen.getByText("Tool output was truncated · original size 2.3 MB")).toBeInTheDocument();
