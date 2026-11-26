@@ -13,10 +13,12 @@ export function BackToConversationLink() {
   const { cwd = "" } = useParams<{ cwd: string }>();
   const location = useLocation();
   const runtimeSessionId = useRuntimeStore(state => state.cwd === cwd ? state.activeSessionId : null);
-  const querySessionId = new URLSearchParams(location.search).get("session_id");
+  const searchParams = new URLSearchParams(location.search);
+  const querySessionId = searchParams.get("session_id");
+  const targetsNewConversation = searchParams.get("conversation") === "new";
   const sessionId = querySessionId || runtimeSessionId || readLastConversation(cwd);
   const root = `/workspace/${encodeURIComponent(cwd)}`;
-  const to = sessionId ? `${root}/session/${encodeURIComponent(sessionId)}` : root;
+  const to = targetsNewConversation ? `${root}/new` : sessionId ? `${root}/session/${encodeURIComponent(sessionId)}` : root;
   return <Link to={to} className="mb-2 inline-flex min-h-8 items-center gap-1.5 rounded-input pr-2 text-sm font-medium text-accent hover:bg-surface-2"><ArrowLeft size={15} />{t("conversation.backToConversation")}</Link>;
 }
 

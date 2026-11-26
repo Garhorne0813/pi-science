@@ -175,6 +175,22 @@ describe("useComposer failed-send ownership", () => {
 });
 
 describe("useComposer onSend", () => {
+  it("shows and consumes only references owned by the current conversation", async () => {
+    const sendPrompt = vi.fn(async (): Promise<string | null> => "s1");
+    useRuntimeStore.setState({ sendPrompt, draft: "compare" });
+    useUiStore.setState({ workspaceReferences: [
+      { cwd: "/w", conversationKey: "s1", path: "data/a.csv", name: "a.csv", isDir: false },
+      { cwd: "/w", conversationKey: "s2", path: "data/b.csv", name: "b.csv", isDir: false },
+    ] });
+    const { result } = renderHook(() => useComposer({ cwd: "/w", conversationKey: "s1", selectedModel: "m", reviewingProject: false, setReviewNotice: () => undefined, research: { mode: null, setMode: () => undefined } }));
+
+    expect(result.current.workspaceReferences.map((reference) => reference.path)).toEqual(["data/a.csv"]);
+    await act(async () => { await result.current.handleSend(); });
+    expect(useUiStore.getState().workspaceReferences).toEqual([
+      { cwd: "/w", conversationKey: "s2", path: "data/b.csv", name: "b.csv", isDir: false },
+    ]);
+  });
+
   it("accepts an internal file-tree drop as a workspace reference without uploading", () => {
     const { result } = renderHook(() => useComposer({ cwd: "/w", selectedModel: "m", reviewingProject: false, setReviewNotice: () => undefined, research: { mode: null, setMode: () => undefined } }));
     const reference = { cwd: "/w", path: "data/report.csv", name: "report.csv", isDir: false };
@@ -188,7 +204,7 @@ describe("useComposer onSend", () => {
 
     act(() => result.current.handleDrop(event));
 
-    expect(useUiStore.getState().workspaceReferences).toEqual([reference]);
+    expect(useUiStore.getState().workspaceReferences).toEqual([{ ...reference, conversationKey: null }]);
     expect(apiRequest).not.toHaveBeenCalled();
   });
 

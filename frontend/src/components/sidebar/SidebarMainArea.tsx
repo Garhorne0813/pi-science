@@ -7,6 +7,7 @@ import { preloadSettingsContent } from "../settings/settings-loading";
 import { useMemorySummary } from "../../lib/memory";
 import { WorkspaceSessionList } from "./WorkspaceSessionList";
 import { closeSidebarOnNarrow, useNewWorkspaceConversation, useWorkspaceSidebar } from "./workspace-navigation";
+import { conversationSessionId } from "../../lib/conversation/session-route";
 
 export function SidebarMainArea({ cwd, renderSessions }: { cwd: string; renderSessions?: (query: string) => ReactNode }) {
   const { t } = useTranslation();
@@ -19,6 +20,11 @@ export function SidebarMainArea({ cwd, renderSessions }: { cwd: string; renderSe
   const pendingMemoryCount = Number(memorySummary?.pendingCount) || 0;
   const searchId = useId();
   const root = `/workspace/${encodeURIComponent(cwd)}`;
+  const isNewConversation = location.pathname === `${root}/new`;
+  const activeConversationId = conversationSessionId(location.pathname) ?? new URLSearchParams(location.search).get("session_id");
+  const filesHref = isNewConversation
+    ? `${root}/files?${new URLSearchParams({ conversation: "new" })}`
+    : activeConversationId ? `${root}/files?${new URLSearchParams({ session_id: activeConversationId })}` : `${root}/files`;
   const linkClass = "flex h-nav items-center gap-2 rounded-input px-2 text-ui-label text-muted transition-colors hover:bg-surface-hover hover:text-text";
 
   useEffect(() => {
@@ -34,7 +40,7 @@ export function SidebarMainArea({ cwd, renderSessions }: { cwd: string; renderSe
   return <section className="flex min-h-0 flex-1 flex-col">
     <button type="button" onClick={() => newConversation()} className="mb-2 flex h-primary shrink-0 items-center justify-center gap-2 rounded-input bg-accent-fill px-3 text-ui-label font-semibold text-accent-fg"><Plus size={16} />{t("conversation.newSession")}</button>
     <nav aria-label={t("shell.primaryNav")} className="mb-2 flex shrink-0 flex-col gap-0.5 border-b border-faint pb-2">
-      {routeLink(`${root}/files`, location.pathname === `${root}/files`, FileText, t("nav.files"))}
+      {routeLink(filesHref, location.pathname === `${root}/files`, FileText, t("nav.files"))}
       {routeLink(`${root}/memory`, location.pathname === `${root}/memory`, Inbox, t("nav.knowledge"), pendingMemoryCount)}
       {routeLink(`${root}/runs`, location.pathname === `${root}/runs`, Activity, t("sidebar.runs"))}
     </nav>
