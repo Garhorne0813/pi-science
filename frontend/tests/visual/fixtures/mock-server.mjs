@@ -21,7 +21,7 @@ import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FIXTURES, VISUAL_CWD, VISUAL_LANDING_CWD } from "./data.mjs";
+import { FIXTURES, VISUAL_ACTIVITY_SESSION, VISUAL_CWD, VISUAL_LANDING_CWD } from "./data.mjs";
 
 const distRoot = resolve(fileURLToPath(new URL("../../../dist", import.meta.url)));
 const port = Number(process.env.PORT || 4173);
@@ -161,12 +161,12 @@ async function handleApi(req, res, url) {
     }
     if (method === "GET" && sub === "/messages/index") {
       log();
-      return json(res, 200, FIXTURES.userMessageIndex);
+      return json(res, 200, sessionId === VISUAL_ACTIVITY_SESSION ? FIXTURES.activityUserMessageIndex : FIXTURES.userMessageIndex);
     }
     if (method === "GET" && sub === "/messages") {
       log();
       return json(res, 200, {
-        messages: sessionId === FIXTURES.sessions[0].id ? FIXTURES.history : [],
+        messages: sessionId === VISUAL_ACTIVITY_SESSION ? FIXTURES.activityHistory : sessionId === FIXTURES.sessions[0].id ? FIXTURES.history : [],
         next_cursor: null,
         has_more: false,
         snapshot_version: "fixture-v1",
@@ -174,11 +174,11 @@ async function handleApi(req, res, url) {
     }
     if (method === "GET" && sub === "/state") {
       log();
-      return json(res, 200, FIXTURES.sessionState);
+      return json(res, 200, { ...FIXTURES.sessionState, id: sessionId });
     }
     if (method === "GET" && sub === "/artifacts") {
       log();
-      return json(res, 200, { turns: FIXTURES.artifactTurns });
+      return json(res, 200, { turns: sessionId === VISUAL_ACTIVITY_SESSION ? [] : FIXTURES.artifactTurns });
     }
     if (method === "GET" && sub === "/events") {
       log();

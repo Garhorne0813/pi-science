@@ -14,9 +14,17 @@ describe("activity grouping", () => {
     expect(groups[0]).toMatchObject({ kind: "exploration", id: "read-1" });
   });
 
-  it("keeps adjacent bash calls as separate operations", () => {
+  it("groups adjacent execution calls", () => {
     const groups = groupActivityBlocks([tool("bash-1", "bash"), tool("bash-2", "bash")]);
-    expect(groups.map((group) => group.blocks.map((block) => block.id))).toEqual([["bash-1"], ["bash-2"]]);
+    expect(groups).toMatchObject([{ kind: "execution", blocks: [{ id: "bash-1" }, { id: "bash-2" }] }]);
+  });
+
+  it("groups adjacent file changes separately from validation", () => {
+    const groups = groupActivityBlocks([tool("edit-1", "edit"), tool("write-1", "write"), tool("bash-1", "bash"), tool("test-1", "test")]);
+    expect(groups).toMatchObject([
+      { kind: "changes", blocks: [{ id: "edit-1" }, { id: "write-1" }] },
+      { kind: "execution", blocks: [{ id: "bash-1" }, { id: "test-1" }] },
+    ]);
   });
 
   it("does not group exploration across runs or a long gap", () => {

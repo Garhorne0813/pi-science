@@ -167,6 +167,11 @@ describe("AgentActivity live stream", () => {
     expect(recoveredBadge).not.toHaveClass("text-warn-text");
     fireEvent.click(screen.getByRole("button", { name: /^Run checks/ }));
     expect(screen.getByText("Succeeded after 1 failed attempt")).toBeInTheDocument();
+    expect(screen.getByText("Attempt history")).toBeInTheDocument();
+    expect(screen.getByText("Attempt 1")).toBeInTheDocument();
+    expect(screen.getByText("Attempt 2")).toBeInTheDocument();
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText("Succeeded")).toBeInTheDocument();
     expect(screen.getByText("Tool output was truncated · original size 2.3 MB")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Copy error" })).not.toBeInTheDocument();
   });
@@ -206,6 +211,21 @@ describe("AgentActivity live stream", () => {
     expect(screen.getByText(/Exploring/)).toBeInTheDocument();
     expect(screen.getByText("Reading one.ts")).toBeInTheDocument();
     expect(screen.getByText("Reading two.ts")).toBeInTheDocument();
+  });
+
+  it("collapses settled activity groups and mounts their exact focus anchors on demand", () => {
+    render(<AgentActivity lifecycle="settled" hasFinalAnswer blocks={[
+      tool("edit-1", "edit", "done", { path: "src/a.ts" }),
+      tool("edit-2", "write", "done", { path: "src/b.ts" }),
+      tool("test-1", "bash", "done", { description: "Run unit tests" }),
+      tool("test-2", "test", "done", { description: "Run typecheck" }),
+    ]} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Completed/ }));
+    expect(screen.getByRole("button", { name: "Changed files · 2 operations" })).toHaveAttribute("aria-expanded", "false");
+    expect(document.getElementById("thread-block-edit-1")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Changed files · 2 operations" }));
+    expect(document.getElementById("thread-block-edit-1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ran validation · 2 operations" })).toBeInTheDocument();
   });
 
   it("shows a live turn elapsed timer that stops when the turn settles", () => {
