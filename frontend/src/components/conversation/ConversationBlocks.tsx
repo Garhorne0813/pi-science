@@ -89,10 +89,10 @@ function UserMessage({ block, scope }: { block: UserMessageBlock; scope: Message
       {selection.selection && <MessageSelectionQuoteMenu selection={selection.selection} onQuote={selection.quote} />}
       {references.length > 0 && <div className="flex flex-wrap justify-end gap-1.5" aria-label={t("conversation.referencedContext")}>
         {references.map((reference) => reference.imageRegion ? <button key={reference.path} type="button"
-          className="flex max-w-full items-center gap-2 rounded-input border border-accent/20 px-2 py-1 text-xs text-text"
+          aria-label={t("conversation.openImageRegion")}
+          className="rounded-input border border-accent/20 p-1"
           onClick={() => useUiStore.getState().openInspector({ variant: "file", cwd: scope.workspaceCwd, path: reference.path, filename: reference.name })}>
           <img src={previewUrl(reference.path, "workspace", scope.workspaceCwd)} alt="" className="h-10 w-14 rounded object-contain" />
-          <span className="truncate">{reference.imageRegion}</span>
         </button> : <span key={`${reference.isDir ? "folder" : "file"}-${reference.path}`} className="flex max-w-full items-center gap-1 rounded-input border border-accent/20 bg-accent/5 px-2 py-1 font-mono text-[10px] text-muted" title={reference.path}>
           {reference.isDir ? <FolderOpen size={10} /> : <File size={10} />}
           <span className="truncate">{reference.path}</span>

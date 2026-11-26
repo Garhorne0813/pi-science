@@ -1578,6 +1578,7 @@
   "conversation.queue.status.cancelled": "Cancelled",
 
   "conversation.attachedImages": "Attached images",
+  "conversation.openImageRegion": "Open image region",
   "conversation.referencedContext": "Referenced context",
   "settings.redesign.workbench": "Workbench",
   "settings.redesign.capabilities": "Capabilities",

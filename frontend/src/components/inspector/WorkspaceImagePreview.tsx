@@ -48,7 +48,7 @@ export function WorkspaceImagePreview({
             imageRegion: description,
           }),
         finish: () => {
-          useUiStore.getState().setInspectorVisible(false);
+          useUiStore.getState().setInspectorMaximized(false);
           const root = `/workspace/${encodeURIComponent(cwd)}`;
           if (location.pathname === root || location.pathname.startsWith(root + "/session/")) return;
           const runtime = useRuntimeStore.getState();

@@ -1578,6 +1578,7 @@
   "conversation.queue.status.cancelled": "已取消",
 
   "conversation.attachedImages": "附加图片",
+  "conversation.openImageRegion": "打开图片选区",
   "conversation.referencedContext": "引用的上下文",
   "settings.redesign.workbench": "工作台",
   "settings.redesign.capabilities": "智能体能力",
