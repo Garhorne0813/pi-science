@@ -132,7 +132,10 @@ async function fixture(withServer = false) {
   vi.stubEnv("PI_SCIENCE_BACKEND_URL", origin);
   const approve = (
     requestId = "request",
-    payload = { confirmed: true, alwaysAllow: true },
+    payload: { confirmed?: boolean; alwaysAllow?: boolean; value?: string } = {
+      confirmed: true,
+      alwaysAllow: true,
+    },
     workspace = cwd,
   ) =>
     app.inject({
@@ -404,6 +407,15 @@ it("binds Always allow to a live request and persists only in its project after 
   expect((await f.approve()).json()).toEqual({ ok: true, persistentGrant: true });
   expect((await f.grants()).get("echo")).toBe("allow");
   expect((await f.repository.globalToolGrants(f.connector.connector_id)).has("echo")).toBe(false);
+});
+
+it("saves a global MCP allow from a live approval", async () => {
+  const f = await fixture();
+  const result = await f.approve("request", { value: "global" });
+  expect(result.statusCode).toBe(200);
+  expect(result.json()).toMatchObject({ persistentGrant: true });
+  expect((await f.repository.globalToolGrants(f.connector.connector_id)).get("echo")).toBe("allow");
+  expect((await f.grants()).has("echo")).toBe(false);
 });
 
 it("rejects an approval captured before a connector endpoint/command revision changed", async () => {

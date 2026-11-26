@@ -10,8 +10,8 @@ macOS and Bubblewrap plus seccomp on Linux. Missing isolation refuses execution.
 
 | Profile | Callers and filesystem scope | Host grants | Default network |
 | --- | --- | --- | --- |
-| `analysis` | Bash, Python Notebook, background Jobs; workspace data writable, runtime dependencies read only | Explicit read/write directories | None |
-| `mcp` | Local stdio MCP servers, including discovery/probes; user connectors have workspace access; builtins read installed code/dependencies and write private scratch only | Explicit read/write directories for user connectors only | None |
+| `analysis` | Bash, Python Notebook, background Jobs; workspace data writable, runtime dependencies read only | Explicit read/write directories | Versioned science API allowlist over HTTPS |
+| `mcp` | Local stdio MCP servers, including discovery/probes; user connectors have workspace access; builtins read installed code/dependencies and write private scratch only | Explicit read/write directories for user connectors only | Versioned science API allowlist over HTTPS |
 | `install` | Environment service creating one new revision; only that prefix and package cache writable | None | Conda-forge, Anaconda, PyPI and Python file hosting over HTTPS |
 | `control` | Environment health-check helpers; installed prefix read only, private scratch writable | None | None |
 | `byoc` | Provider-helper factory; frame workspace and stage writable, SDK read only | None | Only the registered HTTPS endpoint, intersected with the operator BYOC allowlist |
@@ -46,8 +46,12 @@ flowchart LR
 Set `PI_SCIENCE_SANDBOX_PROFILES` on the server to a canonical absolute path to
 a private, operator-owned, single-link JSON file (mode 0600). Keep it outside
 all writable workspaces and host grants. Workers receive this path only through
-trusted launch configuration. No configuration file is required for offline
-analysis or the default environment-install repositories.
+trusted launch configuration. No configuration file is required for the built-in
+science allowlist or the default environment-install repositories. Science
+allowlist version 1 includes exact NCBI E-utilities and PubChem, UniProt REST,
+EBI, RCSB file, Ensembl REST, and Crossref API hostnames for `analysis` and
+local `mcp`. Settings → Network shows the built-in list and its version.
+Operator and user deny rules take precedence over defaults.
 
 Example (replace directory examples with existing canonical directories):
 

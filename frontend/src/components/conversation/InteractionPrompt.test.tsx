@@ -83,18 +83,45 @@ describe("InteractionPrompt", () => {
       requestId: "mcp-persistent", kind: "permission", method: "confirm", title: "Run MCP search", mcpGrant: grant,
     }} onRespond={onRespond} />);
 
-    const always = screen.getByRole("button", { name: "Always allow" });
-    expect(always).toHaveAttribute("title", "Always allow this MCP tool in the current project. Changing connector configuration or credentials requires approval again.");
-    fireEvent.click(always);
+    const scope = screen.getByRole("combobox", { name: "Approval scope" });
+    expect(scope).toHaveValue("project");
+    expect(screen.getByRole("option", { name: "Allow in this conversation" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
     expect(onRespond).toHaveBeenCalledWith({ confirmed: true, alwaysAllow: true });
-    expect(always).toBeDisabled();
-    expect(always.querySelector(".animate-spin")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Allow once" }).querySelector(".animate-spin")).toBeNull();
+    expect(scope).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Allow" }).querySelector(".animate-spin")).toBeTruthy();
+  });
+
+  it("sends a conversation-scoped MCP approval", () => {
+    const onRespond = vi.fn();
+    render(<InteractionPrompt interaction={{
+      requestId: "mcp-conversation", kind: "permission", method: "confirm", title: "Run MCP search",
+      mcpGrant: { connectorId: "connector_papers", toolName: "search" },
+    }} onRespond={onRespond} />);
+    fireEvent.change(screen.getByRole("combobox", { name: "Approval scope" }), { target: { value: "conversation" } });
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    expect(onRespond).toHaveBeenCalledWith({ value: "conversation" });
+  });
+
+  it("confirms a project-wide execution grant before sending it", () => {
+    const onRespond = vi.fn();
+    render(<InteractionPrompt interaction={{
+      requestId: "bash-project", kind: "permission", method: "select", title: "Run bash?", message: "python -V",
+      presentation: { titleKey: "interaction.localExecution.title", titleParams: { tool: "bash" } },
+    }} onRespond={onRespond} />);
+    const scope = screen.getByRole("combobox", { name: "Approval scope" });
+    expect(scope).toHaveValue("conversation");
+    fireEvent.change(scope, { target: { value: "project" } });
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    expect(onRespond).not.toHaveBeenCalled();
+    expect(screen.getByText(/Future code from this tool/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm scope" }));
+    expect(onRespond).toHaveBeenCalledWith({ value: "project" });
   });
 
   it("never shows persistent permission for a generic confirmation", () => {
     render(<InteractionPrompt interaction={{ requestId: "install", kind: "permission", method: "confirm", title: "Install scipy" }} onRespond={vi.fn()} />);
-    expect(screen.queryByRole("button", { name: "Always allow" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Approval scope" })).not.toBeInTheDocument();
   });
 
   it("shows pending feedback on the confirmation action that was actually chosen", () => {

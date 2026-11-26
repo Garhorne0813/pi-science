@@ -6,7 +6,7 @@ import { Section } from "./Section";
 
 type Profile = "analysis" | "mcp";
 type Rule = { domain: string; profile: Profile; decision: "allow" | "deny"; createdAt: string };
-type NetworkSettings = { revision: number; rules: Rule[]; profiles: Record<Profile, { allowedDomains: string[]; deniedDomains: string[] }> };
+type NetworkSettings = { revision: number; defaultsVersion?: number; rules: Rule[]; profiles: Record<Profile, { defaultDomains?: string[]; allowedDomains: string[]; deniedDomains: string[] }> };
 
 export function NetworkTab() {
   const { t } = useTranslation();
@@ -53,7 +53,7 @@ export function NetworkTab() {
       </Section>
       <Section title={t("settings.network.operator")}>
         <p className="mb-3 text-ui-caption text-muted">{t("settings.network.operatorHelp")}</p>
-        {(["analysis", "mcp"] as const).map((role) => <div key={role} className="mb-3 text-ui-label"><h3 className="font-medium">{t(`settings.network.${role}`)}</h3><p className="mt-1 break-all text-ui-caption text-muted">{t("settings.network.allow")}: {data.profiles[role].allowedDomains.join(", ") || "—"}</p><p className="mt-1 break-all text-ui-caption text-muted">{t("settings.network.deny")}: {data.profiles[role].deniedDomains.join(", ") || "—"}</p></div>)}
+        {(["analysis", "mcp"] as const).map((role) => <div key={role} className="mb-3 text-ui-label"><h3 className="font-medium">{t(`settings.network.${role}`)}</h3><p className="mt-1 break-all text-ui-caption text-muted">{t("settings.network.defaults", { version: data.defaultsVersion ?? 1 })}: {data.profiles[role].defaultDomains?.join(", ") || "—"}</p><p className="mt-1 break-all text-ui-caption text-muted">{t("settings.network.allow")}: {data.profiles[role].allowedDomains.join(", ") || "—"}</p><p className="mt-1 break-all text-ui-caption text-muted">{t("settings.network.deny")}: {data.profiles[role].deniedDomains.join(", ") || "—"}</p></div>)}
       </Section>
     </>}
   </div>;

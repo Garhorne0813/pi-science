@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import { McpExecutionClock } from "./mcp-execution-clock.js";
 import { fingerprintMcpConnection } from "../../../mcp/connection-identity.js";
 import {
@@ -7,7 +8,13 @@ import {
   mcpApprovalKey,
 } from "../../../mcp/runtime-policy.js";
 import { redactMcpError } from "../../../mcp/diagnostics.js";
-import { readSessionApproval, sessionMode } from "../../sandbox/session-approval.js";
+import {
+  readSessionApproval,
+  sessionApprovalPath,
+  sessionMode,
+} from "../../sandbox/session-approval.js";
+import { withFileWriteLock, writeJsonAtomic } from "../../../storage/persistence.js";
+import { readOperatorConfig } from "../../sandbox/operator-config.js";
 import { acquireMcpCall } from "../../../mcp/call-scheduler.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -51,6 +58,28 @@ type ServerDefinition = {
 };
 
 const DISCOVERY_BUDGET_MS = 10_000;
+const conversationGrants = z.array(z.string()).max(1000);
+
+async function conversationGrantPath(cwd: string, sessionId: string): Promise<string> {
+  return (await sessionApprovalPath(cwd, sessionId)).replace(/\.json$/, "-mcp.json");
+}
+
+async function readConversationGrants(path: string): Promise<string[]> {
+  try {
+    return conversationGrants.parse(await readOperatorConfig(path, 256 * 1024));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+async function saveConversationGrant(path: string, key: string): Promise<void> {
+  await withFileWriteLock(path, async () => {
+    const grants = await readConversationGrants(path);
+    if (!grants.includes(key))
+      await writeJsonAtomic(path, conversationGrants.parse([...grants, key]), { mode: 0o600 });
+  });
+}
 
 function visible(server: ServerDefinition, toolName: string): boolean {
   if (server.includeTools?.length && !server.includeTools.includes(toolName)) return false;
@@ -280,6 +309,18 @@ export class AgentMcpTools {
                 context.abortSignal,
               );
             const decision = await checkAuthority();
+            const conversationPath =
+              sessionId && !preauthorizedOnly
+                ? await conversationGrantPath(cwd, sessionId)
+                : undefined;
+            const conversationKey = JSON.stringify([
+              server.__piScienceProjectId,
+              server.__piScienceConnectorId,
+              tool.name,
+              server.__piScienceConnectorRevision,
+              server.__piScienceSettingsRevision,
+              connectionFingerprint,
+            ]);
             const approvalRevision =
               sessionId && !preauthorizedOnly
                 ? (await readSessionApproval(cwd, sessionId)).revision
@@ -293,7 +334,11 @@ export class AgentMcpTools {
               server.__piScienceBuiltin === true &&
               tool.annotations?.readOnlyHint === true &&
               tool.annotations?.destructiveHint !== true;
-            let approvedByUser = mode === "full" || (mode === "auto" && safe);
+            let approvedByUser =
+              mode === "full" ||
+              (mode === "auto" && safe) ||
+              (!!conversationPath &&
+                (await readConversationGrants(conversationPath)).includes(conversationKey));
             let approvalMs = 0;
             if (decision === "ask" && !approvedByUser) {
               if (preauthorizedOnly)
@@ -302,7 +347,7 @@ export class AgentMcpTools {
                 );
               const approvalStarted = Date.now();
               _onUpdate({ content: [], details: { approval: "waiting" } });
-              let outcome: "allowed" | "approved" | "declined";
+              let outcome: "allowed" | "approved" | "conversation" | "declined";
               try {
                 outcome = await bridge.withPermission(
                   mcpApprovalKey({
@@ -325,26 +370,36 @@ export class AgentMcpTools {
                     // Another worker may have saved Always allow while this call waited.
                     if ((await checkAuthority()) === "allow") return "allowed";
                     const argumentsPreview = JSON.stringify(params).slice(0, 4_000);
-                    return (await bridge.confirmPermission(
+                    const answer = await bridge.request(
                       `Allow ${name}: ${tool.name}?`,
-                      `Arguments: ${argumentsPreview}`,
+                      "",
                       context.abortSignal,
-                      _toolCallId,
                       {
-                        connectorId: server.__piScienceConnectorId!,
-                        toolName: tool.name,
-                        connectorRevision: server.__piScienceConnectorRevision,
-                        settingsRevision: server.__piScienceSettingsRevision,
+                        method: "confirm",
+                        kind: "permission",
+                        toolCallId: _toolCallId,
+                        message: `Arguments: ${argumentsPreview}`,
+                        mcpGrant: {
+                          connectorId: server.__piScienceConnectorId!,
+                          toolName: tool.name,
+                          connectorRevision: server.__piScienceConnectorRevision,
+                          settingsRevision: server.__piScienceSettingsRevision,
+                        },
+                        presentation: {
+                          titleKey: "interaction.mcpPermission.title",
+                          titleParams: { connector: name, tool: tool.name },
+                          messageKey: "interaction.mcpPermission.arguments",
+                          messageParams: { preview: argumentsPreview },
+                        },
                       },
-                      {
-                        titleKey: "interaction.mcpPermission.title",
-                        titleParams: { connector: name, tool: tool.name },
-                        messageKey: "interaction.mcpPermission.arguments",
-                        messageParams: { preview: argumentsPreview },
-                      },
-                    ))
-                      ? "approved"
-                      : "declined";
+                    );
+                    if (answer === "conversation" && conversationPath) {
+                      currentPolicy(tool.name);
+                      if ((await checkAuthority()) !== "ask") return "allowed";
+                      await saveConversationGrant(conversationPath, conversationKey);
+                      return "conversation";
+                    }
+                    return answer === "true" ? "approved" : "declined";
                   },
                   context.abortSignal,
                 );
@@ -352,7 +407,7 @@ export class AgentMcpTools {
                 approvalMs = Date.now() - approvalStarted;
                 _onUpdate({ content: [], details: { approval: "resolved" } });
               }
-              approvedByUser = outcome === "approved";
+              approvedByUser = outcome === "approved" || outcome === "conversation";
               if (outcome === "declined")
                 return {
                   content: [{ type: "text", text: "MCP tool call was declined by the user" }],
