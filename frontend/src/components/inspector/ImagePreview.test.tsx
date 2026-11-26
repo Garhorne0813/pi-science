@@ -14,7 +14,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 it("fits image dimensions, changes magnification independently, and restores fit after resize", () => {
   render(<ImagePreview url="/sample.png" filename="sample.png" />);
   const img = screen.getByRole("img") as HTMLImageElement;
-  const viewport = img.parentElement!.parentElement!;
+  const viewport = img.parentElement!.parentElement!.parentElement!;
   Object.defineProperties(viewport, { clientWidth: { value: 432 }, clientHeight: { value: 232 } });
   act(() => resize());
   Object.defineProperties(img, { naturalWidth: { value: 800 }, naturalHeight: { value: 400 } });
@@ -34,7 +34,7 @@ it("fits image dimensions, changes magnification independently, and restores fit
 it.each([10_000, 1_000_000])("zooms a %i pixel image continuously from fit with buttons and pinch gestures", (pixels) => {
   render(<ImagePreview url="/large.png" filename="large.png" />);
   const img = screen.getByRole("img") as HTMLImageElement;
-  const viewport = img.parentElement!.parentElement!;
+  const viewport = img.parentElement!.parentElement!.parentElement!;
   Object.defineProperties(viewport, { clientWidth: { value: 432 }, clientHeight: { value: 432 } });
   act(() => resize());
   Object.defineProperties(img, { naturalWidth: { value: pixels }, naturalHeight: { value: pixels } });
@@ -58,7 +58,7 @@ it.each([10_000, 1_000_000])("zooms a %i pixel image continuously from fit with 
 it.each(["ctrlKey", "metaKey"])("accumulates a batch of %s wheel events before rendering", (modifier) => {
   render(<ImagePreview url="/batch.png" filename="batch.png" />);
   const img = screen.getByRole("img") as HTMLImageElement;
-  const viewport = img.parentElement!.parentElement!;
+  const viewport = img.parentElement!.parentElement!.parentElement!;
   Object.defineProperties(viewport, { clientWidth: { value: 432 }, clientHeight: { value: 432 } });
   act(() => resize());
   Object.defineProperties(img, { naturalWidth: { value: 10_000 }, naturalHeight: { value: 10_000 } });
@@ -67,4 +67,24 @@ it.each(["ctrlKey", "metaKey"])("accumulates a batch of %s wheel events before r
     for (let i = 0; i < 3; i++) viewport.dispatchEvent(new WheelEvent("wheel", { [modifier]: true, deltaY: -100, bubbles: true, cancelable: true }));
   });
   expect(parseFloat(img.style.width)).toBeCloseTo(400 * Math.exp(0.6));
+});
+
+it("retains the selected source pixels after a failed attachment and supports keyboard retry", async () => {
+  const onAsk = vi.fn().mockRejectedValueOnce(new Error("Upload failed")).mockResolvedValue(undefined);
+  render(<ImagePreview url="/plot.png" filename="plot.png" onAsk={onAsk} />);
+  const image = screen.getByRole("img");
+  Object.defineProperties(image, { naturalWidth: { value: 800 }, naturalHeight: { value: 400 } });
+  fireEvent.load(image);
+  fireEvent.click(screen.getByRole("button", { name: "Select image region" }));
+  const ask = screen.getByRole("button", { name: "Ask about region" });
+  expect(ask).toBeDisabled();
+  const surface = screen.getByRole("group", { name: /Use arrow keys/ });
+  fireEvent.keyDown(surface, { key: "ArrowRight" });
+  fireEvent.keyDown(surface, { key: "ArrowDown", shiftKey: true });
+  fireEvent.click(ask);
+  expect(await screen.findByRole("alert")).toBeVisible();
+  await act(async () => { fireEvent.click(ask); });
+  expect(onAsk).toHaveBeenCalledTimes(2);
+  expect(onAsk).toHaveBeenLastCalledWith(image, { x: 8, y: 0, width: 200, height: 104 });
+  expect(screen.queryByRole("button", { name: "Ask about region" })).not.toBeInTheDocument();
 });

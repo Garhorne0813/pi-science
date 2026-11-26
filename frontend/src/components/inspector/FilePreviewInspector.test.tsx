@@ -4,6 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { FilePreviewInspector } from "./FilePreviewInspector";
 import { FeedbackContext } from "../feedback/feedback-context";
@@ -97,7 +98,7 @@ describe("FilePreviewInspector edit capability", () => {
     const sha256 = "b".repeat(64);
     render(
       <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
-        <FilePreviewInspector data={{ variant: "file", path: "plot.png", filename: "plot.png", root: "workspace", sha256 }} onClose={() => {}} cwd="proj" />
+        <MemoryRouter><FilePreviewInspector data={{ variant: "file", path: "plot.png", filename: "plot.png", root: "workspace", sha256 }} onClose={() => {}} cwd="proj" /></MemoryRouter>
       </FeedbackContext.Provider>,
     );
     const image = await screen.findByAltText("plot.png");

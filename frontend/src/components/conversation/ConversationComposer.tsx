@@ -1,3 +1,4 @@
+import { previewUrl } from "../../lib/files";
 import { McpDiagnosticsNotice } from "./McpDiagnosticsNotice";
 import { ApprovalModeMenu } from "./ApprovalModeMenu";
 import { lazy, Suspense, useEffect, useState } from "react";
@@ -77,6 +78,10 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
   const retryRequest = activeSessionId && composedDraft
     ? findLocalPromptRequest(workspaceCwd, activeSessionId, promptContentDigest(composedDraft))
     : null;
+  const regionPath = workspaceReferences.at(-1)?.imageRegion ? workspaceReferences.at(-1)?.path : undefined;
+  useEffect(() => {
+    if (regionPath) composer.inputRef.current?.focus();
+  }, [regionPath, composer.inputRef]);
   const canSend = Boolean(input.trim() || files.length > 0 || workspaceReferences.length > 0 || quote);
   const queuedMessages = useRuntimeStore((state) => (state.queueSessionId === activeSessionId ? state.queuedMessages : NO_QUEUED_MESSAGES));
   const queuePaused = useRuntimeStore((state) => (state.queueSessionId === activeSessionId ? state.queuePaused : false));
@@ -175,8 +180,8 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
                 {workspaceReferences.map((reference) => (
                   <span key={reference.path} className="flex max-w-full items-center gap-1 rounded-input bg-accent/5 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-accent/20">
                     <button type="button" className="flex min-w-0 items-center gap-1 text-left" title={`${t("conversation.clickToInsert")} ${reference.path}`} aria-label={`${t("conversation.clickToInsert")} ${reference.path}`} onClick={() => { setInput(input ? `${input} ${reference.path}` : reference.path); composer.inputRef.current?.focus(); }}>
-                    {reference.isDir ? <FolderOpen size={11} className="shrink-0 text-accent" /> : <File size={11} className="shrink-0 text-accent" />}
-                    <span className="truncate">{reference.path}</span></button>
+                    {reference.imageRegion ? <img src={previewUrl(reference.path, "workspace", workspaceCwd)} alt="" className="h-9 w-12 rounded object-contain" /> : reference.isDir ? <FolderOpen size={11} className="shrink-0 text-accent" /> : <File size={11} className="shrink-0 text-accent" />}
+                    <span className="truncate">{reference.imageRegion ?? reference.path}</span></button>
                     <button type="button" aria-label={t("conversation.removeReference", { name: reference.name })} onClick={(event) => { event.stopPropagation(); onRemoveWorkspaceReference(workspaceCwd, reference.path); }} className="shrink-0 text-muted hover:text-error-text">
                       <X size={11} />
                     </button>

@@ -47,3 +47,11 @@ describe("workspace reference messages", () => {
     expect(referencesFromMessage("Hello")).toEqual([]);
   });
 });
+
+it("retains the region snapshot and its source coordinates across transcript reload", () => {
+  const reference = { cwd: "/study", path: "image-regions/fbaf434f-c2d8-4343-885a-e36ee1591629.png",
+    isDir: false, name: "plot.png", imageRegion: "results/plot.png [x=10, y=15, w=20, h=35 px]" };
+  const message = injectWorkspaceReferences("Why is this peak split?", [reference]);
+  expect(visibleUserMessage(message)).toBe("Why is this peak split?");
+  expect(referencesFromMessage(message)).toEqual([expect.objectContaining({ path: reference.path, imageRegion: reference.imageRegion })]);
+});

@@ -19,7 +19,7 @@ import { MarkdownViewer } from "@/components/markdown-viewer/MarkdownViewer";
 import { CitationNumberingProvider } from "@/components/markdown-viewer/CitationNumbering";
 import { numberCitations } from "@/lib/citations/numbering";
 import { IconButton } from "@/components/ui/Icon";
-import { ImagePreview } from "./ImagePreview";
+import { WorkspaceImagePreview } from "./WorkspaceImagePreview";
 import { PreviewZoomControls, clampPreviewScale } from "./PreviewZoomControls";
 import { ProvenancePanel } from "./ProvenancePanel";
 import { ArtifactDiffPanel } from "./ArtifactDiffPanel";
@@ -424,6 +424,7 @@ export function FilePreviewInspector({
         {!showHistory && !showDiff && !editing && !loading && !error && (
           <Suspense fallback={<Note text={t("filePreview.loadingScientificViewer")} />}>
             <Body
+              source={data}
               textScale={textScale}
               kind={kind}
               url={url}
@@ -434,11 +435,7 @@ export function FilePreviewInspector({
               fullTextError={fullTextError}
               onLoadFullText={() => void loadFullText()}
               showCode={tab === "code"}
-              filename={data.filename}
-              path={data.path}
-              language={data.language}
               cwd={cwd}
-              root={data.root}
             />
           </Suspense>
         )}
@@ -457,6 +454,7 @@ function MarkdownDocument({ text, textScale, cwd, root, path }: { text: string; 
 }
 
 function Body({
+  source,
   textScale,
   kind,
   url,
@@ -467,12 +465,9 @@ function Body({
   fullTextError,
   onLoadFullText,
   showCode,
-  filename,
-  path,
-  language,
   cwd,
-  root,
 }: {
+  source: FilePreviewInspectorT;
   textScale: number;
   kind: PreviewKind;
   url: string | null;
@@ -483,13 +478,9 @@ function Body({
   fullTextError: string | null;
   onLoadFullText: () => void;
   showCode: boolean;
-  filename: string;
-  path: string;
-  language?: string;
-  /** Workspace root for resolving relative markdown references. */
-  cwd?: string;
-  root?: FileRoot;
+  cwd: string;
 }) {
+  const { filename, path, language, root } = source;
   const { t } = useTranslation();
   if (kind === "docx" || kind === "xlsx" || kind === "pptx") {
     // Office views scroll internally (the outer pane never does), so they
@@ -676,7 +667,7 @@ function Body({
   }
   if (kind === "image") {
     return url ? (
-      <ImagePreview key={url} url={url} filename={filename} />
+      <WorkspaceImagePreview key={url} url={url} source={source} cwd={cwd} />
     ) : (
       <Note text={t("filePreview.loading")} />
     );
