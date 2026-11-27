@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures/app.fixture";
+import { expect, selectSettingsSection, test } from "./fixtures/app.fixture";
 import { writeFile } from "node:fs/promises";
 
 test("Settings isolates delayed model loading and bounds a 10,000-model catalog", async ({ page }, testInfo) => {
@@ -15,15 +15,16 @@ test("Settings isolates delayed model loading and bounds a 10,000-model catalog"
   const opened = Date.now();
   await page.goto("/settings");
   const dialog = page.getByRole("dialog", { name: "Settings" });
+  if (testInfo.project.name === "mobile") await selectSettingsSection(dialog, "General");
   await expect(dialog.getByRole("button", { name: "Light", exact: true })).toBeVisible();
   const generalReadyMs = Date.now() - opened;
   expect(requests).toBe(0);
-  await dialog.getByRole("tab", { name: "AI Models", exact: true }).click();
+  await selectSettingsSection(dialog, "Model connections");
   await expect.poll(() => requests).toBe(1);
-  await dialog.getByRole("tab", { name: "General", exact: true }).click();
+  await selectSettingsSection(dialog, "General");
   await dialog.getByRole("button", { name: "Dark", exact: true }).click();
   await expect(dialog.getByRole("button", { name: "Dark", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await dialog.getByRole("tab", { name: "Progress", exact: true }).click();
+  await selectSettingsSection(dialog, "Status display");
   await expect(dialog.getByRole("button", { name: "Reset", exact: true })).toBeVisible();
   expect(requests).toBe(1);
   const longTaskSupported = await page.evaluate(() => {
@@ -40,7 +41,7 @@ test("Settings isolates delayed model loading and bounds a 10,000-model catalog"
   expect(longTaskSupported, "Chromium must expose Long Tasks for this regression").toBe(true);
   const catalogStart = Date.now();
   release();
-  await dialog.getByRole("tab", { name: "AI Models", exact: true }).click();
+  await selectSettingsSection(dialog, "Model connections");
   await dialog.getByRole("button", { name: "Lab 0", exact: true }).click();
   await expect(dialog.getByText("Model 0-0", { exact: false })).toBeVisible();
   const catalogReadyMs = Date.now() - catalogStart;
