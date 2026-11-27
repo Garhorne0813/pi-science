@@ -184,10 +184,10 @@ describe("SettingsDialog", () => {
     openSettings(null);
     await screen.findByRole("dialog");
     // The close button now lives in the content header, so the first focusable
-    // is the sidebar's General tab and the panel-order select stays last.
-    const panelOrder = await screen.findByLabelText(/Conversation and preview layout/);
-    panelOrder.focus();
-    fireEvent.keyDown(panelOrder, { key: "Tab" });
+    // is the sidebar's General tab and the file-tree position select stays last.
+    const treeSide = await screen.findByLabelText(/File tree position/);
+    treeSide.focus();
+    fireEvent.keyDown(treeSide, { key: "Tab" });
     expect(document.activeElement).toBe(screen.getByRole("tab", { name: "General" }));
   });
 
@@ -199,11 +199,11 @@ describe("SettingsDialog", () => {
     const general = screen.getByRole("tab", { name: "General" });
     general.focus();
     fireEvent.keyDown(general, { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(screen.getByLabelText(/Conversation and preview layout/));
+    expect(document.activeElement).toBe(screen.getByLabelText(/File tree position/));
     // Right after opening, focus sits on the panel itself: Shift+Tab wraps too.
     dialog.focus();
     fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(screen.getByLabelText(/Conversation and preview layout/));
+    expect(document.activeElement).toBe(screen.getByLabelText(/File tree position/));
   });
 
   it("keeps the close button in the panel's normal tab order", async () => {
@@ -219,9 +219,11 @@ describe("SettingsDialog", () => {
     const generalIndex = labels.indexOf("General");
     const closeIndex = labels.indexOf("Close");
     const panelOrderIndex = labels.findIndex((label) => label.includes("Conversation and preview layout"));
+    const treeSideIndex = labels.findIndex((label) => label.includes("File tree position"));
     expect(generalIndex).toBeGreaterThanOrEqual(0);
     expect(closeIndex).toBeGreaterThan(generalIndex);
     expect(panelOrderIndex).toBeGreaterThan(closeIndex);
+    expect(treeSideIndex).toBeGreaterThan(panelOrderIndex);
   });
 });
 

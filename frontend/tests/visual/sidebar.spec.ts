@@ -14,7 +14,7 @@ test("desktop sidebar presents one stable navigation column", async ({ page }, t
   await expect(panel).toBeVisible();
   await expect(panel.getByRole("button", { name: "Switch project" })).toBeVisible();
   await expect(panel.getByRole("button", { name: "New conversation" })).toBeVisible();
-  await expect(panel.getByRole("link", { name: "Files", exact: true })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Files", exact: true })).toBeVisible();
   await expect(panel.getByRole("link", { name: KNOWLEDGE })).toHaveAttribute("aria-current", "page");
   await expect(panel.getByRole("link", { name: "Run history", exact: true })).toBeVisible();
   await expect(panel.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
@@ -62,7 +62,11 @@ test("primary links highlight only their exact page", async ({ page }, testInfo)
   const panel = page.locator(PANEL);
   await expect(panel.locator("[aria-current=page]")).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Markdown rendering demo", exact: true })).toHaveAttribute("aria-current", "page");
-  for (const [path, label] of [["files", "Files"], ["memory", KNOWLEDGE], ["runs", "Run history"]] as const) {
+  await panel.getByRole("button", { name: "Files", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`${root}/session/${VISUAL_SESSION}$`));
+  await expect(panel.getByRole("button", { name: "Files", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("region", { name: "Workspace file tree" })).toBeVisible();
+  for (const [path, label] of [["memory", KNOWLEDGE], ["runs", "Run history"]] as const) {
     const item = panel.getByRole("link", { name: label });
     await item.click();
     await expect(page).toHaveURL(new RegExp(`${root}/${path}$`));
@@ -89,8 +93,8 @@ test("mobile page navigation closes the context drawer", async ({ page }, testIn
   await expand.click();
   const panel = page.locator(PANEL);
   await expect(panel).toBeFocused();
-  await panel.getByRole("link", { name: "Files", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`${root}/files$`));
+  await panel.getByRole("button", { name: "Files", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`${root}/session/${VISUAL_SESSION}$`));
   await expect(panel).toHaveAttribute("hidden");
   await expect(page.getByRole("button", { name: "Expand sidebar", exact: true })).toBeVisible();
 });

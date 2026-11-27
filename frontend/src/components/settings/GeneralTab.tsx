@@ -27,6 +27,8 @@ export function GeneralTab() {
   const setLocale = useUiStore((state) => state.setLocale);
   const previewPaneSide = useUiStore((state) => state.previewPaneSide);
   const setPreviewPaneSide = useUiStore((state) => state.setPreviewPaneSide);
+  const previewFileTreeSide = useUiStore((state) => state.previewFileTreeSide);
+  const setPreviewFileTreeSide = useUiStore((state) => state.setPreviewFileTreeSide);
   return (
     <div className="space-y-6">
       <p className="text-ui-caption leading-relaxed text-muted">{t("settings.redesign.generalDescription")}</p>
@@ -48,6 +50,10 @@ export function GeneralTab() {
         <div className="flex flex-wrap items-center justify-between gap-3 py-4">
           <div className="min-w-0 flex-1"><h3 className="text-ui-label text-text">{t("settings.layout.panelOrder.label")}</h3><p className="mt-1 text-ui-caption text-muted">{t("settings.redesign.layoutHelp")}</p></div>
           <SettingsSelectMenu ariaLabel={t("settings.layout.panelOrder.label")} value={previewPaneSide} options={[{ value: "right", label: t("settings.layout.panelOrder.conversationPreview") }, { value: "left", label: t("settings.layout.panelOrder.previewConversation") }]} className="max-w-full" onSelect={(next) => setPreviewPaneSide(next as "left" | "right")} />
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 py-4">
+          <div className="min-w-0 flex-1"><h3 className="text-ui-label text-text">{t("settings.layout.fileTreeSide.label")}</h3><p className="mt-1 text-ui-caption text-muted">{t("settings.redesign.fileTreeSideHelp")}</p></div>
+          <SettingsSelectMenu ariaLabel={t("settings.layout.fileTreeSide.label")} value={previewFileTreeSide} options={[{ value: "left", label: t("settings.layout.fileTreeSide.left") }, { value: "right", label: t("settings.layout.fileTreeSide.right") }]} className="max-w-full" onSelect={(next) => setPreviewFileTreeSide(next as "left" | "right")} />
         </div>
       </section>
     </div>

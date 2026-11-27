@@ -111,13 +111,13 @@ export function FileBrowser({
   cwd: string;
   embedded?: boolean;
   active?: boolean;
-  mode?: "sidebar" | "page";
+  mode?: "sidebar" | "page" | "pane";
   fileType?: "all" | "notebook";
   conversationKey?: string | null;
 }) {
   const { t } = useTranslation();
   const { confirm, toast } = useFeedback();
-  const pageMode = mode === "page";
+  const fullTreeMode = mode === "page" || mode === "pane";
   const [entries, setEntries] = useState<FileListEntry[]>([]);
   // One inline name editor at a time, so no combination of state can render two inputs.
   const [draft, setDraft] = useState<InlineEditDraft | null>(null);
@@ -266,7 +266,7 @@ export function FileBrowser({
       setLoading(true);
     }
     try {
-      const rootEntries = pageMode
+      const rootEntries = fullTreeMode
         ? (await workspaceFiles.directory(cwd, "", signal)).entries
         : await workspaceFiles.sidebar(cwd, signal, recentRootPathsRef.current);
       if (token !== requestTokenRef.current || signal?.aborted) return;
@@ -328,7 +328,7 @@ export function FileBrowser({
         setLoading(false);
       }
     }
-  }, [cwd, pageMode, t, toast]);
+  }, [cwd, fullTreeMode, t, toast]);
 
   // Reset per-workspace state when the cwd changes.
   useEffect(() => {
@@ -348,7 +348,7 @@ export function FileBrowser({
   }, [shouldPoll, fileRevision, loadFiles]);
 
   const loadGitStatus = useCallback(async (signal?: AbortSignal) => {
-    if (!pageMode) return;
+    if (!fullTreeMode) return;
     try {
       const status = await workspaceFiles.gitStatus(cwd, signal);
       if (!signal?.aborted) {
@@ -363,7 +363,7 @@ export function FileBrowser({
         setGitStats({});
       }
     }
-  }, [cwd, pageMode]);
+  }, [cwd, fullTreeMode]);
 
   useEffect(() => {
     if (!shouldPoll) return;
@@ -400,7 +400,7 @@ export function FileBrowser({
   }, [shouldPoll, loadFiles, watchConnected]);
 
   useEffect(() => {
-    if (!pageMode || !normalizedSearch) {
+    if (!fullTreeMode || !normalizedSearch) {
       setSearchResults([]);
       setSearchLoading(false);
       return;
@@ -414,7 +414,7 @@ export function FileBrowser({
         .finally(() => { if (!controller.signal.aborted) setSearchLoading(false); });
     }, 200);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [cwd, normalizedSearch, pageMode, t, toast]);
+  }, [cwd, normalizedSearch, fullTreeMode, t, toast]);
 
   const handleClick = (entry: TreeEntry) => {
     if (entry.isDir) {
@@ -466,10 +466,10 @@ export function FileBrowser({
   const revealFolder = (dirPath: string) => revealTreePath(dirPath, true);
 
   useEffect(() => {
-    if (!pageMode || !fileTreeReveal || fileTreeReveal.cwd !== cwd) return;
+    if (!fullTreeMode || !fileTreeReveal || fileTreeReveal.cwd !== cwd) return;
     clearFileTreeReveal(fileTreeReveal.id);
     void revealTreePath(fileTreeReveal.path);
-  }, [clearFileTreeReveal, cwd, fileTreeReveal, pageMode, revealTreePath]);
+  }, [clearFileTreeReveal, cwd, fileTreeReveal, fullTreeMode, revealTreePath]);
 
   const toggleFolder = useCallback(async (dirPath: string) => {
     const isClosing = openFoldersRef.current.has(dirPath);
@@ -495,7 +495,7 @@ export function FileBrowser({
       loaded.set(currentPath, { entries: result.entries, loading: false, error: null });
       // Page mode follows a bounded chain of single-child directories. The
       // renderer folds the loaded chain into one row, matching IDE compact folders.
-      if (pageMode) {
+      if (fullTreeMode) {
         for (let depth = 0; depth < 12; depth += 1) {
           const visibleEntries = fileType === "notebook"
             ? result.entries.filter((entry) => entry.isDir || entry.name.toLowerCase().endsWith(".ipynb"))
@@ -528,7 +528,7 @@ export function FileBrowser({
         return next;
       });
     }
-  }, [cwd, fileType, pageMode]);
+  }, [cwd, fileType, fullTreeMode]);
 
   const folderEntries = useMemo(() => {
     const seen = new Set<string>();
@@ -543,7 +543,7 @@ export function FileBrowser({
         seen.add(entry.path);
         let displayed = entry;
         let displayName = entry.name;
-        if (pageMode && entry.isDir && openFolders.has(entry.path)) {
+        if (fullTreeMode && entry.isDir && openFolders.has(entry.path)) {
           for (let compactDepth = 0; compactDepth < 12; compactDepth += 1) {
             const state = folderStates.get(displayed.path);
             const children = state && !state.loading && !state.error ? visibleItems(state.entries) : [];
@@ -563,7 +563,7 @@ export function FileBrowser({
       return row;
     };
     return build(entries, 0);
-  }, [changedOnly, entries, fileType, folderStates, gitStatusIndex, openFolders, pageMode]);
+  }, [changedOnly, entries, fileType, folderStates, gitStatusIndex, openFolders, fullTreeMode]);
 
   const displayedEntries = useMemo(() => normalizedSearch
     ? searchResults
@@ -849,8 +849,8 @@ export function FileBrowser({
     const state = folderStates.get(e.path);
     const isLoading = state?.loading;
     const error = state?.error;
-    const gitStatus = pageMode ? gitStatusIndex.get(e.compactRootPath ?? e.path) ?? null : null;
-    const gitLineStats = pageMode ? gitStatsIndex.get(e.compactRootPath ?? e.path) ?? null : null;
+    const gitStatus = fullTreeMode ? gitStatusIndex.get(e.compactRootPath ?? e.path) ?? null : null;
+    const gitLineStats = fullTreeMode ? gitStatsIndex.get(e.compactRootPath ?? e.path) ?? null : null;
     const gitStatusLabel = gitStatus ? t(gitStatusLabelKey(gitStatus)) : null;
     const isReferenced = referencedPaths.has(e.path);
     return (
@@ -884,7 +884,7 @@ export function FileBrowser({
             : <span aria-hidden="true" className="w-3 shrink-0" />}
           <Icon icon={e.isDir ? (openFolders.has(e.path) ? FolderOpen : Folder) : iconForFile(e.name)} size="sm" className="shrink-0 text-muted" />
           <span className="min-w-0 flex-1 truncate">{e.displayName ?? e.name}</span>
-          {isReferenced && <span aria-hidden="true" className="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium text-accent"><Link2 size={11} />{pageMode && t("files.referenced")}</span>}
+          {isReferenced && <span aria-hidden="true" className="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium text-accent"><Link2 size={11} />{fullTreeMode && t("files.referenced")}</span>}
           {normalizedSearch && <span className="max-w-[55%] shrink truncate text-ui-meta text-muted">{parentDir(e.path) || t("files.workspace")}</span>}
           {gitLineStats && (gitLineStats.additions > 0 || gitLineStats.deletions > 0) ? (
             <span
@@ -958,7 +958,7 @@ export function FileBrowser({
         <div className="h-px shrink-0 bg-faint" />
       ))}
       <div className="flex min-h-0 flex-1 flex-col pt-2">
-        {pageMode && (
+        {fullTreeMode && (
           <label className="mx-2 mb-2 flex h-9 shrink-0 items-center gap-2 rounded-input border border-border bg-bg px-2.5 text-muted focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/15">
             <Icon icon={Search} size="sm" className="shrink-0" />
             <input
@@ -1009,7 +1009,7 @@ export function FileBrowser({
           >
             <Icon icon={FolderPlus} size="xs" />
           </button>
-          {pageMode && gitRepository && (
+          {fullTreeMode && gitRepository && (
             <button
               type="button"
               aria-label={t("files.changedOnly")}
@@ -1052,13 +1052,13 @@ export function FileBrowser({
               }
               setDropTarget(null);
             }}
-            className={cn("mt-1 flex min-h-0 flex-1 flex-col gap-0.5 rounded-input", !pageMode && "overflow-y-auto", dropTarget?.path === "" && dropTarget.valid && "bg-accent/10 ring-2 ring-inset ring-accent/60")}
+            className={cn("mt-1 flex min-h-0 flex-1 flex-col gap-0.5 rounded-input", !fullTreeMode && "overflow-y-auto", dropTarget?.path === "" && dropTarget.valid && "bg-accent/10 ring-2 ring-inset ring-accent/60")}
           >
             {!draft && displayedEntries.length === 0 ? (
               <p className="px-2 py-4 text-center text-ui-meta italic text-muted/60">
                 {loading || searchLoading ? t("common.loading") : normalizedSearch ? t("files.noSearchResults") : t("files.empty")}
               </p>
-            ) : pageMode ? (
+            ) : fullTreeMode ? (
               <div className="min-h-0 flex-1">
                 <Virtuoso
                   ref={virtuosoRef}
