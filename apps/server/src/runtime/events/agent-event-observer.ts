@@ -141,12 +141,15 @@ async function appendProvenance(cwd: string, path: string, tool: string, session
   const version = records.filter((record) => record.path === path).reduce((max, record) => Math.max(max, Number(record.version ?? 0)), 0) + 1;
   const args = event.args && typeof event.args === "object" ? event.args as Record<string, unknown> : {};
   const result = event.result && typeof event.result === "object" ? event.result as Record<string, unknown> : {};
+  const details = result.details && typeof result.details === "object" && !Array.isArray(result.details) ? result.details as Record<string, unknown> : {};
+  const fileChange = details.fileChange && typeof details.fileChange === "object" && !Array.isArray(details.fileChange) ? details.fileChange as Record<string, unknown> : {};
+  const diff = typeof fileChange.patch === "string" ? fileChange.patch : typeof details.diff === "string" ? details.diff : undefined;
   const content = tool === "write" ? String(args.content ?? args.text ?? "").slice(0, 100_000) : undefined;
   await appendJsonLine(workspaceFile(cwd, "provenance.jsonl"), {
     path, version, ts: Date.now() / 1000, tool, toolCallId: String(event.toolCallId ?? ""), sessionId,
     executionId: executionIdFor("agent-tool", sessionId, String(event.toolCallId ?? "")),
     ...(model ? { model } : {}), ...(content ? { content, contentHash: createHash("sha256").update(content).digest("hex").slice(0, 16) } : {}),
-    ...(tool === "edit" && result.diff ? { diff: String(result.diff).slice(0, 100_000) } : {}),
+    ...(diff ? { diff: diff.slice(0, 100_000) } : {}),
     artifactId, artifactVersion, artifactHash: sha256,
   });
 }

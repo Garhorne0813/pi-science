@@ -143,4 +143,20 @@ describe("ActivityRendererRegistry", () => {
     const unknown = tool("future_science_tool", { title: "Future analysis" });
     expect(registry.resolve("not-registered").compact({ activity: projectToolActivity(unknown), source: unknown, live: false, t })).toEqual({ title: "Future analysis" });
   });
+
+  it("projects persisted file changes into a compact tool-event summary", () => {
+    const edit = tool("edit", {
+      input: { path: "src/app.ts" },
+      details: { fileChange: { path: "src/app.ts", additions: 12, deletions: 3, patch: "@@\n-old\n+new" } },
+    });
+    const renderer = activityRendererRegistry.resolve(projectToolActivity(edit).kind);
+    expect(renderer.compact({ activity: projectToolActivity(edit), source: edit, live: false, t })).toEqual({
+      title: "conversation.activity.write:app.ts",
+      fileChange: { additions: 12, deletions: 3 },
+    });
+    expect(renderer.expanded({ activity: projectToolActivity(edit), source: edit, live: false, t })).toContainEqual(expect.objectContaining({
+      label: "conversation.activity.diff:",
+      value: "@@\n-old\n+new",
+    }));
+  });
 });

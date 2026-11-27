@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Code2, Eye, ExternalLink, FileSearch, GitCompare, History, Loader2, Pencil, X } from "lucide-react";
+import { Check, Code2, Eye, ExternalLink, FileSearch, GitCompare, History, Loader2, LocateFixed, Pencil, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { FilePreviewInspector as FilePreviewInspectorT, FileRoot } from "../../types/thread";
 import { previewKindForName, type PreviewKind } from "@/lib/artifacts";
@@ -38,10 +38,10 @@ import { BandView } from "./BandView";
 import { QCodeView } from "./QCodeView";
 import { AnomalyMapView } from "./AnomalyMapView";
 import { PhaseView } from "./PhaseView";
-import { useScrollMemory } from "@/lib/ui";
-import { cn } from "@/lib/ui";
+import { cn, useScrollMemory } from "@/lib/ui";
 import { previewPolicy } from "@/lib/artifacts/preview-policy";
 import { isSelectAllShortcut, selectAllWithin } from "@/lib/ui/select-all-within";
+import { revealWorkspaceFile } from "@/lib/files";
 
 /** Keep the Markdown DOM bounded. Full text is fetched only when requested. */
 const MARKDOWN_PREVIEW_BYTES = 2 * 1024 * 1024;
@@ -373,6 +373,15 @@ export function FilePreviewInspector({
             className="text-text"
             title={t("filePreview.openExternally")}
             onClick={() => void openArtifactExternally(data.path, data.root, cwd)}
+          />
+        )}
+        {data.root === "workspace" && (
+          <IconButton
+            icon={LocateFixed}
+            label={t("files.revealInTree")}
+            size="compact"
+            className="text-text"
+            onClick={() => revealWorkspaceFile(cwd, data.path)}
           />
         )}
         {controls}

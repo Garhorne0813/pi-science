@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { File, FileText, FileSpreadsheet, FileImage, FileCode2, NotebookPen, ChevronDown, ChevronUp, ArrowUpRight } from "lucide-react";
+import { File, FileText, FileSpreadsheet, FileImage, FileCode2, NotebookPen, ChevronDown, ChevronUp, ArrowUpRight, LocateFixed } from "lucide-react";
 import { previewUrl, probeLargeFile, readArtifact } from "../../lib/files";
 import { extractArtifactRefs, fileInspectorForPath, normalizeArtifactPath } from "../../lib/artifacts";
 import { useUiStore } from "../../lib/ui";
@@ -8,6 +8,7 @@ import type { TurnArtifactItem } from "../../types/thread";
 import { codeSnippet, markdownSnippet, parseCsvSnippet, parseTsvSnippet, type CsvSnippet } from "../../lib/conversation/turn-artifact-snippet";
 import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
 import { MoleculeThumb } from "./MoleculeThumb";
+import { revealWorkspaceFile } from "../../lib/files";
 
 const MAX_VISIBLE = 6;
 const SNIPPET_BYTES = 8192;
@@ -21,7 +22,7 @@ const PREVIEW_HEIGHT = "h-[55px]";
  *  no-ops); the focus ring is the Claude Science blue with the inset ring kept. */
 const CARD =
   "group relative flex w-[128px] shrink-0 flex-col overflow-hidden rounded-[12px] bg-surface text-left ring-1 ring-inset ring-black/10 focus-visible:ring-2 focus-visible:ring-[#2a78d6] dark:ring-white/10";
-const FILENAME_BAR = "flex h-[25px] min-w-0 items-center gap-0.5 px-2";
+const FILENAME_BAR = "flex h-[25px] min-w-0 items-center gap-0.5 pl-2 pr-7";
 
 function artifactContentKey(item: TurnArtifactItem): string | number | undefined {
   return item.sha256 ?? item.revision ?? item.version;
@@ -86,6 +87,26 @@ function OpenAffordance() {
     >
       <ArrowUpRight size={14} />
     </span>
+  );
+}
+
+function ArtifactCardActions({ children, cwd, path }: { children: ReactNode; cwd?: string; path: string }) {
+  const { t } = useTranslation();
+  return (
+    <div className="group relative w-[128px] shrink-0">
+      {children}
+      {cwd && (
+        <button
+          type="button"
+          aria-label={t("files.revealInTree")}
+          title={t("files.revealInTree")}
+          onClick={() => revealWorkspaceFile(cwd, path)}
+          className="absolute bottom-0 right-0 z-20 flex h-[25px] w-7 items-center justify-center rounded-br-[12px] rounded-tl-[6px] bg-surface text-muted transition-colors hover:text-accent"
+        >
+          <LocateFixed size={12} />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -172,7 +193,7 @@ function IconCard({ item, cwd, Icon }: { item: TurnArtifactItem; cwd?: string; I
     if (!cwd) return;
     openInspector(inspectorForArtifact(item, cwd));
   };
-  return (
+  return <ArtifactCardActions cwd={cwd} path={item.path}>
     <button
       type="button"
       onClick={open}
@@ -187,7 +208,7 @@ function IconCard({ item, cwd, Icon }: { item: TurnArtifactItem; cwd?: string; I
         <FilenameLabel filename={filename} />
       </span>
     </button>
-  );
+  </ArtifactCardActions>;
 }
 
 function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
@@ -209,7 +230,7 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
 
   if (snippetKindFor(item) === "structure") {
     if (structureFailed || !cwd) return <IconCard item={item} cwd={cwd} Icon={fileIcon(item.kind)} />;
-    return (
+    return <ArtifactCardActions cwd={cwd} path={item.path}>
       <button
         type="button"
         onClick={open}
@@ -231,7 +252,7 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
           <FilenameLabel filename={filename} />
         </span>
       </button>
-    );
+    </ArtifactCardActions>;
   }
 
   let body: ReactNode;
@@ -267,7 +288,7 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
     );
   }
 
-  return (
+  return <ArtifactCardActions cwd={cwd} path={item.path}>
     <button
       type="button"
       onClick={open}
@@ -288,7 +309,7 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
         <FilenameLabel filename={filename} />
       </span>
     </button>
-  );
+  </ArtifactCardActions>;
 }
 
 function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
@@ -308,7 +329,7 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
   };
 
   if (isImage) {
-    return (
+    return <ArtifactCardActions cwd={cwd} path={item.path}>
       <button
         type="button"
         onClick={open}
@@ -329,7 +350,7 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
           <FilenameLabel filename={filename} />
         </span>
       </button>
-    );
+    </ArtifactCardActions>;
   }
 
   if (snippetKindFor(item)) {

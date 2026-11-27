@@ -35,7 +35,7 @@ vi.mock("../../lib/workspace", async (importOriginal) => {
       invalidate: vi.fn(),
       sidebar: vi.fn(async () => sidebarEntries(["work", "reports"])),
       search: vi.fn(async () => []),
-      gitStatus: vi.fn(async () => ({ repository: false, entries: {} })),
+      gitStatus: vi.fn(async () => ({ repository: false, entries: {}, stats: {} })),
       directory: vi.fn(async (_cwd: string, subdir: string) => ({
         entries: subdir === "work" ? sidebarEntries(["data.csv"]) : sidebarEntries(["plot.png"]),
         breadcrumbs: [{ name: subdir, path: subdir }],
@@ -68,11 +68,11 @@ beforeAll(async () => {
 
 beforeEach(() => {
   useRuntimeStore.setState({ fileRevision: 0, cwd: "proj", activeSessionId: "s1" });
-  useUiStore.setState({ inspectorOpen: false, inspectorData: null, sidebarFileBrowserHeight: 288 });
+  useUiStore.setState({ inspectorOpen: false, inspectorData: null, sidebarFileBrowserHeight: 288, fileTreeReveal: null, workspaceReferences: [] });
   vi.clearAllMocks();
   files.sidebar.mockImplementation(async () => sidebarEntries(["work", "reports"]));
   files.search.mockImplementation(async () => []);
-  files.gitStatus.mockImplementation(async () => ({ repository: false, entries: {} }));
+  files.gitStatus.mockImplementation(async () => ({ repository: false, entries: {}, stats: {} }));
   files.directory.mockImplementation(async (_cwd: string, subdir: string) => ({
     entries: subdir === "work" ? sidebarEntries(["data.csv"]) : sidebarEntries(["plot.png"]),
     breadcrumbs: [{ name: subdir, path: subdir }],
@@ -171,13 +171,81 @@ describe("FileBrowser", () => {
 
   it("shows git status for files and aggregates it on parent folders", async () => {
     files.directory.mockResolvedValueOnce({
-      entries: [{ name: "results", path: "results", isDir: true, size: 0, modified: 1 }],
+      entries: [
+        { name: "results", path: "results", isDir: true, size: 0, modified: 1 },
+        { name: "draft.txt", path: "draft.txt", isDir: false, size: 1, modified: 1 },
+      ],
       breadcrumbs: [],
     });
-    files.gitStatus.mockResolvedValueOnce({ repository: true, entries: { "results/report.csv": " M" } });
+    files.gitStatus.mockResolvedValueOnce({
+      repository: true,
+      entries: { "results/report.csv": " M", "draft.txt": "??" },
+      stats: { "results/report.csv": { additions: 12, deletions: 3 }, "draft.txt": { additions: 8, deletions: 0 } },
+    });
     render(<FileBrowser cwd="proj" embedded mode="page" />);
 
-    expect(await screen.findByLabelText("Git status: M")).toHaveTextContent("M");
+    const folderStats = await screen.findByLabelText("Git changes: +12 / -3 lines");
+    expect(folderStats).toHaveTextContent("+12-3");
+    expect(folderStats.firstElementChild).toHaveClass("text-ok-text");
+    expect(folderStats.lastElementChild).toHaveClass("text-error-text");
+    const untracked = screen.getByLabelText("Git changes: +8 / -0 lines");
+    expect(untracked).toHaveTextContent("+8");
+  });
+
+  it("filters the tree to changed files and their parent folders in git workspaces", async () => {
+    files.directory.mockResolvedValueOnce({
+      entries: [
+        { name: "results", path: "results", isDir: true, size: 0, modified: 1 },
+        { name: "notes.md", path: "notes.md", isDir: false, size: 1, modified: 1 },
+      ],
+      breadcrumbs: [],
+    });
+    files.gitStatus.mockResolvedValueOnce({ repository: true, entries: { "results/report.csv": " M" }, stats: {} });
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+
+    expect(await screen.findByRole("button", { name: "notes.md" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Show changed files only" }));
+    expect(screen.getByRole("button", { name: /^results/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "notes.md" })).not.toBeInTheDocument();
+  });
+
+  it("reveals and highlights a nested file requested by another workspace surface", async () => {
+    const entry = (path: string, isDir: boolean): FileListEntry => ({ path, name: path.split("/").at(-1)!, isDir, size: 1, modified: 1 });
+    files.directory.mockImplementation(async (_cwd: string, path: string) => ({
+      entries: path === "" ? [entry("results", true)]
+        : path === "results" ? [entry("results/final", true)]
+          : [entry("results/final/report.csv", false)],
+      breadcrumbs: [],
+    }));
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+    await screen.findByRole("button", { name: "results" });
+
+    act(() => useUiStore.getState().revealInFileTree("proj", "results/final/report.csv"));
+
+    const target = await screen.findByRole("button", { name: "report.csv" });
+    expect(target).toHaveClass("ring-accent/40");
+    expect(files.directory).toHaveBeenCalledWith("proj", "results");
+    expect(files.directory).toHaveBeenCalledWith("proj", "results/final");
+  });
+
+  it("supports arrow-key movement and serializes rows as composer references", async () => {
+    files.directory.mockResolvedValueOnce({
+      entries: [
+        { name: "a.txt", path: "a.txt", isDir: false, size: 1, modified: 1 },
+        { name: "b.txt", path: "b.txt", isDir: false, size: 1, modified: 1 },
+      ],
+      breadcrumbs: [],
+    });
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+    const first = await screen.findByRole("button", { name: "a.txt" });
+    const second = screen.getByRole("button", { name: "b.txt" });
+    first.focus();
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    await vi.waitFor(() => expect(second).toHaveFocus());
+
+    const setData = vi.fn();
+    fireEvent.dragStart(second, { dataTransfer: { setData, effectAllowed: "none" } });
+    expect(setData).toHaveBeenCalledWith("application/x-pi-science-workspace-reference", JSON.stringify({ cwd: "proj", path: "b.txt", name: "b.txt", isDir: false }));
   });
 
   it("sorts siblings naturally at each depth without moving files out of their parent", async () => {
