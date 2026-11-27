@@ -77,3 +77,16 @@ it("loads conversation context when opening a Runs deep link directly", async ()
   expect(loadSessions).toHaveBeenCalledWith("proj");
   expect(router.state.location.search).toBe("?session_id=a");
 });
+
+it("loads the conversation list when opening the Files page directly", async () => {
+  const loadSessions = vi.fn(async (cwd = "proj") => {
+    const sessions = [{ id: "a", cwd, name: "Loaded A" }];
+    useRuntimeStore.setState({ cwd, sessions });
+    return sessions;
+  });
+  useRuntimeStore.setState({ sessions: [], loadSessions });
+  const { router } = mount("/workspace/proj/files");
+  expect(await screen.findByRole("button", { name: "Loaded A" })).toBeInTheDocument();
+  expect(loadSessions).toHaveBeenCalledWith("proj");
+  expect(router.state.location.pathname).toBe("/workspace/proj/files");
+});

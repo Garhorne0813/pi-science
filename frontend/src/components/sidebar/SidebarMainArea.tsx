@@ -51,6 +51,8 @@ export function SidebarMainArea({ cwd, renderSessions }: { cwd: string; renderSe
     </label>
     <span id={searchId} className="sr-only">{t("sidebar.searchScope")}</span>
     <div className="min-h-0 flex-1 overflow-hidden">{renderSessions ? renderSessions(query) : <WorkspaceSessionList cwd={cwd} query={query} />}</div>
-    <button type="button" aria-expanded={settingsOpen} onClick={() => { preloadSettingsContent(); useUiStore.getState().openSettings(cwd); closeSidebarOnNarrow(); }} onPointerEnter={preloadSettingsContent} onFocus={preloadSettingsContent} className={`${linkClass} mt-2 shrink-0 border-t border-faint pt-2`}><Settings size={15} />{t("nav.settings")}</button>
+    <div className="mt-2 shrink-0 border-t border-faint pt-2">
+      <button type="button" aria-expanded={settingsOpen} onClick={() => { preloadSettingsContent(); useUiStore.getState().openSettings(cwd); closeSidebarOnNarrow(); }} onPointerEnter={preloadSettingsContent} onFocus={preloadSettingsContent} className={`${linkClass} w-full text-left`}><Settings size={15} />{t("nav.settings")}</button>
+    </div>
   </section>;
 }

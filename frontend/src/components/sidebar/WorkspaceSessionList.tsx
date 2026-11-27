@@ -72,7 +72,8 @@ export function WorkspaceSessionList({ cwd, query = "" }: { cwd: string; query?:
     let cancelled = false;
     const isConversationRoute = isNewConversation || location.pathname.startsWith(`${workspaceRoot}/session/`);
     const isRunsRoute = location.pathname === `${workspaceRoot}/runs`;
-    if (!isWorkspaceRoot && ((!isConversationRoute && !isRunsRoute) || !sessionsEmpty)) return;
+    const isFilesRoute = location.pathname === `${workspaceRoot}/files`;
+    if (!isWorkspaceRoot && ((!isConversationRoute && !isRunsRoute && !isFilesRoute) || !sessionsEmpty)) return;
     if (isWorkspaceRoot && blocksRootAutoNavigation(live.current.location.state, cwd)) return;
     void loadSessions(cwd).then(merged => {
       if (cancelled || blocksRootAutoNavigation(live.current.location.state, cwd)) return;
