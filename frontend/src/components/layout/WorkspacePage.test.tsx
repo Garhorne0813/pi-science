@@ -27,3 +27,9 @@ it("restores the last viewed conversation after a page refresh", () => {
   renderHeader("/workspace/proj/files");
   expect(screen.getByRole("link", { name: "Back to conversation" })).toHaveAttribute("href", "/workspace/proj/session/remembered-session");
 });
+
+it("returns to the new-conversation draft instead of a previous session", () => {
+  rememberLastConversation("proj", "remembered-session");
+  renderHeader("/workspace/proj/files?conversation=new");
+  expect(screen.getByRole("link", { name: "Back to conversation" })).toHaveAttribute("href", "/workspace/proj/new");
+});

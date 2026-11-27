@@ -488,6 +488,7 @@ describe("agent-core worker mutations", () => {
     const command = `'${process.execPath.replaceAll("'", "'\\''")}' -e '${script}'`;
     const result = await bash.execute("environment-test", { command }, () => undefined,
       { env: parts.executionEnv }, { operationId: "environment-operation", invocationId: "environment-test", turnId: "environment-turn", getMemo: async () => undefined, setMemo: async () => {} }, context);
+    expect(result.details).toMatchObject({ execution_id: expect.any(String), exitCode: 0 });
     const text = result.content.filter((part) => part.type === "text").map((part) => part.type === "text" ? part.text : "").join("");
     expect(JSON.parse(text.trim())).toEqual({ model: false, server: false, parent: false, path: true });
   });

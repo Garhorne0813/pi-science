@@ -1,14 +1,16 @@
-import { presentToolActivity } from "../../../lib/conversation/activity-presenters";
-import { fileChange, genericDetails } from "./shared";
+import { presentFailedToolActivity, presentToolActivity } from "../../../lib/conversation/activity-presenters";
+import { fileChange, genericDetails, toolErrorSummary } from "./shared";
 import type { ActivityRenderer } from "./types";
 
 export const GenericActivityRenderer: ActivityRenderer = {
   compact: ({ source, t }) => {
     const change = fileChange(source);
+    const failure = toolErrorSummary(source);
     return {
-      title: presentToolActivity(source, t),
+      title: source.status === "error" ? presentFailedToolActivity(source, t) : presentToolActivity(source, t),
+      ...(failure ? { detail: failure } : {}),
       ...(change && (change.additions > 0 || change.deletions > 0)
-        ? { fileChange: { additions: change.additions, deletions: change.deletions } }
+        ? { fileChange: { path: change.path, additions: change.additions, deletions: change.deletions, ...(change.truncated ? { truncated: true } : {}) } }
         : {}),
     };
   },

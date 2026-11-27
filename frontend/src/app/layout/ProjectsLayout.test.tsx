@@ -77,6 +77,10 @@ describe("single workspace sidebar", () => {
     expect(await screen.findByRole("button", { name: "New conversation" })).toHaveClass("bg-accent-fill");
     expect(screen.getByRole("link", { name: "Run history" })).toHaveAttribute("aria-current", "page");
     expect(screen.getAllByRole("button", { name: "Settings" })).toHaveLength(1);
+    const settings = screen.getByRole("button", { name: "Settings" });
+    expect(settings).toHaveClass("h-nav", "w-full", "text-left");
+    expect(settings).not.toHaveClass("border-t", "pt-2");
+    expect(settings.parentElement).toHaveClass("border-t", "pt-2");
   });
 
   it("shows pending Memory proposals in the primary navigation", async () => {
@@ -91,6 +95,11 @@ describe("single workspace sidebar", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Collapse sidebar" }));
     expect(container.querySelector("aside")).toHaveAttribute("hidden");
     const expand = screen.getByRole("button", { name: "Expand sidebar" });
+    const slot = container.querySelector("[data-workspace-sidebar-toggle-slot]");
+    expect(slot).toHaveClass("w-12", "shrink-0");
+    expect(slot).toContainElement(expand);
+    expect(expand).toHaveClass("absolute");
+    expect(expand).not.toHaveClass("fixed");
     fireEvent.click(expand);
     expect(container.querySelector("aside")).not.toHaveAttribute("hidden");
     expect(screen.getByRole("button", { name: "Switch project" })).toBeInTheDocument();
@@ -197,12 +206,12 @@ describe("WorkspaceSessionList", () => {
     expect(loadMoreSessions).toHaveBeenCalledTimes(1);
   });
 
-  it("does not load sessions for a workspace route other than the root", () => {
+  it("loads sessions for the Files route when the list is empty", async () => {
     const loadSessions = vi.fn(async () => []);
-    useRuntimeStore.setState({ loadSessions });
+    useRuntimeStore.setState({ sessions: [], loadSessions });
     renderList("/workspace/proj/files");
 
-    expect(loadSessions).not.toHaveBeenCalled();
+    await waitFor(() => expect(loadSessions).toHaveBeenCalledWith("proj"));
   });
 
   it("loads sessions for a direct conversation route when the list is empty", async () => {
@@ -214,7 +223,7 @@ describe("WorkspaceSessionList", () => {
     expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/session/s1");
   });
 
-  it("does not reload sessions when navigating from the root to a workspace page", async () => {
+  it("loads the Files route after navigation when the session list is still empty", async () => {
     const loadSessions = vi.fn(async () => []);
     useRuntimeStore.setState({ loadSessions });
     render(
@@ -237,7 +246,7 @@ describe("WorkspaceSessionList", () => {
     await waitFor(() => expect(loadSessions).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole("button", { name: "Go files" }));
     expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/files");
-    expect(loadSessions).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(loadSessions).toHaveBeenCalledTimes(2));
   });
 
   it("lands on the blank workspace after deleting the active session without creating a new one", async () => {

@@ -150,6 +150,7 @@ describe.skipIf(process.env.PI_SCIENCE_SANDBOX_TEST !== "1" || process.platform 
     const cwd = await fixture(); vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "required"); vi.stubEnv("OPENAI_API_KEY", "host-secret");
     const result = await bash(cwd, "set -e; cat data.txt; printf output > result.txt; test -z \"$OPENAI_API_KEY\"; if grep SECRET token.json; then exit 44; fi; if cat .pi-science/secret; then exit 44; fi; if cat research/evaluator/secret; then exit 44; fi; bash -c 'test ! -r /etc/passwd'; echo isolated");
     expect(result.content).toEqual(expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining("isolated") })]));
+    expect(result.details).toMatchObject({ execution_id: expect.any(String), exitCode: 0 });
     expect(await readFile(join(cwd, "result.txt"), "utf8")).toBe("output");
     expect((await executionRepository.list(cwd))[0]?.runtime).toMatchObject({ execution_mode: "required", sandbox_policy_id: expect.any(String) });
     expect((await executionRepository.list(cwd))[0]?.artifacts).toHaveLength(1);

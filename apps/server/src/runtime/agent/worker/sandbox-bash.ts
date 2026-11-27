@@ -70,7 +70,8 @@ export function sandboxBashTool(identity: SandboxIdentity, hostEnvironment: Reco
           output_preview: result.content.filter((part) => part.type === "text").map((part) => part.type === "text" ? part.text : "").join("\n").slice(0, 16 * 1024),
           ...(evidence.failures.length ? { artifact_publish_errors: evidence.failures } : {}) }, files: evidence.files, artifacts: evidence.artifacts });
         const references = { execution_id: executionId, artifact_refs: evidence.artifacts };
-        return binding || evidence.artifacts.length ? { ...result, content: [...result.content, { type: "text" as const, text: JSON.stringify(references) }], details: { ...result.details, ...references } } : result;
+        const enriched = { ...result, details: { ...result.details, execution_id: executionId, ...(outcome.exitCode !== undefined ? { exitCode: outcome.exitCode } : {}) } };
+        return binding || evidence.artifacts.length ? { ...enriched, content: [...result.content, { type: "text" as const, text: JSON.stringify(references) }], details: { ...enriched.details, ...references } } : enriched;
       } catch (error) {
         const timedOut = outcome.errorCode === "timeout" || context.abortSignal?.reason instanceof Error && context.abortSignal.reason.message === "Execution time budget exhausted";
         if (started) {

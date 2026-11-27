@@ -248,6 +248,27 @@ describe("FileBrowser", () => {
     expect(setData).toHaveBeenCalledWith("application/x-pi-science-workspace-reference", JSON.stringify({ cwd: "proj", path: "b.txt", name: "b.txt", isDir: false }));
   });
 
+  it("marks references for the target conversation and toggles them from the context menu", async () => {
+    files.directory.mockResolvedValueOnce({
+      entries: [{ name: "report.csv", path: "data/report.csv", isDir: false, size: 1, modified: 1 }],
+      breadcrumbs: [],
+    });
+    render(<FileBrowser cwd="proj" embedded mode="page" conversationKey="session-a" />);
+    const row = await screen.findByRole("button", { name: "report.csv" });
+
+    fireEvent.contextMenu(row, { clientX: 20, clientY: 20 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Reference file" }));
+    expect(row).toHaveAttribute("data-referenced", "true");
+    expect(useUiStore.getState().workspaceReferences).toEqual([{
+      cwd: "proj", conversationKey: "session-a", path: "data/report.csv", name: "report.csv", isDir: false,
+    }]);
+
+    fireEvent.contextMenu(row, { clientX: 20, clientY: 20 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove file reference" }));
+    expect(row).not.toHaveAttribute("data-referenced");
+    expect(useUiStore.getState().workspaceReferences).toEqual([]);
+  });
+
   it("sorts siblings naturally at each depth without moving files out of their parent", async () => {
     const entry = (path: string, isDir: boolean): FileListEntry => ({
       path, name: path.split("/").at(-1)!, isDir, size: 0, modified: 1,

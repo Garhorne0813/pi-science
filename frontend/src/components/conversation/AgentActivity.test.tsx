@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import i18n from "../../i18n";
 import type { ActivityBlock } from "./AgentActivity";
 import type { ToolCallBlock } from "../../types/thread";
@@ -122,6 +122,60 @@ describe("AgentActivity live stream", () => {
     expect(changes.lastElementChild).toHaveClass("text-error-text");
   });
 
+  it("shows the full file path and offers preview and file-tree actions", () => {
+    window.history.replaceState({}, "", "/workspace/proj/session/one");
+    render(<AgentActivity cwd="proj" blocks={[{
+      ...tool("edit-file", "edit", "done", { path: "src/features/app.ts" }),
+      details: { fileChange: { path: "src/features/app.ts", additions: 2, deletions: 1 } },
+    }]} />);
+
+    expect(screen.getByText("src/features/app.ts")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^Updating app\.ts/ }));
+    expect(screen.getByRole("button", { name: "Open file" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Locate in file tree" }));
+    expect(window.location.pathname).toBe("/workspace/proj/files");
+  });
+
+  it("summarizes failures and copies the actionable error", async () => {
+    const originalClipboard = navigator.clipboard;
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    try {
+      render(<AgentActivity blocks={[{ ...tool("test", "bash", "error", { description: "Run tests" }), output: "Error: expected 2 to equal 3" }]} />);
+      expect(screen.getByText("Failed: Run tests")).toBeInTheDocument();
+      expect(screen.getByText("Error: expected 2 to equal 3")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Failed: Run tests" }));
+      fireEvent.click(screen.getByRole("button", { name: "Copy error" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith("Error: expected 2 to equal 3"));
+      expect(screen.getByRole("button", { name: "Error copied" })).toBeInTheDocument();
+    } finally {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
+    }
+  });
+
+  it("exposes transport truncation and retry recovery without hiding the final state", () => {
+    const recovered = {
+      ...tool("retry", "bash", "done", { description: "Run checks" }),
+      output: "captured tail",
+      outputTruncated: true,
+      originalOutputBytes: 2_400_000,
+      statusHistory: ["running", "error", "running", "done"] as ToolCallBlock["statusHistory"],
+    };
+    render(<AgentActivity blocks={[recovered]} />);
+    const recoveredBadge = screen.getByText("Recovered");
+    expect(recoveredBadge).toHaveClass("bg-warn-fill", "text-white");
+    expect(recoveredBadge).not.toHaveClass("text-warn-text");
+    fireEvent.click(screen.getByRole("button", { name: /^Run checks/ }));
+    expect(screen.getByText("Succeeded after 1 failed attempt")).toBeInTheDocument();
+    expect(screen.getByText("Attempt history")).toBeInTheDocument();
+    expect(screen.getByText("Attempt 1")).toBeInTheDocument();
+    expect(screen.getByText("Attempt 2")).toBeInTheDocument();
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText("Succeeded")).toBeInTheDocument();
+    expect(screen.getByText("Tool output was truncated · original size 2.3 MB")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy error" })).not.toBeInTheDocument();
+  });
+
   it("does not materialize expanded details while a trace row is collapsed", () => {
     const renderer = activityRendererRegistry.resolve("kernel");
     const expanded = vi.spyOn(renderer, "expanded");
@@ -157,6 +211,21 @@ describe("AgentActivity live stream", () => {
     expect(screen.getByText(/Exploring/)).toBeInTheDocument();
     expect(screen.getByText("Reading one.ts")).toBeInTheDocument();
     expect(screen.getByText("Reading two.ts")).toBeInTheDocument();
+  });
+
+  it("collapses settled activity groups and mounts their exact focus anchors on demand", () => {
+    render(<AgentActivity lifecycle="settled" hasFinalAnswer blocks={[
+      tool("edit-1", "edit", "done", { path: "src/a.ts" }),
+      tool("edit-2", "write", "done", { path: "src/b.ts" }),
+      tool("test-1", "bash", "done", { description: "Run unit tests" }),
+      tool("test-2", "test", "done", { description: "Run typecheck" }),
+    ]} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Completed/ }));
+    expect(screen.getByRole("button", { name: "Changed files · 2 operations" })).toHaveAttribute("aria-expanded", "false");
+    expect(document.getElementById("thread-block-edit-1")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Changed files · 2 operations" }));
+    expect(document.getElementById("thread-block-edit-1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ran validation · 2 operations" })).toBeInTheDocument();
   });
 
   it("shows a live turn elapsed timer that stops when the turn settles", () => {
@@ -504,7 +573,8 @@ it("renders discovery matches as escaped plain text with truncation status", () 
   const { container } = render(<AgentActivity blocks={[{ ...tool("search", "grep"), input: { pattern: "img" }, output }]} />);
   fireEvent.click(screen.getByRole("button"));
   expect(container.querySelector("img")).toBeNull();
-  expect(container.querySelector("pre")?.parentElement).toHaveTextContent("Input");
+  expect(container.textContent).toContain("Pattern");
+  expect(container.querySelector("pre")?.parentElement).toHaveTextContent("Output");
   expect(container.textContent).toContain("truncated");
   expect(container.textContent).toContain("<img src=x");
   expect(container.querySelector("strong")).toBeNull();

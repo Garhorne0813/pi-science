@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Folder, FolderOpen, File, FileSpreadsheet, FileText, Image, BookOpen, ChevronRight, ChevronDown, RefreshCw, FolderPlus, FilePlus, Loader2, Search, X, ListFilter, type LucideIcon } from "lucide-react";
+import { Folder, FolderOpen, File, FileSpreadsheet, FileText, Image, BookOpen, ChevronRight, ChevronDown, RefreshCw, FolderPlus, FilePlus, Loader2, Search, X, ListFilter, Link2, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { cn, copyTextToClipboard, useUiStore } from "../../lib/ui";
@@ -106,12 +106,14 @@ export function FileBrowser({
   active = true,
   mode = "sidebar",
   fileType = "all",
+  conversationKey,
 }: {
   cwd: string;
   embedded?: boolean;
   active?: boolean;
   mode?: "sidebar" | "page";
   fileType?: "all" | "notebook";
+  conversationKey?: string | null;
 }) {
   const { t } = useTranslation();
   const { confirm, toast } = useFeedback();
@@ -153,6 +155,11 @@ export function FileBrowser({
     return !inspector.cwd || inspector.cwd === cwd ? inspector.path : null;
   });
   const addWorkspaceReference = useUiStore((s) => s.addWorkspaceReference);
+  const removeWorkspaceReference = useUiStore((s) => s.removeWorkspaceReference);
+  const workspaceReferences = useUiStore((s) => s.workspaceReferences);
+  const referencedPaths = useMemo(() => new Set(workspaceReferences
+    .filter((reference) => reference.cwd === cwd && reference.conversationKey === conversationKey)
+    .map((reference) => reference.path)), [conversationKey, cwd, workspaceReferences]);
   const fileTreeReveal = useUiStore((s) => s.fileTreeReveal);
   const clearFileTreeReveal = useUiStore((s) => s.clearFileTreeReveal);
   const fileBrowserHeight = useUiStore((s) => s.sidebarFileBrowserHeight);
@@ -737,8 +744,14 @@ export function FileBrowser({
     toast(t(copied ? "files.copied" : "files.copyFailed"), copied ? "success" : "error");
   };
 
-  const referenceEntry = (entry: FileListEntry) => {
-    addWorkspaceReference({ cwd, path: entry.path, name: entry.name, isDir: entry.isDir });
+  const toggleReferenceEntry = (entry: FileListEntry) => {
+    if (referencedPaths.has(entry.path)) {
+      removeWorkspaceReference(cwd, entry.path, conversationKey);
+      toast(t(entry.isDir ? "files.folderReferenceRemoved" : "files.fileReferenceRemoved", { name: entry.name }), "success");
+    } else {
+      addWorkspaceReference({ cwd, conversationKey, path: entry.path, name: entry.name, isDir: entry.isDir });
+      toast(t(entry.isDir ? "files.folderReferenced" : "files.fileReferenced", { name: entry.name }), "success");
+    }
     setContextMenu(null);
   };
 
@@ -839,6 +852,7 @@ export function FileBrowser({
     const gitStatus = pageMode ? gitStatusIndex.get(e.compactRootPath ?? e.path) ?? null : null;
     const gitLineStats = pageMode ? gitStatsIndex.get(e.compactRootPath ?? e.path) ?? null : null;
     const gitStatusLabel = gitStatus ? t(gitStatusLabelKey(gitStatus)) : null;
+    const isReferenced = referencedPaths.has(e.path);
     return (
       <div key={e.path} role="treeitem" aria-level={e.depth + 1}>
         <button
@@ -848,12 +862,14 @@ export function FileBrowser({
           onKeyDown={(event) => handleTreeKeyDown(event, e)}
           onContextMenu={(event) => handleContextMenu(event, e)}
           draggable
-          onDragStart={(event) => writeWorkspaceReferenceDrag(event.dataTransfer, { cwd, path: e.path, name: e.name, isDir: e.isDir })}
+          onDragStart={(event) => writeWorkspaceReferenceDrag(event.dataTransfer, { cwd, ...(conversationKey !== undefined ? { conversationKey } : {}), path: e.path, name: e.name, isDir: e.isDir })}
+          data-referenced={isReferenced || undefined}
           data-file-drop-path={e.path}
           data-file-drop-directory={e.isDir}
           data-drop-state={dropTarget?.path === e.path && dropTarget.valid ? "valid" : dropTarget?.path === e.path && !dropTarget.valid ? "invalid" : undefined}
           className={cn("flex h-tool w-full items-center gap-2 truncate rounded-input px-2 text-left text-ui-caption text-text/80 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
             activePreviewPath === e.path && !e.isDir && "bg-accent/10 text-accent",
+            isReferenced && "bg-accent/10 text-accent ring-1 ring-inset ring-accent/25",
             locatedPath === e.path && "bg-accent/15 text-accent ring-2 ring-inset ring-accent/40",
             dropTarget?.path === e.path && dropTarget.valid && "bg-accent/10 ring-2 ring-inset ring-accent/60",
             dropTarget?.path === e.path && !dropTarget.valid && "cursor-not-allowed bg-error/10 ring-2 ring-inset ring-error/60")}
@@ -868,6 +884,7 @@ export function FileBrowser({
             : <span aria-hidden="true" className="w-3 shrink-0" />}
           <Icon icon={e.isDir ? (openFolders.has(e.path) ? FolderOpen : Folder) : iconForFile(e.name)} size="sm" className="shrink-0 text-muted" />
           <span className="min-w-0 flex-1 truncate">{e.displayName ?? e.name}</span>
+          {isReferenced && <span aria-hidden="true" className="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium text-accent"><Link2 size={11} />{pageMode && t("files.referenced")}</span>}
           {normalizedSearch && <span className="max-w-[55%] shrink truncate text-ui-meta text-muted">{parentDir(e.path) || t("files.workspace")}</span>}
           {gitLineStats && (gitLineStats.additions > 0 || gitLineStats.deletions > 0) ? (
             <span
@@ -1063,7 +1080,7 @@ export function FileBrowser({
       </div>
 
       {/* Context menu */}
-      {contextMenu && <FileContextMenu entry={contextMenu.entry} point={contextMenu.point} onClose={() => setContextMenu(null)} onReference={() => referenceEntry(contextMenu.entry)} onCopy={(text) => void copyToClipboard(text)} onCopyAbsolutePath={() => void copyToClipboard(absoluteWorkspacePath(cwd, contextMenu.entry.path))} onReveal={() => void revealEntry(contextMenu.entry)} onCreateFile={() => startCreate("file", contextMenu.entry)} onCreateFolder={() => startCreate("dir", contextMenu.entry)} onRename={() => startRename(contextMenu.entry)} onDelete={() => void deleteEntry(contextMenu.entry)} />}
+      {contextMenu && <FileContextMenu entry={contextMenu.entry} referenced={referencedPaths.has(contextMenu.entry.path)} point={contextMenu.point} onClose={() => setContextMenu(null)} onToggleReference={() => toggleReferenceEntry(contextMenu.entry)} onCopy={(text) => void copyToClipboard(text)} onCopyAbsolutePath={() => void copyToClipboard(absoluteWorkspacePath(cwd, contextMenu.entry.path))} onReveal={() => void revealEntry(contextMenu.entry)} onCreateFile={() => startCreate("file", contextMenu.entry)} onCreateFolder={() => startCreate("dir", contextMenu.entry)} onRename={() => startRename(contextMenu.entry)} onDelete={() => void deleteEntry(contextMenu.entry)} />}
     </div>
   );
 }

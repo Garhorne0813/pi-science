@@ -49,7 +49,7 @@ export interface ConversationComposerProps {
   onScrollToBottom: () => void;
   onReview: () => void;
   onAbort: () => Promise<unknown>;
-  onRemoveWorkspaceReference: (cwd: string, path: string) => void;
+  onRemoveWorkspaceReference: (cwd: string, path: string, conversationKey?: string | null) => void;
 }
 
 /** The composer seat is kept separate from the route so streamed transcript
@@ -119,7 +119,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
                   <span key={reference.path} className="flex max-w-full items-center gap-1 rounded-input bg-accent/5 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-accent/20 cursor-pointer hover:bg-accent/10" title={`${t("conversation.clickToInsert")} ${reference.path}`} onClick={() => { const current = input; setInput(current ? `${current} ${reference.path}` : reference.path); }}>
                     {reference.isDir ? <FolderOpen size={11} className="shrink-0 text-accent" /> : <File size={11} className="shrink-0 text-accent" />}
                     <span className="truncate">{reference.path}</span>
-                    <button type="button" aria-label={`Remove reference ${reference.name}`} onClick={(event) => { event.stopPropagation(); onRemoveWorkspaceReference(workspaceCwd, reference.path); }} className="shrink-0 text-muted hover:text-error-text">
+                    <button type="button" aria-label={`Remove reference ${reference.name}`} onClick={(event) => { event.stopPropagation(); onRemoveWorkspaceReference(workspaceCwd, reference.path, reference.conversationKey); }} className="shrink-0 text-muted hover:text-error-text">
                       <X size={11} />
                     </button>
                   </span>
