@@ -67,14 +67,14 @@ describe("SettingsDialog", () => {
     openSettings(null);
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveAttribute("aria-modal", "true");
-    expect(await screen.findByText("Global settings")).toBeInTheDocument();
+    expect(await screen.findByText("This device")).toBeInTheDocument();
   });
 
   it("shows the workspace scope label when opened from a workspace", async () => {
     renderDialog();
-    openSettings("proj");
+    act(() => useUiStore.getState().openSettings("proj", "compute"));
     await screen.findByRole("dialog");
-    expect(await screen.findByText("Workspace settings")).toBeInTheDocument();
+    expect(await screen.findByText("Current project")).toBeInTheDocument();
   });
 
   it("opens with the DeepSeek-sized desktop panel above a lighter overlay", async () => {
@@ -118,7 +118,7 @@ describe("SettingsDialog", () => {
     renderDialog();
     openSettings(null);
     await screen.findByRole("dialog");
-    fireEvent.click(screen.getByLabelText("Close"));
+    fireEvent.click(screen.getAllByLabelText("Close")[0]);
     await waitFor(() => expect(useUiStore.getState().settingsOpen).toBe(false));
   });
 
@@ -126,10 +126,10 @@ describe("SettingsDialog", () => {
     renderDialog();
     openSettings(null);
     await screen.findByRole("dialog");
-    const modelsTab = await screen.findByRole("tab", { name: "AI Models" });
+    const modelsTab = await screen.findByRole("tab", { name: "Model connections" });
     fireEvent.click(modelsTab);
     expect(await screen.findByText("My model services")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Model connections" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "false");
   });
 
@@ -217,7 +217,7 @@ describe("SettingsDialog", () => {
     ));
     const labels = focusables.map((el) => el.getAttribute("aria-label") ?? el.textContent ?? "");
     const generalIndex = labels.indexOf("General");
-    const closeIndex = labels.indexOf("Close");
+    const closeIndex = labels.lastIndexOf("Close");
     const panelOrderIndex = labels.findIndex((label) => label.includes("Conversation and preview layout"));
     expect(generalIndex).toBeGreaterThanOrEqual(0);
     expect(closeIndex).toBeGreaterThan(generalIndex);
