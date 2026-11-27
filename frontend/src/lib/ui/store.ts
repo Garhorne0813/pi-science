@@ -24,6 +24,9 @@ interface UiState {
   /** Which side of the conversation the preview occupies on desktop. */
   previewPaneSide: "left" | "right";
   setPreviewPaneSide: (side: "left" | "right") => void;
+  /** Which side of a file preview contains the workspace file tree. */
+  previewFileTreeSide: "left" | "right";
+  setPreviewFileTreeSide: (side: "left" | "right") => void;
   inspectorOpen: boolean;
   inspectorWidth: number;
   /** Preview share of the desktop viewport. Pixel width remains in state for
@@ -31,6 +34,10 @@ interface UiState {
    *  when moving the window between displays. */
   inspectorRatio: number;
   inspectorMaximized: boolean;
+  /** Whether the workspace file tree is visible inside the preview pane. */
+  fileTreeOpen: boolean;
+  /** Width of the file-tree column when it shares the preview pane with a file. */
+  previewFileTreeWidth: number;
   inspectorData: Inspector | null;
   inspectorTabs: InspectorTab[];
   activeInspectorTabId: string | null;
@@ -45,6 +52,8 @@ interface UiState {
   setInspectorWidth: (w: number) => void;
   setInspectorRatio: (ratio: number) => void;
   setInspectorMaximized: (m: boolean) => void;
+  setFileTreeOpen: (open: boolean) => void;
+  setPreviewFileTreeWidth: (width: number) => void;
   workspaceReferences: WorkspaceReference[];
   addWorkspaceReference: (reference: WorkspaceReference) => void;
   removeWorkspaceReference: (cwd: string, path: string, conversationKey?: string | null) => void;
@@ -228,11 +237,18 @@ export const useUiStore = create<UiState>((set) => ({
     saveToStorage("layout.previewPaneSide", side);
     set({ previewPaneSide: side });
   },
+  previewFileTreeSide: loadFromStorage<"left" | "right">("layout.previewFileTreeSide", "left"),
+  setPreviewFileTreeSide: (side) => {
+    saveToStorage("layout.previewFileTreeSide", side);
+    set({ previewFileTreeSide: side });
+  },
 
   inspectorOpen: false,
   inspectorWidth: initialInspectorWidth,
   inspectorRatio: initialInspectorRatio,
   inspectorMaximized: false,
+  fileTreeOpen: false,
+  previewFileTreeWidth: loadFromStorage("inspector.fileTreeWidth", 232),
   inspectorData: null,
   inspectorTabs: [],
   activeInspectorTabId: null,
@@ -260,7 +276,7 @@ export const useUiStore = create<UiState>((set) => ({
   }),
   setInspectorVisible: (visible) => set((state) => {
     if (!visible) return { inspectorOpen: false, inspectorMaximized: false };
-    if (state.inspectorTabs.length === 0 || !state.activeInspectorTabId) return state;
+    if ((state.inspectorTabs.length === 0 || !state.activeInspectorTabId) && !state.fileTreeOpen) return state;
     const active = state.inspectorTabs.find((tab) => tab.id === state.activeInspectorTabId);
     return {
       inspectorOpen: true,
@@ -278,7 +294,7 @@ export const useUiStore = create<UiState>((set) => ({
     const inspectorTabs = state.inspectorTabs.filter((tab) => tab.id !== id);
     if (inspectorTabs.length === 0) {
       return {
-        inspectorOpen: false,
+        inspectorOpen: state.fileTreeOpen,
         inspectorMaximized: false,
         inspectorData: null,
         inspectorTabs,
@@ -301,6 +317,15 @@ export const useUiStore = create<UiState>((set) => ({
     set({ inspectorRatio: ratio });
   },
   setInspectorMaximized: (m) => set({ inspectorMaximized: m }),
+  setFileTreeOpen: (open) => set((state) => ({
+    fileTreeOpen: open,
+    inspectorOpen: open || state.inspectorTabs.length > 0,
+    ...(!open && state.inspectorTabs.length === 0 ? { inspectorMaximized: false } : {}),
+  })),
+  setPreviewFileTreeWidth: (width) => {
+    saveToStorage("inspector.fileTreeWidth", width);
+    set({ previewFileTreeWidth: width });
+  },
 
   workspaceReferences: [],
   addWorkspaceReference: (reference) => set((state) => ({
@@ -315,7 +340,11 @@ export const useUiStore = create<UiState>((set) => ({
     workspaceReferences: state.workspaceReferences.filter((item) => item.cwd !== cwd || (item.conversationKey !== conversationKey && item.conversationKey !== undefined)),
   })),
   fileTreeReveal: null,
-  revealInFileTree: (cwd, path) => set({ fileTreeReveal: { id: ++fileTreeRevealSequence, cwd, path } }),
+  revealInFileTree: (cwd, path) => set({
+    fileTreeReveal: { id: ++fileTreeRevealSequence, cwd, path },
+    fileTreeOpen: true,
+    inspectorOpen: true,
+  }),
   clearFileTreeReveal: (id) => set((state) => state.fileTreeReveal?.id === id ? { fileTreeReveal: null } : state),
 
   settingsOpen: false,

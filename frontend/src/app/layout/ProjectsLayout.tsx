@@ -13,6 +13,7 @@ import { NARROW_MEDIA_QUERY, isNarrowViewport } from "../../lib/ui/viewport";
 
 // Load workspace-only tabs and menus without adding them to the initial page graph.
 const SidebarMainArea = lazy(() => import("../../components/sidebar/SidebarMainArea").then(module => ({ default: module.SidebarMainArea })));
+const PreviewFileTreePane = lazy(() => import("../../components/inspector/PreviewFileTreePane").then(module => ({ default: module.PreviewFileTreePane })));
 
 // The settings bundle (dialog + tabs) only loads on first open.
 const SettingsDialog = lazy(() => import("../../components/settings/SettingsDialog").then((m) => ({ default: m.SettingsDialog })));
@@ -70,6 +71,7 @@ export function ProjectsLayout() {
   const inspectorTabs = useUiStore((s) => s.inspectorTabs);
   const activeInspectorTabId = useUiStore((s) => s.activeInspectorTabId);
   const inspectorMaximized = useUiStore((s) => s.inspectorMaximized);
+  const fileTreeOpen = useUiStore((s) => s.fileTreeOpen);
   const closeInspector = useUiStore((s) => s.closeInspector);
   const setInspectorVisible = useUiStore((s) => s.setInspectorVisible);
   const setInspectorMaximized = useUiStore((s) => s.setInspectorMaximized);
@@ -100,6 +102,9 @@ export function ProjectsLayout() {
     location.pathname === workspaceRoot || location.pathname === `${workspaceRoot}/new` || location.pathname.startsWith(`${workspaceRoot}/session/`)
   );
   const previewOnLeft = isConversationRoute && previewPaneSide === "left";
+  const hasActivePreview = !!activeInspectorTabId && inspectorTabs.length > 0;
+  const showFileTree = isConversationRoute && fileTreeOpen;
+  const showPreviewPane = isWorkspace && inspectorOpen && (showFileTree || hasActivePreview);
   const clampSidebarWidth = (width: number) => Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
   const beginSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -262,44 +267,56 @@ export function ProjectsLayout() {
         <Outlet />
       </main>
 
-      {isConversationRoute && !inspectorOpen && <PreviewPaneControls inert={drawerOpen} />}
+      {isConversationRoute && !inspectorOpen && <PreviewPaneControls inert={drawerOpen} showFileTreeToggle />}
 
       {/* Inspector — only in workspace context */}
-      {isWorkspace && inspectorOpen && activeInspectorTabId && inspectorTabs.length > 0 && (
+      {showPreviewPane && (
         <RightPane
           inert={drawerOpen}
           side={previewOnLeft ? "left" : "right"}
           onMinimize={() => setInspectorVisible(false)}
         >
-          <ErrorBoundary
-            key={inspectorLoadAttempt}
-            fallback={(
-              <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted">
-                <p>{t("errors.somethingWentWrong")}</p>
-                <button
-                  type="button"
-                  className="rounded-input bg-surface-2 px-3 py-1.5 text-xs text-text hover:bg-surface"
-                  onClick={() => {
-                    inspectorTabsModule = null;
-                    setLazyInspectorTabs(() => lazy(loadInspectorTabs));
-                    setInspectorLoadAttempt((attempt) => attempt + 1);
-                  }}
+          <div className="relative flex h-full min-w-0 overflow-hidden">
+            {showFileTree && activeCwd && (
+              <Suspense fallback={<div className="flex h-full flex-1 items-center justify-center text-sm text-muted">{t("inspector.loading")}</div>}>
+                <PreviewFileTreePane cwd={activeCwd} conversationKey={activeConversationSessionId} split={hasActivePreview} />
+              </Suspense>
+            )}
+            {hasActivePreview && activeInspectorTabId && (
+              <div className="h-full min-w-0 flex-1">
+                <ErrorBoundary
+                  key={inspectorLoadAttempt}
+                  fallback={(
+                    <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted">
+                      <p>{t("errors.somethingWentWrong")}</p>
+                      <button
+                        type="button"
+                        className="rounded-input bg-surface-2 px-3 py-1.5 text-xs text-text hover:bg-surface"
+                        onClick={() => {
+                          inspectorTabsModule = null;
+                          setLazyInspectorTabs(() => lazy(loadInspectorTabs));
+                          setInspectorLoadAttempt((attempt) => attempt + 1);
+                        }}
+                      >
+                        {t("common.tryAgain")}
+                      </button>
+                    </div>
+                  )}
                 >
-                  {t("common.tryAgain")}
-                </button>
+                  <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted">{t("inspector.loading")}</div>}>
+                    <LazyInspectorTabs
+                      tabs={inspectorTabs}
+                      activeTabId={activeInspectorTabId}
+                      cwd={activeCwd || undefined}
+                      sessionId={activeConversationSessionId}
+                      reserveControls={isConversationRoute}
+                      showFileTreeToggle={isConversationRoute}
+                    />
+                  </Suspense>
+                </ErrorBoundary>
               </div>
             )}
-          >
-            <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted">{t("inspector.loading")}</div>}>
-              <LazyInspectorTabs
-                tabs={inspectorTabs}
-                activeTabId={activeInspectorTabId}
-                cwd={activeCwd || undefined}
-                sessionId={activeConversationSessionId}
-                reserveControls={isConversationRoute}
-              />
-            </Suspense>
-          </ErrorBoundary>
+          </div>
         </RightPane>
       )}
 

@@ -18,7 +18,7 @@ beforeAll(async () => {
 beforeEach(() => {
   cleanup();
   useUiStore.getState().closeInspector();
-  useUiStore.setState({ previewPaneSide: "right" });
+  useUiStore.setState({ previewPaneSide: "right", fileTreeOpen: false });
 });
 
 describe("PreviewPaneControls", () => {
@@ -64,5 +64,15 @@ describe("PreviewPaneControls", () => {
     const hide = screen.getByRole("button", { name: "Hide preview panel" });
     expect(hide.parentElement).toHaveClass("absolute", "right-card");
     expect(hide.parentElement).not.toHaveClass("fixed");
+  });
+
+  it("opens and closes the file tree without requiring a preview tab", () => {
+    render(<PreviewPaneControls showFileTreeToggle />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show file tree" }));
+    expect(useUiStore.getState()).toMatchObject({ fileTreeOpen: true, inspectorOpen: true });
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide file tree" }));
+    expect(useUiStore.getState()).toMatchObject({ fileTreeOpen: false, inspectorOpen: false });
   });
 });
