@@ -141,7 +141,7 @@ test("navigation controls fit supported sidebar widths and short windows", async
     await page.goto(`${root}/session/${VISUAL_SESSION}`);
     const panelBox = (await page.locator(PANEL).boundingBox())!;
     expect(Math.abs(panelBox.width - width)).toBeLessThanOrEqual(1);
-    for (const [role, name] of [["button", "New conversation"], ["link", "Files"], ["link", KNOWLEDGE], ["link", "Run history"], ["button", "Settings"]] as const) {
+    for (const [role, name] of [["button", "New conversation"], ["button", "Files"], ["link", KNOWLEDGE], ["link", "Run history"], ["button", "Settings"]] as const) {
       const box = await page.getByRole(role, { name }).boundingBox();
       expect(box).not.toBeNull();
       expect(box!.x).toBeGreaterThanOrEqual(panelBox.x - 1);
