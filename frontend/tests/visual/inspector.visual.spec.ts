@@ -290,6 +290,7 @@ for (const newConversation of [false, true]) {
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toEqual(prompts[0]);
     expect(prompts[0].message).toContain("What is shown in this region?");
+    expect(prompts[0].message).toContain("inspect the lower crop first and use it as the primary visual evidence");
     expect(prompts[0].message).toContain("image-regions/");
     expect(prompts[0].message).toContain("sample.svg [x=");
     expect(uploadCount).toBe(1);
