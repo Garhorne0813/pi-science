@@ -31,9 +31,15 @@ async function workspace() {
 
 function service() {
   const events: Array<Record<string, unknown>> = [];
-  const hub = new ConversationEventHub({ append: async (_cwd, _id, event) => { events.push(JSON.parse(event.data) as Record<string, unknown>); },
-    readAfter: async () => [] });
-  const instance = new NodeSessionService(hub, new SessionRepository(), { environment: async () => ({}) });
+  const hub = new ConversationEventHub({
+    append: async (_cwd, _id, event) => {
+      events.push(JSON.parse(event.data) as Record<string, unknown>);
+    },
+    readAfter: async () => [],
+  });
+  const instance = new NodeSessionService(hub, new SessionRepository(), {
+    environment: async () => ({}),
+  });
   services.push(instance);
   return { instance, events };
 }
@@ -43,11 +49,23 @@ async function legacyWorkspace() {
   const cwd = await workspace();
   const id = "legacy-delete-regression";
   const source = workspaceFile(cwd, "sessions/legacy.jsonl");
-  const original = [
-    { type: "session", version: 3, id, cwd, timestamp: "2026-01-01T00:00:00.000Z" },
-    { type: "message", id: "user-1", parentId: null, timestamp: "2026-01-01T00:00:01.000Z",
-      message: { role: "user", content: [{ type: "text", text: "prior question" }], timestamp: 1767225601000 } },
-  ].map((row) => JSON.stringify(row)).join("\n") + "\n";
+  const original =
+    [
+      { type: "session", version: 3, id, cwd, timestamp: "2026-01-01T00:00:00.000Z" },
+      {
+        type: "message",
+        id: "user-1",
+        parentId: null,
+        timestamp: "2026-01-01T00:00:01.000Z",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "prior question" }],
+          timestamp: 1767225601000,
+        },
+      },
+    ]
+      .map((row) => JSON.stringify(row))
+      .join("\n") + "\n";
   await mkdir(dirname(source), { recursive: true });
   await writeFile(source, original);
   return { cwd, id, source, original };
@@ -56,7 +74,11 @@ async function legacyWorkspace() {
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.allSettled(services.splice(0).map((instance) => instance.shutdownAll()));
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })));
+  await Promise.all(
+    roots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })),
+  );
   vi.unstubAllEnvs();
 });
 
@@ -72,35 +94,61 @@ describe("agent-core fault recovery", () => {
     let admissions = 0;
     vi.spyOn(runtime, "sendCommand").mockImplementation(async (type, params) => {
       const result = await send(type, params);
-      if (type === "prompt") { admissions += 1; throw new AgentRuntimeTimeoutError("prompt", 30_000); }
+      if (type === "prompt") {
+        admissions += 1;
+        throw new AgentRuntimeTimeoutError("prompt", 30_000);
+      }
       return result;
     });
     const app = Fastify();
     const repository = new SessionRepository();
     registerNodeSessionRoutes(app, instance, repository);
     const requestId = "8d3e4e4d-0b7c-4f0d-b6b6-8791b098a164";
-    const url = `/api/sessions/${created.id}/prompt?cwd=${encodeURIComponent(cwd)}`;
+    const url = `/api/sessions/${created.id}/prompts?cwd=${encodeURIComponent(cwd)}`;
     try {
-      const first = await app.inject({ method: "POST", url, payload: { message: "one durable prompt", client_message_id: requestId } });
+      const first = await app.inject({
+        method: "POST",
+        url,
+        payload: { message: "one durable prompt", client_message_id: requestId },
+      });
       expect(first.statusCode).toBe(504);
       expect(first.json()).toMatchObject({ code: "timeout", status: "indeterminate" });
-      const retry = await app.inject({ method: "POST", url, payload: { message: "one durable prompt", client_message_id: requestId } });
+      const retry = await app.inject({
+        method: "POST",
+        url,
+        payload: { message: "one durable prompt", client_message_id: requestId },
+      });
       expect(retry.statusCode).toBe(202);
       expect(retry.json()).toMatchObject({ status: "persisted" });
       expect(admissions).toBe(1);
-      await vi.waitFor(() => expect(events.some((event) => event.type === "operation.settled")).toBe(true), { timeout: 5_000 });
+      await vi.waitFor(
+        () => expect(events.some((event) => event.type === "operation.settled")).toBe(true),
+        { timeout: 5_000 },
+      );
       await instance.shutdownAll();
-    } finally { await app.close(); }
+    } finally {
+      await app.close();
+    }
 
     const restarted = service().instance;
     const secondApp = Fastify();
     registerNodeSessionRoutes(secondApp, restarted, new SessionRepository());
     try {
-      const retry = await secondApp.inject({ method: "POST", url, payload: { message: "one durable prompt", client_message_id: requestId } });
+      const retry = await secondApp.inject({
+        method: "POST",
+        url,
+        payload: { message: "one durable prompt", client_message_id: requestId },
+      });
       expect(retry.json()).toMatchObject({ status: "persisted" });
       expect(restarted.processCount).toBe(0); // Durable reconciliation needs no new admission.
-      expect((await repository.messages(cwd, created.id)).filter((message) => message.client_message_id === requestId)).toHaveLength(1);
-    } finally { await secondApp.close(); }
+      expect(
+        (await repository.messages(cwd, created.id)).filter(
+          (message) => message.client_message_id === requestId,
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await secondApp.close();
+    }
   }, 20_000);
 
   it("uses durable configuration after concurrent changes and ignores stale sidecar model values", async () => {
@@ -114,14 +162,28 @@ describe("agent-core fault recovery", () => {
       first.configure(created.id, cwd, "openai/not-a-real-model", "high"),
       first.configure(created.id, cwd, "openai/gpt-5-mini", "high"),
     ];
-    const results = await Promise.all(requests.map((request) => request.then((result) => {
-      if (result.success) committed.push({ model: result.model, thinking: result.thinking });
-      return result;
-    })));
-    expect(results).toMatchObject([{ success: true }, { success: false, code: "invalid_model" }, { success: true }]);
+    const results = await Promise.all(
+      requests.map((request) =>
+        request.then((result) => {
+          if (result.success) committed.push({ model: result.model, thinking: result.thinking });
+          return result;
+        }),
+      ),
+    );
+    expect(results).toMatchObject([
+      { success: true },
+      { success: false, code: "invalid_model" },
+      { success: true },
+    ]);
     const last = committed.at(-1)!;
-    const path = workspaceFile(cwd, `agent-session-config/${createHash("sha256").update(created.id).digest("hex")}.json`);
-    await writeFile(path, JSON.stringify({ model: "openai/not-a-real-model", thinking: "off", skills: [] }));
+    const path = workspaceFile(
+      cwd,
+      `agent-session-config/${createHash("sha256").update(created.id).digest("hex")}.json`,
+    );
+    await writeFile(
+      path,
+      JSON.stringify({ model: "openai/not-a-real-model", thinking: "off", skills: [] }),
+    );
     await first.shutdownAll();
     const second = service().instance;
     expect(await second.state(created.id, cwd)).toMatchObject(last);
@@ -135,7 +197,12 @@ describe("agent-core fault recovery", () => {
     const first = service().instance;
     expect(await first.resume(id, cwd)).toMatchObject({ success: true });
     const registry = new AgentSessionRegistry();
-    expect(await registry.get(cwd, id)).toMatchObject({ backend: "agent-core", state: "active", source, migration: "copied" });
+    expect(await registry.get(cwd, id)).toMatchObject({
+      backend: "agent-core",
+      state: "active",
+      source,
+      migration: "copied",
+    });
     expect(await first.delete(id, cwd)).toMatchObject({ success: true });
     expect(await readFile(source, "utf8")).toBe(original);
     const repository = new SessionRepository();

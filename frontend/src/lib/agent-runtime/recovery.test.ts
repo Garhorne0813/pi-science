@@ -520,7 +520,7 @@ describe("runtime conversation recovery", () => {
     }));
     await useRuntimeStore.getState().connect("/workspace", "session-a");
     FakeEventSource.instances[0].emit("stream.gap", {
-      type: "stream.gap", sessionId: "session-a", missingCursor: "expired",
+      type: "stream.gap", sessionId: "session-a",
     });
 
     await vi.waitFor(() => expect(useRuntimeStore.getState().thread.blocks).toContainEqual(

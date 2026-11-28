@@ -599,7 +599,7 @@ it("enforces native legacy-write isolation using the full App registration order
     200,
   );
   expect((await app.inject({ method: "GET", url: "/api/model-config/shadow" })).statusCode).toBe(
-    410,
+    404,
   );
   expect(await bytes()).toEqual(before);
   for (const url of [
@@ -608,7 +608,7 @@ it("enforces native legacy-write isolation using the full App registration order
     "/api/credentials",
     "/api/provider-endpoint-bindings",
   ]) {
-    expect((await app.inject({ method: "GET", url })).statusCode).toBe(410);
+    expect((await app.inject({ method: "GET", url })).statusCode).toBe(404);
     expect(await bytes()).toEqual(before);
   }
   const bindings = resources.repository.readSync().bindings;
@@ -666,10 +666,7 @@ it("enforces native legacy-write isolation using the full App registration order
   ] as const;
   for (const [method, url, payload] of calls) {
     const response = await app.inject({ method, url, ...(payload ? { payload } : {}) });
-    expect({ method, url, status: response.statusCode, body: response.json() }).toMatchObject({
-      status: 410,
-      body: { code: "model_config_retired" },
-    });
+    expect(response.statusCode).toBe(404);
     expect(await bytes()).toEqual(before);
   }
 });

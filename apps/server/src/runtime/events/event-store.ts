@@ -1,5 +1,14 @@
 import { decodeHistoricalProductEvent } from "./historical-product-event.js";
-import { appendFile, mkdir, readFile, rename, stat, truncate, unlink, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  readFile,
+  rename,
+  stat,
+  truncate,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { configRoot, metadataRoot } from "../../storage/persistence.js";
@@ -104,7 +113,9 @@ function parseRecords(text: string): SseEventRecord[] {
     if (!line.trim()) return [];
     try {
       const parsed = JSON.parse(line) as SseEventRecord;
-      return parsed && typeof parsed.data === "string" ? [decodeHistoricalProductEvent(parsed)] : [];
+      return parsed && typeof parsed.data === "string"
+        ? [decodeHistoricalProductEvent(parsed)]
+        : [];
     } catch {
       return [];
     }
@@ -164,23 +175,27 @@ function compareEventRecords(left: SseEventRecord, right: SseEventRecord): numbe
 export class DurableEventStore {
   private readonly writes = new Map<string, Promise<unknown>>();
 
-  constructor(private readonly options: {
-    maxEventFileBytes?: number;
-    targetEventFileBytes?: number;
-    maxEventRecords?: number;
-    maxEventRecordBytes?: number;
-    compact?: (path: string, records: SseEventRecord[]) => Promise<void>;
-    onCompaction?: (details: {
-      path: string;
-      beforeBytes: number;
-      afterBytes: number;
-      retainedRecords: number;
-    }) => void;
-  } = {}) {}
+  constructor(
+    private readonly options: {
+      maxEventFileBytes?: number;
+      targetEventFileBytes?: number;
+      maxEventRecords?: number;
+      maxEventRecordBytes?: number;
+      compact?: (path: string, records: SseEventRecord[]) => Promise<void>;
+      onCompaction?: (details: {
+        path: string;
+        beforeBytes: number;
+        afterBytes: number;
+        retainedRecords: number;
+      }) => void;
+    } = {},
+  ) {}
 
   append(cwd: string, sessionId: string, event: SseEventRecord): Promise<void> {
     const key = `${resolve(cwd)}\0${sessionId}`;
-    return this.enqueueWrite(key, () => this.appendOrdered(cwd, sessionId, event)).then(() => undefined);
+    return this.enqueueWrite(key, () => this.appendOrdered(cwd, sessionId, event)).then(
+      () => undefined,
+    );
   }
 
   /**
@@ -188,27 +203,46 @@ export class DurableEventStore {
    * append is rolled back when the guard changes while the filesystem write
    * is in flight, so a cancelled conditional publication is not replayed.
    */
-  appendConditional(cwd: string, sessionId: string, event: SseEventRecord, guard: EventPublishGuard): Promise<boolean> {
+  appendConditional(
+    cwd: string,
+    sessionId: string,
+    event: SseEventRecord,
+    guard: EventPublishGuard,
+  ): Promise<boolean> {
     const key = `${resolve(cwd)}\0${sessionId}`;
-    return this.enqueueWrite(key, () => this.appendConditionalOrdered(cwd, sessionId, event, guard));
+    return this.enqueueWrite(key, () =>
+      this.appendConditionalOrdered(cwd, sessionId, event, guard),
+    );
   }
 
   private enqueueWrite<T>(key: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.writes.get(key) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(operation);
     this.writes.set(key, next);
-    void next.then(() => {
-      if (this.writes.get(key) === next) this.writes.delete(key);
-    }, () => { if (this.writes.get(key) === next) this.writes.delete(key); });
+    void next.then(
+      () => {
+        if (this.writes.get(key) === next) this.writes.delete(key);
+      },
+      () => {
+        if (this.writes.get(key) === next) this.writes.delete(key);
+      },
+    );
     return next;
   }
 
   async nextSequence(cwd: string, sessionId: string): Promise<number> {
     const records = await this.readAfter(cwd, sessionId);
-    return records.reduce((maximum, record) => Math.max(maximum, sequenceFromCursor(record.id) ?? 0), 0);
+    return records.reduce(
+      (maximum, record) => Math.max(maximum, sequenceFromCursor(record.id) ?? 0),
+      0,
+    );
   }
 
-  async readAfter(cwd: string, sessionId: string, lastEventId?: string | null): Promise<SseEventRecord[]> {
+  async readAfter(
+    cwd: string,
+    sessionId: string,
+    lastEventId?: string | null,
+  ): Promise<SseEventRecord[]> {
     const paths = [eventPath(cwd, sessionId), fallbackEventPath(cwd, sessionId)];
     const batches = await Promise.all(paths.map((path) => readParsedEvents(path)));
     const unique = new Map<string, SseEventRecord>();
@@ -219,9 +253,11 @@ export class DurableEventStore {
     const events = [...unique.values()].sort(compareEventRecords);
     if (!lastEventId) return events.map((event) => ({ ...event }));
     const requestedCursor = parseStreamCursor(lastEventId);
-    if (!requestedCursor) return [streamGap(sessionId, "invalid_cursor", { requestedCursor: lastEventId })];
+    if (!requestedCursor)
+      return [streamGap(sessionId, "invalid_cursor", { requestedCursor: lastEventId })];
     const index = events.findIndex((event) => event.id === lastEventId);
-    if (index === -1) return [streamGap(sessionId, "cursor_missing", { requestedCursor: lastEventId })];
+    if (index === -1)
+      return [streamGap(sessionId, "cursor_missing", { requestedCursor: lastEventId })];
 
     // Validate the whole replay tail before returning any ordinary event. A
     // client must never apply a suffix after the server has discovered that a
@@ -230,34 +266,44 @@ export class DurableEventStore {
     for (let position = index + 1; position < events.length; position += 1) {
       const current = parseStreamCursor(events[position]?.id ?? null);
       if (!current) {
-        return [streamGap(sessionId, "invalid_cursor", {
-          requestedCursor: lastEventId,
-          expectedSeq: previous.sequence + 1,
-          observedSeq: undefined,
-        })];
+        return [
+          streamGap(sessionId, "invalid_cursor", {
+            requestedCursor: lastEventId,
+            expectedSeq: previous.sequence + 1,
+            observedSeq: undefined,
+          }),
+        ];
       }
       if (current.epoch !== previous.epoch) {
-        return [streamGap(sessionId, "epoch_changed", {
-          requestedCursor: lastEventId,
-          expectedSeq: previous.sequence + 1,
-          observedSeq: current.sequence,
-          observedEpoch: current.epoch,
-        })];
+        return [
+          streamGap(sessionId, "epoch_changed", {
+            requestedCursor: lastEventId,
+            expectedSeq: previous.sequence + 1,
+            observedSeq: current.sequence,
+            observedEpoch: current.epoch,
+          }),
+        ];
       }
       if (current.sequence !== previous.sequence + 1) {
-        return [streamGap(sessionId, "sequence_hole", {
-          requestedCursor: lastEventId,
-          expectedSeq: previous.sequence + 1,
-          observedSeq: current.sequence,
-          observedEpoch: current.epoch,
-        })];
+        return [
+          streamGap(sessionId, "sequence_hole", {
+            requestedCursor: lastEventId,
+            expectedSeq: previous.sequence + 1,
+            observedSeq: current.sequence,
+            observedEpoch: current.epoch,
+          }),
+        ];
       }
       previous = current;
     }
     return events.slice(index + 1).map((event) => ({ ...event }));
   }
 
-  private async appendOrdered(cwd: string, sessionId: string, event: SseEventRecord): Promise<void> {
+  private async appendOrdered(
+    cwd: string,
+    sessionId: string,
+    event: SseEventRecord,
+  ): Promise<void> {
     const primary = eventPath(cwd, sessionId);
     let target = primary;
     try {
@@ -271,7 +317,12 @@ export class DurableEventStore {
     await this.compactIfNeeded(target).catch(() => undefined);
   }
 
-  private async appendConditionalOrdered(cwd: string, sessionId: string, event: SseEventRecord, guard: EventPublishGuard): Promise<boolean> {
+  private async appendConditionalOrdered(
+    cwd: string,
+    sessionId: string,
+    event: SseEventRecord,
+    guard: EventPublishGuard,
+  ): Promise<boolean> {
     if (!guard()) return false;
     const primary = eventPath(cwd, sessionId);
     let target = primary;
@@ -301,14 +352,21 @@ export class DurableEventStore {
     await appendFile(path, `${JSON.stringify(event)}\n`, "utf8");
   }
 
-  private async appendRecordConditional(path: string, event: SseEventRecord, guard: EventPublishGuard): Promise<boolean> {
+  private async appendRecordConditional(
+    path: string,
+    event: SseEventRecord,
+    guard: EventPublishGuard,
+  ): Promise<boolean> {
     this.assertRecordSize(event);
     if (!guard()) return false;
     await mkdir(dirname(path), { recursive: true });
     let existed = true;
     let originalSize = 0;
-    try { originalSize = (await stat(path)).size; }
-    catch { existed = false; }
+    try {
+      originalSize = (await stat(path)).size;
+    } catch {
+      existed = false;
+    }
     if (!guard()) return false;
     await appendFile(path, `${JSON.stringify(event)}\n`, "utf8");
     if (guard()) return true;
@@ -316,7 +374,9 @@ export class DurableEventStore {
     try {
       await truncate(path, originalSize);
       if (!existed && originalSize === 0) await unlink(path);
-    } catch { rollbackFailed = true; }
+    } catch {
+      rollbackFailed = true;
+    }
     removeCachedEvents(path);
     if (rollbackFailed) throw new ConditionalAppendRollbackError();
     return false;
@@ -324,7 +384,11 @@ export class DurableEventStore {
 
   private async compactIfNeeded(path: string): Promise<void> {
     let size = 0;
-    try { size = (await stat(path)).size; } catch { return; }
+    try {
+      size = (await stat(path)).size;
+    } catch {
+      return;
+    }
     if (size <= (this.options.maxEventFileBytes ?? MAX_EVENT_FILE_BYTES)) return;
     const targetBytes = Math.min(
       this.options.targetEventFileBytes ?? TARGET_EVENT_FILE_BYTES,
@@ -351,10 +415,21 @@ export class DurableEventStore {
     }
     const temporary = `${path}.${process.pid}.compact.tmp`;
     try {
-      await writeFile(temporary, retained.map((record) => JSON.stringify(record)).join("\n") + "\n", "utf8");
+      await writeFile(
+        temporary,
+        retained.map((record) => JSON.stringify(record)).join("\n") + "\n",
+        "utf8",
+      );
       await rename(temporary, path);
-      const afterBytes = await stat(path).then((metadata) => metadata.size).catch(() => 0);
-      this.options.onCompaction?.({ path, beforeBytes: size, afterBytes, retainedRecords: retained.length });
+      const afterBytes = await stat(path)
+        .then((metadata) => metadata.size)
+        .catch(() => 0);
+      this.options.onCompaction?.({
+        path,
+        beforeBytes: size,
+        afterBytes,
+        retainedRecords: retained.length,
+      });
     } finally {
       await unlink(temporary).catch(() => undefined);
     }
@@ -369,10 +444,20 @@ export class DurableEventStore {
   private reportCompaction(path: string, beforeBytes: number, retainedRecords: number): void {
     // Custom compaction hooks own the write. Read the resulting size only for
     // diagnostics and never let a logging callback break event delivery.
-    void stat(path).then((metadata) => {
-      try { this.options.onCompaction?.({ path, beforeBytes, afterBytes: metadata.size, retainedRecords }); }
-      catch { /* diagnostics are best effort */ }
-    }).catch(() => undefined);
+    void stat(path)
+      .then((metadata) => {
+        try {
+          this.options.onCompaction?.({
+            path,
+            beforeBytes,
+            afterBytes: metadata.size,
+            retainedRecords,
+          });
+        } catch {
+          /* diagnostics are best effort */
+        }
+      })
+      .catch(() => undefined);
   }
 }
 
@@ -383,7 +468,12 @@ function serializedRecordBytes(record: SseEventRecord): number {
 function streamGap(
   sessionId: string,
   reason: "cursor_missing" | "sequence_hole" | "epoch_changed" | "invalid_cursor",
-  details: { requestedCursor?: string; expectedSeq?: number; observedSeq?: number; observedEpoch?: string },
+  details: {
+    requestedCursor?: string;
+    expectedSeq?: number;
+    observedSeq?: number;
+    observedEpoch?: string;
+  },
 ): SseEventRecord {
   return {
     event: "stream.gap",
@@ -393,12 +483,11 @@ function streamGap(
       sessionId,
       reason,
       requestedCursor: details.requestedCursor,
-      // Keep the old field during the compatibility window.
-      missingCursor: details.requestedCursor,
       expectedSeq: details.expectedSeq,
       observedSeq: details.observedSeq,
       observedEpoch: details.observedEpoch,
-      message: "The requested event cursor cannot be replayed continuously; reload the conversation snapshot before applying new deltas.",
+      message:
+        "The requested event cursor cannot be replayed continuously; reload the conversation snapshot before applying new deltas.",
     }),
     created_at: new Date().toISOString(),
   };

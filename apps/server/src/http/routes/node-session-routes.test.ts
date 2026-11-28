@@ -265,7 +265,7 @@ describe("native Node conversation routes", () => {
     const server = Fastify({ logger: false });
     registerNodeSessionRoutes(server, fakeService, sessionRepository);
     const id = "8fd824aa-51d3-4f63-839c-09e021b7970b";
-    const url = `/api/sessions/prompt-idempotency/prompt?cwd=${encodeURIComponent(cwd)}`;
+    const url = `/api/sessions/prompt-idempotency/prompts?cwd=${encodeURIComponent(cwd)}`;
 
     const first = await server.inject({
       method: "POST",
@@ -315,7 +315,7 @@ describe("native Node conversation routes", () => {
     registerNodeSessionRoutes(server, fakeService, sessionRepository);
     const firstId = "8fd824aa-51d3-4f63-839c-09e021b7970b";
     const secondId = "91d824aa-51d3-4f63-839c-09e021b7970b";
-    const url = `/api/sessions/prompt-serialized/prompt?cwd=${encodeURIComponent(cwd)}`;
+    const url = `/api/sessions/prompt-serialized/prompts?cwd=${encodeURIComponent(cwd)}`;
 
     const first = server.inject({
       method: "POST",
@@ -1172,7 +1172,10 @@ describe("native Node conversation routes", () => {
           : { success: true },
     );
     vi.spyOn(nodeSessionService, "notify").mockResolvedValue({ success: true });
-    vi.spyOn(nodeSessionService, "fork").mockResolvedValue({ success: true, sessionId: "forked" });
+    vi.spyOn(nodeSessionService, "fork").mockResolvedValue({
+      success: true,
+      sessionId: "session-b",
+    });
     const server = app();
     const query = `cwd=${encodeURIComponent(cwd)}`;
 
@@ -1218,10 +1221,10 @@ describe("native Node conversation routes", () => {
 
     const prompt = await server.inject({
       method: "POST",
-      url: `/api/sessions/${forked.json().id}/prompt?${query}`,
-      payload: { message: "hold" },
+      url: `/api/sessions/${forked.json().id}/prompts?${query}`,
+      payload: { message: "hold", client_message_id: "3b7f2a1c-8d4e-4f5a-9b6c-0d1e2f3a4b5c" },
     });
-    expect(prompt.statusCode).toBe(200);
+    expect(prompt.statusCode).toBe(202);
     const compact = await server.inject({
       method: "POST",
       url: `/api/sessions/${forked.json().id}/compact?${query}`,
@@ -1415,7 +1418,7 @@ describe("native Node conversation routes", () => {
   });
 });
 
-it("requires a submission ID on the new prompt endpoint and shares deduplication with the compatibility endpoint", async () => {
+it("requires a submission ID on the new prompt endpoint", async () => {
   const cwd = await workspaceWithSessions("prompt-v2");
   const command = vi.fn(async () => ({ success: true }));
   const server = Fastify();
@@ -1432,13 +1435,6 @@ it("requires a submission ID on the new prompt endpoint and shares deduplication
     expect(command).not.toHaveBeenCalled();
     const payload = { message: "hello", client_message_id: "8fd824aa-51d3-4f63-839c-09e021b7970b" };
     expect((await server.inject({ method: "POST", url, payload })).statusCode).toBe(202);
-    const compatible = await server.inject({
-      method: "POST",
-      url: url.replace("/prompts?", "/prompt?"),
-      payload,
-    });
-    expect(compatible.statusCode).toBe(202);
-    expect(compatible.headers.deprecation).toBe("true");
     expect(command).toHaveBeenCalledTimes(1);
   } finally {
     await server.close();

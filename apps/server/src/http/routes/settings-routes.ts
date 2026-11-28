@@ -29,8 +29,6 @@ import { resolveCompaction } from "../../runtime/agent/agent-runtime-settings.js
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { SettingsStore, type SettingsData as Settings } from "../../storage/settings-store.js";
 import type { RuntimeCatalogService } from "../../runtime/agent/runtime-catalog.js";
-import { resolveMcpConfig } from "../../catalog/mcp-config.js";
-import type { McpConnectorService } from "../../mcp/connector-service.js";
 import { storedSkillPolicy } from "../../catalog/skill-policy.js";
 import { registerSettingsSkillRoutes } from "./settings-skill-routes.js";
 import { citationAutoVerifyEnabled } from "../../runtime/citations/citation-auto-verify.js";
@@ -53,7 +51,6 @@ export function registerSettingsRoutes(
   nodeSessionService: NodeSessionService,
   settingsStore: SettingsStore,
   runtimeCatalog?: Pick<RuntimeCatalogService, "getCatalog">,
-  mcp?: McpConnectorService,
 ): void {
   registerNetworkGrantRoutes(app);
   app.get("/api/settings/approval", async () => approvalPreferences(await settingsStore.read()));
@@ -158,7 +155,6 @@ export function registerSettingsRoutes(
         config.citation_inline_style === "identifier" ? "identifier" : "number",
       allow_private_providers: config.allow_private_providers !== false,
       providers,
-      custom_providers: [],
       available_models: available,
       model_catalog_source: catalog.source,
     };
@@ -261,63 +257,6 @@ export function registerSettingsRoutes(
     });
   });
 
-  app.get("/api/settings/mcp", async () => {
-    if (mcp) {
-      const result = await mcp.list();
-      return {
-        servers: result.connectors
-          .filter((item) => item.settings.enabled)
-          .map((item) => item.connector_id),
-        configured: result.connectors.map((item) => item.connector_id),
-        config_path: null,
-        deprecated: true,
-      };
-    }
-    const config = await load();
-    const { definitions, source } = await resolveMcpConfig({
-      explicitPath: typeof config.mcp_config_path === "string" ? config.mcp_config_path : undefined,
-    });
-    const configured = Object.keys(definitions);
-    const enabled = Array.isArray(config.mcp_servers)
-      ? config.mcp_servers.filter((id) => configured.includes(id))
-      : configured;
-    return { servers: enabled, configured, config_path: source };
-  });
-  app.put<{ Params: { server_id: string } }>(
-    "/api/settings/mcp/:server_id",
-    async (request, reply) => {
-      const on = String((request.query as { enabled?: string }).enabled ?? "true") !== "false";
-      if (mcp) {
-        const item = (await mcp.list()).connectors.find(
-          (connector) =>
-            connector.connector_id === request.params.server_id ||
-            connector.name === request.params.server_id,
-        );
-        if (!item) return reply.code(404).send({ error: "MCP connector not found" });
-        await mcp.setSettings(item.connector_id, {
-          enabled: on,
-          include_tools: item.settings.include_tools,
-          exclude_tools: item.settings.exclude_tools,
-          approval_mode: item.settings.approval_mode,
-          revision: item.settings.revision,
-        });
-        return { ok: true, server: item.connector_id, enabled: on, deprecated: true };
-      }
-      await mutate(async (config) => {
-        const { definitions } = await resolveMcpConfig({
-          explicitPath:
-            typeof config.mcp_config_path === "string" ? config.mcp_config_path : undefined,
-        });
-        const enabled = new Set(
-          Array.isArray(config.mcp_servers) ? config.mcp_servers : Object.keys(definitions),
-        );
-        if (on) enabled.add(request.params.server_id);
-        else enabled.delete(request.params.server_id);
-        config.mcp_servers = [...enabled].sort();
-      });
-      return respondWithReload(reply, { ok: true, server: request.params.server_id, enabled: on });
-    },
-  );
   registerSettingsSkillRoutes(app, nodeSessionService, settingsStore);
   app.get("/api/settings/subagents/discovery", async (request, reply) => {
     let cwd: string;

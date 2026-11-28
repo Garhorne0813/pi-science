@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SettingsConfig } from "../../../lib/settings";
 import { contextPolicy } from "./context-policy";
 
-const config: SettingsConfig = { api_keys: {}, model: "lab/one", thinking: "high", providers: [], custom_providers: [], compaction_enabled: true, compaction_threshold_percent: 85, model_context_window: 1000000, available_models: [{ id: "lab/one", provider: "lab", model: "one", label: "Lab · One", custom: true, reasoning: true, thinking_levels: ["high"], context_window: 128000, capability_source: "runtime" }] };
+const config: SettingsConfig = { api_keys: {}, model: "lab/one", thinking: "high", providers: [], compaction_enabled: true, compaction_threshold_percent: 85, model_context_window: 1000000, available_models: [{ id: "lab/one", provider: "lab", model: "one", label: "Lab · One", custom: true, reasoning: true, thinking_levels: ["high"], context_window: 128000, capability_source: "runtime" }] };
 
 describe("Settings context preview", () => {
   it("uses model facts instead of the old cached model window", () => {

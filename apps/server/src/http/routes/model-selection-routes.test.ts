@@ -10,8 +10,18 @@ import type { ServerConfig } from "../../config/config.js";
 
 const flash = "deepseek/deepseek-flash";
 const pro = "deepseek/deepseek-v4-pro";
-const config: ServerConfig = { host: "127.0.0.1", port: 0, corsOrigins: [], maxBodyBytes: 1000000, upstreamTimeoutMs: 100,
-  nodeSessions: false, nodeSse: false, nodeFiles: false, nodePiManager: false, logLevel: "silent" };
+const config: ServerConfig = {
+  host: "127.0.0.1",
+  port: 0,
+  corsOrigins: [],
+  maxBodyBytes: 1000000,
+  upstreamTimeoutMs: 100,
+  nodeSessions: false,
+  nodeSse: false,
+  nodeFiles: false,
+  nodePiManager: false,
+  logLevel: "silent",
+};
 let root: string;
 let cwd: string;
 let home: string;
@@ -21,7 +31,8 @@ beforeEach(async () => {
   const scratch = fileURLToPath(new URL("../../../../../.cache/", import.meta.url));
   await mkdir(scratch, { recursive: true });
   root = await mkdtemp(join(scratch, "selection-v2-"));
-  cwd = join(root, "workspace"); home = join(root, "home");
+  cwd = join(root, "workspace");
+  home = join(root, "home");
   await mkdir(join(cwd, ".pi-science"), { recursive: true });
   await mkdir(home);
   vi.stubEnv("PI_SCIENCE_HOME", home);
@@ -29,8 +40,27 @@ beforeEach(async () => {
   vi.stubEnv("PI_CLI_PATH", "");
   modules = createServerModules(config, { sqliteEnabled: false });
   app = buildApp(config, modules);
-  expect((await app.inject({ method: "PUT", url: "/api/model-config/providers/deepseek/credential", payload: { revision: 0, credential: { source: "managed", secret: "synthetic-ownership-key" } } })).statusCode).toBe(200);
-  expect((await app.inject({ method: "PUT", url: "/api/model-selection/default", payload: { model: flash, thinking: "off" } })).statusCode).toBe(200);
+  expect(
+    (
+      await app.inject({
+        method: "PUT",
+        url: "/api/model-config/providers/deepseek/credential",
+        payload: {
+          revision: 0,
+          credential: { source: "managed", secret: "synthetic-ownership-key" },
+        },
+      })
+    ).statusCode,
+  ).toBe(200);
+  expect(
+    (
+      await app.inject({
+        method: "PUT",
+        url: "/api/model-selection/default",
+        payload: { model: flash, thinking: "off" },
+      })
+    ).statusCode,
+  ).toBe(200);
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -51,36 +81,70 @@ async function selection(id: string) {
   return response.json().selection;
 }
 describe("ModelSelection v2", () => {
-  it.each(["failed", "threw"])("keeps configured providers manageable when the workspace Core catalog %s", async (scenario) => {
-    const provider = { id: "native-recovery" };
-    await new ModelConfigService().createProvider(1, provider.id, { api: "openai-completions", baseUrl: "http://127.0.0.1:9/v1", models: [{ id: "lab-model" }] }, { source: "managed", secret: "recovery-key" });
-    const read = vi.spyOn(modules.sessions, "availableModels");
-    if (scenario === "failed") read.mockResolvedValue({ success: false, code: "unavailable", error: "Core offline" });
-    else read.mockRejectedValue(new Error("Core offline"));
-    const before = await readFile(join(home, "models.json"), "utf8");
-    const response = await app.inject({ method: "GET", url: `/api/provider-views?cwd=${encodeURIComponent(cwd)}` });
-    expect(response.statusCode).toBe(200);
-    expect(providerViewsResponseSchema.safeParse(response.json()).success).toBe(true);
-    expect(response.json().catalog_status).toBe("ready");
-    const view = response.json().providers.find((item: { id: string }) => item.id === provider.id);
-    expect(view).toMatchObject({ status: "ready", credential: { configured: true },
-      routing: { configured_model_count: 1, selectable_model_count: 1 },
-      models: [expect.objectContaining({ id: `${provider.id}/lab-model`, available: true })] });
-    expect(view.allowed_actions).toContain("edit");
-    expect(view.routing.issues).toEqual([]);
-    expect(response.body).not.toContain("recovery-key");
-    expect(await readFile(join(home, "models.json"), "utf8")).toBe(before);
-  });
+  it.each(["failed", "threw"])(
+    "keeps configured providers manageable when the workspace Core catalog %s",
+    async (scenario) => {
+      const provider = { id: "native-recovery" };
+      await new ModelConfigService().createProvider(
+        1,
+        provider.id,
+        {
+          api: "openai-completions",
+          baseUrl: "http://127.0.0.1:9/v1",
+          models: [{ id: "lab-model" }],
+        },
+        { source: "managed", secret: "recovery-key" },
+      );
+      const read = vi.spyOn(modules.sessions, "availableModels");
+      if (scenario === "failed")
+        read.mockResolvedValue({ success: false, code: "unavailable", error: "Core offline" });
+      else read.mockRejectedValue(new Error("Core offline"));
+      const before = await readFile(join(home, "models.json"), "utf8");
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/provider-views?cwd=${encodeURIComponent(cwd)}`,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(providerViewsResponseSchema.safeParse(response.json()).success).toBe(true);
+      expect(response.json().catalog_status).toBe("ready");
+      const view = response
+        .json()
+        .providers.find((item: { id: string }) => item.id === provider.id);
+      expect(view).toMatchObject({
+        status: "ready",
+        credential: { configured: true },
+        routing: { configured_model_count: 1, selectable_model_count: 1 },
+        models: [expect.objectContaining({ id: `${provider.id}/lab-model`, available: true })],
+      });
+      expect(view.allowed_actions).toContain("edit");
+      expect(view.routing.issues).toEqual([]);
+      expect(response.body).not.toContain("recovery-key");
+      expect(await readFile(join(home, "models.json"), "utf8")).toBe(before);
+    },
+  );
   it("separates defaults, existing sessions and cold durable resumes", async () => {
     const reload = vi.spyOn(modules.sessions, "reloadConfiguration");
     const a = await create();
-    expect((await app.inject({ method: "PUT", url: path(a), payload: { model: pro, thinking: "high" } })).statusCode).toBe(200);
+    expect(
+      (await app.inject({ method: "PUT", url: path(a), payload: { model: pro, thinking: "high" } }))
+        .statusCode,
+    ).toBe(200);
     expect(await selection(a)).toEqual({ model: pro, thinking: "high" });
-    expect((await app.inject({ method: "GET", url: "/api/model-selection/default" })).json().selection).toEqual({ model: flash, thinking: "off" });
+    expect(
+      (await app.inject({ method: "GET", url: "/api/model-selection/default" })).json().selection,
+    ).toEqual({ model: flash, thinking: "off" });
     const b = await create();
     expect(await selection(b)).toEqual({ model: flash, thinking: "off" });
     expect(modules.sessions.processCount).toBe(2);
-    expect((await app.inject({ method: "PUT", url: "/api/model-selection/default", payload: { model: pro, thinking: "max" } })).statusCode).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: "PUT",
+          url: "/api/model-selection/default",
+          payload: { model: pro, thinking: "max" },
+        })
+      ).statusCode,
+    ).toBe(200);
     expect(modules.sessions.processCount).toBe(2);
     expect(await selection(a)).toEqual({ model: pro, thinking: "high" });
     expect(await selection(b)).toEqual({ model: flash, thinking: "off" });
@@ -89,7 +153,11 @@ describe("ModelSelection v2", () => {
     expect(reload).not.toHaveBeenCalled();
     await modules.sessions.shutdownAll();
     expect(modules.sessions.processCount).toBe(0);
-    for (const [id, model, thinking] of [[a, pro, "high"], [b, flash, "off"], [c, pro, "max"]]) {
+    for (const [id, model, thinking] of [
+      [a, pro, "high"],
+      [b, flash, "off"],
+      [c, pro, "max"],
+    ]) {
       expect(await selection(id!)).toEqual({ model, thinking });
       expect(await modules.sessions.resume(id!, cwd)).toMatchObject({ success: true });
       expect(await selection(id!)).toEqual({ model, thinking });
@@ -100,80 +168,189 @@ describe("ModelSelection v2", () => {
     const models = vi.spyOn(modules.sessions, "availableModels");
     const configure = vi.spyOn(modules.sessions, "configure");
     const write = vi.spyOn(modules.settings, "update");
-    expect((await app.inject({ method: "GET", url: "/api/model-selection/default" })).json()).toMatchObject({ scope: "default", selection: { model: flash, thinking: "off" } });
-    expect(catalog).not.toHaveBeenCalled(); expect(models).not.toHaveBeenCalled();
-    for (const payload of [{ model: flash, thinking: "unknown" }, { model: "invalid", thinking: "off" }, { model: flash, thinking: "off", session_id: "injected" }]) {
-      expect((await app.inject({ method: "PUT", url: "/api/model-selection/default", payload })).statusCode).toBe(400);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/model-selection/default" })).json(),
+    ).toMatchObject({ scope: "default", selection: { model: flash, thinking: "off" } });
+    expect(catalog).not.toHaveBeenCalled();
+    expect(models).not.toHaveBeenCalled();
+    for (const payload of [
+      { model: flash, thinking: "unknown" },
+      { model: "invalid", thinking: "off" },
+      { model: flash, thinking: "off", session_id: "injected" },
+    ]) {
+      expect(
+        (await app.inject({ method: "PUT", url: "/api/model-selection/default", payload }))
+          .statusCode,
+      ).toBe(400);
     }
-    expect((await app.inject({ method: "PUT", url: "/api/model-selection/default", payload: { model: "user-missing/model", thinking: "off" } })).statusCode).toBe(422);
-    const available = (await app.inject({ method: "GET", url: "/api/model-selection/catalog" })).json().available_models;
+    expect(
+      (
+        await app.inject({
+          method: "PUT",
+          url: "/api/model-selection/default",
+          payload: { model: "user-missing/model", thinking: "off" },
+        })
+      ).statusCode,
+    ).toBe(422);
+    const available = (
+      await app.inject({ method: "GET", url: "/api/model-selection/catalog" })
+    ).json().available_models;
     const levels = available.find((model: { id: string }) => model.id === flash).thinking_levels;
-    const unsupported = ["minimal", "low", "medium", "high", "xhigh", "max"].find((level) => !levels.includes(level));
+    const unsupported = ["minimal", "low", "medium", "high", "xhigh", "max"].find(
+      (level) => !levels.includes(level),
+    );
     expect(unsupported).toBeDefined();
-    expect((await app.inject({ method: "PUT", url: "/api/model-selection/default", payload: { model: flash, thinking: unsupported } })).statusCode).toBe(422);
-    expect((await app.inject({ method: "GET", url: "/api/sessions/missing/model-selection" })).statusCode).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: "PUT",
+          url: "/api/model-selection/default",
+          payload: { model: flash, thinking: unsupported },
+        })
+      ).statusCode,
+    ).toBe(422);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/sessions/missing/model-selection" }))
+        .statusCode,
+    ).toBe(400);
     expect((await app.inject({ method: "GET", url: path("missing") })).statusCode).toBe(404);
-    expect(write).not.toHaveBeenCalled(); expect(configure).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    expect(configure).not.toHaveBeenCalled();
   });
   it("isolates failed/busy session writes and clearing defaults from existing sessions", async () => {
     const a = await create();
     const before = await readFile(join(home, "config.json"), "utf8");
-    const configure = vi.spyOn(modules.sessions, "configure").mockResolvedValue({ success: false, code: "busy", error: "agent is busy" });
-    const failed = await app.inject({ method: "PUT", url: path(a), payload: { model: pro, thinking: "high" } });
+    const configure = vi
+      .spyOn(modules.sessions, "configure")
+      .mockResolvedValue({ success: false, code: "busy", error: "agent is busy" });
+    const failed = await app.inject({
+      method: "PUT",
+      url: path(a),
+      payload: { model: pro, thinking: "high" },
+    });
     expect(failed.statusCode).toBe(409);
     expect(await readFile(join(home, "config.json"), "utf8")).toBe(before);
     expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
     configure.mockRestore();
-    expect((await app.inject({ method: "PUT", url: path(a), payload: { model: null, thinking: "off" } })).statusCode).toBe(422);
-    expect((await app.inject({ method: "PUT", url: "/api/model-selection/default", payload: { model: null, thinking: "off" } })).statusCode).toBe(200);
-    expect((await app.inject({ method: "GET", url: "/api/model-selection/default" })).json().selection).toEqual({ model: null, thinking: "off" });
+    expect(
+      (await app.inject({ method: "PUT", url: path(a), payload: { model: null, thinking: "off" } }))
+        .statusCode,
+    ).toBe(422);
+    expect(
+      (
+        await app.inject({
+          method: "PUT",
+          url: "/api/model-selection/default",
+          payload: { model: null, thinking: "off" },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/model-selection/default" })).json().selection,
+    ).toEqual({ model: null, thinking: "off" });
     expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
-    expect(await modules.sessions.create({ cwd, config: { skills: [], extensions: [] } })).toMatchObject({ code: "invalid_model" });
+    expect(
+      await modules.sessions.create({ cwd, config: { skills: [], extensions: [] } }),
+    ).toMatchObject({ code: "invalid_model" });
     // A workspace draft can still create a session with an explicit selection.
-    const draft = await modules.sessions.create({ cwd, config: { model: pro, thinking: "high", skills: [], extensions: [] } });
+    const draft = await modules.sessions.create({
+      cwd,
+      config: { model: pro, thinking: "high", skills: [], extensions: [] },
+    });
     expect(draft).toHaveProperty("id");
   }, 30000);
-  it.each(["credential_deleted", "provider_removed", "model_removed"])("rejects unavailable native model after %s without changing either selection owner", async (failure) => {
-    const service = new ModelConfigService();
-    const config = { api: "openai-completions" as const, baseUrl: "http://127.0.0.1:9/v1", models: [{ id: "lab-model" }] };
-    await service.createProvider(1, "native-selectable", config, { source: "managed", secret: "selection-secret" });
-    const model = "native-selectable/lab-model";
-    expect((await app.inject({ method: "GET", url: "/api/model-selection/catalog" })).json().available_models).toEqual(expect.arrayContaining([expect.objectContaining({ id: model })]));
-    const a = await create();
-    if (failure === "credential_deleted") await service.credentials.remove(service.readSync().credential_refs["native-selectable"]!);
-    else if (failure === "provider_removed") await service.replace(2, { providers: { deepseek: {} } });
-    else await service.update(2, (snapshot) => { snapshot.config.providers["native-selectable"] = { ...config, models: [{ id: "other" }] }; });
-    const persisted = await readFile(join(home, "config.json"), "utf8");
-    const configure = vi.spyOn(modules.sessions, "configure");
-    for (const url of ["/api/model-selection/default", path(a), `/api/settings/model?cwd=${encodeURIComponent(cwd)}`]) {
-      const result = await app.inject({ method: "PUT", url, payload: { model, thinking: "off" } });
-      expect(result.statusCode).toBe(422); expect(result.json()).toMatchObject({ code: "invalid_model" });
-    }
-    expect(configure).not.toHaveBeenCalled(); expect(await readFile(join(home, "config.json"), "utf8")).toBe(persisted);
-    expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
-  }, 30000);
+  it.each(["credential_deleted", "provider_removed", "model_removed"])(
+    "rejects unavailable native model after %s without changing either selection owner",
+    async (failure) => {
+      const service = new ModelConfigService();
+      const config = {
+        api: "openai-completions" as const,
+        baseUrl: "http://127.0.0.1:9/v1",
+        models: [{ id: "lab-model" }],
+      };
+      await service.createProvider(1, "native-selectable", config, {
+        source: "managed",
+        secret: "selection-secret",
+      });
+      const model = "native-selectable/lab-model";
+      expect(
+        (await app.inject({ method: "GET", url: "/api/model-selection/catalog" })).json()
+          .available_models,
+      ).toEqual(expect.arrayContaining([expect.objectContaining({ id: model })]));
+      const a = await create();
+      if (failure === "credential_deleted")
+        await service.credentials.remove(service.readSync().credential_refs["native-selectable"]!);
+      else if (failure === "provider_removed")
+        await service.replace(2, { providers: { deepseek: {} } });
+      else
+        await service.update(2, (snapshot) => {
+          snapshot.config.providers["native-selectable"] = { ...config, models: [{ id: "other" }] };
+        });
+      const persisted = await readFile(join(home, "config.json"), "utf8");
+      const configure = vi.spyOn(modules.sessions, "configure");
+      for (const url of ["/api/model-selection/default", path(a)]) {
+        const result = await app.inject({
+          method: "PUT",
+          url,
+          payload: { model, thinking: "off" },
+        });
+        expect(result.statusCode).toBe(422);
+        expect(result.json()).toMatchObject({ code: "invalid_model" });
+      }
+      expect(configure).not.toHaveBeenCalled();
+      expect(await readFile(join(home, "config.json"), "utf8")).toBe(persisted);
+      expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
+    },
+    30000,
+  );
   it("removes a native credential mapping without deleting its shared CredentialStore resource", async () => {
-    const service = new ModelConfigService(); const ref = service.readSync().credential_refs.deepseek!;
-    await service.update(1, (snapshot) => { snapshot.config.providers.openai = {}; snapshot.credential_refs.openai = ref; });
-    const response = await app.inject({ method: "PUT", url: "/api/model-config/providers/deepseek/credential", payload: { revision: 2, credential: { source: "remove" } } });
-    expect(response.statusCode).toBe(200); expect(service.readSync().credential_refs.deepseek).toBeUndefined();
-    expect(service.readSync().credential_refs.openai).toBe(ref); expect((await service.credentials.getForRuntime(ref))?.secret).toBe("synthetic-ownership-key");
+    const service = new ModelConfigService();
+    const ref = service.readSync().credential_refs.deepseek!;
+    await service.update(1, (snapshot) => {
+      snapshot.config.providers.openai = {};
+      snapshot.credential_refs.openai = ref;
+    });
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/model-config/providers/deepseek/credential",
+      payload: { revision: 2, credential: { source: "remove" } },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(service.readSync().credential_refs.deepseek).toBeUndefined();
+    expect(service.readSync().credential_refs.openai).toBe(ref);
+    expect((await service.credentials.getForRuntime(ref))?.secret).toBe("synthetic-ownership-key");
   });
   it("rejects a builtin model after its native credential is deleted", async () => {
-    const a = await create(); const service = new ModelConfigService();
+    const a = await create();
+    const service = new ModelConfigService();
     await service.credentials.remove(service.readSync().credential_refs.deepseek!);
-    for (const url of ["/api/model-selection/default", path(a)]) expect((await app.inject({ method: "PUT", url, payload: { model: flash, thinking: "off" } })).statusCode).toBe(422);
+    for (const url of ["/api/model-selection/default", path(a)])
+      expect(
+        (await app.inject({ method: "PUT", url, payload: { model: flash, thinking: "off" } }))
+          .statusCode,
+      ).toBe(422);
     expect(await selection(a)).toEqual({ model: flash, thinking: "off" });
   }, 30000);
   it("scopes provider views to the validated workspace catalog", async () => {
-    const response = await app.inject({ method: "GET", url: `/api/provider-views?cwd=${encodeURIComponent(cwd)}` });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/provider-views?cwd=${encodeURIComponent(cwd)}`,
+    });
     expect(response.statusCode).toBe(200);
-    const catalog = (await app.inject({ method: "GET", url: `/api/model-selection/catalog?cwd=${encodeURIComponent(cwd)}` })).json().available_models;
+    const catalog = (
+      await app.inject({
+        method: "GET",
+        url: `/api/model-selection/catalog?cwd=${encodeURIComponent(cwd)}`,
+      })
+    ).json().available_models;
     const ids = new Set(catalog.map((item: { id: string }) => item.id));
     for (const provider of response.json().providers) {
-      expect(provider.routing.selectable_model_count).toBe(provider.models.filter((model: { id: string }) => ids.has(model.id)).length);
+      expect(provider.routing.selectable_model_count).toBe(
+        provider.models.filter((model: { id: string }) => ids.has(model.id)).length,
+      );
     }
-    expect((await app.inject({ method: "GET", url: "/api/provider-views?cwd=" })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/api/provider-views?cwd=" })).statusCode).toBe(
+      400,
+    );
   }, 30000);
-
 });

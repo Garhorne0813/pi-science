@@ -29,19 +29,6 @@ export interface Provider {
   enabled?: boolean;
 }
 
-/** @deprecated Compatibility projection for custom providers. */
-export interface CustomProvider {
-  id: string;
-  name: string;
-  base_url: string;
-  api: string;
-  models: string[];
-  has_key: boolean;
-  reasoning?: boolean;
-  context_window?: number;
-  model_hints?: Record<string, { context_window?: number; reasoning?: boolean; thinking_levels?: string[]; source?: string }>;
-}
-
 export interface AvailableModel {
   id: string;
   provider: string;
@@ -65,8 +52,6 @@ export interface SettingsConfig {
   thinking: string;
   unavailable_model?: string | null;
   providers: Provider[];
-  /** @deprecated Compatibility projection only. */
-  custom_providers: CustomProvider[];
   available_models: AvailableModel[];
   model_catalog_source?: "pi" | "fallback";
   compaction_enabled: boolean;

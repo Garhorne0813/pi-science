@@ -96,11 +96,14 @@ describe("native control-plane business routes", () => {
       );
       const selected = await app.inject({
         method: "PUT",
-        url: "/api/settings/model",
+        url: "/api/model-selection/default",
         payload: { model: "deepseek/deepseek-flash", thinking: "off" },
       });
       expect(selected.statusCode).toBe(200);
-      expect(selected.json()).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
+      expect(selected.json()).toMatchObject({
+        scope: "default",
+        selection: { model: "deepseek/deepseek-flash", thinking: "off" },
+      });
       const created = await modules.sessions.create({
         cwd,
         config: { model: "deepseek/deepseek-flash", thinking: "off", skills: [], extensions: [] },
@@ -109,8 +112,8 @@ describe("native control-plane business routes", () => {
       await modules.sessions.reloadConfiguration();
       const switched = await app.inject({
         method: "PUT",
-        url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
-        payload: { model: "deepseek/deepseek-v4-pro", thinking: "high", session_id: created.id },
+        url: `/api/sessions/${created.id}/model-selection?cwd=${encodeURIComponent(cwd)}`,
+        payload: { model: "deepseek/deepseek-v4-pro", thinking: "high" },
       });
       expect(switched.statusCode).toBe(200);
       expect(await modules.sessions.state(created.id, cwd)).toMatchObject({
@@ -131,8 +134,8 @@ describe("native control-plane business routes", () => {
       await modules.sessions.resume(nextSession.id, cwd);
       const switchedAgain = await app.inject({
         method: "PUT",
-        url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
-        payload: { model: "deepseek/deepseek-flash", thinking: "off", session_id: created.id },
+        url: `/api/sessions/${created.id}/model-selection?cwd=${encodeURIComponent(cwd)}`,
+        payload: { model: "deepseek/deepseek-flash", thinking: "off" },
       });
       expect(switchedAgain.statusCode).toBe(200);
       await modules.sessions.resume(created.id, cwd);
@@ -556,14 +559,14 @@ describe("native control-plane business routes", () => {
     ]);
     const rejected = await app.inject({
       method: "PUT",
-      url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
+      url: `/api/model-selection/default?cwd=${encodeURIComponent(cwd)}`,
       payload: { model: "deepseek/deepseek-flash", thinking: "high" },
     });
     expect(rejected.statusCode).toBe(422);
     expect(rejected.json()).toMatchObject({ error: expect.any(String) });
   });
 
-  it("clamps a saved thinking level to the selected model's supported levels", async () => {
+  it("rejects a saved thinking level the selected model does not support", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
@@ -588,20 +591,11 @@ describe("native control-plane business routes", () => {
     apps.push(app);
     const saved = await app.inject({
       method: "PUT",
-      url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
+      url: `/api/model-selection/default?cwd=${encodeURIComponent(cwd)}`,
       payload: { model: "deepseek/lab-flash", thinking: "max" },
     });
-    expect(saved.statusCode).toBe(200);
-    expect(saved.json()).toMatchObject({
-      ok: true,
-      model: "deepseek/lab-flash",
-      thinking: "high",
-    });
-    // The persisted value matches the response (never an unsupported level).
-    const stored = JSON.parse(
-      await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"),
-    );
-    expect(stored).toMatchObject({ model: "deepseek/lab-flash", thinking: "high" });
+    expect(saved.statusCode).toBe(422);
+    expect(saved.json()).toMatchObject({ code: "invalid_thinking" });
   });
 
   it("projects the runtime-clamped thinking level on GET without persisting it", async () => {
@@ -896,14 +890,13 @@ describe("native control-plane business routes", () => {
     apps.push(app);
     const saved = await app.inject({
       method: "PUT",
-      url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
+      url: `/api/model-selection/default?cwd=${encodeURIComponent(cwd)}`,
       payload: { model: "deepseek/deepseek-flash", thinking: "high" },
     });
     expect(saved.statusCode).toBe(200);
     expect(saved.json()).toMatchObject({
-      ok: true,
-      model: "deepseek/deepseek-flash",
-      thinking: "high",
+      scope: "default",
+      selection: { model: "deepseek/deepseek-flash", thinking: "high" },
     });
     const stored = JSON.parse(
       await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"),
@@ -911,7 +904,7 @@ describe("native control-plane business routes", () => {
     expect(stored).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "high" });
   });
 
-  it("keeps the catalog-clamped level when runtime verification returns a different model", async () => {
+  it("keeps catalog levels when runtime verification returns a different model", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
@@ -940,15 +933,14 @@ describe("native control-plane business routes", () => {
     apps.push(app);
     const saved = await app.inject({
       method: "PUT",
-      url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
-      payload: { model: "deepseek/deepseek-flash", thinking: "high" },
+      url: `/api/model-selection/default?cwd=${encodeURIComponent(cwd)}`,
+      payload: { model: "deepseek/deepseek-flash", thinking: "low" },
     });
     expect(saved.statusCode).toBe(200);
-    // Catalog clamp stands (high -> low); the foreign runtime is ignored.
+    // Catalog levels stay authoritative; the foreign runtime is ignored.
     expect(saved.json()).toMatchObject({
-      ok: true,
-      model: "deepseek/deepseek-flash",
-      thinking: "low",
+      scope: "default",
+      selection: { model: "deepseek/deepseek-flash", thinking: "low" },
     });
     const stored = JSON.parse(
       await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"),
@@ -1701,8 +1693,11 @@ describe("native control-plane business routes", () => {
         const aliasedCwd = join(alias, "project");
         const prompt = await app.inject({
           method: "POST",
-          url: `/api/sessions/old/prompt?cwd=${encodeURIComponent(aliasedCwd)}`,
-          payload: { message: "Research now" },
+          url: `/api/sessions/old/prompts?cwd=${encodeURIComponent(aliasedCwd)}`,
+          payload: {
+            message: "Research now",
+            client_message_id: "2b6f7c1e-9f5a-4d3b-8a6e-1c2d3e4f5a6b",
+          },
         });
         expect(prompt.statusCode).toBe(409);
         expect(prompt.json().code).toBe("busy");
@@ -2569,8 +2564,8 @@ describe("native control-plane business routes", () => {
     });
     expect(fetched.json()).not.toHaveProperty("ownership");
     const cancelled = await app.inject({
-      method: "DELETE",
-      url: `/api/jobs/${jobId}?cwd=${encodeURIComponent(cwd)}`,
+      method: "POST",
+      url: `/api/jobs/${jobId}/cancel?cwd=${encodeURIComponent(cwd)}`,
     });
     expect(cancelled.statusCode).toBe(200);
     expect(cancelled.json()).not.toHaveProperty("ownership");

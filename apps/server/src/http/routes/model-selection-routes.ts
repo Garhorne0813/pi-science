@@ -7,10 +7,7 @@ import {
 } from "@pi-science/contracts";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import type { SettingsStore } from "../../storage/settings-store.js";
-import {
-  normalizeThinkingLevels,
-  CANONICAL_THINKING_LEVELS,
-} from "../../model-resources/capability-resolver.js";
+import { normalizeThinkingLevels } from "../../model-resources/capability-resolver.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { sessionRuntimeStatus } from "./node-session-routes.js";
 
@@ -82,17 +79,9 @@ export function registerModelSelectionRoutes(
     },
   );
 
-  const write = async (
-    request: FastifyRequest,
-    reply: FastifyReply,
-    sessionId?: string,
-    legacy = false,
-  ) => {
+  const write = async (request: FastifyRequest, reply: FastifyReply, sessionId?: string) => {
     const body = request.body as Record<string, unknown> | undefined;
-    const input = legacy
-      ? { model: body?.model || null, thinking: body?.thinking ?? "high" }
-      : body;
-    const parsed = modelSelectionSchema.safeParse(input);
+    const parsed = modelSelectionSchema.safeParse(body);
     if (!parsed.success)
       return reply.code(400).send({
         ok: false,
@@ -123,31 +112,20 @@ export function registerModelSelectionRoutes(
       if (actual?.success && data?.model === model)
         levels = normalizeThinkingLevels(data.levels) ?? levels;
     }
-    let thinking = model ? parsed.data.thinking : "off";
-    if (!levels.includes(thinking)) {
-      if (!legacy)
-        return reply.code(422).send({
-          ok: false,
-          code: "invalid_thinking",
-          error: "Thinking level is not supported by this model",
-          supported_levels: levels,
-        });
-      const index = CANONICAL_THINKING_LEVELS.indexOf(thinking);
-      thinking =
-        CANONICAL_THINKING_LEVELS.slice(index).find((level) => levels.includes(level)) ??
-        [...CANONICAL_THINKING_LEVELS.slice(0, index)]
-          .reverse()
-          .find((level) => levels.includes(level)) ??
-        "off";
-    }
+    const thinking = model ? parsed.data.thinking : "off";
+    if (!levels.includes(thinking))
+      return reply.code(422).send({
+        ok: false,
+        code: "invalid_thinking",
+        error: "Thinking level is not supported by this model",
+        supported_levels: levels,
+      });
     const selection: ModelSelection = { model, thinking };
     if (sessionId) {
       const configured = await sessions.configure(sessionId, cwd, model!, thinking);
       if (!configured.success)
         return reply.code(sessionRuntimeStatus(configured.code)).send({ ok: false, ...configured });
-      return legacy
-        ? { ok: true, ...selection }
-        : { scope: "session", session_id: sessionId, selection };
+      return { scope: "session", session_id: sessionId, selection };
     }
     await settings.update(
       (config) => {
@@ -165,26 +143,11 @@ export function registerModelSelectionRoutes(
       },
       { skipUnchanged: true },
     );
-    return legacy
-      ? { ok: true, ...selection, model: model ?? "" }
-      : { scope: "default", selection };
+    return { scope: "default", selection };
   };
   app.put("/api/model-selection/default", (request, reply) => write(request, reply));
   app.put<{ Params: { session_id: string } }>(
     "/api/sessions/:session_id/model-selection",
     (request, reply) => write(request, reply, request.params.session_id),
   );
-  // Compatibility adapter: a session_id changes only that session; otherwise
-  // the old route means default selection. Neither write reloads all workers.
-  app.put("/api/settings/model", (request, reply) => {
-    reply.header("Deprecation", "true");
-    const id = (request.body as { session_id?: unknown } | undefined)?.session_id;
-    if (id !== undefined && (typeof id !== "string" || !id))
-      return reply.code(400).send({
-        ok: false,
-        code: "invalid_request",
-        error: "session_id must be a nonempty string",
-      });
-    return write(request, reply, id as string | undefined, true);
-  });
 }

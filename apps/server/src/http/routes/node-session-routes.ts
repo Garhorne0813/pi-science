@@ -150,20 +150,6 @@ export function registerNodeSessionRoutes(
   });
 
   app.post<{ Params: { session_id: string } }>(
-    "/api/sessions/:session_id/prompt",
-    async (request, reply) => {
-      reply.header("deprecation", "true");
-      reply.header(
-        "link",
-        `</api/sessions/${request.params.session_id}/prompts>; rel="successor-version"`,
-      );
-      const result = await resolveUseCase(() =>
-        promptSubmissions.submit(cwd(request), request.params.session_id, request.body),
-      );
-      return sendUseCaseResult(reply, result);
-    },
-  );
-  app.post<{ Params: { session_id: string } }>(
     "/api/sessions/:session_id/prompts",
     async (request, reply) => {
       const parsed = promptSubmissionRequestSchema.safeParse(request.body);

@@ -21,7 +21,7 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   if (url === "/api/model-config") return Promise.resolve(jsonResponse(nativeSnapshot));
   if (url === "/api/model-config/catalog") return Promise.resolve(jsonResponse({ revision: 0, providers: [] }));
   if (url.startsWith("/api/provider-views")) return Promise.resolve(jsonResponse({ providers: [] }));
-  if (url.startsWith("/api/model-selection/catalog")) return Promise.resolve(jsonResponse({ available_models: [{ id: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash", thinking_levels: ["off", "high", "max"], context_window: 1000000 }] }));
+  if (url.startsWith("/api/model-selection/catalog")) return Promise.resolve(jsonResponse({ available_models: [{ id: "deepseek/deepseek-flash", label: "DeepSeek V4.1 Flash", thinking_levels: ["off", "high", "max"], context_window: 1000000 }] }));
   if (url === "/api/model-selection/default") {
     if (method === "PUT") { putCalls.push({ url, body: JSON.parse(String(init.body)) }); return Promise.resolve(jsonResponse({ scope: "default", selection: JSON.parse(String(init.body)) })); }
     return Promise.resolve(jsonResponse({ scope: "default", selection: { model: null, thinking: "off" } }));
@@ -29,16 +29,11 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   if (url.startsWith("/api/settings/config")) {
     return Promise.resolve(jsonResponse({
       ok: true,
-      providers: [{ id: "deepseek", name: "DeepSeek", has_key: true, models: [{ id: "deepseek/deepseek-v4-flash", name: "DeepSeek V4 Flash", provider: "deepseek" }] }],
-      available_models: [{ id: "deepseek/deepseek-v4-flash", name: "DeepSeek V4 Flash", model: "DeepSeek V4 Flash", label: "DeepSeek V4 Flash", provider: "deepseek", reasoning: true, thinking_levels: ["high", "max"] }],
+      providers: [{ id: "deepseek", name: "DeepSeek", has_key: true, models: [{ id: "deepseek/deepseek-flash", name: "DeepSeek V4.1 Flash", provider: "deepseek" }] }],
+      available_models: [{ id: "deepseek/deepseek-flash", name: "DeepSeek V4.1 Flash", model: "DeepSeek V4.1 Flash", label: "DeepSeek V4.1 Flash", provider: "deepseek", reasoning: true, thinking_levels: ["high", "max"] }],
       model: "",
       thinking: "high",
     }));
-  }
-  if (url.startsWith("/api/settings/model")) {
-    putCalls.push({ url, body: init.body ? JSON.parse(String(init.body)) : null });
-    if (url.includes("fail")) return Promise.resolve(jsonResponse({ ok: false, error: "boom" }, 500));
-    return Promise.resolve(jsonResponse({ ok: true, model: "deepseek/deepseek-v4-flash", thinking: "high" }));
   }
   if (url.startsWith("/api/settings/subagents?")) return Promise.resolve(jsonResponse({ agents: [{ name: "reviewer", path: ".pi/agents/reviewer.md" }] }));
   if (url === "/api/settings/web-access") return Promise.resolve(jsonResponse({ web_access: { search_enabled: true, fetch_enabled: true, provider: "auto", api_keys: {} } }));
@@ -350,8 +345,8 @@ describe("SettingsContent", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Context settings could not load: context unavailable");
     expect(model).toBeEnabled();
     fireEvent.pointerDown(model); fireEvent.click(model);
-    fireEvent.click(await screen.findByRole("menuitemradio", { name: "DeepSeek V4 Flash" }));
-    await waitFor(() => expect(putCalls).toContainEqual({ url: "/api/model-selection/default", body: { model: "deepseek/deepseek-v4-flash", thinking: "off" } }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "DeepSeek V4.1 Flash" }));
+    await waitFor(() => expect(putCalls).toContainEqual({ url: "/api/model-selection/default", body: { model: "deepseek/deepseek-flash", thinking: "off" } }));
     expect(await screen.findByText(/Default model saved. Context settings could not refresh/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save default model" })).not.toBeInTheDocument();
   });

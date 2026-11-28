@@ -263,13 +263,7 @@ export function buildApp(
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);
   if (config.nodeArtifacts !== false) registerTurnArtifactRoutes(app);
   if (config.nodeSettings !== false)
-    registerSettingsRoutes(
-      app,
-      nodeSessionService,
-      settings,
-      runtimeCatalog,
-      sqliteEnabled ? mcp : undefined,
-    );
+    registerSettingsRoutes(app, nodeSessionService, settings, runtimeCatalog);
   if (sqliteEnabled) registerMcpRoutes(app, mcp, config.nodeSettings !== false);
   if (config.nodeSettings !== false) {
     registerModelResourceRoutes(app, nodeSessionService, settings);

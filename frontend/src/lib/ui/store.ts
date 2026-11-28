@@ -176,18 +176,12 @@ function saveToStorage(key: string, value: unknown) {
 const DEFAULT_INSPECTOR_RATIO = 0.42;
 const initialViewportWidth = typeof window === "undefined" ? 1000 : window.innerWidth;
 const storedInspectorRatio = loadFromStorage<unknown>("inspector.ratio", null);
-const legacyInspectorWidth = loadFromStorage<unknown>("inspector.width", null);
-const migratedInspectorRatio = typeof legacyInspectorWidth === "number"
-  && Number.isFinite(legacyInspectorWidth)
-  && legacyInspectorWidth > 0
-  ? legacyInspectorWidth / initialViewportWidth
-  : DEFAULT_INSPECTOR_RATIO;
 const initialInspectorRatio = typeof storedInspectorRatio === "number"
   && Number.isFinite(storedInspectorRatio)
   && storedInspectorRatio > 0
   && storedInspectorRatio <= 0.7
   ? storedInspectorRatio
-  : Math.min(migratedInspectorRatio, 0.7);
+  : DEFAULT_INSPECTOR_RATIO;
 const initialInspectorWidth = Math.max(280, Math.round(initialViewportWidth * initialInspectorRatio));
 
 export const useUiStore = create<UiState>((set) => ({

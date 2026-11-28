@@ -44,17 +44,6 @@ function readName(cwd: string, sessionId: string): string {
     delete names[compositeKey];
     changed = true;
   }
-  const legacy = names[sessionId];
-  if (typeof legacy === "string") {
-    names[compositeKey] = legacy;
-    delete names[sessionId];
-    saveNames(names);
-    return legacy;
-  }
-  if (legacy !== undefined) {
-    delete names[sessionId];
-    changed = true;
-  }
   if (changed) saveNames(names);
   return "";
 }

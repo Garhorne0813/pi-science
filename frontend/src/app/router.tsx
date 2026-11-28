@@ -1,5 +1,4 @@
-import { LegacyWorkspaceRedirect } from "./routes/LegacyWorkspaceRedirect";
-import { createBrowserRouter, Navigate, useParams } from "react-router-dom";
+import { createBrowserRouter } from "react-router-dom";
 import { Suspense, lazy, type ReactElement } from "react";
 import { ProjectsLayout } from "./layout/ProjectsLayout";
 import { RoutedErrorBoundary } from "../components/ErrorBoundary";
@@ -19,11 +18,6 @@ function LoadingFallback() {
 }
 const wrap = (element: ReactElement) => <Suspense fallback={<LoadingFallback />}>{element}</Suspense>;
 
-function LegacyNotebooksRedirect() {
-  const { cwd = "" } = useParams<{ cwd: string }>();
-  return <Navigate replace to={`/workspace/${encodeURIComponent(cwd)}/files?type=notebook`} />;
-}
-
 export const router = createBrowserRouter([
   {
     path: "/",
@@ -35,10 +29,8 @@ export const router = createBrowserRouter([
       { path: "workspace/:cwd/new", element: wrap(<LiveSessionPage />) },
       { path: "workspace/:cwd/session/:sessionId", element: wrap(<LiveSessionPage />) },
       { path: "workspace/:cwd/files", element: wrap(<FilesPage />) },
-      { path: "workspace/:cwd/notebooks", element: <LegacyNotebooksRedirect /> },
       { path: "workspace/:cwd/runs", element: wrap(<RunsPage />) },
       { path: "workspace/:cwd/memory", element: wrap(<MemoryPage />) },
-      { path: "workspace/:cwd/*", element: <LegacyWorkspaceRedirect /> },
       { path: "workspace/:cwd/settings", element: wrap(<SettingsPage />) },
     ],
   },

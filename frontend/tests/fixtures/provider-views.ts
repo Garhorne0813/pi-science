@@ -2,8 +2,8 @@ import type { ProviderView } from "@pi-science/contracts";
 import type { SettingsConfig } from "../../src/lib/settings/settings-types.ts";
 
 /** Test data adapter only. Production reads the server's ProviderView contract. */
-export function providerViewsFixture(config: Pick<SettingsConfig, "providers" | "available_models"> & { custom_providers?: SettingsConfig["custom_providers"] }): { providers: ProviderView[] } {
-  const providers: SettingsConfig["providers"] = [...config.providers, ...(config.custom_providers ?? []).filter((item) => !config.providers.some((provider) => provider.id === `user-${item.id}`)).map((item) => ({ ...item, id: `user-${item.id}`, custom: true }))];
+export function providerViewsFixture(config: Pick<SettingsConfig, "providers" | "available_models">): { providers: ProviderView[] } {
+  const providers: SettingsConfig["providers"] = [...config.providers];
   return { providers: providers.map((provider): ProviderView => {
     const state = provider.credential_status === "invalid" ? "invalid" : provider.credential_status === "needs_login" || provider.auth?.kind === "oauth" ? "needs_login" : provider.has_key ? "ready" : "needs_key";
     const status = provider.enabled === false ? "disabled" : state;

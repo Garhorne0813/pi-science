@@ -242,7 +242,7 @@ describe("agent-core main service integration", () => {
       expect(created.statusCode).toBe(201);
       const id = created.json().id as string;
       const requestId = "b2199baa-1385-4df6-8ba5-1307e4ae686e";
-      const url = `/api/sessions/${id}/prompt?cwd=${encodeURIComponent(cwd)}`;
+      const url = `/api/sessions/${id}/prompts?cwd=${encodeURIComponent(cwd)}`;
       const first = await app.inject({
         method: "POST",
         url,
