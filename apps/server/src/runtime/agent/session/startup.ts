@@ -14,6 +14,8 @@ import type { AgentCoreRuntimeClient } from "../agent-runtime-client.js";
 import type { RuntimeResult } from "../agent-runtime-types.js";
 import { seedWorkspaceAssets } from "../runtime-config.js";
 import type { Live } from "./types.js";
+import { agentModels } from "../worker/agent-models.js";
+import { canonicalRuntimeModelRef } from "../model-ref.js";
 import {
   identity,
   OPERATION_PROGRESS_EVENTS,
@@ -293,6 +295,30 @@ export async function open(
   }
 }
 
+type OpenModelRef = { provider: string; modelId: string };
+type OpenModelCatalog = Pick<ReturnType<typeof agentModels>, "getModel" | "getAvailable">;
+
+/** Pick a model the current catalog can resolve. A renamed or retired model in
+ * durable state must not block opening a session: fall back to the requested
+ * default, then to the first available catalog entry, so the worker can adopt
+ * the replacement and commit it to the lane. */
+export async function resolveOpenModel(
+  persisted: OpenModelRef | null | undefined,
+  requested: OpenModelRef | null | undefined,
+  models: OpenModelCatalog = agentModels(),
+): Promise<OpenModelRef | null> {
+  const canonical = (ref: OpenModelRef | null | undefined) =>
+    ref ? splitModel(canonicalRuntimeModelRef(`${ref.provider}/${ref.modelId}`)) : null;
+  const usable = (ref: OpenModelRef | null) =>
+    ref && models.getModel(ref.provider, ref.modelId) ? ref : null;
+  const persistedModel = usable(canonical(persisted));
+  if (persistedModel) return persistedModel;
+  const requestedModel = usable(canonical(requested));
+  if (requestedModel) return requestedModel;
+  const first = (await models.getAvailable())[0];
+  return first ? { provider: first.provider, modelId: first.id } : null;
+}
+
 export async function openOnce(
   context: SessionStartupContext,
   cwd: string,
@@ -309,13 +335,15 @@ export async function openOnce(
   );
   const persisted = await context.repository.configuration(cwd, sessionId);
   // Legacy sessions without a lane model inherit the current default until
-  // Core persists a model; unavailable saved models never use this fallback.
-  const model = persisted?.model ?? splitModel(config.model);
+  // Core persists a model. A saved model removed by an upstream rename must
+  // not make the session unopenable: prefer the requested/default model, then
+  // any available model, so the worker can adopt it and persist the change.
+  const model = await resolveOpenModel(persisted?.model, splitModel(config.model));
   if (!model)
     return {
       success: false,
       code: "invalid_model",
-      error: "An agent-core session requires a provider/model setting",
+      error: "No available model; configure a provider before opening this session",
     };
   try {
     await context.beforeStart?.(cwd);

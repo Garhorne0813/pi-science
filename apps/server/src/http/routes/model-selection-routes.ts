@@ -1,4 +1,4 @@
-import { ModelConfigService } from "../../model-config/model-config-service.js";
+import { canonicalRuntimeModelRef } from "../../runtime/agent/model-ref.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   modelSelectionSchema,
@@ -24,7 +24,7 @@ export function registerModelSelectionRoutes(
   catalog: SelectionCatalog,
 ) {
   const canonical = async (model: string | null) => {
-    return model ? (new ModelConfigService().readSync().aliases[model] ?? model) : null;
+    return model ? canonicalRuntimeModelRef(model) : null;
   };
   const readDefault = async (): Promise<ModelSelection> => {
     const config = await settings.read();
