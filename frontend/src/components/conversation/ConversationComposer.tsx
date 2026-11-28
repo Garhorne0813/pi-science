@@ -56,7 +56,7 @@ export interface ConversationComposerProps {
   onScrollToBottom: () => void;
   onReview: () => void;
   onAbort: () => Promise<unknown>;
-  onRemoveWorkspaceReference: (cwd: string, path: string) => void;
+  onRemoveWorkspaceReference: (cwd: string, path: string, conversationKey?: string | null) => void;
 }
 
 /** The composer seat is kept separate from the route so streamed transcript
@@ -182,7 +182,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
                     <button type="button" className="flex min-w-0 items-center gap-1 text-left" title={`${t("conversation.clickToInsert")} ${reference.path}`} aria-label={`${t("conversation.clickToInsert")} ${reference.path}`} onClick={() => { setInput(input ? `${input} ${reference.path}` : reference.path); composer.inputRef.current?.focus(); }}>
                     {reference.imageRegion ? <img src={previewUrl(reference.path, "workspace", workspaceCwd)} alt="" className="h-9 w-12 rounded object-contain" /> : reference.isDir ? <FolderOpen size={11} className="shrink-0 text-accent" /> : <File size={11} className="shrink-0 text-accent" />}
                     <span className="truncate">{reference.imageRegion ?? reference.path}</span></button>
-                    <button type="button" aria-label={t("conversation.removeReference", { name: reference.name })} onClick={(event) => { event.stopPropagation(); onRemoveWorkspaceReference(workspaceCwd, reference.path); }} className="shrink-0 text-muted hover:text-error-text">
+                    <button type="button" aria-label={t("conversation.removeReference", { name: reference.name })} onClick={(event) => { event.stopPropagation(); onRemoveWorkspaceReference(workspaceCwd, reference.path, reference.conversationKey); }} className="shrink-0 text-muted hover:text-error-text">
                       <X size={11} />
                     </button>
                   </span>

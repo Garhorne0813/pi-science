@@ -5,6 +5,9 @@ import { isImageRegionPath } from "./image-region-path";
 
 export interface WorkspaceReference {
   cwd: string;
+  /** Conversation draft that owns this pending reference. `null` is the
+   * workspace's new-conversation draft; absent values are legacy/unscoped. */
+  conversationKey?: string | null;
   path: string;
   name: string;
   isDir: boolean;

@@ -14,41 +14,6 @@ import { processSettings, srtCli, type RuntimeInstallation } from "./settings.js
 import { prepareMacosSupervisor } from "./platform.js";
 
 const runFile = promisify(execFile);
-const certificateFiles = () => [...new Set([
-  process.env.SSL_CERT_FILE,
-  process.env.CURL_CA_BUNDLE,
-  process.env.REQUESTS_CA_BUNDLE,
-  process.env.NODE_EXTRA_CA_CERTS,
-  ...(process.platform === "darwin" ? ["/etc/ssl/cert.pem"] : ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"]),
-].filter((path): path is string => !!path))];
-
-/** Copy the host's public trust anchors into the otherwise isolated workload.
- * macOS applications normally consult Keychain in addition to /etc/ssl/cert.pem;
- * exporting it preserves operator-installed roots without granting Keychain access. */
-async function prepareCertificateBundle(scratch: string): Promise<string | undefined> {
-  const bundles: Buffer[] = [];
-  for (const source of certificateFiles()) {
-    try { bundles.push(await readFile(source)); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  }
-  if (process.platform === "darwin") {
-    // `security find-certificate` without an explicit keychain does not
-    // reliably include SystemRootCertificates on headless macOS runners.
-    for (const keychain of ["/System/Library/Keychains/SystemRootCertificates.keychain", "/Library/Keychains/System.keychain"]) {
-      try {
-        const { stdout } = await runFile("/usr/bin/security", ["find-certificate", "-a", "-p", keychain], { timeout: 5_000, maxBuffer: 16 * 1024 * 1024, encoding: "buffer" });
-        if (stdout.length > 0) bundles.push(stdout);
-      } catch {
-        // Minimal macOS installations may omit an individual keychain. The
-        // file-based roots and any remaining keychains are still usable.
-      }
-    }
-  }
-  if (bundles.length === 0) return undefined;
-  const certificate = join(scratch, "system-ca.pem");
-  await writeFile(certificate, Buffer.concat(bundles.flatMap((bundle) => [bundle, Buffer.from("\n")])), { mode: 0o600 });
-  return certificate;
-}
 
 export const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 export const launcherPath = fileURLToPath(

@@ -35,13 +35,10 @@ export const KernelActivityRenderer: ActivityRenderer = {
   },
   expanded: (props) => {
     const rows = genericDetails(props);
-    const input = props.source.input ?? {};
     const details = detailRecord(props.source);
-    const code = text(input.code) ?? text(input.source) ?? text(input.script);
     const stdout = text(details.stdout);
     const stderr = text(details.stderr);
-    const environment = text(details.environmentRevision) ?? text(details.environment_revision) ?? text(input.environmentRevision);
-    if (code) rows.splice(1, 0, { label: props.t("conversation.activity.code"), value: code, pre: true });
+    const environment = text(details.environmentRevision) ?? text(details.environment_revision) ?? text(props.source.input?.environmentRevision);
     if (stdout) rows.push({ label: "stdout", value: stdout, fullValue: stdout });
     if (stderr) rows.push({ label: "stderr", value: stderr, fullValue: stderr });
     if (environment) rows.push({ label: props.t("conversation.activity.environmentRevision"), value: environment, plain: true });

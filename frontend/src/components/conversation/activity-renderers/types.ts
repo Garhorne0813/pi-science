@@ -14,8 +14,10 @@ export interface ActivityCompactView {
   title: string;
   detail?: string;
   fileChange?: {
+    path: string;
     additions: number;
     deletions: number;
+    truncated?: boolean;
   };
 }
 
@@ -27,6 +29,8 @@ export interface ActivityDetailView {
   diff?: boolean;
   fullValue?: string;
   partial?: boolean;
+  transportTruncated?: boolean;
+  originalBytes?: number;
 }
 
 export interface ActivityRenderer {

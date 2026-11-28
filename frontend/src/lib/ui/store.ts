@@ -47,8 +47,8 @@ interface UiState {
   setInspectorMaximized: (m: boolean) => void;
   workspaceReferences: WorkspaceReference[];
   addWorkspaceReference: (reference: WorkspaceReference) => void;
-  removeWorkspaceReference: (cwd: string, path: string) => void;
-  clearWorkspaceReferences: (cwd: string) => void;
+  removeWorkspaceReference: (cwd: string, path: string, conversationKey?: string | null) => void;
+  clearWorkspaceReferences: (cwd: string, conversationKey?: string | null) => void;
   fileTreeReveal: FileTreeRevealRequest | null;
   revealInFileTree: (cwd: string, path: string) => void;
   clearFileTreeReveal: (id: number) => void;
@@ -304,15 +304,15 @@ export const useUiStore = create<UiState>((set) => ({
 
   workspaceReferences: [],
   addWorkspaceReference: (reference) => set((state) => ({
-    workspaceReferences: state.workspaceReferences.some((item) => item.cwd === reference.cwd && item.path === reference.path)
+    workspaceReferences: state.workspaceReferences.some((item) => item.cwd === reference.cwd && item.conversationKey === reference.conversationKey && item.path === reference.path)
       ? state.workspaceReferences
       : [...state.workspaceReferences, reference],
   })),
-  removeWorkspaceReference: (cwd, path) => set((state) => ({
-    workspaceReferences: state.workspaceReferences.filter((item) => item.cwd !== cwd || item.path !== path),
+  removeWorkspaceReference: (cwd, path, conversationKey) => set((state) => ({
+    workspaceReferences: state.workspaceReferences.filter((item) => item.cwd !== cwd || item.path !== path || (item.conversationKey !== conversationKey && item.conversationKey !== undefined)),
   })),
-  clearWorkspaceReferences: (cwd) => set((state) => ({
-    workspaceReferences: state.workspaceReferences.filter((item) => item.cwd !== cwd),
+  clearWorkspaceReferences: (cwd, conversationKey) => set((state) => ({
+    workspaceReferences: state.workspaceReferences.filter((item) => item.cwd !== cwd || (item.conversationKey !== conversationKey && item.conversationKey !== undefined)),
   })),
   fileTreeReveal: null,
   revealInFileTree: (cwd, path) => set({ fileTreeReveal: { id: ++fileTreeRevealSequence, cwd, path } }),

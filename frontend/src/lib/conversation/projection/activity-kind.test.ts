@@ -19,3 +19,19 @@ describe("activityKind notebook semantics", () => {
     expect(activityKind(tool("python"))).toBe("kernel");
   });
 });
+
+describe("activityKind execution semantics", () => {
+  it("separates shell commands and verification from kernels", () => {
+    expect(activityKind(tool("bash"))).toBe("shell");
+    expect(activityKind(tool("pytest"))).toBe("test");
+    expect(activityKind({
+      ...tool("bash"),
+      presentation: { version: 1, kind: "verify", title: "Run tests", importance: "stage", domain: "code" },
+    })).toBe("test");
+  });
+
+  it("keeps delegated work on the subagent renderer", () => {
+    expect(activityKind(tool("subagent"))).toBe("subagent");
+    expect(activityKind({ ...tool("future_tool"), childSessionId: "child-1" })).toBe("subagent");
+  });
+});

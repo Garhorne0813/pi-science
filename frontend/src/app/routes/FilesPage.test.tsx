@@ -1,7 +1,10 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 
 import i18n from "@/i18n";
+import { useRuntimeStore } from "@/lib/agent-runtime";
+import { useUiStore } from "@/lib/ui";
 import { FilesPage } from "./FilesPage";
 
 vi.mock("../../lib/workspace", () => ({
@@ -9,8 +12,8 @@ vi.mock("../../lib/workspace", () => ({
 }));
 
 vi.mock("../../components/sidebar/FileBrowser", () => ({
-  FileBrowser: ({ cwd, embedded, mode, fileType }: { cwd: string; embedded?: boolean; mode?: string; fileType?: string }) => (
-    <div data-testid="file-browser" data-cwd={cwd} data-embedded={String(embedded)} data-mode={mode} data-file-type={fileType} />
+  FileBrowser: ({ cwd, embedded, mode, fileType, conversationKey }: { cwd: string; embedded?: boolean; mode?: string; fileType?: string; conversationKey?: string | null }) => (
+    <div data-testid="file-browser" data-cwd={cwd} data-embedded={String(embedded)} data-mode={mode} data-file-type={fileType} data-conversation-key={conversationKey ?? "new"} />
   ),
 }));
 
@@ -25,9 +28,17 @@ beforeAll(async () => {
   await i18n.changeLanguage("en");
 });
 
+beforeEach(() => {
+  localStorage.clear();
+  useRuntimeStore.setState({ cwd: "proj", activeSessionId: null, sessions: [] });
+  useUiStore.setState({ workspaceReferences: [] });
+});
+
+const renderPage = (entry = "/workspace/proj/files") => render(<MemoryRouter initialEntries={[entry]}><FilesPage /></MemoryRouter>);
+
 describe("FilesPage", () => {
   it("renders the shared file tree in full page mode", () => {
-    render(<FilesPage />);
+    renderPage();
 
     expect(screen.getByRole("heading", { name: "Files" })).toBeInTheDocument();
     expect(screen.getByText("Browse the workspace and preview a file without losing the tree.")).toBeInTheDocument();
@@ -39,9 +50,18 @@ describe("FilesPage", () => {
   });
 
   it("preserves the notebook-only route", () => {
-    window.history.pushState({}, "", "/workspace/proj/files?type=notebook");
-    render(<FilesPage />);
+    renderPage("/workspace/proj/files?type=notebook");
     expect(screen.getByTestId("file-browser")).toHaveAttribute("data-file-type", "notebook");
-    window.history.pushState({}, "", "/");
+  });
+
+  it("shows pending references with their explicit target conversation", () => {
+    useRuntimeStore.setState({ sessions: [{ id: "session-a", cwd: "proj", name: "Analysis notes", created_at: "", updated_at: "" }] });
+    useUiStore.setState({ workspaceReferences: [{ cwd: "proj", conversationKey: "session-a", path: "data/a.csv", name: "a.csv", isDir: false }] });
+    renderPage("/workspace/proj/files?session_id=session-a");
+
+    expect(screen.getByTestId("file-browser")).toHaveAttribute("data-conversation-key", "session-a");
+    expect(screen.getByText("1 referenced item")).toBeInTheDocument();
+    expect(screen.getByText("For Analysis notes")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Return to conversation/ })).toHaveAttribute("href", "/workspace/proj/session/session-a");
   });
 });

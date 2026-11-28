@@ -346,10 +346,13 @@ export function sandboxBashTool(
           const references = { execution_id: executionId, artifact_refs: evidence.artifacts };
           const details = {
             ...result.details,
+            execution_id: executionId,
             // The settled row keeps its measured progress, and history restores
             // it from the persisted tool result details.
             ...(settledProgress ? { progress: settledProgress } : {}),
-            ...(typeof outcome.exitCode === "number" ? { exit_code: outcome.exitCode } : {}),
+            ...(typeof outcome.exitCode === "number"
+              ? { exit_code: outcome.exitCode, exitCode: outcome.exitCode }
+              : {}),
           };
           return binding || evidence.artifacts.length
             ? {

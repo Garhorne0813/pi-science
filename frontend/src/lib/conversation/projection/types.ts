@@ -42,6 +42,8 @@ export type ActivityKind =
   | "literature"
   | "dataset"
   | "file"
+  | "shell"
+  | "test"
   | "environment"
   | "subagent"
   | "research"

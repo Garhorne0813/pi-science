@@ -373,6 +373,7 @@ describe.skipIf(process.env.PI_SCIENCE_SANDBOX_TEST !== "1" || process.platform 
           expect.objectContaining({ text: expect.stringContaining("isolated") }),
         ]),
       );
+      expect(result.details).toMatchObject({ execution_id: expect.any(String), exitCode: 0 });
       expect(await readFile(join(cwd, "result.txt"), "utf8")).toBe("output");
       expect((await executionRepository.list(cwd))[0]?.runtime).toMatchObject({
         execution_mode: "required",

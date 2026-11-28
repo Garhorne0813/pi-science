@@ -213,7 +213,9 @@ export function ProjectsLayout() {
       </a>
       {/* The project workbench is full-width; workspace routes retain navigation. */}
       {!isProjectsHome && isWorkspace && <>
-        {contextPanelCollapsed && <button ref={toggleRef} type="button" aria-label={t("shell.expandContextPanel")} title={t("shell.expandContextPanel")} aria-controls="workspace-context-panel" aria-expanded={false} onClick={event => expandContextPanel(event.currentTarget)} className="fixed left-2 top-1.5 z-40 flex h-8 w-8 items-center justify-center rounded-input text-muted hover:bg-surface-hover hover:text-text"><PanelLeftOpen size={18} /></button>}
+        {contextPanelCollapsed && <div data-workspace-sidebar-toggle-slot className="relative h-full w-12 shrink-0">
+          <button ref={toggleRef} type="button" aria-label={t("shell.expandContextPanel")} title={t("shell.expandContextPanel")} aria-controls="workspace-context-panel" aria-expanded={false} onClick={event => expandContextPanel(event.currentTarget)} className="absolute left-2 top-1.5 z-40 flex h-8 w-8 items-center justify-center rounded-input text-muted hover:bg-surface-hover hover:text-text"><PanelLeftOpen size={18} /></button>
+        </div>}
         <div data-context-panel-shade aria-hidden="true" hidden={!drawerOpen} onPointerDown={closeContextPanel} onMouseDown={(event) => event.preventDefault()} className={cn(!drawerOpen && "!hidden", "absolute inset-0 z-50 bg-black/45 md:hidden")} />
         <aside ref={panelRef} tabIndex={-1} id="workspace-context-panel" aria-label={t("sidebar.workspaceContent")} hidden={contextPanelCollapsed} className={cn(contextPanelCollapsed && "!hidden", "app-sidebar sidebar-enter absolute inset-y-0 left-0 z-[60] flex h-full shrink-0 flex-col overflow-hidden border-r border-faint md:relative md:z-auto")} style={{ width: sidebarDragWidth ?? sidebarWidth, maxWidth: "min(88vw, 420px)" }}>
           <div className="flex h-full min-h-0 flex-col px-panel py-card">
@@ -254,7 +256,6 @@ export function ProjectsLayout() {
       {/* Main */}
       <main id="main-content" tabIndex={-1} inert={drawerOpen} aria-hidden={drawerOpen || undefined} className={cn(
         "relative flex min-w-0 flex-1 flex-col overflow-hidden [container-type:inline-size]",
-        isWorkspace && contextPanelCollapsed && "workspace-sidebar-collapsed",
         inspectorMaximized && "hidden",
         previewOnLeft && "order-2",
       )}>

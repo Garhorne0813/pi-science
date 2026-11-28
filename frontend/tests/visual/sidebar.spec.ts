@@ -3,6 +3,7 @@ import { waitForConversationSettled } from "./fixtures/app.fixture";
 import { VISUAL_CWD, VISUAL_SESSION } from "./fixtures/data.mjs";
 
 const root = `/workspace/${encodeURIComponent(VISUAL_CWD)}`;
+const filesForSession = `${root}/files?${new URLSearchParams({ session_id: VISUAL_SESSION })}`;
 const PANEL = "#workspace-context-panel";
 const TOGGLE = /^(Expand|Collapse) sidebar$/;
 const KNOWLEDGE = /^Memory/;
@@ -62,10 +63,10 @@ test("primary links highlight only their exact page", async ({ page }, testInfo)
   const panel = page.locator(PANEL);
   await expect(panel.locator("[aria-current=page]")).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Markdown rendering demo", exact: true })).toHaveAttribute("aria-current", "page");
-  for (const [path, label] of [["files", "Files"], ["memory", KNOWLEDGE], ["runs", "Run history"]] as const) {
+  for (const [href, label] of [[filesForSession, "Files"], [`${root}/memory`, KNOWLEDGE], [`${root}/runs`, "Run history"]] as const) {
     const item = panel.getByRole("link", { name: label });
     await item.click();
-    await expect(page).toHaveURL(new RegExp(`${root}/${path}$`));
+    await expect(page).toHaveURL(href);
     await expect(item).toHaveAttribute("aria-current", "page");
     await expect(page.getByRole("button", { name: "Markdown rendering demo", exact: true })).not.toHaveAttribute("aria-current", "page");
   }
@@ -90,7 +91,7 @@ test("mobile page navigation closes the context drawer", async ({ page }, testIn
   const panel = page.locator(PANEL);
   await expect(panel).toBeFocused();
   await panel.getByRole("link", { name: "Files", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`${root}/files$`));
+  await expect(page).toHaveURL(filesForSession);
   await expect(panel).toHaveAttribute("hidden");
   await expect(page.getByRole("button", { name: "Expand sidebar", exact: true })).toBeVisible();
 });
