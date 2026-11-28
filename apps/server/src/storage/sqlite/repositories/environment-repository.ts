@@ -105,6 +105,10 @@ export class EnvironmentRepository {
     const sorted = revisions.slice().sort((a, b) => a.created_at.localeCompare(b.created_at));
     let rows = 0;
     for (const revision of sorted) {
+      // SQLite is authoritative after the one-time import. A stale legacy JSON
+      // snapshot must not overwrite newer state (for example a repaired or
+      // directly adopted package fingerprint).
+      if (await this.get(revision.revision_id)) continue;
       try {
         await this.upsert(revision);
         rows += 1;
