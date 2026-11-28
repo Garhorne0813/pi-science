@@ -89,8 +89,8 @@ describe("SettingsContent", () => {
     renderContent(null);
     const nav = await screen.findByRole("tablist", { name: "Settings" });
     expect(nav).toHaveAttribute("aria-orientation", "vertical");
-    expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true");
-    const panel = screen.getByRole("tabpanel", { name: "General" });
+    expect(screen.getByRole("tab", { name: "General & appearance" })).toHaveAttribute("aria-selected", "true");
+    const panel = screen.getByRole("tabpanel", { name: "General & appearance" });
     expect(panel).toHaveAttribute("aria-labelledby", "settings-tab-general");
     expect(panel.querySelector(":scope > div > div")).toHaveClass("md:px-0");
     expect(panel.querySelector(":scope > div > div")).not.toHaveClass("md:px-6");
@@ -100,7 +100,7 @@ describe("SettingsContent", () => {
     renderContent(null);
     const nav = await screen.findByRole("tablist", { name: "Settings" });
     expect(nav).toHaveClass("gap-1");
-    const general = screen.getByRole("tab", { name: "General" });
+    const general = screen.getByRole("tab", { name: "General & appearance" });
     const models = screen.getByRole("tab", { name: "Model connections" });
     expect(general).toHaveClass("bg-surface-selected");
     expect(models).not.toHaveClass("bg-surface-selected");
@@ -114,7 +114,7 @@ describe("SettingsContent", () => {
     if (!aside) throw new Error("settings aside not found");
     expect(aside).toHaveClass("flex-1", "px-3", "md:w-[188px]", "md:pt-[22px]", "md:pb-0");
     expect(screen.getByRole("heading", { name: "Settings" })).toHaveClass("text-base", "font-medium");
-    const general = screen.getByRole("tab", { name: "General" });
+    const general = screen.getByRole("tab", { name: "General & appearance" });
     expect(general).toHaveClass("h-11", "w-full", "rounded-card", "px-3", "md:h-10", "md:gap-2");
     expect(general).toHaveClass("bg-surface-selected", "text-text");
     expect(screen.getByRole("tab", { name: "Agent Capabilities" })).toHaveClass("hover:bg-surface-hover");
@@ -163,7 +163,7 @@ describe("SettingsContent", () => {
     await screen.findByRole("tablist", { name: "Settings" });
     fireEvent.click(screen.getByRole("tab", { name: "Model connections" }));
     expect(screen.getByRole("tab", { name: "Model connections" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "General & appearance" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("tabpanel", { name: "Model connections" })).toHaveAttribute("aria-labelledby", "settings-tab-models");
     expect(await screen.findByText("My model services")).toBeInTheDocument();
   });
@@ -181,7 +181,7 @@ describe("SettingsContent", () => {
   it("opens global web search settings from a workspace", async () => {
     renderContent("/lab/project");
     await screen.findByRole("tablist", { name: "Settings" });
-    fireEvent.click(screen.getByRole("tab", { name: "Web search" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Web access" }));
     expect(await screen.findByRole("checkbox", { name: "Enable web search" })).toBeChecked();
     expect(screen.getByText("All projects")).toBeInTheDocument();
   });
@@ -237,7 +237,7 @@ describe("SettingsContent", () => {
   it("supports arrow-key navigation between tabs", async () => {
     renderContent(null);
     const nav = await screen.findByRole("tablist", { name: "Settings" });
-    const general = screen.getByRole("tab", { name: "General" });
+    const general = screen.getByRole("tab", { name: "General & appearance" });
     general.focus();
     fireEvent.keyDown(nav, { key: "ArrowDown" });
     await waitFor(() => expect(screen.getByRole("tab", { name: "Model connections" })).toHaveAttribute("aria-selected", "true"));
@@ -248,7 +248,7 @@ describe("SettingsContent", () => {
     fireEvent.keyDown(nav, { key: "ArrowUp" });
     await waitFor(() => expect(screen.getByRole("tab", { name: "Project environment" })).toHaveAttribute("aria-selected", "true"));
     fireEvent.keyDown(nav, { key: "Home" });
-    await waitFor(() => expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "General & appearance" })).toHaveAttribute("aria-selected", "true"));
   });
 
   it("keeps runtime model controls out of Settings", async () => {
@@ -274,7 +274,7 @@ describe("SettingsContent", () => {
     const nav = await screen.findByRole("tablist", { name: "Settings" });
     expect(nav.querySelectorAll('button[tabindex="0"]')).toHaveLength(1);
     fireEvent.click(screen.getByRole("tab", { name: "Agent behavior" }));
-    expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("tab", { name: "General & appearance" })).toHaveAttribute("tabindex", "-1");
     expect(screen.getByRole("tab", { name: "Agent behavior" })).toHaveAttribute("tabindex", "0");
     fireEvent.click(await screen.findByRole("button", { name: "Manage models" }));
     expect(screen.getByRole("tab", { name: "Model connections" })).toHaveAttribute("aria-selected", "true");
@@ -309,7 +309,7 @@ describe("SettingsContent", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("tab", { name: "Model connections" }));
     await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/model-config")).toHaveLength(1));
-    fireEvent.click(screen.getByRole("tab", { name: "General" }));
+    fireEvent.click(screen.getByRole("tab", { name: "General & appearance" }));
     fireEvent.click(screen.getByRole("button", { name: "Dark" }));
     expect(useUiStore.getState().theme).toBe("dark");
     expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
@@ -327,7 +327,7 @@ describe("SettingsContent", () => {
     renderContent(null);
     fireEvent.click(screen.getByRole("tab", { name: "Model connections" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Catalog unavailable");
-    fireEvent.click(screen.getByRole("tab", { name: "General" }));
+    fireEvent.click(screen.getByRole("tab", { name: "General & appearance" }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Light" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Model connections" }));
