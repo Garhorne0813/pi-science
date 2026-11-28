@@ -4,7 +4,7 @@ import { useUiStore } from "../../lib/ui";
 import { useWorkspaceCwd } from "../../lib/workspace";
 import { isSettingsSection } from "../../lib/settings/settings-sections";
 
-/** Legacy deep-link target for `/settings` and `/workspace/:cwd/settings`.
+/** Deep-link target for `/settings` and `/workspace/:cwd/settings`.
  *  The dialog itself lives in ProjectsLayout; this shell opens it on mount and
  *  returns to the workspace home (or the project list) once it closes. */
 export function SettingsPage() {
