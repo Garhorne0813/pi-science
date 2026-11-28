@@ -249,12 +249,13 @@ describe("follow-up queue routes", () => {
       method: "POST",
       url: `/api/sessions/${sessionId}/queue/resume${params}`,
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(resumed.json()).toMatchObject({ ok: true, queue: { paused: false } });
-    expect(command).toHaveBeenCalledWith(sessionId, cwd, "prompt", {
-      message: "after the stop",
-      client_message_id: first,
-    });
+    await vi.waitFor(() =>
+      expect(command).toHaveBeenCalledWith(sessionId, cwd, "prompt", {
+        message: "after the stop",
+        client_message_id: first,
+      }),
+    );
   });
 
   it("delivers a queued entry immediately as a steer", async () => {
