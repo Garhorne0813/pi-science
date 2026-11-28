@@ -98,7 +98,7 @@ describe("FileBrowser", () => {
     await screen.findByRole("button", { name: "root.txt" });
     expect(files.directory).toHaveBeenCalledWith("proj", "", expect.any(AbortSignal));
     expect(files.sidebar).not.toHaveBeenCalled();
-    expect(screen.getByRole("searchbox", { name: "Search files" })).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Search files by name or type" })).toBeInTheDocument();
   });
 
   it("searches across paths and opens a file in the existing preview pane", async () => {
@@ -108,7 +108,7 @@ describe("FileBrowser", () => {
     ]);
     render(<FileBrowser cwd="proj" embedded mode="page" />);
 
-    fireEvent.change(screen.getByRole("searchbox", { name: "Search files" }), { target: { value: "report" } });
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search files by name or type" }), { target: { value: "report" } });
     const result = await screen.findByRole("button", { name: /report\.csv.*results\/final/ });
     expect(files.search).toHaveBeenCalledWith("proj", "report", expect.any(AbortSignal));
     fireEvent.click(result);

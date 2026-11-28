@@ -72,10 +72,6 @@ export function reduceToolEvent(event: PiScienceEvent, { foldState, blocks, inde
         title: (event.title as string | undefined) ?? previous?.title,
         input: (event.input as Record<string, unknown> | undefined) ?? previous?.input,
         output: (event.output as string | undefined) ?? previous?.output,
-        outputTruncated: event.outputTruncated === true || previous?.outputTruncated,
-        ...(numberValue(event.originalOutputBytes) !== undefined || previous?.originalOutputBytes !== undefined
-          ? { originalOutputBytes: numberValue(event.originalOutputBytes) ?? previous?.originalOutputBytes }
-          : {}),
         details: event.details ?? previous?.details,
         presentation: (event.presentation as ToolCallBlock["presentation"] | undefined) ?? previous?.presentation,
         ...(progress ? { progress } : {}),

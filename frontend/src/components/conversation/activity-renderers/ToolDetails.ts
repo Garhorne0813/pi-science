@@ -19,7 +19,7 @@ export function toolDetails(props: ActivityRendererProps): ActivityDetailView[] 
       input.command = command;
     }
     if (typeof code === "number") {
-      rows.push({ label: t("conversation.activity.exitCode"), value: String(code), plain: true });
+      rows.push({ label: t("conversation.activity.exitCodeLabel"), value: String(code), plain: true });
     }
     return [...rows, ...genericDetails({ ...props, source: {
       ...source,

@@ -1,3 +1,7 @@
+import { SettingsSaveBar } from "../SettingsSaveBar";
+import { SettingsSaveMode } from "../SettingsSaveMode";
+import { useSettingsDraftStatus } from "../SettingsDraftStatus";
+import { useSettingsAutosave } from "../useSettingsAutosave";
 import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -29,7 +33,8 @@ export function DefaultModelSelection({ scope = null, onCommitted, onOpenModels 
   const configured = base?.model ? index.byId.get(base.model) : undefined;
   const levels = model?.thinking_levels?.length ? model.thinking_levels : ["off"];
   const dirty = Boolean(draft && (draft.model !== base?.model || draft.thinking !== base?.thinking));
-  const edit = (selection: ModelSelection) => { setDraft(selection); setSaved(false); };
+  useSettingsDraftStatus("agent:model", dirty);
+  const edit = (selection: ModelSelection) => { setDraft(selection); setSaved(false); setError(null); };
   const refresh = async () => {
     const version = ++refreshVersion.current;
     setSyncWarning(null);
@@ -48,9 +53,11 @@ export function DefaultModelSelection({ scope = null, onCommitted, onOpenModels 
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setSaving(false); }
   };
+  useSettingsAutosave(dirty && base && !saving && !error ? JSON.stringify(draft) : null, save);
   const loadError = defaults.error ?? catalog.error;
   return <section aria-labelledby="agent-model-title" className="rounded-card border border-border bg-bg p-4">
-    <div className="flex flex-wrap items-start justify-between gap-3">
+    <SettingsSaveMode automatic />
+    <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0 flex-1">
         <h3 id="agent-model-title" className="text-ui-body font-medium text-text">{t("settings.agent.activeModelTitle")}</h3>
         <p className="mt-1 text-ui-caption leading-relaxed text-muted">{t("settings.redesign.modelSelectionHelp")}</p>
@@ -75,7 +82,7 @@ export function DefaultModelSelection({ scope = null, onCommitted, onOpenModels 
     {syncWarning && <p role="status" className="mt-3 text-ui-caption text-muted">{t("settings.selection.syncWarning", { error: syncWarning })}<button type="button" onClick={() => void refresh()} className="ml-2 min-h-9 px-2 text-link">{t("settings.redesign.retryLoad")}</button></p>}
     <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
       <button type="button" disabled={!base || saving || !selected?.model} onClick={() => edit({ model: null, thinking: "off" })} className="min-h-9 rounded-input px-3 text-ui-caption text-muted hover:bg-surface-hover disabled:opacity-40">{t("settings.selection.clearDefault")}</button>
-      <button type="button" disabled={!dirty || saving || !base} onClick={() => void save()} className="min-h-9 rounded-input bg-accent px-4 text-ui-caption text-white disabled:opacity-40">{saving ? t("common.saving") : t("common.save")}</button>
     </div>
+    <SettingsSaveBar dirty={dirty} busy={saving} saved={saved} failed={Boolean(error)} onDiscard={() => { setDraft(null); setError(null); }} onRetry={() => void save()} />
   </section>;
 }
