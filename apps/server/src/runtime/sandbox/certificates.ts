@@ -11,11 +11,17 @@ export async function writeSandboxCaBundle(
     : ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"],
 ) {
   const certificates = new Set([...rootCertificates, ...getCACertificates("system")]);
-  // Retain distribution/operator roots supplied by the existing file bundle too.
-  for (const source of sources) {
+  // Retain distribution roots and operator-supplied trust anchors (for example
+  // NODE_EXTRA_CA_CERTS in corporate or laboratory installations) too.
+  const operatorSources = [
+    process.env.SSL_CERT_FILE,
+    process.env.CURL_CA_BUNDLE,
+    process.env.REQUESTS_CA_BUNDLE,
+    process.env.NODE_EXTRA_CA_CERTS,
+  ].filter((value): value is string => Boolean(value));
+  for (const source of [...operatorSources, ...sources]) {
     try {
       certificates.add(await readFile(source, "utf8"));
-      break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
