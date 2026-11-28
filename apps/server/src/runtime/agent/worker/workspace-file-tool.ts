@@ -205,7 +205,14 @@ export function workspaceFileTool(
           return typeof value === "function" ? value.bind(target) : value;
         },
       });
-      const result = await original.execute(id, params, update, { ...ctx, env }, invocation, context);
+      const result = await original.execute(
+        id,
+        params,
+        update,
+        { ...ctx, env },
+        invocation,
+        context,
+      );
       if (!mutation || before === undefined) return result;
       const after = await mutationSnapshot(checkedPath);
       if (after === undefined || after === null) return result;

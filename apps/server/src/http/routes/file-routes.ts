@@ -122,10 +122,20 @@ async function resolveSurfaceableApiFile(root: string, path: string): Promise<st
   return target;
 }
 
-interface GitLineStats { additions: number; deletions: number }
-interface GitStatusResult { repository: boolean; entries: Record<string, string>; stats: Record<string, GitLineStats> }
+interface GitLineStats {
+  additions: number;
+  deletions: number;
+}
+interface GitStatusResult {
+  repository: boolean;
+  entries: Record<string, string>;
+  stats: Record<string, GitLineStats>;
+}
 
-function runGit(root: string, args: string[]): Promise<{ code: number | null; stdout: Buffer; overflow: boolean }> {
+function runGit(
+  root: string,
+  args: string[],
+): Promise<{ code: number | null; stdout: Buffer; overflow: boolean }> {
   return new Promise((resolve) => {
     const child = spawn("git", ["-c", "core.fsmonitor=false", "-C", root, ...args], {
       stdio: ["ignore", "pipe", "ignore"],
@@ -140,7 +150,10 @@ function runGit(root: string, args: string[]): Promise<{ code: number | null; st
       clearTimeout(timeout);
       resolve({ code, stdout: Buffer.concat(chunks), overflow: size > 2 * 1024 * 1024 });
     };
-    const timeout = setTimeout(() => { child.kill(); finish(null); }, 5_000);
+    const timeout = setTimeout(() => {
+      child.kill();
+      finish(null);
+    }, 5_000);
     child.stdout.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size > 2 * 1024 * 1024) child.kill();
@@ -167,39 +180,59 @@ function parseNumstat(output: Buffer): Record<string, GitLineStats> {
   return stats;
 }
 
-function mergeGitStats(target: Record<string, GitLineStats>, source: Record<string, GitLineStats>): void {
+function mergeGitStats(
+  target: Record<string, GitLineStats>,
+  source: Record<string, GitLineStats>,
+): void {
   for (const [path, value] of Object.entries(source)) {
     const current = target[path] ?? { additions: 0, deletions: 0 };
-    target[path] = { additions: current.additions + value.additions, deletions: current.deletions + value.deletions };
+    target[path] = {
+      additions: current.additions + value.additions,
+      deletions: current.deletions + value.deletions,
+    };
   }
 }
 
-async function countUntrackedLines(root: string, entries: Record<string, string>, stats: Record<string, GitLineStats>): Promise<void> {
-  const paths = Object.entries(entries).filter(([, status]) => status === "??").map(([path]) => path).slice(0, 500);
+async function countUntrackedLines(
+  root: string,
+  entries: Record<string, string>,
+  stats: Record<string, GitLineStats>,
+): Promise<void> {
+  const paths = Object.entries(entries)
+    .filter(([, status]) => status === "??")
+    .map(([path]) => path)
+    .slice(0, 500);
   let cursor = 0;
-  await Promise.all(Array.from({ length: Math.min(paths.length, 16) }, async () => {
-    while (cursor < paths.length) {
-      const path = paths[cursor++];
-      if (!path) continue;
-      try {
-        const target = await resolveApiFile(root, path);
-        const metadata = await stat(target);
-        if (!metadata.isFile() || metadata.size > 1024 * 1024) continue;
-        const content = await readFile(target);
-        if (!isUtf8(content)) continue;
-        let additions = content.length > 0 && content.at(-1) !== 10 ? 1 : 0;
-        for (const byte of content) if (byte === 10) additions += 1;
-        stats[path] = { additions, deletions: 0 };
-      } catch {
-        // The working tree may change while status is being collected.
+  await Promise.all(
+    Array.from({ length: Math.min(paths.length, 16) }, async () => {
+      while (cursor < paths.length) {
+        const path = paths[cursor++];
+        if (!path) continue;
+        try {
+          const target = await resolveApiFile(root, path);
+          const metadata = await stat(target);
+          if (!metadata.isFile() || metadata.size > 1024 * 1024) continue;
+          const content = await readFile(target);
+          if (!isUtf8(content)) continue;
+          let additions = content.length > 0 && content.at(-1) !== 10 ? 1 : 0;
+          for (const byte of content) if (byte === 10) additions += 1;
+          stats[path] = { additions, deletions: 0 };
+        } catch {
+          // The working tree may change while status is being collected.
+        }
       }
-    }
-  }));
+    }),
+  );
 }
 
 async function readGitStatus(root: string): Promise<GitStatusResult> {
   const empty = { repository: false, entries: {}, stats: {} };
-  const statusResult = await runGit(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+  const statusResult = await runGit(root, [
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+  ]);
   if (statusResult.code !== 0 || statusResult.overflow) return empty;
 
   const fields = statusResult.stdout.toString("utf8").split("\0");
@@ -231,7 +264,8 @@ async function readGitStatus(root: string): Promise<GitStatusResult> {
       runGit(root, ["diff", "--numstat", "-z", "--no-renames", "--"]),
     ]);
     if (staged.code === 0 && !staged.overflow) mergeGitStats(stats, parseNumstat(staged.stdout));
-    if (unstaged.code === 0 && !unstaged.overflow) mergeGitStats(stats, parseNumstat(unstaged.stdout));
+    if (unstaged.code === 0 && !unstaged.overflow)
+      mergeGitStats(stats, parseNumstat(unstaged.stdout));
   }
   await countUntrackedLines(root, entries, stats);
   return { repository: true, entries, stats };
@@ -303,13 +337,21 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
 
   app.get("/api/files/git-status", async (request, reply) => {
     let root: string;
-    try { root = await safeWorkspace(request); } catch (error) { return reply.code(403).send({ error: String(error) }); }
+    try {
+      root = await safeWorkspace(request);
+    } catch (error) {
+      return reply.code(403).send({ error: String(error) });
+    }
     return readGitStatus(root);
   });
 
   app.get("/api/files/events", async (request, reply) => {
     let root: string;
-    try { root = await safeWorkspace(request); } catch (error) { return reply.code(403).send({ error: String(error) }); }
+    try {
+      root = await safeWorkspace(request);
+    } catch (error) {
+      return reply.code(403).send({ error: String(error) });
+    }
     reply.hijack();
     reply.raw.writeHead(200, {
       "content-type": "text/event-stream",
@@ -318,7 +360,8 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
       "x-accel-buffering": "no",
     });
     const push = (event: unknown) => {
-      if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+      if (!reply.raw.destroyed && !reply.raw.writableEnded)
+        reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
     };
     reply.raw.write(": connected\n\n");
     let watcher: ReturnType<typeof watchFiles>;
@@ -354,37 +397,72 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
 
   app.get("/api/files/search", async (request, reply) => {
     let root: string;
-    try { root = await safeWorkspace(request); } catch (error) { return reply.code(403).send({ error: String(error) }); }
+    try {
+      root = await safeWorkspace(request);
+    } catch (error) {
+      return reply.code(403).send({ error: String(error) });
+    }
     const query = queryValue(request, "q").trim().toLocaleLowerCase();
     if (!query) return [];
 
     // Search is deliberately bounded and never follows symlinks. The regular
     // directory endpoint remains the source of truth for expanding the tree;
     // this endpoint only supplies a compact cross-workspace result set.
-    const pending: Array<{ absolute: string; relativePath: string }> = [{ absolute: root, relativePath: "" }];
-    const matches: Array<{ path: string; name: string; isDir: boolean; size: number; modified: number }> = [];
+    const pending: Array<{ absolute: string; relativePath: string }> = [
+      { absolute: root, relativePath: "" },
+    ];
+    const matches: Array<{
+      path: string;
+      name: string;
+      isDir: boolean;
+      size: number;
+      modified: number;
+    }> = [];
     let visited = 0;
     let directoryIndex = 0;
     while (directoryIndex < pending.length && visited < 20_000 && matches.length < 200) {
       const directory = pending[directoryIndex++];
       if (!directory) break;
       let children;
-      try { children = await readdir(directory.absolute, { withFileTypes: true }); } catch { continue; }
+      try {
+        children = await readdir(directory.absolute, { withFileTypes: true });
+      } catch {
+        continue;
+      }
       for (const entry of children) {
         if (visited >= 20_000 || matches.length >= 200) break;
-        if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.isSymbolicLink()) continue;
+        if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.isSymbolicLink())
+          continue;
         visited += 1;
-        const relativePath = directory.relativePath ? `${directory.relativePath}/${entry.name}` : entry.name;
+        const relativePath = directory.relativePath
+          ? `${directory.relativePath}/${entry.name}`
+          : entry.name;
         const absolute = join(directory.absolute, entry.name);
         if (entry.isDirectory()) pending.push({ absolute, relativePath });
-        if (!entry.name.toLocaleLowerCase().includes(query) && !relativePath.toLocaleLowerCase().includes(query)) continue;
+        if (
+          !entry.name.toLocaleLowerCase().includes(query) &&
+          !relativePath.toLocaleLowerCase().includes(query)
+        )
+          continue;
         try {
           const metadata = await stat(absolute);
-          matches.push({ path: relativePath, name: entry.name, isDir: entry.isDirectory(), size: metadata.size, modified: metadata.mtimeMs / 1000 });
-        } catch { /* Entry changed during the search. */ }
+          matches.push({
+            path: relativePath,
+            name: entry.name,
+            isDir: entry.isDirectory(),
+            size: metadata.size,
+            modified: metadata.mtimeMs / 1000,
+          });
+        } catch {
+          /* Entry changed during the search. */
+        }
       }
     }
-    return matches.sort((left, right) => Number(right.isDir) - Number(left.isDir) || left.path.localeCompare(right.path, undefined, { numeric: true, sensitivity: "base" }));
+    return matches.sort(
+      (left, right) =>
+        Number(right.isDir) - Number(left.isDir) ||
+        left.path.localeCompare(right.path, undefined, { numeric: true, sensitivity: "base" }),
+    );
   });
 
   app.post("/api/files/upload", async (request, reply) => {

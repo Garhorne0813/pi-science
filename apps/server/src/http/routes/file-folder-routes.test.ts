@@ -31,7 +31,9 @@ async function buildApp(cwd: string) {
 }
 
 async function git(cwd: string, ...args: string[]): Promise<void> {
-  await new Promise<void>((resolve, reject) => execFile("git", ["-C", cwd, ...args], (error) => error ? reject(error) : resolve()));
+  await new Promise<void>((resolve, reject) =>
+    execFile("git", ["-C", cwd, ...args], (error) => (error ? reject(error) : resolve())),
+  );
 }
 
 describe("GET /api/files/git-status", () => {
@@ -92,7 +94,9 @@ describe("GET /api/files/events", () => {
     const { app, query } = await buildApp(cwd);
     const address = await app.listen({ host: "127.0.0.1", port: 0 });
     const controller = new AbortController();
-    const response = await fetch(`${address}/api/files/events?${query}`, { signal: controller.signal });
+    const response = await fetch(`${address}/api/files/events?${query}`, {
+      signal: controller.signal,
+    });
     expect(response.status).toBe(200);
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
@@ -102,7 +106,9 @@ describe("GET /api/files/events", () => {
 
     const next = await Promise.race([
       reader.read(),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("file event timeout")), 3_000)),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("file event timeout")), 3_000),
+      ),
     ]);
     const text = decoder.decode(next.value, { stream: !next.done });
     controller.abort();
@@ -124,11 +130,18 @@ describe("GET /api/files/search", () => {
     await writeFile(join(cwd, "node_modules", "package", "report.js"), "", "utf8");
     await symlink(join(cwd, "results"), join(cwd, "linked-results"));
 
-    const response = await app.inject({ method: "GET", url: `/api/files/search?${query}&q=report` });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/files/search?${query}&q=report`,
+    });
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual([
-      expect.objectContaining({ path: "results/final/report.csv", name: "report.csv", isDir: false }),
+      expect.objectContaining({
+        path: "results/final/report.csv",
+        name: "report.csv",
+        isDir: false,
+      }),
     ]);
   });
 

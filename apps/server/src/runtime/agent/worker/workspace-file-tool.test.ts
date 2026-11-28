@@ -377,9 +377,7 @@ it("attaches immutable line changes to successful write and edit results", async
   expect(changed.details).toMatchObject({
     fileChange: { path: "notes.txt", additions: 1, deletions: 1 },
   });
-  expect((changed.details as { fileChange: { patch: string } }).fileChange.patch).toContain(
-    "-two",
-  );
+  expect((changed.details as { fileChange: { patch: string } }).fileChange.patch).toContain("-two");
   expect((changed.details as { fileChange: { patch: string } }).fileChange.patch).toContain(
     "+changed",
   );

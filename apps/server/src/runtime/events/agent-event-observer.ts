@@ -272,7 +272,9 @@ async function appendProvenance(
       ? (result.details as Record<string, unknown>)
       : {};
   const fileChange =
-    details.fileChange && typeof details.fileChange === "object" && !Array.isArray(details.fileChange)
+    details.fileChange &&
+    typeof details.fileChange === "object" &&
+    !Array.isArray(details.fileChange)
       ? (details.fileChange as Record<string, unknown>)
       : {};
   const diff =

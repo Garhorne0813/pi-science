@@ -19,7 +19,9 @@ export function toolFileChange(path: string, before: string, after: string): Too
     if (change.added) additions += change.count ?? 0;
     if (change.removed) deletions += change.count ?? 0;
   }
-  const completePatch = createTwoFilesPatch(path, path, before, after, "before", "after", { context: 3 });
+  const completePatch = createTwoFilesPatch(path, path, before, after, "before", "after", {
+    context: 3,
+  });
   const truncated = completePatch.length > MAX_PATCH_CHARS;
   return {
     path,
