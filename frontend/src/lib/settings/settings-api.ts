@@ -83,7 +83,7 @@ export const mcpCatalogQuery = (cwd: string, errorFallback: string) => ({
 export const mcpConnectorsKey = ["mcp", "connectors"] as const;
 export const mcpConnectorsQuery = (errorFallback: string) => ({
   queryKey: mcpConnectorsKey,
-  queryFn: () => apiRequest<{ connectors: McpConnector[]; migration_conflicts?: McpMigrationConflict[]; legacy_count?: number; legacy_config_path?: string | null }>("/api/mcp/connectors", { errorFallback }),
+  queryFn: () => apiRequest<{ connectors: McpConnector[]; migration_conflicts?: McpMigrationConflict[] }>("/api/mcp/connectors", { errorFallback }),
   staleTime: 0,
 });
 
@@ -163,12 +163,6 @@ export const settingsApi = {
   clearMcpToolDecision(connectorId: string, toolName: string, cwd?: string | null) {
     const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
     return apiRequest<void>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/tools/${encodeURIComponent(toolName)}${query}`, { method: "DELETE" });
-  },
-  previewMcpImport(cwd: string | null) {
-    return apiRequest<{ source: string | null; entries: Array<{ name: string; transport: string; importable: boolean; conflict: boolean; contains_sensitive_fields: boolean }> }>(`/api/mcp/import/preview${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`, { method: "POST" });
-  },
-  commitMcpImport(cwd: string | null, names: string[]) {
-    return apiRequest<{ imported: McpConnector[]; failed: Array<{ name: string; error: string }> }>(`/api/mcp/import/commit${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`, json("POST", { names }));
   },
 
 

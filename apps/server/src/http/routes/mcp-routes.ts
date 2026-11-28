@@ -5,8 +5,6 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { McpConnectorService, McpServiceError } from "../../mcp/connector-service.js";
 
-const importCommitSchema = z.object({ names: z.array(z.string().min(1).max(64)).min(1).max(100) });
-
 function cwd(request: { query: unknown }): string {
   const value = (request.query as { cwd?: unknown }).cwd;
   return typeof value === "string" && value ? value : ".";
@@ -62,7 +60,7 @@ export function registerMcpRoutes(
 
   app.get("/api/mcp/connectors", async (request, reply) => {
     try {
-      return await service.list(optionalCwd(request));
+      return await service.list();
     } catch (error) {
       return failure(reply, error);
     }
@@ -209,20 +207,4 @@ export function registerMcpRoutes(
       }
     },
   );
-
-  app.post("/api/mcp/import/preview", async (request, reply) => {
-    try {
-      return await service.importPreview(cwd(request));
-    } catch (error) {
-      return failure(reply, error);
-    }
-  });
-
-  app.post("/api/mcp/import/commit", async (request, reply) => {
-    try {
-      return await service.importCommit(importCommitSchema.parse(request.body).names, cwd(request));
-    } catch (error) {
-      return failure(reply, error);
-    }
-  });
 }
