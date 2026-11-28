@@ -318,7 +318,6 @@ describe("native control-plane business routes", () => {
     expect(response.statusCode).toBe(200);
     const environment = response.json();
     expect(environment).toMatchObject({ ready: true, manager: "micromamba" });
-    expect(environment.prefix).toBe(join(environment.workspace, ".pi-science", "test-python"));
     await expect(readFile(join(cwd, ".venv", "keep.txt"), "utf8")).resolves.toBe("user-owned");
   });
 
@@ -342,7 +341,6 @@ describe("native control-plane business routes", () => {
       manager: "micromamba",
       workspace: expect.any(String),
     });
-    expect(environment.prefix).toBe(join(environment.workspace, ".pi-science", "test-python"));
     await expect(access(environment.python)).resolves.toBeUndefined();
 
     const submitted = await app.inject({

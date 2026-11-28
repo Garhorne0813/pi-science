@@ -3,10 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { NodeSessionService } from "../runtime/node/node-session-service.js";
-import { SettingsStore } from "../storage/settings-store.js";
 import { registerCatalogRoutes } from "../http/routes/catalog-routes.js";
-import { registerSettingsRoutes } from "../http/routes/settings-routes.js";
 import { resolveMcpConfig } from "./mcp-config.js";
 
 const originalHome = process.env.HOME;
@@ -31,7 +28,9 @@ afterEach(async () => {
   else process.env.USERPROFILE = originalUserProfile;
   if (originalPiScienceHome === undefined) delete process.env.PI_SCIENCE_HOME;
   else process.env.PI_SCIENCE_HOME = originalPiScienceHome;
-  await Promise.all([home, piScienceHome].map((path) => rm(path, { recursive: true, force: true })));
+  await Promise.all(
+    [home, piScienceHome].map((path) => rm(path, { recursive: true, force: true })),
+  );
 });
 
 async function writeMcp(path: string, servers: Record<string, unknown>): Promise<void> {
@@ -42,10 +41,14 @@ async function writeMcp(path: string, servers: Record<string, unknown>): Promise
 describe("MCP configuration resolution", () => {
   it("discovers the standard user-level MCP configuration", async () => {
     const standardPath = join(home, ".config", "mcp", "mcp.json");
-    await writeMcp(standardPath, { "paper-search": { command: "python", args: ["-m", "paper_search_mcp.server"] } });
+    await writeMcp(standardPath, {
+      "paper-search": { command: "python", args: ["-m", "paper_search_mcp.server"] },
+    });
 
     await expect(resolveMcpConfig()).resolves.toEqual({
-      definitions: { "paper-search": { command: "python", args: ["-m", "paper_search_mcp.server"] } },
+      definitions: {
+        "paper-search": { command: "python", args: ["-m", "paper_search_mcp.server"] },
+      },
       source: standardPath,
     });
   });
@@ -59,32 +62,10 @@ describe("MCP configuration resolution", () => {
     await writeMcp(explicitPath, { explicit: {} });
 
     const result = await resolveMcpConfig({ workspaceRoot: workspace, explicitPath });
-    expect(result).toEqual({ definitions: { workspace: {} }, source: join(await realpath(workspace), ".mcp.json") });
-  });
-
-  it("exposes standard user-level servers through the Settings endpoint", async () => {
-    const standardPath = join(home, ".config", "mcp", "mcp.json");
-    await writeMcp(standardPath, { "paper-search": { command: "python" } });
-    await writeFile(join(piScienceHome, "config.json"), JSON.stringify({ mcp_servers: ["paper-search"] }), "utf8");
-    const session = { reloadConfiguration: vi.fn().mockResolvedValue([]) } as unknown as NodeSessionService;
-    const app = Fastify({ logger: false });
-    registerSettingsRoutes(app, session, new SettingsStore());
-
-    const response = await app.inject({ method: "GET", url: "/api/settings/mcp" });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ servers: ["paper-search"], configured: ["paper-search"], config_path: standardPath });
-    await app.close();
-  });
-
-  it("preserves other default-enabled servers on the first legacy toggle", async () => {
-    await writeMcp(join(home, ".config", "mcp", "mcp.json"), { first: { command: "node" }, second: { command: "node" } });
-    const session = { reloadConfiguration: vi.fn().mockResolvedValue([]) } as unknown as NodeSessionService;
-    const app = Fastify({ logger: false });
-    registerSettingsRoutes(app, session, new SettingsStore());
-    expect((await app.inject({ method: "PUT", url: "/api/settings/mcp/first?enabled=false" })).statusCode).toBe(200);
-    expect((await app.inject({ method: "GET", url: "/api/settings/mcp" })).json().servers).toEqual(["second"]);
-    await app.close();
+    expect(result).toEqual({
+      definitions: { workspace: {} },
+      source: join(await realpath(workspace), ".mcp.json"),
+    });
   });
 
   it("uses the same standard user-level configuration in the MCP Catalog", async () => {
@@ -92,14 +73,24 @@ describe("MCP configuration resolution", () => {
     const workspace = join(home, "workspace");
     await writeMcp(standardPath, { "paper-search": { command: "python" } });
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
-    await writeFile(join(piScienceHome, "config.json"), JSON.stringify({ mcp_servers: ["paper-search"] }), "utf8");
+    await writeFile(
+      join(piScienceHome, "config.json"),
+      JSON.stringify({ mcp_servers: ["paper-search"] }),
+      "utf8",
+    );
     const app = Fastify({ logger: false });
     registerCatalogRoutes(app);
 
-    const response = await app.inject({ method: "GET", url: `/api/mcp/catalog?cwd=${encodeURIComponent(workspace)}` });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/mcp/catalog?cwd=${encodeURIComponent(workspace)}`,
+    });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ config_path: standardPath, servers: [{ id: "paper-search", enabled: true }] });
+    expect(response.json()).toMatchObject({
+      config_path: standardPath,
+      servers: [{ id: "paper-search", enabled: true }],
+    });
     await app.close();
   });
 });

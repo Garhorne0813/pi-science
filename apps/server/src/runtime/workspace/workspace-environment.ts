@@ -14,6 +14,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import { delimiter, join, resolve, sep } from "node:path";
 import {
   configPath,
@@ -574,6 +575,8 @@ export function workspaceEnvironmentVariables(
   };
 }
 
+let testEnvironmentPrefix: Promise<string> | undefined;
+
 export class WorkspaceEnvironmentService {
   private readonly provisioning = new Map<string, Promise<WorkspaceEnvironmentStatus>>();
   private readonly creating = new Map<string, Promise<EnvironmentRevision>>();
@@ -974,11 +977,18 @@ export class WorkspaceEnvironmentService {
     if (before.error) throw new Error(before.error);
     if (process.env.NODE_ENV === "test") {
       // Test fixture only: production always provisions an immutable Micromamba
-      // revision. A workspace-local venv keeps unit tests hermetic and avoids
-      // downloading Micromamba; it is never detected as a legacy environment.
-      const prefix = join(cwd, ".pi-science", "test-python");
-      if (!(await exists(join(prefix, "pyvenv.cfg"))))
+      // revision. One shared workspace-external venv keeps unit tests hermetic,
+      // fast under parallel load, and avoids downloading Micromamba.
+      testEnvironmentPrefix ??= (async () => {
+        const root = await mkdtemp(join(tmpdir(), "pi-science-test-env-"));
+        const prefix = join(root, "python");
         await this.run(defaultPythonExecutable(), ["-m", "venv", prefix], 120_000);
+        return prefix;
+      })();
+      const prefix = await testEnvironmentPrefix.catch((error) => {
+        testEnvironmentPrefix = undefined;
+        throw error;
+      });
       return this.statusFor(cwd, prefix, "micromamba", {
         ready: true,
         environment_id: "env_test",
