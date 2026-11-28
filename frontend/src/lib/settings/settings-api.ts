@@ -1,7 +1,7 @@
 import { applySessionReplacements, type SessionReplacement } from "../agent-runtime";
 import { apiRequest } from "../client/api";
 import { queryClient } from "../client/query-client";
-import type { McpServer, ProjectSubagent } from "./settings-types";
+import type { ProjectSubagent } from "./settings-types";
 import type {
   McpConnector,
   McpConnectorCreate,
@@ -71,13 +71,6 @@ export const subagentsDiscoveryQuery = (cwd: string) => ({
   queryKey: subagentsDiscoveryKey(cwd),
   queryFn: () => apiRequest<{ agents?: Array<{ name: string; description?: string; source?: string }> }>(`/api/settings/subagents/discovery?cwd=${encodeURIComponent(cwd)}`),
   staleTime: 3_000,
-});
-
-export const mcpCatalogKey = (cwd: string) => ["mcp", "catalog", cwd];
-export const mcpCatalogQuery = (cwd: string, errorFallback: string) => ({
-  queryKey: mcpCatalogKey(cwd),
-  queryFn: () => apiRequest<{ servers?: McpServer[] }>(`/api/mcp/catalog?cwd=${encodeURIComponent(cwd)}`, { errorFallback }),
-  staleTime: 0,
 });
 
 export const mcpConnectorsKey = ["mcp", "connectors"] as const;

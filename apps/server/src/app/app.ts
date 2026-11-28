@@ -274,13 +274,7 @@ export function buildApp(
   registerNotebookRoutes(app, notebooks, config.internalToken);
   if (config.nodeCatalog !== false) registerCitationRoutes(app);
   if (config.nodeCatalog !== false)
-    registerCatalogRoutes(
-      app,
-      jobs,
-      sqliteEnabled ? workspaces : undefined,
-      sqliteEnabled ? mcp : undefined,
-      nodeSessionService,
-    );
+    registerCatalogRoutes(app, jobs, sqliteEnabled ? workspaces : undefined, nodeSessionService);
   if (config.nodeProject !== false) {
     registerProjectRoutes(app, memory, memoryBackground);
     registerMemoryRoutes(app, memory, memoryBackground, nodeSessionService, config.internalToken);

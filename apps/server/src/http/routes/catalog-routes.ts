@@ -35,8 +35,6 @@ import {
   writeJsonAtomic,
 } from "../../storage/persistence.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
-import { probeMcpHealth, type McpDefinition } from "../../security/mcp-health.js";
-import { egressAuditEnabled, recordEgress } from "../../security/egress-audit.js";
 import { sessionRepository } from "../../runtime/node/session-repository.js";
 import {
   catalog as skillCatalog,
@@ -48,8 +46,6 @@ import { probeRequirements } from "../../catalog/skill-requirements.js";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import type { JobCoordinator } from "../../runtime/jobs/job-coordinator.js";
 import type { WorkspaceRepository } from "../../storage/sqlite/repositories/workspace-repository.js";
-import type { McpConnectorService } from "../../mcp/connector-service.js";
-import { resolveMcpConfig } from "../../catalog/mcp-config.js";
 import { findExecutable, pathIsInside, userHome } from "../../support/platform-utils.js";
 import { defaultPythonExecutable } from "../../runtime/workspace/workspace-environment.js";
 import { WorkspaceActivityCache } from "../../storage/workspace-activity.js";
@@ -428,7 +424,6 @@ export function registerCatalogRoutes(
   app: FastifyInstance,
   jobs?: JobCoordinator,
   workspaceRepository?: WorkspaceRepository,
-  mcp?: McpConnectorService,
   sessions?: Pick<NodeSessionService, "hasActiveOperations" | "closeIdleWorkspace">,
 ): void {
   const activity = new WorkspaceActivityCache((workspace, err) =>
@@ -511,152 +506,6 @@ export function registerCatalogRoutes(
       validations,
     };
   });
-
-  async function loadMcpDefinitions(
-    root: string,
-  ): Promise<{ definitions: Record<string, unknown>; source: string | null }> {
-    const config = await readJson<{ mcp_config_path?: unknown }>(configPath("config.json"), {});
-    return resolveMcpConfig({
-      workspaceRoot: root,
-      explicitPath: typeof config.mcp_config_path === "string" ? config.mcp_config_path : undefined,
-    });
-  }
-
-  function summarizeMcpServers(
-    definitions: Record<string, unknown>,
-    enabled: ReadonlySet<string>,
-  ): Array<Record<string, unknown>> {
-    return Object.keys(definitions)
-      .sort()
-      .map((id) => {
-        const definition = (definitions[id] as Record<string, unknown> | undefined) ?? {};
-        const remote = Boolean(definition.url);
-        return {
-          id,
-          name: String(definition.name ?? id),
-          description: String(definition.description ?? ""),
-          transport: remote
-            ? String(definition.transport ?? "http")
-            : definition.command
-              ? "stdio"
-              : "unknown",
-          enabled: enabled.has(id),
-          auth: definition.required_env ? "missing" : "unknown",
-          data_egress: remote ? "remote" : "local",
-          terms_url: definition.terms_url ?? null,
-          privacy_url: definition.privacy_url ?? null,
-          license: definition.license ?? null,
-          tags: Array.isArray(definition.tags) ? definition.tags : [],
-          tools: Array.isArray(definition.tools) ? definition.tools : [],
-        };
-      });
-  }
-
-  async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<string>> {
-    const config = await readJson<{ mcp_servers?: string[] }>(configPath("config.json"), {});
-    return Array.isArray(config.mcp_servers)
-      ? new Set(config.mcp_servers)
-      : new Set(Object.keys(definitions));
-  }
-
-  // ── MCP catalog ──
-  app.get("/api/mcp/catalog", async (request, reply) => {
-    const root = await ws(request, reply);
-    if (!root) return;
-    if (mcp) {
-      const result = await mcp.list();
-      return {
-        servers: result.connectors.map((item) => ({
-          id: item.connector_id,
-          name: item.display_name,
-          description: item.description,
-          transport: item.transport,
-          enabled: item.settings.enabled,
-          health: item.runtime_state,
-          auth: item.auth_state,
-          data_egress: item.endpoint_url ? "remote" : "local",
-          terms_url: item.runtime_config.terms_url ?? null,
-          privacy_url: item.runtime_config.privacy_url ?? null,
-          tools: [],
-        })),
-        config_path: null,
-        deprecated: true,
-      };
-    }
-    const { definitions, source } = await loadMcpDefinitions(root);
-    const servers = summarizeMcpServers(definitions, await mcpEnabledSet(definitions));
-    return { servers, config_path: source };
-  });
-  app.get<{ Params: { server_id: string } }>(
-    "/api/mcp/health/:server_id",
-    async (request, reply) => {
-      const root = await ws(request, reply);
-      if (!root) return;
-      if (mcp) return mcp.probe(request.params.server_id);
-      const { definitions } = await loadMcpDefinitions(root);
-      const definition = definitions[request.params.server_id];
-      if (!definition) return reply.code(404).send({ error: "MCP server not found" });
-      const enabled = await mcpEnabledSet(definitions);
-      const server = summarizeMcpServers(definitions, enabled).find(
-        (item) => item.id === request.params.server_id,
-      );
-      if (!server) return reply.code(404).send({ error: "MCP server not found" });
-      if (!server.enabled)
-        return {
-          ...server,
-          health: "blocked",
-          error: "server disabled",
-          checked_at: Date.now() / 1000,
-        };
-      const result = await probeMcpHealth(definition as McpDefinition);
-      return {
-        ...server,
-        health: result.health,
-        error: result.error,
-        checked_at: Date.now() / 1000,
-      };
-    },
-  );
-  app.get<{ Params: { server_id: string } }>(
-    "/api/mcp/egress/:server_id",
-    async (request, reply) => {
-      const root = await ws(request, reply);
-      if (!root) return;
-      const { definitions } = await loadMcpDefinitions(root);
-      const server = summarizeMcpServers(definitions, new Set(Object.keys(definitions))).find(
-        (item) => item.id === request.params.server_id,
-      );
-      if (!server) return reply.code(404).send({ error: "MCP server not found" });
-      const auditEnabled = await egressAuditEnabled();
-      if (server.data_egress === "remote" && auditEnabled) {
-        const url =
-          typeof (definitions[request.params.server_id] as Record<string, unknown> | undefined)
-            ?.url === "string"
-            ? String((definitions[request.params.server_id] as Record<string, unknown>).url)
-            : "";
-        await recordEgress({
-          connector_type: "mcp",
-          connector_id: request.params.server_id,
-          target_domain: url,
-          approved: false,
-          note: "egress_review",
-        });
-      }
-      return {
-        server: request.params.server_id,
-        data_egress: server.data_egress,
-        transport: server.transport,
-        terms_url: server.terms_url,
-        privacy_url: server.privacy_url,
-        tools: server.tools,
-        warning:
-          server.data_egress === "remote"
-            ? "Review the destination and data class before sending user files or sequences."
-            : null,
-        audit_enabled: auditEnabled,
-      };
-    },
-  );
 
   // ── Workspaces ──
   app.get("/api/workspaces", async () => {

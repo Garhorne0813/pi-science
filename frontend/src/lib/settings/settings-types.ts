@@ -73,17 +73,4 @@ export interface ProjectSubagent {
   path: string;
 }
 
-export interface McpServer {
-  id: string;
-  name: string;
-  description: string;
-  enabled: boolean;
-  health: string;
-  auth: string;
-  data_egress: string;
-  transport: string;
-  tools: Array<{ name: string }>;
-  terms_url?: string | null;
-  privacy_url?: string | null;
-  error?: string | null;
-}
+
