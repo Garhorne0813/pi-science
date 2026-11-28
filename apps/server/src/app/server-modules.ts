@@ -82,7 +82,6 @@ export function createServerModules(
   const sessionRepository = new SessionRepository();
   const runtimeCatalog = new AgentCoreCatalogService();
   const environments = new WorkspaceEnvironmentService(
-    undefined,
     config?.micromambaExecutable,
     sqliteEnabled ? environmentRepository : undefined,
   );

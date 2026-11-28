@@ -191,7 +191,7 @@ MCP 定义、启用状态、发现元数据和全局/项目工具策略由控制
 
 ## 科学执行与研究
 
-每个对话和语言使用独立 Python/R 内核进程，从项目绑定的不可变 Micromamba revision 启动。内核按需启动，通过 JSONL 与 Node 通信；安装包创建新 revision。旧工作区 `.venv` 保留为迁移回退，JavaScript 包保存在工作区中。JupyterLab 是可选功能，使用应用级工具环境和项目 kernelspec。
+每个对话和语言使用独立 Python/R 内核进程，从项目绑定的不可变 Micromamba revision 启动。内核按需启动，通过 JSONL 与 Node 通信；安装包创建新 revision。未绑定 revision 的工作区按需创建并绑定共享 Python Standard 环境，工作区 `.venv` 不再参与执行。JavaScript 包保存在工作区中。JupyterLab 是可选功能，使用应用级工具环境和项目 kernelspec。
 
 Session Notebook 展示智能体和用户的执行历史。文件型 `.ipynb` 使用 `notebook_read`、`notebook_edit` 和 `notebook_run`。编辑检查文件 SHA-256 或指定 cell revision；源代码变更清除旧输出。执行原子写回受限输出，并记录执行/产物谱系；产物发布失败保留为可见的执行证据。
 

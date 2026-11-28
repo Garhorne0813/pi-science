@@ -439,6 +439,19 @@ describe("workspace environment package mutation", () => {
     expect(status.error).toBeUndefined();
   });
 
+  it("ignores a workspace .venv instead of treating it as an execution environment", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-science-ignored-venv-"));
+    tempDirs.push(root);
+    await mkdir(join(root, ".venv", "bin"), { recursive: true });
+    await writeFile(join(root, ".venv", "pyvenv.cfg"), "home = /opt/python\n", "utf8");
+    await writeFile(join(root, ".venv", "bin", "python"), "", { mode: 0o755 });
+
+    const status = await new WorkspaceEnvironmentService().status(root);
+    expect(status.ready).toBe(false);
+    expect(status.manager).toBe("micromamba");
+    expect(status.prefix).not.toBe(join(root, ".venv"));
+  });
+
   it("reports node workspace tooling status", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-science-node-status-"));
     tempDirs.push(root);

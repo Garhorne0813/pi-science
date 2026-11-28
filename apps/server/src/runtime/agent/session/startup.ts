@@ -311,8 +311,11 @@ export async function resolveOpenModel(
     ref ? splitModel(canonicalRuntimeModelRef(`${ref.provider}/${ref.modelId}`)) : null;
   const usable = (ref: OpenModelRef | null) =>
     ref && models.getModel(ref.provider, ref.modelId) ? ref : null;
-  const persistedModel = usable(canonical(persisted));
-  if (persistedModel) return persistedModel;
+  const persistedModel = canonical(persisted);
+  // A caller-selected model is never silently rewritten while the session has
+  // no durable selection; the worker and route validate that explicit choice.
+  if (!persistedModel) return canonical(requested);
+  if (usable(persistedModel)) return persistedModel;
   const requestedModel = usable(canonical(requested));
   if (requestedModel) return requestedModel;
   const first = (await models.getAvailable())[0];

@@ -12,119 +12,255 @@ import { AgentRuntimeExitedError, AgentRuntimeTimeoutError } from "./agent-runti
 import { EventEmitter } from "node:events";
 
 describe("approval transitions", () => {
-  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
-  async function fixture(run: (value: { service: AgentCoreSessionService; cwd: string; item: { busy: boolean; runtime: unknown }; state: ReturnType<typeof vi.fn>; resources: ReturnType<typeof vi.fn>; server: { revokeApprovalResources?: (cwd: string, id: string) => Promise<{ kernelRestartCount: number }> }; stop: ReturnType<typeof vi.spyOn> }) => Promise<void>) {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+  async function fixture(
+    run: (value: {
+      service: AgentCoreSessionService;
+      cwd: string;
+      item: { busy: boolean; runtime: unknown };
+      state: ReturnType<typeof vi.fn>;
+      resources: ReturnType<typeof vi.fn>;
+      server: {
+        revokeApprovalResources?: (
+          cwd: string,
+          id: string,
+        ) => Promise<{ kernelRestartCount: number }>;
+      };
+      stop: ReturnType<typeof vi.spyOn>;
+    }) => Promise<void>,
+  ) {
     const root = await mkdtemp(join(tmpdir(), "approval-mode-service-"));
     vi.stubEnv("PI_SCIENCE_HOME", join(root, "private"));
     vi.stubEnv("PI_SCIENCE_APPROVAL_HOT_SWITCH", "1");
     try {
-      const { realpath } = await import("node:fs/promises"); const cwd = await realpath(root);
+      const { realpath } = await import("node:fs/promises");
+      const cwd = await realpath(root);
       const resources = vi.fn(() => false);
-      const server: { hasApprovalResources: typeof resources; revokeApprovalResources?: (cwd: string, id: string) => Promise<{ kernelRestartCount: number }> } = { hasApprovalResources: resources };
+      const server: {
+        hasApprovalResources: typeof resources;
+        revokeApprovalResources?: (
+          cwd: string,
+          id: string,
+        ) => Promise<{ kernelRestartCount: number }>;
+      } = { hasApprovalResources: resources };
       const service = new AgentCoreSessionService({} as never, {} as never, server);
-      const internals = service as unknown as { live: Map<string, unknown>; stopForReload(item: unknown): Promise<void> };
-      const state = vi.fn().mockResolvedValue({ success: true, data: { busy: false, queues: [], operation: null } });
-      const item = { key: "approval-test-worker", busy: false, runtime: { cwd, sessionId: "session-a", isClosed: false, sendCommand: state } };
+      const internals = service as unknown as {
+        live: Map<string, unknown>;
+        stopForReload(item: unknown): Promise<void>;
+      };
+      const state = vi
+        .fn()
+        .mockResolvedValue({ success: true, data: { busy: false, queues: [], operation: null } });
+      const item = {
+        key: "approval-test-worker",
+        busy: false,
+        runtime: { cwd, sessionId: "session-a", isClosed: false, sendCommand: state },
+      };
       internals.live.set(`${workspaceIdentity(cwd)}\0session-a`, item);
-      const stop = vi.spyOn(internals, "stopForReload").mockImplementation(async () => { resources.mockReturnValue(false); });
+      const stop = vi.spyOn(internals, "stopForReload").mockImplementation(async () => {
+        resources.mockReturnValue(false);
+      });
       await run({ service, cwd, item, state, resources, server, stop });
-    } finally { await rm(root, { recursive: true, force: true }); }
-  }
-  it("hot switches ask/auto without replacing the Worker and makes identical writes a no-op", () => fixture(async ({ service, cwd, stop }) => {
-    expect(await service.setApprovalMode(cwd, "session-a", "auto", 0)).toMatchObject({ success: true, data: { mode: "auto", revision: 1, runtimeRestarted: false } });
-    expect(await service.setApprovalMode(cwd, "session-a", "auto", 1)).toMatchObject({ success: true, data: { revision: 1 } });
-    expect(await service.setApprovalMode(cwd, "session-a", "ask", 1)).toMatchObject({ success: true, data: { mode: "ask", revision: 2 } });
-    expect(stop).not.toHaveBeenCalled();
-  }));
-  it("rejects running, queued, pending and unverifiable worker state", () => fixture(async ({ service, cwd, item, state, stop }) => {
-    item.busy = true;
-    expect(await service.setApprovalMode(cwd, "session-a", "auto", 0)).toMatchObject({ code: "session_busy" });
-    item.busy = false;
-    for (const data of [{ busy: true }, { queues: [{}] }, { pendingInteraction: true }, { faulted: true }]) {
-      state.mockResolvedValueOnce({ success: true, data: { queues: [], ...data } });
-      expect(await service.setApprovalMode(cwd, "session-a", "auto", 0)).toMatchObject({ code: "session_busy" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
-    state.mockResolvedValueOnce({ success: false });
-    expect(await service.setApprovalMode(cwd, "session-a", "auto", 0)).toMatchObject({ code: "session_busy" });
-    expect(stop).not.toHaveBeenCalled();
-  }));
-  it("serializes competing revisions and returns the current authority on conflict", () => fixture(async ({ service, cwd, stop }) => {
-    const results = await Promise.all([service.setApprovalMode(cwd, "session-a", "auto", 0), service.setApprovalMode(cwd, "session-a", "full", 0)]);
-    expect(results[0]).toMatchObject({ success: true, data: { mode: "auto", revision: 1 } });
-    expect(results[1]).toMatchObject({ success: false, code: "approval_revision_conflict", data: { mode: "auto", revision: 1 } });
-    expect(stop).not.toHaveBeenCalled();
-  }));
-  it("retires persistent capabilities before committing and fails closed when revocation fails", () => fixture(async ({ service, cwd, resources, stop }) => {
-    await service.setApprovalMode(cwd, "session-a", "auto", 0);
-    resources.mockReturnValue(true);
-    stop.mockRejectedValueOnce(new Error("worker shutdown failed"));
-    expect(await service.setApprovalMode(cwd, "session-a", "ask", 1)).toMatchObject({ success: false, code: "permission_transition_failed" });
-    const { readSessionApproval } = await import("../sandbox/session-approval.js");
-    expect(await readSessionApproval(cwd, "session-a")).toEqual({ mode: "auto", revision: 1 });
-    expect(await service.command(cwd, "session-a", "prompt", { message: "blocked" }, { skills: [], extensions: [] })).toMatchObject({ code: "permission_transition_failed" });
-    expect(await service.setApprovalMode(cwd, "session-a", "ask", 1)).toMatchObject({ success: true, data: { runtimeRestarted: true } });
-  }));
-  it("retires only session kernels while retaining the Worker behind a revision barrier", () => fixture(async ({ service, cwd, resources, server, state, stop }) => {
-    resources.mockReturnValue(true);
-    server.revokeApprovalResources = vi.fn(async () => {
+  }
+  it("hot switches ask/auto without replacing the Worker and makes identical writes a no-op", () =>
+    fixture(async ({ service, cwd, stop }) => {
+      expect(await service.setApprovalMode(cwd, "session-a", "auto", 0)).toMatchObject({
+        success: true,
+        data: { mode: "auto", revision: 1, runtimeRestarted: false },
+      });
+      expect(await service.setApprovalMode(cwd, "session-a", "auto", 1)).toMatchObject({
+        success: true,
+        data: { revision: 1 },
+      });
+      expect(await service.setApprovalMode(cwd, "session-a", "ask", 1)).toMatchObject({
+        success: true,
+        data: { mode: "ask", revision: 2 },
+      });
+      expect(stop).not.toHaveBeenCalled();
+    }));
+  it("rejects running, queued, pending and unverifiable worker state", () =>
+    fixture(async ({ service, cwd, item, state, stop }) => {
+      item.busy = true;
+      expect(await service.setApprovalMode(cwd, "session-a", "auto", 0)).toMatchObject({
+        code: "session_busy",
+      });
+      item.busy = false;
+      for (const data of [
+        { busy: true },
+        { queues: [{}] },
+        { pendingInteraction: true },
+        { faulted: true },
+      ]) {
+        state.mockResolvedValueOnce({ success: true, data: { queues: [], ...data } });
+        expect(await service.setApprovalMode(cwd, "session-a", "auto", 0)).toMatchObject({
+          code: "session_busy",
+        });
+      }
+      state.mockResolvedValueOnce({ success: false });
+      expect(await service.setApprovalMode(cwd, "session-a", "auto", 0)).toMatchObject({
+        code: "session_busy",
+      });
+      expect(stop).not.toHaveBeenCalled();
+    }));
+  it("serializes competing revisions and returns the current authority on conflict", () =>
+    fixture(async ({ service, cwd, stop }) => {
+      const results = await Promise.all([
+        service.setApprovalMode(cwd, "session-a", "auto", 0),
+        service.setApprovalMode(cwd, "session-a", "full", 0),
+      ]);
+      expect(results[0]).toMatchObject({ success: true, data: { mode: "auto", revision: 1 } });
+      expect(results[1]).toMatchObject({
+        success: false,
+        code: "approval_revision_conflict",
+        data: { mode: "auto", revision: 1 },
+      });
+      expect(stop).not.toHaveBeenCalled();
+    }));
+  it("retires persistent capabilities before committing and fails closed when revocation fails", () =>
+    fixture(async ({ service, cwd, resources, stop }) => {
+      await service.setApprovalMode(cwd, "session-a", "auto", 0);
+      resources.mockReturnValue(true);
+      stop.mockRejectedValueOnce(new Error("worker shutdown failed"));
+      expect(await service.setApprovalMode(cwd, "session-a", "ask", 1)).toMatchObject({
+        success: false,
+        code: "permission_transition_failed",
+      });
+      const { readSessionApproval } = await import("../sandbox/session-approval.js");
+      expect(await readSessionApproval(cwd, "session-a")).toEqual({ mode: "auto", revision: 1 });
+      expect(
+        await service.command(
+          cwd,
+          "session-a",
+          "prompt",
+          { message: "blocked" },
+          { skills: [], extensions: [] },
+        ),
+      ).toMatchObject({ code: "permission_transition_failed" });
+      expect(await service.setApprovalMode(cwd, "session-a", "ask", 1)).toMatchObject({
+        success: true,
+        data: { runtimeRestarted: true },
+      });
+    }));
+  it("retires only session kernels while retaining the Worker behind a revision barrier", () =>
+    fixture(async ({ service, cwd, resources, server, state, stop }) => {
+      resources.mockReturnValue(true);
+      server.revokeApprovalResources = vi.fn(async () => {
+        const { readSessionApproval } = await import("../sandbox/session-approval.js");
+        expect(await readSessionApproval(cwd, "session-a")).toEqual({ mode: "ask", revision: 0 });
+        resources.mockReturnValue(false);
+        return { kernelRestartCount: 2 };
+      });
+      expect(await service.setApprovalMode(cwd, "session-a", "auto", 0)).toMatchObject({
+        success: true,
+        data: { revision: 1, runtimeRestarted: false, kernelRestartCount: 2 },
+      });
+      expect(state.mock.calls.map(([name]) => name)).toEqual([
+        "get_state",
+        "begin_approval_change",
+        "end_approval_change",
+      ]);
+      expect(state.mock.calls.at(-1)).toEqual(["end_approval_change", { revision: 1 }]);
+      expect(stop).not.toHaveBeenCalled();
+    }));
+  it("leaves the old mode and blocks dispatch when targeted revocation fails", () =>
+    fixture(async ({ service, cwd, resources, server }) => {
+      resources.mockReturnValue(true);
+      server.revokeApprovalResources = vi.fn().mockRejectedValue(new Error("kernel still running"));
+      expect(await service.setApprovalMode(cwd, "session-a", "auto", 0)).toMatchObject({
+        success: false,
+        code: "permission_transition_failed",
+      });
       const { readSessionApproval } = await import("../sandbox/session-approval.js");
       expect(await readSessionApproval(cwd, "session-a")).toEqual({ mode: "ask", revision: 0 });
-      resources.mockReturnValue(false);
-      return { kernelRestartCount: 2 };
-    });
-    expect(await service.setApprovalMode(cwd, "session-a", "auto", 0)).toMatchObject({ success: true, data: { revision: 1, runtimeRestarted: false, kernelRestartCount: 2 } });
-    expect(state.mock.calls.map(([name]) => name)).toEqual(["get_state", "begin_approval_change", "end_approval_change"]);
-    expect(state.mock.calls.at(-1)).toEqual(["end_approval_change", { revision: 1 }]);
-    expect(stop).not.toHaveBeenCalled();
-  }));
-  it("leaves the old mode and blocks dispatch when targeted revocation fails", () => fixture(async ({ service, cwd, resources, server }) => {
-    resources.mockReturnValue(true);
-    server.revokeApprovalResources = vi.fn().mockRejectedValue(new Error("kernel still running"));
-    expect(await service.setApprovalMode(cwd, "session-a", "auto", 0)).toMatchObject({ success: false, code: "permission_transition_failed" });
-    const { readSessionApproval } = await import("../sandbox/session-approval.js");
-    expect(await readSessionApproval(cwd, "session-a")).toEqual({ mode: "ask", revision: 0 });
-    expect(await service.command(cwd, "session-a", "prompt", { message: "blocked" }, { skills: [], extensions: [] })).toMatchObject({ code: "permission_transition_failed" });
-    expect(await service.hasActiveOperations(cwd)).toBe(true);
-  }));
-  it("recycles locally spawned MCP processes instead of reusing their OS grants", () => fixture(async ({ service, cwd, state, stop }) => {
-    state.mockResolvedValueOnce({ success: true, data: { busy: false, queues: [], approvalBoundProcesses: 1 } });
-    expect(await service.setApprovalMode(cwd, "session-a", "auto", 0)).toMatchObject({ success: true, data: { runtimeRestarted: true } });
-    expect(stop).toHaveBeenCalledOnce();
-  }));
-  it("retains the cleanup reference when a failed shutdown has already removed the live Worker", () => fixture(async ({ service, cwd, resources, stop }) => {
-    const internals = service as unknown as { live: Map<string, unknown>; manager: { stop(key: string): Promise<void> }; repository: { findPath(cwd: string, id: string): Promise<string> } };
-    await service.setApprovalMode(cwd, "session-a", "auto", 0);
-    resources.mockReturnValue(true);
-    stop.mockImplementationOnce(async () => { internals.live.delete(`${workspaceIdentity(cwd)}\0session-a`); throw new Error("Worker exited but cleanup failed"); });
-    expect(await service.setApprovalMode(cwd, "session-a", "ask", 1)).toMatchObject({ success: false });
-    vi.spyOn(internals.repository, "findPath").mockResolvedValue(join(cwd, "session.jsonl"));
-    const drain = vi.spyOn(internals.manager, "stop").mockImplementation(async () => { resources.mockReturnValue(false); });
-    expect(await service.setApprovalMode(cwd, "session-a", "ask", 1)).toMatchObject({ success: true, data: { mode: "ask", revision: 2 } });
-    expect(drain).toHaveBeenCalledExactlyOnceWith("approval-test-worker");
-  }));
-  it("keeps full downgrades and the server rollback switch on the shutdown path", () => fixture(async ({ service, cwd, stop }) => {
-    await service.setApprovalMode(cwd, "session-a", "full", 0);
-    expect(stop).not.toHaveBeenCalled();
-    await service.setApprovalMode(cwd, "session-a", "auto", 1);
-    expect(stop).toHaveBeenCalledTimes(1);
-    vi.stubEnv("PI_SCIENCE_APPROVAL_HOT_SWITCH", "0");
-    await service.setApprovalMode(cwd, "session-a", "ask", 2);
-    expect(stop).toHaveBeenCalledTimes(2);
-  }));
+      expect(
+        await service.command(
+          cwd,
+          "session-a",
+          "prompt",
+          { message: "blocked" },
+          { skills: [], extensions: [] },
+        ),
+      ).toMatchObject({ code: "permission_transition_failed" });
+      expect(await service.hasActiveOperations(cwd)).toBe(true);
+    }));
+  it("recycles locally spawned MCP processes instead of reusing their OS grants", () =>
+    fixture(async ({ service, cwd, state, stop }) => {
+      state.mockResolvedValueOnce({
+        success: true,
+        data: { busy: false, queues: [], approvalBoundProcesses: 1 },
+      });
+      expect(await service.setApprovalMode(cwd, "session-a", "auto", 0)).toMatchObject({
+        success: true,
+        data: { runtimeRestarted: true },
+      });
+      expect(stop).toHaveBeenCalledOnce();
+    }));
+  it("retains the cleanup reference when a failed shutdown has already removed the live Worker", () =>
+    fixture(async ({ service, cwd, resources, stop }) => {
+      const internals = service as unknown as {
+        live: Map<string, unknown>;
+        manager: { stop(key: string): Promise<void> };
+        repository: { findPath(cwd: string, id: string): Promise<string> };
+      };
+      await service.setApprovalMode(cwd, "session-a", "auto", 0);
+      resources.mockReturnValue(true);
+      stop.mockImplementationOnce(async () => {
+        internals.live.delete(`${workspaceIdentity(cwd)}\0session-a`);
+        throw new Error("Worker exited but cleanup failed");
+      });
+      expect(await service.setApprovalMode(cwd, "session-a", "ask", 1)).toMatchObject({
+        success: false,
+      });
+      vi.spyOn(internals.repository, "findPath").mockResolvedValue(join(cwd, "session.jsonl"));
+      const drain = vi.spyOn(internals.manager, "stop").mockImplementation(async () => {
+        resources.mockReturnValue(false);
+      });
+      expect(await service.setApprovalMode(cwd, "session-a", "ask", 1)).toMatchObject({
+        success: true,
+        data: { mode: "ask", revision: 2 },
+      });
+      expect(drain).toHaveBeenCalledExactlyOnceWith("approval-test-worker");
+    }));
+  it("keeps full downgrades and the server rollback switch on the shutdown path", () =>
+    fixture(async ({ service, cwd, stop }) => {
+      await service.setApprovalMode(cwd, "session-a", "full", 0);
+      expect(stop).not.toHaveBeenCalled();
+      await service.setApprovalMode(cwd, "session-a", "auto", 1);
+      expect(stop).toHaveBeenCalledTimes(1);
+      vi.stubEnv("PI_SCIENCE_APPROVAL_HOT_SWITCH", "0");
+      await service.setApprovalMode(cwd, "session-a", "ask", 2);
+      expect(stop).toHaveBeenCalledTimes(2);
+    }));
 });
 
 describe("agent-core session configuration", () => {
   it("inherits current defaults for a legacy cold session only until a durable lane model exists", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-legacy-selection-"));
     try {
-      const service = new AgentCoreSessionService({} as never, { environment: async () => ({}) } as never);
+      const service = new AgentCoreSessionService(
+        {} as never,
+        { environment: async () => ({}) } as never,
+      );
       const internals = service as unknown as {
-        repository: { findPath: (...args: unknown[]) => Promise<string>; configuration: (...args: unknown[]) => Promise<unknown> };
+        repository: {
+          findPath: (...args: unknown[]) => Promise<string>;
+          configuration: (...args: unknown[]) => Promise<unknown>;
+        };
         registry: { register: (...args: unknown[]) => Promise<unknown> };
         manager: { start: (...args: unknown[]) => Promise<unknown> };
         attach: (...args: unknown[]) => Promise<unknown>;
         credentialEnvNames: (...args: unknown[]) => Promise<string[]>;
-        openOnce: (cwd: string, id: string, config: { model: string; thinking: string; skills: string[]; extensions: string[] }) => Promise<unknown>;
+        openOnce: (
+          cwd: string,
+          id: string,
+          config: { model: string; thinking: string; skills: string[]; extensions: string[] },
+        ) => Promise<unknown>;
       };
       vi.spyOn(internals.repository, "findPath").mockResolvedValue(join(cwd, "legacy.jsonl"));
       const configuration = vi.spyOn(internals.repository, "configuration").mockResolvedValue(null);
@@ -132,56 +268,126 @@ describe("agent-core session configuration", () => {
       const start = vi.spyOn(internals.manager, "start").mockResolvedValue({});
       vi.spyOn(internals, "attach").mockResolvedValue({ success: true });
       vi.spyOn(internals, "credentialEnvNames").mockResolvedValue([]);
-      const config = { model: "deepseek/deepseek-flash", thinking: "off", skills: [], extensions: [] };
+      const config = {
+        model: "deepseek/deepseek-flash",
+        thinking: "off",
+        skills: [],
+        extensions: [],
+      };
       await internals.openOnce(cwd, "legacy", config);
-      expect(start.mock.calls.at(-1)?.[1]).toMatchObject({ model: { provider: "deepseek", modelId: "deepseek-flash" }, thinking: "off" });
+      expect(start.mock.calls.at(-1)?.[1]).toMatchObject({
+        model: { provider: "deepseek", modelId: "deepseek-flash" },
+        thinking: "off",
+      });
       await internals.openOnce(cwd, "legacy", { ...config, model: "openai/new", thinking: "high" });
-      expect(start.mock.calls.at(-1)?.[1]).toMatchObject({ model: { provider: "openai", modelId: "new" }, thinking: "high" });
-      configuration.mockResolvedValue({ model: { provider: "deepseek", modelId: "saved" }, thinkingLevel: "low" });
+      expect(start.mock.calls.at(-1)?.[1]).toMatchObject({
+        model: { provider: "openai", modelId: "new" },
+        thinking: "high",
+      });
+      configuration.mockResolvedValue({
+        model: { provider: "deepseek", modelId: "deepseek-v4-pro" },
+        thinkingLevel: "low",
+      });
       await internals.openOnce(cwd, "legacy", { ...config, model: "openai/new", thinking: "high" });
-      expect(start.mock.calls.at(-1)?.[1]).toMatchObject({ model: { provider: "deepseek", modelId: "saved" }, thinking: "low" });
+      expect(start.mock.calls.at(-1)?.[1]).toMatchObject({
+        model: { provider: "deepseek", modelId: "deepseek-v4-pro" },
+        thinking: "low",
+      });
       configuration.mockResolvedValue(null);
       start.mockClear();
-      expect(await internals.openOnce(cwd, "legacy", { ...config, model: "" })).toMatchObject({ success: false, code: "invalid_model" });
+      expect(await internals.openOnce(cwd, "legacy", { ...config, model: "" })).toMatchObject({
+        success: false,
+        code: "invalid_model",
+      });
       expect(start).not.toHaveBeenCalled();
-    } finally { await rm(cwd, { recursive: true, force: true }); }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 
   it("protects workspace lifecycle across live, queued, admission and recovery operations", async () => {
-    const cwd = resolve("workspace-lifecycle-test"); const key = `${workspaceIdentity(cwd)}\0session`;
+    const cwd = resolve("workspace-lifecycle-test");
+    const key = `${workspaceIdentity(cwd)}\0session`;
     const service = new AgentCoreSessionService({} as never, {} as never);
-    const internals = service as unknown as { live: Map<string, unknown>; opening: Map<string, unknown>; mutations: Map<string, unknown>; recovering: Map<string, unknown>; recoveryTimers: Map<string, unknown> };
-    const sendCommand = vi.fn().mockResolvedValue({ success: true, data: { busy: false, queues: [] } });
-    const item = { runtime: { cwd, isClosed: false, sendCommand }, busy: false, expectedOperationId: undefined as string | undefined };
+    const internals = service as unknown as {
+      live: Map<string, unknown>;
+      opening: Map<string, unknown>;
+      mutations: Map<string, unknown>;
+      recovering: Map<string, unknown>;
+      recoveryTimers: Map<string, unknown>;
+    };
+    const sendCommand = vi
+      .fn()
+      .mockResolvedValue({ success: true, data: { busy: false, queues: [] } });
+    const item = {
+      runtime: { cwd, isClosed: false, sendCommand },
+      busy: false,
+      expectedOperationId: undefined as string | undefined,
+    };
     internals.live.set(key, item);
     expect(await service.hasActiveOperations(cwd)).toBe(false);
-    item.busy = true; expect(await service.hasActiveOperations(cwd)).toBe(true); item.busy = false;
-    item.expectedOperationId = "recoverable"; expect(await service.hasActiveOperations(cwd)).toBe(true); item.expectedOperationId = undefined;
+    item.busy = true;
+    expect(await service.hasActiveOperations(cwd)).toBe(true);
+    item.busy = false;
+    item.expectedOperationId = "recoverable";
+    expect(await service.hasActiveOperations(cwd)).toBe(true);
+    item.expectedOperationId = undefined;
     for (const data of [{ busy: true }, { queues: [{}] }, { pendingInteraction: {} }]) {
-      sendCommand.mockResolvedValueOnce({ success: true, data }); expect(await service.hasActiveOperations(cwd)).toBe(true);
+      sendCommand.mockResolvedValueOnce({ success: true, data });
+      expect(await service.hasActiveOperations(cwd)).toBe(true);
     }
-    sendCommand.mockRejectedValueOnce(new Error("unavailable")); expect(await service.hasActiveOperations(cwd)).toBe(true);
-    for (const entries of [internals.opening, internals.mutations, internals.recovering, internals.recoveryTimers]) {
-      entries.set(key, {}); expect(await service.hasActiveOperations(cwd)).toBe(true); entries.delete(key);
+    sendCommand.mockRejectedValueOnce(new Error("unavailable"));
+    expect(await service.hasActiveOperations(cwd)).toBe(true);
+    for (const entries of [
+      internals.opening,
+      internals.mutations,
+      internals.recovering,
+      internals.recoveryTimers,
+    ]) {
+      entries.set(key, {});
+      expect(await service.hasActiveOperations(cwd)).toBe(true);
+      entries.delete(key);
     }
     expect(await service.hasActiveOperations(resolve("unrelated-workspace"))).toBe(false);
   });
 
   it("blocks direct prompt/notification/start admission and drains idle workspace workers before mutation", async () => {
-    const cwd = resolve("workspace-lifecycle-worker-test"); const key = `${workspaceIdentity(cwd)}\0session`;
+    const cwd = resolve("workspace-lifecycle-worker-test");
+    const key = `${workspaceIdentity(cwd)}\0session`;
     const events = { flush: vi.fn(async () => undefined) };
     const service = new AgentCoreSessionService(events as never, {} as never);
-    const internals = service as unknown as { live: Map<string, unknown>; stopForReload: (item: unknown) => Promise<void> };
-    const sendCommand = vi.fn(); const runtime = { cwd, isClosed: false, sendCommand };
+    const internals = service as unknown as {
+      live: Map<string, unknown>;
+      stopForReload: (item: unknown) => Promise<void>;
+    };
+    const sendCommand = vi.fn();
+    const runtime = { cwd, isClosed: false, sendCommand };
     internals.live.set(key, { runtime, key: "idle", busy: false });
-    const stop = vi.spyOn(internals, "stopForReload").mockImplementation(async () => { internals.live.delete(key); });
+    const stop = vi.spyOn(internals, "stopForReload").mockImplementation(async () => {
+      internals.live.delete(key);
+    });
     await withWorkspaceMutation([cwd], async () => {
-      expect(await service.command(cwd, "session", "prompt", { message: "new" }, { skills: [], extensions: [] })).toMatchObject({ success: false, code: "busy" });
-      expect(await service.notify(cwd, "session", "extension_ui_response", {})).toMatchObject({ success: false, code: "busy" });
-      expect(await service.create(cwd, { skills: [], extensions: [] })).toMatchObject({ code: "busy" });
+      expect(
+        await service.command(
+          cwd,
+          "session",
+          "prompt",
+          { message: "new" },
+          { skills: [], extensions: [] },
+        ),
+      ).toMatchObject({ success: false, code: "busy" });
+      expect(await service.notify(cwd, "session", "extension_ui_response", {})).toMatchObject({
+        success: false,
+        code: "busy",
+      });
+      expect(await service.create(cwd, { skills: [], extensions: [] })).toMatchObject({
+        code: "busy",
+      });
       expect(sendCommand).not.toHaveBeenCalled();
       await service.closeIdleWorkspace(cwd);
-      expect(stop).toHaveBeenCalledOnce(); expect(events.flush).toHaveBeenCalledOnce(); expect(service.liveSessions(cwd)).toEqual([]);
+      expect(stop).toHaveBeenCalledOnce();
+      expect(events.flush).toHaveBeenCalledOnce();
+      expect(service.liveSessions(cwd)).toEqual([]);
     });
   });
 
@@ -191,10 +397,20 @@ describe("agent-core session configuration", () => {
     const sendCommand = vi.fn();
     const runtime = { cwd, sessionId, isClosed: false, sendCommand };
     const service = new AgentCoreSessionService({} as never, {} as never);
-    (service as unknown as { live: Map<string, unknown> }).live.set(`${workspaceIdentity(cwd)}\0${sessionId}`,
-      { key: "test", runtime, busy: true, restartPending: false, model: "openai/old", thinking: "low" });
-    expect(await service.configure(cwd, sessionId, "openai/new", "high", { skills: [], extensions: [] }))
-      .toMatchObject({ success: false, code: "busy" });
+    (service as unknown as { live: Map<string, unknown> }).live.set(
+      `${workspaceIdentity(cwd)}\0${sessionId}`,
+      {
+        key: "test",
+        runtime,
+        busy: true,
+        restartPending: false,
+        model: "openai/old",
+        thinking: "low",
+      },
+    );
+    expect(
+      await service.configure(cwd, sessionId, "openai/new", "high", { skills: [], extensions: [] }),
+    ).toMatchObject({ success: false, code: "busy" });
     expect(sendCommand).not.toHaveBeenCalled();
   });
 
@@ -204,11 +420,25 @@ describe("agent-core session configuration", () => {
     const sendCommand = vi.fn().mockResolvedValue({ success: false, code: "busy" });
     const runtime = { cwd, sessionId, isClosed: false, sendCommand };
     const service = new AgentCoreSessionService({} as never, {} as never);
-    (service as unknown as { live: Map<string, unknown> }).live.set(`${workspaceIdentity(cwd)}\0${sessionId}`,
-      { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low" });
-    expect(await service.configure(cwd, sessionId, "openai/new", "high", { skills: [], extensions: [] }))
-      .toMatchObject({ success: false, code: "busy" });
-    expect(sendCommand).toHaveBeenCalledExactlyOnceWith("configure", { provider: "openai", modelId: "new", level: "high" });
+    (service as unknown as { live: Map<string, unknown> }).live.set(
+      `${workspaceIdentity(cwd)}\0${sessionId}`,
+      {
+        key: "test",
+        runtime,
+        busy: false,
+        restartPending: false,
+        model: "openai/old",
+        thinking: "low",
+      },
+    );
+    expect(
+      await service.configure(cwd, sessionId, "openai/new", "high", { skills: [], extensions: [] }),
+    ).toMatchObject({ success: false, code: "busy" });
+    expect(sendCommand).toHaveBeenCalledExactlyOnceWith("configure", {
+      provider: "openai",
+      modelId: "new",
+      level: "high",
+    });
   });
 
   it("selects custom model and MCP credential names for the worker", async () => {
@@ -218,17 +448,34 @@ describe("agent-core session configuration", () => {
     try {
       process.env.PI_SCIENCE_HOME = join(root, "home");
       process.env.MY_LAB_TOKEN = "test-secret";
-      await new CredentialStore().put({ id: "lab", backend: "environment", environment_variable: "MY_LAB_TOKEN", kind: "api_key" });
+      await new CredentialStore().put({
+        id: "lab",
+        backend: "environment",
+        environment_variable: "MY_LAB_TOKEN",
+        kind: "api_key",
+      });
       const cwd = join(root, "workspace");
       await mkdir(join(cwd, ".pi-science"), { recursive: true });
-      await writeFile(join(cwd, ".pi-science", "mcp-runtime.json"), JSON.stringify({ version: 1, project_id: "project_test",
-        mcpServers: { lab: { __piScienceEnvironment: { TOKEN: { kind: "environment", name: "MY_MCP_KEY" } } } } }));
+      await writeFile(
+        join(cwd, ".pi-science", "mcp-runtime.json"),
+        JSON.stringify({
+          version: 1,
+          project_id: "project_test",
+          mcpServers: {
+            lab: { __piScienceEnvironment: { TOKEN: { kind: "environment", name: "MY_MCP_KEY" } } },
+          },
+        }),
+      );
       const service = new AgentCoreSessionService({} as never, {} as never);
-      const names = await (service as unknown as { credentialEnvNames(cwd: string): Promise<string[]> }).credentialEnvNames(cwd);
+      const names = await (
+        service as unknown as { credentialEnvNames(cwd: string): Promise<string[]> }
+      ).credentialEnvNames(cwd);
       expect(names.sort()).toEqual(["MY_LAB_TOKEN", "MY_MCP_KEY"]);
     } finally {
-      if (previousHome === undefined) delete process.env.PI_SCIENCE_HOME; else process.env.PI_SCIENCE_HOME = previousHome;
-      if (previousToken === undefined) delete process.env.MY_LAB_TOKEN; else process.env.MY_LAB_TOKEN = previousToken;
+      if (previousHome === undefined) delete process.env.PI_SCIENCE_HOME;
+      else process.env.PI_SCIENCE_HOME = previousHome;
+      if (previousToken === undefined) delete process.env.MY_LAB_TOKEN;
+      else process.env.MY_LAB_TOKEN = previousToken;
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -237,49 +484,111 @@ describe("agent-core session configuration", () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-config-"));
     try {
       const sessionId = "session-test";
-      const path = workspaceFile(cwd, `agent-session-config/${createHash("sha256").update(sessionId).digest("hex")}.json`);
+      const path = workspaceFile(
+        cwd,
+        `agent-session-config/${createHash("sha256").update(sessionId).digest("hex")}.json`,
+      );
       await writeJsonAtomic(path, { model: "openai/old", thinking: "low", skills: ["lab"] });
       let release!: () => void;
-      const blocked = new Promise<void>((resolve) => { release = resolve; });
+      const blocked = new Promise<void>((resolve) => {
+        release = resolve;
+      });
       const sendCommand = vi.fn(async (_name: string, params: Record<string, string>) => {
-        if (params.modelId === "first") { await blocked; return { success: false, code: "invalid_model" }; }
-        return { success: true, data: { model: { provider: params.provider, modelId: params.modelId }, thinkingLevel: params.level } };
+        if (params.modelId === "first") {
+          await blocked;
+          return { success: false, code: "invalid_model" };
+        }
+        return {
+          success: true,
+          data: {
+            model: { provider: params.provider, modelId: params.modelId },
+            thinkingLevel: params.level,
+          },
+        };
       });
       const runtime = { cwd, sessionId, isClosed: false, sendCommand };
       const service = new AgentCoreSessionService({} as never, {} as never);
-      const live = { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low" };
-      (service as unknown as { live: Map<string, unknown> }).live.set(`${workspaceIdentity(cwd)}\0${sessionId}`, live);
+      const live = {
+        key: "test",
+        runtime,
+        busy: false,
+        restartPending: false,
+        model: "openai/old",
+        thinking: "low",
+      };
+      (service as unknown as { live: Map<string, unknown> }).live.set(
+        `${workspaceIdentity(cwd)}\0${sessionId}`,
+        live,
+      );
       const config = { skills: [], extensions: [] };
       const first = service.configure(cwd, sessionId, "openai/first", "medium", config);
       const second = service.configure(cwd, sessionId, "openai/second", "high", config);
       await vi.waitFor(() => expect(sendCommand).toHaveBeenCalledTimes(1));
       release();
       expect(await first).toMatchObject({ success: false, code: "invalid_model" });
-      expect(await second).toMatchObject({ success: true, model: "openai/second", thinking: "high" });
+      expect(await second).toMatchObject({
+        success: true,
+        model: "openai/second",
+        thinking: "high",
+      });
       expect(live).toMatchObject({ model: "openai/second", thinking: "high" });
       expect(sendCommand.mock.calls.map(([name]) => name)).toEqual(["configure", "configure"]);
       // Stale sidecar cache values no longer participate in configuration.
-      expect(await readJson(path, null)).toEqual({ model: "openai/old", thinking: "low", skills: ["lab"] });
-      expect(await service.configure(cwd, sessionId, "openai/new", "invalid", config)).toMatchObject({ success: false, code: "invalid_thinking" });
+      expect(await readJson(path, null)).toEqual({
+        model: "openai/old",
+        thinking: "low",
+        skills: ["lab"],
+      });
+      expect(
+        await service.configure(cwd, sessionId, "openai/new", "invalid", config),
+      ).toMatchObject({ success: false, code: "invalid_thinking" });
       expect(sendCommand).toHaveBeenCalledTimes(2);
-    } finally { await rm(cwd, { recursive: true, force: true }); }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 
   it("keeps durable worker configuration authoritative when the sidecar cannot be written", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-config-write-"));
     try {
       const sessionId = "session-write-test";
-      const path = workspaceFile(cwd, `agent-session-config/${createHash("sha256").update(sessionId).digest("hex")}.json`);
+      const path = workspaceFile(
+        cwd,
+        `agent-session-config/${createHash("sha256").update(sessionId).digest("hex")}.json`,
+      );
       await mkdir(path, { recursive: true }); // A directory at the file path makes atomic rename fail.
-      const runtime = { cwd, sessionId, isClosed: false, sendCommand: async () => ({ success: true,
-        data: { model: { provider: "openai", modelId: "new" }, thinkingLevel: "high" } }) };
+      const runtime = {
+        cwd,
+        sessionId,
+        isClosed: false,
+        sendCommand: async () => ({
+          success: true,
+          data: { model: { provider: "openai", modelId: "new" }, thinkingLevel: "high" },
+        }),
+      };
       const service = new AgentCoreSessionService({} as never, {} as never);
-      const live = { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low" };
-      (service as unknown as { live: Map<string, unknown> }).live.set(`${workspaceIdentity(cwd)}\0${sessionId}`, live);
-      expect(await service.configure(cwd, sessionId, "openai/new", "high", { skills: [], extensions: [] }))
-        .toMatchObject({ success: true, model: "openai/new", thinking: "high" });
+      const live = {
+        key: "test",
+        runtime,
+        busy: false,
+        restartPending: false,
+        model: "openai/old",
+        thinking: "low",
+      };
+      (service as unknown as { live: Map<string, unknown> }).live.set(
+        `${workspaceIdentity(cwd)}\0${sessionId}`,
+        live,
+      );
+      expect(
+        await service.configure(cwd, sessionId, "openai/new", "high", {
+          skills: [],
+          extensions: [],
+        }),
+      ).toMatchObject({ success: true, model: "openai/new", thinking: "high" });
       expect(live).toMatchObject({ model: "openai/new", thinking: "high" });
-    } finally { await rm(cwd, { recursive: true, force: true }); }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 
   it.each([
@@ -288,52 +597,114 @@ describe("agent-core session configuration", () => {
   ])("preserves ambiguous transport failures: %s", async (error, code) => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-transport-"));
     try {
-      const runtime = { cwd, sessionId: "transport", isClosed: false, sendCommand: vi.fn().mockRejectedValue(error) };
+      const runtime = {
+        cwd,
+        sessionId: "transport",
+        isClosed: false,
+        sendCommand: vi.fn().mockRejectedValue(error),
+      };
       const service = new AgentCoreSessionService({} as never, {} as never);
-      const recover = vi.spyOn(service as unknown as { recover(item: unknown): Promise<void> }, "recover").mockResolvedValue();
-      (service as unknown as { live: Map<string, unknown> }).live.set(`${workspaceIdentity(cwd)}\0transport`,
-        { key: "test", runtime, busy: false, restartPending: false, model: "openai/old", thinking: "low" });
-      expect(await service.command(cwd, "transport", "prompt", { message: "hello" }, { skills: [], extensions: [] }))
-        .toMatchObject({ success: false, code });
+      const recover = vi
+        .spyOn(service as unknown as { recover(item: unknown): Promise<void> }, "recover")
+        .mockResolvedValue();
+      (service as unknown as { live: Map<string, unknown> }).live.set(
+        `${workspaceIdentity(cwd)}\0transport`,
+        {
+          key: "test",
+          runtime,
+          busy: false,
+          restartPending: false,
+          model: "openai/old",
+          thinking: "low",
+        },
+      );
+      expect(
+        await service.command(
+          cwd,
+          "transport",
+          "prompt",
+          { message: "hello" },
+          { skills: [], extensions: [] },
+        ),
+      ).toMatchObject({ success: false, code });
       expect(recover).toHaveBeenCalledOnce();
-    } finally { await rm(cwd, { recursive: true, force: true }); }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 
   it("applies the initial snapshot before activation events change busy state", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-attach-"));
     try {
-      const runtime = Object.assign(new EventEmitter(), { cwd, sessionId: "recovered", isClosed: false,
+      const runtime = Object.assign(new EventEmitter(), {
+        cwd,
+        sessionId: "recovered",
+        isClosed: false,
         sendCommand: async (command: string) => {
           if (command === "get_state") return { success: true, data: { busy: true } };
-          runtime.emit("event", { type: "operation.started", runId: "recovery", turnId: "recovery" });
+          runtime.emit("event", {
+            type: "operation.started",
+            runId: "recovery",
+            turnId: "recovery",
+          });
           runtime.emit("event", { type: "operation.settled", runId: "recovery" });
           return { success: true };
-        } });
-      const hub = { bind: (_cwd: string, source: EventEmitter, callbacks: { onBusy(busy: boolean): void }) => {
-        source.on("event", (event: { type: string }) => {
-          if (event.type === "operation.started") callbacks.onBusy(true);
-          if (event.type === "operation.settled") callbacks.onBusy(false);
-        });
-      } };
+        },
+      });
+      const hub = {
+        bind: (_cwd: string, source: EventEmitter, callbacks: { onBusy(busy: boolean): void }) => {
+          source.on("event", (event: { type: string }) => {
+            if (event.type === "operation.started") callbacks.onBusy(true);
+            if (event.type === "operation.settled") callbacks.onBusy(false);
+          });
+        },
+      };
       const service = new AgentCoreSessionService(hub as never, {} as never);
-      const live = await (service as unknown as { attach(key: string, runtime: unknown, model: string, level: string): Promise<{ busy: boolean }> })
-        .attach("test", runtime, "openai/old", "low");
+      const live = await (
+        service as unknown as {
+          attach(
+            key: string,
+            runtime: unknown,
+            model: string,
+            level: string,
+          ): Promise<{ busy: boolean }>;
+        }
+      ).attach("test", runtime, "openai/old", "low");
       expect(live.busy).toBe(false);
-    } finally { await rm(cwd, { recursive: true, force: true }); }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 
   it("waits for activation before aborting a partially attached recovery", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-core-opening-"));
     try {
       const sessionId = "opening-recovery";
-      const runtime = { cwd, sessionId, isClosed: false, sendCommand: vi.fn().mockResolvedValue({ success: true }) };
-      const live = { key: "test", runtime, busy: true, restartPending: false, model: "openai/old", thinking: "low" };
+      const runtime = {
+        cwd,
+        sessionId,
+        isClosed: false,
+        sendCommand: vi.fn().mockResolvedValue({ success: true }),
+      };
+      const live = {
+        key: "test",
+        runtime,
+        busy: true,
+        restartPending: false,
+        model: "openai/old",
+        thinking: "low",
+      };
       const service = new AgentCoreSessionService({} as never, {} as never);
-      const internals = service as unknown as { live: Map<string, typeof live>; opening: Map<string, Promise<typeof live>>;
-        registry: { get(cwd: string, sessionId: string): Promise<unknown> } };
+      const internals = service as unknown as {
+        live: Map<string, typeof live>;
+        opening: Map<string, Promise<typeof live>>;
+        registry: { get(cwd: string, sessionId: string): Promise<unknown> };
+      };
       const lookup = vi.spyOn(internals.registry, "get").mockResolvedValue(undefined);
       let activate!: (value: typeof live) => void;
-      const opening = new Promise<typeof live>((resolveOpening) => { activate = resolveOpening; });
+      const opening = new Promise<typeof live>((resolveOpening) => {
+        activate = resolveOpening;
+      });
       const key = `${workspaceIdentity(cwd)}\0${sessionId}`;
       internals.live.set(key, live);
       internals.opening.set(key, opening);
@@ -342,29 +713,55 @@ describe("agent-core session configuration", () => {
         await vi.waitFor(() => expect(lookup).toHaveBeenCalled());
         await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
         expect(runtime.sendCommand).not.toHaveBeenCalled();
-      } finally { activate(live); lookup.mockRestore(); }
+      } finally {
+        activate(live);
+        lookup.mockRestore();
+      }
       expect(await aborted).toMatchObject({ success: true });
       expect(runtime.sendCommand).toHaveBeenCalledExactlyOnceWith("abort", {});
-    } finally { await rm(cwd, { recursive: true, force: true }); }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 });
 
 describe("agent-core operation progress watchdog", () => {
-  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
 
   async function supervised() {
     vi.useFakeTimers();
     vi.setSystemTime(100_000);
     vi.stubEnv("PI_SCIENCE_EVENT_WATCHDOG_MS", "100");
     vi.stubEnv("PI_SCIENCE_OPERATION_NO_PROGRESS_MS", "1000");
-    const snapshot = { busy: true, operation: { id: "run" }, eventSequence: 0, faulted: false, pendingInteraction: false,
-      lastResult: undefined as { operationId: string; status: "completed" } | undefined };
-    const runtime = Object.assign(new EventEmitter(), { cwd: process.cwd(), sessionId: "watchdog", isClosed: false,
-      sendCommand: vi.fn(async () => ({ success: true, data: snapshot })) });
+    const snapshot = {
+      busy: true,
+      operation: { id: "run" },
+      eventSequence: 0,
+      faulted: false,
+      pendingInteraction: false,
+      lastResult: undefined as { operationId: string; status: "completed" } | undefined,
+    };
+    const runtime = Object.assign(new EventEmitter(), {
+      cwd: process.cwd(),
+      sessionId: "watchdog",
+      isClosed: false,
+      sendCommand: vi.fn(async () => ({ success: true, data: snapshot })),
+    });
     const service = new AgentCoreSessionService({ bind: () => undefined } as never, {} as never);
     const internals = service as unknown as {
-      attach(key: string, runtime: unknown, model: string, thinking: string, config: unknown): Promise<{ lastProgressAt: number }>;
-      probe(item: unknown): Promise<void>; recover(item: unknown): Promise<void>;
+      attach(
+        key: string,
+        runtime: unknown,
+        model: string,
+        thinking: string,
+        config: unknown,
+      ): Promise<{ lastProgressAt: number }>;
+      probe(item: unknown): Promise<void>;
+      recover(item: unknown): Promise<void>;
     };
     const recover = vi.spyOn(internals, "recover").mockResolvedValue();
     const live = await internals.attach("watchdog", runtime, "openai/gpt-4.1-mini", "off", {});
@@ -435,7 +832,10 @@ describe("agent-core operation progress watchdog", () => {
     const emit = vi.spyOn(runtime, "emit");
     await vi.advanceTimersByTimeAsync(100);
     expect(emit).toHaveBeenCalledExactlyOnceWith("event", {
-      type: "operation.settled", runId: "run", status: "completed", recovery: true,
+      type: "operation.settled",
+      runId: "run",
+      status: "completed",
+      recovery: true,
     });
     expect(recover).not.toHaveBeenCalled();
     const probes = runtime.sendCommand.mock.calls.length;
