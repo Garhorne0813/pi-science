@@ -14,12 +14,41 @@ export function genericDetails({ source, t }: ActivityRendererProps, outputLabel
     ...(source.output ? { fullValue: source.output } : {}),
     partial: Boolean(source.partialOutput && !source.output),
   });
+  const detailObject = record(source.details);
+  const change = fileChange(source);
   if (source.details !== undefined && source.details !== null) {
-    const value = stringify(source.details);
-    details.push({ label: t("conversation.activity.details"), value, fullValue: value, ...(discovery ? { pre: true } : {}) });
+    const remaining = detailObject ? Object.fromEntries(Object.entries(detailObject).filter(([key]) => key !== "fileChange" && key !== "diff" && key !== "patch")) : source.details;
+    const value = stringify(remaining);
+    if (value !== "{}") {
+      details.push({ label: t("conversation.activity.details"), value, fullValue: value, ...(discovery ? { pre: true } : {}) });
+    }
   }
-  if (source.diff) details.push({ label: t("conversation.activity.diff"), value: source.diff, fullValue: source.diff });
+  const patch = change?.patch ?? text(detailObject?.patch) ?? text(detailObject?.diff) ?? source.diff;
+  if (patch) details.push({ label: t("conversation.activity.diff"), value: patch, fullValue: patch, pre: true });
   return details;
+}
+
+export interface FileChangeView {
+  path: string;
+  additions: number;
+  deletions: number;
+  patch?: string;
+  truncated?: boolean;
+}
+
+export function fileChange(source: ToolCallBlock): FileChangeView | null {
+  const value = record(record(source.details)?.fileChange);
+  if (!value || typeof value.path !== "string") return null;
+  const additions = typeof value.additions === "number" && Number.isFinite(value.additions) && value.additions >= 0 ? Math.round(value.additions) : null;
+  const deletions = typeof value.deletions === "number" && Number.isFinite(value.deletions) && value.deletions >= 0 ? Math.round(value.deletions) : null;
+  if (additions === null || deletions === null) return null;
+  return {
+    path: value.path,
+    additions,
+    deletions,
+    ...(typeof value.patch === "string" ? { patch: value.patch } : {}),
+    ...(value.truncated === true ? { truncated: true } : {}),
+  };
 }
 
 export function record(value: unknown): Record<string, unknown> | null {

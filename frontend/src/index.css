@@ -19,8 +19,22 @@
 
 .sidebar-tab-list { container-type: inline-size; }
 
+/* The file drop affordance belongs at the bottom of the available tree space.
+   Hide the sentence when the tree pane itself is too narrow to show it cleanly. */
+.file-browser-container { container-type: inline-size; }
+.file-browser-drop-hint { white-space: nowrap; }
+@container (max-width: 360px) {
+  .file-browser-drop-hint { display: none; }
+}
+
 .workspace-brand {
   @apply text-[18px] font-semibold leading-6 tracking-[-0.03em];
+}
+
+/* Make room for the sidebar toggle in page headers while the single workspace
+   sidebar is collapsed. */
+.workspace-sidebar-collapsed > div > header {
+  padding-left: 3.25rem;
 }
 
 /* Match the context header's page coordinates: rail width + panel padding

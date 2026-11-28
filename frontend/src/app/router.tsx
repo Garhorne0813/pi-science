@@ -32,6 +32,7 @@ export const router = createBrowserRouter([
       { index: true, element: wrap(<ProjectsPage />) },
       { path: "settings", element: wrap(<SettingsPage />) },
       { path: "workspace/:cwd", element: wrap(<LiveSessionPage />) },
+      { path: "workspace/:cwd/new", element: wrap(<LiveSessionPage />) },
       { path: "workspace/:cwd/session/:sessionId", element: wrap(<LiveSessionPage />) },
       { path: "workspace/:cwd/files", element: wrap(<FilesPage />) },
       { path: "workspace/:cwd/notebooks", element: <LegacyNotebooksRedirect /> },

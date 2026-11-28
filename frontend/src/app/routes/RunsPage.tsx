@@ -31,6 +31,7 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
   const navigate = useNavigate();
   const workspaceCwd = useRequiredWorkspaceCwd();
   const openInspector = useUiStore((state) => state.openInspector);
+  const revealInFileTree = useUiStore((state) => state.revealInFileTree);
   const setComposerDraft = useRuntimeStore((state) => state.setDraft);
   const sessions = useRuntimeStore((state) => state.sessions);
   const sessionTitles = Object.assign(Object.create(null) as Record<string, string>, Object.fromEntries((sessions ?? []).filter((session) => session.cwd === workspaceCwd && session.name).map((session) => [session.id, session.name!])));
@@ -165,6 +166,16 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
     openInspector(fileInspectorForPath(relative, fileName(relative), "workspace", workspaceCwd));
   };
 
+  const locateFile = (path: string) => {
+    const relative = workspaceRelativePath(path, workspaceCwd);
+    if (!relative) {
+      toast(t("runs.fileOutsideWorkspace"), "error");
+      return;
+    }
+    revealInFileTree(workspaceCwd, relative);
+    navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/files`);
+  };
+
   const openArtifact = async (artifact: ExecutionRecord["artifacts"][number]) => {
     try {
       const manifest = await apiRequest<{ path: string }>(`/api/artifacts/${encodeURIComponent(artifact.artifact_id)}?${new URLSearchParams({ cwd: workspaceCwd, version: String(artifact.version) })}`);
@@ -239,7 +250,7 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
           : <section className="runs-ledger-pane min-w-0">{loading ? <div className="p-10 text-center text-muted"><Loader2 className="mx-auto animate-spin" size={20} />{t("common.loading")}</div> : runsResult.error ? <EmptyState icon={<AlertTriangle size={32} />} title={t("runs.loadError")} hint={String(runsResult.error)} /> : <EmptyState icon={search || kind || status || from || to ? <FileSearch size={36} /> : <Play size={36} />} title={t(search || kind || status || from || to ? "runs.noMatches" : "runs.empty")} hint={t(search || kind || status || from || to ? "runs.noMatchesHint" : "runs.emptyHint")} />}</section>}
         <section aria-label={t("runs.details")} className="runs-detail-pane min-w-0 bg-bg/40">
           {outsidePage && <div role="status" className="shrink-0 border-b border-border bg-surface-2 px-4 py-3 text-sm text-text"><p>{t(targetOutsideFilters ? "runs.targetOutsideFilters" : "runs.targetOutsidePage")}</p><button type="button" onClick={() => void locateTarget()} disabled={targetPageResult.isFetching} className="mt-2 rounded-input border border-border bg-surface px-3 py-1.5 text-xs font-medium disabled:opacity-50">{t(targetPageResult.isFetching ? "common.loading" : targetOutsideFilters ? "runs.relaxTargetFilters" : "runs.locateTargetPage")}</button></div>}
-          {selected ? <ExecutionDetails run={selected} tab={detailTab} onTabChange={setDetailTab} onBack={() => updateRoute({ detail: "0" }, true)} onCopy={(text, message) => void copyText(text, message)} onOpenFile={openFile} onOpenArtifact={(artifact) => void openArtifact(artifact)}
+          {selected ? <ExecutionDetails run={selected} tab={detailTab} onTabChange={setDetailTab} onBack={() => updateRoute({ detail: "0" }, true)} onCopy={(text, message) => void copyText(text, message)} onOpenFile={openFile} onLocateFile={locateFile} onOpenArtifact={(artifact) => void openArtifact(artifact)}
             onOpenSession={selected.correlation.session_id && selected.correlation.session_id !== sessionId ? () => openSession(selected) : undefined}
             onLocate={sessionId && selected.correlation.session_id === sessionId && selected.correlation.tool_call_id ? () => locateExecution(selected) : undefined}
             onReproduce={() => reproduce(selected)} sessionTitle={selected.correlation.session_id ? sessionTitles[selected.correlation.session_id] : undefined}

@@ -170,7 +170,7 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
             "ui-card relative mx-auto max-w-[var(--conversation-composer-width)] rounded-composer shadow-composer transition-colors",
             composer.dragOver && "border-accent bg-accent/5",
           )}
-          onDragOver={(event) => { event.preventDefault(); composer.setDragOver(true); }}
+          onDragOver={composer.handleDragOver}
           onDragLeave={() => composer.setDragOver(false)}
           onDrop={composer.handleDrop}
         >

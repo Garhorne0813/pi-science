@@ -49,6 +49,9 @@ interface UiState {
   addWorkspaceReference: (reference: WorkspaceReference) => void;
   removeWorkspaceReference: (cwd: string, path: string) => void;
   clearWorkspaceReferences: (cwd: string) => void;
+  fileTreeReveal: FileTreeRevealRequest | null;
+  revealInFileTree: (cwd: string, path: string) => void;
+  clearFileTreeReveal: (id: number) => void;
   settingsOpen: boolean;
   /** Snapshot of the workspace cwd taken when the dialog opened; the dialog
    *  must not follow route changes while it is open (e.g. browser back). */
@@ -61,6 +64,14 @@ interface UiState {
   inspectorResizing: boolean;
   setInspectorResizing: (r: boolean) => void;
 }
+
+export interface FileTreeRevealRequest {
+  id: number;
+  cwd: string;
+  path: string;
+}
+
+let fileTreeRevealSequence = 0;
 
 export interface InspectorTab {
   id: string;
@@ -303,6 +314,9 @@ export const useUiStore = create<UiState>((set) => ({
   clearWorkspaceReferences: (cwd) => set((state) => ({
     workspaceReferences: state.workspaceReferences.filter((item) => item.cwd !== cwd),
   })),
+  fileTreeReveal: null,
+  revealInFileTree: (cwd, path) => set({ fileTreeReveal: { id: ++fileTreeRevealSequence, cwd, path } }),
+  clearFileTreeReveal: (id) => set((state) => state.fileTreeReveal?.id === id ? { fileTreeReveal: null } : state),
 
   settingsOpen: false,
   settingsScope: null,

@@ -117,6 +117,18 @@ describe("AgentActivity live stream", () => {
     expect(screen.getByText("3 results · 1 retained")).toBeInTheDocument();
   });
 
+  it("shows green additions and red deletions on completed file tool events", () => {
+    render(<AgentActivity blocks={[{
+      ...tool("edit-file", "edit", "done", { path: "src/app.ts" }),
+      details: { fileChange: { path: "src/app.ts", additions: 12, deletions: 3, patch: "@@\n-old\n+new" } },
+    }]} />);
+
+    const changes = screen.getByLabelText("12 additions, 3 deletions");
+    expect(changes).toHaveTextContent("+12-3");
+    expect(changes.firstElementChild).toHaveClass("text-ok-text");
+    expect(changes.lastElementChild).toHaveClass("text-error-text");
+  });
+
   it("does not materialize expanded details while a trace row is collapsed", () => {
     const renderer = activityRendererRegistry.resolve("kernel");
     const expanded = vi.spyOn(renderer, "expanded");

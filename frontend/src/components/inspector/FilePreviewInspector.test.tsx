@@ -10,6 +10,7 @@ import { FilePreviewInspector } from "./FilePreviewInspector";
 import { FeedbackContext } from "../feedback/feedback-context";
 import type { FilePreviewInspector as FilePreviewInspectorT } from "../../types/thread";
 import i18n from "../../i18n";
+import { useUiStore } from "../../lib/ui/store";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -70,6 +71,8 @@ beforeEach(async () => {
   fetchMock.mockClear();
   vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  useUiStore.setState({ fileTreeReveal: null });
+  window.history.replaceState({}, "", "/");
   await i18n.changeLanguage("en");
 });
 
@@ -79,6 +82,13 @@ afterEach(() => {
 });
 
 describe("FilePreviewInspector edit capability", () => {
+  it("reveals the previewed workspace file in the file tree", () => {
+    renderInspector("reports/final.md", "final.md", "text", "done");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal in file tree" }));
+    expect(useUiStore.getState().fileTreeReveal).toMatchObject({ cwd: "proj", path: "reports/final.md" });
+    expect(window.location.pathname).toBe("/workspace/proj/files");
+  });
+
   it("reads a published snapshot and prevents editing or opening the live file", async () => {
     const sha256 = "a".repeat(64);
     render(

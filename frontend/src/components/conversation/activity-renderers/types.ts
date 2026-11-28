@@ -13,6 +13,10 @@ export interface ActivityRendererProps {
 export interface ActivityCompactView {
   title: string;
   detail?: string;
+  fileChange?: {
+    additions: number;
+    deletions: number;
+  };
 }
 
 export interface ActivityDetailView {

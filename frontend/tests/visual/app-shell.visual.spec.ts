@@ -17,50 +17,29 @@ test("workspace landing shows the hero composer", async ({ page }) => {
   // and the page must render the true landing hero.
   await page.goto(workspaceRoute(VISUAL_LANDING_CWD));
   // Real landing hero: welcome copy plus the centered composer.
-  const greeting = page.getByRole("heading", { name: "What are you researching today?" });
-  const input = page.getByPlaceholder("Enter a research question or drop a data file", { exact: true });
-  await expect(greeting).toBeVisible();
-  await expect(input).toBeVisible();
-  const { cardCenter, areaCenter, cardTop, cardMiddle } = await input.evaluate((element) => {
-    const card = element.closest(".rounded-composer")!;
-    const area = card.closest(".relative.flex.flex-1.flex-col")!;
-    const cardBox = card.getBoundingClientRect();
-    const areaBox = area.getBoundingClientRect();
-    return {
-      cardCenter: cardBox.left + cardBox.width / 2,
-      areaCenter: areaBox.top + areaBox.height / 2,
-      cardTop: cardBox.top,
-      cardMiddle: cardBox.top + cardBox.height / 2,
-    };
-  });
-  const headingBox = (await greeting.boundingBox())!;
-  expect(headingBox.y + headingBox.height).toBeLessThan(cardTop);
-  expect(Math.abs(headingBox.x + headingBox.width / 2 - cardCenter)).toBeLessThan(2);
-  expect(Math.abs(cardMiddle - areaCenter)).toBeLessThan(2);
+  await expect(page.getByRole("heading", { name: "Pi-Science" })).toBeVisible();
+  await expect(page.getByText("Scientific AI Workbench", { exact: true })).toBeVisible();
+  await expect(page.getByPlaceholder(/Ask anything/)).toBeVisible();
   // No auto-navigation: the URL still points at the workspace root and the
   // session list for this cwd is empty.
   await expect(page).toHaveURL(new RegExp(`/workspace/${encodeURIComponent(VISUAL_LANDING_CWD).replace(/\//g, "\\/")}$`));
   await screenshot(page, "workspace-landing.png");
 });
 
-test("collapsed context panel leaves a stable primary rail", async ({ page }, testInfo) => {
+test("collapsed context panel leaves a stable expand control", async ({ page }, testInfo) => {
   // The mobile project starts with the context panel closed and has its own
   // drawer coverage in sidebar.spec.ts, so this baseline only covers desktop.
   test.skip(testInfo.project.name === "mobile", "mobile starts with the context panel closed");
   await page.goto(workspaceRoute(VISUAL_CWD));
   // The workspace root auto-navigates into the most recent session; wait for
-  // the settled thread so the rail screenshot is not racing the message load.
+  // the settled thread so the shell screenshot is not racing the message load.
   await waitForConversationSettled(page);
   const toggle = page.getByRole("button", { name: /^(Expand|Collapse) sidebar$/ });
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await expect(page.locator("#workspace-context-panel")).toHaveAttribute("hidden");
-  // The Rail is permanent: collapsing the panel must not take navigation away.
-  await expect(page.locator('nav[aria-label="Primary navigation"]').getByRole("link", { name: "Conversations", exact: true })).toBeVisible();
-  // The pointer can remain over the Rail toggle after collapsing the panel.
-  // Capture the compact state after leaving its hover overlay.
-  await page.mouse.move(700, 300);
-  await expect(page.locator('nav[aria-label="Primary navigation"]')).toHaveCSS("width", "52px");
+  await expect(page.getByRole("button", { name: "Expand sidebar", exact: true })).toBeVisible();
+  await expect(page.locator('nav[aria-label="Primary navigation"]')).toBeHidden();
   await screenshot(page, "sidebar-collapsed.png");
 });

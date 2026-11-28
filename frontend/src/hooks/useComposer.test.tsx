@@ -19,7 +19,10 @@ vi.mock("react-i18next", async (importOriginal) => {
 });
 vi.mock("../components/feedback/feedback-context", () => ({ useFeedback: () => ({ toast: vi.fn() }) }));
 vi.mock("../lib/client/api", () => ({ apiRequest: vi.fn(async () => undefined) }));
-vi.mock("../lib/files", () => ({ injectWorkspaceReferences: (message: string) => message }));
+vi.mock("../lib/files", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../lib/files")>(),
+  injectWorkspaceReferences: (message: string) => message,
+}));
 
 function Harness({
   onSend,
@@ -172,6 +175,23 @@ describe("useComposer failed-send ownership", () => {
 });
 
 describe("useComposer onSend", () => {
+  it("accepts an internal file-tree drop as a workspace reference without uploading", () => {
+    const { result } = renderHook(() => useComposer({ cwd: "/w", selectedModel: "m", reviewingProject: false, setReviewNotice: () => undefined, research: { mode: null, setMode: () => undefined } }));
+    const reference = { cwd: "/w", path: "data/report.csv", name: "report.csv", isDir: false };
+    const event = {
+      preventDefault: vi.fn(),
+      dataTransfer: {
+        files: [] as unknown as FileList,
+        getData: (type: string) => type === "application/x-pi-science-workspace-reference" ? JSON.stringify(reference) : "",
+      },
+    } as unknown as React.DragEvent;
+
+    act(() => result.current.handleDrop(event));
+
+    expect(useUiStore.getState().workspaceReferences).toEqual([reference]);
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
   it("retains the prompt while a session model change is still being committed", async () => {
     const sendPrompt = vi.fn(async (): Promise<string | null> => null);
     useRuntimeStore.setState({ draft: "hello", sendPrompt });
