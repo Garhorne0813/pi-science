@@ -203,10 +203,10 @@ export function ComputeSettings({ workspaceCwd }: ComputeSettingsProps) {
   if (loading) return <div className="py-4 text-sm text-muted">{t("common.loading")}</div>;
 
   return (
-    <section className="space-y-0">
+    <section className="space-y-5">
+      <p className="text-ui-caption leading-relaxed text-muted">{t("settings.computePage.description")}</p>
       <div className="overflow-hidden rounded-card border border-faint bg-surface-2/40 pb-3">
-        <div className="flex min-h-14 items-center gap-2 border-b border-faint px-4 py-2">
-          <Server size={16} className="text-accent" />
+        <div className="flex items-center border-b border-faint px-4 py-3">
           <h3 className="text-[13px] font-semibold text-text">{t("settings.computePage.connection")}</h3>
         </div>
 
@@ -299,13 +299,18 @@ export function ComputeSettings({ workspaceCwd }: ComputeSettingsProps) {
         </div>
       </div>
 
-      {machines.length === 0 ? (
-        <p className="border-b border-dashed border-border py-4 text-center text-xs text-muted">{t("settings.computePage.empty")}</p>
-      ) : machines.map((machine) => {
+      <div className="overflow-hidden rounded-card border border-faint bg-surface-2/40">
+        <div className="border-b border-faint px-4 py-3">
+          <h3 className="text-[13px] font-semibold text-text">{t("settings.computePage.savedMachines")}</h3>
+        </div>
+        <div className="divide-y divide-faint">
+        {machines.length === 0 ? (
+          <p className="px-4 py-5 text-center text-xs text-muted">{t("settings.computePage.empty")}</p>
+        ) : machines.map((machine) => {
         const result = probing[machine.label];
         const passwordAuth = machine.auth_method === "password";
         return (
-          <article key={machine.label} className="border-b border-faint py-3">
+          <article key={machine.label} className="px-4 py-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
@@ -339,7 +344,9 @@ export function ComputeSettings({ workspaceCwd }: ComputeSettingsProps) {
             {result && result !== true && <ProbeDetails result={result} />}
           </article>
         );
-      })}
+        })}
+        </div>
+      </div>
     </section>
   );
 }

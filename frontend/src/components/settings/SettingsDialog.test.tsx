@@ -62,7 +62,7 @@ describe("SettingsDialog", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("opens General settings with the device scope label", async () => {
+  it("opens with the global scope label", async () => {
     renderDialog();
     openSettings(null);
     const dialog = await screen.findByRole("dialog");
@@ -70,11 +70,11 @@ describe("SettingsDialog", () => {
     expect(await screen.findByText("This device")).toBeInTheDocument();
   });
 
-  it("keeps the device scope for General settings opened from a workspace", async () => {
+  it("shows the workspace scope label when opened from a workspace", async () => {
     renderDialog();
-    openSettings("proj");
+    act(() => useUiStore.getState().openSettings("proj", "compute"));
     await screen.findByRole("dialog");
-    expect(await screen.findByText("This device")).toBeInTheDocument();
+    expect(await screen.findByText("Current project")).toBeInTheDocument();
   });
 
   it("opens with the DeepSeek-sized desktop panel above a lighter overlay", async () => {
@@ -118,7 +118,7 @@ describe("SettingsDialog", () => {
     renderDialog();
     openSettings(null);
     await screen.findByRole("dialog");
-    fireEvent.click(screen.getByLabelText("Close"));
+    fireEvent.click(screen.getAllByLabelText("Close")[0]);
     await waitFor(() => expect(useUiStore.getState().settingsOpen).toBe(false));
   });
 
@@ -126,10 +126,10 @@ describe("SettingsDialog", () => {
     renderDialog();
     openSettings(null);
     await screen.findByRole("dialog");
-    const modelsTab = await screen.findByRole("tab", { name: "Models" });
+    const modelsTab = await screen.findByRole("tab", { name: "Model connections" });
     fireEvent.click(modelsTab);
     expect(await screen.findByText("My model services")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Models" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Model connections" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "false");
   });
 
@@ -185,8 +185,7 @@ describe("SettingsDialog", () => {
     await screen.findByRole("dialog");
     // The close button now lives in the content header, so the first focusable
     // is the sidebar's General tab and the panel-order select stays last.
-    await screen.findByRole("button", { name: /^Waiting for input:/ });
-    const panelOrder = screen.getByRole("button", { name: /^Waiting for input:/ });
+    const panelOrder = await screen.findByLabelText(/Conversation and preview layout/);
     panelOrder.focus();
     fireEvent.keyDown(panelOrder, { key: "Tab" });
     expect(document.activeElement).toBe(screen.getByRole("tab", { name: "General" }));
@@ -200,11 +199,11 @@ describe("SettingsDialog", () => {
     const general = screen.getByRole("tab", { name: "General" });
     general.focus();
     fireEvent.keyDown(general, { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: /^Waiting for input:/ }));
+    expect(document.activeElement).toBe(screen.getByLabelText(/Conversation and preview layout/));
     // Right after opening, focus sits on the panel itself: Shift+Tab wraps too.
     dialog.focus();
     fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: /^Waiting for input:/ }));
+    expect(document.activeElement).toBe(screen.getByLabelText(/Conversation and preview layout/));
   });
 
   it("keeps the close button in the panel's normal tab order", async () => {
@@ -218,7 +217,7 @@ describe("SettingsDialog", () => {
     ));
     const labels = focusables.map((el) => el.getAttribute("aria-label") ?? el.textContent ?? "");
     const generalIndex = labels.indexOf("General");
-    const closeIndex = labels.indexOf("Close");
+    const closeIndex = labels.lastIndexOf("Close");
     const panelOrderIndex = labels.findIndex((label) => label.includes("Conversation and preview layout"));
     expect(generalIndex).toBeGreaterThanOrEqual(0);
     expect(closeIndex).toBeGreaterThan(generalIndex);

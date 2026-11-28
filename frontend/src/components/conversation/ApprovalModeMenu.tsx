@@ -118,7 +118,7 @@ export function ApprovalModeMenu({ cwd, sessionId, disabled }: { cwd: string; se
   return <>
     <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild><button type="button" aria-label={zh ? "审批模式" : "Approval mode"} title={triggerLabel} disabled={disabled || loading || saving}
-        className={`flex min-h-7 min-w-7 shrink-0 items-center gap-1 rounded-input px-2 py-1 text-xs hover:bg-surface-2 disabled:opacity-50 ${approval.mode === "full" ? "text-orange-500" : "text-muted"}`}>
+        className={`flex min-h-7 min-w-7 shrink-0 items-center gap-1 rounded-input px-2 py-1 text-xs enabled:hover:bg-surface-2 disabled:cursor-not-allowed ${approval.mode === "full" ? "text-orange-500" : "text-muted"}`}>
         <Icon size={14} className="shrink-0" /><span className="truncate max-lg:hidden">{statusLabel}</span>
       </button></DropdownMenu.Trigger>
       <DropdownMenu.Portal><DropdownMenu.Content onCloseAutoFocus={(event) => { if (confirmFull) event.preventDefault(); }} side="top" align="start" sideOffset={8} className="ui-popover z-[90] w-80 max-w-[calc(100vw-24px)] rounded-card p-1.5 text-text">
