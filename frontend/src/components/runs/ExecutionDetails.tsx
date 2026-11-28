@@ -17,6 +17,7 @@ export interface ExecutionDetailsProps {
   onBack: () => void;
   onCopy: (text: string, message: string) => void;
   onOpenFile: (path: string) => void;
+  onLocateFile: (path: string) => void;
   onOpenArtifact: (artifact: ExecutionRecord["artifacts"][number]) => void;
   onOpenSession?: () => void;
   onLocate?: () => void;
@@ -26,7 +27,7 @@ export interface ExecutionDetailsProps {
   sessionTitle?: string;
 }
 
-export function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpenFile, onOpenArtifact, onOpenSession, onLocate, onReproduce, log, loadingLog, sessionTitle }: ExecutionDetailsProps) {
+export function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpenFile, onLocateFile, onOpenArtifact, onOpenSession, onLocate, onReproduce, log, loadingLog, sessionTitle }: ExecutionDetailsProps) {
   const { t } = useTranslation();
   const backRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -71,10 +72,10 @@ export function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpen
         {tabs.map((item) => <button key={item} type="button" role="tab" aria-selected={tab === item} onClick={() => onTabChange(item)} className={cn("shrink-0 border-b-2 px-3 py-2.5 text-[13px] transition-colors", tab === item ? "border-accent text-text" : "border-transparent text-muted hover:text-text")}>{t(`runs.tab.${item}`)}</button>)}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        {tab === "summary" && <SummaryDetails run={run} onOpenFile={onOpenFile} onOpenArtifact={onOpenArtifact} />}
-        {tab === "input" && <div className="space-y-4"><InputDetails run={run} /><FileList title={t("runs.filesRead")} icon={<FileSearch size={14} />} files={run.files.read} empty={t("runs.noFilesRead")} onOpen={onOpenFile} /><RawRecord value={run.request} empty={t("runs.noInput")} /></div>}
+        {tab === "summary" && <SummaryDetails run={run} onOpenFile={onOpenFile} onLocateFile={onLocateFile} onOpenArtifact={onOpenArtifact} />}
+        {tab === "input" && <div className="space-y-4"><InputDetails run={run} /><FileList title={t("runs.filesRead")} icon={<FileSearch size={14} />} files={run.files.read} empty={t("runs.noFilesRead")} onOpen={onOpenFile} onLocate={onLocateFile} /><RawRecord value={run.request} empty={t("runs.noInput")} /></div>}
         {tab === "output" && <div className="space-y-4"><DetailSection title={t("runs.log")}>{loadingLog ? <div className="flex items-center gap-2 text-xs text-muted"><Loader2 size={13} className="animate-spin" />{t("common.loading")}</div> : <div>{log && !log.complete && <p className="mb-2 text-xs text-muted">{t("runs.logPreview")}</p>}<pre tabIndex={0} className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-input border border-border bg-surface-2 p-3 font-mono text-[13px] leading-relaxed text-text">{log?.text ?? t("runs.noLog")}</pre></div>}</DetailSection><RawRecord value={run.result} empty={t("runs.noResult")} /></div>}
-        {tab === "files" && <FileDetails run={run} onOpenFile={onOpenFile} onOpenArtifact={onOpenArtifact} />}
+        {tab === "files" && <FileDetails run={run} onOpenFile={onOpenFile} onLocateFile={onLocateFile} onOpenArtifact={onOpenArtifact} />}
         {tab === "runtime" && <div className="space-y-4"><dl className="runs-detail-fields grid gap-2 text-xs">{Object.entries(run.runtime).filter(([, value]) => typeof value === "string" || typeof value === "number").map(([key, value]) => <div key={key} className="contents"><DetailTerm>{key}</DetailTerm><DetailValue>{String(value)}</DetailValue></div>)}</dl><RawRecord value={run.runtime} empty={t("runs.noRuntime")} /></div>}
         {tab === "timing" && <TimingDetails run={run} />}
       </div>
@@ -98,17 +99,17 @@ function InputDetails({ run }: { run: ExecutionRecord }) {
   </DetailSection>;
 }
 
-function SummaryDetails({ run, onOpenFile, onOpenArtifact }: { run: ExecutionRecord; onOpenFile: (path: string) => void; onOpenArtifact: (artifact: ExecutionRecord["artifacts"][number]) => void }) {
+function SummaryDetails({ run, onOpenFile, onLocateFile, onOpenArtifact }: { run: ExecutionRecord; onOpenFile: (path: string) => void; onLocateFile: (path: string) => void; onOpenArtifact: (artifact: ExecutionRecord["artifacts"][number]) => void }) {
   const { t } = useTranslation();
   const output = [...new Set([run.result.stdout_preview, run.result.output_preview].filter(Boolean))].join("\n");
   return <div className="space-y-5">
     <InputDetails run={run} />
-    {run.files.read.length > 0 && <FileList title={t("runs.filesRead")} icon={<FileSearch size={14} />} files={run.files.read} empty={t("runs.noFilesRead")} onOpen={onOpenFile} compact />}
+    {run.files.read.length > 0 && <FileList title={t("runs.filesRead")} icon={<FileSearch size={14} />} files={run.files.read} empty={t("runs.noFilesRead")} onOpen={onOpenFile} onLocate={onLocateFile} compact />}
     <DetailSection title={t("runs.result")}>
       {output ? <><pre tabIndex={0} className="max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-input border border-border bg-surface-2 p-3 text-[13px] leading-6 text-text">{output}</pre><p className="mt-2 text-xs leading-5 text-muted">{t("runs.logPreview")}</p></>
         : <p className="text-sm text-muted">{executionError(run) || t("runs.noResult")}</p>}
     </DetailSection>
-    <FileList title={t("runs.filesWritten")} icon={<FileOutput size={14} />} files={run.files.written} empty={t("runs.noFilesWritten")} onOpen={onOpenFile} compact />
+    <FileList title={t("runs.filesWritten")} icon={<FileOutput size={14} />} files={run.files.written} empty={t("runs.noFilesWritten")} onOpen={onOpenFile} onLocate={onLocateFile} compact />
     {run.artifacts.length > 0 && <DetailSection title={t("runs.artifacts")}><div className="flex flex-wrap gap-2">{run.artifacts.map((artifact) => <button type="button" key={`${artifact.artifact_id}:${artifact.version}:${artifact.relation}`} onClick={() => onOpenArtifact(artifact)} title={artifact.artifact_id} className="max-w-full truncate rounded-input border border-border bg-surface px-3 py-2 text-xs text-text">{artifact.artifact_id} · v{artifact.version}<ArrowUpRight size={12} className="ml-2 inline" /></button>)}</div></DetailSection>}
     <details><summary className="cursor-pointer text-sm text-muted">{t("runs.advancedEvidence")}</summary>
       <div className="mt-3 space-y-4">    <dl className="runs-detail-fields grid gap-x-3 gap-y-2 text-sm">
@@ -120,13 +121,14 @@ function SummaryDetails({ run, onOpenFile, onOpenArtifact }: { run: ExecutionRec
   </div>;
 }
 
-function FileDetails({ run, onOpenFile, onOpenArtifact }: { run: ExecutionRecord; onOpenFile: (path: string) => void; onOpenArtifact: (artifact: ExecutionRecord["artifacts"][number]) => void }) {
+function FileDetails({ run, onOpenFile, onLocateFile, onOpenArtifact }: { run: ExecutionRecord; onOpenFile: (path: string) => void; onLocateFile: (path: string) => void; onOpenArtifact: (artifact: ExecutionRecord["artifacts"][number]) => void }) {
   const { t } = useTranslation();
-  return <div className="space-y-5"><FileList title={t("runs.filesRead")} icon={<FileSearch size={13} />} files={run.files.read} empty={t("runs.noFilesRead")} onOpen={onOpenFile} /><FileList title={t("runs.filesWritten")} icon={<FileOutput size={13} />} files={run.files.written} empty={t("runs.noFilesWritten")} onOpen={onOpenFile} /><DetailSection title={t("runs.artifacts")}>{run.artifacts.length === 0 ? <p className="text-xs text-muted">{t("runs.noArtifacts")}</p> : <div className="space-y-2">{run.artifacts.map((artifact) => <button type="button" onClick={() => onOpenArtifact(artifact)} key={`${artifact.artifact_id}:${artifact.version}:${artifact.relation}`} className="group flex w-full items-center gap-3 rounded-input border border-border bg-surface-2 px-3 py-2 text-left hover:border-accent-border hover:bg-accent-soft"><span className="min-w-0 flex-1"><span className="block truncate font-mono text-[13px] text-text">{artifact.artifact_id}</span><span className="mt-1 block text-xs text-muted">{artifact.relation} · v{artifact.version}</span></span><ArrowUpRight size={13} className="shrink-0 text-muted group-hover:text-accent" /></button>)}</div>}</DetailSection></div>;
+  return <div className="space-y-5"><FileList title={t("runs.filesRead")} icon={<FileSearch size={13} />} files={run.files.read} empty={t("runs.noFilesRead")} onOpen={onOpenFile} onLocate={onLocateFile} /><FileList title={t("runs.filesWritten")} icon={<FileOutput size={13} />} files={run.files.written} empty={t("runs.noFilesWritten")} onOpen={onOpenFile} onLocate={onLocateFile} /><DetailSection title={t("runs.artifacts")}>{run.artifacts.length === 0 ? <p className="text-xs text-muted">{t("runs.noArtifacts")}</p> : <div className="space-y-2">{run.artifacts.map((artifact) => <button type="button" onClick={() => onOpenArtifact(artifact)} key={`${artifact.artifact_id}:${artifact.version}:${artifact.relation}`} className="group flex w-full items-center gap-3 rounded-input border border-border bg-surface-2 px-3 py-2 text-left hover:border-accent-border hover:bg-accent-soft"><span className="min-w-0 flex-1"><span className="block truncate font-mono text-[13px] text-text">{artifact.artifact_id}</span><span className="mt-1 block text-xs text-muted">{artifact.relation} · v{artifact.version}</span></span><ArrowUpRight size={13} className="shrink-0 text-muted group-hover:text-accent" /></button>)}</div>}</DetailSection></div>;
 }
 
-function FileList({ title, icon, files, empty, onOpen, compact = false }: { title: string; icon: ReactNode; files: ExecutionRecord["files"]["read"]; empty: string; onOpen: (path: string) => void; compact?: boolean }) {
-  return <DetailSection title={title} icon={icon}>{files.length === 0 ? <p className="text-xs text-muted">{empty}</p> : <div className="space-y-2">{files.map((file, index) => <button type="button" onClick={() => onOpen(file.path)} key={`${file.path}:${index}`} className="group flex w-full items-center gap-3 rounded-input border border-border bg-surface-2 px-3 py-2 text-left hover:border-accent-border hover:bg-accent-soft"><span className="min-w-0 flex-1"><span className="block break-all font-mono text-[13px] text-text">{file.path}</span>{!compact && <span className="mt-1 block break-all text-xs text-muted">{file.detection}{file.sha256 && ` · SHA-256 ${file.sha256}`}{file.artifact_version && ` · v${file.artifact_version}`}</span>}</span><ArrowUpRight size={13} className="shrink-0 text-muted group-hover:text-accent" /></button>)}</div>}</DetailSection>;
+function FileList({ title, icon, files, empty, onOpen, onLocate, compact = false }: { title: string; icon: ReactNode; files: ExecutionRecord["files"]["read"]; empty: string; onOpen: (path: string) => void; onLocate: (path: string) => void; compact?: boolean }) {
+  const { t } = useTranslation();
+  return <DetailSection title={title} icon={icon}>{files.length === 0 ? <p className="text-xs text-muted">{empty}</p> : <div className="space-y-2">{files.map((file, index) => <div key={`${file.path}:${index}`} className="group flex items-center rounded-input border border-border bg-surface-2 hover:border-accent-border hover:bg-accent-soft"><button type="button" onClick={() => onOpen(file.path)} className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left"><span className="min-w-0 flex-1"><span className="block break-all font-mono text-[13px] text-text">{file.path}</span>{!compact && <span className="mt-1 block break-all text-xs text-muted">{file.detection}{file.sha256 && ` · SHA-256 ${file.sha256}`}{file.artifact_version && ` · v${file.artifact_version}`}</span>}</span><ArrowUpRight size={13} className="shrink-0 text-muted group-hover:text-accent" /></button><button type="button" onClick={() => onLocate(file.path)} aria-label={t("files.revealInTree")} title={t("files.revealInTree")} className="mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-input text-muted hover:bg-surface hover:text-accent"><Crosshair size={13} /></button></div>)}</div>}</DetailSection>;
 }
 
 function TimingDetails({ run }: { run: ExecutionRecord }) {

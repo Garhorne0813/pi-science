@@ -96,11 +96,14 @@ describe("native control-plane business routes", () => {
       );
       const selected = await app.inject({
         method: "PUT",
-        url: "/api/settings/model",
+        url: "/api/model-selection/default",
         payload: { model: "deepseek/deepseek-flash", thinking: "off" },
       });
       expect(selected.statusCode).toBe(200);
-      expect(selected.json()).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "off" });
+      expect(selected.json()).toMatchObject({
+        scope: "default",
+        selection: { model: "deepseek/deepseek-flash", thinking: "off" },
+      });
       const created = await modules.sessions.create({
         cwd,
         config: { model: "deepseek/deepseek-flash", thinking: "off", skills: [], extensions: [] },
@@ -109,8 +112,8 @@ describe("native control-plane business routes", () => {
       await modules.sessions.reloadConfiguration();
       const switched = await app.inject({
         method: "PUT",
-        url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
-        payload: { model: "deepseek/deepseek-v4-pro", thinking: "high", session_id: created.id },
+        url: `/api/sessions/${created.id}/model-selection?cwd=${encodeURIComponent(cwd)}`,
+        payload: { model: "deepseek/deepseek-v4-pro", thinking: "high" },
       });
       expect(switched.statusCode).toBe(200);
       expect(await modules.sessions.state(created.id, cwd)).toMatchObject({
@@ -131,8 +134,8 @@ describe("native control-plane business routes", () => {
       await modules.sessions.resume(nextSession.id, cwd);
       const switchedAgain = await app.inject({
         method: "PUT",
-        url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
-        payload: { model: "deepseek/deepseek-flash", thinking: "off", session_id: created.id },
+        url: `/api/sessions/${created.id}/model-selection?cwd=${encodeURIComponent(cwd)}`,
+        payload: { model: "deepseek/deepseek-flash", thinking: "off" },
       });
       expect(switchedAgain.statusCode).toBe(200);
       await modules.sessions.resume(created.id, cwd);
@@ -300,7 +303,7 @@ describe("native control-plane business routes", () => {
     expect(install.statusCode).toBe(400);
   });
 
-  it("does not overwrite an existing incomplete workspace environment", async () => {
+  it("preserves an existing workspace .venv but uses the managed environment", async () => {
     const cwd = await workspace();
     await mkdir(join(cwd, ".venv"), { recursive: true });
     await writeFile(join(cwd, ".venv", "keep.txt"), "user-owned", "utf8");
@@ -312,14 +315,15 @@ describe("native control-plane business routes", () => {
       url: `/api/environments/workspace?cwd=${encodeURIComponent(cwd)}`,
     });
 
-    expect(response.statusCode).toBe(500);
-    expect(response.json().error).toContain("incomplete");
+    expect(response.statusCode).toBe(200);
+    const environment = response.json();
+    expect(environment).toMatchObject({ ready: true, manager: "micromamba" });
     await expect(readFile(join(cwd, ".venv", "keep.txt"), "utf8")).resolves.toBe("user-owned");
   });
 
-  it("provisions an isolated Python environment inside the workspace", async () => {
-    // This compatibility fixture creates a mutable workspace venv. Required
-    // execution intentionally accepts only external immutable environments.
+  it("runs workspace jobs with the provisioned environment", async () => {
+    // The test fixture is a workspace-local venv; execute it without the
+    // required sandbox, which intentionally rejects workspace symlinks.
     vi.stubEnv("PI_SCIENCE_EXECUTION_MODE", "trusted-host");
     const cwd = await workspace();
     const app = buildApp(config());
@@ -334,10 +338,8 @@ describe("native control-plane business routes", () => {
     const environment = response.json();
     expect(environment).toMatchObject({
       ready: true,
+      manager: "micromamba",
       workspace: expect.any(String),
-      prefix: join(environment.workspace, ".venv"),
-      python: expect.stringContaining(join(environment.workspace, ".venv")),
-      npm: { local_prefix: environment.workspace },
     });
     await expect(access(environment.python)).resolves.toBeUndefined();
 
@@ -475,7 +477,7 @@ describe("native control-plane business routes", () => {
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
     await writeFile(
       join(process.env.PI_SCIENCE_HOME, "config.json"),
-      JSON.stringify({ model: "deepseek/deepseek-v4-flash", thinking: "max" }),
+      JSON.stringify({ model: "deepseek/deepseek-flash", thinking: "max" }),
       "utf8",
     );
     vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
@@ -484,8 +486,8 @@ describe("native control-plane business routes", () => {
         models: [
           {
             provider: "deepseek",
-            id: "deepseek-v4-flash",
-            name: "DeepSeek V4 Flash",
+            id: "deepseek-flash",
+            name: "DeepSeek V4.1 Flash",
             reasoning: true,
             contextWindow: 1_000_000,
             thinkingLevelMap: { high: "high", max: "max" },
@@ -507,12 +509,12 @@ describe("native control-plane business routes", () => {
     });
     expect(settings.statusCode).toBe(200);
     expect(settings.json()).toMatchObject({
-      model: "deepseek/deepseek-v4-flash",
+      model: "deepseek/deepseek-flash",
       // Catalog levels stay authoritative; the unrelated runtime is ignored.
       thinking: "max",
       available_models: [
         {
-          id: "deepseek/deepseek-v4-flash",
+          id: "deepseek/deepseek-flash",
           reasoning: true,
           thinking_levels: ["off", "minimal", "low", "medium", "high", "max"],
           context_window: 1000000,
@@ -528,7 +530,7 @@ describe("native control-plane business routes", () => {
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
     await writeFile(
       join(process.env.PI_SCIENCE_HOME, "config.json"),
-      JSON.stringify({ model: "deepseek/deepseek-v4-flash", thinking: "high" }),
+      JSON.stringify({ model: "deepseek/deepseek-flash", thinking: "high" }),
       "utf8",
     );
     vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
@@ -548,21 +550,21 @@ describe("native control-plane business routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       model: "",
-      unavailable_model: "deepseek/deepseek-v4-flash",
+      unavailable_model: "deepseek/deepseek-flash",
     });
     expect(response.json().available_models).toEqual([
       expect.objectContaining({ id: "deepseek/deepseek-v4-pro" }),
     ]);
     const rejected = await app.inject({
       method: "PUT",
-      url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
-      payload: { model: "deepseek/deepseek-v4-flash", thinking: "high" },
+      url: `/api/model-selection/default?cwd=${encodeURIComponent(cwd)}`,
+      payload: { model: "deepseek/deepseek-flash", thinking: "high" },
     });
     expect(rejected.statusCode).toBe(422);
     expect(rejected.json()).toMatchObject({ error: expect.any(String) });
   });
 
-  it("clamps a saved thinking level to the selected model's supported levels", async () => {
+  it("rejects a saved thinking level the selected model does not support", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
@@ -572,8 +574,10 @@ describe("native control-plane business routes", () => {
         models: [
           {
             provider: "deepseek",
-            id: "deepseek-v4-flash",
-            name: "DeepSeek V4 Flash",
+            // A non-built-in id keeps this fixture's restrictive level map
+            // authoritative instead of the Pi catalog's DeepSeek defaults.
+            id: "lab-flash",
+            name: "Lab Flash",
             reasoning: true,
             contextWindow: 1_000_000,
             thinkingLevelMap: { high: "high" },
@@ -585,20 +589,11 @@ describe("native control-plane business routes", () => {
     apps.push(app);
     const saved = await app.inject({
       method: "PUT",
-      url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
-      payload: { model: "deepseek/deepseek-v4-flash", thinking: "max" },
+      url: `/api/model-selection/default?cwd=${encodeURIComponent(cwd)}`,
+      payload: { model: "deepseek/lab-flash", thinking: "max" },
     });
-    expect(saved.statusCode).toBe(200);
-    expect(saved.json()).toMatchObject({
-      ok: true,
-      model: "deepseek/deepseek-v4-flash",
-      thinking: "high",
-    });
-    // The persisted value matches the response (never an unsupported level).
-    const stored = JSON.parse(
-      await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"),
-    );
-    expect(stored).toMatchObject({ model: "deepseek/deepseek-v4-flash", thinking: "high" });
+    expect(saved.statusCode).toBe(422);
+    expect(saved.json()).toMatchObject({ code: "invalid_thinking" });
   });
 
   it("projects the runtime-clamped thinking level on GET without persisting it", async () => {
@@ -864,7 +859,7 @@ describe("native control-plane business routes", () => {
     expect(await fingerprints()).toEqual(repaired);
   }, 30000);
 
-  it("uses verified runtime levels when saving the legacy default selection", async () => {
+  it("uses verified runtime levels when saving the default selection", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
@@ -874,8 +869,8 @@ describe("native control-plane business routes", () => {
         models: [
           {
             provider: "deepseek",
-            id: "deepseek-v4-flash",
-            name: "DeepSeek V4 Flash",
+            id: "deepseek-flash",
+            name: "DeepSeek V4.1 Flash",
             reasoning: true,
             contextWindow: 1_000_000,
             thinkingLevelMap: { off: "off", low: "low", minimal: null, medium: null, high: null },
@@ -887,28 +882,27 @@ describe("native control-plane business routes", () => {
     // the response AND the persisted config must both settle on high.
     vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({
       success: true,
-      data: { levels: ["high", "max"], model: "deepseek/deepseek-v4-flash" },
+      data: { levels: ["high", "max"], model: "deepseek/deepseek-flash" },
     });
     const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService });
     apps.push(app);
     const saved = await app.inject({
       method: "PUT",
-      url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
-      payload: { model: "deepseek/deepseek-v4-flash", thinking: "high" },
+      url: `/api/model-selection/default?cwd=${encodeURIComponent(cwd)}`,
+      payload: { model: "deepseek/deepseek-flash", thinking: "high" },
     });
     expect(saved.statusCode).toBe(200);
     expect(saved.json()).toMatchObject({
-      ok: true,
-      model: "deepseek/deepseek-v4-flash",
-      thinking: "high",
+      scope: "default",
+      selection: { model: "deepseek/deepseek-flash", thinking: "high" },
     });
     const stored = JSON.parse(
       await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"),
     );
-    expect(stored).toMatchObject({ model: "deepseek/deepseek-v4-flash", thinking: "high" });
+    expect(stored).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "high" });
   });
 
-  it("keeps the catalog-clamped level when runtime verification returns a different model", async () => {
+  it("keeps catalog levels when runtime verification returns a different model", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
@@ -918,8 +912,8 @@ describe("native control-plane business routes", () => {
         models: [
           {
             provider: "deepseek",
-            id: "deepseek-v4-flash",
-            name: "DeepSeek V4 Flash",
+            id: "deepseek-flash",
+            name: "DeepSeek V4.1 Flash",
             reasoning: true,
             contextWindow: 1_000_000,
             thinkingLevelMap: { off: "off", low: "low", minimal: null, medium: null, high: null },
@@ -937,20 +931,19 @@ describe("native control-plane business routes", () => {
     apps.push(app);
     const saved = await app.inject({
       method: "PUT",
-      url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`,
-      payload: { model: "deepseek/deepseek-v4-flash", thinking: "high" },
+      url: `/api/model-selection/default?cwd=${encodeURIComponent(cwd)}`,
+      payload: { model: "deepseek/deepseek-flash", thinking: "low" },
     });
     expect(saved.statusCode).toBe(200);
-    // Catalog clamp stands (high -> low); the foreign runtime is ignored.
+    // Catalog levels stay authoritative; the foreign runtime is ignored.
     expect(saved.json()).toMatchObject({
-      ok: true,
-      model: "deepseek/deepseek-v4-flash",
-      thinking: "low",
+      scope: "default",
+      selection: { model: "deepseek/deepseek-flash", thinking: "low" },
     });
     const stored = JSON.parse(
       await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"),
     );
-    expect(stored).toMatchObject({ model: "deepseek/deepseek-v4-flash", thinking: "low" });
+    expect(stored).toMatchObject({ model: "deepseek/deepseek-flash", thinking: "low" });
   });
 
   it("keeps authoritative levels when the runtime omits capability metadata", async () => {
@@ -1229,7 +1222,7 @@ describe("native control-plane business routes", () => {
             context_window: 1_000_000,
           }),
           expect.objectContaining({
-            id: "deepseek/deepseek-v4-flash",
+            id: "deepseek/deepseek-flash",
             reasoning: true,
             thinking_levels: expect.arrayContaining(["off", "high"]),
             context_window: 1_000_000,
@@ -1698,8 +1691,11 @@ describe("native control-plane business routes", () => {
         const aliasedCwd = join(alias, "project");
         const prompt = await app.inject({
           method: "POST",
-          url: `/api/sessions/old/prompt?cwd=${encodeURIComponent(aliasedCwd)}`,
-          payload: { message: "Research now" },
+          url: `/api/sessions/old/prompts?cwd=${encodeURIComponent(aliasedCwd)}`,
+          payload: {
+            message: "Research now",
+            client_message_id: "2b6f7c1e-9f5a-4d3b-8a6e-1c2d3e4f5a6b",
+          },
         });
         expect(prompt.statusCode).toBe(409);
         expect(prompt.json().code).toBe("busy");
@@ -2566,8 +2562,8 @@ describe("native control-plane business routes", () => {
     });
     expect(fetched.json()).not.toHaveProperty("ownership");
     const cancelled = await app.inject({
-      method: "DELETE",
-      url: `/api/jobs/${jobId}?cwd=${encodeURIComponent(cwd)}`,
+      method: "POST",
+      url: `/api/jobs/${jobId}/cancel?cwd=${encodeURIComponent(cwd)}`,
     });
     expect(cancelled.statusCode).toBe(200);
     expect(cancelled.json()).not.toHaveProperty("ownership");

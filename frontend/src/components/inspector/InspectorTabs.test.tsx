@@ -26,6 +26,7 @@ function Harness() {
 
 beforeEach(async () => {
   useUiStore.getState().closeInspector();
+  useUiStore.setState({ fileTreeOpen: false });
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   await i18n.changeLanguage("en");
 });
@@ -68,6 +69,21 @@ describe("InspectorTabs", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "one.txt" }));
     expect(screen.getByText("one.txt content")).toBeInTheDocument();
+  });
+
+  it("keeps the preview pane open on the file tree after closing the last tab", () => {
+    const only = file("one.txt");
+    useUiStore.getState().setFileTreeOpen(true);
+    useUiStore.getState().openInspector(only);
+
+    useUiStore.getState().closeInspectorTab(inspectorTabId(only));
+
+    expect(useUiStore.getState()).toMatchObject({
+      inspectorOpen: true,
+      fileTreeOpen: true,
+      inspectorTabs: [],
+      activeInspectorTabId: null,
+    });
   });
 
   it("reserves fixed control space and keeps tab content at a stable height", () => {

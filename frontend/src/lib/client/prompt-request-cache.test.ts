@@ -13,7 +13,6 @@ import { installClientTestEnvironment } from "./test-helpers";
 installClientTestEnvironment();
 
 const V2_KEY = "pi-science.pending-prompt-requests.v2";
-const V1_KEY = "pi-science.pending-prompt-requests.v1";
 
 function record(overrides: Partial<Parameters<typeof saveLocalPromptRequest>[0]> = {}) {
   const text = overrides.text ?? "draw the curve";
@@ -37,14 +36,11 @@ describe("pending prompt request cache", () => {
     expect(findLocalPromptRequest("/workspace-a", "session-a", saved.contentDigest)).toEqual(saved);
     expect(findLocalPromptRequest("/workspace-b", "session-a", saved.contentDigest)).toBeNull();
     expect(findLocalPromptRequest("/workspace-a", "session-b", saved.contentDigest)).toBeNull();
-    // The whole point of v2: the text survives a reload, and only localStorage
-    // holds it — the v1 sessionStorage key is deleted on read.
+    // The whole point of v2: the text survives a reload.
     expect(localStorage.getItem(V2_KEY)).toContain(saved.text);
-    expect(sessionStorage.getItem(V1_KEY)).toBeNull();
   });
 
-  it("drops legacy v1 records and malformed payloads instead of trusting them", () => {
-    sessionStorage.setItem(V1_KEY, JSON.stringify([{ cwd: "/workspace-a", sessionId: "s", clientMessageId: "id", contentDigest: "d", status: "pending" }]));
+  it("drops malformed payloads instead of trusting them", () => {
     localStorage.setItem(V2_KEY, JSON.stringify([
       { cwd: "/workspace-a", sessionId: "s", clientMessageId: "no-version", contentDigest: "d", text: "x", createdAt: 1, status: "pending" },
       { schemaVersion: 2, cwd: "/workspace-a", sessionId: "s", clientMessageId: "bad-status", contentDigest: "d", text: "x", createdAt: 1, status: "done" },
@@ -52,7 +48,6 @@ describe("pending prompt request cache", () => {
     ]));
 
     expect(localPromptRequests("/workspace-a", "s").map((item) => item.clientMessageId)).toEqual(["kept"]);
-    expect(sessionStorage.getItem(V1_KEY)).toBeNull();
   });
 
   it("keeps the original creation time when a replay re-saves the same record", () => {

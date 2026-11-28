@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useRuntimeStore } from "../lib/agent-runtime";
 import { useUiStore } from "../lib/ui";
 import { apiRequest } from "../lib/client/api";
-import { injectWorkspaceReferences } from "../lib/files";
+import { injectWorkspaceReferences, readWorkspaceReferenceDrag, WORKSPACE_REFERENCE_MIME } from "../lib/files";
 import { useFeedback } from "../components/feedback/feedback-context";
 import type { ResearchStarter } from "../components/conversation/ResearchModePicker";
 import { injectSubagentMentions } from "../lib/conversation";
@@ -40,6 +40,7 @@ export function useComposer(params: {
   const sendSteer = useRuntimeStore((s) => s.sendSteer);
   const enqueueMessage = useRuntimeStore((s) => s.enqueueMessage);
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
+  const referenceScope = conversationKey;
   const input = useRuntimeStore((s) => s.draft);
   const setDraft = useRuntimeStore((s) => s.setDraft);
   const quote = useActiveMessageQuote();
@@ -62,10 +63,11 @@ export function useComposer(params: {
   const composingRef = useRef(false);
   const allWorkspaceReferences = useUiStore((state) => state.workspaceReferences);
   const workspaceReferences = useMemo(
-    () => allWorkspaceReferences.filter((item) => item.cwd === cwd),
-    [allWorkspaceReferences, cwd],
+    () => allWorkspaceReferences.filter((item) => item.cwd === cwd && (item.conversationKey === undefined || item.conversationKey === referenceScope)),
+    [allWorkspaceReferences, cwd, referenceScope],
   );
   const clearWorkspaceReferences = useUiStore((state) => state.clearWorkspaceReferences);
+  const addWorkspaceReference = useUiStore((state) => state.addWorkspaceReference);
   const composerContextRef = useRef<{ cwd: string; conversationKey: string | null; sessionId: string | null } | null>(null);
 
   useEffect(() => {
@@ -73,12 +75,12 @@ export function useComposer(params: {
       if (state.draft !== previous.draft || (previous.activeSessionId !== null && state.activeSessionId !== previous.activeSessionId)) composerRevisionRef.current += 1;
     });
     const unsubscribeUi = useUiStore.subscribe((state, previous) => {
-      const current = state.workspaceReferences.filter((reference) => reference.cwd === cwd);
-      const before = previous.workspaceReferences.filter((reference) => reference.cwd === cwd);
+      const current = state.workspaceReferences.filter((reference) => reference.cwd === cwd && (reference.conversationKey === undefined || reference.conversationKey === referenceScope));
+      const before = previous.workspaceReferences.filter((reference) => reference.cwd === cwd && (reference.conversationKey === undefined || reference.conversationKey === referenceScope));
       if (current.length !== before.length || current.some((reference, index) => reference !== before[index])) composerRevisionRef.current += 1;
     });
     return () => { unsubscribeRuntime(); unsubscribeUi(); composerRevisionRef.current += 1; };
-  }, [cwd]);
+  }, [cwd, referenceScope]);
 
   useEffect(() => {
     const composerContext = { cwd, conversationKey, sessionId: activeSessionId };
@@ -95,7 +97,6 @@ export function useComposer(params: {
       setInput("");
       setEntities([]);
       setFiles([]);
-      clearWorkspaceReferences(cwd);
     }
     // Support opening a fresh conversation with a pre-filled prompt from
     // another surface (e.g. the Skills "let the assistant write it" dialog).
@@ -103,7 +104,7 @@ export function useComposer(params: {
     if (initialDraft && !useRuntimeStore.getState().draft) {
       setInput(initialDraft);
     }
-  }, [activeSessionId, clearWorkspaceReferences, conversationKey, cwd, location.state, setEntities, setFiles, setInput]);
+  }, [activeSessionId, conversationKey, cwd, location.state, setEntities, setFiles, setInput]);
 
   const uploadFiles = useCallback(async (fileList: FileList | File[]) => {
     const arr = Array.from(fileList);
@@ -222,7 +223,7 @@ export function useComposer(params: {
     research.setMode(null);
     setEntities([]);
     setFiles([]);
-    clearWorkspaceReferences(cwd);
+    clearWorkspaceReferences(cwd, referenceScope);
     if (sentQuote) useMessageQuoteStore.getState().clearQuote(sentQuote.source);
     const sentRevision = composerRevisionRef.current;
     onSend?.();
@@ -270,9 +271,20 @@ export function useComposer(params: {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
+    const reference = readWorkspaceReferenceDrag(e.dataTransfer);
+    if (reference) {
+      if (reference.cwd === cwd) addWorkspaceReference({ ...reference, conversationKey: referenceScope });
+      return;
+    }
     if (e.dataTransfer.files.length > 0) {
       void uploadFiles(e.dataTransfer.files);
     }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (Array.from(e.dataTransfer.types).includes(WORKSPACE_REFERENCE_MIME)) e.dataTransfer.dropEffect = "link";
+    e.preventDefault();
+    setDragOver(true);
   };
 
   const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -285,6 +297,6 @@ export function useComposer(params: {
   return {
     input, setInput, entities, setEntities, mentions, files, setFiles, dragOver, setDragOver,
     fileInputRef, inputRef, composingRef, workspaceReferences, quote,
-    handleSend, handleKeyDown, handleDrop, handleFilePick,
+    handleSend, handleKeyDown, handleDrop, handleDragOver, handleFilePick,
   };
 }

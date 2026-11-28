@@ -242,8 +242,13 @@ it("refreshes instructions between model generations in the same tool-using turn
     { timeout: 30000 },
   );
   expect(JSON.stringify(requests[0]!.messages)).toContain("BEFORE_TOOL_EDIT");
-  expect(JSON.stringify(requests[1]!.messages)).not.toContain("BEFORE_TOOL_EDIT");
-  expect(JSON.stringify(requests[1]!.messages)).toContain("AFTER_TOOL_EDIT");
+  // The write tool's fileChange patch legitimately retains the previous bytes
+  // in the tool result; only the refreshed instructions must drop them.
+  const refreshedInstructions = JSON.stringify(
+    requests[1]!.messages.filter((message) => message.role !== "toolResult"),
+  );
+  expect(refreshedInstructions).not.toContain("BEFORE_TOOL_EDIT");
+  expect(refreshedInstructions).toContain("AFTER_TOOL_EDIT");
   expect(await readFile(join(parts.executionEnv.cwd, "AGENTS.md"), "utf8")).toBe("AFTER_TOOL_EDIT");
   // Include runtime setup and cleanup in addition to the sandboxed generation wait.
 }, 45_000);
@@ -1306,6 +1311,7 @@ describe("agent-core worker mutations", () => {
       },
       context,
     );
+    expect(result.details).toMatchObject({ execution_id: expect.any(String), exitCode: 0 });
     const text = result.content
       .filter((part) => part.type === "text")
       .map((part) => (part.type === "text" ? part.text : ""))

@@ -255,8 +255,14 @@ describe("conversation presentation protocol v2", () => {
         callId: "call-1",
         tool: "bash",
         status: "error",
+        outputTruncated: true,
+        originalOutputBytes: 70_000,
       }),
-    ).toMatchObject({ callId: "call-1" });
+    ).toMatchObject({
+      callId: "call-1",
+      outputTruncated: true,
+      originalOutputBytes: 70_000,
+    });
     expect(() =>
       conversationToolUpdatedPayloadSchema.parse({
         callId: "call-1",

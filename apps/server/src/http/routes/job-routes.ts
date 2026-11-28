@@ -156,7 +156,5 @@ export function registerJobRoutes(app: FastifyInstance, jobs: JobCoordinator): v
     };
   app.get("/api/jobs/:job_id", handle("get"));
   app.post("/api/jobs/:job_id/cancel", handle("cancel"));
-  // Compatibility alias: this has always cancelled rather than deleted history.
-  app.delete("/api/jobs/:job_id", handle("cancel"));
   app.get("/api/jobs/:job_id/logs", handle("logs"));
 }

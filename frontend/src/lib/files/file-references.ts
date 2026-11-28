@@ -5,6 +5,9 @@ import { isImageRegionPath } from "./image-region-path";
 
 export interface WorkspaceReference {
   cwd: string;
+  /** Conversation draft that owns this pending reference. `null` is the
+   * workspace's new-conversation draft; absent values are legacy/unscoped. */
+  conversationKey?: string | null;
   path: string;
   name: string;
   isDir: boolean;
@@ -17,6 +20,13 @@ const RESEARCH_STARTER = /^(?:\/skill:auto-research\s+)?\[Workflow: (?:research_
 const REFERENCE_BLOCK = /<workspace_references>[\s\S]*?<\/workspace_references>\s*/g;
 
 const REGION_PREFIX = "- image-region (read this PNG for the marked overview above and detail below): ";
+const REGION_GUIDANCE = [
+  "For image-region references, inspect the lower crop first and use it as the primary visual evidence.",
+  "Answer the user's question about the selected region.",
+  "Use the upper marked overview to locate the selection and supply context only when needed for that answer.",
+  "Explain the full image only if the user explicitly asks for it.",
+  "If the crop is insufficient, state what cannot be determined from the selection.",
+].join(" ");
 
 export function injectWorkspaceReferences(message: string, references: WorkspaceReference[]): string {
   if (references.length === 0) return message;
@@ -25,7 +35,8 @@ export function injectWorkspaceReferences(message: string, references: Workspace
       ? `${REGION_PREFIX}${JSON.stringify([reference.path, reference.imageRegion]).replace(/</g, "\\u003c")}`
       : `- ${reference.isDir ? "folder" : "file"}: ${JSON.stringify(reference.path)}`)
     .join("\n");
-  return `${message}\n\n<workspace_references>\n${items}\n</workspace_references>`.trim();
+  const guidance = references.some((reference) => reference.imageRegion) ? `${REGION_GUIDANCE}\n` : "";
+  return `${message}\n\n<workspace_references>\n${guidance}${items}\n</workspace_references>`.trim();
 }
 
 export function visibleUserMessage(message: string): string {

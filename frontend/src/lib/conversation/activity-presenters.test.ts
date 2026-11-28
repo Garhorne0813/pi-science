@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ToolCallBlock } from "../../types/thread";
-import { presentToolActivity, toolActivityCategory } from "./activity-presenters";
+import { presentFailedToolActivity, presentToolActivity, toolActivityCategory } from "./activity-presenters";
 const block = (tool: string, input?: Record<string, unknown>, title?: string): ToolCallBlock => ({ kind: "tool", id: tool, callId: tool, tool, status: "running", input, title });
 
 describe("presentToolActivity", () => {
@@ -119,4 +119,12 @@ describe("toolActivityCategory", () => {
 describe("safe fallbacks", () => {
   it.each(["TOKEN=secret cmd", "env cmd", "cmd | other", "cmd 'secret'", "cmd\nother"])("rejects %s", (command) => { expect(presentToolActivity(block("bash", { command }))).toBe("Running bash"); });
   it.each([[{ path: "a.ts", offset: 120, limit: 40 }, "Reading a.ts:120-159"], [{ path: "a.ts", offset: 120 }, "Reading a.ts:120"], [{ path: "a.ts" }, "Reading a.ts"], [{ path: "a.ts", offset: -1 }, "Reading a.ts"]])("formats read target", (input, expected) => { expect(presentToolActivity(block("read", input))).toBe(expected); });
+});
+describe("presentFailedToolActivity", () => {
+  it("presents a failed file action without losing its target", () => {
+    expect(presentFailedToolActivity(block("write", { path: "src/file.ts" }))).toBe("Failed to update file.ts");
+  });
+  it("uses the actionable description for a generic failed tool", () => {
+    expect(presentFailedToolActivity(block("bash", { description: "Run checks" }))).toBe("Failed: Run checks");
+  });
 });

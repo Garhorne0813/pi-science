@@ -1,18 +1,19 @@
-import { Link, Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 import { lazy, Suspense, useState, useEffect, useRef, useCallback } from "react";
 import { useUiStore } from "../../lib/ui";
 import { RightPane } from "../../components/inspector/RightPane";
 import { PreviewPaneControls } from "../../components/inspector/PreviewPaneControls";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
-import { WorkspaceRail } from "../../components/sidebar/WorkspaceRail";
+import { WorkspaceProjectSwitcher } from "../../components/sidebar/WorkspaceProjectSwitcher";
 import { useWorkspaceCwd } from "../../lib/workspace";
 import { cn } from "../../lib/ui";
-import { ChevronsLeft } from "lucide-react";
+import { ChevronsLeft, PanelLeftOpen } from "lucide-react";
 import { IconButton } from "../../components/ui/Icon";
 import { NARROW_MEDIA_QUERY, isNarrowViewport } from "../../lib/ui/viewport";
 
 // Load workspace-only tabs and menus without adding them to the initial page graph.
 const SidebarMainArea = lazy(() => import("../../components/sidebar/SidebarMainArea").then(module => ({ default: module.SidebarMainArea })));
+const PreviewFileTreePane = lazy(() => import("../../components/inspector/PreviewFileTreePane").then(module => ({ default: module.PreviewFileTreePane })));
 
 // The settings bundle (dialog + tabs) only loads on first open.
 const SettingsDialog = lazy(() => import("../../components/settings/SettingsDialog").then((m) => ({ default: m.SettingsDialog })));
@@ -54,8 +55,8 @@ function loadInspectorTabs(): Promise<InspectorTabsModule> {
 
 const InitialInspectorTabs = lazy(loadInspectorTabs);
 import { useTranslation } from "react-i18next";
-import { workspacePathLeaf } from "../../lib/workspace";
 import { conversationSessionId } from "../../lib/conversation/session-route";
+import { rememberLastConversation } from "../../lib/conversation/last-conversation";
 
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 420;
@@ -70,6 +71,7 @@ export function ProjectsLayout() {
   const inspectorTabs = useUiStore((s) => s.inspectorTabs);
   const activeInspectorTabId = useUiStore((s) => s.activeInspectorTabId);
   const inspectorMaximized = useUiStore((s) => s.inspectorMaximized);
+  const fileTreeOpen = useUiStore((s) => s.fileTreeOpen);
   const closeInspector = useUiStore((s) => s.closeInspector);
   const setInspectorVisible = useUiStore((s) => s.setInspectorVisible);
   const setInspectorMaximized = useUiStore((s) => s.setInspectorMaximized);
@@ -82,7 +84,7 @@ export function ProjectsLayout() {
   const sidebarDragWidthRef = useRef<number | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
   const toggleRef = useRef<HTMLButtonElement | null>(null);
-  const headerLinkRef = useRef<HTMLAnchorElement | null>(null);
+  const headerLinkRef = useRef<HTMLDivElement | null>(null);
   const focusBeforeExplicitExpand = useRef<HTMLButtonElement | null>(null);
   const focusBeforeExplicitClose = useRef<{ element: Element | null } | null>(null);
   const [narrowViewport, setNarrowViewport] = useState(isNarrowViewport);
@@ -93,10 +95,16 @@ export function ProjectsLayout() {
   const drawerOpen = isWorkspace && narrowViewport && !contextPanelCollapsed;
   const workspaceRoot = activeCwd ? `/workspace/${encodeURIComponent(activeCwd)}` : "";
   const activeConversationSessionId = conversationSessionId(location.pathname);
+  useEffect(() => {
+    if (activeCwd && activeConversationSessionId) rememberLastConversation(activeCwd, activeConversationSessionId);
+  }, [activeConversationSessionId, activeCwd]);
   const isConversationRoute = isWorkspace && (
-    location.pathname === workspaceRoot || location.pathname.startsWith(`${workspaceRoot}/session/`)
+    location.pathname === workspaceRoot || location.pathname === `${workspaceRoot}/new` || location.pathname.startsWith(`${workspaceRoot}/session/`)
   );
   const previewOnLeft = isConversationRoute && previewPaneSide === "left";
+  const hasActivePreview = !!activeInspectorTabId && inspectorTabs.length > 0;
+  const showFileTree = isConversationRoute && fileTreeOpen;
+  const showPreviewPane = isWorkspace && inspectorOpen && (showFileTree || hasActivePreview);
   const clampSidebarWidth = (width: number) => Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
   const beginSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -209,19 +217,18 @@ export function ProjectsLayout() {
         {t("common.skipToContent", { defaultValue: "Skip to content" })}
       </a>
       {/* The project workbench is full-width; workspace routes retain navigation. */}
-      {!isProjectsHome && <>
-        <WorkspaceRail cwd={activeCwd} toggleRef={toggleRef} onExpand={expandContextPanel} />
-        <div data-context-panel-shade aria-hidden="true" hidden={!drawerOpen} onPointerDown={closeContextPanel} onMouseDown={(event) => event.preventDefault()} className={cn(!drawerOpen && "!hidden", "absolute inset-y-0 left-[var(--rail-width-mobile)] right-0 z-50 bg-black/45 md:hidden")} />
-        <aside ref={panelRef} tabIndex={-1} id="workspace-context-panel" aria-label={t("sidebar.workspaceContent")} hidden={contextPanelCollapsed || !isWorkspace} className={cn((contextPanelCollapsed || !isWorkspace) && "!hidden", "app-sidebar sidebar-enter absolute inset-y-0 left-[var(--rail-width-mobile)] z-[60] flex h-full shrink-0 flex-col overflow-hidden border-r border-faint md:relative md:left-auto md:z-auto")} style={{ width: sidebarDragWidth ?? sidebarWidth, maxWidth: "calc(100vw - var(--rail-width-mobile))" }}>
+      {!isProjectsHome && isWorkspace && <>
+        {contextPanelCollapsed && <div data-workspace-sidebar-toggle-slot className="relative h-full w-12 shrink-0">
+          <button ref={toggleRef} type="button" aria-label={t("shell.expandContextPanel")} title={t("shell.expandContextPanel")} aria-controls="workspace-context-panel" aria-expanded={false} onClick={event => expandContextPanel(event.currentTarget)} className="absolute left-2 top-1.5 z-40 flex h-8 w-8 items-center justify-center rounded-input text-muted hover:bg-surface-hover hover:text-text"><PanelLeftOpen size={18} /></button>
+        </div>}
+        <div data-context-panel-shade aria-hidden="true" hidden={!drawerOpen} onPointerDown={closeContextPanel} onMouseDown={(event) => event.preventDefault()} className={cn(!drawerOpen && "!hidden", "absolute inset-0 z-50 bg-black/45 md:hidden")} />
+        <aside ref={panelRef} tabIndex={-1} id="workspace-context-panel" aria-label={t("sidebar.workspaceContent")} hidden={contextPanelCollapsed} className={cn(contextPanelCollapsed && "!hidden", "app-sidebar sidebar-enter absolute inset-y-0 left-0 z-[60] flex h-full shrink-0 flex-col overflow-hidden border-r border-faint md:relative md:z-auto")} style={{ width: sidebarDragWidth ?? sidebarWidth, maxWidth: "min(88vw, 420px)" }}>
           <div className="flex h-full min-h-0 flex-col px-panel py-card">
-            <header className="mb-2 flex shrink-0 items-start gap-2 px-2 py-1">
-              <Link ref={headerLinkRef} to="/" title={activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")} className="flex min-w-0 flex-1 flex-col text-text">
-                <span className="workspace-brand">pi-science</span>
-                <span className="truncate text-xs font-normal leading-4 text-muted">{activeCwd ? workspacePathLeaf(activeCwd) : t("nav.projects")}</span>
-              </Link>
-              {isWorkspace && <IconButton icon={ChevronsLeft} label={t("shell.collapseContextPanel")} title={t("shell.collapseContextPanel")} aria-controls="workspace-context-panel" aria-expanded={!contextPanelCollapsed} onClick={closeContextPanel} />}
+            <header className="mb-2 flex shrink-0 items-center gap-1">
+              <div ref={headerLinkRef} tabIndex={-1} className="flex min-w-0 flex-1"><WorkspaceProjectSwitcher cwd={activeCwd} /></div>
+              <IconButton icon={ChevronsLeft} label={t("shell.collapseContextPanel")} title={t("shell.collapseContextPanel")} aria-controls="workspace-context-panel" aria-expanded={!contextPanelCollapsed} onClick={closeContextPanel} />
             </header>
-            {isWorkspace && <Suspense fallback={<div role="status" className="min-h-0 flex-1 p-2 text-ui-label text-muted">{t("inspector.loading")}</div>}><SidebarMainArea key={activeCwd!} cwd={activeCwd!} /></Suspense>}
+            <Suspense fallback={<div role="status" className="min-h-0 flex-1 p-2 text-ui-label text-muted">{t("inspector.loading")}</div>}><SidebarMainArea key={activeCwd} cwd={activeCwd} /></Suspense>
           </div>
             <div
               role="separator"
@@ -260,44 +267,56 @@ export function ProjectsLayout() {
         <Outlet />
       </main>
 
-      {isConversationRoute && !inspectorOpen && <PreviewPaneControls inert={drawerOpen} />}
+      {isConversationRoute && !inspectorOpen && <PreviewPaneControls inert={drawerOpen} showFileTreeToggle />}
 
       {/* Inspector — only in workspace context */}
-      {isWorkspace && inspectorOpen && activeInspectorTabId && inspectorTabs.length > 0 && (
+      {showPreviewPane && (
         <RightPane
           inert={drawerOpen}
           side={previewOnLeft ? "left" : "right"}
           onMinimize={() => setInspectorVisible(false)}
         >
-          <ErrorBoundary
-            key={inspectorLoadAttempt}
-            fallback={(
-              <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted">
-                <p>{t("errors.somethingWentWrong")}</p>
-                <button
-                  type="button"
-                  className="rounded-input bg-surface-2 px-3 py-1.5 text-xs text-text hover:bg-surface"
-                  onClick={() => {
-                    inspectorTabsModule = null;
-                    setLazyInspectorTabs(() => lazy(loadInspectorTabs));
-                    setInspectorLoadAttempt((attempt) => attempt + 1);
-                  }}
+          <div className="relative flex h-full min-w-0 overflow-hidden">
+            {showFileTree && activeCwd && (
+              <Suspense fallback={<div className="flex h-full flex-1 items-center justify-center text-sm text-muted">{t("inspector.loading")}</div>}>
+                <PreviewFileTreePane cwd={activeCwd} conversationKey={activeConversationSessionId} split={hasActivePreview} />
+              </Suspense>
+            )}
+            {hasActivePreview && activeInspectorTabId && (
+              <div className="h-full min-w-0 flex-1">
+                <ErrorBoundary
+                  key={inspectorLoadAttempt}
+                  fallback={(
+                    <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted">
+                      <p>{t("errors.somethingWentWrong")}</p>
+                      <button
+                        type="button"
+                        className="rounded-input bg-surface-2 px-3 py-1.5 text-xs text-text hover:bg-surface"
+                        onClick={() => {
+                          inspectorTabsModule = null;
+                          setLazyInspectorTabs(() => lazy(loadInspectorTabs));
+                          setInspectorLoadAttempt((attempt) => attempt + 1);
+                        }}
+                      >
+                        {t("common.tryAgain")}
+                      </button>
+                    </div>
+                  )}
                 >
-                  {t("common.tryAgain")}
-                </button>
+                  <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted">{t("inspector.loading")}</div>}>
+                    <LazyInspectorTabs
+                      tabs={inspectorTabs}
+                      activeTabId={activeInspectorTabId}
+                      cwd={activeCwd || undefined}
+                      sessionId={activeConversationSessionId}
+                      reserveControls={isConversationRoute}
+                      showFileTreeToggle={isConversationRoute}
+                    />
+                  </Suspense>
+                </ErrorBoundary>
               </div>
             )}
-          >
-            <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted">{t("inspector.loading")}</div>}>
-              <LazyInspectorTabs
-                tabs={inspectorTabs}
-                activeTabId={activeInspectorTabId}
-                cwd={activeCwd || undefined}
-                sessionId={activeConversationSessionId}
-                reserveControls={isConversationRoute}
-              />
-            </Suspense>
-          </ErrorBoundary>
+          </div>
         </RightPane>
       )}
 

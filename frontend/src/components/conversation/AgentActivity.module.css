@@ -100,8 +100,7 @@
   padding: 0.25rem 0;
 }
 
-/* The live feed reads as one continuous stream: tighter than the folded
-   records behind the settled summary row. */
+/* The live feed keeps a small gap while the folded history stays compact. */
 .traceLive {
   gap: 0.125rem;
 }

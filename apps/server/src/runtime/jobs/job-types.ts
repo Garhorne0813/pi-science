@@ -7,14 +7,16 @@ export interface JobRequirement {
   runtime?: string;
   packages?: string[];
   environment_revision_id?: string;
-  /** Backward-compatible alias for clients that use the shorter field name. */
-  environment_revision?: string;
   timeout_seconds?: number;
   [key: string]: unknown;
 }
 
 export type JobProcessIdentity = { kind: "linux-proc-start-ticks"; value: string };
-export type JobOwnerProcessIdentity = { kind: "linux-proc-start-ticks" | "ps-lstart-utc" | "windows-start-ticks"; platform: NodeJS.Platform; value: string };
+export type JobOwnerProcessIdentity = {
+  kind: "linux-proc-start-ticks" | "ps-lstart-utc" | "windows-start-ticks";
+  platform: NodeJS.Platform;
+  value: string;
+};
 
 export interface JobChildIdentity {
   pid: number;

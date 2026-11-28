@@ -25,7 +25,6 @@ const defaultFetch = async (input: RequestInfo | URL, init: RequestInit = {}) =>
         settings: { connector_id: "mcp-paper-search", enabled: true, include_tools: [], exclude_tools: [], approval_mode: "ask", revision: 1, created_at: 1, updated_at: 1 },
         config_state: "valid", auth_state: "not-required", runtime_state: "ready", tool_count: 2, error: null,
       }],
-      legacy_count: 0,
     });
   }
   if (url === "/api/mcp/connectors/mcp-paper-search/settings" && method === "PUT") {
@@ -78,7 +77,6 @@ describe("MCPTab", () => {
 
     const table = await screen.findByRole("table");
     expect(screen.getByRole("button", { name: "Add connector" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Import existing config" })).toBeInTheDocument();
     expect(within(table).getByRole("columnheader", { name: "Name" })).toBeInTheDocument();
     expect(within(table).getByRole("columnheader", { name: "Description" })).toBeInTheDocument();
     expect(within(table).getByRole("columnheader", { name: "Status" })).toBeInTheDocument();
@@ -100,7 +98,7 @@ describe("MCPTab", () => {
           credential_ref: null, revision: 1, created_at: 1, updated_at: 1,
           settings: { connector_id: "mcp-paper-search", enabled: true, include_tools: [], exclude_tools: [], approval_mode: "ask", revision: 1, created_at: 1, updated_at: 1 },
           config_state: "valid", auth_state: "not-required", runtime_state: "ready", tool_count: 1, error: null,
-        }], legacy_count: 0,
+        }],
       });
       if (url === "/api/mcp/connectors/mcp-paper-search/tools?cwd=%2Ftmp%2Fws" && method === "GET") return jsonResponse({ tools: [{ name: "search_pubmed", title: "Search PubMed", description: "Search papers", read_only: true, decision: "ask", decision_scope: "global" }], cached_at: 1 });
       if (url === "/api/mcp/connectors/mcp-paper-search/credential" && method === "GET") return jsonResponse({ credential_ref: null, configured: false, backend: null, delivery: null, target_name: null, environment_variable: null, suggested_delivery: "environment", suggested_target_name: "NCBI_API_KEY" });
@@ -151,7 +149,7 @@ describe("MCPTab", () => {
   });
 
   it("keeps the Skills-style empty table when no server is configured", async () => {
-    fetchMock.mockImplementationOnce(async () => jsonResponse({ connectors: [], legacy_count: 0 }));
+    fetchMock.mockImplementationOnce(async () => jsonResponse({ connectors: [] }));
     renderTab("/tmp/ws");
 
     const table = await screen.findByRole("table");
@@ -164,12 +162,6 @@ describe("MCPTab", () => {
     expect(screen.getByLabelText("Name")).toBeInTheDocument();
     expect(screen.getByLabelText("Endpoint URL")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create and enable" })).toBeDisabled();
-  });
-
-  it("shows the import entry at all times and annotates discovered legacy entries", async () => {
-    fetchMock.mockImplementationOnce(async () => jsonResponse({ connectors: [], legacy_count: 1 }));
-    renderTab("/tmp/ws");
-    expect(await screen.findByRole("button", { name: "Import existing config (1)" })).toBeInTheDocument();
   });
 
   it("clears transport-specific values when transport changes", async () => {
@@ -230,19 +222,6 @@ describe("MCPTab", () => {
     expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
   });
 
-  it("previews importable legacy connectors before committing", async () => {
-    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      const url = String(input); const method = (init.method || "GET").toUpperCase();
-      if (url === "/api/mcp/import/preview?cwd=%2Ftmp%2Fws" && method === "POST") return jsonResponse({ source: "/tmp/ws/.mcp.json", entries: [{ name: "legacy-tools", transport: "stdio", importable: true, conflict: false, contains_sensitive_fields: false }] });
-      return defaultFetch(input, init);
-    });
-    renderTab("/tmp/ws");
-    fireEvent.click(await screen.findByRole("button", { name: "Import existing config" }));
-    expect(await screen.findByText("/tmp/ws/.mcp.json")).toBeInTheDocument();
-    expect(screen.getByText("legacy-tools")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Import selected (1)" })).toBeEnabled();
-  });
-
   it("preserves quoted and escaped local command arguments", async () => {
     renderTab("/tmp/ws");
     fireEvent.click(await screen.findByRole("button", { name: "Add connector" }));
@@ -279,7 +258,7 @@ describe("MCPTab", () => {
         credential_ref: null, revision: 1, created_at: 1, updated_at: 1,
         settings: { connector_id: "mcp_builtin_clinical_trials", enabled: false, include_tools: [], exclude_tools: [], approval_mode: "ask", revision: 1, created_at: 1, updated_at: 1 },
         config_state: "valid", auth_state: "not-required", runtime_state: "disabled", tool_count: 4, error: null,
-      }], legacy_count: 0 });
+      }] });
       if (url === "/api/mcp/connectors/mcp_builtin_clinical_trials/tools" && method === "GET") return jsonResponse({ tools: [], cached_at: null });
       if (url === "/api/mcp/connectors/mcp_builtin_clinical_trials/credential" && method === "GET") return jsonResponse({ capability: "unsupported", credential_ref: null, configured: false, backend: null, delivery: null, target_name: null, environment_variable: null, suggested_delivery: null, suggested_target_name: null });
       return jsonResponse({ error: `unhandled ${method} ${url}` }, 404);
@@ -323,7 +302,6 @@ describe("MCPTab", () => {
             settings: { connector_id: "mcp-paper-search", enabled: true, include_tools: [], exclude_tools: [], approval_mode: "ask", revision: 1, created_at: 1, updated_at: 1 },
             config_state: "valid", auth_state: "not-required", runtime_state: "ready", tool_count: 3, error: null,
           }],
-          legacy_count: 0,
         });
       }
       if (url === "/api/mcp/connectors/mcp-paper-search/tools" && method === "GET") {

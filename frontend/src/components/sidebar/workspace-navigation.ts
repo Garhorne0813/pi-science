@@ -2,7 +2,6 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { create } from "zustand";
 import { useUiStore } from "../../lib/ui";
 import { isNarrowViewport } from "../../lib/ui/viewport";
-import { explicitNewLandingState } from "./blank-landing";
 
 type SidebarTab = "sessions" | "files";
 
@@ -32,9 +31,10 @@ export function useNewWorkspaceConversation(cwd: string | null) {
   const location = useLocation();
   return (options?: { draft?: string }) => {
     if (!cwd) return;
-    useWorkspaceSidebar.getState().showConversations(cwd);
+    useWorkspaceSidebar.getState().setTab(cwd, "sessions");
     const root = `/workspace/${encodeURIComponent(cwd)}`;
-    navigate(root, { replace: location.pathname === root, state: explicitNewLandingState(cwd, options?.draft) });
+    const next = `${root}/new`;
+    navigate(next, { replace: location.pathname === next, state: options?.draft !== undefined ? { initialDraft: options.draft } : undefined });
     closeSidebarOnNarrow();
   };
 }

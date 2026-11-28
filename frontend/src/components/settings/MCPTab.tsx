@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Loader2, Plus, Search, Upload } from "lucide-react";
+import { ChevronDown, Loader2, Plus, Search } from "lucide-react";
 import type { McpConnector, McpConnectorCreate, McpRuntimeConfig, McpToolSummary } from "@pi-science/contracts";
 import { useTranslation } from "react-i18next";
 import { queryClient } from "../../lib/client/query-client";
@@ -11,7 +11,6 @@ import { McpConnectorDetails } from "./McpConnectorDetails";
 type Transport = McpConnectorCreate["transport"];
 type Filter = "all" | "enabled" | "ready" | "needs-auth" | "local" | "remote" | "imported";
 type Binding = McpRuntimeConfig["environment"][string];
-type ImportEntry = { name: string; transport: string; importable: boolean; conflict: boolean; contains_sensitive_fields: boolean };
 type FormState = {
   name: string; display_name: string; description: string; transport: Transport; location: string; args: string;
   lifecycle: McpRuntimeConfig["lifecycle"]; request_timeout_ms: string; idle_timeout_minutes: string; cwd: string;
@@ -39,14 +38,10 @@ export function MCPTab({ workspaceCwd }: { workspaceCwd: string | null }) {
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
-  const [importEntries, setImportEntries] = useState<ImportEntry[] | null>(null);
-  const [importSource, setImportSource] = useState<string | null>(null);
-  const [importSelection, setImportSelection] = useState<Set<string>>(new Set());
   const toolRequest = useRef(0);
 
   const connectorRead = useQuery(mcpConnectorsQuery(t("settings.mcpPage.loadError")));
   const connectors = connectorRead.data?.connectors ?? [];
-  const legacyCount = connectorRead.data?.legacy_count ?? 0;
   const migrationConflicts = connectorRead.data?.migration_conflicts ?? [];
   const formDirty = JSON.stringify(form) !== JSON.stringify(editing ? formFor(editing) : blank);
   const filtered = connectors.filter((connector) => {
@@ -118,25 +113,6 @@ export function MCPTab({ workspaceCwd }: { workspaceCwd: string | null }) {
   useEffect(() => { toolRequest.current += 1; setSelectedId(null); setTools([]); setToolsCachedAt(null); }, [workspaceCwd]);
 
   const beginEdit = (connector: McpConnector) => { setEditing(connector); setAdding(false); setForm(formFor(connector)); setAdvanced(true); setError(null); setFieldError(null); };
-  const openImport = async () => {
-    setBusy("import-preview"); setError(null);
-    try {
-      const preview = await settingsApi.previewMcpImport(workspaceCwd);
-      setImportEntries(preview.entries); setImportSource(preview.source);
-      setImportSelection(new Set(preview.entries.filter((item) => item.importable && !item.conflict).map((item) => item.name)));
-    } catch (cause) { setError(message(cause)); }
-    finally { setBusy(null); }
-  };
-  const commitImport = async () => {
-    if (!importSelection.size) return;
-    await mutate("import", async () => {
-      const result = await settingsApi.commitMcpImport(workspaceCwd, [...importSelection]);
-      if (result.failed.length) throw new Error(t("settings.mcpPage.importFailed", { error: result.failed.map((item) => `${item.name}: ${item.error}`).join("; ") }));
-      for (const connector of result.imported) await settingsApi.probeMcp(connector.connector_id);
-      setImportEntries(null); setImportSource(null); setImportSelection(new Set());
-    });
-  };
-
   if (connectorRead.isLoading) return <div className="flex min-h-[240px] items-center justify-center text-sm text-muted"><Loader2 size={18} className="mr-2 animate-spin" />{t("settings.mcpPage.loading")}</div>;
 
   return <div className="space-y-card pt-card">
@@ -144,12 +120,10 @@ export function MCPTab({ workspaceCwd }: { workspaceCwd: string | null }) {
     <div className="flex flex-wrap items-center gap-2">
       <label className="relative min-w-52 flex-1"><span className="sr-only">{t("settings.mcpPage.search")}</span><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" /><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("settings.mcpPage.searchPlaceholder")} className="w-full h-10 rounded-input border border-border bg-surface pl-9 pr-3 text-ui-label text-text" /></label>
       <select aria-label={t("settings.mcpPage.filter")} value={filter} onChange={(event) => setFilter(event.target.value as Filter)} className="h-10 rounded-input border border-border bg-surface px-3 text-ui-label text-text">{(["all", "enabled", "ready", "needs-auth", "local", "remote", "imported"] as Filter[]).map((value) => <option key={value} value={value}>{t(`settings.mcpPage.filter.${value}`)}</option>)}</select>
-      <button type="button" onClick={() => void openImport()} disabled={busy !== null} className="inline-flex items-center gap-1 min-h-10 rounded-input border border-border px-3 text-ui-caption"><Upload size={14} />{t("settings.mcpPage.importExisting")}{legacyCount > 0 && ` (${legacyCount})`}</button>
       <button type="button" onClick={() => { if (adding) closeForm(); else { setEditing(null); setAdding(true); setForm(blank); setError(null); } }} className="inline-flex items-center gap-1 min-h-10 rounded-input bg-accent px-3 text-ui-caption text-white"><Plus size={14} />{t("settings.mcpPage.addConnector")}</button>
     </div>
     {error && <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-ui-caption text-error-text">{error}</p>}
     {migrationConflicts.length > 0 && <p role="alert" className="rounded-input bg-warn/10 px-3 py-2 text-ui-caption text-warn-text">{t("settings.mcpPage.migrationConflicts", { count: migrationConflicts.length })}</p>}
-    {importEntries && <ImportPanel entries={importEntries} source={importSource} selection={importSelection} busy={busy === "import"} onSelection={setImportSelection} onCancel={() => { setImportEntries(null); setImportSource(null); }} onCommit={() => void commitImport()} />}
     {(adding || editing) && <ConnectorForm form={form} advanced={advanced} editing={Boolean(editing)} busy={busy !== null} error={fieldError} onChange={updateForm} onAdvanced={() => setAdvanced((value) => !value)} onCancel={() => { if (!formDirty || window.confirm(t("settings.mcpPage.discardConfirm"))) closeForm(); }} onSave={() => void saveConnector()} />}
     <section className="ui-card-flat overflow-hidden rounded-card"><table className="w-full table-fixed text-left"><thead className="border-b border-border bg-surface-2/50"><tr><th className="w-[30%] px-4 py-2.5 text-xs text-muted">{t("settings.mcpPage.tableName")}</th><th className="hidden w-[30%] px-4 py-2.5 text-xs text-muted md:table-cell">{t("settings.mcpPage.tableDescription")}</th><th className="w-[24%] px-4 py-2.5 text-xs text-muted">{t("settings.mcpPage.tableStatus")}</th><th className="w-[16%] px-4 py-2.5 text-xs text-muted">{t("settings.mcpPage.tableActions")}</th></tr></thead><tbody className="divide-y divide-border">{filtered.length ? filtered.map((connector) => <Fragment key={connector.connector_id}><McpRow connector={connector} selected={selectedId === connector.connector_id} busy={busy === connector.connector_id} actionsEnabled onSelect={() => toggleDetails(connector)} onProbe={() => void mutate(connector.connector_id, async () => { const result = await settingsApi.probeMcp(connector.connector_id); if (result.error) throw new Error(result.error); if (selectedId === connector.connector_id) await select(connector); })} onToggle={(enabled) => void toggle(connector, enabled)} />{selectedId === connector.connector_id && <McpConnectorDetails connector={connector} tools={tools} toolsCachedAt={toolsCachedAt} workspaceCwd={workspaceCwd} onRefresh={() => void select(connector)} onProbe={() => void mutate(connector.connector_id, async () => { const result = await settingsApi.probeMcp(connector.connector_id); if (result.error) throw new Error(result.error); await select(connector); })} onEdit={() => beginEdit(connector)} onCredentialChanged={async () => { await connectorRead.refetch(); }} onDelete={() => { if (window.confirm(t("settings.mcpPage.deleteConfirm", { name: connector.display_name }))) void mutate(connector.connector_id, async () => { await settingsApi.deleteMcp(connector.connector_id); setSelectedId(null); }); }} onSetDecision={(tool, decision) => void mutate(connector.connector_id, async () => { if (workspaceCwd && decision === "inherit") await settingsApi.clearMcpToolDecision(connector.connector_id, tool.name, workspaceCwd); else await settingsApi.setMcpToolDecision(connector.connector_id, tool.name, decision as "allow" | "ask" | "deny", workspaceCwd); await select(connector); })} />}</Fragment>) : <tr><td colSpan={4} className="px-4 py-8 text-center text-sm text-muted">{connectors.length ? t("settings.mcpPage.noMatches") : t("settings.mcpPage.empty")}</td></tr>}</tbody></table></section>
   </div>;
@@ -184,11 +158,6 @@ function ConnectorForm({ form, advanced, editing, busy, error, onChange, onAdvan
     {error && <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-xs text-error-text md:col-span-2">{error}</p>}
     <div className="flex justify-end gap-2 md:col-span-2"><button type="button" onClick={onCancel} className="min-h-10 px-3 text-ui-caption text-muted">{t("settings.mcpPage.cancel")}</button><button type="button" disabled={busy || !form.name || !form.display_name || !form.location || (remote && !isHttpUrl(form.location))} onClick={onSave} className="min-h-10 rounded-input bg-accent px-3 text-ui-caption text-white disabled:opacity-50">{t(editing ? "settings.mcpPage.saveChanges" : "settings.mcpPage.createAndEnable")}</button></div>
   </div>;
-}
-
-function ImportPanel({ entries, source, selection, busy, onSelection, onCancel, onCommit }: { entries: ImportEntry[]; source: string | null; selection: Set<string>; busy: boolean; onSelection: (value: Set<string>) => void; onCancel: () => void; onCommit: () => void }) {
-  const { t } = useTranslation();
-  return <section className="ui-card-flat rounded-card p-4"><h3 className="text-sm font-semibold text-text">{t("settings.mcpPage.importExisting")}</h3>{source && <p className="mt-1 break-all font-mono text-[10px] text-muted">{source}</p>}<div className="mt-3 divide-y divide-border">{entries.length ? entries.map((entry) => { const disabled = !entry.importable || entry.conflict; return <label key={entry.name} className="flex items-center justify-between gap-3 py-2 text-xs"><span><span className="text-text">{entry.name}</span><span className="ml-2 text-muted">{entry.transport}</span>{entry.conflict && <span className="ml-2 text-warn-text">{t("settings.mcpPage.importConflict")}</span>}{entry.contains_sensitive_fields && <span className="ml-2 text-warn-text">{t("settings.mcpPage.importSensitive")}</span>}</span><input type="checkbox" disabled={disabled} checked={selection.has(entry.name)} onChange={(event) => { const next = new Set(selection); if (event.target.checked) next.add(entry.name); else next.delete(entry.name); onSelection(next); }} /></label>; }) : <p className="py-3 text-xs text-muted">{t("settings.mcpPage.importNone")}</p>}</div><div className="mt-3 flex justify-end gap-2"><button type="button" onClick={onCancel} className="min-h-10 px-3 text-ui-caption text-muted">{t("settings.mcpPage.cancel")}</button><button type="button" disabled={busy || !selection.size} onClick={onCommit} className="min-h-10 rounded-input bg-accent px-3 text-ui-caption text-white disabled:opacity-50">{t("settings.mcpPage.importSelected", { count: selection.size })}</button></div></section>;
 }
 
 function Field({ label, value, onChange, mono = false, inputMode }: { label: string; value: string; onChange: (value: string) => void; mono?: boolean; inputMode?: "numeric" }) { return <label className="text-xs text-muted">{label}<input value={value} inputMode={inputMode} onChange={(event) => onChange(event.target.value)} className={`mt-1 w-full h-10 rounded-input border border-border bg-surface px-3 text-ui-label text-text ${mono ? "font-mono text-ui-label" : ""}`} /></label>; }

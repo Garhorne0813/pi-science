@@ -4,7 +4,7 @@ import { ContextManagementSection } from "./ContextManagementSection";
 import i18n from "../../i18n";
 import type { SettingsConfig } from "../../lib/settings";
 
-const config: SettingsConfig = { api_keys: {}, model: "lab/one", thinking: "high", providers: [], custom_providers: [], compaction_enabled: true, compaction_threshold_percent: 85, available_models: [{ id: "lab/one", provider: "lab", model: "one", label: "One", custom: true, reasoning: true, thinking_levels: ["high"], context_window: 128000, capability_source: "runtime" }] };
+const config: SettingsConfig = { api_keys: {}, model: "lab/one", thinking: "high", providers: [], compaction_enabled: true, compaction_threshold_percent: 85, available_models: [{ id: "lab/one", provider: "lab", model: "one", label: "One", custom: true, reasoning: true, thinking_levels: ["high"], context_window: 128000, capability_source: "runtime" }] };
 beforeAll(async () => { await i18n.changeLanguage("en"); });
 
 describe("context settings drafts", () => {

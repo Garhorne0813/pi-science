@@ -18,7 +18,7 @@ import Fastify from "fastify";
 import { registerKernelExecutionRoutes } from "../../http/routes/kernel-execution-routes.js";
 import type { ServerConfig } from "../../config/config.js";
 import type { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
-import { candidateKernelGrant, SANDBOX_GRANT_HEADER } from "./kernel-authorization.js";
+import { confinedKernelGrant, SANDBOX_GRANT_HEADER } from "./kernel-authorization.js";
 import { executionBudgetTools } from "../agent/worker/execution-budget.js";
 import { registerNotebookRoutes } from "../../http/routes/notebook-routes.js";
 import type { NotebookService } from "../notebooks/notebook-service.js";
@@ -373,6 +373,7 @@ describe.skipIf(process.env.PI_SCIENCE_SANDBOX_TEST !== "1" || process.platform 
           expect.objectContaining({ text: expect.stringContaining("isolated") }),
         ]),
       );
+      expect(result.details).toMatchObject({ execution_id: expect.any(String), exitCode: 0 });
       expect(await readFile(join(cwd, "result.txt"), "utf8")).toBe("output");
       expect((await executionRepository.list(cwd))[0]?.runtime).toMatchObject({
         execution_mode: "required",
@@ -528,7 +529,7 @@ describe.skipIf(process.env.PI_SCIENCE_SANDBOX_TEST !== "1" || process.platform 
           parentPolicy: await workspacePolicy(cwd),
         }),
       };
-      const grant = await candidateKernelGrant(identity, "op", "test-secret");
+      const grant = await confinedKernelGrant(identity, "op", "test-secret");
       const manager = new NodeKernelManager();
       managers.push(manager);
       const app = Fastify();

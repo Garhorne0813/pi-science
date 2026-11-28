@@ -67,4 +67,12 @@ describe("SettingsPage legacy route shell", () => {
     act(() => useUiStore.getState().closeSettings());
     await screen.findByText("workspace-home");
   });
+
+  it("restores a linked settings section", async () => {
+    renderShell("/workspace/proj/settings?section=memory");
+    await waitFor(() => {
+      expect(useUiStore.getState().settingsOpen).toBe(true);
+      expect(useUiStore.getState().settingsSection).toBe("memory");
+    });
+  });
 });

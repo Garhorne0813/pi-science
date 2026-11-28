@@ -7,9 +7,12 @@ import { ApiError, apiRequest } from "../../lib/client/api";
 import { useFeedback } from "../feedback/feedback-context";
 import type { FileListEntry } from "./FileContextMenu";
 import { FileBrowser } from "./FileBrowser";
-import { SidebarMainArea } from "./SidebarMainArea";
-import { useWorkspaceSidebar } from "./workspace-navigation";
-import { MemoryRouter } from "react-router-dom";
+
+vi.mock("react-virtuoso", () => ({
+  Virtuoso: <T,>({ data, itemContent }: { data: T[]; itemContent: (index: number, item: T) => React.ReactNode }) => (
+    <>{data.map((item, index) => <div key={index}>{itemContent(index, item)}</div>)}</>
+  ),
+}));
 
 vi.mock("../../lib/client/api", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../lib/client/api")>(),
@@ -31,6 +34,8 @@ vi.mock("../../lib/workspace", async (importOriginal) => {
     workspaceFiles: {
       invalidate: vi.fn(),
       sidebar: vi.fn(async () => sidebarEntries(["work", "reports"])),
+      search: vi.fn(async () => []),
+      gitStatus: vi.fn(async () => ({ repository: false, entries: {}, stats: {} })),
       directory: vi.fn(async (_cwd: string, subdir: string) => ({
         entries: subdir === "work" ? sidebarEntries(["data.csv"]) : sidebarEntries(["plot.png"]),
         breadcrumbs: [{ name: subdir, path: subdir }],
@@ -53,7 +58,7 @@ vi.mock("../../components/feedback/feedback-context", () => {
   return { useFeedback: () => ({ toast, confirm }) };
 });
 
-let files: ReturnType<typeof vi.mocked> & { sidebar: ReturnType<typeof vi.fn>; directory: ReturnType<typeof vi.fn>; invalidate: ReturnType<typeof vi.fn>; mkdir: ReturnType<typeof vi.fn>; createFile: ReturnType<typeof vi.fn>; rename: ReturnType<typeof vi.fn> };
+let files: ReturnType<typeof vi.mocked> & { sidebar: ReturnType<typeof vi.fn>; search: ReturnType<typeof vi.fn>; gitStatus: ReturnType<typeof vi.fn>; directory: ReturnType<typeof vi.fn>; invalidate: ReturnType<typeof vi.fn>; mkdir: ReturnType<typeof vi.fn>; createFile: ReturnType<typeof vi.fn>; rename: ReturnType<typeof vi.fn> };
 
 beforeAll(async () => {
   await i18n.changeLanguage("en");
@@ -63,8 +68,15 @@ beforeAll(async () => {
 
 beforeEach(() => {
   useRuntimeStore.setState({ fileRevision: 0, cwd: "proj", activeSessionId: "s1" });
-  useUiStore.setState({ inspectorOpen: false, inspectorData: null, sidebarFileBrowserHeight: 288 });
+  useUiStore.setState({ inspectorOpen: false, inspectorData: null, sidebarFileBrowserHeight: 288, fileTreeReveal: null, workspaceReferences: [] });
   vi.clearAllMocks();
+  files.sidebar.mockImplementation(async () => sidebarEntries(["work", "reports"]));
+  files.search.mockImplementation(async () => []);
+  files.gitStatus.mockImplementation(async () => ({ repository: false, entries: {}, stats: {} }));
+  files.directory.mockImplementation(async (_cwd: string, subdir: string) => ({
+    entries: subdir === "work" ? sidebarEntries(["data.csv"]) : sidebarEntries(["plot.png"]),
+    breadcrumbs: [{ name: subdir, path: subdir }],
+  }));
   // jsdom reports the tab as visible by default.
   Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
 });
@@ -75,6 +87,188 @@ afterEach(() => {
 });
 
 describe("FileBrowser", () => {
+  it("loads the complete root listing in page mode instead of the capped sidebar listing", async () => {
+    files.directory.mockResolvedValueOnce({
+      entries: [{ name: "root.txt", path: "root.txt", isDir: false, size: 1, modified: 1 }],
+      breadcrumbs: [],
+    });
+
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+
+    await screen.findByRole("button", { name: "root.txt" });
+    expect(files.directory).toHaveBeenCalledWith("proj", "", expect.any(AbortSignal));
+    expect(files.sidebar).not.toHaveBeenCalled();
+    expect(screen.getByRole("searchbox", { name: "Search files by name or type" })).toBeInTheDocument();
+  });
+
+  it("searches across paths and opens a file in the existing preview pane", async () => {
+    files.directory.mockResolvedValueOnce({ entries: [], breadcrumbs: [] });
+    files.search.mockResolvedValueOnce([
+      { name: "report.csv", path: "results/final/report.csv", isDir: false, size: 12, modified: 1 },
+    ]);
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search files by name or type" }), { target: { value: "report" } });
+    const result = await screen.findByRole("button", { name: /report\.csv.*results\/final/ });
+    expect(files.search).toHaveBeenCalledWith("proj", "report", expect.any(AbortSignal));
+    fireEvent.click(result);
+    await vi.waitFor(() => expect(useUiStore.getState().inspectorData).toMatchObject({ path: "results/final/report.csv", cwd: "proj" }));
+  });
+
+  it("highlights the file currently shown in the preview pane", async () => {
+    files.directory.mockResolvedValueOnce({
+      entries: [{ name: "active.md", path: "active.md", isDir: false, size: 1, modified: 1 }],
+      breadcrumbs: [],
+    });
+    useUiStore.setState({
+      inspectorOpen: true,
+      inspectorData: { variant: "file", path: "active.md", filename: "active.md", cwd: "proj" },
+    });
+
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+
+    expect(await screen.findByRole("button", { name: "active.md" })).toHaveAttribute("aria-current", "true");
+  });
+
+  it("keeps folders but filters ordinary files on the notebook route", async () => {
+    files.directory.mockResolvedValueOnce({
+      entries: [
+        { name: "folder", path: "folder", isDir: true, size: 0, modified: 1 },
+        { name: "analysis.ipynb", path: "analysis.ipynb", isDir: false, size: 1, modified: 1 },
+        { name: "notes.md", path: "notes.md", isDir: false, size: 1, modified: 1 },
+      ],
+      breadcrumbs: [],
+    });
+
+    render(<FileBrowser cwd="proj" embedded mode="page" fileType="notebook" />);
+
+    expect(await screen.findByRole("button", { name: "folder" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "analysis.ipynb" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "notes.md" })).not.toBeInTheDocument();
+  });
+
+  it("compacts a chain of single-child folders in page mode", async () => {
+    const entry = (path: string, isDir: boolean): FileListEntry => ({
+      path, name: path.split("/").at(-1)!, isDir, size: 0, modified: 1,
+    });
+    files.directory.mockImplementation(async (_cwd: string, path: string) => ({
+      entries: path === "" ? [entry("src", true)]
+        : path === "src" ? [entry("src/features", true)]
+          : path === "src/features" ? [entry("src/features/files", true)]
+            : [entry("src/features/files/index.ts", false)],
+      breadcrumbs: [],
+    }));
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "src" }));
+    expect(await screen.findByRole("button", { name: "src/features/files" })).toHaveAttribute("title", "src/features/files");
+    expect(screen.getByRole("button", { name: "index.ts" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "src/features/files" }));
+    expect(await screen.findByRole("button", { name: "src" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "index.ts" })).not.toBeInTheDocument();
+  });
+
+  it("shows git status for files and aggregates it on parent folders", async () => {
+    files.directory.mockResolvedValueOnce({
+      entries: [
+        { name: "results", path: "results", isDir: true, size: 0, modified: 1 },
+        { name: "draft.txt", path: "draft.txt", isDir: false, size: 1, modified: 1 },
+      ],
+      breadcrumbs: [],
+    });
+    files.gitStatus.mockResolvedValueOnce({
+      repository: true,
+      entries: { "results/report.csv": " M", "draft.txt": "??" },
+      stats: { "results/report.csv": { additions: 12, deletions: 3 }, "draft.txt": { additions: 8, deletions: 0 } },
+    });
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+
+    const folderStats = await screen.findByLabelText("Git changes: +12 / -3 lines");
+    expect(folderStats).toHaveTextContent("+12-3");
+    expect(folderStats.firstElementChild).toHaveClass("text-ok-text");
+    expect(folderStats.lastElementChild).toHaveClass("text-error-text");
+    const untracked = screen.getByLabelText("Git changes: +8 / -0 lines");
+    expect(untracked).toHaveTextContent("+8");
+  });
+
+  it("filters the tree to changed files and their parent folders in git workspaces", async () => {
+    files.directory.mockResolvedValueOnce({
+      entries: [
+        { name: "results", path: "results", isDir: true, size: 0, modified: 1 },
+        { name: "notes.md", path: "notes.md", isDir: false, size: 1, modified: 1 },
+      ],
+      breadcrumbs: [],
+    });
+    files.gitStatus.mockResolvedValueOnce({ repository: true, entries: { "results/report.csv": " M" }, stats: {} });
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+
+    expect(await screen.findByRole("button", { name: "notes.md" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Show changed files only" }));
+    expect(screen.getByRole("button", { name: /^results/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "notes.md" })).not.toBeInTheDocument();
+  });
+
+  it("reveals and highlights a nested file requested by another workspace surface", async () => {
+    const entry = (path: string, isDir: boolean): FileListEntry => ({ path, name: path.split("/").at(-1)!, isDir, size: 1, modified: 1 });
+    files.directory.mockImplementation(async (_cwd: string, path: string) => ({
+      entries: path === "" ? [entry("results", true)]
+        : path === "results" ? [entry("results/final", true)]
+          : [entry("results/final/report.csv", false)],
+      breadcrumbs: [],
+    }));
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+    await screen.findByRole("button", { name: "results" });
+
+    act(() => useUiStore.getState().revealInFileTree("proj", "results/final/report.csv"));
+
+    const target = await screen.findByRole("button", { name: "report.csv" });
+    expect(target).toHaveClass("ring-accent/40");
+    expect(files.directory).toHaveBeenCalledWith("proj", "results");
+    expect(files.directory).toHaveBeenCalledWith("proj", "results/final");
+  });
+
+  it("supports arrow-key movement and serializes rows as composer references", async () => {
+    files.directory.mockResolvedValueOnce({
+      entries: [
+        { name: "a.txt", path: "a.txt", isDir: false, size: 1, modified: 1 },
+        { name: "b.txt", path: "b.txt", isDir: false, size: 1, modified: 1 },
+      ],
+      breadcrumbs: [],
+    });
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+    const first = await screen.findByRole("button", { name: "a.txt" });
+    const second = screen.getByRole("button", { name: "b.txt" });
+    first.focus();
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    await vi.waitFor(() => expect(second).toHaveFocus());
+
+    const setData = vi.fn();
+    fireEvent.dragStart(second, { dataTransfer: { setData, effectAllowed: "none" } });
+    expect(setData).toHaveBeenCalledWith("application/x-pi-science-workspace-reference", JSON.stringify({ cwd: "proj", path: "b.txt", name: "b.txt", isDir: false }));
+  });
+
+  it("marks references for the target conversation and toggles them from the context menu", async () => {
+    files.directory.mockResolvedValueOnce({
+      entries: [{ name: "report.csv", path: "data/report.csv", isDir: false, size: 1, modified: 1 }],
+      breadcrumbs: [],
+    });
+    render(<FileBrowser cwd="proj" embedded mode="page" conversationKey="session-a" />);
+    const row = await screen.findByRole("button", { name: "report.csv" });
+
+    fireEvent.contextMenu(row, { clientX: 20, clientY: 20 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Reference file" }));
+    expect(row).toHaveAttribute("data-referenced", "true");
+    expect(useUiStore.getState().workspaceReferences).toEqual([{
+      cwd: "proj", conversationKey: "session-a", path: "data/report.csv", name: "report.csv", isDir: false,
+    }]);
+
+    fireEvent.contextMenu(row, { clientX: 20, clientY: 20 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove file reference" }));
+    expect(row).not.toHaveAttribute("data-referenced");
+    expect(useUiStore.getState().workspaceReferences).toEqual([]);
+  });
+
   it("sorts siblings naturally at each depth without moving files out of their parent", async () => {
     const entry = (path: string, isDir: boolean): FileListEntry => ({
       path, name: path.split("/").at(-1)!, isDir, size: 0, modified: 1,
@@ -132,6 +326,12 @@ describe("FileBrowser", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh files" }));
     await vi.waitFor(() => expect(files.sidebar.mock.calls.length).toBeGreaterThan(before));
     expect(files.invalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("places the root drop hint at the bottom and marks it for narrow-container hiding", () => {
+    render(<FileBrowser cwd="proj" embedded mode="page" />);
+    const hint = screen.getByText("Drop files here to upload to the workspace root");
+    expect(hint).toHaveClass("mt-auto", "justify-center", "text-center", "file-browser-drop-hint");
   });
 
   it("loads the root and auto-opens work/ on first load", async () => {
@@ -215,32 +415,6 @@ describe("FileBrowser", () => {
     // Reopen: the listing must be re-read, not reused from a stale cache.
     fireEvent.click(screen.getByText("work"));
     await screen.findByText("new.csv");
-  });
-
-  it("panel visibility stops polling and restores an immediate read before the next tick", async () => {
-    useWorkspaceSidebar.setState({ cwd: "proj", tab: "files", query: "" });
-    useUiStore.setState({ contextPanelCollapsed: false });
-    render(<MemoryRouter><SidebarMainArea cwd="proj" renderSessions={() => null} /></MemoryRouter>);
-    await screen.findByText("data.csv");
-    expect(files.sidebar).toHaveBeenCalledTimes(1);
-    vi.useFakeTimers();
-    act(() => { Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
-    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
-    expect(files.sidebar).toHaveBeenCalledTimes(1);
-    await act(async () => { Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
-    expect(files.sidebar).toHaveBeenCalledTimes(2);
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
-    expect(files.sidebar).toHaveBeenCalledTimes(3);
-    act(() => useUiStore.getState().setContextPanelCollapsed(true));
-    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
-    expect(files.sidebar).toHaveBeenCalledTimes(3);
-    await act(async () => useUiStore.getState().setContextPanelCollapsed(false));
-    expect(files.sidebar).toHaveBeenCalledTimes(4);
-    act(() => useWorkspaceSidebar.getState().setTab("proj", "sessions"));
-    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
-    expect(files.sidebar).toHaveBeenCalledTimes(4);
-    await act(async () => useWorkspaceSidebar.getState().setTab("proj", "files"));
-    expect(files.sidebar).toHaveBeenCalledTimes(5);
   });
 
   it("does not poll when collapsed", async () => {

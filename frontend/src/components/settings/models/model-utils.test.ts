@@ -3,7 +3,7 @@ import { modelCapabilitySources } from "@pi-science/contracts";
 import { providerViewsFixture } from "../../../../tests/fixtures/provider-views";
 import { applyModelEdits, buildServices, mergeDiscoveredModels, modelConfigFromDiscovery } from "./model-utils";
 
-const fixture = providerViewsFixture({ providers: [{ id: "user-lab", name: "Lab", custom: true, has_key: false, models: ["model-a"], credential_status: "needs_key" }], available_models: [], custom_providers: [] }).providers[0];
+const fixture = providerViewsFixture({ providers: [{ id: "user-lab", name: "Lab", custom: true, has_key: false, models: ["model-a"], credential_status: "needs_key" }], available_models: [] }).providers[0];
 describe("ProviderView presentation", () => {
   it.each(["ready", "needs_key", "invalid", "needs_login", "unavailable", "disabled"] as const)("preserves the server's %s status and configured models", (status) => {
     const service = buildServices([{ ...fixture, status }])[0];

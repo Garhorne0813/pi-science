@@ -34,29 +34,11 @@ describe("deriveSessionName", () => {
 });
 
 describe("session name migration and storage resilience", () => {
-  it("migrates a v2 single-key session name to the composite (cwd, sessionId) key", () => {
-    // Simulate a v2 payload stored before the composite-key change.
-    localStorage.setItem("pi-science.session-names", JSON.stringify({ "legacy-id": "Old Name" }));
-    expect(getSessionName("/workspace", "legacy-id")).toBe("Old Name");
-    // The store should now hold the migrated composite key, not the bare id.
-    const migrated = JSON.parse(localStorage.getItem("pi-science.session-names")!);
-    expect(migrated["/workspace\0legacy-id"]).toBe("Old Name");
-    expect(migrated["legacy-id"]).toBeUndefined();
-  });
-
   it("returns an empty string (never an object) for a corrupt object name value", () => {
     localStorage.setItem("pi-science.session-names", JSON.stringify({ "/workspace\0bad": { bad: true } }));
     const value = getSessionName("/workspace", "bad");
     expect(typeof value).toBe("string");
     expect(value).toBe("");
-  });
-
-  it("moves a legacy name without restoring the bare legacy key", () => {
-    localStorage.setItem("pi-science.session-names", JSON.stringify({ "legacy-id": "Legacy" }));
-    expect(moveSessionName("/workspace", "legacy-id", "new-id")).toBe("Legacy");
-    const stored = JSON.parse(localStorage.getItem("pi-science.session-names")!);
-    expect(stored["/workspace\0new-id"]).toBe("Legacy");
-    expect(stored["legacy-id"]).toBeUndefined();
   });
 
   it("never returns an object when the destination name is corrupt", () => {

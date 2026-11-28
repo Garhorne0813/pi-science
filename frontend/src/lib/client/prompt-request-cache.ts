@@ -1,12 +1,10 @@
 import type { PromptDeliveryState } from "./types";
 
-// v2 stores the prompt text and moves to localStorage. A refresh between the
-// keystroke and `POST /api/sessions/<id>/prompt` used to strand the message:
-// sessionStorage lost it when the tab closed, and the v1 record carried only a
-// digest, so a reload could not replay what the user had typed.
+// Stores the prompt text and moves to localStorage. A refresh between the
+// keystroke and `POST /api/sessions/<id>/prompts` used to strand the message:
+// sessionStorage lost it when the tab closed, and the older record carried only
+// a digest, so a reload could not replay what the user had typed.
 const KEY = "pi-science.pending-prompt-requests.v2";
-// v1 records live in sessionStorage under this key; they never held the text.
-const LEGACY_KEY = "pi-science.pending-prompt-requests.v1";
 const SCHEMA_VERSION = 2;
 const MAX_RECORDS = 30;
 
@@ -25,11 +23,6 @@ function storage(): Storage | null {
   catch { return null; }
 }
 
-function legacyStorage(): Storage | null {
-  try { return typeof sessionStorage === "undefined" ? null : sessionStorage; }
-  catch { return null; }
-}
-
 function isRecord(item: unknown): item is LocalPromptRequest {
   if (!item || typeof item !== "object") return false;
   const record = item as Record<string, unknown>;
@@ -45,13 +38,8 @@ function isRecord(item: unknown): item is LocalPromptRequest {
     && ["pending", "accepted", "persisted", "rejected", "indeterminate"].includes(String(record.status));
 }
 
-function dropLegacy(): void {
-  try { legacyStorage()?.removeItem(LEGACY_KEY); } catch { /* storage may be disabled */ }
-}
-
 function read(): LocalPromptRequest[] {
   try {
-    dropLegacy();
     const raw = storage()?.getItem(KEY);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);

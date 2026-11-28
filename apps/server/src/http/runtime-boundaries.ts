@@ -1,6 +1,6 @@
 export type RuntimeOwner = "node-control-plane";
 
-export type RouteAvailability = "native" | "compatibility-proxy";
+export type RouteAvailability = "native";
 
 export interface RouteBoundary {
   prefix: string;
@@ -28,15 +28,9 @@ export const routeBoundaries: readonly RouteBoundary[] = [
   { prefix: "/api/mcp", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/jobs", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/environments", owner: "node-control-plane", availability: "native" },
-  { prefix: "/api/endpoints", owner: "node-control-plane", availability: "native" },
-  { prefix: "/api/providers", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/provider-views", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/model-config", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/model-selection", owner: "node-control-plane", availability: "native" },
-  { prefix: "/api/models", owner: "node-control-plane", availability: "native" },
-  { prefix: "/api/credentials", owner: "node-control-plane", availability: "native" },
-  { prefix: "/api/provider-endpoint-bindings", owner: "node-control-plane", availability: "native" },
-  { prefix: "/api/custom-providers", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/agent-profiles", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/result-reviews", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/bookmarks", owner: "node-control-plane", availability: "native" },
@@ -47,7 +41,10 @@ function matchesPrefix(pathname: string, prefix: string): boolean {
 }
 
 export function runtimeOwner(pathname: string): RuntimeOwner {
-  return routeBoundaries.find((boundary) => matchesPrefix(pathname, boundary.prefix))?.owner ?? "node-control-plane";
+  return (
+    routeBoundaries.find((boundary) => matchesPrefix(pathname, boundary.prefix))?.owner ??
+    "node-control-plane"
+  );
 }
 
 export function routeBoundary(pathname: string): RouteBoundary | undefined {

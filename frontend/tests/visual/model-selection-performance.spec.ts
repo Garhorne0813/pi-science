@@ -1,5 +1,5 @@
 import { writeFile } from "node:fs/promises";
-import { expect, test, workspaceRoute } from "./fixtures/app.fixture";
+import { expect, selectSettingsSection, test, workspaceRoute } from "./fixtures/app.fixture";
 import { FIXTURES, VISUAL_CWD, VISUAL_SESSION } from "./fixtures/data.mjs";
 
 test("10,000-model default picker stays responsive while context settings stall or fail", async ({ page }, testInfo) => {
@@ -16,6 +16,7 @@ test("10,000-model default picker stays responsive while context settings stall 
   });
   await page.goto("/settings");
   const dialog = page.getByRole("dialog", { name: "Settings" });
+  if (testInfo.project.name === "mobile") await selectSettingsSection(dialog, "General & appearance");
   await expect(dialog.getByRole("button", { name: "Light", exact: true })).toBeVisible();
   await page.evaluate(() => {
     type Profile = Window & { selectionTasks: number[]; selectionObserver: PerformanceObserver };
@@ -26,7 +27,7 @@ test("10,000-model default picker stays responsive while context settings stall 
     target.selectionObserver.observe({ type: "longtask" });
   });
   const agentStart = Date.now();
-  await dialog.getByRole("tab", { name: "Agent", exact: true }).click();
+  await selectSettingsSection(dialog, "Agent behavior");
   const trigger = dialog.getByRole("button", { name: /^Default model:/ });
   await expect(trigger).toBeEnabled();
   const agentReadyMs = Date.now() - agentStart;

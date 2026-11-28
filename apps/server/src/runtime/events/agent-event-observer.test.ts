@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -26,29 +26,57 @@ describe("agent execution evidence", () => {
     const path = "results/output.txt";
     await mkdir(join(cwd, "results"), { recursive: true });
 
-    await observeAgentEvent(cwd, "model-test", {
-      type: "tool.started", runId: "r",
-      toolCallId,
-      toolName: "write",
-      args: { path, content: "result", api_key: "must-not-leak" },
-    }, sessionId, async () => undefined);
+    await observeAgentEvent(
+      cwd,
+      "model-test",
+      {
+        type: "tool.started",
+        runId: "r",
+        toolCallId,
+        toolName: "write",
+        args: { path, content: "result", api_key: "must-not-leak" },
+      },
+      sessionId,
+      async () => undefined,
+    );
     await writeFile(join(cwd, path), "result", "utf8");
-    await observeAgentEvent(cwd, "model-test", {
-      type: "tool.completed", runId: "r",
-      toolCallId,
-      toolName: "write",
-      args: { path, content: "result" },
-      result: { ok: true },
-      isError: false,
-    }, sessionId, async () => undefined);
+    await observeAgentEvent(
+      cwd,
+      "model-test",
+      {
+        type: "tool.completed",
+        runId: "r",
+        toolCallId,
+        toolName: "write",
+        args: { path, content: "result" },
+        result: {
+          details: {
+            fileChange: { path, additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+result" },
+          },
+        },
+        isError: false,
+      },
+      sessionId,
+      async () => undefined,
+    );
 
-    const execution = await executionRepository.get(cwd, executionIdFor("agent-tool", sessionId, toolCallId));
+    const execution = await executionRepository.get(
+      cwd,
+      executionIdFor("agent-tool", sessionId, toolCallId),
+    );
     expect(execution).toMatchObject({
       status: "succeeded",
       correlation: { session_id: sessionId, tool_call_id: toolCallId },
       request: { tool: "write", input: { api_key: "[redacted]" } },
     });
-    expect(execution?.files.written).toEqual([expect.objectContaining({ path, artifact_id: expect.any(String), artifact_version: 1 })]);
-    expect(execution?.artifacts).toEqual([expect.objectContaining({ relation: "output", version: 1 })]);
+    expect(execution?.files.written).toEqual([
+      expect.objectContaining({ path, artifact_id: expect.any(String), artifact_version: 1 }),
+    ]);
+    expect(execution?.artifacts).toEqual([
+      expect.objectContaining({ relation: "output", version: 1 }),
+    ]);
+    expect(await readFile(join(cwd, ".pi-science", "provenance.jsonl"), "utf8")).toContain(
+      '"diff":"@@ -0,0 +1 @@\\n+result"',
+    );
   });
 });

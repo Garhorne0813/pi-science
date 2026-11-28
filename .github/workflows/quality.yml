@@ -288,7 +288,15 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           pnpm --filter frontend exec playwright test --config playwright.visual.config.ts sidebar.spec.ts --project desktop-light --project mobile --project tablet --output tests/visual/.artifacts/sidebar
-          pnpm --filter frontend exec playwright test --config playwright.visual.config.ts app-shell.visual.spec.ts --grep "collapsed context panel" --project desktop-light --project desktop-dark --project desktop-lg --project tablet --project wide --update-snapshots=none --output tests/visual/.artifacts/rail-baseline
+          pnpm --filter frontend exec playwright test --config playwright.visual.config.ts app-shell.visual.spec.ts --project desktop-light --project desktop-dark --project desktop-lg --project mobile --project tablet --project wide --update-snapshots=all --output tests/visual/.artifacts/rail-baseline
+
+      - name: Upload Linux app-shell baselines
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-shell-linux-baselines
+          path: frontend/tests/visual/app-shell.visual.spec.ts-snapshots/*-linux.png
+          if-no-files-found: error
 
       - name: Upload workspace sidebar screenshots
         if: always() && runner.os == 'Linux'

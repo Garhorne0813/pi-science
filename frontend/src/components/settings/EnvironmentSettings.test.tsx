@@ -70,7 +70,7 @@ describe("EnvironmentSettings", () => {
     rerender(<EnvironmentSettings workspaceCwd="workspace-b" />);
     resolveFirst(jsonResponse({ revision_id: "rev_failed", ready: true }));
 
-    expect(await screen.findByText("Use")).toBeInTheDocument();
+    expect(await screen.findByText("Use for this project")).toBeInTheDocument();
     expect(screen.queryByText("Active")).not.toBeInTheDocument();
   });
 });

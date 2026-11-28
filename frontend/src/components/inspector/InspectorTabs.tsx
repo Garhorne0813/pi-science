@@ -29,6 +29,7 @@ export function InspectorTabs({
   cwd,
   sessionId,
   reserveControls = false,
+  showFileTreeToggle = false,
 }: {
   tabs: InspectorTab[];
   activeTabId: string;
@@ -36,6 +37,7 @@ export function InspectorTabs({
   sessionId?: string;
   /** Keep the fixed preview layout controls from covering the scroll viewport. */
   reserveControls?: boolean;
+  showFileTreeToggle?: boolean;
 }) {
   const { t } = useTranslation();
   const activateTab = useUiStore((state) => state.activateInspectorTab);
@@ -180,7 +182,7 @@ export function InspectorTabs({
             // Reserve a real layout column for the two floating controls. A
             // padding-only reservation still lets the scroll viewport extend
             // underneath them when the tabs are scrolled to the end.
-            reserveControls && "mr-20",
+            reserveControls && (showFileTreeToggle ? "mr-28" : "mr-20"),
           )}
         >
           <div className="flex h-11 w-max min-w-full px-1">
@@ -236,7 +238,7 @@ export function InspectorTabs({
             })}
           </div>
         </div>
-        {reserveControls && <PreviewPaneControls embedded />}
+        {reserveControls && <PreviewPaneControls embedded showFileTreeToggle={showFileTreeToggle} />}
       </div>
 
       <div className="min-h-0 flex-1">

@@ -14,6 +14,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import { delimiter, join, resolve, sep } from "node:path";
 import {
   configPath,
@@ -81,8 +82,7 @@ export interface WorkspaceEnvironmentStatus {
   display_name?: string;
   packages?: string[];
   pip_packages?: string[];
-  manager?: "micromamba" | "legacy-venv";
-  legacy?: boolean;
+  manager?: "micromamba";
   npm: { local_prefix: string; global_prefix: string; cache: string };
   error?: string;
 }
@@ -575,12 +575,13 @@ export function workspaceEnvironmentVariables(
   };
 }
 
+let testEnvironmentPrefix: Promise<string> | undefined;
+
 export class WorkspaceEnvironmentService {
   private readonly provisioning = new Map<string, Promise<WorkspaceEnvironmentStatus>>();
   private readonly creating = new Map<string, Promise<EnvironmentRevision>>();
 
   constructor(
-    private readonly basePython = defaultPythonExecutable(),
     private readonly micromambaExecutable = process.env.PI_SCIENCE_MICROMAMBA_EXECUTABLE ||
       "micromamba",
     private readonly environmentRepository?: EnvironmentRepository,
@@ -692,20 +693,6 @@ export class WorkspaceEnvironmentService {
                   : `Environment is ${revision.status}`),
             }
           : {}),
-      });
-    }
-    const legacy = environmentPaths(join(workspace, ".venv"));
-    if ((await exists(join(legacy.virtualEnv, "pyvenv.cfg"))) && (await executable(legacy.python)))
-      return this.statusFor(workspace, legacy.virtualEnv, "legacy-venv", {
-        ready: true,
-        legacy: true,
-      });
-    if (await exists(legacy.virtualEnv)) {
-      const info = await stat(legacy.virtualEnv);
-      return this.statusFor(workspace, legacy.virtualEnv, "legacy-venv", {
-        error: info.isDirectory()
-          ? "The workspace .venv is incomplete. Remove or repair it before migration."
-          : "The workspace .venv path exists but is not a directory.",
       });
     }
     return this.statusFor(workspace, environmentRoot(), "micromamba", { ready: false });
@@ -989,9 +976,24 @@ export class WorkspaceEnvironmentService {
     if (before.ready) return before;
     if (before.error) throw new Error(before.error);
     if (process.env.NODE_ENV === "test") {
-      const legacy = join(cwd, ".venv");
-      await this.run(this.basePython, ["-m", "venv", legacy], 120_000);
-      return this.status(cwd);
+      // Test fixture only: production always provisions an immutable Micromamba
+      // revision. One shared workspace-external venv keeps unit tests hermetic,
+      // fast under parallel load, and avoids downloading Micromamba.
+      testEnvironmentPrefix ??= (async () => {
+        const root = await mkdtemp(join(tmpdir(), "pi-science-test-env-"));
+        const prefix = join(root, "python");
+        await this.run(defaultPythonExecutable(), ["-m", "venv", prefix], 120_000);
+        return prefix;
+      })();
+      const prefix = await testEnvironmentPrefix.catch((error) => {
+        testEnvironmentPrefix = undefined;
+        throw error;
+      });
+      return this.statusFor(cwd, prefix, "micromamba", {
+        ready: true,
+        environment_id: "env_test",
+        revision_id: "rev_test",
+      });
     }
     const existing = (await this.list()).find(
       (item) =>

@@ -231,9 +231,18 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
       // conversations and clamps to the last item.
       virtuosoRef.current?.scrollToIndex({ index: turnIndex, align: "start", behavior: "auto" });
       // After Virtuoso mounts the group, scroll again so the target lands at
-      // the top of the viewport exactly (height estimation is inexact).
-      scheduleSessionScoped(() => { if (!scrollToExact()) scheduleSessionScoped(scrollToExact, 250); }, 120);
+      // the top of the viewport exactly (height estimation is inexact). A
+      // semantic activity group can add a second disclosure inside the turn;
+      // reveal it after the outer trace has mounted, then try the exact row.
       scheduleSessionScoped(() => {
+        revealCollapsedThreadBlock(id);
+        if (!scrollToExact()) scheduleSessionScoped(() => {
+          revealCollapsedThreadBlock(id);
+          scrollToExact();
+        }, 250);
+      }, 120);
+      scheduleSessionScoped(() => {
+        revealCollapsedThreadBlock(id);
         scrollToExact();
         if (highlight) highlightThreadBlock(id);
       }, 350);

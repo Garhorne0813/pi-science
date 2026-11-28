@@ -24,6 +24,9 @@ interface UiState {
   /** Which side of the conversation the preview occupies on desktop. */
   previewPaneSide: "left" | "right";
   setPreviewPaneSide: (side: "left" | "right") => void;
+  /** Which side of a file preview contains the workspace file tree. */
+  previewFileTreeSide: "left" | "right";
+  setPreviewFileTreeSide: (side: "left" | "right") => void;
   inspectorOpen: boolean;
   inspectorWidth: number;
   /** Preview share of the desktop viewport. Pixel width remains in state for
@@ -31,6 +34,10 @@ interface UiState {
    *  when moving the window between displays. */
   inspectorRatio: number;
   inspectorMaximized: boolean;
+  /** Whether the workspace file tree is visible inside the preview pane. */
+  fileTreeOpen: boolean;
+  /** Width of the file-tree column when it shares the preview pane with a file. */
+  previewFileTreeWidth: number;
   inspectorData: Inspector | null;
   inspectorTabs: InspectorTab[];
   activeInspectorTabId: string | null;
@@ -45,10 +52,15 @@ interface UiState {
   setInspectorWidth: (w: number) => void;
   setInspectorRatio: (ratio: number) => void;
   setInspectorMaximized: (m: boolean) => void;
+  setFileTreeOpen: (open: boolean) => void;
+  setPreviewFileTreeWidth: (width: number) => void;
   workspaceReferences: WorkspaceReference[];
   addWorkspaceReference: (reference: WorkspaceReference) => void;
-  removeWorkspaceReference: (cwd: string, path: string) => void;
-  clearWorkspaceReferences: (cwd: string) => void;
+  removeWorkspaceReference: (cwd: string, path: string, conversationKey?: string | null) => void;
+  clearWorkspaceReferences: (cwd: string, conversationKey?: string | null) => void;
+  fileTreeReveal: FileTreeRevealRequest | null;
+  revealInFileTree: (cwd: string, path: string) => void;
+  clearFileTreeReveal: (id: number) => void;
   settingsOpen: boolean;
   /** Snapshot of the workspace cwd taken when the dialog opened; the dialog
    *  must not follow route changes while it is open (e.g. browser back). */
@@ -61,6 +73,14 @@ interface UiState {
   inspectorResizing: boolean;
   setInspectorResizing: (r: boolean) => void;
 }
+
+export interface FileTreeRevealRequest {
+  id: number;
+  cwd: string;
+  path: string;
+}
+
+let fileTreeRevealSequence = 0;
 
 export interface InspectorTab {
   id: string;
@@ -156,18 +176,12 @@ function saveToStorage(key: string, value: unknown) {
 const DEFAULT_INSPECTOR_RATIO = 0.42;
 const initialViewportWidth = typeof window === "undefined" ? 1000 : window.innerWidth;
 const storedInspectorRatio = loadFromStorage<unknown>("inspector.ratio", null);
-const legacyInspectorWidth = loadFromStorage<unknown>("inspector.width", null);
-const migratedInspectorRatio = typeof legacyInspectorWidth === "number"
-  && Number.isFinite(legacyInspectorWidth)
-  && legacyInspectorWidth > 0
-  ? legacyInspectorWidth / initialViewportWidth
-  : DEFAULT_INSPECTOR_RATIO;
 const initialInspectorRatio = typeof storedInspectorRatio === "number"
   && Number.isFinite(storedInspectorRatio)
   && storedInspectorRatio > 0
   && storedInspectorRatio <= 0.7
   ? storedInspectorRatio
-  : Math.min(migratedInspectorRatio, 0.7);
+  : DEFAULT_INSPECTOR_RATIO;
 const initialInspectorWidth = Math.max(280, Math.round(initialViewportWidth * initialInspectorRatio));
 
 export const useUiStore = create<UiState>((set) => ({
@@ -217,11 +231,18 @@ export const useUiStore = create<UiState>((set) => ({
     saveToStorage("layout.previewPaneSide", side);
     set({ previewPaneSide: side });
   },
+  previewFileTreeSide: loadFromStorage<"left" | "right">("layout.previewFileTreeSide", "left"),
+  setPreviewFileTreeSide: (side) => {
+    saveToStorage("layout.previewFileTreeSide", side);
+    set({ previewFileTreeSide: side });
+  },
 
   inspectorOpen: false,
   inspectorWidth: initialInspectorWidth,
   inspectorRatio: initialInspectorRatio,
   inspectorMaximized: false,
+  fileTreeOpen: false,
+  previewFileTreeWidth: loadFromStorage("inspector.fileTreeWidth", 232),
   inspectorData: null,
   inspectorTabs: [],
   activeInspectorTabId: null,
@@ -249,7 +270,7 @@ export const useUiStore = create<UiState>((set) => ({
   }),
   setInspectorVisible: (visible) => set((state) => {
     if (!visible) return { inspectorOpen: false, inspectorMaximized: false };
-    if (state.inspectorTabs.length === 0 || !state.activeInspectorTabId) return state;
+    if ((state.inspectorTabs.length === 0 || !state.activeInspectorTabId) && !state.fileTreeOpen) return state;
     const active = state.inspectorTabs.find((tab) => tab.id === state.activeInspectorTabId);
     return {
       inspectorOpen: true,
@@ -267,7 +288,7 @@ export const useUiStore = create<UiState>((set) => ({
     const inspectorTabs = state.inspectorTabs.filter((tab) => tab.id !== id);
     if (inspectorTabs.length === 0) {
       return {
-        inspectorOpen: false,
+        inspectorOpen: state.fileTreeOpen,
         inspectorMaximized: false,
         inspectorData: null,
         inspectorTabs,
@@ -290,19 +311,35 @@ export const useUiStore = create<UiState>((set) => ({
     set({ inspectorRatio: ratio });
   },
   setInspectorMaximized: (m) => set({ inspectorMaximized: m }),
+  setFileTreeOpen: (open) => set((state) => ({
+    fileTreeOpen: open,
+    inspectorOpen: open || state.inspectorTabs.length > 0,
+    ...(!open && state.inspectorTabs.length === 0 ? { inspectorMaximized: false } : {}),
+  })),
+  setPreviewFileTreeWidth: (width) => {
+    saveToStorage("inspector.fileTreeWidth", width);
+    set({ previewFileTreeWidth: width });
+  },
 
   workspaceReferences: [],
   addWorkspaceReference: (reference) => set((state) => ({
-    workspaceReferences: state.workspaceReferences.some((item) => item.cwd === reference.cwd && item.path === reference.path)
+    workspaceReferences: state.workspaceReferences.some((item) => item.cwd === reference.cwd && item.conversationKey === reference.conversationKey && item.path === reference.path)
       ? state.workspaceReferences
       : [...state.workspaceReferences, reference],
   })),
-  removeWorkspaceReference: (cwd, path) => set((state) => ({
-    workspaceReferences: state.workspaceReferences.filter((item) => item.cwd !== cwd || item.path !== path),
+  removeWorkspaceReference: (cwd, path, conversationKey) => set((state) => ({
+    workspaceReferences: state.workspaceReferences.filter((item) => item.cwd !== cwd || item.path !== path || (item.conversationKey !== conversationKey && item.conversationKey !== undefined)),
   })),
-  clearWorkspaceReferences: (cwd) => set((state) => ({
-    workspaceReferences: state.workspaceReferences.filter((item) => item.cwd !== cwd),
+  clearWorkspaceReferences: (cwd, conversationKey) => set((state) => ({
+    workspaceReferences: state.workspaceReferences.filter((item) => item.cwd !== cwd || (item.conversationKey !== conversationKey && item.conversationKey !== undefined)),
   })),
+  fileTreeReveal: null,
+  revealInFileTree: (cwd, path) => set({
+    fileTreeReveal: { id: ++fileTreeRevealSequence, cwd, path },
+    fileTreeOpen: true,
+    inspectorOpen: true,
+  }),
+  clearFileTreeReveal: (id) => set((state) => state.fileTreeReveal?.id === id ? { fileTreeReveal: null } : state),
 
   settingsOpen: false,
   settingsScope: null,

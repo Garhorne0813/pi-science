@@ -163,4 +163,98 @@ describe("ActivityRendererRegistry", () => {
     expect(details.find(row => row.label.startsWith("conversation.activity.input"))?.value).toContain('"query": "kinase"');
     expect(details.find(row => row.label.startsWith("conversation.activity.toolLabel"))?.value).toBe(source.tool);
   });
+
+  it("projects persisted file changes into a compact tool-event summary", () => {
+    const edit = tool("edit", {
+      input: { path: "src/app.ts" },
+      details: { fileChange: { path: "src/app.ts", additions: 12, deletions: 3, patch: "@@\n-old\n+new" } },
+    });
+    const renderer = activityRendererRegistry.resolve(projectToolActivity(edit).kind);
+    expect(renderer.compact({ activity: projectToolActivity(edit), source: edit, live: false, t })).toEqual({
+      title: "conversation.activity.write:app.ts",
+      detail: "src/app.ts",
+      fileChange: { path: "src/app.ts", additions: 12, deletions: 3 },
+    });
+    expect(renderer.expanded({ activity: projectToolActivity(edit), source: edit, live: false, t })).toContainEqual(expect.objectContaining({
+      label: "conversation.activity.diff:",
+      value: "@@\n-old\n+new",
+    }));
+  });
+
+  it("shows only the command for bash input instead of repeating description JSON", () => {
+    const bash = tool("bash", {
+      title: "Run frontend tests",
+      input: { description: "Run frontend tests", command: "pnpm --filter frontend test", timeout: 600 },
+      presentation: { version: 1, kind: "verify", title: "Run frontend tests", description: "Run frontend tests", importance: "stage", domain: "code" },
+      details: { verification: { passed: 12, failed: 0, skipped: 1 }, execution: { exitCode: 0, id: "exec-1" } },
+    });
+    const renderer = activityRendererRegistry.resolve(projectToolActivity(bash).kind);
+    expect(renderer.compact({ activity: projectToolActivity(bash), source: bash, live: false, t })).toEqual({
+      title: "Run frontend tests",
+      detail: "conversation.activity.testsPassed: · conversation.activity.testsPassedCount:12 · conversation.activity.testsSkippedCount:1 · conversation.activity.exitCode:0",
+    });
+    const expanded = renderer.expanded({ activity: projectToolActivity(bash), source: bash, live: false, t });
+    expect(expanded).toContainEqual({ label: "conversation.activity.command:", value: "pnpm --filter frontend test", pre: true });
+    expect(expanded).not.toContainEqual(expect.objectContaining({ label: "conversation.activity.input:" }));
+    expect(expanded.map((row) => row.value).join("\n")).not.toContain("Run frontend tests");
+  });
+
+  it("uses semantic input rows for known tools", () => {
+    const read = tool("read", { input: { description: "Inspect config", path: "src/config.ts" } });
+    const renderer = activityRendererRegistry.resolve(projectToolActivity(read).kind);
+    const expanded = renderer.expanded({ activity: projectToolActivity(read), source: read, live: false, t });
+    expect(expanded).toContainEqual({ label: "conversation.activity.filePath:", value: "src/config.ts", plain: true });
+    expect(expanded).not.toContainEqual(expect.objectContaining({ label: "conversation.activity.input:" }));
+  });
+
+  it("filters repeated descriptions from unknown-tool input fallback", () => {
+    const future = tool("future_tool", { input: { description: "Do the future thing", option: "safe" } });
+    const renderer = activityRendererRegistry.resolve(projectToolActivity(future).kind);
+    const expanded = renderer.expanded({ activity: projectToolActivity(future), source: future, live: false, t });
+    expect(expanded).toContainEqual({ label: "conversation.activity.input:", value: "{\n  \"option\": \"safe\"\n}", pre: true });
+    expect(expanded.map((row) => row.value).join("\n")).not.toContain("Do the future thing");
+  });
+
+  it("summarizes parallel subagents and expands each result", () => {
+    const subagent = tool("subagent", {
+      input: { tasks: [{ agent: "reviewer", task: "Review the change" }, { agent: "tester", task: "Run tests" }] },
+      details: { mode: "parallel", results: [
+        { agent: "reviewer", task: "Review the change", exitCode: 0, output: "Looks good" },
+        { agent: "tester", task: "Run tests", exitCode: 1, error: "One test failed" },
+      ] },
+    });
+    const renderer = activityRendererRegistry.resolve(projectToolActivity(subagent).kind);
+    expect(renderer.compact({ activity: projectToolActivity(subagent), source: subagent, live: false, t })).toEqual({
+      title: "conversation.activity.subagentsComplete:2",
+      detail: "conversation.activity.subagentResultSummary:1:1",
+    });
+    const expanded = renderer.expanded({ activity: projectToolActivity(subagent), source: subagent, live: false, t });
+    expect(expanded).toContainEqual(expect.objectContaining({ label: "reviewer", value: expect.stringContaining("Looks good") }));
+    expect(expanded).toContainEqual(expect.objectContaining({ label: "tester", value: expect.stringContaining("One test failed") }));
+  });
+
+  it("presents subagent control calls without raw input JSON", () => {
+    const control = tool("subagent_control", { input: { action: "collect", task_id: "task-1", wait_seconds: 30 }, details: { status: "completed" } });
+    const renderer = activityRendererRegistry.resolve(projectToolActivity(control).kind);
+    expect(renderer.compact({ activity: projectToolActivity(control), source: control, live: false, t })).toEqual({
+      title: "conversation.activity.subagentControl.collected:",
+      detail: "conversation.activity.subagentControl.status.completed:",
+    });
+    const expanded = renderer.expanded({ activity: projectToolActivity(control), source: control, live: false, t });
+    expect(expanded).toContainEqual({ label: "conversation.activity.action:", value: "collect", plain: true });
+    expect(expanded).toContainEqual({ label: "conversation.activity.taskId:", value: "task-1", plain: true });
+    expect(expanded).not.toContainEqual(expect.objectContaining({ label: "conversation.activity.input:" }));
+  });
+
+  it("keeps an asynchronously dispatched subagent running after its tool call returns", () => {
+    const dispatched = tool("subagent", {
+      input: { agent: "reviewer", task: "Review later", wait_seconds: 0 },
+      details: { task_id: "task-1", status: "running" },
+    });
+    const renderer = activityRendererRegistry.resolve(projectToolActivity(dispatched).kind);
+    expect(renderer.compact({ activity: projectToolActivity(dispatched), source: dispatched, live: false, t })).toEqual({
+      title: "conversation.activity.subagentRunningNamed:reviewer",
+      detail: "conversation.activity.subagentProgress:0:1",
+    });
+  });
 });

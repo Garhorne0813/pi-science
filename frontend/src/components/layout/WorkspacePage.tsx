@@ -1,12 +1,31 @@
 import type { ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
+import { Link, useLocation, useParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 
 import { cn } from "../../lib/ui";
+import { useRuntimeStore } from "../../lib/agent-runtime";
+import { readLastConversation } from "../../lib/conversation/last-conversation";
 
-export function WorkspacePage({ children, className }: { children: ReactNode; className?: string }) {
+export function BackToConversationLink() {
+  const { t } = useTranslation();
+  const { cwd = "" } = useParams<{ cwd: string }>();
+  const location = useLocation();
+  const runtimeSessionId = useRuntimeStore(state => state.cwd === cwd ? state.activeSessionId : null);
+  const searchParams = new URLSearchParams(location.search);
+  const querySessionId = searchParams.get("session_id");
+  const targetsNewConversation = searchParams.get("conversation") === "new";
+  const sessionId = querySessionId || runtimeSessionId || readLastConversation(cwd);
+  const root = `/workspace/${encodeURIComponent(cwd)}`;
+  const to = targetsNewConversation ? `${root}/new` : sessionId ? `${root}/session/${encodeURIComponent(sessionId)}` : root;
+  return <Link to={to} className="mb-2 inline-flex min-h-8 items-center gap-1.5 rounded-input pr-2 text-sm font-medium text-accent hover:bg-surface-2"><ArrowLeft size={15} />{t("conversation.backToConversation")}</Link>;
+}
+
+export function WorkspacePage({ children, className, contentClassName }: { children: ReactNode; className?: string; contentClassName?: string }) {
   return (
     <div className={cn("h-full overflow-y-auto bg-bg [scrollbar-gutter:stable]", className)}>
-      <div className="mx-auto w-full max-w-[1120px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+      <div className={cn("mx-auto w-full max-w-[1120px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8", contentClassName)}>
         {children}
       </div>
     </div>
@@ -27,6 +46,7 @@ export function WorkspacePageHeader({
   return (
     <header className={cn("flex flex-col gap-4 border-b border-border pb-5 md:flex-row md:items-start md:justify-between", className)}>
       <div className="min-w-0">
+        <BackToConversationLink />
         <h1 className="text-2xl font-medium tracking-tight text-text sm:text-[28px]">{title}</h1>
         {description && <div className="mt-1 max-w-[680px] text-sm leading-6 text-muted md:overflow-hidden md:text-ellipsis md:whitespace-nowrap">{description}</div>}
       </div>

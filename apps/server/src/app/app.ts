@@ -263,13 +263,7 @@ export function buildApp(
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);
   if (config.nodeArtifacts !== false) registerTurnArtifactRoutes(app);
   if (config.nodeSettings !== false)
-    registerSettingsRoutes(
-      app,
-      nodeSessionService,
-      settings,
-      runtimeCatalog,
-      sqliteEnabled ? mcp : undefined,
-    );
+    registerSettingsRoutes(app, nodeSessionService, settings, runtimeCatalog);
   if (sqliteEnabled) registerMcpRoutes(app, mcp, config.nodeSettings !== false);
   if (config.nodeSettings !== false) {
     registerModelResourceRoutes(app, nodeSessionService, settings);
@@ -280,13 +274,7 @@ export function buildApp(
   registerNotebookRoutes(app, notebooks, config.internalToken);
   if (config.nodeCatalog !== false) registerCitationRoutes(app);
   if (config.nodeCatalog !== false)
-    registerCatalogRoutes(
-      app,
-      jobs,
-      sqliteEnabled ? workspaces : undefined,
-      sqliteEnabled ? mcp : undefined,
-      nodeSessionService,
-    );
+    registerCatalogRoutes(app, jobs, sqliteEnabled ? workspaces : undefined, nodeSessionService);
   if (config.nodeProject !== false) {
     registerProjectRoutes(app, memory, memoryBackground);
     registerMemoryRoutes(app, memory, memoryBackground, nodeSessionService, config.internalToken);

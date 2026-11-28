@@ -97,7 +97,7 @@ it("binds complete pip revisions, rejects stale approvals, and restores the prev
     await writeFile(python, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     inventories.set(await realpath(target), [["numpy", "2.2.0"]]);
   };
-  const service = new WorkspaceEnvironmentService(undefined, process.execPath, repository);
+  const service = new WorkspaceEnvironmentService(process.execPath, repository);
   vi.mocked(runEnvironmentProcess).mockImplementation(
     async (_command, args, target, _cache, _timeout, _env, options) => {
       if (args[0] === "create") {
@@ -178,7 +178,7 @@ it("binds complete pip revisions, rejects stale approvals, and restores the prev
     });
     await store.close();
     await store.start();
-    const reopened = new WorkspaceEnvironmentService(undefined, process.execPath, repository);
+    const reopened = new WorkspaceEnvironmentService(process.execPath, repository);
     expect(await reopened.status(workspace)).toMatchObject({
       revision_id: second.revision_id,
       ready: true,
@@ -224,7 +224,7 @@ it("recovers abandoned pip revisions after restart and preserves live and publis
   );
   const store = new SqliteStateStore({ path: join(home, "state.sqlite") });
   const repository = new EnvironmentRepository(store);
-  const environments = new WorkspaceEnvironmentService(undefined, process.execPath, repository);
+  const environments = new WorkspaceEnvironmentService(process.execPath, repository);
   const workspace = join(home, "workspace");
   const deadProcess = spawnSync(process.execPath, ["-e", "process.exit(1)"]);
   const seed = async (

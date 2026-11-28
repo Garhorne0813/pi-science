@@ -32,7 +32,6 @@ import {
   type McpToolSummary,
 } from "@pi-science/contracts";
 import { CredentialStore } from "../model-resources/credential-store.js";
-import { resolveMcpConfig } from "../catalog/mcp-config.js";
 import type { NodeSessionService } from "../runtime/node/node-session-service.js";
 import { validateConnectorOutboundUrl } from "../security/outbound-security.js";
 import { probeMcpHealth } from "../security/mcp-health.js";
@@ -136,34 +135,16 @@ export class McpConnectorService {
     await this.materializeKnownWorkspaces();
   }
 
-  async list(cwd?: string | null): Promise<{
+  async list(): Promise<{
     connectors: McpConnector[];
     migration_conflicts: StoredMcpMigrationConflict[];
-    legacy_config_path: string | null;
-    legacy_count: number;
   }> {
     const connectors = await this.repository.list();
     const result = await Promise.all(connectors.map((item) => this.publicConnector(item)));
     const migrationConflicts = await this.repository.migrationConflicts();
-    const legacy = await this.legacyDefinitions(cwd);
-    const canonicalNames = new Set(connectors.map((item) => item.name.toLowerCase()));
-    const legacyCount = Object.entries(legacy.definitions).filter(([name, raw]) => {
-      if (canonicalNames.has(name.toLowerCase())) return false;
-      const definition = object(raw);
-      const sensitive = Boolean(
-        definition.env ||
-          definition.headers ||
-          definition.bearerToken ||
-          definition.oauth ||
-          definition.auth,
-      );
-      return !sensitive && Boolean(definition.url || definition.socket || definition.command);
-    }).length;
     return {
       connectors: result,
       migration_conflicts: migrationConflicts,
-      legacy_config_path: legacy.source,
-      legacy_count: legacyCount,
     };
   }
 
@@ -706,102 +687,6 @@ export class McpConnectorService {
     }
   }
 
-  async importPreview(
-    cwd: string,
-  ): Promise<{ source: string | null; entries: Array<Record<string, unknown>> }> {
-    await this.project(cwd);
-    const { definitions, source } = await this.legacyDefinitions(cwd);
-    const existing = new Set((await this.repository.list()).map((item) => item.name));
-    return {
-      source,
-      entries: Object.entries(definitions)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([name, raw]) => {
-          const definition = object(raw);
-          const sensitive = Boolean(
-            definition.env ||
-              definition.headers ||
-              definition.bearerToken ||
-              definition.oauth ||
-              definition.auth,
-          );
-          return {
-            name,
-            transport: definition.url
-              ? "streamable_http"
-              : definition.socket
-                ? "socket"
-                : definition.command
-                  ? "stdio"
-                  : "unknown",
-            conflict: existing.has(name),
-            contains_sensitive_fields: sensitive,
-            importable:
-              !sensitive && Boolean(definition.url || definition.socket || definition.command),
-          };
-        }),
-    };
-  }
-
-  async importCommit(
-    names: string[],
-    cwd: string,
-  ): Promise<{ imported: McpConnector[]; failed: Array<{ name: string; error: string }> }> {
-    const { definitions } = await this.legacyDefinitions(cwd);
-    const imported: McpConnector[] = [];
-    const failed: Array<{ name: string; error: string }> = [];
-    for (const name of [...new Set(names)]) {
-      try {
-        const definition = object(definitions[name]);
-        if (!definition || (!definition.command && !definition.url && !definition.socket))
-          throw new Error("definition not found or unsupported");
-        if (
-          definition.env ||
-          definition.headers ||
-          definition.bearerToken ||
-          definition.oauth ||
-          definition.auth
-        )
-          throw new Error("sensitive fields require manual credential migration");
-        const transport = definition.command
-          ? "stdio"
-          : definition.socket
-            ? "socket"
-            : "streamable_http";
-        imported.push(
-          await this.create(
-            {
-              name,
-              display_name: String(definition.name ?? name),
-              description: String(definition.description ?? ""),
-              transport,
-              endpoint_url: transport === "streamable_http" ? String(definition.url) : null,
-              command: transport === "stdio" ? String(definition.command) : null,
-              args: Array.isArray(definition.args) ? definition.args.map(String) : [],
-              socket_path: transport === "socket" ? String(definition.socket) : null,
-              runtime_config: {
-                lifecycle: "lazy",
-                expose_resources: true,
-                include_tools: [],
-                exclude_tools: [],
-                environment: {},
-                headers: {},
-                auth: "auto",
-                allow_private: false,
-              },
-              credential_ref: null,
-              enabled: true,
-            },
-            "imported",
-          ),
-        );
-      } catch (error) {
-        failed.push({ name, error: error instanceof Error ? error.message : String(error) });
-      }
-    }
-    return { imported, failed };
-  }
-
   private async validate(input: McpConnectorCreate, connectorId?: string): Promise<void> {
     const invalid = bindingError(input.runtime_config, input.credential_ref);
     if (invalid) throw new McpServiceError("unsupported_binding", invalid);
@@ -998,23 +883,9 @@ export class McpConnectorService {
     return connector;
   }
 
-  private async legacyDefinitions(cwd?: string | null) {
-    const config = await this.settings.read();
-    return resolveMcpConfig({
-      ...(cwd ? { workspaceRoot: cwd } : {}),
-      explicitPath: typeof config.mcp_config_path === "string" ? config.mcp_config_path : undefined,
-    });
-  }
-
   private async reload(): Promise<Array<{ cwd: string; oldId: string; newId: string }>> {
     return this.sessions ? this.sessions.reloadConfiguration() : [];
   }
-}
-
-function object(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
 }
 
 function clearCredentialBindings(

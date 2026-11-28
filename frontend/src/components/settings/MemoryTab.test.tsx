@@ -122,7 +122,7 @@ it("is available in application Settings with global scope even when opened insi
     "true",
   );
   expect(
-    screen.getByText("Global settings"),
+    screen.getByText("All projects"),
   ).toBeInTheDocument();
   expect(
     screen.queryByLabelText("Allow recall in this project"),

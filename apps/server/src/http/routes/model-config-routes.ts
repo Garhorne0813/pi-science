@@ -498,24 +498,4 @@ export function registerModelConfigRoutes(
       return fail(reply, error);
     }
   });
-  // Tombstones run before validation, discovery, or mutation. No legacy CRUD is registered.
-  for (const path of [
-    "providers",
-    "models",
-    "endpoints",
-    "credentials",
-    "provider-endpoint-bindings",
-    "custom-providers",
-    "settings/api-key",
-    "settings/custom-providers",
-    "model-config/shadow",
-  ]) {
-    for (const url of [`/api/${path}`, `/api/${path}/*`])
-      app.all(url, async (_request, reply) =>
-        reply.code(410).send({
-          code: "model_config_retired",
-          error: "Use /api/model-config; old model configuration is no longer active",
-        }),
-      );
-  }
 }

@@ -115,6 +115,22 @@ describe("ProjectsPage loading", () => {
     client.clear();
   });
 
+  it("asks for a project name before creating it", async () => {
+    vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+      if (path === "/api/workspaces/pinned") return { paths: [] };
+      if (path === "/api/workspaces" && options?.method === "POST") return { name: "Materials", path: "/projects/Materials", project_id: "p1", session_count: 0, last_modified: "2026-11-23T00:00:00Z" };
+      return [];
+    });
+    const client = renderPage();
+    fireEvent.click((await screen.findAllByRole("button", { name: "New workspace" }))[0]);
+    expect(screen.getByRole("dialog", { name: "Create project" })).toBeInTheDocument();
+    expect(vi.mocked(apiRequest).mock.calls.some(([path, options]) => path === "/api/workspaces" && options?.method === "POST")).toBe(false);
+    fireEvent.change(screen.getByRole("textbox", { name: "Project name" }), { target: { value: "Materials" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create and open" }));
+    await waitFor(() => expect(vi.mocked(apiRequest)).toHaveBeenCalledWith("/api/workspaces", expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "Materials" }) })));
+    client.clear();
+  });
+
   it("refreshes activity and reorders cards without leaving the page", async () => {
     const projects = [
       { name: "Alpha", path: "/alpha", project_id: "1", session_count: 0, last_modified: "2026-09-12T00:00:00Z" },

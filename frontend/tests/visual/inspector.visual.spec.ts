@@ -17,12 +17,10 @@ async function openSidebarFile(page: import("@playwright/test").Page, testInfo: 
   // embedded tree. Scoping to the panel element guarantees the click lands on
   // the real file browser row, not on the conversation's artifact strip
   // (which would render report.md without the panel being involved).
-  const sidebar = page.locator("#workspace-context-panel");
-  // The Files entry is a Context Panel tab, not a navigation button, and the
-  // embedded tree replaced the old collapsible section header.
-  await sidebar.getByRole("tab", { name: "Files", exact: true }).click();
-  await sidebar.getByRole("button", { name: "analysis", exact: true }).click();
-  const fileRow = sidebar.getByRole("button", { name: "report.md" });
+  await page.locator("#workspace-context-panel").getByRole("button", { name: "Files", exact: true }).click();
+  const tree = page.getByRole("region", { name: "Workspace file tree" });
+  await tree.getByRole("button", { name: "analysis", exact: true }).click();
+  const fileRow = tree.getByRole("button", { name: "report.md" });
   await expect(fileRow).toBeVisible();
   await fileRow.click();
 }
@@ -78,10 +76,10 @@ test("representative ordinary and scientific previews share responsive chrome", 
   });
   await page.goto(workspaceRoute(VISUAL_CWD));
   await waitForConversationSettled(page);
-  const sidebar = page.locator("#workspace-context-panel");
-  await sidebar.getByRole("tab", { name: "Files", exact: true }).click();
+  await page.locator("#workspace-context-panel").getByRole("button", { name: "Files", exact: true }).click();
+  const tree = page.getByRole("region", { name: "Workspace file tree" });
   for (const name of Object.keys(previewFiles)) {
-    await sidebar.getByRole("button", { name, exact: true }).click();
+    await tree.getByRole("button", { name, exact: true }).click();
     const panel = page.getByRole("tabpanel").filter({ has: page.locator('[data-variant="file"]') });
     await expect(panel).toBeVisible();
     if (name === "sample.pdb") await expect(panel.getByText(/\d+ atoms/)).toBeVisible();
@@ -164,9 +162,9 @@ test("iframe keyboard navigation contains focus and prioritizes native dialogs",
   });
   await page.goto(workspaceRoute(VISUAL_CWD));
   await waitForConversationSettled(page);
-  const sidebar = page.locator("#workspace-context-panel");
-  await sidebar.getByRole("tab", { name: "Files", exact: true }).click();
-  await sidebar.getByRole("button", { name: "focus.html", exact: true }).click();
+  await page.locator("#workspace-context-panel").getByRole("button", { name: "Files", exact: true }).click();
+  const tree = page.getByRole("region", { name: "Workspace file tree" });
+  await tree.getByRole("button", { name: "focus.html", exact: true }).click();
   await page.getByRole("button", { name: "Focus file", exact: true }).click();
   const htmlDialog = page.getByRole("dialog", { name: "focus.html", exact: true });
   const embeddedInput = htmlDialog.frameLocator("iframe").getByRole("textbox", { name: "Embedded input" });
@@ -200,7 +198,7 @@ test("iframe keyboard navigation contains focus and prioritizes native dialogs",
   await expect(htmlDialog).not.toBeVisible();
   await expect(page.getByRole("button", { name: "Focus file", exact: true })).toBeFocused();
 
-  await sidebar.getByRole("button", { name: "focus.pdf", exact: true }).click();
+  await tree.getByRole("button", { name: "focus.pdf", exact: true }).click();
   await page.getByRole("button", { name: "Focus file", exact: true }).click();
   const pdfDialog = page.getByRole("dialog", { name: "focus.pdf", exact: true });
   await expect(pdfDialog.getByRole("note")).toContainText("browser PDF viewer may handle Esc itself");
@@ -290,6 +288,7 @@ for (const newConversation of [false, true]) {
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toEqual(prompts[0]);
     expect(prompts[0].message).toContain("What is shown in this region?");
+    expect(prompts[0].message).toContain("inspect the lower crop first and use it as the primary visual evidence");
     expect(prompts[0].message).toContain("image-regions/");
     expect(prompts[0].message).toContain("sample.svg [x=");
     expect(uploadCount).toBe(1);

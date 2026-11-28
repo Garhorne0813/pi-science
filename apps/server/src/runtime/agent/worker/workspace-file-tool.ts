@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { isUtf8 } from "node:buffer";
 import { realpath } from "node:fs/promises";
 import { configRoot } from "../../../storage/persistence.js";
 import { workspacePolicy } from "../../sandbox/policy.js";
@@ -9,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, rename, unlink, type FileHandle } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   ok,
   type AgentHarnessTool,
@@ -20,8 +21,21 @@ import { runtimeReadPolicy, pathsOverlap } from "../../sandbox/read-grants.js";
 import { workspaceReadBoundary } from "../../sandbox/workspace-read-authorization.js";
 import { readRegularFile } from "../../sandbox/file-read.js";
 import { writeSandboxFile } from "../../sandbox/file-write.js";
+import { toolFileChange } from "./file-change-details.js";
 
 type Tool = AgentHarnessTool<{ env: NodeExecutionEnv }>;
+const MAX_FILE_CHANGE_BYTES = 2 * 1024 * 1024;
+
+async function mutationSnapshot(path: string): Promise<string | null | undefined> {
+  try {
+    const bytes = await readRegularFile(path, MAX_FILE_CHANGE_BYTES);
+    return bytes.includes(0) || !isUtf8(bytes) ? undefined : bytes.toString("utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    return undefined;
+  }
+}
+
 /** Tools may manage research protocol/candidate files, but never service-private
  * state, protected assets or aliases escaping the workspace. Skill roots are read-only. */
 export function workspaceFileTool(
@@ -74,7 +88,10 @@ export function workspaceFileTool(
           throw new Error("File access is outside authorized workspace data");
         return path;
       };
-      check(String((params as { path?: string }).path ?? ""), original.name !== "read");
+      const requestedPath = String((params as { path?: string }).path ?? "");
+      const checkedPath = check(requestedPath, original.name !== "read");
+      const mutation = original.name === "write" || original.name === "edit";
+      const before = mutation ? await mutationSnapshot(checkedPath) : undefined;
       const env = new Proxy(ctx.env, {
         get(target, property) {
           if (["readBinaryFile", "readTextFile"].includes(String(property)))
@@ -188,7 +205,26 @@ export function workspaceFileTool(
           return typeof value === "function" ? value.bind(target) : value;
         },
       });
-      return original.execute(id, params, update, { ...ctx, env }, invocation, context);
+      const result = await original.execute(
+        id,
+        params,
+        update,
+        { ...ctx, env },
+        invocation,
+        context,
+      );
+      if (!mutation || before === undefined) return result;
+      const after = await mutationSnapshot(checkedPath);
+      if (after === undefined || after === null) return result;
+      const existingDetails =
+        result.details && typeof result.details === "object" && !Array.isArray(result.details)
+          ? (result.details as Record<string, unknown>)
+          : {};
+      const path = relative(cwd, checkedPath).split(sep).join("/") || requestedPath;
+      return {
+        ...result,
+        details: { ...existingDetails, fileChange: toolFileChange(path, before ?? "", after) },
+      };
     },
   };
 }

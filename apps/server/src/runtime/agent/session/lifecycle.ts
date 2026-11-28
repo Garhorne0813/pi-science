@@ -5,6 +5,7 @@ import { readJson, writeJsonAtomic } from "../../../storage/persistence.js";
 import type { RuntimeResult } from "../agent-runtime-types.js";
 import type { Live } from "./types.js";
 import { identity, configPath, failed } from "./identity.js";
+import { canonicalRuntimeModelRef } from "../model-ref.js";
 import type { SessionContext } from "./context.js";
 
 export type SessionLifecycleContext = Pick<
@@ -66,15 +67,16 @@ export async function state(
       return { error: "session not found in this workspace", code: "not_found" };
     const saved = await context.repository.configuration(cwd, sessionId);
     const facts = await context.repository.runtimeState(cwd, sessionId);
+    const savedModel = saved?.model ? `${saved.model.provider}/${saved.model.modelId}` : null;
     return {
       id: sessionId,
       cwd,
       is_streaming: false,
       is_compacting: false,
       pending_message_count: 0,
-      model: saved?.model
-        ? `${saved.model.provider}/${saved.model.modelId}`
-        : (config.model ?? null),
+      // Report the current catalog identity for renamed models; the lane keeps
+      // the old ID until the next open adopts and persists the replacement.
+      model: savedModel ? canonicalRuntimeModelRef(savedModel) : (config.model ?? null),
       thinking: saved?.thinkingLevel ?? config.thinking ?? null,
       ...facts,
     };

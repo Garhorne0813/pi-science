@@ -1,5 +1,6 @@
 import Fastify from "fastify";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -28,6 +29,130 @@ async function buildApp(cwd: string) {
   const query = `cwd=${encodeURIComponent(cwd)}`;
   return { app, query };
 }
+
+async function git(cwd: string, ...args: string[]): Promise<void> {
+  await new Promise<void>((resolve, reject) =>
+    execFile("git", ["-C", cwd, ...args], (error) => (error ? reject(error) : resolve())),
+  );
+}
+
+describe("GET /api/files/git-status", () => {
+  it("returns tracked and untracked changes without exposing git output", async () => {
+    const cwd = await makeWorkspace();
+    const { app, query } = await buildApp(cwd);
+    await git(cwd, "init");
+    await git(cwd, "config", "user.email", "tests@example.com");
+    await git(cwd, "config", "user.name", "Tests");
+    await writeFile(join(cwd, "tracked.txt"), "before", "utf8");
+    await git(cwd, "add", "tracked.txt");
+    await git(cwd, "commit", "-m", "initial");
+    await writeFile(join(cwd, "tracked.txt"), "after", "utf8");
+    await writeFile(join(cwd, "new.txt"), "new", "utf8");
+
+    const response = await app.inject({ method: "GET", url: `/api/files/git-status?${query}` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      repository: true,
+      entries: { "new.txt": "??", "tracked.txt": " M" },
+      stats: {
+        "new.txt": { additions: 1, deletions: 0 },
+        "tracked.txt": { additions: 1, deletions: 1 },
+      },
+    });
+  });
+
+  it("returns a stable empty result outside a git repository", async () => {
+    const cwd = await makeWorkspace();
+    const { app, query } = await buildApp(cwd);
+    const response = await app.inject({ method: "GET", url: `/api/files/git-status?${query}` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ repository: false, entries: {}, stats: {} });
+  });
+
+  it("counts staged lines before the repository has its first commit", async () => {
+    const cwd = await makeWorkspace();
+    const { app, query } = await buildApp(cwd);
+    await git(cwd, "init");
+    await writeFile(join(cwd, "first.txt"), "one\ntwo\n", "utf8");
+    await git(cwd, "add", "first.txt");
+
+    const response = await app.inject({ method: "GET", url: `/api/files/git-status?${query}` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      repository: true,
+      entries: { "first.txt": "A " },
+      stats: { "first.txt": { additions: 2, deletions: 0 } },
+    });
+  });
+});
+
+describe("GET /api/files/events", () => {
+  it("streams workspace changes and ignores hidden metadata", async () => {
+    const cwd = await makeWorkspace();
+    const { app, query } = await buildApp(cwd);
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const controller = new AbortController();
+    const response = await fetch(`${address}/api/files/events?${query}`, {
+      signal: controller.signal,
+    });
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    await reader.read(); // connected comment
+    await writeFile(join(cwd, ".pi-science", "ignored.json"), "{}", "utf8");
+    await writeFile(join(cwd, "visible.txt"), "changed", "utf8");
+
+    const next = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("file event timeout")), 3_000),
+      ),
+    ]);
+    const text = decoder.decode(next.value, { stream: !next.done });
+    controller.abort();
+
+    expect(text).toContain("visible.txt");
+    expect(text).not.toContain("ignored.json");
+  });
+});
+
+describe("GET /api/files/search", () => {
+  it("finds nested files by path while excluding hidden, dependency, and symlink trees", async () => {
+    const cwd = await makeWorkspace();
+    const { app, query } = await buildApp(cwd);
+    await mkdir(join(cwd, "results", "final"), { recursive: true });
+    await writeFile(join(cwd, "results", "final", "report.csv"), "a,b\n1,2\n", "utf8");
+    await mkdir(join(cwd, ".hidden"), { recursive: true });
+    await writeFile(join(cwd, ".hidden", "report-secret.csv"), "secret", "utf8");
+    await mkdir(join(cwd, "node_modules", "package"), { recursive: true });
+    await writeFile(join(cwd, "node_modules", "package", "report.js"), "", "utf8");
+    await symlink(join(cwd, "results"), join(cwd, "linked-results"));
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/files/search?${query}&q=report`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([
+      expect.objectContaining({
+        path: "results/final/report.csv",
+        name: "report.csv",
+        isDir: false,
+      }),
+    ]);
+  });
+
+  it("returns an empty result for an empty query", async () => {
+    const cwd = await makeWorkspace();
+    const { app, query } = await buildApp(cwd);
+    const response = await app.inject({ method: "GET", url: `/api/files/search?${query}&q=%20` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([]);
+  });
+});
 
 describe("POST /api/files/mkdir", () => {
   it("creates nested folders and records provenance", async () => {

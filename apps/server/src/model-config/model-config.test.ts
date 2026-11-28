@@ -291,7 +291,7 @@ describe("native model configuration", () => {
       expect((await app.inject("/api/model-config/catalog")).body).not.toContain("private-key");
       expect(
         (await app.inject({ method: "POST", url: "/api/providers", payload: {} })).statusCode,
-      ).toBe(410);
+      ).toBe(404);
       expect(reload).toHaveBeenCalledTimes(2);
       for (let attempt = 0; attempt < 10; attempt++)
         await app.inject({ method: "POST", url: "/api/model-config/discover", payload: {} });

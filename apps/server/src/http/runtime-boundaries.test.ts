@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { routeBoundaries, routeBoundary, runtimeOwner } from "./runtime-boundaries.js";
+import { routeBoundary, runtimeOwner } from "./runtime-boundaries.js";
 
 describe("runtime route boundaries", () => {
   it("marks kernels and notebooks as Node-native routes", () => {
@@ -10,9 +10,5 @@ describe("runtime route boundaries", () => {
     expect(routeBoundary("/api/unknown-route")).toBeUndefined();
     expect(routeBoundary("/api/literature/search")).toBeUndefined();
     expect(routeBoundary("/api/literature/approve")).toBeUndefined();
-  });
-
-  it("leaves no scientific-runtime compatibility proxies", () => {
-    expect(routeBoundaries.filter((boundary) => boundary.availability === "compatibility-proxy")).toEqual([]);
   });
 });

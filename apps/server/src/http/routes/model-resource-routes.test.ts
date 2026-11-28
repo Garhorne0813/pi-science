@@ -33,7 +33,7 @@ it("keeps MCP credentials inaccessible and immutable through retired model APIs"
   try {
     for (const method of ["GET", "POST", "PUT", "DELETE"] as const) {
       const response = await app.inject({ method, url: `/api/credentials/${key.id}` });
-      expect(response.statusCode).toBe(410);
+      expect(response.statusCode).toBe(404);
       expect(response.body).not.toContain("mcp-secret");
     }
     expect((await service.credentials.getForRuntime(key.id))?.secret).toBe("mcp-secret");

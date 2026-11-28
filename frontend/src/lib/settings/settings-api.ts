@@ -1,7 +1,7 @@
 import { applySessionReplacements, type SessionReplacement } from "../agent-runtime";
 import { apiRequest } from "../client/api";
 import { queryClient } from "../client/query-client";
-import type { McpServer, ProjectSubagent } from "./settings-types";
+import type { ProjectSubagent } from "./settings-types";
 import type {
   McpConnector,
   McpConnectorCreate,
@@ -73,17 +73,10 @@ export const subagentsDiscoveryQuery = (cwd: string) => ({
   staleTime: 3_000,
 });
 
-export const mcpCatalogKey = (cwd: string) => ["mcp", "catalog", cwd];
-export const mcpCatalogQuery = (cwd: string, errorFallback: string) => ({
-  queryKey: mcpCatalogKey(cwd),
-  queryFn: () => apiRequest<{ servers?: McpServer[] }>(`/api/mcp/catalog?cwd=${encodeURIComponent(cwd)}`, { errorFallback }),
-  staleTime: 0,
-});
-
 export const mcpConnectorsKey = ["mcp", "connectors"] as const;
 export const mcpConnectorsQuery = (errorFallback: string) => ({
   queryKey: mcpConnectorsKey,
-  queryFn: () => apiRequest<{ connectors: McpConnector[]; migration_conflicts?: McpMigrationConflict[]; legacy_count?: number; legacy_config_path?: string | null }>("/api/mcp/connectors", { errorFallback }),
+  queryFn: () => apiRequest<{ connectors: McpConnector[]; migration_conflicts?: McpMigrationConflict[] }>("/api/mcp/connectors", { errorFallback }),
   staleTime: 0,
 });
 
@@ -113,16 +106,6 @@ export const settingsApi = {
     invalidateSettings();
   },
 
-  async saveModel<T>(model: string, thinking: string, cwd?: string | null, sessionId?: string | null): Promise<T> {
-    const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
-    const result = unwrapSettings(await apiRequest<T & SettingsEnvelope>(`/api/settings/model${query}`, json("PUT", { model, thinking, ...(sessionId ? { session_id: sessionId } : {}) })), "Unable to save default model");
-    // Wait for invalidation before SettingsPage immediately reloads. Without
-    // this, fetchQuery can return the still-fresh 3s cached config and keep
-    // showing the previous model's context window.
-    await invalidateSettings();
-    return result;
-  },
-
   async saveCompaction<T>(enabled: boolean, thresholdPercent: number, cwd?: string | null): Promise<T> {
     const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
     const result = unwrapSettings(await apiRequest<T & SettingsEnvelope>(`/api/settings/compaction${query}`, json("PUT", { enabled, threshold_percent: thresholdPercent })), "Unable to save context management settings");
@@ -137,10 +120,6 @@ export const settingsApi = {
   },
 
   /* ── MCP catalog ── */
-
-  setMcpEnabled(id: string, enabled: boolean, fallback: string) {
-    return writeSettings(`/api/settings/mcp/${id}?enabled=${enabled}`, { method: "PUT" }, fallback);
-  },
 
   createMcp(body: McpConnectorCreate) {
     return apiRequest<McpConnector>("/api/mcp/connectors", json("POST", body));
@@ -177,12 +156,6 @@ export const settingsApi = {
   clearMcpToolDecision(connectorId: string, toolName: string, cwd?: string | null) {
     const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
     return apiRequest<void>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/tools/${encodeURIComponent(toolName)}${query}`, { method: "DELETE" });
-  },
-  previewMcpImport(cwd: string | null) {
-    return apiRequest<{ source: string | null; entries: Array<{ name: string; transport: string; importable: boolean; conflict: boolean; contains_sensitive_fields: boolean }> }>(`/api/mcp/import/preview${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`, { method: "POST" });
-  },
-  commitMcpImport(cwd: string | null, names: string[]) {
-    return apiRequest<{ imported: McpConnector[]; failed: Array<{ name: string; error: string }> }>(`/api/mcp/import/commit${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`, json("POST", { names }));
   },
 
 

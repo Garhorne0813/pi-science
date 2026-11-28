@@ -13,6 +13,8 @@ import { canonicalDirectory, identifyPolicy, isWithin, type SandboxPolicy } from
 import { processSettings, srtCli, type RuntimeInstallation } from "./settings.js";
 import { prepareMacosSupervisor } from "./platform.js";
 
+const runFile = promisify(execFile);
+
 export const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 export const launcherPath = fileURLToPath(
   new URL(import.meta.url.endsWith(".ts") ? "./launcher.ts" : "./launcher.js", import.meta.url),
@@ -163,7 +165,6 @@ export function killSandboxGroup(
   }
 }
 
-const runFile = promisify(execFile);
 export async function retireSandboxGroup(pid: number | undefined): Promise<void> {
   if (pid === undefined) return; // A failed spawn never created a process group.
   killSandboxGroup(pid);

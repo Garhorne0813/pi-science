@@ -12,11 +12,12 @@ export interface FileListEntry {
 
 export interface ContextPoint { x: number; y: number }
 
-export function FileContextMenu({ entry, point, onClose, onReference, onCopy, onCopyAbsolutePath, onReveal, onCreateFile, onCreateFolder, onRename, onDelete }: {
+export function FileContextMenu({ entry, referenced, point, onClose, onToggleReference, onCopy, onCopyAbsolutePath, onReveal, onCreateFile, onCreateFolder, onRename, onDelete }: {
   entry: FileListEntry;
+  referenced: boolean;
   point: ContextPoint;
   onClose: () => void;
-  onReference: () => void;
+  onToggleReference: () => void;
   onCopy: (text: string) => void;
   /** Copy the absolute path instead of the workspace-relative one. Omitted by
    *  callers that have no workspace cwd to resolve against. */
@@ -61,7 +62,7 @@ export function FileContextMenu({ entry, point, onClose, onReference, onCopy, on
       {onCreateFile && <MenuButton icon={<FilePlus size={12} />} label={t("files.newFile")} onClick={onCreateFile} />}
       {onCreateFolder && <MenuButton icon={<FolderPlus size={12} />} label={t("files.newFolder")} onClick={onCreateFolder} />}
       <MenuDivider />
-      <MenuButton icon={<Link2 size={12} />} label={entry.isDir ? t("files.referenceFolder") : t("files.referenceFile")} onClick={onReference} />
+      <MenuButton icon={<Link2 size={12} />} label={referenced ? (entry.isDir ? t("files.removeFolderReference") : t("files.removeFileReference")) : (entry.isDir ? t("files.referenceFolder") : t("files.referenceFile"))} onClick={onToggleReference} />
       <MenuButton icon={<Copy size={12} />} label={t("files.copyPath")} onClick={() => onCopy(entry.path)} />
       {onCopyAbsolutePath && <MenuButton icon={<Copy size={12} />} label={t("files.copyAbsolutePath")} onClick={onCopyAbsolutePath} />}
       <MenuButton icon={<Copy size={12} />} label={t("files.copyName")} onClick={() => onCopy(entry.name)} />

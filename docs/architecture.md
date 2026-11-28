@@ -343,9 +343,10 @@ Worker, with public-address, redirect and size checks. See
 Each conversation and language receives a separate Python/R kernel process from
 the project's selected immutable Micromamba revision. Kernels start lazily and
 communicate with Node through JSONL. Package changes create a new revision;
-existing workspace `.venv` directories remain a migration fallback. JavaScript
-packages remain workspace-local. JupyterLab is optional, with its own app-managed
-tooling environment and project kernelspecs.
+workspaces without a bound revision provision the shared Python Standard
+environment on demand, and workspace `.venv` directories are never executed.
+JavaScript packages remain workspace-local. JupyterLab is optional, with its own
+app-managed tooling environment and project kernelspecs.
 
 Session Notebook displays agent/user execution history. File-backed `.ipynb`
 notebooks use `notebook_read`, `notebook_edit` and `notebook_run`. Edits validate

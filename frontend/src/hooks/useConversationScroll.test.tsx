@@ -88,6 +88,41 @@ describe("useConversationScroll follow output", () => {
     owner.remove();
   });
 
+  it("expands a semantic activity group after revealing its folded turn", async () => {
+    setHistory([user("u1"), tool("tool-grouped")], null, false);
+    const owner = document.createElement("div");
+    owner.dataset.threadBlockIds = "tool-grouped";
+    const turnDisclosure = document.createElement("button");
+    turnDisclosure.setAttribute("aria-expanded", "false");
+    turnDisclosure.setAttribute("aria-controls", "trace-grouped");
+    const groupDisclosure = document.createElement("button");
+    groupDisclosure.setAttribute("aria-expanded", "false");
+    groupDisclosure.setAttribute("aria-controls", "group-content");
+    const group = document.createElement("div");
+    group.dataset.threadBlockIds = "tool-grouped";
+    groupDisclosure.addEventListener("click", () => {
+      groupDisclosure.setAttribute("aria-expanded", "true");
+      const exact = document.createElement("div");
+      exact.id = "thread-block-tool-grouped";
+      group.append(exact);
+    });
+    turnDisclosure.addEventListener("click", () => {
+      turnDisclosure.setAttribute("aria-expanded", "true");
+      group.append(groupDisclosure);
+      owner.append(group);
+    });
+    owner.append(turnDisclosure);
+    document.body.append(owner);
+    const groupClick = vi.spyOn(groupDisclosure, "click");
+
+    const { result } = renderHook(() => useConversationScroll({ ...options(vi.fn(async () => 0), "tool-grouped"), blocks: useRuntimeStore.getState().thread.blocks }));
+    result.current.virtuosoRef.current = { scrollToIndex: vi.fn() } as unknown as VirtuosoHandle;
+
+    await waitFor(() => expect(groupClick).toHaveBeenCalledOnce());
+    expect(document.getElementById("thread-block-tool-grouped")).not.toBeNull();
+    owner.remove();
+  });
+
   it("follows a second turn after collapse and delayed measurements, but respects browsing", () => {
     vi.useFakeTimers();
     try {

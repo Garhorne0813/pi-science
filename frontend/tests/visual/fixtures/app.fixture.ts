@@ -9,7 +9,7 @@
  *    paper over a crash.
  */
 
-import { test as base, expect } from "@playwright/test";
+import { test as base, expect, type Locator } from "@playwright/test";
 import { FIXED_NOW } from "./data.mjs";
 
 export const test = base.extend({
@@ -33,6 +33,12 @@ export const test = base.extend({
 });
 
 export { expect } from "@playwright/test";
+
+export async function selectSettingsSection(dialog: Locator, name: string) {
+  const back = dialog.getByRole("button", { name: "Back to settings", exact: true });
+  if (await back.isVisible()) await back.click();
+  await dialog.getByRole("tab", { name, exact: true }).click();
+}
 
 /** Wait for webfonts before capturing: @fontsource ships font-display: swap,
  *  so a screenshot taken mid-load would capture fallback metrics and drift

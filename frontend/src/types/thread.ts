@@ -102,18 +102,18 @@ export interface ToolCallBlock extends ConversationBlockIdentity {
   progress?: ToolProgressV1;
   input?: Record<string, unknown>;
   output?: string;
+  /** The event projection keeps only a bounded tail for large results, and a
+   * refreshed history that carries the full output drops the flag. These
+   * fields make transport truncation explicit instead of presenting the
+   * captured tail as the complete tool output. */
+  outputTruncated?: boolean;
+  /** Size of the untruncated output, when the server reports it. */
+  originalOutputBytes?: number;
   /** Tool-specific metadata from the persisted toolResult message (e.g.
    *  rpiv-todo's task snapshot). Read-only panels rebuild tool state from
    *  this without needing live events. */
   details?: unknown;
   partialOutput?: string;
-  /** The server kept only the tail of this output because the full text
-   *  exceeded its per-event budget. The flag is authoritative: the visible
-   *  text may look short and complete, and a refreshed history that carries
-   *  the full output drops it. */
-  outputTruncated?: boolean;
-  /** Size of the untruncated output, when the server reports it. */
-  originalOutputBytes?: number;
   diff?: string;
   startedAt?: string;
   endedAt?: string;

@@ -205,7 +205,7 @@ test("AC-22 a key pressed on a settings control is not consumed by completion", 
   await expect(page.getByRole("listbox")).toHaveCount(0);
   await expect(composer).toHaveValue("/sum");
 
-  const general = dialog.getByRole("tab", { name: "General" });
+  const general = dialog.getByRole("tab", { name: "General & appearance" });
   await general.click();
   await expect(general).toHaveAttribute("aria-selected", "true");
 

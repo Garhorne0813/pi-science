@@ -14,6 +14,7 @@ export const VISUAL_CWD = "/tmp/visual-demo";
  *  never auto-navigate into a conversation. */
 export const VISUAL_LANDING_CWD = "/tmp/visual-landing";
 export const VISUAL_SESSION = "visual-session-1";
+export const VISUAL_ACTIVITY_SESSION = "visual-session-2";
 
 export const FIXTURES = {
   workspaces: [
@@ -143,10 +144,64 @@ export const FIXTURES = {
     },
   ],
 
+  /** Dense tool workflow used to verify attempt history and semantic groups. */
+  activityHistory: [
+    {
+      id: "activity-user",
+      role: "user",
+      turnId: "activity-turn",
+      turnStatus: "completed",
+      turnStartedAt: "2026-08-15T10:00:00.000Z",
+      turnEndedAt: "2026-08-15T10:00:35.000Z",
+      content: [{ type: "text", text: "Inspect the analysis pipeline, update the affected files, and run validation." }],
+      timestamp: "2026-08-15T10:00:00.000Z",
+    },
+    {
+      id: "activity-tools",
+      role: "assistant",
+      turnId: "activity-turn",
+      presentationRole: "intermediate",
+      content: [
+        { type: "toolCall", id: "activity-read-1", name: "read", arguments: { path: "src/pipeline.ts" } },
+        { type: "toolCall", id: "activity-grep", name: "grep", arguments: { pattern: "normalizeResults", path: "src" } },
+        { type: "toolCall", id: "activity-read-2", name: "read", arguments: { path: "src/results.ts" } },
+        { type: "toolCall", id: "activity-edit", name: "edit", arguments: { path: "src/pipeline.ts" } },
+        { type: "toolCall", id: "activity-write", name: "write", arguments: { path: "src/results.ts" } },
+        { type: "toolCall", id: "activity-test", name: "bash", arguments: { command: "pnpm test -- pipeline", description: "Run pipeline tests" } },
+        { type: "toolCall", id: "activity-typecheck", name: "bash", arguments: { command: "pnpm typecheck", description: "Run typecheck" } },
+      ],
+      timestamp: "2026-08-15T10:00:03.000Z",
+    },
+    { id: "result-read-1", role: "toolResult", toolCallId: "activity-read-1", toolName: "read", content: [{ type: "text", text: "export function runPipeline() {}" }], timestamp: "2026-08-15T10:00:05.000Z" },
+    { id: "result-grep", role: "toolResult", toolCallId: "activity-grep", toolName: "grep", content: [{ type: "text", text: "src/results.ts:42: normalizeResults" }], timestamp: "2026-08-15T10:00:07.000Z" },
+    { id: "result-read-2", role: "toolResult", toolCallId: "activity-read-2", toolName: "read", content: [{ type: "text", text: "export const normalizeResults = () => []" }], timestamp: "2026-08-15T10:00:09.000Z" },
+    { id: "result-edit", role: "toolResult", toolCallId: "activity-edit", toolName: "edit", content: [{ type: "text", text: "Updated src/pipeline.ts" }], timestamp: "2026-08-15T10:00:14.000Z" },
+    { id: "result-write", role: "toolResult", toolCallId: "activity-write", toolName: "write", content: [{ type: "text", text: "Updated src/results.ts" }], timestamp: "2026-08-15T10:00:17.000Z" },
+    { id: "result-test-failed", role: "toolResult", toolCallId: "activity-test", toolName: "bash", isError: true, content: [{ type: "text", text: "Error: worker exited before completing the suite" }], timestamp: "2026-08-15T10:00:22.000Z" },
+    { id: "result-test-recovered", role: "toolResult", toolCallId: "activity-test", toolName: "bash", content: [{ type: "text", text: "12 tests passed" }], timestamp: "2026-08-15T10:00:28.000Z" },
+    { id: "result-typecheck", role: "toolResult", toolCallId: "activity-typecheck", toolName: "bash", content: [{ type: "text", text: "Typecheck passed" }], timestamp: "2026-08-15T10:00:31.000Z" },
+    {
+      id: "activity-final",
+      role: "assistant",
+      turnId: "activity-turn",
+      turnStatus: "completed",
+      turnStartedAt: "2026-08-15T10:00:00.000Z",
+      turnEndedAt: "2026-08-15T10:00:35.000Z",
+      presentationRole: "final",
+      content: [{ type: "text", text: "Validation recovered after one retry. The pipeline changes are ready for review." }],
+      timestamp: "2026-08-15T10:00:35.000Z",
+    },
+  ],
+
   userMessageIndex: {
     messages: [
       { id: "m-user-1", text: "Load the shikimate pathway measurements from data/shikimate.csv, compute the fold change for each condition, and summarize the three strongest effects.", timestamp: "2026-08-15T09:01:00.000Z", before: "0" },
     ],
+    snapshot_version: "fixture-v1",
+  },
+
+  activityUserMessageIndex: {
+    messages: [{ id: "activity-user", text: "Inspect the analysis pipeline, update the affected files, and run validation.", timestamp: "2026-08-15T10:00:00.000Z", before: "0" }],
     snapshot_version: "fixture-v1",
   },
 
