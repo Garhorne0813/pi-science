@@ -3,7 +3,6 @@ import { waitForConversationSettled } from "./fixtures/app.fixture";
 import { VISUAL_CWD, VISUAL_SESSION } from "./fixtures/data.mjs";
 
 const root = `/workspace/${encodeURIComponent(VISUAL_CWD)}`;
-const filesForSession = `${root}/files?${new URLSearchParams({ session_id: VISUAL_SESSION })}`;
 const PANEL = "#workspace-context-panel";
 const TOGGLE = /^(Expand|Collapse) sidebar$/;
 const KNOWLEDGE = /^Memory/;
@@ -15,7 +14,7 @@ test("desktop sidebar presents one stable navigation column", async ({ page }, t
   await expect(panel).toBeVisible();
   await expect(panel.getByRole("button", { name: "Switch project" })).toBeVisible();
   await expect(panel.getByRole("button", { name: "New conversation" })).toBeVisible();
-  await expect(panel.getByRole("link", { name: "Files", exact: true })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Files", exact: true })).toBeVisible();
   await expect(panel.getByRole("link", { name: KNOWLEDGE })).toHaveAttribute("aria-current", "page");
   await expect(panel.getByRole("link", { name: "Run history", exact: true })).toBeVisible();
   await expect(panel.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
@@ -63,10 +62,14 @@ test("primary links highlight only their exact page", async ({ page }, testInfo)
   const panel = page.locator(PANEL);
   await expect(panel.locator("[aria-current=page]")).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Markdown rendering demo", exact: true })).toHaveAttribute("aria-current", "page");
-  for (const [href, label] of [[filesForSession, "Files"], [`${root}/memory`, KNOWLEDGE], [`${root}/runs`, "Run history"]] as const) {
+  await panel.getByRole("button", { name: "Files", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`${root}/session/${VISUAL_SESSION}$`));
+  await expect(panel.getByRole("button", { name: "Files", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("region", { name: "Workspace file tree" })).toBeVisible();
+  for (const [path, label] of [["memory", KNOWLEDGE], ["runs", "Run history"]] as const) {
     const item = panel.getByRole("link", { name: label });
     await item.click();
-    await expect(page).toHaveURL(href);
+    await expect(page).toHaveURL(new RegExp(`${root}/${path}$`));
     await expect(item).toHaveAttribute("aria-current", "page");
     await expect(page.getByRole("button", { name: "Markdown rendering demo", exact: true })).not.toHaveAttribute("aria-current", "page");
   }
@@ -90,8 +93,8 @@ test("mobile page navigation closes the context drawer", async ({ page }, testIn
   await expand.click();
   const panel = page.locator(PANEL);
   await expect(panel).toBeFocused();
-  await panel.getByRole("link", { name: "Files", exact: true }).click();
-  await expect(page).toHaveURL(filesForSession);
+  await panel.getByRole("button", { name: "Files", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`${root}/session/${VISUAL_SESSION}$`));
   await expect(panel).toHaveAttribute("hidden");
   await expect(page.getByRole("button", { name: "Expand sidebar", exact: true })).toBeVisible();
 });
@@ -136,10 +139,11 @@ test("navigation controls fit supported sidebar widths and short windows", async
       localStorage.setItem("pi-science.sidebar.width", JSON.stringify(nextWidth));
     }, width);
     await page.goto(`${root}/session/${VISUAL_SESSION}`);
-    const panelBox = (await page.locator(PANEL).boundingBox())!;
+    const panel = page.locator(PANEL);
+    const panelBox = (await panel.boundingBox())!;
     expect(Math.abs(panelBox.width - width)).toBeLessThanOrEqual(1);
-    for (const [role, name] of [["button", "New conversation"], ["link", "Files"], ["link", KNOWLEDGE], ["link", "Run history"], ["button", "Settings"]] as const) {
-      const box = await page.getByRole(role, { name }).boundingBox();
+    for (const [role, name] of [["button", "New conversation"], ["button", "Files"], ["link", KNOWLEDGE], ["link", "Run history"], ["button", "Settings"]] as const) {
+      const box = await panel.getByRole(role, { name, exact: true }).boundingBox();
       expect(box).not.toBeNull();
       expect(box!.x).toBeGreaterThanOrEqual(panelBox.x - 1);
       expect(box!.x + box!.width).toBeLessThanOrEqual(panelBox.x + panelBox.width + 1);

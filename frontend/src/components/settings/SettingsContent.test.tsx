@@ -77,6 +77,7 @@ beforeEach(() => {
   queryClient.clear();
   useUiStore.setState({ settingsOpen: false, settingsScope: null });
   useUiStore.getState().setPreviewPaneSide("right");
+  useUiStore.getState().setPreviewFileTreeSide("left");
 });
 
 afterEach(() => {
@@ -137,7 +138,7 @@ describe("SettingsContent", () => {
     expect(close).toHaveClass("h-7", "w-7", "rounded-full", "hover:bg-surface-hover");
   });
 
-  it("persists the selected conversation and preview order", async () => {
+  it("persists the selected conversation order and file-tree position", async () => {
     renderContent(null);
     const order = await screen.findByLabelText(/Conversation and preview layout/);
 
@@ -147,6 +148,14 @@ describe("SettingsContent", () => {
 
     expect(useUiStore.getState().previewPaneSide).toBe("left");
     expect(window.localStorage.getItem("pi-science.layout.previewPaneSide")).toBe('"left"');
+
+    const treeSide = screen.getByLabelText(/File tree position/);
+    fireEvent.pointerDown(treeSide);
+    fireEvent.click(treeSide);
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Right of preview" }));
+
+    expect(useUiStore.getState().previewFileTreeSide).toBe("right");
+    expect(window.localStorage.getItem("pi-science.layout.previewFileTreeSide")).toBe('"right"');
   });
 
   it("switches tabs and resets aria-selected", async () => {

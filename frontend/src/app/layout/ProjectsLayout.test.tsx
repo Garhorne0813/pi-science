@@ -44,7 +44,7 @@ beforeEach(() => {
   cleanup();
   pendingKnowledge.count = 0;
   useWorkspaceSidebar.setState({ cwd: null, tab: "sessions", query: "" });
-  useUiStore.setState({ settingsOpen: false, settingsScope: null, contextPanelCollapsed: false, sidebarWidth: 240 });
+  useUiStore.setState({ settingsOpen: false, settingsScope: null, contextPanelCollapsed: false, sidebarWidth: 240, fileTreeOpen: false, inspectorOpen: false });
   useRuntimeStore.setState({
     sessions: [],
     sessionsHasMore: false,
@@ -73,7 +73,7 @@ describe("single workspace sidebar", () => {
     expect(await screen.findByRole("button", { name: "Switch project" })).toHaveTextContent("proj");
     expect(container.querySelector("[data-workspace-rail-slot]")).toBeNull();
     expect(screen.queryByRole("link", { name: "Conversations" })).toBeNull();
-    expect(await screen.findByRole("link", { name: "Files" })).toHaveAttribute("href", "/workspace/proj/files");
+    expect(await screen.findByRole("button", { name: "Files" })).toHaveAttribute("aria-pressed", "false");
     expect(await screen.findByRole("button", { name: "New conversation" })).toHaveClass("bg-accent-fill");
     expect(screen.getByRole("link", { name: "Run history" })).toHaveAttribute("aria-current", "page");
     expect(screen.getAllByRole("button", { name: "Settings" })).toHaveLength(1);
@@ -370,7 +370,7 @@ describe("WorkspaceSessionList", () => {
     expect(search.closest("label")).toHaveClass("bg-surface-2");
   });
 
-  it("keeps the conversation list mounted while visiting another workspace page", async () => {
+  it("keeps the conversation list mounted while opening the file tree", async () => {
     const loadSessions = vi.fn(async () => []);
     useRuntimeStore.setState({ sessions: [session("s1", "Protein study"), session("s2", "Genome study")], activeSessionId: "s1", sessionsHasMore: true, loadSessions });
     renderList();
@@ -378,9 +378,10 @@ describe("WorkspaceSessionList", () => {
     expect(screen.queryByRole("button", { name: "Genome study" })).not.toBeInTheDocument();
     expect(screen.getAllByText(/Search covers loaded conversations only;/)).toHaveLength(2);
     const row = screen.getByRole("button", { name: "Protein study" });
-    await userEvent.click(screen.getByRole("link", { name: "Files" }));
+    await userEvent.click(screen.getByRole("button", { name: "Files" }));
     expect(row).toBeInTheDocument();
-    expect(screen.getByTestId("path")).toHaveTextContent("/workspace/proj/files");
+    expect(screen.getByTestId("path")).toHaveTextContent("/workspace/proj/session/s1");
+    expect(useUiStore.getState()).toMatchObject({ fileTreeOpen: true, inspectorOpen: true });
     expect(screen.getByRole("searchbox")).toHaveValue("Protein");
     expect(screen.getByRole("button", { name: "Protein study" })).toBe(row);
     expect(loadSessions).not.toHaveBeenCalled();
@@ -388,12 +389,13 @@ describe("WorkspaceSessionList", () => {
     expect(screen.getByRole("button", { name: "Protein follow-up" })).toBeInTheDocument();
   });
 
-  it("navigates to the files page and closes the narrow drawer", async () => {
+  it("opens the file tree preview and closes the narrow drawer", async () => {
     vi.stubGlobal("innerWidth", 375);
     useUiStore.setState({ contextPanelCollapsed: false });
     renderList();
-    await userEvent.click(screen.getByRole("link", { name: "Files" }));
-    expect(screen.getByTestId("path")).toHaveTextContent("/workspace/proj/files");
+    await userEvent.click(screen.getByRole("button", { name: "Files" }));
+    expect(screen.getByTestId("path")).toHaveTextContent("/workspace/proj/session/s1");
+    expect(useUiStore.getState().fileTreeOpen).toBe(true);
     expect(useUiStore.getState().contextPanelCollapsed).toBe(true);
   });
 
@@ -471,7 +473,7 @@ describe("ProjectsLayout workbench navigation", () => {
     expect(screen.queryByRole("navigation", { name: "Primary navigation" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Enter workspace" }));
     await waitFor(() => expect(container.querySelector("aside")).toBeInTheDocument());
-    expect(await screen.findByRole("link", { name: i18n.t("nav.files") })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: i18n.t("nav.files") })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Primary navigation" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Return home" }));
     expect(container.querySelector("aside")).toBeNull();

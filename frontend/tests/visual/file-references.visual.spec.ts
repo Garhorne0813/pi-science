@@ -5,10 +5,10 @@ test("file references stay scoped to their conversation and remain visible in th
   test.skip(testInfo.project.name !== "desktop-light", "One desktop baseline is sufficient for this focused workflow.");
   await page.goto(workspaceRoute(VISUAL_CWD, `/session/${VISUAL_ACTIVITY_SESSION}`));
   await expect(page.getByText("Validation recovered after one retry.")).toBeVisible();
-  await page.getByRole("link", { name: "Files" }).click();
-  await expect(page).toHaveURL(new RegExp(`/files\\?session_id=${VISUAL_ACTIVITY_SESSION}$`));
+  await page.getByRole("button", { name: "Files", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/session/${VISUAL_ACTIVITY_SESSION}$`));
 
-  const tree = page.getByRole("tree");
+  const tree = page.getByRole("region", { name: "Workspace file tree" }).getByRole("tree");
   const readme = tree.getByRole("button", { name: "README.md" });
   await expect(readme).toBeVisible();
   await readme.click({ button: "right" });
@@ -19,17 +19,13 @@ test("file references stay scoped to their conversation and remain visible in th
   await measurements.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Reference file" }).click();
 
-  await expect(page.getByText("2 referenced items")).toBeVisible();
-  await expect(page.getByText("For Data analysis notes")).toBeVisible();
   await expect(readme).toHaveAttribute("data-referenced", "true");
   await expect(measurements).toHaveAttribute("data-referenced", "true");
+  await expect(page.getByLabel("Remove reference README.md")).toBeVisible();
+  await expect(page.getByLabel("Remove reference shikimate.csv")).toBeVisible();
 
   await readme.click({ button: "right" });
   await expect(page.getByRole("menuitem", { name: "Remove file reference" })).toBeVisible();
   await screenshot(page, "file-references.png");
 
-  await page.getByRole("link", { name: "Return to conversation" }).click();
-  await expect(page).toHaveURL(new RegExp(`/session/${VISUAL_ACTIVITY_SESSION}$`));
-  await expect(page.getByLabel("Remove reference README.md")).toBeVisible();
-  await expect(page.getByLabel("Remove reference shikimate.csv")).toBeVisible();
 });
