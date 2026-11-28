@@ -39,12 +39,12 @@ test("settings navigation, model facts and saved compaction across viewports", a
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog.getByRole("button", { name: "Light", exact: true })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
-  for (const tab of ["General", "Models", "Agent"]) {
+  for (const tab of ["General & appearance", "Model connections", "Agent behavior"]) {
     await dialog.getByRole("tab", { name: tab, exact: true }).click();
-    await expect(dialog.getByRole("heading", { name: tab === "General" ? "General & appearance" : tab, exact: true })).toBeVisible();
+    await expect(dialog.getByRole("heading", { name: tab, exact: true })).toBeVisible();
     // Default selection is fetched independently from the Settings shell.
     // Audit the ready control, rather than racing its disabled loading state.
-    if (tab === "Agent") {
+    if (tab === "Agent behavior") {
       const clearDefault = dialog.getByRole("button", { name: "Clear default model", exact: true });
       await expect(clearDefault).toBeEnabled();
       await expect(clearDefault).toHaveCSS("opacity", "1");
@@ -53,7 +53,7 @@ test("settings navigation, model facts and saved compaction across viewports", a
     expect(violations, `${tab} accessibility`).toEqual([]);
     expect(await dialog.getByRole("tabpanel").evaluate((element) => element.scrollWidth <= element.clientWidth + 1), `${tab} must fit the viewport`).toBe(true);
     await dialog.screenshot({ path: testInfo.outputPath(`${tab.replaceAll(" ", "-").toLowerCase()}.png`), animations: "disabled" });
-    if (tab === "Models") {
+    if (tab === "Model connections") {
       await expect(dialog.getByRole("button", { name: "DeepSeek", exact: true })).toBeVisible();
       const search = dialog.getByRole("textbox", { name: /Search/ });
       await search.fill("nonexistent-model");
@@ -68,7 +68,7 @@ test("settings navigation, model facts and saved compaction across viewports", a
   await expect(dialog.getByText("Settings saved", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Save context settings", exact: true })).toHaveCount(0);
   await dialog.getByRole("button", { name: "Manage models", exact: true }).click();
-  await expect(dialog.getByRole("tab", { name: "Models", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(dialog.getByRole("tab", { name: "Model connections", exact: true })).toHaveAttribute("aria-selected", "true");
 });
 
 test("native model catalog failures recover without showing an empty inventory", async ({ page }) => {
@@ -79,7 +79,7 @@ test("native model catalog failures recover without showing an empty inventory",
   });
   await page.goto("/settings");
   const dialog = page.getByRole("dialog", { name: "Settings" });
-  await dialog.getByRole("tab", { name: "Models", exact: true }).click();
+  await dialog.getByRole("tab", { name: "Model connections", exact: true }).click();
   await expect(dialog.getByRole("alert")).toContainText("Catalog unavailable");
   failed = false;
   await dialog.getByRole("button", { name: "Retry loading", exact: true }).click();
@@ -94,7 +94,7 @@ test("Agent owns built-in capability guidance", async ({ page }, testInfo) => {
   });
   await page.goto("/settings");
   const dialog = page.getByRole("dialog", { name: "Settings" });
-  await dialog.getByRole("tab", { name: "Agent", exact: true }).click();
+  await dialog.getByRole("tab", { name: "Agent behavior", exact: true }).click();
   await dialog.locator("summary").filter({ hasText: "Built-in tools" }).click();
   await expect(dialog.getByText(/no Pi extension installation is required/)).toBeVisible();
   await expect(dialog.getByRole("tab", { name: "Extensions", exact: true })).toHaveCount(0);
@@ -103,8 +103,8 @@ test("Agent owns built-in capability guidance", async ({ page }, testInfo) => {
   const violations = (await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations.filter((item) => item.impact === "critical" || item.impact === "serious");
   expect(violations).toEqual([]);
   await dialog.screenshot({ path: testInfo.outputPath("agent-capabilities.png"), animations: "disabled" });
-  await dialog.getByRole("tab", { name: "MCP", exact: true }).click();
-  await expect(dialog.getByRole("tab", { name: "MCP", exact: true })).toHaveAttribute("aria-selected", "true");
+  await dialog.getByRole("tab", { name: "MCP connectors", exact: true }).click();
+  await expect(dialog.getByRole("tab", { name: "MCP connectors", exact: true })).toHaveAttribute("aria-selected", "true");
   expect(obsoleteRequests).toEqual([]);
 });
 
@@ -167,7 +167,7 @@ test("settings switches autosave and expose only applicable controls", async ({ 
   await expect(dialog.getByLabel("API key", { exact: true })).toBeVisible();
   await dialog.getByRole("checkbox", { name: "Enable webpage and PDF reading", exact: true }).uncheck();
   await expect(dialog.getByLabel("API key", { exact: true })).toHaveCount(0);
-  const agentTab = dialog.getByRole("tab", { name: "Agent", exact: true });
+  const agentTab = dialog.getByRole("tab", { name: "Agent behavior", exact: true });
   await agentTab.click();
   const compact = dialog.getByRole("checkbox", { name: "Automatic compaction", exact: true });
   await compact.uncheck();

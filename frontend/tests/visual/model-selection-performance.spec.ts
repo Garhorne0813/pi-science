@@ -16,7 +16,7 @@ test("10,000-model default picker stays responsive while context settings stall 
   });
   await page.goto("/settings");
   const dialog = page.getByRole("dialog", { name: "Settings" });
-  if (testInfo.project.name === "mobile") await selectSettingsSection(dialog, "General");
+  if (testInfo.project.name === "mobile") await selectSettingsSection(dialog, "General & appearance");
   await expect(dialog.getByRole("button", { name: "Light", exact: true })).toBeVisible();
   await page.evaluate(() => {
     type Profile = Window & { selectionTasks: number[]; selectionObserver: PerformanceObserver };

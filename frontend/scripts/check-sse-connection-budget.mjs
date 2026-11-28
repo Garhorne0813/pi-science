@@ -305,12 +305,11 @@ try {
   await assertStreamBudget(notebookPage, "Leaving Runs releases execution SSE", SESSION_PAGE_BUDGET);
   await notebookPage.close();
 
-  // Historical Research bookmarks use Run history archives and only the execution signal.
+  // Run history archives use only the execution signal.
   const archivePage = await context.newPage();
   await archivePage.route("**/api/project/archives**", (route) => route.fulfill({ json: { archives: [{ id: "old", title: "Historical research", objective: "Inspect saved evidence", status: "completed", path: "research/archives/old/history.json", record_count: 1 }] } }));
-  await archivePage.goto(`${origin}/workspace/${encodeURIComponent(cwd)}/research`, { waitUntil: "domcontentloaded" });
+  await archivePage.goto(`${origin}/workspace/${encodeURIComponent(cwd)}/runs?archives=1`, { waitUntil: "domcontentloaded" });
   await archivePage.getByRole("heading", { name: "Historical research", exact: true }).waitFor();
-  assert(new URL(archivePage.url()).pathname.endsWith("/runs"), "Historical Research route redirects to Run history");
   await waitForOpenSource(archivePage, executionEndpoint);
   await assertStreamBudget(archivePage, "Historical archive", RUNS_PAGE_BUDGET);
   await setHidden(archivePage, true);
@@ -320,7 +319,7 @@ try {
   await assertStreamBudget(archivePage, "Archive catch-up", RUNS_PAGE_BUDGET);
   await archivePage.close();
 
-  console.log("SSE connection budget passed: per-page subscription sets, two visible tabs, hidden-tab release, first CONNECTING resume, reload, executions resume, Memory REST count, shared Notebook stream, historical archive redirect, and /api/health.");
+  console.log("SSE connection budget passed: per-page subscription sets, two visible tabs, hidden-tab release, first CONNECTING resume, reload, executions resume, Memory REST count, shared Notebook stream, historical archives, and /api/health.");
   await context.close();
 } finally {
   // A rejected close must never skip the SIGTERM: a leftover fixture server

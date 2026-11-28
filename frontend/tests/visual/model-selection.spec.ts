@@ -35,7 +35,7 @@ test("Settings defaults and Composer session selection remain independent", asyn
   await page.route(`**/api/sessions/${VISUAL_SESSION}/state*`, (route) => route.fulfill({ json: { ...FIXTURES.sessionState, ...session } }));
   await page.goto("/settings");
   const dialog = page.getByRole("dialog", { name: "Settings" });
-  await dialog.getByRole("tab", { name: "Agent", exact: true }).click();
+  await dialog.getByRole("tab", { name: "Agent behavior", exact: true }).click();
   const model = dialog.getByRole("button", { name: /^Default model:/ });
   await expect(model).toContainText("DeepSeek Chat");
   await model.click();
@@ -70,6 +70,6 @@ test("Settings defaults and Composer session selection remain independent", asyn
   await expect.poll(() => session.thinking).toBe("high");
   expect(defaults.thinking).toBe("off");
   await page.goto("/settings");
-  await dialog.getByRole("tab", { name: "Agent", exact: true }).click();
+  await dialog.getByRole("tab", { name: "Agent behavior", exact: true }).click();
   await expect(dialog.getByRole("button", { name: /^Thinking Level:/ })).toContainText("Off");
 });

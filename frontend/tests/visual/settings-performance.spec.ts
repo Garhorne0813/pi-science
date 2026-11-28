@@ -15,13 +15,13 @@ test("Settings isolates delayed model loading and bounds a 10,000-model catalog"
   const opened = Date.now();
   await page.goto("/settings");
   const dialog = page.getByRole("dialog", { name: "Settings" });
-  if (testInfo.project.name === "mobile") await selectSettingsSection(dialog, "General");
+  if (testInfo.project.name === "mobile") await selectSettingsSection(dialog, "General & appearance");
   await expect(dialog.getByRole("button", { name: "Light", exact: true })).toBeVisible();
   const generalReadyMs = Date.now() - opened;
   expect(requests).toBe(0);
   await selectSettingsSection(dialog, "Model connections");
   await expect.poll(() => requests).toBe(1);
-  await selectSettingsSection(dialog, "General");
+  await selectSettingsSection(dialog, "General & appearance");
   await dialog.getByRole("button", { name: "Dark", exact: true }).click();
   await expect(dialog.getByRole("button", { name: "Dark", exact: true })).toHaveAttribute("aria-pressed", "true");
   await selectSettingsSection(dialog, "Status display");
